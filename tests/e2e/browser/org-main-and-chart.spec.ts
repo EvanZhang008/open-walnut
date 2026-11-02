@@ -29,6 +29,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { loadHome, openAskWalnutDrawer } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
+import { expectNotInTasksTable, revealInTasksTable } from './tasks-table-helpers'
 import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
 
 // Both browser projects load this file in their own worker at about the same moment: the pid
@@ -268,8 +269,11 @@ test('the Tasks page hides the leads, like the board', async ({ page, request })
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead
   expect(lead, 'the lead the previous test made').toBeTruthy()
   await page.locator('.sidebar a[href="/tasks"]').first().click()
+  // The table windows its rows (tasks-table-helpers.ts): scroll to the one, and look in
+  // every window for the other.
+  await revealInTasksTable(page, page.locator(`.tp-row[data-task-id="${made[0]}"]`), 30_000)
   await expect(page.locator(`.tp-row[data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator(`.tp-row[data-task-id="${lead!.id}"]`)).toHaveCount(0)
+  await expectNotInTasksTable(page, page.locator(`.tp-row[data-task-id="${lead!.id}"]`))
 })
 
 test('a send from Main\'s composer makes Main, shows its session, and keeps Main off the board', async ({ page, request }) => {
@@ -300,8 +304,9 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
 
   // The Tasks page leaves Main out too.
   await page.locator('.sidebar a[href="/tasks"]').first().click()
+  await revealInTasksTable(page, page.locator(`.tp-row[data-task-id="${made[0]}"]`), 30_000)
   await expect(page.locator(`.tp-row[data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator(`.tp-row[data-task-id="${taskId}"]`)).toHaveCount(0)
+  await expectNotInTasksTable(page, page.locator(`.tp-row[data-task-id="${taskId}"]`))
 })
 
 test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their own', async ({ page }) => {

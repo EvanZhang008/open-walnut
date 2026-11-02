@@ -24,6 +24,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView, selectSection } from './todo-panel-helpers'
+import { revealInTasksTable } from './tasks-table-helpers'
 import {
   addFilter, closeFilterMenu, expandMoreFilters, filterChip, filterDimRow, filterMenu, filterRow, filterValue,
   openFilterMenu, openFilterPage, removeFilterChip, setStatus,
@@ -418,6 +419,8 @@ test('a tag filters on both surfaces and its chip removes it', async ({ page }) 
     // /tasks builds its own tag list through the same helper: pick the other tag there.
     await page.locator('.sidebar a[href="/tasks"]').click()
     await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 20_000 })
+    // The table windows its rows (tasks-table-helpers.ts): scroll to the one under test.
+    await revealInTasksTable(page, tableRow(page, sev2))
     await expect(tableRow(page, sev2)).toBeVisible({ timeout: 10_000 })
     const tasksPanel = await openTasksPanel(page)
     await toggleQueryChip(tasksPanel, 'Tag', TAG3)
@@ -427,6 +430,7 @@ test('a tag filters on both surfaces and its chip removes it', async ({ page }) 
     await expect(tasksTagChip(TAG3)).toBeVisible()
     await tasksTagChip(TAG3).locator('.tag-chip-remove').click()
     await expect(tasksTagChip(TAG3)).toHaveCount(0)
+    await revealInTasksTable(page, tableRow(page, sev2))
     await expect(tableRow(page, sev2)).toBeVisible({ timeout: 10_000 })
   } finally {
     for (const id of ids) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => {})

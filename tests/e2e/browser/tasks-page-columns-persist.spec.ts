@@ -17,6 +17,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
+import { revealInTasksTable } from './tasks-table-helpers'
 
 const SHOTS = '/tmp/tasks-page-columns'
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 })
@@ -40,6 +41,8 @@ async function headerLabels(page: Page): Promise<string[]> {
 
 /** Header tracks and row cells must agree: Title + N columns each. */
 async function expectAligned(page: Page, id: string): Promise<void> {
+  // A sort can move the row out of the table's window: scroll back to it.
+  await revealInTasksTable(page, row(page, id))
   const headerCells = await page.locator(`${TABLE} .tp-thead .tp-th`).count()
   const rowCells = await row(page, id).locator(':scope > *').count()
   expect(rowCells, 'row cells = header cells').toBe(headerCells)
@@ -85,6 +88,8 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   expect(before).not.toContain('Created')
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▼')
+  // The table windows its rows (tasks-table-helpers.ts): scroll to the one under test.
+  await revealInTasksTable(page, row(page, OPEN_RECENT))
   await expect(row(page, OPEN_RECENT)).toBeVisible({ timeout: 15_000 })
   await expectAligned(page, OPEN_RECENT)
   await page.screenshot({ path: `${SHOTS}/01-default-columns.png`, clip: { x: 0, y: 0, width: 1280, height: 420 } })
@@ -224,15 +229,19 @@ test('rows carry the home list\'s circle colour and red marks', async ({ page, b
   try {
     await gotoTasks(page)
 
-    // Grey circle: a plain task with no session.
+    // Grey circle: a plain task with no session. The table windows its rows
+    // (tasks-table-helpers.ts), so each row is scrolled to before it is read.
+    await revealInTasksTable(page, row(page, OPEN_RECENT))
     await expect(row(page, OPEN_RECENT).locator('.tp-status-circle')).toHaveClass(/task-circle-todo/)
     await expect(row(page, OPEN_RECENT).locator('.task-unread-dot')).toHaveCount(0)
 
     // Blue circle: a task with a session attached (pw-task-001 owns pw-mode-test-session).
+    await revealInTasksTable(page, row(page, 'pw-task-001'))
     await expect(row(page, 'pw-task-001').locator('.tp-status-circle')).toHaveClass(/task-circle-(session|running)/)
 
     // Red mark: NEED_ACTION shows the ring (or the solid dot if the phase change
     // also flagged it unread) in the row's left gutter, and it is actually drawn.
+    await revealInTasksTable(page, row(page, needsActionId))
     const mark = row(page, needsActionId).locator('.task-unread-dot')
     await expect(mark).toHaveCount(1)
     await expect(mark).toBeVisible()
@@ -242,6 +251,7 @@ test('rows carry the home list\'s circle colour and red marks', async ({ page, b
 
     // Green check: a done row (turn the Complete chip on to see one).
     await chip(page, 'Complete').click()
+    await revealInTasksTable(page, row(page, 'pw-tq-pinned-done-recent'))
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.tp-status-circle')).toHaveClass(/task-circle-done/)
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.task-unread-dot')).toHaveCount(0)
     await page.screenshot({ path: `${SHOTS}/06-circles-and-marks.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } })

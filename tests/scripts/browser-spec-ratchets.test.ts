@@ -680,6 +680,61 @@ describe('a key the editor handles itself, right after a click', () => {
   })
 })
 
+describe('a row or a project header of the /tasks table', () => {
+  // The table renders only what is in view once it holds more than 200 items, and the shared
+  // fixture passes that on CI after a shard's earlier specs added their tasks: a header or a row
+  // further down was not in the DOM, and the spec waited out its timeout (2026-11-01:
+  // draft-surface-plus, the SurfacePlusProj header). A test that reads one narrows the table first
+  // (the search box, a rail project, a query chip) or scrolls to it (tasks-table-helpers.ts).
+  const ROW = /\.tp-row\b|tp-group-header|tasks-group-header|tasksPageGroupHeader\(/
+  const NARROW = /tp-search|revealInTasksTable\(|expectNotInTasksTable\(|tp-rail-item|toggleQueryChip\(/
+  // Reads only that some rows are drawn, which a windowed table always does.
+  const ANY_ROWS = ['the /tasks table reads the project registry once for the whole table']
+  const code = (text: string) => text.split('\n').filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).join('\n')
+  /** File-local helpers by name, with their source (a one-line arrow, or up to the closing brace). */
+  const helpers = (text: string): Array<[string, string]> => {
+    const out: Array<[string, string]> = []
+    const re = /^\s*(?:export )?(?:async )?function (\w+)\(|^\s*(?:export )?const (\w+) = (?:async )?\(/gm
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const lineEnd = text.indexOf('\n', m.index)
+      const first = text.slice(m.index, lineEnd < 0 ? undefined : lineEnd)
+      const end = /=>\s*\S/.test(first) && !first.trimEnd().endsWith('{') ? lineEnd : text.indexOf('\n}', m.index)
+      out.push([(m[1] ?? m[2])!, text.slice(m.index, end < 0 ? undefined : end)])
+    }
+    return out
+  }
+  const offendersOf = (raw: string): string[] => {
+    const text = code(raw)
+    const all = helpers(text)
+    const reads = all.filter(([, body]) => ROW.test(body) && !NARROW.test(body)).map(([name]) => name)
+    const narrows = all.filter(([, body]) => NARROW.test(body)).map(([name]) => name)
+    const calls = (body: string, names: string[]) => names.some((name) => new RegExp(`\\b${name}\\(`).test(body))
+    return text.split(/\n(?=\s*test\()/)
+      .filter((body) => /^\s*test\(/.test(body) && !ANY_ROWS.some((title) => body.includes(title)))
+      .filter((body) => (ROW.test(body) || calls(body, reads)) && !NARROW.test(body) && !calls(body, narrows))
+      .map((body) => body.trim().split('\n')[0]!.slice(0, 100))
+  }
+
+  it('every test that reads one narrows the table or scrolls to it', () => {
+    expect(sources.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      'const row = (page: Page, id: string) => page.locator(`.tp-row[data-task-id="${id}"]`)',
+      "test('a row on /tasks', async ({ page }) => {",
+      '  await navigateToTasksPage(page)',
+      "  await expect(row(page, 'x')).toBeVisible()",
+      '})',
+      "test('a header on /tasks', async ({ page }) => {",
+      "  const header = tasksPageGroupHeader(page, 'P')",
+      '  await revealInTasksTable(page, header)',
+      '})',
+    ].join('\n')
+    expect(offendersOf(spec)).toEqual(["test('a row on /tasks', async ({ page }) => {"])
+  })
+})
+
 describe('a document of megabytes', () => {
   // A web-first text matcher prints the whole received text, once per poll in its call log and
   // again in each copy of the error. When the 31MB letter in human-inbox.spec.ts missed its tail,

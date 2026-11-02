@@ -83,7 +83,9 @@ test('a task detail page is not remembered as "the tasks list"', async ({ page, 
   await rail(page, 'tasks').click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.locator('[data-testid="tasks-table"]')).toBeVisible({ timeout: 30_000 })
-  // Open a task's detail page through its title.
+  // Open a task's detail page through its title. The table windows its rows
+  // (tasks-table-helpers.ts): narrow it to that task first.
+  await page.locator('.tp-search').fill('tq open recent unpinned')
   const title = page.locator('[data-testid="tasks-table"] .tp-row[data-task-id="pw-tq-open-recent"] .tp-row-title')
   await title.click()
   await expect(page).toHaveURL(/\/tasks\/pw-tq-open-recent$/)

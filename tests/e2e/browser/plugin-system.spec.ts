@@ -44,9 +44,12 @@ async function openSourceRow(page: import('@playwright/test').Page, taskTitle: s
   return sourceRow
 }
 
-async function goToDashboard(page: import('@playwright/test').Page) {
+/** /tasks, narrowed to the task the test reads: the table windows its rows, so a
+ *  row further down the full list is not rendered (tasks-table-helpers.ts). */
+async function goToDashboard(page: import('@playwright/test').Page, title: string) {
   await page.goto('/tasks')
   await page.waitForLoadState('networkidle')
+  await page.locator('.tp-search').fill(title)
 }
 
 // ── 1. App loads with plugin system ──
@@ -126,7 +129,7 @@ test.describe('3. Click into task shows context', () => {
 
 test.describe('4. Dashboard task with phase info', () => {
   test('seeded task shows sync indicator on dashboard', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginA synced task')
 
     // Look for any task card that has a sync indicator — Walnut-project tasks should be visible
     const taskCard = page.locator('.tp-row', { hasText: 'PluginA synced task' })
@@ -172,7 +175,7 @@ test.describe('5. GET /api/integrations endpoint', () => {
 
 test.describe('6. Sync indicator states on dashboard', () => {
   test('synced plugin-a task: badge with sync-synced', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginA synced task')
     const taskCard = page.locator('.tp-row', { hasText: 'PluginA synced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
@@ -182,7 +185,7 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 
   test('unsynced plugin-a task: sync-unsynced class', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginA unsynced task')
     const taskCard = page.locator('.tp-row', { hasText: 'PluginA unsynced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
@@ -192,7 +195,7 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 
   test('synced plugin-b task: badge with sync-synced', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginB synced task')
     // Plugin-b task is in the Backend project — check it appears on /tasks
     const taskCard = page.locator('.tp-row', { hasText: 'PluginB synced task' })
     // May not be visible if the dashboard scopes to a different project
@@ -204,7 +207,7 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 
   test('local task: "L" with sync-local', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'Local only task')
     const taskCard = page.locator('.tp-row', { hasText: 'Local only task' })
     if (await taskCard.isVisible().catch(() => false)) {
       const indicator = taskCard.locator('.sync-indicator')
@@ -216,7 +219,7 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 
   test('sync error task: sync-error class with error tooltip', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'Sync error task')
     const taskCard = page.locator('.tp-row', { hasText: 'Sync error task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
@@ -227,7 +230,7 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 
   test('synced MS To-Do task: "M" with sync-synced', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'MS To-Do synced task')
     const taskCard = page.locator('.tp-row', { hasText: 'MS To-Do synced task' })
     if (await taskCard.isVisible().catch(() => false)) {
       const indicator = taskCard.locator('.sync-indicator')
@@ -339,7 +342,7 @@ test.describe('10. Sync error and tooltip details', () => {
   // the full error text is the Dashboard's, below.
 
   test('Dashboard error indicator tooltip has full error message', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'Sync error task')
 
     const indicator = page.locator('.tp-row', { hasText: 'Sync error task' }).locator('.sync-indicator')
     await expect(indicator).toBeVisible({ timeout: 5000 })
@@ -349,7 +352,7 @@ test.describe('10. Sync error and tooltip details', () => {
   })
 
   test('synced task tooltip includes "Synced to"', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginA synced task')
 
     const indicator = page.locator('.tp-row', { hasText: 'PluginA synced task' }).locator('.sync-indicator')
     await expect(indicator).toBeVisible({ timeout: 5000 })
@@ -360,7 +363,7 @@ test.describe('10. Sync error and tooltip details', () => {
   })
 
   test('unsynced task tooltip includes "Not synced" and "will retry"', async ({ page }) => {
-    await goToDashboard(page)
+    await goToDashboard(page, 'PluginA unsynced task')
 
     const indicator = page.locator('.tp-row', { hasText: 'PluginA unsynced task' }).locator('.sync-indicator')
     await expect(indicator).toBeVisible({ timeout: 5000 })

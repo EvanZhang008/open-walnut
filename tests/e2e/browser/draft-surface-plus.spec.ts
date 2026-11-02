@@ -50,6 +50,7 @@ import {
   restVisibility, tasksPageGroupHeader, tierProjectLabel, tierViewBar,
 } from './draft-surface-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { revealInTasksTable } from './tasks-table-helpers'
 
 /** Artifacts of this run. Per-run overridable, same convention as the siblings. */
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-gap-fix'
@@ -281,6 +282,9 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
   await navigateToTasksPage(page)
 
   const header = tasksPageGroupHeader(page, SURFACE_PROJECT)
+  // The table windows its rows: on a fixture that earlier specs filled, the header
+  // of an S project is not rendered until the table is scrolled to it.
+  await revealInTasksTable(page, header)
   await expect(header).toBeVisible({ timeout: 25_000 })
   const plus = header.getByRole('button', { name: `New session in ${SURFACE_PROJECT}` })
   await expect(plus, 'the /tasks group header must offer a session route').toHaveCount(1)
@@ -489,6 +493,9 @@ test('the session "+" is legible at rest on every surface, while the kebab stays
   // by side rather than across two different designs.
   await navigateToTasksPage(page)
   const header = tasksPageGroupHeader(page, SURFACE_PROJECT)
+  // The table windows its rows: on a fixture that earlier specs filled, the header
+  // of an S project is not rendered until the table is scrolled to it.
+  await revealInTasksTable(page, header)
   await expect(header).toBeVisible({ timeout: 25_000 })
 
   const pagePlus = header.getByRole('button', { name: `New session in ${SURFACE_PROJECT}` })

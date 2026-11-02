@@ -244,6 +244,10 @@ test('/tasks has one Status section in the status words, matching the home hit s
     await expect(panel.locator('.vd-cat[aria-pressed="true"]')).toHaveCount(1);
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();
+    // The table windows its rows (tasks-table-helpers.ts), so a read of the rendered rows
+    // is a read of the whole hit set only once the table is narrowed to this test's tasks.
+    await page.locator('.tasks-page .tp-search').fill(String(stamp));
+    await expect(page.locator(`[data-testid="tasks-table"] .tp-row[data-task-id="${ids[2]}"]`)).toBeVisible({ timeout: 15_000 });
     const tableHits = await page.locator('[data-testid="tasks-table"] .tp-row[data-task-id]').evaluateAll(
       (rows, own) => rows.map((r) => r.getAttribute('data-task-id')!).filter((id) => (own as string[]).includes(id)), ids);
     expect(tableHits).toEqual(visibleHome);

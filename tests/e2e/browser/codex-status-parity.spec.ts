@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
+import { revealInTasksTable } from './tasks-table-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-status-regression'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -124,6 +125,8 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   await navigateToTasks(page)
   await showAllStatusesOnTasksPage(page)
   const activeTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  // The table windows its rows (tasks-table-helpers.ts): scroll to this one.
+  await revealInTasksTable(page, activeTaskRow)
   await expect(activeTaskRow).toBeVisible()
   await expect(activeTaskRow.locator('.task-session-pill')).toContainText('Running')
   await page.screenshot({
@@ -174,6 +177,8 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   // rather than run. Pre-existing at HEAD (verified with esbuild on the HEAD
   // blob); fixed here because it otherwise hides the migrated spec's real result.
   const idleTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  // The table windows its rows (tasks-table-helpers.ts): scroll to this one.
+  await revealInTasksTable(page, idleTaskRow)
   await expect(idleTaskRow).toBeVisible()
   await expect(idleTaskRow.locator('.task-session-pill')).toContainText('Idle')
 

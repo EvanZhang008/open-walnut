@@ -17,16 +17,18 @@ import { showEverything } from './todo-panel-helpers'
 // ── TaskCard sync indicators (dashboard / task list views) ──
 
 test.describe('TaskCard SyncIndicator', () => {
-  async function showAllStatuses(page: import('@playwright/test').Page) {
+  async function showAllStatuses(page: import('@playwright/test').Page, title: string) {
     await page.goto('/tasks')
     await page.waitForLoadState('networkidle')
+    // The table windows its rows (tasks-table-helpers.ts): narrow it to the task read.
+    await page.locator('.tp-search').fill(title)
     // The /tasks table shows open tasks only by default, so turn the Complete chip on too.
     const doneChip = page.locator('.tp-chip', { hasText: 'Complete' })
     if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
   }
 
   test('synced plugin-a task shows badge with sync-synced class', async ({ page }) => {
-    await showAllStatuses(page)
+    await showAllStatuses(page, 'PluginA synced task')
 
     const taskCard = page.locator('.tp-row', { hasText: 'PluginA synced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
@@ -38,7 +40,7 @@ test.describe('TaskCard SyncIndicator', () => {
   })
 
   test('unsynced plugin-a task shows badge with sync-unsynced class', async ({ page }) => {
-    await showAllStatuses(page)
+    await showAllStatuses(page, 'PluginA unsynced task')
 
     const taskCard = page.locator('.tp-row', { hasText: 'PluginA unsynced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
@@ -50,7 +52,7 @@ test.describe('TaskCard SyncIndicator', () => {
   })
 
   test('unsynced MS To-Do task shows unsynced indicator', async ({ page }) => {
-    await showAllStatuses(page)
+    await showAllStatuses(page, 'MS To-Do unsynced task')
 
     const taskCard = page.locator('.tp-row', { hasText: 'MS To-Do unsynced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })

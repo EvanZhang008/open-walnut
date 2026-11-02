@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { openChatOnLoad, openDraftOnCwd } from './draft-helpers'
+import { revealInTasksTable } from './tasks-table-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-status-store'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -316,6 +317,8 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   await navigateToTasks(page)
   await showAllStatusesOnTasksPage(page)
   const taskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  // The table windows its rows (tasks-table-helpers.ts): scroll to this one.
+  await revealInTasksTable(page, taskRow)
   await expect(taskRow).toBeVisible()
   await expect(taskRow.locator('.task-session-pill')).toContainText('Running')
 
@@ -446,6 +449,8 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   await navigateToTasks(page, true)
   await showAllStatusesOnTasksPage(page)
   const taskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  // The table windows its rows (tasks-table-helpers.ts): scroll to this one.
+  await revealInTasksTable(page, taskRow)
   await expect(taskRow).toBeVisible()
   await expect(taskRow.locator('.task-session-pill')).toContainText('Running')
   await page.screenshot({
