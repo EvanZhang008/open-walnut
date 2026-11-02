@@ -101,7 +101,7 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
     .toHaveCount(1, { timeout: 2_000 })
   // The running call sits inside the closed run, which breathes while it runs
   // (2026-10-04); opened, the call is there and not done yet.
-  const liveRun = homePanel.locator('.session-streaming-panel .tool-run-row')
+  const liveRun = homePanel.locator('.session-live-row .tool-run-row')
     .filter({ has: page.locator('.tool-run-live-dot') })
   await expect(liveRun).toHaveCount(1, { timeout: 10_000 })
   await liveRun.locator(':scope > .tool-run-toggle').click()

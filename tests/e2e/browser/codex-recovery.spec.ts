@@ -7,7 +7,7 @@ import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-gap-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 /** The live turn: its panels, and a reply still arriving, which is a row of its own. */
-const LIVE_TURN = ':is(.session-streaming-panel, [data-stream-reply])'
+const LIVE_TURN = ':is(.session-live-row, [data-stream-reply])'
 const BASE_PROMPT = 'recovery baseline persisted turn'
 const BASE_REPLY = `hello from mock-acp (you said: ${BASE_PROMPT})`
 const CRASH_PROMPT = 'lifecycle-slow-mobile crash the active worker'

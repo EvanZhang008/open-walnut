@@ -21,6 +21,8 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
+import { disclosureIds, useRowDisclosure } from './row-disclosure';
+import { toolMergesIntoRun } from '@/stream/tool-merge';
 import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
 import { parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
@@ -104,13 +106,15 @@ interface EditDiffViewProps {
   status: 'calling' | 'done' | 'error';
   result?: string;
   onViewFile?: (path: string) => void;
+  /** The edit's tool call, so the card keeps its state when its row is drawn again. */
+  toolUseId?: string;
 }
 
-function EditDiffView({ filePath, oldString, newString, replaceAll, status, result, onViewFile }: EditDiffViewProps) {
-  const [collapsed, setCollapsed] = useState(false);
+function EditDiffView({ filePath, oldString, newString, replaceAll, status, result, onViewFile, toolUseId }: EditDiffViewProps) {
+  const [collapsed, setCollapsed] = useRowDisclosure(disclosureIds.diff(toolUseId), false);
   const totalLines = oldString.split('\n').length + newString.split('\n').length;
   const isLarge = totalLines > 100;
-  const [expanded, setExpanded] = useState(!isLarge);
+  const [expanded, setExpanded] = useRowDisclosure(disclosureIds.diffFull(toolUseId), !isLarge);
 
   const diffLines = useMemo(
     () => computeLineDiff(oldString, newString),
@@ -262,8 +266,8 @@ function formatTime(ts: string): string {
 
 /** Muted collapsed "Thinking ›" row — same visual language as merged tool
  *  runs (ToolRunShell). `live` appends the pulsing dot while tokens stream. */
-export function SessionThinking({ text, live }: { text: string; live?: boolean }) {
-  const [open, setOpen] = useState(false);
+export function SessionThinking({ text, live, disclosureId }: { text: string; live?: boolean; disclosureId?: string }) {
+  const [open, setOpen] = useRowDisclosure(disclosureId, false);
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
@@ -304,10 +308,10 @@ export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
 /** Accent-bordered card rendering the plan markdown, collapsible.
  *  Consumes PlanContentContext to show live plan content (bypasses memo).
  *  Falls back to the snapshot `content` prop when context is null (initial load, non-plan session). */
-export function PlanCard({ content }: { content: string }) {
+export function PlanCard({ content, disclosureId }: { content: string; disclosureId?: string }) {
   const livePlan = useLivePlanContent();
   const displayContent = livePlan ?? content;
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useRowDisclosure(disclosureId, true);
   const html = useRenderedMarkdown(displayContent);
 
   const handleExpandClick = useCallback(() => {
@@ -356,7 +360,7 @@ function escapeHtml(s: string): string {
 /** CLI-injected user line (skill dump, compaction summary, …) — a muted
  *  one-line context row (Claude Code app style), click to expand the content. */
 function InjectedContextRow({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(disclosureIds.content('inject', text), false);
   const labelsVersion = useEntityLabelsVersion();
   const html = useMemo(
     () => (open ? renderMarkdownWithRefs(text, undefined, undefined, DATA_RENDER) : ''),
@@ -387,8 +391,11 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, failCount, running, count, children }: {
+export function ToolRunShell({ phrase, failCount, running, count, disclosureId, children }: {
   phrase: string;
+  /** What the run shows (disclosureIds.run), so a reader who opened it keeps
+   *  it open when the row is drawn again (its saved twin, a rebuilt lane). */
+  disclosureId?: string;
   failCount: number;
   /** How many tool calls the run holds: a phone reads the row as `<n> tool calls`. */
   count?: number;
@@ -397,7 +404,7 @@ export function ToolRunShell({ phrase, failCount, running, count, children }: {
   running?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(disclosureId, false);
   return (
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
@@ -418,29 +425,6 @@ function systemLineIcon(variant: string): string {
   return variant === 'error' ? '!' : '';
 }
 
-// A notice the user opened stays open when its streamed row gives way to its persisted one
-// (the same id, another element): the card snapped shut under the reader as history landed
-// (2026-11-02, codex-stream-retry on CI). Kept by notice id, a bounded set for the page's life.
-const openNotices = new Set<string>();
-const OPEN_NOTICES_MAX = 200;
-
-function useNoticeOpen(noticeId: string | undefined): [boolean, () => void] {
-  const [open, setOpen] = useState(() => !!noticeId && openNotices.has(noticeId));
-  const toggle = useCallback(() => {
-    setOpen((was) => {
-      const next = !was;
-      if (noticeId) {
-        if (next) {
-          openNotices.add(noticeId);
-          if (openNotices.size > OPEN_NOTICES_MAX) openNotices.delete(openNotices.values().next().value as string);
-        } else openNotices.delete(noticeId);
-      }
-      return next;
-    });
-  }, [noticeId]);
-  return [open, toggle];
-}
-
 /** System notice that keeps compact lines inline and collapses verbose payloads. */
 export function SystemLineCollapsible({ variant, message, detail, time, noticeId }: {
   variant: string;
@@ -450,7 +434,10 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
   /** The notice's id (the history row's msgId, the streamed block's uuid): keeps it open across the swap. */
   noticeId?: string;
 }) {
-  const [open, toggleOpen] = useNoticeOpen(noticeId);
+  // Kept by the notice's id (row-disclosure.ts), so it stays open when its
+  // streamed block gives way to the persisted row; by its words when it has none.
+  const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content(`sys-${variant}`, message), false);
+  const toggleOpen = () => setOpen((o) => !o);
   const icon = systemLineIcon(variant);
   if (detail && detail.length > 80) {
     return (
@@ -506,7 +493,7 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 
 /** Collapsed run of consecutive system notices from history or the live stream. */
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
   const label = allErrors ? `${members.length} errors` : `${members.length} system messages`;
   return (
@@ -539,9 +526,9 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   const phrase = toolRunPhrase(tools);
   const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length;
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount} count={tools.length}>
+    <ToolRunShell phrase={phrase} failCount={failCount} running={tools.some((t) => t.liveStatus === 'calling')} count={tools.length} disclosureId={disclosureIds.run({ toolUseId: tools[0]?.toolUseId })}>
       {tools.map((t, i) => (
-        <SessionToolCall key={t.toolUseId ?? i} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        <SessionToolCall key={t.toolUseId ?? i} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       ))}
     </ToolRunShell>
   );
@@ -549,14 +536,8 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
 
 /** True when a history tool merges into a run (generic tools only). */
 export function isMergeableHistoryTool(tool: SessionHistoryTool): boolean {
-  if (GROUPABLE_HISTORY_TOOLS.has(tool.name)) return false;
-  if (tool.name === 'ExitPlanMode') return false;
-  if (isPlanWrite(tool)) return false;
-  // A message to another session is conversation, not plumbing: folded into
-  // "Ran a command" it vanishes from the timeline the way the inbound card
-  // never does.
-  if (detectOutboundSend(tool)) return false;
-  return true;
+  // The live stream's rule too (stream/tool-merge.ts).
+  return toolMergesIntoRun(tool);
 }
 
 /** True when an entire persisted message can dissolve into a cross-message
@@ -640,6 +621,14 @@ export function runRowKey(blocks: readonly StreamRunMember[], fallback: number):
   return `run-${first?.msgId ?? `at${fallback}`}`;
 }
 
+/** A live call as the saved tool it will be (SessionToolCall reads one shape). */
+function streamToolOf(b: StreamingBlock & { type: 'tool_call' }): SessionHistoryTool {
+  return {
+    name: b.name ?? 'unknown', input: b.input ?? {}, toolUseId: b.toolUseId,
+    ...(b.result !== undefined ? { result: b.result } : {}),
+  } as SessionHistoryTool;
+}
+
 /** A merged run's streaming members, in arrival order: each thinking block its
  *  own "Thinking ›" row, each tool its card (a running one says so) — the same
  *  body a persisted run shows (MergedHistoryToolRun), so the row does not change
@@ -658,13 +647,13 @@ export function StreamRunMembers({ members, live, sessionId, sessionCwd, session
   return (
     <>
       {members.map((b, i) => b.type === 'thinking' ? (
-        <SessionThinking key={b.msgId ? `think-${b.msgId}-${i}` : `think-${i}`} text={b.content} live={live && i === members.length - 1} />
+        <SessionThinking key={b.msgId ? `think-${b.msgId}-${i}` : `think-${i}`} text={b.content} live={live && i === members.length - 1} disclosureId={disclosureIds.thinking(b.msgId)} />
       ) : (
-        <GenericToolCall
+        <SessionToolCall
           key={b.toolUseId ?? i}
-          tool={{ name: b.name ?? 'unknown', input: b.input ?? {} }}
+          tool={streamToolOf(b)}
+          assistantLabel="Claude Code"
           status={b.status === 'error' ? 'error' : b.status === 'calling' ? 'calling' : 'done'}
-          result={b.result}
           sessionCwd={sessionCwd}
           sessionHost={sessionHost}
           sessionId={sessionId}
@@ -706,13 +695,18 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   ]);
   const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result)).length
     + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
+  // The run's first member, as the live run names it (runRowKey): a message's
+  // reasoning streams before its tools.
+  const head = messages[0];
+  const first = head ? (head.thinking ? { msgId: head.msgId } : { toolUseId: head.tools?.[0]?.toolUseId })
+    : trailingBlocks[0]?.type === 'tool_call' ? { toolUseId: trailingBlocks[0].toolUseId } : { msgId: trailingBlocks[0]?.msgId };
   return (
-    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive} count={allTools.length + trailingTools.length}>
+    <ToolRunShell phrase={phrase} failCount={failCount} running={trailingLive || allTools.some((t) => t.liveStatus === 'calling')} count={allTools.length + trailingTools.length} disclosureId={disclosureIds.run(first)}>
       {messages.map((m, mi) => (
         <div key={m.msgId ?? mi}>
-          {m.thinking && <SessionThinking text={m.thinking} />}
+          {m.thinking && <SessionThinking text={m.thinking} disclosureId={disclosureIds.thinking(m.msgId)} />}
           {(m.tools ?? []).map((t, ti) => (
-            <SessionToolCall key={t.toolUseId ?? ti} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            <SessionToolCall key={t.toolUseId ?? ti} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
           ))}
         </div>
       ))}
@@ -731,7 +725,8 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
 });
 
 interface GenericToolCallProps {
-  tool: { name: string; input: Record<string, unknown> };
+  /** `toolUseId` names the call, so its card keeps its state when the row is drawn again. */
+  tool: { name: string; input: Record<string, unknown>; toolUseId?: string };
   /** Tool execution status. Defaults to 'done' (preserves history behavior). */
   status?: 'calling' | 'done' | 'error';
   /** Tool result text (streaming path provides this separately from tool.result). */
@@ -770,7 +765,7 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
 });
 
 function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), false);
   // Pill titles resolve from the entity-label store — memo boundary is at
   // GenericToolCall, so this leaf must subscribe itself to see title changes.
   const labelsVersion = useEntityLabelsVersion();
@@ -951,6 +946,8 @@ function getExitPlanContent(tool: { input: Record<string, unknown>; planContent?
 interface SessionToolCallProps {
   tool: SessionHistoryTool;
   assistantLabel: string;
+  /** A live call's state; a saved one reads its own (`isError`). */
+  status?: 'calling' | 'done' | 'error';
   sessionId?: string;
   sessionCwd?: string;
   sessionHost?: string;
@@ -973,8 +970,8 @@ export function agentModelLabel(input?: Record<string, unknown>): string {
 /** Collapsed-by-default row inside a task-group body exposing the subagent's
  *  full input: prompt text + remaining settings (model, effort, isolation…).
  *  Opt-in visibility — header stays uncluttered. */
-export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) {
-  const [open, setOpen] = useState(false);
+export function TaskGroupPrompt({ input, toolUseId }: { input?: Record<string, unknown>; toolUseId?: string }) {
+  const [open, setOpen] = useRowDisclosure(disclosureIds.prompt(toolUseId), false);
   const prompt = typeof input?.prompt === 'string' ? input.prompt : '';
   const settings = Object.entries(input ?? {})
     .filter(([k, v]) => k !== 'prompt' && k !== 'description' && v !== undefined && v !== null)
@@ -1031,16 +1028,21 @@ function TaskGroup({ tool, sessionId }: SessionToolCallProps) {
   return <BackgroundTasksChip sessionId={sessionId} agents={agents} />;
 }
 
-function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
-  // Task/Agent tool with childMessages or agentId → render as collapsible group
-  if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result)) {
+/** One tool call's card, live or saved: both draw it through this one dispatcher,
+ *  so a card never changes form when its saved twin takes over (an Edit was a
+ *  plain card live and a diff once saved). */
+export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
+  // Task/Agent tool with childMessages or agentId → its chip. A call still
+  // streaming (`liveStatus`, a subagent's lane) is the chip from its first
+  // frame, as its saved row will be.
+  if (GROUPABLE_HISTORY_TOOLS.has(tool.name) && (tool.childMessages || tool.agentId || tool.result || tool.liveStatus)) {
     return <TaskGroup tool={tool} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // ExitPlanMode with plan content → render PlanCard
   const exitPlanContent = tool.name === 'ExitPlanMode' ? getExitPlanContent(tool) : null;
   if (exitPlanContent) {
-    return <PlanCard content={exitPlanContent} />;
+    return <PlanCard content={exitPlanContent} disclosureId={disclosureIds.plan(tool.toolUseId)} />;
   }
 
   // Write to plans → collapsed row
@@ -1059,14 +1061,15 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
         oldString={tool.input.old_string}
         newString={tool.input.new_string}
         replaceAll={tool.input.replace_all === true}
-        status={((tool as { status?: string }).status === 'error' || (tool as { isError?: boolean }).isError) ? 'error' : 'done'}
+        status={status === 'error' || (tool as { status?: string }).status === 'error' || (tool as { isError?: boolean }).isError ? 'error' : status === 'calling' ? 'calling' : 'done'}
         result={(tool as { result?: string }).result}
         onViewFile={onFileOpen}
+        toolUseId={tool.toolUseId}
       />
     );
   }
 
-  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+  return <GenericToolCall tool={tool} {...(status ? { status } : {})} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
 }
 
 
@@ -1232,7 +1235,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // person) is drawn as it always was: it IS the message there.
   const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
   const alwaysShowAdded = useShowWalnutAdditions();
-  const [addedOpen, setAddedOpen] = useState(false);
+  const [addedOpen, setAddedOpen] = useRowDisclosure(disclosureIds.added(message.walnutMessageId ?? message.msgId), false);
   const showAdded = alwaysShowAdded || addedOpen;
   const addedCount = !isUser ? 0
     : (personWords ? (riderSplit?.riders.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0);
@@ -1321,13 +1324,13 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       onContextMenu={(e) => rowMenu.open(e, undefined)}
     >
       <div className="session-msg-content" ref={contentRef} onClick={handleContentClick}>
-        {thinking && !answerOnly && <SessionThinking text={thinking} />}
+        {thinking && !answerOnly && <SessionThinking text={thinking} disclosureId={disclosureIds.thinking(message.msgId)} />}
         {/* Folded machine blocks first, then the human's words — the typed text
             stays the dominant part of the bubble. A turn that was ONLY banners
             drops the bubble chrome entirely (session-msg-envelope above): there is
             no human message there to attribute one to. */}
         {(showAdded || !bodyText) && bannerSplit?.banners.map((banner, i) => (
-          <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} sessionCwd={sessionCwd} />
+          <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} sessionCwd={sessionCwd} disclosureId={disclosureIds.added(`${message.walnutMessageId ?? message.msgId ?? message.timestamp}-${banner.name}-${i}`)} />
         ))}
         {bodyText && envelopeSegments ? (
           <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
@@ -1382,7 +1385,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
               i = j - 1;
               continue;
             }
-            out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
+            out.push(<SessionToolCall key={t.toolUseId ?? `solo-${i}`} tool={t} {...(t.liveStatus ? { status: t.liveStatus } : {})} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />);
           }
           flush();
           return out;

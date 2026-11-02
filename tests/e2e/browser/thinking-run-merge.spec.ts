@@ -191,12 +191,12 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await completedTool(page, 'WebFetch', 'fetch_3')
     await completedTool(page, 'WebFetch', 'fetch_4')
 
-    const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+    const streamRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched 4 pages, ran a command')
     // Nothing is a top-level "Thinking ›" row any more, and nothing pulses: the
     // turn's tail is a finished tool.
-    await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
     await expect(streamRows.locator('.tool-run-live-dot')).toHaveCount(0)
     await expect(streamRows.locator('.tool-run-body')).toHaveCount(0)
     await page.screenshot({ path: test.info().outputPath('zebra-collapsed.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
@@ -218,7 +218,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await mockSession(page, [{ role: 'assistant', text: 'Parent turn.', timestamp: '2026-01-01T00:00:00.000Z' }])
     const panel = await openSession(page)
     await expect(panel.locator('.session-history')).toContainText('Parent turn.')
-    const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+    const streamRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
 
     // Only reasoning so far: the familiar live "Thinking ›" row.
     await think(page, 'think_1', 'Let me look this up.')
@@ -231,7 +231,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await startTool(page, 'WebFetch', 'fetch_1')
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
-    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-live-dot')).toHaveCount(1)
     await page.screenshot({ path: test.info().outputPath('running-call-closed.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
     // Opened, the running call is there and says so.
@@ -243,7 +243,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await finishTool(page, 'fetch_1')
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
-    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
     await expect(streamRows.locator('.tool-run-live-dot')).toHaveCount(0)
 
     // More reasoning streams INTO the run: same row, now pulsing.
@@ -251,7 +251,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-live-dot')).toHaveCount(1)
-    await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
 
     // The answer arrives: that reasoning led to PROSE, and it stays in the run
     // rather than splitting off as a "Thinking ›" row of its own; nothing pulses.
@@ -259,7 +259,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await expect(panel.locator('[data-stream-reply]', { hasText: 'Both sources agree.' })).toHaveCount(1)
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
-    await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
     await expect(streamRows.locator('.tool-run-live-dot')).toHaveCount(0)
     await streamRows.locator(':scope > .tool-run-toggle').click()
     expect(await bodyOrder(streamRows)).toEqual(['thinking', 'tool:WebFetch', 'thinking'])
@@ -270,7 +270,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await mockSession(page, [{ role: 'assistant', text: 'Parent turn.', timestamp: '2026-01-01T00:00:00.000Z' }])
     const panel = await openSession(page)
     await expect(panel.locator('.session-history')).toContainText('Parent turn.')
-    const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+    const streamRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
 
     await think(page, 'think_1', 'Reading the design before I act.')
     await streamRows.locator(':scope > .tool-run-toggle').click()
@@ -297,7 +297,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
       { name: 'session:thinking-delta', data: { sessionId: SESSION_ID, delta: 'Now I can answer.', msgId: 'msg_b' } },
       { name: 'session:text-delta', data: { sessionId: SESSION_ID, delta: 'The file has it.', msgId: 'msg_b' } },
     ])
-    const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+    const streamRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
     await expect(panel.locator('[data-stream-reply]', { hasText: 'The file has it.' })).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
     await streamRows.locator(':scope > .tool-run-toggle').click()
@@ -315,14 +315,16 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 })
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
 
-    await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-row')).toHaveCount(0)
     // The answer's own reasoning (msg_b) rides the run before it, as it did
     // live, and the turn the reader watched keeps the shape it streamed in
     // (2026-11-01: "no flash, no change"): one run, the same line, the same body.
-    const historyRows = panel.locator('.session-history .tool-run-row').filter({ has: page.locator(':scope > .tool-run-toggle') })
+    // Top-level runs only: the reader opened this one live, so it is still open
+    // (row-disclosure.ts) and its body holds rows of its own.
+    const historyRows = panel.locator('.session-history .tool-run-row:not(.tool-run-body .tool-run-row)')
     await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
     await expect(panel.locator('.session-history')).toContainText('The file has it.')
-    if (!(await historyRows.locator(':scope > .tool-run-body').count())) await historyRows.locator(':scope > .tool-run-toggle').click()
+    await expect(historyRows.locator(':scope > .tool-run-body')).toHaveCount(1)
     // Its body: both pieces of reasoning around the call, as live.
     const innerThinking = historyRows.locator('.tool-run-body .tool-run-row')
     await expect(innerThinking).toHaveCount(liveOrder.filter((k) => k === 'thinking').length)
@@ -405,7 +407,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await completedTool(page, 'WebFetch', 'fetch_a')
     await think(page, 'msg_b', 'And the second.')
     await completedTool(page, 'WebFetch', 'fetch_b')
-    const streamRows = panel.locator('.session-streaming-panel .tool-run-row')
+    const streamRows = panel.locator('.session-live-row .tool-run-row')
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched 2 pages')
 
@@ -424,7 +426,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
 
     // Same count, same words, now drawn from history.
-    await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-row')).toHaveCount(0)
     const historyRows = panel.locator('.session-history .tool-run-row')
     await expect(historyRows).toHaveCount(1)
     await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched 2 pages')

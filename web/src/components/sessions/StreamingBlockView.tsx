@@ -15,6 +15,7 @@ import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { disclosureIds } from './row-disclosure';
 import { SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, SystemLineCollapsible, ReplyImageStrip } from './SessionMessage';
 import { PermissionRequestCard } from './PromptCards';
 import { MessageMetaRow } from './MessageMetaRow';
@@ -160,7 +161,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
     if (!block.content.trim()) return null;
     // Unified muted "Thinking ›" row (same language as merged tool runs).
     // Collapsed by default; `live` shows a pulsing dot while tokens stream.
-    return <SessionThinking text={block.content} live={live} />;
+    return <SessionThinking text={block.content} live={live} disclosureId={disclosureIds.thinking(block.msgId)} />;
   }
 
   // A taken-line marker is a place, not content (stream/chat-order.ts).
@@ -172,7 +173,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
     const content = block.planContent
       ?? (typeof block.input?.plan === 'string' && block.input.plan ? block.input.plan : null);
     if (content) {
-      return <PlanCard content={content} />;
+      return <PlanCard content={content} disclosureId={disclosureIds.plan(block.toolUseId)} />;
     }
   }
 
@@ -193,7 +194,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
   }
 
   // Tool call block — reuse GenericToolCall for full expand/collapse support
-  const toolObj = { name: block.name ?? 'unknown', input: block.input ?? {} };
+  const toolObj = { name: block.name ?? 'unknown', input: block.input ?? {}, toolUseId: block.toolUseId };
   const status = block.status === 'error' ? 'error' : block.status === 'done' ? 'done' : 'calling';
   return (
     <GenericToolCall

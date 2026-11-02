@@ -134,7 +134,7 @@ function focusTaskCard(page: Page, id: string): Locator {
  *  (2026-10-04: a running call folds like a finished one). Open the run when
  *  it is closed; the in-flight card is inside. */
 async function expectRunningTool(panel: Locator, timeout = 10_000): Promise<void> {
-  const run = panel.locator('.session-streaming-panel .tool-run-row')
+  const run = panel.locator('.session-live-row .tool-run-row')
     .filter({ has: panel.page().locator('.tool-run-toggle > .tool-run-live-dot') })
     .first()
   await expect(run).toBeVisible({ timeout })

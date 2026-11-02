@@ -1,17 +1,19 @@
 /**
  * LaneTimeline — a subagent's transcript rendered with the main chat's own rows.
  *
- * Two inputs, one look. While the agent runs, its lane is read straight out of the
- * streaming buffer (`StreamingLane`: the Agent tool_call anchor plus the blocks
- * stamped with its toolUseId); once it has finished, its transcript is the persisted
- * messages the parser embedded under the Agent tool or the subagent endpoint returns
- * (`LaneHistoryTimeline`). Both apply the merges the main conversation applies:
- * consecutive tools (a running one included, the row then breathes) and the
- * thinking around them fold into one "Ran 3 commands, read a file ›" row,
- * thinking with no tool around it into one "Thinking ›" row, system notices into
- * one "N system messages ›" row. A running
- * lane ends in the same "… is working…" indicator the main chat pins to a live
- * turn, clocked from the agent's start.
+ * One input shape, one renderer. While the agent runs, its lane is read straight
+ * out of the streaming buffer (the Agent tool_call anchor plus the blocks stamped
+ * with its toolUseId) and turned into the messages its transcript will hold
+ * (`laneMessagesFromStream`); once it has finished, its transcript is the persisted
+ * messages the parser embedded under the Agent tool or the subagent endpoint
+ * returns. `LaneHistoryTimeline` draws both, keyed by what each row shows, so the
+ * saved transcript takes over the rows the stream drew. It applies the merges the
+ * main conversation applies: consecutive tools (a running one included, the row
+ * then breathes) and the thinking around them fold into one "Ran 3 commands, read
+ * a file ›" row, thinking with no tool around it into one "Thinking ›" row, system
+ * notices into one "N system messages ›" row. A running lane ends in the same
+ * "… is working…" indicator the main chat pins to a live turn, clocked from the
+ * agent's start.
  *
  * Rendered inside the Background tasks panel (never in the chat), and by the
  * workflow transcript modal.
@@ -22,15 +24,12 @@ import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { KnownAgent } from './BackgroundTasksPanel';
 import { agentResultText } from './background-ledger';
-import { groupLaneChildren } from '@/stream/group-blocks';
-import { laneRows, type ToolBlock } from '@/stream/lane-rows';
-import { useLiveAgentsForSession } from '@/stores/background-agents-store';
+import { GROUPABLE_STREAM_TOOLS, isTransparentBlock } from '@/stream/group-blocks';
 import {
-  SessionMessage, TaskGroupPrompt, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, agentModelLabel,
-  isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart,
+  SessionMessage, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart,
   MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember,
 } from './SessionMessage';
-import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars } from './StreamingBlockView';
+import { WorkingIndicator, streamReplyText } from './StreamingBlockView';
 
 interface LaneHandlers {
   sessionId: string;
@@ -43,122 +42,113 @@ interface LaneHandlers {
 
 // ── Streaming lane ─────────────────────────────────────────────────────────────
 
-export interface StreamingLaneProps extends LaneHandlers {
+export type ToolBlock = StreamingBlock & { type: 'tool_call' };
+
+/** A running agent's lane in the stream buffer: its Agent call and every block
+ *  stamped with it (any depth), root-flattened, in stream order. */
+export interface LiveLane {
   taskBlock: ToolBlock;
-  /** The lane's blocks, root-flattened (every depth), in stream order. */
-  childBlocks: StreamingBlock[];
-  /** The agent is still running: the tail row pulses and the working indicator
-   *  shows. Defaults to "not settled by the conversation" (see streamAgentSettled). */
-  live?: boolean;
+  childBlocks: readonly StreamingBlock[];
 }
 
-/** "Explore agent" / "Agent" — who the working indicator says is working. */
-function laneAgentLabel(input?: Record<string, unknown>): string {
+/** When each streamed message of a lane first showed: its time until the saved one's. */
+const laneSeenAt = new Map<string, string>();
+function seenAt(id: string | undefined): string {
+  if (!id) return new Date().toISOString();
+  let at = laneSeenAt.get(id);
+  if (!at) {
+    at = new Date().toISOString();
+    laneSeenAt.set(id, at);
+    if (laneSeenAt.size > 500) laneSeenAt.delete(laneSeenAt.keys().next().value!);
+  }
+  return at;
+}
+
+/**
+ * A live lane as the transcript its agent will save: one message per model
+ * message (msgId) with its reasoning, its words and its calls (a call still
+ * running says so in `liveStatus`), a nested agent's lane under its call. The
+ * reader draws the stream and the saved transcript through the same
+ * LaneHistoryTimeline, so when the agent finishes the saved rows take over the
+ * rows the stream drew (2026-11-01, the user: streaming and finished must look
+ * exactly the same, "no flash"; the reader used to flip to "Loading
+ * transcript…" and build every row again).
+ */
+/**
+ * What names a lane message on both sides: its msgId when it has words or
+ * reasoning (the stream names a message on those), else its first call (a
+ * message of calls alone carries no msgId while it streams).
+ */
+export function laneMessageKey(m: SessionHistoryMessage): string | undefined {
+  if ((m.text ?? '').trim() || (m.thinking ?? '').trim()) return m.msgId ?? m.tools?.[0]?.toolUseId;
+  return m.tools?.[0]?.toolUseId ?? m.msgId;
+}
+
+/** A built message, reused while none of the blocks it came from changed (the
+ *  reducer replaces a block whenever it grows), so an unchanged row keeps its
+ *  memo while the lane streams. Keyed by its first block. */
+const builtLaneMessages = new WeakMap<StreamingBlock, { blocks: StreamingBlock[]; msg: SessionHistoryMessage }>();
+
+export function laneMessagesFromStream(rootId: string, childBlocks: readonly StreamingBlock[]): SessionHistoryMessage[] {
+  const byParent = new Map<string, StreamingBlock[]>();
+  for (const b of childBlocks) {
+    const parent = 'parentToolUseId' in b ? b.parentToolUseId : undefined;
+    if (!parent) continue;
+    let list = byParent.get(parent);
+    if (!list) { list = []; byParent.set(parent, list); }
+    list.push(b);
+  }
+  // Every block a message came from, its nested lanes' included.
+  const sources = new Map<SessionHistoryMessage, StreamingBlock[]>();
+  const build = (parent: string, depth: number, ancestors: StreamingBlock[][]): SessionHistoryMessage[] => {
+    const out: SessionHistoryMessage[] = [];
+    let cur: SessionHistoryMessage | null = null;
+    for (const b of byParent.get(parent) ?? []) {
+      if (b.type !== 'text' && b.type !== 'thinking' && b.type !== 'tool_call') continue;
+      // Nothing to draw yet (an empty tail, a placeholder call): the saved
+      // transcript never has it either.
+      if (isTransparentBlock(b)) continue;
+      // A call belongs to the message whose reasoning and words came before it
+      // (the stream names a message on those, never on a call).
+      const msgId: string | undefined = b.type === 'tool_call' ? (cur as SessionHistoryMessage | null)?.msgId : b.msgId;
+      if (!cur || (b.type !== 'tool_call' && cur.msgId !== msgId)) {
+        cur = { role: 'assistant', text: '', ...(msgId ? { msgId } : {}), timestamp: seenAt(msgId ?? (b.type === 'tool_call' ? b.toolUseId : undefined)) };
+        out.push(cur);
+        sources.set(cur, []);
+      }
+      sources.get(cur)!.push(b);
+      for (const list of ancestors) list.push(b);
+      if (b.type === 'thinking') {
+        if (b.content.trim()) cur.thinking = cur.thinking ? `${cur.thinking}\n\n${b.content}` : b.content;
+      } else if (b.type === 'text') {
+        const text = streamReplyText(b.content);
+        cur.text = cur.text ? `${cur.text}\n\n${text}` : text;
+      } else {
+        const nested = GROUPABLE_STREAM_TOOLS.has(b.name) && depth < 8 ? build(b.toolUseId, depth + 1, [...ancestors, sources.get(cur)!]) : [];
+        (cur.tools ??= []).push({
+          name: b.name ?? 'unknown', input: b.input ?? {}, toolUseId: b.toolUseId,
+          ...(b.result !== undefined ? { result: b.result } : {}),
+          ...(b.status === 'error' ? { isError: true } : {}),
+          liveStatus: b.status === 'error' ? 'error' : b.status === 'calling' ? 'calling' : 'done',
+          ...(nested.length ? { childMessages: nested } : {}),
+        });
+      }
+    }
+    return out.map((m) => {
+      const from = sources.get(m)!;
+      const known = builtLaneMessages.get(from[0]);
+      if (known && known.blocks.length === from.length && known.blocks.every((x, i) => x === from[i])) return known.msg;
+      builtLaneMessages.set(from[0], { blocks: from, msg: m });
+      return m;
+    });
+  };
+  return build(rootId, 0, []);
+}
+
+/** "Explore agent" / "Agent": who the working indicator says is working. */
+export function laneAgentLabel(input?: Record<string, unknown>): string {
   const type = typeof input?.subagent_type === 'string' ? input.subagent_type : '';
   return type ? `${type} agent` : 'Agent';
-}
-
-export function StreamingLane(props: StreamingLaneProps) {
-  const { taskBlock, childBlocks, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen } = props;
-  const live = props.live ?? !streamAgentSettled(taskBlock);
-  // childBlocks arrive root-flattened; selfId lets groupLaneChildren re-derive
-  // the per-level structure (a nested Agent's blocks go under its own header).
-  const rows = laneRows(groupLaneChildren(taskBlock.toolUseId, childBlocks));
-  const startedAt = useLiveAgentsForSession(sessionId).get(taskBlock.toolUseId)?.startedAt;
-  const handlers = { sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen };
-  const tailIdx = rows.length - 1;
-  return (
-    <>
-      <TaskGroupPrompt input={taskBlock.input} />
-      {rows.map((row, i) => {
-        const isTail = live && i === tailIdx;
-        if (row.kind === 'agent') {
-          return (
-            <NestedStreamingAgent key={`nested-${row.item.taskBlock.toolUseId}`} taskBlock={row.item.taskBlock} childBlocks={row.item.childBlocks} {...handlers} />
-          );
-        }
-        if (row.kind === 'run') {
-          const { phrase, failCount } = streamRunSummary(row.blocks);
-          // The row pulses while reasoning streams into it or a call inside it
-          // runs: a finished tool at the tail is settled, and the working
-          // indicator below already says the agent is still going.
-          const thinkingLive = isTail && row.blocks[row.blocks.length - 1].type === 'thinking';
-          const running = thinkingLive || streamRunHasCallingTool(row.blocks);
-          return (
-            <div key={runRowKey(row.blocks, i)} className="session-msg-bare">
-              <ToolRunShell phrase={phrase} failCount={failCount} running={running}>
-                <StreamRunMembers members={row.blocks} live={thinkingLive} {...handlers} />
-              </ToolRunShell>
-            </div>
-          );
-        }
-        if (row.kind === 'thinking') {
-          const text = row.blocks.map(b => b.content).filter(s => s.trim()).join('\n\n');
-          // The same shell and key the stretch will have once a tool joins it, so
-          // a reader who opened the reasoning keeps it open through the fold.
-          return (
-            <div key={runRowKey(row.blocks, i)} className="session-msg-bare">
-              <ToolRunShell phrase="Thinking" failCount={0} running={isTail}>
-                <div className="chat-thinking-content">{text}</div>
-              </ToolRunShell>
-            </div>
-          );
-        }
-        const b = row.block;
-        if (b.type === 'text') {
-          return (
-            <div key={`text-${i}`} className="session-msg session-msg-assistant">
-              <div className="session-msg-content">
-                <StreamingBlockView block={b} live={isTail} {...handlers} />
-                <StreamingReplyMeta block={b} alwaysVisible={false} />
-              </div>
-            </div>
-          );
-        }
-        // A plan card or a plan write (a tool still executing rides its run).
-        return (
-          <div key={`block-${i}`} className="session-msg-bare">
-            <StreamingBlockView block={b} live={isTail} {...handlers} />
-          </div>
-        );
-      })}
-      {live && (
-        <WorkingIndicator
-          label={laneAgentLabel(taskBlock.input)}
-          tokens={Math.round(countStreamChars(childBlocks) / 4)}
-          startedAt={startedAt}
-        />
-      )}
-    </>
-  );
-}
-
-/** A nested Agent this agent spawned: one inert header line with its own lane
- *  beneath it (depth is content inside the reader, never a chip). */
-function NestedStreamingAgent(props: StreamingLaneProps) {
-  const { taskBlock, childBlocks } = props;
-  const isDone = taskBlock.status === 'done';
-  const isError = taskBlock.status === 'error';
-  const subagentType = typeof taskBlock.input?.subagent_type === 'string' ? taskBlock.input.subagent_type : '';
-  const modelChip = agentModelLabel(taskBlock.input);
-  const toolCount = childBlocks.filter(b => b.type === 'tool_call').length;
-  return (
-    <div className={`task-group task-group--nested ${isDone ? 'task-group--done' : ''} ${isError ? 'task-group--error' : ''}`}>
-      <div className="task-group-header">
-        <span className={`task-group-icon ${!isDone && !isError ? 'task-group-icon--running' : ''}`}>
-          {isError ? '✗' : isDone ? '✓' : <span className="task-group-streaming-dot" />}
-        </span>
-        <span className="task-group-label">{taskBlock.name}</span>
-        {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
-        {modelChip && <span className="task-group-model">{modelChip}</span>}
-        <span className="task-group-description">{streamAgentDescription(taskBlock)}</span>
-        {toolCount > 0 && (
-          <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
-        )}
-      </div>
-      <div className="task-group-body"><StreamingLane {...props} live={!isDone && !isError} /></div>
-    </div>
-  );
 }
 
 export function streamAgentDescription(taskBlock: ToolBlock): string {
@@ -289,9 +279,11 @@ export function LaneHistoryTimeline({ messages, live, startedAt, agentLabel, ses
     <>
       {parts.map((part, i) => {
         if (part.kind === 'run') {
+          // Keyed by the run's first member, as the live run is (runRowKey).
           const first = part.memberMsgs[0];
+          const key = first.thinking ? first.msgId : first.tools?.[0]?.toolUseId;
           return (
-            <div key={`run-${first.msgId ?? i}`} className="session-msg-bare">
+            <div key={`run-${key ?? i}`} className="session-msg-bare">
               <MergedHistoryToolRun messages={part.memberMsgs} {...handlers} />
             </div>
           );
@@ -304,7 +296,7 @@ export function LaneHistoryTimeline({ messages, live, startedAt, agentLabel, ses
           );
         }
         return (
-          <SessionMessage key={part.m.msgId ?? `${part.m.role}:${part.m.timestamp}:${i}`} message={part.m} suppressTools={part.suppressTools} {...handlers} />
+          <SessionMessage key={laneMessageKey(part.m) ?? `${part.m.role}:${part.m.timestamp}:${i}`} message={part.m} suppressTools={part.suppressTools} {...handlers} />
         );
       })}
       {live && (

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRowDisclosure } from './row-disclosure';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import type { InjectedBanner } from '@open-walnut/history-injected-banner';
@@ -15,11 +15,13 @@ import '@/styles/injected-banner.css';
  * Markdown renders lazily, only once opened: a catch-up block is a whole
  * conversation recap, and a session's history can hold many of them.
  */
-export function InjectedBannerRow({ banner, sessionCwd }: {
+export function InjectedBannerRow({ banner, sessionCwd, disclosureId }: {
   banner: InjectedBanner;
   sessionCwd?: string;
+  /** Its message's id and place (the same banner rides many messages). */
+  disclosureId?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(disclosureId, false);
   const html = useRenderedMarkdown(open ? banner.body : '', sessionCwd);
   return (
     <div

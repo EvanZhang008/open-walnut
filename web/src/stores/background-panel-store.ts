@@ -16,8 +16,9 @@
  * its history successor share, so the hand-over is seamless.
  */
 
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { KnownAgent } from '@/components/sessions/BackgroundTasksPanel';
+import type { LiveLane } from '@/components/sessions/LaneTimeline';
 import { EMPTY_TOOL_SOURCE, type ToolSource } from '@/stream/command-view';
 
 interface OpenState {
@@ -110,14 +111,14 @@ export function useKnownAgents(sessionId: string | undefined): KnownAgent[] {
 
 // ── Live lanes: a running agent's transcript straight from the stream buffer ──
 
-export type LaneRenderer = () => ReactNode;
-const EMPTY_LANES: ReadonlyMap<string, LaneRenderer> = new Map();
-const lanesBySession = new Map<string, ReadonlyMap<string, LaneRenderer>>();
+const EMPTY_LANES: ReadonlyMap<string, LiveLane> = new Map();
+const lanesBySession = new Map<string, ReadonlyMap<string, LiveLane>>();
 const laneListeners = new Map<string, Set<() => void>>();
 
-/** The chat publishes, per render, a renderer for every lane the stream holds
- *  whose agent is still running, keyed by the root Agent toolUseId. */
-export function setLiveLanes(sessionId: string, lanes: ReadonlyMap<string, LaneRenderer>): void {
+/** The chat publishes, per render, every lane the stream holds whose agent is
+ *  still running (its Agent call and blocks), keyed by the root Agent toolUseId.
+ *  The panel draws it with the renderer the saved transcript uses. */
+export function setLiveLanes(sessionId: string, lanes: ReadonlyMap<string, LiveLane>): void {
   const prev = lanesBySession.get(sessionId);
   if (lanes.size === 0 && (!prev || prev.size === 0)) return;
   lanesBySession.set(sessionId, lanes);
@@ -125,12 +126,12 @@ export function setLiveLanes(sessionId: string, lanes: ReadonlyMap<string, LaneR
   if (set) for (const l of set) l();
 }
 
-export function getLiveLanes(sessionId: string | undefined): ReadonlyMap<string, LaneRenderer> {
+export function getLiveLanes(sessionId: string | undefined): ReadonlyMap<string, LiveLane> {
   if (!sessionId) return EMPTY_LANES;
   return lanesBySession.get(sessionId) ?? EMPTY_LANES;
 }
 
-export function useLiveLanes(sessionId: string | undefined): ReadonlyMap<string, LaneRenderer> {
+export function useLiveLanes(sessionId: string | undefined): ReadonlyMap<string, LiveLane> {
   return useSyncExternalStore(
     (l) => {
       if (!sessionId) return () => {};

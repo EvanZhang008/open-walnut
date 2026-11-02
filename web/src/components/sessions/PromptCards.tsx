@@ -11,6 +11,7 @@
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
 import { useEffect, useState } from 'react';
+import { useRowDisclosure } from './row-disclosure';
 import { createPortal } from 'react-dom';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -198,7 +199,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
   const status: PermissionRequestStatus = stored?.status
     ?? (initialStatus && initialStatus !== 'pending' ? initialStatus : 'pending');
   const busy = stored?.inFlight ?? false;
-  const [inputExpanded, setInputExpanded] = useState(false);
+  const [inputExpanded, setInputExpanded] = useRowDisclosure(`perm-input-${requestId}`, false);
   const phone = usePhoneLayout();
   const settled = isSettledPermission(status);
   // Phone: the answered card keeps its pending face (buttons off) for 300 ms.

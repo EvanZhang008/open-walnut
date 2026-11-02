@@ -31,13 +31,14 @@
  */
 
 import type { StreamingBlock } from './stream-reducer';
+import { GROUPABLE_TOOLS, toolMergesIntoRun } from './tool-merge';
 
 export type GroupedStreamItem =
   | { kind: 'block'; block: StreamingBlock; index: number }
   | { kind: 'task-group'; taskBlock: StreamingBlock & { type: 'tool_call' }; childBlocks: StreamingBlock[]; index: number };
 
 /** Tool names whose streaming child blocks should be grouped under them. */
-export const GROUPABLE_STREAM_TOOLS = new Set(['Task', 'Agent']);
+export const GROUPABLE_STREAM_TOOLS = GROUPABLE_TOOLS;
 
 /** True for a block that belongs to a subagent lane (any depth). */
 export function isLaneChild(b: StreamingBlock): boolean {
@@ -71,14 +72,11 @@ export function isTransparentBlock(b: StreamingBlock): boolean {
  *  and ghosts never merge. */
 export function isMergeableToolBlock(b: StreamingBlock): b is StreamingBlock & { type: 'tool_call' } {
   if (b.type !== 'tool_call') return false;
-  if (GROUPABLE_STREAM_TOOLS.has(b.name)) return false;
-  if (b.name === 'ExitPlanMode') return false;
-  if (b.name === 'Write' && typeof b.input?.file_path === 'string'
-    && b.input.file_path.includes('.claude/plans/')) return false;
-  // Empty input and no result, whatever the status: a placeholder with nothing
-  // to show, never counted in a run's summary (a calling one is a ghost).
-  if (!b.result && (!b.input || Object.keys(b.input).length === 0)) return false;
-  return true;
+  // The saved rows' rule too (tool-merge.ts), so a run keeps its members when
+  // its saved twin takes over.
+  // Empty input and no result is in it too: a placeholder with nothing to show,
+  // never counted in a run's summary (a calling one is a ghost).
+  return toolMergesIntoRun(b);
 }
 
 /** A thinking block with words in it folds into the run around it, exactly as a

@@ -265,8 +265,9 @@ test.describe('Mid-stream user message persistence', () => {
     await page.waitForTimeout(100);
 
     // Verify streaming blocks are visible
-    const streamingPanel = page.locator('.session-streaming-panel');
-    await expect(streamingPanel).toBeVisible({ timeout: 3000 });
+    // Live rows (a run, a tool card) and a reply still arriving (a row of its own).
+    const liveRows = page.locator('.session-history :is(.session-live-row, [data-stream-reply])');
+    await expect(liveRows.first()).toBeVisible({ timeout: 3000 });
 
     // ── Step 2: User sends a message mid-stream ──
     const chatInput = page.getByPlaceholder('Send a message to this session...');

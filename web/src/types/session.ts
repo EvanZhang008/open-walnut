@@ -267,6 +267,9 @@ export interface SessionHistoryTool {
   teamAgentName?: string;
   /** Child messages from subagent JSONL (populated for Task tools) */
   childMessages?: SessionHistoryMessage[];
+  /** Client only: a call drawn from the live stream (a subagent lane), with its
+   *  state. A saved tool has none. */
+  liveStatus?: 'calling' | 'done' | 'error';
 }
 
 export interface SessionHistoryMessage {

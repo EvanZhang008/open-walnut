@@ -52,8 +52,6 @@ const SURFACES: Record<string, string> = {
   // Persisted rows only (the server's parse orders them, src/core/session-history.ts).
   'web/src/components/sessions/ChatEarlierBlock.tsx': 'history only',
   'web/src/components/sessions/TaskEarlierSessions.tsx': 'history only',
-  // Subagent lane blocks: no user line is ever in a lane.
-  'web/src/components/sessions/LaneTimeline.tsx': 'lane only',
   // Before a session exists: queued messages and nothing streaming above them.
   'web/src/components/sessions/PendingSessionPanel.tsx': 'no stream',
   'web/src/components/workspaces/WorkspacePreparingPanel.tsx': 'no stream',

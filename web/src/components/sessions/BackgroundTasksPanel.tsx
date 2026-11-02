@@ -296,8 +296,10 @@ export function BackgroundTasksPanel({
     ? lanes.get(selectedToolUseId)
     : undefined;
   const readable = selected?.isAgent
-    && (selected.agentId || selected.known?.preloaded?.length || selected.known?.result);
-  const target = selected && readable && !liveLane
+    && (liveLane || selected.agentId || selected.known?.preloaded?.length || selected.known?.result);
+  // One reader for the live lane and the saved transcript (TranscriptBody), so
+  // the saved rows take over the rows the stream drew when the agent finishes.
+  const target = selected && readable
     ? {
         agentId: selected.agentId ?? selected.known?.toolUseId ?? selected.key,
         label: selected.title,
@@ -310,6 +312,7 @@ export function BackgroundTasksPanel({
         fetchable: !!selected.agentId,
         startedAt: selected.task?.startedAt,
         agentLabel: selected.subagentType ? `${selected.subagentType} agent` : 'Agent',
+        toolUseId: selectedToolUseId,
       }
     : null;
   const detailLive = !!liveLane || target?.live === true;
@@ -380,10 +383,10 @@ export function BackgroundTasksPanel({
               </div>
             )}
             <div className="bg-tasks-detail-body">
-              {liveLane ? (
-                <div className="bg-tasks-live-lane">{liveLane()}</div>
-              ) : target ? (
-                <TranscriptBody key={target.agentId} target={target} sessionId={sessionId} />
+              {target ? (
+                <div className="bg-tasks-transcript" {...(liveLane ? { 'data-live-lane': '' } : {})}>
+                  <TranscriptBody key={selectedToolUseId ?? target.agentId} target={target} sessionId={sessionId} {...(liveLane ? { liveLane } : {})} />
+                </div>
               ) : selected?.isCommand && selected.task ? (
                 <CommandDetail row={selected} source={source} />
               ) : selected ? (
@@ -479,8 +482,8 @@ function useStackedTitle(ref: RefObject<HTMLElement | null>, deps: unknown[]): b
 export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; agents: KnownAgent[] }) {
   const live = useLiveAgentsForSession(sessionId);
   const chipKey = agents[0]?.toolUseId ?? agents[0]?.agentId ?? agents[0]?.description ?? '';
-  // Publish on every render: the live-lane closures inside `agents` are rebuilt per
-  // stream delta and the panel must read the current one.
+  // Publish on every render: `agents` is rebuilt per stream delta (a running
+  // agent's status) and the panel must read the current one.
   useEffect(() => { if (sessionId && chipKey) registerKnownAgents(sessionId, chipKey, agents); });
   useEffect(() => () => { if (sessionId && chipKey) unregisterKnownAgents(sessionId, chipKey); }, [sessionId, chipKey]);
   const n = agents.length;

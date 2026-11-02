@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, isValidElement, type ReactNode } from 'react';
 import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
@@ -24,7 +24,7 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { useForegroundActive } from '@/stores/background-agents-store';
-import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
+import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
@@ -66,6 +66,7 @@ import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOL
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
+import { RowDisclosureScope, disclosureIds } from './row-disclosure';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
@@ -3016,15 +3017,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const streamLanes = collectLanes(blocks);
   useEffect(() => {
     if (!sessionId) return;
-    const renderers = new Map<string, () => ReactNode>();
+    const live = new Map<string, LiveLane>();
     for (const [rootId, lane] of streamLanes) {
       const anchor = lane.anchor;
       if (!anchor || streamAgentSettled(anchor)) continue;
-      renderers.set(rootId, () => (
-        <StreamingLane taskBlock={anchor} childBlocks={lane.children} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-      ));
+      live.set(rootId, { taskBlock: anchor, childBlocks: lane.children });
     }
-    setLiveLanes(sessionId, renderers);
+    setLiveLanes(sessionId, live);
     // The panel's Command rows read their Bash tool call and output from here.
     setToolSource(sessionId, { blocks, messages });
   });
@@ -4195,7 +4194,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // The line after some reasoning: the reasoning, then the mark. Drawn as a
           // message it was a "Thinking" row and an empty footer under it.
           <>
-            <SessionThinking text={m.thinking ?? ''} />
+            <SessionThinking text={m.thinking ?? ''} disclosureId={disclosureIds.thinking(m.msgId)} />
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
@@ -5030,8 +5029,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // is never absorbed) stays a stream block.
   const historyMsgIds = useMemo(() => new Set(messages.flatMap((m) => (m.msgId ? [m.msgId] : []))), [messages]);
   const streamReplyIds = new Set<string>();
-  // Timeline positions drawn as their own row in bodyRows (replies, the
-  // person's messages, the working indicator); the rest goes in panels.
+  // Timeline positions of replies drawn as history rows (their own key in
+  // bodyRows); every other live item gets a live-row wrapper.
   const streamTopLevel = new Set<number>();
   /** One live-turn item (interleaved blocks + ALL optimistic messages by
    *  blockIndex, in their visual positions until persisted history dedupes them). */
@@ -5100,7 +5099,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
-          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])}>
+          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])} disclosureId={disclosureIds.thinking(thinkingIds.find(Boolean))}>
             <div className="chat-thinking-content">{content}</div>
           </ToolRunShell>
         </div>
@@ -5119,7 +5118,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-          <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length}>
+          <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
             <StreamRunMembers
               members={members}
               live={thinkingLive}
@@ -5283,45 +5282,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   const streamNodes = timeline.map(renderStreamItem);
   // The history rows and the live turn are ONE keyed list, so a reply row
-  // stays the same element when its persisted twin takes its place. The live
-  // items between rows go in `.session-streaming-panel` stretches, each keyed
-  // by the block index its span starts at (after a reply, absorbed ones too,
-  // or a person's message), so a stretch keeps its key while the rows around
-  // it land. The person's messages and the working indicator are rows of
-  // their own: a reply starting before them must not move them into another
-  // stretch.
+  // stays the same element when its persisted twin takes its place. Every
+  // other live item is a row of that list too, in a `display: contents`
+  // wrapper keyed by the item (`.session-live-row`): a person's message saved
+  // mid-turn, a block absorbed, a reply landing never moves a live row into
+  // another parent, which would build it again and fold an open tool card shut
+  // (2026-11-01, the user: "no flash, no change of format").
   const streamRows: React.ReactNode[] = [];
-  let stretch: React.ReactNode[] = [];
-  let stretchFrom = 0;
-  let nextBlock = 0;
-  const flushStretch = (from: number) => {
-    if (stretch.some((n) => n != null && n !== false)) {
-      streamRows.push(<div key={`sp-${stretchFrom}`} className="session-streaming-panel">{stretch}</div>);
-    }
-    stretch = [];
-    stretchFrom = from;
-  };
-  const passBlocksBefore = (end: number) => {
-    for (; nextBlock < end; nextBlock++) {
-      const b = blocks[nextBlock];
-      if (b.type === 'text' && b.msgId && !b.parentToolUseId) flushStretch(nextBlock + 1);
-    }
-  };
-  timeline.forEach((item, i) => {
-    if (item.kind === 'block') passBlocksBefore(item.index);
-    else if (item.kind === 'user') passBlocksBefore(Math.min(item.at, blocks.length));
-    if (streamTopLevel.has(i) || item.kind === 'user' || item.kind === 'indicator') {
-      flushStretch(item.kind === 'user' ? item.at : stretchFrom);
-      streamRows.push(streamNodes[i]);
-    } else {
-      stretch.push(streamNodes[i]);
-    }
-    if (item.kind === 'block') passBlocksBefore(item.index + 1);
+  streamNodes.forEach((node, i) => {
+    if (node == null || node === false) return;
+    const item = timeline[i];
+    if (streamTopLevel.has(i) && item.kind === 'block') { streamRows.push(node); return; }
+    const key = isValidElement(node) && node.key != null ? node.key : `at${i}`;
+    streamRows.push(<div key={`live:${key}`} className="session-live-row">{node}</div>);
   });
-  flushStretch(0);
   const bodyRows = [...pageRows, boundaryEl, ...streamRows];
 
   return (
+    <RowDisclosureScope.Provider value={sessionId}>
     <ReaderOpenedFolds.Provider value={readerOpened}>
       {/* Team tab bar — shown when session has team(s) */}
       {teams.length > 0 && (
@@ -5686,5 +5664,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       </ThreadStackFrame>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
     </ReaderOpenedFolds.Provider>
+    </RowDisclosureScope.Provider>
   );
 });

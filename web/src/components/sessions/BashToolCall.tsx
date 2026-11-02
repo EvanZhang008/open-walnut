@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { ChevronRightIcon, PlayGlyphIcon } from '@/components/common/PhoneIcons';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
@@ -13,7 +14,7 @@ import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 const INLINE_RESULT_LIMIT = 4000;
 
 interface BashToolCallProps {
-  tool: { name: string; input: Record<string, unknown> };
+  tool: { name: string; input: Record<string, unknown>; toolUseId?: string };
   status?: 'calling' | 'done' | 'error';
   result?: string;
   sessionCwd?: string;
@@ -57,7 +58,7 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
 };
 
 export function BashToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd }: BashToolCallProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), false);
   const [popupOpen, setPopupOpen] = useState(false);
 
   const result = resultProp ?? (tool as { result?: string }).result;

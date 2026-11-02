@@ -56,6 +56,7 @@ import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, noticeText, noticeTitle, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
+import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-quote.css';
 import '@/styles/provenance-fold.css';
 
@@ -252,8 +253,9 @@ function EnvelopeBody({ body, sessionCwd }: { body: string; sessionCwd?: string 
 /** Everything the model was told that a human does not need on screen, ids included. */
 function EnvelopeDetails({ envelope, sessionId }: { envelope: SessionEnvelope; sessionId?: string }) {
   const requestId = envelope.requestId ?? envelope.replyRequest?.requestId;
+  const disclosure = useDetailsDisclosure(disclosureIds.content('envelope', `${requestId ?? ''}|${envelope.body ?? ''}`));
   return (
-    <details className="provenance-details">
+    <details className="provenance-details" {...disclosure}>
       <summary>Envelope details</summary>
       {(requestId || sessionId) && (
         <div className="provenance-ids">

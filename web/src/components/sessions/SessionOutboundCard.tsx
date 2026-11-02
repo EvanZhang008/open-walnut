@@ -54,6 +54,7 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
+import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-fold.css';
 
 interface ResolvedTarget {
@@ -238,8 +239,10 @@ function OutboundBody({ body, sessionCwd }: { body: string; sessionCwd?: string 
 /** The command and the server's answer, ids included: present, never dominant. */
 function OutboundDetails({ send, result, sessionId }: { send: OutboundSend; result?: string; sessionId?: string }) {
   const requestId = send.repliedTo ?? send.requestId;
+  // Kept by the command, which the live card and its saved twin share.
+  const disclosure = useDetailsDisclosure(disclosureIds.content('outbound', send.raw));
   return (
-    <details className="provenance-details">
+    <details className="provenance-details" {...disclosure}>
       <summary>{send.via === 'cli' ? 'Command & response' : 'Call & response'}</summary>
       {(requestId || sessionId) && (
         <div className="provenance-ids">

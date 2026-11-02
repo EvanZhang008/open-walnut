@@ -172,7 +172,7 @@ test.describe('Session timeline collapsed rows', () => {
       await completedTool(page, 'Read', 'grandchild_read', 'child_agent')
       await completedTool(page, 'Bash', 'main_command_2')
 
-      const rows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+      const rows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
       await expect(rows).toHaveCount(1)
       await expect(rows.locator('.tool-run-label')).toHaveText('Read 2 files, ran 2 commands')
       await expect(panel.locator('.bg-tasks-chip')).toHaveCount(anchor === 'missing' ? 0 : 1)
@@ -218,7 +218,7 @@ test.describe('Session timeline collapsed rows', () => {
       for (const [j, name] of names.entries()) await completedTool(page, name, `dense_main_${i}_${j}`)
       await completedTool(page, 'Bash', `dense_child_${i}`, 'dense_background')
     }
-    const rows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
+    const rows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
     await expect(rows.locator('.tool-run-label')).toHaveText([
       'Read a file, ran a command',
       'Read 10 files, ran 9 commands, edited 3 files, used a tool',
@@ -263,8 +263,8 @@ test.describe('Session timeline collapsed rows', () => {
     await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: 'Visible thinking.', msgId: 'main_thinking' })
     // Reasoning is a run MEMBER, not a boundary: the row it streams into pulses,
     // and no top-level "Thinking ›" row appears (thinking-run-merge.spec.ts).
-    const toolRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row').filter({ hasText: /^Ran / })
-    await expect(panel.locator('.session-streaming-panel .tool-run-label').filter({ hasText: /^Thinking$/ })).toHaveCount(0)
+    const toolRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row').filter({ hasText: /^Ran / })
+    await expect(panel.locator('.session-live-row .tool-run-label').filter({ hasText: /^Thinking$/ })).toHaveCount(0)
     await expect(toolRows.last().locator('.tool-run-live-dot')).toHaveCount(1)
     await completedTool(page, 'Bash', 'before_system')
     await injectEvent(page, 'session:system-event', { sessionId: SESSION_ID, variant: 'info', message: 'Visible notice.' })
@@ -283,15 +283,15 @@ test.describe('Session timeline collapsed rows', () => {
     await expect(toolRows.locator('.tool-run-label')).toHaveText([
       'Ran a command', 'Ran 2 commands', 'Ran a command', 'Ran 3 commands',
     ])
-    await expect(panel.locator('.session-streaming-panel .tool-run-live-dot')).toHaveCount(1)
+    await expect(panel.locator('.session-live-row .tool-run-live-dot')).toHaveCount(1)
     await expect(toolRows.last().locator('.tool-run-live-dot')).toHaveCount(1)
     await expect(panel.locator('.bg-tasks-chip')).toHaveCount(1)
-    await expect(panel.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
     await expect(panel).toContainText('Visible notice.')
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'running_command', result: 'done' })
     await expect(toolRows).toHaveCount(4)
     await expect(toolRows.last().locator('.tool-run-label')).toHaveText('Ran 3 commands')
-    await expect(panel.locator('.session-streaming-panel .tool-run-live-dot')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-live-dot')).toHaveCount(0)
   })
 
   test('keeps failures and retries through duplicate results and history absorption', async ({ page }) => {
@@ -327,10 +327,11 @@ test.describe('Session timeline collapsed rows', () => {
     })
     await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 })
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
-    await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
+    await expect(panel.locator('.session-live-row .tool-run-row')).toHaveCount(0)
     await expect(panel.locator('.tool-run-label')).toHaveText('Ran 2 commands')
     await expect(panel.locator('.tool-run-fail')).toHaveText('1 failed')
-    await panel.locator('.tool-run-toggle').click()
+    // The reader opened the run live: the saved run is open too (row-disclosure.ts).
+    await expect(panel.locator('.tool-run-row > .tool-run-body')).toHaveCount(1)
     await expect(panel.locator('.chat-tool-block')).toHaveCount(2)
   })
 
@@ -373,10 +374,10 @@ test.describe('Session timeline collapsed rows', () => {
       result: 'second',
     })
 
-    const toolRows = page.locator('.session-streaming-panel .tool-run-row')
+    const toolRows = page.locator('.session-live-row .tool-run-row')
     await expect(toolRows).toHaveCount(1)
     await expect(toolRows.locator('.tool-run-label')).toHaveText(/Ran 2 commands/i)
-    await expect(page.locator('.session-streaming-panel .chat-tool-block')).toHaveCount(0)
+    await expect(page.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
   })
 
   test('merges adjacent streaming thinking segments into one row', async ({ page }) => {
@@ -406,7 +407,7 @@ test.describe('Session timeline collapsed rows', () => {
       msgId: 'msg_think_2',
     })
 
-    const thinkingRows = page.locator('.session-streaming-panel .tool-run-row', {
+    const thinkingRows = page.locator('.session-live-row .tool-run-row', {
       has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
     })
     await expect(thinkingRows).toHaveCount(1)

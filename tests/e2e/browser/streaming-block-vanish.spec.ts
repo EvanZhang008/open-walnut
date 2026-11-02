@@ -256,10 +256,10 @@ test.describe('Streaming blocks survive turn boundaries (evidence-based promotio
     expect((finalTxt.match(/Step 2 done\./g) || []).length, 'Step 2 must appear exactly once').toBe(1);
 
     // The completed turn now renders as persisted history (SessionMessage), and the
-    // live turn 2 block is the only thing left in the streaming panel.
-    const streamingPanel = page.locator('.session-streaming-panel');
-    await expect(streamingPanel).toContainText('Message 5 is generating');
-    await expect(streamingPanel).not.toContainText('Step 1 done.');
+    // live turn 2 block is the only live row left.
+    const liveRows = page.locator('.session-history :is(.session-live-row, [data-stream-reply])');
+    await expect(liveRows.filter({ hasText: 'Message 5 is generating' })).toHaveCount(1);
+    await expect(liveRows.filter({ hasText: 'Step 1 done.' })).toHaveCount(0);
   });
 
   test('a completed block WITHOUT a twin in the arrived delta is KEPT, not deleted (broken/incomplete archive)', async ({ page }) => {

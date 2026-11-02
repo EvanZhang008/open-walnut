@@ -105,7 +105,6 @@ const PASSING: Record<string, string> = {
   'apps/mail/MailAccountFolders.tsx#filter': 'a typed search over one account\'s folders',
   'apps/mail/MailApp.tsx#showMailboxes': 'the mailbox drawer on a narrow window, an overlay',
   'components/board/kanban/useKanbanLayout.ts#mode': 'derived from the board\'s width',
-  'components/sessions/SessionMessage.tsx#collapsed': 'one message folded',
   'components/sessions/UserMessagesSummary.tsx#collapsed': 'one summary folded',
   'components/sessions/SessionPanel.tsx#chatCollapsed': 'the chat folded inside the Changed / Files split, an overlay',
   'hooks/useEngineSettings.ts#view': 'the settings the engine sent, not a choice',

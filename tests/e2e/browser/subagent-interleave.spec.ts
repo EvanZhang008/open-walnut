@@ -374,7 +374,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(rows.first().locator('.bg-task-row-meta')).toContainText('61k tokens');
     // While the agent runs, the reader IS the live lane from the stream buffer (no
     // fetch, no poll): the 60 probes and the narration the chat refused to show.
-    await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(1);
+    await expect(panel.locator('[data-live-lane]')).toHaveCount(1);
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Lane narration that must stay off the main conversation.');
     await expect(panel.locator('.bg-tasks-detail')).not.toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(1);
@@ -397,7 +397,8 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await chip.click();
     await expect(panel).toHaveCount(1);
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('Find other insights needing audit log');
-    await panel.locator('.bg-tasks-detail .tool-run-toggle').click();
+    // The run the reader opened before is still open (row-disclosure.ts).
+    await expect(panel.locator('.bg-tasks-detail .tool-run-row > .tool-run-body')).toHaveCount(1);
     await expect(panel.locator('.bg-tasks-detail')).toContainText('probe 59');
     await expect(history).not.toContainText('probe 59');
     await page.keyboard.press('Escape');
@@ -433,10 +434,135 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // persisted transcript (the canonical record), not the stream lane.
     await chip.click();
     await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Finished']);
-    await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(0);
+    await expect(panel.locator('[data-live-lane]')).toHaveCount(0);
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(0);
     await expect(panel.locator('.bg-tasks-detail .session-working-indicator')).toHaveCount(0);
+  });
+
+  test('the reader keeps its rows when the agent finishes: the saved transcript takes over the live lane in place, nothing reloads or folds', async ({ page }) => {
+    // 2026-11-01, the user: streaming and finished must look exactly the same, "no
+    // flash, no change of format". The reader drew the running lane with its own
+    // component and the finished agent's transcript with another, after a
+    // "Loading transcript…" line; now one renderer draws both in one place.
+    const AGENT_ID = 'b2c3d4e5f6071829';
+    const base = [
+      { role: 'user', text: 'Audit the logs', timestamp: '2026-01-01T00:00:00.000Z' },
+      {
+        role: 'assistant', text: 'Dispatched an agent.', timestamp: '2026-01-01T00:00:01.000Z', msgId: 'msg_launch_h',
+        tools: [{
+          name: 'Agent', toolUseId: PARENT, agentId: AGENT_ID,
+          input: { description: 'Audit the logs', subagent_type: 'explore', run_in_background: true },
+          result: `Async agent launched successfully. agentId: ${AGENT_ID}`,
+        }],
+      },
+    ];
+    await mockHistory(page, base);
+    await mockSessionDetail(page);
+    await page.route(`**/api/sessions/${SESSION_ID}/workflow`, (route) => route.fulfill({ status: 204, body: '' }));
+    const probes = [0, 1, 2].map((i) => ({ name: 'Bash', toolUseId: `toolu_hand_${i}`, input: { command: `probe ${i}` }, result: `probe-${i}-out` }));
+    let fetches = 0;
+    await page.route(`**/api/sessions/${SESSION_ID}/subagent/${AGENT_ID}/history**`, async (route) => {
+      fetches++;
+      // Slow on purpose: a reader that waits for it shows its loading line.
+      await new Promise((r) => setTimeout(r, 700));
+      await route.fulfill({
+        json: {
+          messages: [
+            { role: 'assistant', text: '', msgId: 'msg_hand_tools', timestamp: new Date().toISOString(), tools: probes },
+            { role: 'assistant', text: 'Lane narration of the audit.', msgId: 'msg_hand_text', timestamp: new Date().toISOString() },
+            // What only the saved transcript has: proves it is what renders now.
+            { role: 'assistant', text: 'Closing line only the saved transcript has.', msgId: 'msg_hand_close', timestamp: new Date().toISOString() },
+          ],
+        },
+      });
+    });
+
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForLoadState('networkidle');
+    await waitForWs(page);
+    await page.waitForSelector('.session-msg', { timeout: 8000 });
+
+    await injectEvent(page, 'session:tool-use', {
+      sessionId: SESSION_ID, toolName: 'Agent', toolUseId: PARENT,
+      input: { description: 'Audit the logs', subagent_type: 'explore', run_in_background: true },
+    });
+    await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: PARENT, result: `agentId: ${AGENT_ID}` });
+    for (const p of probes) {
+      await injectEvent(page, 'session:tool-use', {
+        sessionId: SESSION_ID, toolName: p.name, toolUseId: p.toolUseId, input: p.input, parentToolUseId: PARENT, subagentType: 'explore',
+      });
+      await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: p.toolUseId, result: p.result, parentToolUseId: PARENT });
+    }
+    await injectEvent(page, 'session:text-delta', {
+      sessionId: SESSION_ID, delta: 'Lane narration of the audit.', msgId: 'msg_hand_text', parentToolUseId: PARENT, subagentType: 'explore',
+    });
+    const ledger = (status: 'running' | 'completed') => injectEvent(page, 'session:background-tasks', {
+      sessionId: SESSION_ID, inFlight: status === 'running' ? 1 : 0, phases: [], agents: [],
+      tasks: [{
+        taskId: AGENT_ID, toolUseId: PARENT, taskType: 'local_agent', status,
+        description: 'Audit the logs', subagentType: 'explore', tokens: 1200, toolUses: 3, durationMs: 9000,
+        startedAt: Date.now() - 9000, ...(status === 'completed' ? { endedAt: Date.now() } : { isBackgrounded: true }),
+      }],
+    });
+    await ledger('running');
+
+    await page.locator('.session-history .bg-tasks-chip').click();
+    const panel = page.locator('.wf-modal--tasks');
+    const detail = panel.locator('.bg-tasks-detail');
+    await expect(panel.locator('[data-live-lane]')).toHaveCount(1);
+    await expect(detail).toContainText('Lane narration of the audit.');
+    // The reader opens the run and the first command.
+    await detail.locator('.tool-run-toggle').click();
+    await detail.locator('.chat-tool-block-header', { hasText: 'probe 0' }).click();
+    await expect(detail).toContainText('probe-0-out');
+    expect(fetches, 'a running lane is read from the stream, never fetched').toBe(0);
+
+    // Tag the rows the stream drew, and watch every frame.
+    await page.evaluate(() => {
+      const d = document.querySelector('.wf-modal--tasks .bg-tasks-detail')!;
+      d.querySelector('.tool-run-row')!.setAttribute('data-pw-kept', 'run');
+      const text = Array.from(d.querySelectorAll('.session-msg')).find((e) => (e.textContent ?? '').includes('Lane narration of the audit.'));
+      text?.setAttribute('data-pw-kept', 'text');
+      const w = window as any;
+      w.__laneFrames = [];
+      w.__laneSampling = true;
+      // Every DOM commit and every frame: a commit that a frame never painted
+      // is still caught.
+      const sample = () => {
+        if (!w.__laneSampling) return;
+        const el = document.querySelector('.wf-modal--tasks .bg-tasks-detail') as HTMLElement | null;
+        const t = el?.innerText ?? '';
+        w.__laneFrames.push({
+          loading: /Loading transcript|Waiting for the agent/.test(t),
+          outputs: (t.match(/probe-0-out/g) ?? []).length,
+          narration: (t.match(/Lane narration of the audit\./g) ?? []).length,
+          runs: el?.querySelectorAll('.tool-run-row').length ?? 0,
+        });
+      };
+      w.__laneObserver = new MutationObserver(sample);
+      w.__laneObserver.observe(document.querySelector('.wf-modal--tasks')!, { subtree: true, childList: true, characterData: true, attributes: true });
+      const tick = () => { if (!w.__laneSampling) return; sample(); requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+      sample();
+    });
+
+    // The agent finishes: the ledger flips and the saved transcript is read.
+    const read = page.waitForResponse((r) => r.url().includes(`/subagent/${AGENT_ID}/history`), { timeout: 8000 });
+    await ledger('completed');
+    await read;
+    await expect(panel.locator('[data-live-lane]')).toHaveCount(0);
+    await expect(detail).toContainText('Closing line only the saved transcript has.');
+    await page.waitForTimeout(600);
+    const frames = await page.evaluate(() => { const w = window as any; w.__laneSampling = false; w.__laneObserver.disconnect(); return w.__laneFrames as Array<Record<string, unknown>>; });
+    expect(frames.length).toBeGreaterThan(1);
+    const bad = frames.map((f, i) => ({ i, ...f }))
+      .filter((f) => f.loading || f.outputs !== 1 || f.narration !== 1 || f.runs !== 1);
+    expect(bad.slice(0, 5), `frames where the reader changed (of ${frames.length})`).toEqual([]);
+    // The saved transcript took over the very rows the stream drew.
+    expect(await page.evaluate(() => Array.from(document.querySelectorAll('.wf-modal--tasks [data-pw-kept]')).map((e) => e.getAttribute('data-pw-kept')).sort()))
+      .toEqual(['run', 'text']);
+    await expect(detail.locator('.session-working-indicator')).toHaveCount(0);
   });
 
   test('three parallel spawns are ONE `3 agents` chip; the panel lists all three and switches the reader', async ({ page }) => {

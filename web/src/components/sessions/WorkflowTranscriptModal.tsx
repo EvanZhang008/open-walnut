@@ -22,14 +22,15 @@
  * write happens when the agent finishes while the modal is open.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { TaskGroupPrompt } from './SessionMessage';
-import { LaneHistoryTimeline } from './LaneTimeline';
+import { LaneHistoryTimeline, laneMessagesFromStream, type LiveLane } from './LaneTimeline';
+import { RowDisclosureScope } from './row-disclosure';
 import type { ReactNode } from 'react';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -69,6 +70,8 @@ export interface TranscriptTarget {
   startedAt?: number;
   /** Who is working, for the indicator ("Explore agent"). */
   agentLabel?: string;
+  /** The Agent call, so the "Prompt & settings" row keeps its state across readers. */
+  toolUseId?: string;
 }
 
 /** The overlay shell every transcript reader shares: title row (label, live dot,
@@ -98,7 +101,20 @@ export function TranscriptOverlay({
 /** The fetching reader for ONE agent's transcript, without a shell: the modal
  *  below wraps it in the overlay; the Background tasks panel mounts it in its
  *  detail column. Owns the cache/poll rules described in the file header. */
-export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget; sessionId: string }) {
+export function TranscriptBody({ target, sessionId, liveLane }: {
+  target: TranscriptTarget;
+  sessionId: string;
+  /** The running agent's lane in the stream buffer: drawn as the transcript it
+   *  will be, nothing fetched. When it ends, its rows stay on screen until the
+   *  saved transcript arrives and takes them over in place. */
+  liveLane?: LiveLane;
+}) {
+  const streamed = useMemo(
+    () => (liveLane ? laneMessagesFromStream(liveLane.taskBlock.toolUseId, liveLane.childBlocks) : null),
+    [liveLane],
+  );
+  const lastStreamed = useRef<SessionHistoryMessage[] | null>(null);
+  if (streamed && streamed.length > 0) lastStreamed.current = streamed;
   const [messages, setMessages] = useState<SessionHistoryMessage[] | null>(target.preloaded ?? null);
   const [loading, setLoading] = useState(false);
   // Distinct from an empty transcript: a fetch failure must NOT render the same as
@@ -117,10 +133,12 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
   useEffect(() => { setMessages(target.preloaded ?? null); setFailed(false); }, [target.agentId, target.preloaded]);
 
   const preloaded = (target.preloaded != null && !live) || target.fetchable === false;
+  const fromStream = streamed != null;
   useEffect(() => {
     // Embedded children ARE the transcript for a finished agent; nothing to fetch.
     // An unfetchable target (no real agent id) shows the caller's data or its result.
-    if (preloaded) return;
+    // A lane in the stream IS the live transcript: nothing to fetch or poll.
+    if (preloaded || fromStream) return;
     let cancelled = false;
     const cacheKey = workflow ? `wf:${target.agentId}` : target.agentId;
     const justFinished = wasLiveRef.current && !live;
@@ -158,24 +176,30 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
         .finally(() => { inFlight = false; if (!cancelled && isFirst) setLoading(false); });
     };
 
-    load(!cached && !justFinished);
+    // Rows the stream drew stay on screen while the saved transcript loads.
+    load(!cached && !justFinished && !lastStreamed.current);
     if (!live) return () => { cancelled = true; };
     const timer = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
       load(false);
     }, LIVE_POLL_MS);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [sessionId, target.agentId, workflow, live, preloaded]);
+  }, [sessionId, target.agentId, workflow, live, preloaded, fromStream]);
+
+  // One renderer, one place for the stream and the saved transcript, so the
+  // saved rows take over the rows the stream drew (keys are what a row shows).
+  const shown = streamed ?? (messages && messages.length > 0 ? messages : lastStreamed.current);
 
   return (
     <>
-      {target.promptInput && <TaskGroupPrompt input={target.promptInput} />}
-      {loading ? (
+      <RowDisclosureScope.Provider value={sessionId}>
+      {target.promptInput && <TaskGroupPrompt input={target.promptInput} toolUseId={liveLane?.taskBlock.toolUseId ?? target.toolUseId} />}
+      {shown && shown.length > 0 ? (
+        <LaneHistoryTimeline messages={shown} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
+      ) : loading ? (
         <div className="wf-modal-loading">Loading transcript…</div>
       ) : failed ? (
         <div className="wf-modal-loading">Failed to load transcript. Close and reopen to retry.</div>
-      ) : messages && messages.length > 0 ? (
-        <LaneHistoryTimeline messages={messages} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
       ) : target.fallbackResult ? (
         <div className="task-group-result">
           <div className="task-group-result-label">Result</div>
@@ -184,6 +208,7 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
       ) : (
         <div className="wf-modal-loading">{live ? 'Waiting for the agent\u2019s first output…' : 'No transcript available'}</div>
       )}
+      </RowDisclosureScope.Provider>
     </>
   );
 }
