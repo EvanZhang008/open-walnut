@@ -113,36 +113,53 @@ try {
   }
 
   # 3. What Windows asks before it runs a downloaded app that is not signed.
-  # SmartScreen's "Windows protected your PC" is a window of smartscreen.exe, whose own name may
-  # be empty (2026-11-02: it showed 6 s after the double-click and a match on the name never saw it).
-  $smartPid = { param($w) try { (Get-Process -Id $w.Current.ProcessId -ErrorAction Stop).ProcessName -eq 'smartscreen' } catch { $false } }
-  $smart = { param($w) $w.Current.Name -like '*protected your PC*' -or $w.Current.Name -like '*SmartScreen*' -or (& $smartPid $w) }
-  $warned = Find-Window { param($w) (& $smart $w) -or $w.Current.Name -eq 'Open File - Security Warning' } 60
+  # SmartScreen's "Windows protected your PC" sits in a frame window with no name (on the runner,
+  # class ApplicationFrameWindow), so neither its name nor its process tells it apart
+  # (2026-11-02, twice): what does is the text inside it.
+  $named = { param($n) New-Object Windows.Automation.PropertyCondition($A::NameProperty, $n) }
+  $smartText = New-Object Windows.Automation.OrCondition((& $named 'Windows protected your PC'), (& $named 'More info'))
+  $isSmart = { param($w)
+    $w.Current.Name -like '*protected your PC*' -or $w.Current.Name -like '*SmartScreen*' -or
+      ($w.Current.ClassName -in 'ApplicationFrameWindow', 'Windows.UI.Core.CoreWindow', '#32770' -and $w.FindFirst($Tree::Descendants, $smartText))
+  }
+  $warned = Find-Window { param($w) $w.Current.Name -eq 'Open File - Security Warning' -or (& $isSmart $w) } 60
+  if (-not $warned) {
+    # Anywhere on the desktop, once: the top-level window that holds the text.
+    $hit = $A::RootElement.FindFirst($Tree::Descendants, $smartText)
+    if ($hit) {
+      $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+      $warned = $hit
+      for ($p = $walker.GetParent($warned); $p -and -not [Windows.Automation.Automation]::Compare($p, $A::RootElement); $p = $walker.GetParent($warned)) { $warned = $p }
+    }
+  }
   if ($warned) {
-    Say ('Windows asked first: ' + $warned.Current.Name + ' (' + $warned.Current.ClassName + ')')
-    Shot 'windows-asks.png'
     $asked = $warned.Current.Name
-    if (-not $asked) { $asked = 'Windows protected your PC' }
+    if ($asked -ne 'Open File - Security Warning') { $asked = 'Windows protected your PC' }
+    Say ('Windows asked first: ' + $asked + ' (window class ' + $warned.Current.ClassName + ')')
+    Shot 'windows-asks.png'
     Done 'windowsAsked' $asked
-    if (& $smart $warned) {
+    if ($asked -eq 'Windows protected your PC') {
       $more = Find-In $warned { param($e) $e.Current.Name -eq 'More info' } 15
-      if (-not $more) {
-        try { foreach ($e in $warned.FindAll($Tree::Descendants, [Windows.Automation.Condition]::TrueCondition)) { Say ('  in it: "' + $e.Current.Name + '" ' + $e.Current.ControlType.ProgrammaticName) } } catch { }
-        throw 'SmartScreen shows no More info'
-      }
+      if (-not $more) { throw 'SmartScreen shows no More info' }
       Start-Sleep 2; Click-Element $more; Say 'clicked More info'
       $run = Find-In $warned { param($e) $e.Current.Name -eq 'Run anyway' -and $e.Current.ControlType -eq [Windows.Automation.ControlType]::Button } 15
       if (-not $run) { throw 'SmartScreen shows no Run anyway' }
-      Start-Sleep 2; Click-Element $run; Say 'clicked Run anyway'
+      Start-Sleep 2; Shot 'windows-asks-more-info.png'; Click-Element $run; Say 'clicked Run anyway'
     } else {
       $run = Find-In $warned { param($e) $e.Current.Name -eq 'Run' -and $e.Current.ControlType -eq [Windows.Automation.ControlType]::Button } 15
       if (-not $run) { throw 'The security warning shows no Run' }
       Start-Sleep 2; Click-Element $run; Say 'clicked Run'
     }
   } else {
-    # Every top-level window, so a prompt this does not know is named in the log.
+    # Every top-level window and what an unnamed one holds, so a prompt this does not know is
+    # named in the log.
     foreach ($w in $A::RootElement.FindAll($Tree::Children, [Windows.Automation.Condition]::TrueCondition)) {
-      try { Say ('  window: "' + $w.Current.Name + '" class ' + $w.Current.ClassName + ' process ' + (Get-Process -Id $w.Current.ProcessId).ProcessName) } catch { }
+      try {
+        Say ('  window: "' + $w.Current.Name + '" class ' + $w.Current.ClassName + ' process ' + (Get-Process -Id $w.Current.ProcessId).ProcessName)
+        if (-not $w.Current.Name) {
+          foreach ($e in $w.FindAll($Tree::Descendants, [Windows.Automation.Condition]::TrueCondition)) { Say ('    in it: "' + $e.Current.Name + '" ' + $e.Current.ControlType.ProgrammaticName + ' class ' + $e.Current.ClassName) }
+        }
+      } catch { }
     }
     Say 'Windows asked nothing before running it'
     Done 'windowsAsked' ''
