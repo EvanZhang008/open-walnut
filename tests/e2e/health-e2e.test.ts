@@ -31,7 +31,9 @@ import { MARKER_HR, WATCH, uuid } from '../core/health/fixtures.js'
 import { createDevice } from '../../src/core/device-auth.js'
 import { notSyncingMessage, statusMessage } from '../../src/web/routes/health.js'
 
-const TZ = 'America/New_York'
+// A zone with an offset and no daylight saving time: the nights below and the 24 hourly buckets
+// are of days now, and a New York night across a clock change ran an hour long (2026-11-01).
+const TZ = 'America/Phoenix'
 let server: HttpServer
 let port = 0
 const previousDisableSearch = process.env.WALNUT_DISABLE_SEARCH
