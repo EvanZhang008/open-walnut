@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "walnut-windows",
+      "name": "walnut",
       "dependencies": {
         "electron-updater": "6.8.11",
       },

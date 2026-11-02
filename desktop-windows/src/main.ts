@@ -48,7 +48,10 @@ function saveState(s: AppState): void {
 }
 
 function page(name: string, query: Record<string, string> = {}): void {
-  win?.loadFile(path.join(UI, name), { query }).catch((err: Error) => log(`could not show ${name}: ${err.message}`))
+  win?.loadFile(path.join(UI, name), { query }).catch((err: Error & { code?: string }) => {
+    // The next page replaced this one before it finished loading: nothing went wrong.
+    if (err.code !== 'ERR_ABORTED') log(`could not show ${name}: ${err.message}`)
+  })
 }
 
 /** Only the app's own pages (file://) may call it, never the console or a page it links to. */
