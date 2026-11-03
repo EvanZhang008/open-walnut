@@ -85,6 +85,8 @@ print(spki.base64EncodedString())
 print(sig.base64EncodedString())
 print(ApprovalBridge.keyId(spki))
 `)
+    // macOS only: the describe is skipped elsewhere (hasSwift); this guard sits beside the spawn.
+    if (process.platform !== 'darwin') return
     const r = spawnSync('xcrun', ['swiftc', '-o', exe, path.join(REPO, 'desktop/ApprovalBridge.swift'), path.join(dir, 'main.swift')],
       { encoding: 'utf8', timeout: 300_000 })
     if (r.status !== 0) throw new Error(`swiftc failed:\n${r.stderr}`)
