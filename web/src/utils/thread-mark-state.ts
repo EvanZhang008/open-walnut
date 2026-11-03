@@ -46,6 +46,9 @@ export interface MarkStateInput {
   /** Its page or card is on screen now. */
   viewing?: boolean;
   resolved?: boolean;
+  /** Its newest question has no answer yet (a strict question with no tag): it
+   *  waits, it never reads read / Answered. */
+  awaiting?: boolean;
 }
 
 export function markStateOf(i: MarkStateInput): ThreadMarkState {
@@ -55,6 +58,8 @@ export function markStateOf(i: MarkStateInput): ThreadMarkState {
   if (i.live === 'queued') return 'waiting';
   if (i.live === 'failed' || i.unsent) return 'failed';
   if (i.pending) return 'waiting';
+  // No answer at all is not "Answered" (2026-11-03: a card read Answered over "No answer").
+  if (i.awaiting) return 'waiting';
   // Never viewed here (asked elsewhere, or before this was kept): not announced.
   if (!i.viewing && i.answeredAt !== undefined && i.lastViewedAt !== undefined && i.answeredAt > i.lastViewedAt) return 'unread';
   return 'read';
@@ -72,6 +77,8 @@ export interface MarkStatesInput {
   sentKeys: ReadonlySet<string>;
   queuedKeys: ReadonlySet<string>;
   unsentKeys: ReadonlySet<string>;
+  /** Questions whose newest question has no answer yet (ThreadDerived.awaiting). */
+  awaitingKeys?: ReadonlySet<string>;
   /** By HEAD id, as the stack keeps it. */
   lastViewedAt: ReadonlyMap<string, number>;
   /** The question on screen ('' = none). */
@@ -103,6 +110,7 @@ export function markStatesOf(input: MarkStatesInput): Map<string, ThreadMarkStat
       ...(lastViewedAt !== undefined ? { lastViewedAt } : {}),
       viewing: node.key === input.viewingKey,
       resolved: input.isResolved(node),
+      awaiting: !!input.awaitingKeys?.has(node.key),
     }));
   }
   return out;

@@ -86,8 +86,9 @@ import { useThreadReviewPane } from './useThreadReviewPane';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
 import { allPassageMarks, cardTurnsOf, hasWords } from '@/utils/thread-card';
-import { blockTagKeys, headsBySeq, keysBySeq, parseQuestionTag, questionNumbers, questionSeqOfRow, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
-import { splitTaggedReplies } from '@/utils/tagged-reply-split';
+import { blockTagKeys, headsBySeq, isQuestionRow, keysBySeq, parseQuestionTag, questionLabels, questionNumbers, questionSeqOfRow, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
+import { liveAskKeyOf, strictAsksOf } from '@/utils/ask-answer';
+import { splitIndexOf, splitTaggedReplies } from '@/utils/tagged-reply-split';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
 import { useThreadLanding } from '@/hooks/useThreadLanding';
@@ -687,8 +688,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const forkBoundaryIndex = useMemo(() => {
     if (loadedForkBoundary == null || messages === loadedMessages) return loadedForkBoundary;
     if (loadedForkBoundary >= loadedMessages.length) return messages.length;
-    const at = messages.indexOf(loadedMessages[loadedForkBoundary]);
-    return at >= 0 ? at : loadedForkBoundary;
+    return splitIndexOf(messages, loadedMessages[loadedForkBoundary]) ?? loadedForkBoundary;
   }, [loadedForkBoundary, loadedMessages, messages]);
   // Where each gap inside the loaded rows sits: the index of the row after it.
   const gapAt = useMemo(() => {
@@ -1461,8 +1461,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     () => buildThreadTree(threadRows, tagAnchors),
     [threadRows, tagAnchors],
   );
-  const questionNumber = useMemo(() => questionNumbers(threadTree, threadsApi.metaIndex), [threadTree, threadsApi.metaIndex]);
-  const keyBySeq = useMemo(() => keysBySeq(questionNumber), [questionNumber]);
+  // The `[Qn]` tag reads numbers; every surface shows the label (the thread id
+  // the tag names, else the number: questionLabels, 2026-11-03 "must match").
+  const keyBySeq = useMemo(() => keysBySeq(questionNumbers(threadTree, threadsApi.metaIndex)), [threadTree, threadsApi.metaIndex]);
+  const questionLabel = useMemo(() => questionLabels(threadTree, threadsApi.metaIndex), [threadTree, threadsApi.metaIndex]);
+  // Strict questions (utils/ask-answer.ts): their answer is the text inside their
+  // tag alone. A sent question not in the transcript yet is strict too (every
+  // question this client sends asks for the tag); its name is checked once its
+  // row lands.
+  const strictAsks = useMemo(
+    () => strictAsksOf(messages, optimisticMessages, (id) => threadTree.byRow.get(id ?? '')?.key ?? ROOT_THREAD_KEY),
+    [messages, optimisticMessages, threadTree],
+  );
+  /** The `[Qn]` tag files only old-protocol questions. */
+  const tagKeyBySeq = useMemo(() => {
+    if (strictAsks.byKey.size === 0) return keyBySeq;
+    const out = new Map<number, string>();
+    for (const [seq, key] of keyBySeq) if (!strictAsks.byKey.has(key)) out.set(seq, key);
+    return out;
+  }, [keyBySeq, strictAsks]);
+  /** The question a live text block's answer tag files it under, or null (liveAskKeyOf). */
+  const strictSpanKeyOfBlock = (b: StreamingBlock | undefined): string | null => {
+    if (strictAsks.byThread.size === 0 || !b || b.type !== 'text' || b.parentToolUseId) return null;
+    return liveAskKeyOf(strictAsks, b.content);
+  };
   // Publish it to the panel (composer chip + the send path's "is this the newest
   // thread?" question). A session with anchors gets a fresh tree per history
   // change, so this costs the panel one extra render per refetch and converges
@@ -3509,16 +3531,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const row = rowOfLine(line);
     return row ? rowThreadKey(row.sourceUuid ?? row.msgId) : null;
   };
+  // Whether the line asked a question (a thread id like 6.1 counts: its first number).
   const lineSeqsOf = (line: StreamingUserLineBlock): readonly number[] | null => {
     const bubble = bubbleOfLine(line);
     if (bubble) {
       const arg = bubble.requestedHints?.question?.arg;
-      return arg && /^\d{1,5}$/.test(arg) ? [Number(arg)] : [];
+      return arg ? [Number(arg.split('.')[0]) || 0] : [];
     }
     const row = rowOfLine(line);
     if (!row) return null;
-    const seq = questionSeqOfRow(row);
-    return seq === null ? [] : [seq];
+    return isQuestionRow(row) ? [questionSeqOfRow(row) ?? 0] : [];
   };
   // Where each finished turn ends: the recorded turns, and the stream's own
   // boundary (a turn that ended before questions were tracked was never recorded,
@@ -3531,7 +3553,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const lineOwners = hasQuestions && takenLines.reports
     ? liveLineOwners(blocks, takenLines, lineKeyOf, lineSeqsOf, (b) => {
       const tag = b.type === 'text' ? parseQuestionTag(b.content) : null;
-      const key = tag ? keyBySeq.get(tag.seq) : undefined;
+      const key = tag ? tagKeyBySeq.get(tag.seq) : undefined;
       return tag && key !== undefined ? { key, seq: tag.seq } : null;
     }, liveTurnEnds)
     : NO_LINE_OWNERS;
@@ -3540,9 +3562,22 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const takenMidTurn = (m: OptimisticMessage) => (!!m.userUuid && midTurnLines.has(m.userUuid)) || (!!m.queueId && midTurnLines.has(m.queueId));
   const liveTurnStart = turnSegmentsRef.current.length > 0 ? turnSegmentsRef.current[turnSegmentsRef.current.length - 1].end : 0;
   const liveTagKey = hasQuestions && blocks.length > liveTurnStart
-    ? tagKeyAtBlock(blocks, liveTurnStart, blocks.length, blocks.length - 1, keyBySeq) : null;
+    ? tagKeyAtBlock(blocks, liveTurnStart, blocks.length, blocks.length - 1, tagKeyBySeq) : null;
   // The questions this live turn already answered and left (every tag but the newest).
-  const liveLeftKeys = hasQuestions ? tagKeysOfBlocks(blocks, liveTurnStart, blocks.length, keyBySeq).filter((k) => k !== liveTagKey) : [];
+  const liveLeftKeys = hasQuestions ? tagKeysOfBlocks(blocks, liveTurnStart, blocks.length, tagKeyBySeq).filter((k) => k !== liveTagKey) : [];
+  // A strict question answered in the live turn (its tag) that the turn's newest
+  // words have moved on from: answered, no longer answering.
+  if (hasQuestions && strictAsks.byKey.size > 0) {
+    let newest: string | null | undefined;
+    for (let i = blocks.length - 1; i >= liveTurnStart && newest === undefined; i--) {
+      const b = blocks[i];
+      if (b.type === 'text' && !b.parentToolUseId && /\S/.test(b.content)) newest = strictSpanKeyOfBlock(b);
+    }
+    for (let i = liveTurnStart; i < blocks.length; i++) {
+      const k = strictSpanKeyOfBlock(blocks[i]);
+      if (k !== null && k !== newest && !liveLeftKeys.includes(k)) liveLeftKeys.push(k);
+    }
+  }
   const liveStreamKey = (() => {
     if (!hasQuestions) return ROOT_THREAD_KEY;
     // The newest line Claude Code took in the live turn: the model answers it now.
@@ -3631,16 +3666,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  else that turn's recorded owner, else the live turn's key (tag first, see
    *  liveStreamKey). */
   let blockTags: { segs: readonly StreamTurnSegment[]; keys: Array<string | null> } | null = null;
-  const pageKeyOfBlock = (index: number): string => {
+  const placeKeyOfBlock = (index: number): string => {
     const byLine = lineOwners[index];
     if (byLine != null) return byLine;
     const segs = turnSegments.current;
-    if (blockTags?.segs !== segs) blockTags = { segs, keys: blockTagKeys(blocks, segs.map((seg) => seg.end), keyBySeq) };
+    if (blockTags?.segs !== segs) blockTags = { segs, keys: blockTagKeys(blocks, segs.map((seg) => seg.end), tagKeyBySeq) };
     const tagged = blockTags.keys[index] ?? null;
     for (const seg of segs) {
       if (index < seg.end) return tagged ?? blockPageKey(segs, index, streamThreadKey);
     }
     return trackTurns ? tagged ?? streamThreadKey : streamThreadKey;
+  };
+  // A strict question (utils/ask-answer.ts) owns only the text blocks that open
+  // with its answer tag; every other block it would own by place reads in the
+  // main conversation (the transcript's split files the same way, exactly).
+  const pageKeyOfBlock = (index: number): string => {
+    const spanKey = strictSpanKeyOfBlock(blocks[index]);
+    if (spanKey !== null) return spanKey;
+    const key = placeKeyOfBlock(index);
+    return strictAsks.byKey.has(key) ? ROOT_THREAD_KEY : key;
   };
 
   // The page's own rows: the SAME parts, filtered by row identity.
@@ -3738,9 +3782,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const ask = streamingKey ? threadStats.lastAsk?.get(streamingKey) : undefined;
     const ownSend = !!streamingKey && queued.some((q) => threadTree.byRow.get(q.rowId)?.key === streamingKey);
     if (streamingKey && ask && !ownSend && threadStats.answered.has(ask)) turnSpoke.add(streamingKey);
+    // No answer yet and no failed end (a strict question waiting for its tag):
+    // waiting, never Answered. Words still on screen as live blocks count (a
+    // turn's end dates a question even with no words: that is no answer).
+    const awaiting = new Set([...threadStats.unanswered].filter((k) => !spoke.has(k)));
     return {
       live: deriveThreadLiveStates({
-        tree: threadTree, queued, streamingKey, turnEnds,
+        tree: threadTree, queued, streamingKey, turnEnds, awaiting,
         hasAnswerAfter: (id) => threadStats.answered.has(id) || spoke.has(threadTree.byRow.get(id)?.key ?? ROOT_THREAD_KEY),
       }),
       answeredAt,
@@ -3748,6 +3796,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       lastQuestion: threadStats.lastQuestion,
       answering: new Set(streamingKey && streamingKey !== ROOT_THREAD_KEY ? [streamingKey] : []),
       spoke: turnSpoke,
+      // Waiting for its tag alone: nothing of it is queued or running now.
+      awaiting: new Set([...awaiting].filter((k) => k !== streamingKey && !queued.some((q) => threadTree.byRow.get(q.rowId)?.key === k))),
       datedAt: streamEnds,
       ...ownRowsOf(queuedSig, threadTree),
     };
@@ -4028,7 +4078,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
-    numbers: questionNumber, messages, liveText: reviewLiveText, markStates, openCard,
+    numbers: questionLabel, messages, liveText: reviewLiveText, markStates, openCard,
     quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed, enlargedKey, sentText: reviewSentText,
     renderBody: renderReviewBody, bodySig: reviewBodySig,
   });
@@ -4124,7 +4174,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return (
       <ThreadTurnLabel
         threadKey={info.key}
-        number={questionNumber.get(info.key)}
+        number={questionLabel.get(info.key)}
         title={t.title}
         naming={t.naming}
         status={node ? viewStatusOf(node, threadsApi.metaIndex, threadDerived.live) : undefined}
@@ -4143,7 +4193,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div key={`fold-${group}-${key}`} data-thread-fold={group} {...threadWrapperProps(rowId)}>
         <ThreadTurnLabel
           threadKey={group}
-          number={questionNumber.get(group)}
+          number={questionLabel.get(group)}
           title={t.title}
           naming={t.naming}
           status={node ? viewStatusOf(node, threadsApi.metaIndex, threadDerived.live) : undefined}
@@ -4844,6 +4894,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         turns={turns}
         {...(lastReply && superseded ? { supersededReply: lastReply } : {})}
         lastLive={lastLive}
+        awaiting={order.rounds.length === 0 && !!threadDerived.awaiting?.has(key)}
         rounds={order.rounds.map((r) => ({
           bubble: r.bubble, ...(r.live ? { live: { index: r.live.index, block: r.live.block } } : {}),
         }))}
@@ -5530,13 +5581,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               <ThreadCommentCard
                 threadKey={cardKey}
                 draft={!!cardPending && !cardNode}
-                number={questionNumber.get(cardKey)}
+                number={questionLabel.get(cardKey)}
                 title={cardPending && !cardNode ? cardPending.title : cardTitle?.title ?? ''}
                 naming={cardTitle?.naming}
                 status={cardStatus}
                 unread={threadsApi.unreadKeys.has(cardKey)}
                 answering={threadDerived.answering.has(cardKey)}
-                waiting={cardWaiting}
+                waiting={cardWaiting && !threadDerived.awaiting?.has(cardKey)}
                 queued={cardWaiting && threadDerived.live.get(cardKey) === 'queued'}
                 canAsk={threadsApi.canAsk}
                 menu={cardMenu}
@@ -5560,13 +5611,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <ThreadCommentCard
             threadKey={cardKey}
             draft={!!cardPending && !cardNode}
-            number={questionNumber.get(cardKey)}
+            number={questionLabel.get(cardKey)}
             title={cardPending && !cardNode ? cardPending.title : cardTitle?.title ?? ''}
             naming={cardTitle?.naming}
             status={cardStatus}
             unread={threadsApi.unreadKeys.has(cardKey)}
             answering={threadDerived.answering.has(cardKey)}
-            waiting={cardWaiting}
+            waiting={cardWaiting && !threadDerived.awaiting?.has(cardKey)}
             queued={cardWaiting && threadDerived.live.get(cardKey) === 'queued'}
             canAsk={threadsApi.canAsk}
             menu={cardMenu}

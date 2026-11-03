@@ -14,6 +14,7 @@
  * serialized write paths and the after-write listener registry.
  */
 
+import { ASK_THREAD_RE } from './ask-thread.js';
 import { SessionControlError } from './session-controls.js';
 import { threadAiAvailable } from './thread-ai-stub.js';
 import { log } from '../../logging/index.js';
@@ -45,7 +46,7 @@ const BOOLEANS = ['hidden', 'suggestDismissed'] as const;
 type MetaField = Exclude<keyof SessionThreadMeta, 'headId' | 'updatedAt'>;
 const FIELDS: readonly MetaField[] = [
   'status', 'title', 'titleSource', 'titleState', 'question', 'takeaway',
-  'takeawaySource', 'takeawayState', 'hidden', 'suggestDismissed', 'refinedAt', 'seq',
+  'takeawaySource', 'takeawayState', 'hidden', 'suggestDismissed', 'refinedAt', 'seq', 'thread',
 ];
 
 function bad(message: string): never {
@@ -98,6 +99,9 @@ export function normalizeThreadMeta(value: unknown): SessionThreadMetaPatch[] {
       } else if (field === 'refinedAt') {
         if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) bad('thread_meta[].refinedAt must be an ISO date');
         patch[field] = v;
+      } else if (field === 'thread') {
+        if (typeof v !== 'string' || !ASK_THREAD_RE.test(v)) bad('thread_meta[].thread must be a thread id like 6 or 6.1.2');
+        patch[field] = v;
       } else if (field === 'seq') {
         if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > MAX_THREAD_SEQ) {
           bad(`thread_meta[].seq must be an integer from 1 to ${MAX_THREAD_SEQ}`);
@@ -137,16 +141,19 @@ function aiGuard(base: SessionThreadMeta, patch: SessionThreadMetaPatch): Sessio
     const may = p.status === 'suggested' && base.status === 'open' && !base.suggestDismissed;
     if (!may) delete p.status;
   }
-  delete p.hidden; delete p.suggestDismissed; delete p.question; delete p.seq;
+  delete p.hidden; delete p.suggestDismissed; delete p.question; delete p.seq; delete p.thread;
   return p as SessionThreadMetaPatch;
 }
 
 /** A question's number is given once: a later write may not move or clear it
  *  (the model's replies already carry it). */
 function seqGuard(base: SessionThreadMeta, patch: SessionThreadMetaPatch): SessionThreadMetaPatch {
-  if (patch.seq === undefined || base.seq === undefined) return patch;
+  const keepSeq = patch.seq !== undefined && base.seq !== undefined;
+  const keepThread = patch.thread !== undefined && base.thread !== undefined;
+  if (!keepSeq && !keepThread) return patch;
   const p = { ...patch };
-  delete p.seq;
+  if (keepSeq) delete p.seq;
+  if (keepThread) delete p.thread;
   return p;
 }
 

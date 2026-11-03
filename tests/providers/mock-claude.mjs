@@ -500,12 +500,22 @@ let resultText = '';
 // chunk-delay:) are matched, and answer the tag the way a real model does, so
 // the client's tag-based filing runs in these fixtures too.
 let questionSeq = null;
+// A strict Ask here question (its hint names `<walnut-ask thread=".." name="..">`
+// and asks for the answer inside `<walnut-ask-answer ...>`, src/core/sessions/ask-thread.ts):
+// the reply puts its answer inside that tag, the way a real model follows the hint.
+// `MOCK_ASK_NO_TAG` in the words forgets the tag; `MOCK_ASK_WRONG_NAME` gets the name wrong.
+let strictAsk = null;
 function stripBanners(text) {
   questionSeq = null;
+  strictAsk = null;
   // Walnut's message hints (`<system-reminder>` blocks, src/core/hints/hint-format.ts),
   // wherever they sit; the question hint carries the number the reply must tag.
-  let body = text.replace(/<system-reminder>\s*Walnut \(([a-z][a-z0-9-]*)(?: ([^)\s]+))?\):[\s\S]*?<\/system-reminder>\s*/g, (_m, kind, arg) => {
-    if (kind === 'question' && arg) questionSeq = Number(arg);
+  let body = text.replace(/<system-reminder>\s*Walnut \(([a-z][a-z0-9-]*)(?: ([^)\s]+))?\):([\s\S]*?)<\/system-reminder>\s*/g, (_m, kind, arg, hintText) => {
+    if (kind === 'question' && arg) {
+      const tag = /walnut-ask-answer/.test(hintText) ? /<walnut-ask\s+thread="([^"]+)"(?:\s+name="([^"]*)")?>/.exec(hintText) : null;
+      if (tag) strictAsk = { thread: tag[1], name: tag[2] ?? '' };
+      else questionSeq = Number(arg);
+    }
     return '';
   }).trim();
   for (;;) {
@@ -579,7 +589,7 @@ let speakAtMs = null;
 let takeMidTurn = false;
 function computeMessageParts() {
   slowDelayMs = 0;
-  const decorated = stripInputDecorations(stripBanners(message), questionSeq !== null);
+  const decorated = stripInputDecorations(stripBanners(message), questionSeq !== null || strictAsk !== null);
   takeMidTurn = /(^|\s)MOCK_TAKE_MIDTURN(\s|$)/.test(decorated);
   const bare = takeMidTurn ? decorated.replace(/\s*MOCK_TAKE_MIDTURN\s*/, ' ').trim() : decorated;
   rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
@@ -617,19 +627,37 @@ function computeMessageParts() {
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
   const tagPart = tagSwitch ? `[Q${tagSwitch.seq}]\n` : questionSeq ? `[Q${questionSeq}]\n` : '';
   const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
-  resultText = `${tagPart}Hello! I processed your message: ${rawEcho ? message : effectiveMessage}${flags}`;
+  const said = `Hello! I processed your message: ${rawEcho ? message : effectiveMessage}${flags}`;
+  // A tag switch moves on to an older question (`[Qn]`, the fixtures' old protocol).
+  resultText = strictAsk && !tagSwitch ? askAnswerOf(strictAsk, said) : `${tagPart}${said}`;
+}
+
+/** A strict question's answer as the model writes it: inside its tag (unless the
+ *  words say to forget it), with the same thread id and name. */
+function askAnswerOf(ask, words) {
+  const forget = /(^|\s)MOCK_ASK_NO_TAG(\s|$)/.test(words);
+  const wrong = /(^|\s)MOCK_ASK_WRONG_NAME(\s|$)/.test(words);
+  // `MOCK_ASK_ECHO_THREAD`: the answer says which thread id it was asked under.
+  const echo = /(^|\s)MOCK_ASK_ECHO_THREAD(\s|$)/.test(words);
+  let clean = words.replace(/\s*MOCK_ASK_(NO_TAG|WRONG_NAME|ECHO_THREAD)\s*/g, ' ').trim();
+  if (echo) clean = `Thread ${ask.thread} answer. ${clean}`;
+  if (forget) return clean;
+  const name = wrong ? 'A different question' : ask.name;
+  return `<walnut-ask-answer thread="${ask.thread}"${name ? ` name="${name}"` : ''}>\n${clean}\n</walnut-ask-answer>`;
 }
 computeMessageParts();
 
 /** A slow turn's words before its result: a tag switch's first two texts (the
  *  turn's own question now, question n after ms), or MOCK_SPEAK_AT's first words. */
 function startTagSwitch() {
-  if (speakAtMs !== null && questionSeq) {
-    const t = setTimeout(() => sayMidTurn(`[Q${questionSeq}]\nWorking on it: ${effectiveMessage}`), speakAtMs);
+  // A strict question's words sit inside its answer tag; the old protocol's open with `[Qn]`.
+  const own = (words) => (strictAsk ? askAnswerOf(strictAsk, words) : `[Q${questionSeq}]\n${words}`);
+  if (speakAtMs !== null && (questionSeq || strictAsk)) {
+    const t = setTimeout(() => sayMidTurn(own(`Working on it: ${effectiveMessage}`)), speakAtMs);
     return () => clearTimeout(t);
   }
-  if (!tagSwitch || !questionSeq) return () => {};
-  sayMidTurn(`[Q${questionSeq}]\nFirst, this question: ${effectiveMessage}`);
+  if (!tagSwitch || !(questionSeq || strictAsk)) return () => {};
+  sayMidTurn(own(`First, this question: ${effectiveMessage}`));
   const t = setTimeout(() => sayMidTurn(`[Q${tagSwitch.seq}]\nNow back to question ${tagSwitch.seq}.`), tagSwitch.ms);
   return () => clearTimeout(t);
 }
@@ -682,12 +710,15 @@ function takeLineMidTurn(parsed) {
   }
   // Read the taken line's question number without touching the running turn's.
   const turnSeq = questionSeq;
-  const bare = stripInputDecorations(stripBanners(text), questionSeq !== null);
+  const turnAsk = strictAsk;
+  const bare = stripInputDecorations(stripBanners(text), questionSeq !== null || strictAsk !== null);
   const seq = questionSeq;
+  const ask = strictAsk;
   questionSeq = turnSeq;
-  if (seq && /(^|\s)MOCK_MIDTURN_ANSWER(\s|$)/.test(bare)) {
+  strictAsk = turnAsk;
+  if ((seq || ask) && /(^|\s)MOCK_MIDTURN_ANSWER(\s|$)/.test(bare)) {
     const words = bare.replace(/\s*MOCK_MIDTURN_ANSWER\s*/, ' ').trim();
-    setTimeout(() => sayMidTurn(`[Q${seq}]\nMid-turn answer: ${words}`), 300);
+    setTimeout(() => sayMidTurn(ask ? askAnswerOf(ask, `Mid-turn answer: ${words}`) : `[Q${seq}]\nMid-turn answer: ${words}`), 300);
   }
 }
 

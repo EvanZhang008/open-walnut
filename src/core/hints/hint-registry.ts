@@ -29,6 +29,7 @@ import {
   replyLanguageText, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
+import { ASK_THREAD_RE, askHintText, askNameOf } from '../sessions/ask-thread.js';
 import { MESSAGE_MIN_LETTERS, languageDrift, ruleLanguage } from './hint-drift-detect.js';
 import { replyLanguageLines } from './reply-language-lines.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
@@ -48,7 +49,11 @@ export const HINT_EVERY_MAX = 1000;
 /** What a hint's content functions read. */
 export interface HintContentInput {
   config: Pick<Config, 'session'> | null;
-  record: { output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> } } | null;
+  record: {
+    output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> };
+    threadMeta?: ReadonlyArray<{ seq?: number; thread?: string; title?: string; question?: string }>;
+    asksSent?: ReadonlyArray<{ thread: string; name: string }>;
+  } | null;
   /** The send asked for this hint (`on_request`), with its argument. */
   request?: { arg?: string };
   /** The identity this session was last told, if any. */
@@ -104,19 +109,23 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'question',
     label: 'Question number',
-    description: 'Asks the reply to a question in the conversation tree to begin with its number, so the answer is filed under that question.',
+    description: 'Names an Ask here question by its thread number and name, and asks the model to put its answer inside a tag with that number, so the answer is filed under that question and nothing else is.',
     allowed: ['on_request'],
     defaults: { enabled: true, triggers: ['on_request'], placement: 'before' },
     identity: (i) => (i.request?.arg ? `question ${i.request.arg}` : null),
     render: (i) => {
-      const seq = i.request?.arg;
-      if (!seq || !/^\d{1,5}$/.test(seq)) return null;
-      return {
-        arg: seq,
-        // A message without the tag is filed with the turn it was written in (a question
-        // read mid-turn owns only the messages that open with its tag, web/src/stream/chat-order.ts).
-        text: `this message is question ${seq} of this conversation. Begin your reply with the line "[Q${seq}]" (nothing else on that line) so the reply is filed under question ${seq}. If you answer it in more than one message, or while you are doing other work, begin each message of the answer with that line.`,
-      };
+      const thread = i.request?.arg;
+      if (!thread || !ASK_THREAD_RE.test(thread)) return null;
+      // A follow-up in the thread keeps the name its first send gave it: the answer must match both.
+      const sent = i.record?.asksSent?.find((a) => a.thread === thread);
+      const flat = /^\d+$/.test(thread) ? Number(thread) : null;
+      const name = sent?.name ?? askNameOf(i.record?.threadMeta?.find((m) => (m.thread ?? (m.seq !== undefined ? String(m.seq) : '')) === thread || (flat !== null && m.seq === flat && !m.thread)), i.message);
+      // The answer is filed ONLY from the tag (2026-11-03, the user: "we must make it strict ...
+      // the thread-id and thread name in a html tag format, in the first send"; "each question has
+      // a thread id and thread name, and they must match, each ask from us in that thread also
+      // remind model about this, the thread can be nested"). The reader is web/src/utils/ask-answer.ts;
+      // the Stop hook names a question still without one (src/core/sessions/ask-unanswered.ts).
+      return { arg: thread, text: askHintText(thread, name) };
     },
   },
   {

@@ -159,3 +159,56 @@ describe('unansweredStopReason', () => {
     expect(text).toContain('do not send a progress note')
   })
 })
+
+describe('an Ask here question answered outside its tag holds the turn (ask-unanswered.ts)', () => {
+  async function stopWith(sid: string, asked: string, answered: string): Promise<Record<string, unknown>> {
+    const r = await executeOp('open_items', { hook: 'stop', asked, answered }, { apiBase, callerSid: sid, origin: LOCAL_ORIGIN })
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    return (r as { result: Record<string, unknown> }).result
+  }
+
+  it('the real send records the question; the hook names it until its tag is in the transcript; twice at most; with a request in one reason', async () => {
+    const { resetAskNudges } = await import('../../../src/core/sessions/ask-unanswered.js')
+    const { prepareHintedSend } = await import('../../../src/core/hints/hint-send.js')
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
+    resetAskNudges()
+    const s = await seedSession('Sandbox reviews')
+    for (const [thread, words] of [['6', 'Can the controller impersonate the deployer?'], ['6.1', 'And across namespaces?']] as const) {
+      const sent = await prepareHintedSend(s.sid, await getSessionByClaudeId(s.sid), words, { requested: { question: { arg: thread } }, sentBy: 'person', config: null })
+      expect(sent.enqueueText).toContain(`<walnut-ask thread="${thread}"`)
+      await sent.commit()
+    }
+    const rec = await getSessionByClaudeId(s.sid)
+    expect(rec?.asksSent?.map((a) => a.thread)).toEqual(['6', '6.1'])
+    // An older hook passes no lists: no question is named.
+    expect(await stopAnswer(s.sid)).toEqual({})
+    // 6.1 answered inside its tag, 6 not: 6 is named with its tag.
+    const held = await stopWith(s.sid, '6,6.1', '6.1')
+    expect(held.decision).toBe('block')
+    expect(String(held.reason)).toContain('<walnut-ask-answer thread="6" name="Can the controller impersonate the deployer?">')
+    expect(String(held.reason)).not.toContain('thread="6.1"')
+    // Not delivered yet (not in the transcript): not named.
+    resetAskNudges()
+    expect(await stopWith(s.sid, '6.1', '6.1')).toEqual({})
+    // At most twice per question.
+    expect((await stopWith(s.sid, '6', '')).decision).toBe('block')
+    expect((await stopWith(s.sid, '6', '')).decision).toBe('block')
+    expect(await stopWith(s.sid, '6', '')).toEqual({})
+    // A follow-up in thread 6 is a new send: it may be named again, under the name the thread was first sent with.
+    await new Promise((r) => setTimeout(r, 5))
+    const follow = await prepareHintedSend(s.sid, await getSessionByClaudeId(s.sid), 'One more thing', { requested: { question: { arg: '6' } }, sentBy: 'person', config: null })
+    expect(follow.enqueueText).toContain('<walnut-ask thread="6" name="Can the controller impersonate the deployer?">')
+    await follow.commit()
+    const again = await stopWith(s.sid, '6', '')
+    expect(again.decision).toBe('block')
+    expect(String(again.reason)).toContain('One more thing')
+    // A request and a question in one reason.
+    resetAskNudges()
+    resetStopNudges()
+    const lead = await seedSession('Sandbox lead')
+    await createSessionRequest({ fromSessionId: lead.sid, toSessionId: s.sid, toTaskId: s.id, text: 'Report back' })
+    const both = await stopWith(s.sid, '6', '')
+    expect(String(both.reason)).toContain('Report back')
+    expect(String(both.reason)).toContain('<walnut-ask thread="6"')
+  })
+})

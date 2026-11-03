@@ -23,12 +23,13 @@ import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedH
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
 import { dueReasons } from './hint-schedule.js';
 import { hookStatementVoid } from '../sessions/hook-statement.js';
+import { withAskSent } from '../sessions/ask-unanswered.js';
 import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
 import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/thread-capture.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
-  & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
+  & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId' | 'threadMeta' | 'asksSent'>>;
 type HintConfig = Pick<Config, 'session'> | null;
 
 /** Hints a send asks for by kind (`on_request`), with an argument (a question's number). */
@@ -377,8 +378,13 @@ export async function prepareHintedSend(
         const sid = intoSessionId ?? sessionId;
         const at = now();
         if (thread) await thread.commit({ told: !!plan.told.threads });
+        // An Ask here question is kept for the Stop hook (sessions/ask-unanswered.ts) under the
+        // name its hint gave it, which a follow-up in its thread repeats.
+        const ask = plan.carried.find((h) => h.kind === 'question' && h.arg);
+        const askName = ask ? /<walnut-ask thread="[^"]*"(?: name="([^"]*)")?>/.exec(ask.text)?.[1] ?? '' : '';
         await writeHintState(sid, (cur) => ({
           hintState: advanceHintState(cur.hintState, cur, plan.told, { now: at, ...(opts.sentBy ? { sentBy: opts.sentBy } : {}) }),
+          ...(ask?.arg ? { asksSent: withAskSent(cur.asksSent, { thread: ask.arg, name: askName, words: body, at }) } : {}),
           // Kept for a rollback: the release before the registry reads its rich edge here.
           ...(plan.told['rich-output'] ? { output_mode_injected: plan.told['rich-output'] === 'rich' ? 'rich' : 'markdown' } : {}),
         }));

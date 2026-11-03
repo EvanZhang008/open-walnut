@@ -404,7 +404,42 @@ show inline after the open ones, other completed hits that show the query fold i
   filed there (2026-10-08). A reply tag that only echoes the row's OWN banner never overrides the
   row's own anchor (`bannerSeqOf` in `withTagAnchors`): the banner is what Walnut numbered, so when
   they disagree the number was wrong.
-  **The reply tag files the answer.** A question's send (and every follow-up) asks for the
+  **Strict questions: the answer is the text inside its tag, nothing else** (2026-11-03, the user:
+  "we must make it strict ... the thread-id and thread name in a html tag format ... otherwise we
+  keep getting this no answered"; a question taken mid-turn, then a compaction, was answered with
+  no `[Q6]`, filed in the main chat, and its card read Answered over No answer). Every send filed
+  under a question (the Ask, a follow-up from its page or card, Retry) carries
+  `hints: questionHint(<thread id>)` (`tests/web/question-send-hint-guard.test.ts`); the thread id
+  is a path fixed at Ask and stored as `SessionThreadMeta.thread` beside `seq` (`6` on the main
+  conversation, `6.1` asked inside question 6, `6.1.1` below that: `nextQuestionPath`; a question
+  from before ids reads as its `seq`). The server's hint names the question
+  `<walnut-ask thread="6.1" name="...">` and asks for `<walnut-ask-answer thread="6.1" name="...">`
+  ... `</walnut-ask-answer>` (`src/core/sessions/ask-thread.ts`), and a row whose hint text asks for
+  that tag is STRICT (`utils/ask-answer.ts` `strictAskOf`). Its answer is exactly the text inside
+  spans whose id AND name match the hint of any ask row of that thread (head or follow-up: a follow-up's hint may carry another name; compared with case, spacing and a
+  trailing ellipsis folded), wherever they sit after it: the same turn, a turn it was taken into, a
+  later turn, after a compaction, or one message answering several. `fileStrictAnswers` (called by
+  `splitTaggedReplies`) cuts each span into its own row and gives rows whose place does not say
+  their owner an explicit `ownerId` (the question's newest ask; '' = the main conversation for a
+  strict question's own untagged words); `buildThreadTree`, `deriveThreadStats`, `cardTurnsOf`,
+  `reviewTurnIndex` and `withTagAnchors` all honor it (the readers guard fails on one that files by
+  place alone). Live: `pageKeyOfBlock` gives a strict question a text block that opens with its
+  tag, or whose matching spans hold at least as many of its words as the text outside them (a short
+  preamble, then the answer: `liveAskKeyOf`); any other block it would own by place reads in the
+  main chat. A strict question's `[Qn]` text is never its answer, and its number is never offered to
+  the old tag (`headsBySeq`, `withTagAnchors`). With no span it reads waiting (live state `queued`,
+  `ThreadDerived.awaiting`, card body "Waiting for its answer…"), only a strict question does (an
+  old one with no reply reads No answer), and a turn that ends in an API error fails it (Retry) like
+  an old one; no question without an answer reads Answered. A tag quoted in code (a fence, or inline
+  backticks on one line: `codeSpans`) is text: it files nothing and shows as written. Tag lines are
+  never shown (`stripQuestionTag` strips them too). Every badge, map row, review card, turn label and
+  the composer pill shows `questionLabels` (the thread id, else the number of a question from before
+  ids), never `questionNumbers`, which only the old tag reads (`tests/web/question-label-guard.test.ts`);
+  two questions asked before their meta is read back get distinct ids (`withIssued`). An index into
+  the transcript rows follows its row into the split rows by id (`splitIndexOf`, the fork boundary).
+  Ratchets: `tests/web/ask-answer.test.ts`, `tests/web/strict-ask-filing.test.ts`,
+  `tests/e2e/browser/session-ask-strict-tag.spec.ts`. The `[Qn]` rule below holds for old rows.
+  **The reply tag files the answer (old rows).** A question's send (and every follow-up) asked for the
   `question` message hint (`hints: questionHint(n)`; the server writes it ahead of the words as a
   `Walnut (question <n>)` block, `src/core/hints/`) asking the model to begin with the line `[Q<n>]`;
   the bubble never shows the block (old rows' `[Question Q<n>]` banner is hidden by

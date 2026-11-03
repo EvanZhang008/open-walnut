@@ -72,6 +72,9 @@ export interface DeriveLiveInput {
   turnEnds: ReadonlyMap<string, 'ok' | 'error' | 'interrupted' | 'parked' | 'silent'>;
   /** Is there assistant text after this user row (within its turn)? */
   hasAnswerAfter: (rowId: string) => boolean;
+  /** Questions with no answer yet that did not fail (a strict question waiting
+   *  for its tag): they read waiting (`queued`), never Answered. */
+  awaiting?: ReadonlySet<string>;
 }
 
 /**
@@ -98,6 +101,7 @@ export function deriveThreadLiveStates(input: DeriveLiveInput): Map<string, Thre
     if (key && key !== ROOT_THREAD_KEY) out.set(key, q.status === 'processing' ? 'answering' : 'queued');
   }
   if (input.streamingKey && input.streamingKey !== ROOT_THREAD_KEY) out.set(input.streamingKey, 'answering');
+  for (const key of input.awaiting ?? []) if (!out.has(key)) out.set(key, 'queued');
   return out;
 }
 

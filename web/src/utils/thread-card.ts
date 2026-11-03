@@ -21,6 +21,8 @@ export interface CardRowLike {
   sourceUuid?: string;
   text?: string;
   tools?: readonly unknown[];
+  /** Filed under this user row ('' = main) by the split, not by its place. */
+  ownerId?: string;
 }
 
 /** An assistant row says something: text left once the `[Qn]` tag and the
@@ -48,16 +50,26 @@ export interface CardTurn<M extends CardRowLike = CardRowLike> {
 export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node: ThreadNode | undefined): CardTurn<M>[] {
   if (!node || node.turnIds.length === 0) return [];
   const want = new Set(node.turnIds);
+  // A row the split filed by its owner (a strict question's answer in its tag,
+  // ask-answer.ts) answers that row's turn wherever it sits; the rest by place.
+  const ownedLast = new Map<string, { at: number; row: M }>();
+  for (let j = 0; j < messages.length; j++) {
+    const r = messages[j];
+    if (r.role === 'assistant' && r.ownerId && want.has(r.ownerId) && hasWords(r.text)) ownedLast.set(r.ownerId, { at: j, row: r });
+  }
   const out: CardTurn<M>[] = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     const id = m.sourceUuid ?? m.msgId ?? m.walnutMessageId;
     if (m.role !== 'user' || !id || !want.has(id)) continue;
     let last: M | undefined;
+    let lastAt = -1;
     for (let j = i + 1; j < messages.length && messages[j].role !== 'user'; j++) {
       const r = messages[j];
-      if (r.role === 'assistant' && hasWords(r.text)) last = r;
+      if (r.role === 'assistant' && r.ownerId === undefined && hasWords(r.text)) { last = r; lastAt = j; }
     }
+    const owned = ownedLast.get(id);
+    if (owned && owned.at > lastAt) last = owned.row;
     out.push({ user: m, replies: last ? [last] : [] });
   }
   return out;

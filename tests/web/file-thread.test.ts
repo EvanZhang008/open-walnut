@@ -117,8 +117,8 @@ describe('fileQuestionRows (the rail)', () => {
   it('lists this file\'s questions in order with number, status and the current one', () => {
     const rows = fileQuestionRows(tree, new Set(), index, '/d/cache.md', null, threadKeyOf(second), new Set([threadKeyOf(first)]));
     expect(rows.map((r) => [r.kind, r.number, r.current, r.unread, r.status])).toEqual([
-      ['thread', 1, false, true, 'older'],
-      ['thread', 7, true, false, 'open'],
+      ['thread', '1', false, true, 'older'],
+      ['thread', '7', true, false, 'open'],
     ]);
     expect(rows[1].title.length).toBeGreaterThan(0);
   });

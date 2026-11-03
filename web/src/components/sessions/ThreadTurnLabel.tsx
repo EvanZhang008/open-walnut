@@ -15,7 +15,7 @@ import '@/styles/thread-stack.css';
 
 export interface ThreadTurnLabelProps {
   threadKey: string;
-  number: number | undefined;
+  number: string | undefined;
   title: string;
   naming?: boolean;
   status: ThreadViewStatus | undefined;

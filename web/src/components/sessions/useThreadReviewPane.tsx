@@ -26,7 +26,7 @@ export interface ThreadReviewPaneArgs {
   hasQuestions: boolean;
   tree: ThreadTree;
   metaIndex: ThreadMetaIndex;
-  numbers: ReadonlyMap<string, number>;
+  numbers: ReadonlyMap<string, string>;
   messages: readonly SessionHistoryMessage[];
   /** Question key to the text of its answer streaming now (empty while the
    *  sidebar is not shown: the caller reads `on` back, see SessionChatHistory). */

@@ -67,6 +67,9 @@ export interface ThreadCardConversationProps extends RowHandlers {
   supersededReply?: SessionHistoryMessage;
   /** The newest turn may still be answering (no "No answer" for it). */
   lastLive: boolean;
+  /** The newest question has no answer yet and did not fail (a strict question
+   *  waiting for its tag): its turn says it waits, never "No answer". */
+  awaiting?: boolean;
   /** Sent, not in the transcript yet, in the chat's order: each question with
    *  the newest live text answering it (web/src/stream/chat-order.ts). */
   rounds: Array<{ bubble: SessionHistoryMessage & { queueId: string; status: string }; live?: LiveText }>;
@@ -108,7 +111,10 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
           <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
             <QuestionBubble message={t.user} cwd={h.sessionCwd} />
             {replies.map(reply)}
-            {t.replies.length === 0 && !(last && (liveReply || p.lastLive)) && (
+            {t.replies.length === 0 && last && p.awaiting && !liveReply && !p.live && (
+              <div className="thread-card-noanswer" data-awaiting="true">Waiting for its answer…</div>
+            )}
+            {t.replies.length === 0 && !(last && (liveReply || p.lastLive || p.awaiting)) && (
               <div className="thread-card-noanswer">No answer</div>
             )}
           </div>

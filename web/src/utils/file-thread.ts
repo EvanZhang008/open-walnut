@@ -12,7 +12,7 @@ import type { ThreadCardPlace } from '@/contexts/SessionThreadsContext';
 import type { ThreadPendingPage } from '@/components/sessions/thread-ui-contract';
 import type { ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf, statusOf } from '@/utils/thread-meta';
-import { questionNumbers } from '@/utils/question-tag';
+import { questionLabels } from '@/utils/question-tag';
 import type { PassageMarkSpec } from '@/utils/thread-card';
 import { CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
 import { ROOT_THREAD_KEY, fileOfParent, type ThreadTree } from '@/utils/thread-tree';
@@ -64,7 +64,7 @@ export function fileQuestionMarks(
 export interface FileRailRow {
   key: string;
   kind: 'thread' | 'pending';
-  number?: number;
+  number?: string;
   title: string;
   naming: boolean;
   status: ThreadViewStatus;
@@ -82,7 +82,7 @@ export function fileQuestionRows(
   tree: ThreadTree, hiddenKeys: ReadonlySet<string>, index: ThreadMetaIndex, path: string,
   pending: PendingMarks, currentKey: string | null, unreadKeys: ReadonlySet<string>,
 ): FileRailRow[] {
-  const numbers = questionNumbers(tree, index);
+  const numbers = questionLabels(tree, index);
   const out: FileRailRow[] = [];
   for (const node of tree.threads) {
     if (node.key === ROOT_THREAD_KEY || hiddenKeys.has(node.key) || node.file?.path !== path) continue;

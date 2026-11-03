@@ -22,6 +22,7 @@
 import type { SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
 import { ROOT_THREAD_KEY, threadIdOf, type ThreadTree, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
+import { ASK_THREAD_RE, isStrictAskRow, stripAskAnswerTags } from '@/utils/ask-answer';
 
 /** `[Q4]` at the very start of a reply (blank lines and bold markers allowed). */
 const TAG_HEAD = /^\s*(?:\*\*|__)?\[Q\s?(\d{1,5})\](?:\*\*|__)?[ \t]*:?[ \t]*\r?\n?/;
@@ -42,9 +43,10 @@ export function parseQuestionTag(text: string | undefined): QuestionTag | null {
   return { seq, rest: text.slice(m[0].length).replace(/^\s*\n/, '') };
 }
 
-/** The reply as shown: the tag line gone, everything else verbatim. */
+/** The reply as shown: the `[Qn]` tag line and every `<walnut-ask-answer>` tag
+ *  line gone (ask-answer.ts), everything else verbatim. */
 export function stripQuestionTag(text: string): string {
-  return parseQuestionTag(text)?.rest ?? text;
+  return stripAskAnswerTags(parseQuestionTag(text)?.rest ?? text);
 }
 
 /**
@@ -56,9 +58,9 @@ export function stripQuestionTag(text: string): string {
  */
 export const QUESTION_BANNER_RE = /^Question Q(\d{1,5})$/;
 
-/** The `hints` a question's send asks for. */
-export function questionHint(seq: number): Record<string, { arg: string }> {
-  return { question: { arg: String(seq) } };
+/** The `hints` a question's send asks for: its thread id (6, 6.1; ask-answer.ts). */
+export function questionHint(thread: string): Record<string, { arg: string }> {
+  return { question: { arg: thread } };
 }
 
 const BANNER_IN_TEXT = /^\[Question Q(\d{1,5})\]\nThis message is question \1 of this conversation\.[\s\S]*?^\[\/Question Q\1\]/m;
@@ -69,11 +71,20 @@ export function bannerSeqOf(text: string | undefined): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** The number a sent row was given: its question hint, else an old banner. */
-export function questionSeqOfRow(m: { text?: string; hints?: ReadonlyArray<{ kind: string; arg?: string }> }): number | null {
+/** The number an OLD-protocol question row was given (its question hint, else an
+ *  old banner): what its `[Qn]` reply tag names. A strict question (its hint asks
+ *  for the `<walnut-ask-answer>` tag) has none: its answer is read from that tag
+ *  alone, never from `[Qn]` or from its place (ask-answer.ts). */
+export function questionSeqOfRow(m: { text?: string; hints?: ReadonlyArray<{ kind: string; arg?: string; text?: string }> }): number | null {
+  if (isStrictAskRow(m)) return null;
   const hint = m.hints?.find((h) => h.kind === 'question');
   if (hint?.arg && /^\d{1,5}$/.test(hint.arg)) return Number(hint.arg);
   return bannerSeqOf(m.text);
+}
+
+/** The row asked a question, of either protocol. */
+export function isQuestionRow(m: { text?: string; hints?: ReadonlyArray<{ kind: string; arg?: string; text?: string }> }): boolean {
+  return isStrictAskRow(m) || questionSeqOfRow(m) !== null;
 }
 
 /**
@@ -115,6 +126,89 @@ export function nextQuestionSeq(tree: ThreadTree, index: ThreadMetaIndex, list?:
   return max + 1;
 }
 
+/**
+ * Thread id per question key (ask-answer.ts): the path stored when it was asked
+ * (`SessionThreadMeta.thread`), else its number (a question from before paths).
+ */
+export function questionPaths(tree: ThreadTree, index: ThreadMetaIndex, numbers = questionNumbers(tree, index)): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const node of tree.threads) {
+    if (node.key === ROOT_THREAD_KEY) continue;
+    const stored = index.get(node.headId)?.thread;
+    if (stored && ASK_THREAD_RE.test(stored)) out.set(node.key, stored);
+    else if (numbers.has(node.key)) out.set(node.key, String(numbers.get(node.key)));
+  }
+  return out;
+}
+
+/**
+ * What every surface shows as a question's number (2026-11-03, the user: the
+ * ids "must match"): its thread id, the one its tag names (`6.1`), else its
+ * number for a question from before ids. The badges, map rows, review cards,
+ * turn labels and the composer pill read this, never `questionNumbers` (which
+ * the old `[Qn]` tag is read by). Guarded by tests/web/question-label-guard.test.ts.
+ */
+export function questionLabels(tree: ThreadTree, index: ThreadMetaIndex): Map<string, string> {
+  return questionPaths(tree, index);
+}
+
+/**
+ * The meta list with the questions this client gave a number and an id to that
+ * the list does not show yet (their write still in flight, or the render that
+ * reads it not run yet), so two questions asked in a row never get one id.
+ */
+export function withIssued(list: readonly SessionThreadMeta[] | undefined, issued: readonly SessionThreadMeta[]): SessionThreadMeta[] {
+  const base = [...(list ?? [])];
+  if (issued.length === 0) return base;
+  const have = new Set(base.map((m) => m.headId));
+  return [...base, ...issued.filter((m) => !have.has(m.headId))];
+}
+
+/**
+ * The thread id a new question gets (2026-11-03, the user: "the thread can be
+ * nested"): asked on the main conversation (or a file), the next top-level
+ * number, above every id's first part; asked inside a question (on its page, or
+ * about a passage of its answer), that question's id plus the next free child
+ * number: 6.1, 6.2, then 6.1.1 under 6.1. Ids are never reused.
+ */
+export function nextQuestionPath(
+  tree: ThreadTree, index: ThreadMetaIndex, list: readonly SessionThreadMeta[] | undefined, parentKey: string,
+): string {
+  const known = new Set<string>(questionPaths(tree, index).values());
+  for (const m of list ?? index.values()) {
+    if (m.thread && ASK_THREAD_RE.test(m.thread)) known.add(m.thread);
+    else if (typeof m.seq === 'number' && m.seq > 0) known.add(String(m.seq));
+  }
+  // The question it was asked in may be newer than the index (its meta still in
+  // flight): its id is then read from the list.
+  const parentHead = tree.byKey.get(parentKey)?.headId;
+  const listed = parentHead ? (list ?? []).find((m) => m.headId === parentHead) : undefined;
+  const given = parentHead && !index.has(parentHead) && listed?.thread && ASK_THREAD_RE.test(listed.thread) ? listed.thread : undefined;
+  const parent = parentKey === ROOT_THREAD_KEY ? undefined : given ?? questionPaths(tree, index).get(parentKey);
+  if (!parent) {
+    let max = 0;
+    for (const p of known) max = Math.max(max, Number(p.split('.')[0]) || 0);
+    return String(max + 1);
+  }
+  const depth = parent.split('.').length + 1;
+  let max = 0;
+  for (const p of known) {
+    const parts = p.split('.');
+    if (parts.length === depth && p.startsWith(`${parent}.`)) max = Math.max(max, Number(parts[depth - 1]) || 0);
+  }
+  // The server's id holds six levels: deeper questions go on at the last one.
+  if (depth > 6) {
+    const up = parent.split('.').slice(0, -1).join('.');
+    let top = 0;
+    for (const p of known) {
+      const parts = p.split('.');
+      if (parts.length === depth - 1 && p.startsWith(`${up}.`)) top = Math.max(top, Number(parts[depth - 2]) || 0);
+    }
+    return `${up}.${top + 1}`;
+  }
+  return `${parent}.${max + 1}`;
+}
+
 /** Question key per number (the inverse of questionNumbers). */
 export function keysBySeq(numbers: ReadonlyMap<string, number>): Map<number, string> {
   const out = new Map<number, string>();
@@ -141,6 +235,8 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
   if (headBySeq.size === 0 || messages.length === 0) return anchors as SessionThreadAnchor[];
   const anchorFor = new Map<string, SessionThreadAnchor>();
   for (const a of anchors) if (a?.msgId && a.parent) anchorFor.set(a.msgId, a);
+  const strictHeads = new Set<string>();
+  for (const m of messages) if (m.role === 'user' && isStrictAskRow(m)) { const id = threadIdOf(m); if (id) strictHeads.add(id); }
   const extra: SessionThreadAnchor[] = [];
   let headId: string | undefined;
   let headSeq: number | null = null;
@@ -155,12 +251,15 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
       decided = false;
       continue;
     }
-    if (decided || !headId || m.role !== 'assistant' || !(m.text ?? '').trim()) continue;
+    // A row the split filed by its owner (a strict question's turn) is no answer by place.
+    if (decided || !headId || m.role !== 'assistant' || m.ownerId !== undefined || !(m.text ?? '').trim()) continue;
     decided = true;
     const tag = parseQuestionTag(m.text);
     if (!tag) continue;
     const targetHead = headBySeq.get(tag.seq);
     if (!targetHead || targetHead === headId) continue;
+    // A strict question's answer is its tag's alone: a `[Qn]` naming its number moves nothing.
+    if (strictHeads.has(targetHead)) continue;
     const target = anchorFor.get(targetHead);
     // The tagged question must exist (its own anchor) and precede this turn.
     if (!target) continue;
@@ -194,7 +293,8 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
 /** Head row id per question number, from the meta list. */
 export function headsBySeq(list: readonly SessionThreadMeta[] | undefined): Map<number, string> {
   const out = new Map<number, string>();
-  for (const m of list ?? []) if (typeof m.seq === 'number' && m.seq > 0 && m.headId) out.set(m.seq, m.headId);
+  // A strict question (one with a thread id) is never filed by a `[Qn]` tag.
+  for (const m of list ?? []) if (typeof m.seq === 'number' && m.seq > 0 && m.headId && !m.thread) out.set(m.seq, m.headId);
   return out;
 }
 

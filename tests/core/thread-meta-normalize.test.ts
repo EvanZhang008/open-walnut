@@ -40,6 +40,8 @@ describe('normalizeThreadMeta', () => {
     [[{ headId: 'h', seq: 1.5 }], /seq must be an integer from 1 to 100000/],
     [[{ headId: 'h', seq: '3' }], /seq must be an integer from 1 to 100000/],
     [[{ headId: 'h', seq: 100001 }], /seq must be an integer from 1 to 100000/],
+    [[{ headId: 'h', thread: '6.' }], /thread must be a thread id like 6 or 6.1.2/],
+    [[{ headId: 'h', thread: 6 }], /thread must be a thread id like 6 or 6.1.2/],
     [['not-an-object'], /each thread_meta entry must be an object/],
     [{ headId: 'h' }, /thread_meta must be an array/],
   ])('rejects %j with 400', (body, message) => {
@@ -94,6 +96,16 @@ describe('mergeThreadMeta: upsert by headId', () => {
 });
 
 describe('mergeThreadMeta: the question number is written once', () => {
+  it('a client sets the thread id (nested path) when the question is asked; later writes cannot move or clear it; the AI never sets it', () => {
+    expect(normalizeThreadMeta([{ headId: 'h', thread: '6.1.2' }])[0].thread).toBe('6.1.2');
+    const asked = mergeThreadMeta([], [{ headId: 'head-n', question: 'nested?', seq: 9, thread: '6.1' }], T1, client);
+    expect(asked.meta[0]).toMatchObject({ seq: 9, thread: '6.1' });
+    expect(mergeThreadMeta(asked.meta, [{ headId: 'head-n', thread: '7' }], T1, client).meta[0].thread).toBe('6.1');
+    expect(mergeThreadMeta(asked.meta, [{ headId: 'head-n', thread: null }], T1, client).meta[0].thread).toBe('6.1');
+    const fresh = mergeThreadMeta([entry({ headId: 'head-n' })], [{ headId: 'head-n', thread: '3' }], T1, ai);
+    expect(fresh.meta[0].thread).toBeUndefined();
+  });
+
   it('a client sets seq when the question is asked; later writes cannot move or clear it', () => {
     const asked = mergeThreadMeta([], [{ headId: 'head-q', question: 'why?', seq: 4 }], T1, client);
     expect(asked.meta[0].seq).toBe(4);

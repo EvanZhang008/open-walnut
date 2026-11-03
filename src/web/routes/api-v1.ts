@@ -3571,9 +3571,18 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
   try {
     const rawSid = req.headers['x-walnut-caller-sid']
     // The Stop hook asks only whether a request it holds is still unanswered (unanswered-at-stop.ts).
+    // It also names an Ask here question whose answer is not inside its tag (ask-unanswered.ts),
+    // from the thread ids the hook read in the session's transcript.
     if (req.query.hook === 'stop') {
+      const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
       const { unansweredAtStop } = await import('../../core/sessions/unanswered-at-stop.js')
-      res.json({ stop: await unansweredAtStop(Array.isArray(rawSid) ? rawSid[0] : rawSid) })
+      const { askUnansweredAtStop } = await import('../../core/sessions/ask-unanswered.js')
+      const [requests, asks] = await Promise.all([
+        unansweredAtStop(sid),
+        askUnansweredAtStop(sid, { asked: req.query.asked, answered: req.query.answered }),
+      ])
+      const reason = [requests?.reason, asks?.reason].filter(Boolean).join('\n\n')
+      res.json({ stop: reason ? { reason, ...(requests ? { requests: requests.requests } : {}), ...(asks ? { asks: asks.asks } : {}) } : null })
       return
     }
     const { collectOpenItems } = await import('../../core/sessions/open-items.js')

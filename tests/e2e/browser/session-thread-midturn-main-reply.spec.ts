@@ -18,7 +18,8 @@
  *
  * The mock CLI's `MOCK_TAKE_MIDTURN` takes a line sent during a slow turn the way
  * Claude Code does (lifecycle started, queued_command attachment), and
- * `MOCK_MIDTURN_ANSWER` in the question makes the model answer it under its tag.
+ * `MOCK_MIDTURN_ANSWER` in the question makes the model answer it inside its
+ * `<walnut-ask-answer>` tag (the strict protocol, utils/ask-answer.ts).
  * Chromium and WebKit, on pw-threads-midturn-session (threads-fixture.ts).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -119,7 +120,7 @@ test.describe('a question taken mid-turn is not answered by the main turn\'s rep
     await resetThreadsFixture(request, MIDTURN_SESSION)
   })
 
-  test('no tag: the reply stays in the main chat, live, after the turn and after a reload; the question reads No answer', async ({ page }) => {
+  test('no tag: the reply stays in the main chat, live, after the turn and after a reload; the question waits for its answer', async ({ page }) => {
     const MAIN = 'Rebuild the guide page.'
     const REPLY = `processed your message: ${MAIN}`
     const QUESTION = 'Can a pod use an account from another namespace?'
@@ -137,14 +138,15 @@ test.describe('a question taken mid-turn is not answered by the main turn\'s rep
     await expect.poll(() => mainChatShows(panel, REPLY), { timeout: 10_000 }).toBe(true)
     await expect(panel.locator('.chat-stop-btn-icon')).toHaveCount(0, { timeout: 30_000 })
     // The transcript is read again at the turn's end: still the main chat's, and
-    // the question says it got no answer.
+    // the question still waits for its tagged answer (a strict question,
+    // utils/ask-answer.ts: never "Answered" over "No answer").
     for (let i = 0; i < 4; i++) {
       await page.waitForTimeout(1_000)
       expect(await mainChatShows(panel, REPLY), 'the reply stays in the main chat').toBe(true)
       await expect(body).not.toContainText(REPLY)
     }
-    await expect(card(panel).locator('.thread-status-word')).toHaveAttribute('data-kind', 'failed', { timeout: 30_000 })
-    await expect(card(panel).locator('.thread-card-noanswer')).toHaveText('No answer')
+    await expect(card(panel).locator('.thread-status-word')).toHaveAttribute('data-kind', 'waiting', { timeout: 30_000 })
+    await expect(card(panel).locator('.thread-card-noanswer')).toHaveText('Waiting for its answer…')
     await shot(page, '3-no-answer', panel)
 
     // A reload reads the transcript only.
@@ -153,7 +155,7 @@ test.describe('a question taken mid-turn is not answered by the main turn\'s rep
     await openCardOf(page, again, MIDTURN_PASSAGES.ASK)
     await expect(card(again).locator('.thread-card-body')).toContainText(QUESTION)
     await expect(card(again).locator('.thread-card-body')).not.toContainText(REPLY)
-    await expect(card(again).locator('.thread-status-word')).toHaveAttribute('data-kind', 'failed')
+    await expect(card(again).locator('.thread-status-word')).toHaveAttribute('data-kind', 'waiting')
     await shot(page, '4-reload', again)
   })
 

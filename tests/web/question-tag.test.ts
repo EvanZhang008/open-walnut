@@ -65,7 +65,9 @@ describe('parseQuestionTag / stripQuestionTag', () => {
 
 describe('question number on a send (the question hint) and old banners', () => {
   it('asks the server for the question hint with the number as its argument', () => {
-    expect(questionHint(4)).toEqual({ question: { arg: '4' } });
+    expect(questionHint('4')).toEqual({ question: { arg: '4' } });
+    // A nested question names its thread id (ask-answer.ts).
+    expect(questionHint('6.1')).toEqual({ question: { arg: '6.1' } });
   });
 
   it('reads a row\'s number from its question hint first, else from an old banner', () => {

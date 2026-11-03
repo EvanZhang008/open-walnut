@@ -70,6 +70,10 @@ export interface SessionThreadMeta {
   refinedAt?: string;
   /** The question's number (1..), fixed when it is asked; the reply tag `[Q<seq>]` names it. */
   seq?: number;
+  /** The question's thread id (6, 6.1, 6.1.2), fixed when it is asked: what its
+   *  `question` hint and its `<walnut-ask-answer>` tag name (utils/ask-answer.ts).
+   *  A question from before ids reads as its `seq`. */
+  thread?: string;
   updatedAt: string;
 }
 
@@ -299,6 +303,10 @@ export interface SessionHistoryMessage {
    *  on the next delta — otherwise a prefix synced mid-flight stays frozen and that
    *  agent's lane blocks never get absorption proof (inc-1785965937858). */
   unsettled?: boolean;
+  /** Client only, set by the split (utils/tagged-reply-split.ts fileStrictAnswers):
+   *  the thread id of the user row this assistant row is filed under, '' for the
+   *  main conversation, when its place in the transcript does not say it. */
+  ownerId?: string;
   /** A user row still in Claude Code's queue (sent, not handed to the model yet).
    *  The server puts it after everything written since its enqueue; the chat draws
    *  it after the live output too, where an untaken bubble sits. */

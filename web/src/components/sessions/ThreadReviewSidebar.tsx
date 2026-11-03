@@ -30,7 +30,7 @@ import '@/styles/thread-review.css';
 
 export interface ReviewEntry {
   key: string;
-  number?: number;
+  number?: string;
   title: string;
   state: ThreadMarkState;
   question: string;
@@ -62,7 +62,16 @@ export function reviewTurnIndex(messages: readonly SessionHistoryMessage[]): Rea
       if (id && open) out.set(id, open);
       continue;
     }
-    if (open && m.role === 'assistant' && hasWords(m.text)) open.reply = m;
+    if (m.role !== 'assistant' || !hasWords(m.text)) continue;
+    // A row the split filed by its owner (a strict answer, ask-answer.ts): that
+    // row's turn wherever it sits; '' is the main conversation's, no turn here.
+    const owner = m.ownerId;
+    if (owner !== undefined) {
+      const t = owner ? out.get(owner) : undefined;
+      if (t) t.reply = m;
+      continue;
+    }
+    if (open) open.reply = m;
   }
   return out;
 }
@@ -73,7 +82,7 @@ export function buildReviewEntries(a: {
   keys: readonly string[];
   tree: ThreadTree;
   metaIndex: ThreadMetaIndex;
-  numbers: ReadonlyMap<string, number>;
+  numbers: ReadonlyMap<string, string>;
   turns: ReadonlyMap<string, TurnAt>;
   markStates: ReadonlyMap<string, ThreadMarkState>;
 }): ReviewEntry[] {

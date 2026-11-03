@@ -9,7 +9,8 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
 import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
-import { isMidTurn } from '@/utils/tagged-reply-split';
+import { isMidTurn, rowOwnerOf } from '@/utils/tagged-reply-split';
+import { isStrictAskRow } from '@/utils/ask-answer';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { sessionDraftKey } from '@/utils/composer-insert';
 import {
@@ -405,6 +406,10 @@ export interface StatsRow {
   sourceUuid?: string;
   timestamp?: string;
   systemVariant?: 'compact' | 'error' | 'info';
+  /** User rows: the hints it carried (a strict question's, ask-answer.ts). */
+  hints?: ReadonlyArray<{ kind: string; arg?: string; text?: string }>;
+  /** Filed under this user row ('' = main) by the split, not by its place. */
+  ownerId?: string;
 }
 
 export interface ThreadStats {
@@ -424,9 +429,17 @@ export interface ThreadStats {
   /** Questions taken mid-turn in the newest turn with no answer yet: `silent`
    *  above, unless that turn is still running (it may still write their tag). */
   openMidTurn: Set<string>;
+  /** Thread keys whose newest question has no answer and no failed end yet
+   *  (a strict question waiting for its tag, ask-answer.ts): never `Answered`. */
+  unanswered: Set<string>;
 }
 
 const INTERRUPT_RE = /^\[Request interrupted/;
+
+/** Words a reply says: text left once the reply tags are gone. */
+function hasAnswerWords(text: string): boolean {
+  return /\S/.test(stripQuestionTag(text));
+}
 
 /** One pass over the loaded rows: answers, questions and failed turn ends per
  *  question (spec 5.10). A turn is a user row and everything up to the next one.
@@ -439,10 +452,29 @@ export function deriveThreadStats(
 ): ThreadStats {
   const out: ThreadStats = {
     answeredAt: new Map(), lastAnswer: new Map(), lastQuestion: new Map(), turnEnds: new Map(), answered: new Set(), lastAsk: new Map(),
-    openMidTurn: new Set(),
+    openMidTurn: new Set(), unanswered: new Set(),
   };
   let turnHead: string | undefined;
   let turnKey = '';
+  /** Strict questions' rows: only these wait for an answer (an old question
+   *  whose turn has no reply reads `No answer`, as before). */
+  const strictRows = new Set<string>();
+  /** Words for a turn: the head row's answer (none: the main conversation's). */
+  const credit = (head: string | undefined, key: string, r: StatsRow, text: string) => {
+    if (hasAnswerWords(text)) {
+      if (head) {
+        out.answered.add(head);
+        out.turnEnds.delete(head);
+        out.openMidTurn.delete(head);
+      }
+      // The takeaway reads its last paragraph: never the no-action line.
+      out.lastAnswer.set(key, stripTurnMarker(text));
+      const at = r.timestamp ? Date.parse(r.timestamp) : NaN;
+      if (Number.isFinite(at)) out.answeredAt.set(key, at);
+    } else if (head && !out.answered.has(head) && !out.turnEnds.has(head)) {
+      out.turnEnds.set(head, 'silent');
+    }
+  };
   for (const r of rows) {
     const text = r.text ?? '';
     if (r.role === 'user') {
@@ -456,6 +488,7 @@ export function deriveThreadStats(
       turnKey = keyOfRow(turnHead);
       out.lastQuestion.set(turnKey, text);
       if (turnHead) out.lastAsk.set(turnKey, turnHead);
+      if (turnHead && isStrictAskRow(r)) strictRows.add(turnHead);
       const mid = isMidTurn(r);
       if (!mid) out.openMidTurn.clear();
       // A question the CLI took while another conversation's turn ran: that turn's
@@ -463,30 +496,38 @@ export function deriveThreadStats(
       // has none until a row under its own tag follows (2026-11-03). A second
       // line of the same question right after an unanswered one is the same wait.
       const unansweredBefore = !!before && out.openMidTurn.has(before);
-      if (turnHead && mid && turnKey !== ROOT_THREAD_KEY && (turnKey !== takenIn || unansweredBefore)) {
+      // A strict question has no answer until its tag comes, whenever: it waits.
+      if (turnHead && mid && !isStrictAskRow(r) && turnKey !== ROOT_THREAD_KEY && (turnKey !== takenIn || unansweredBefore)) {
         out.turnEnds.set(turnHead, 'silent');
         out.openMidTurn.add(turnHead);
       }
       continue;
     }
-    if (!turnHead) continue;
-    const isError = r.systemVariant === 'error' || (r.role === 'assistant' && /^API Error\b/.test(text.trim()));
-    if (isError) {
-      if (!out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'error');
+    const owner = rowOwnerOf(r);
+    // A failed turn end fails the line that started the turn (and the row's owner),
+    // whoever the split filed the error row under: a strict question whose turn
+    // died reads failed with Retry, never waiting, and the error is no takeaway.
+    if (r.systemVariant === 'error' || (r.role === 'assistant' && /^API Error\b/.test(text.trim()))) {
+      for (const head of new Set([turnHead, owner || undefined])) {
+        if (head && !out.answered.has(head)) out.turnEnds.set(head, 'error');
+      }
       continue;
     }
-    if (r.role !== 'assistant') continue;
-    if (/\S/.test(stripQuestionTag(text))) {
-      out.answered.add(turnHead);
-      out.turnEnds.delete(turnHead);
-      out.openMidTurn.delete(turnHead);
-      // The takeaway reads its last paragraph: never the no-action line.
-      out.lastAnswer.set(turnKey, stripTurnMarker(text));
-      const at = r.timestamp ? Date.parse(r.timestamp) : NaN;
-      if (Number.isFinite(at)) out.answeredAt.set(turnKey, at);
-    } else if (!out.answered.has(turnHead) && !out.turnEnds.has(turnHead)) {
-      out.turnEnds.set(turnHead, 'silent');
+    // A row the split filed under its owner (a strict answer, or a strict
+    // question's turn read in the main conversation): its owner's, wherever it sits.
+    if (owner !== undefined) {
+      if (r.role === 'assistant') {
+        const head = owner || undefined;
+        credit(head, head ? keyOfRow(head) : ROOT_THREAD_KEY, r, text);
+      }
+      continue;
     }
+    if (!turnHead) continue;
+    if (r.role !== 'assistant') continue;
+    credit(turnHead, turnKey, r, text);
+  }
+  for (const [key, ask] of out.lastAsk) {
+    if (key !== ROOT_THREAD_KEY && strictRows.has(ask) && !out.answered.has(ask) && !out.turnEnds.has(ask)) out.unanswered.add(key);
   }
   return out;
 }

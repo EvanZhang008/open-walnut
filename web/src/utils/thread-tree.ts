@@ -147,6 +147,13 @@ export interface ThreadTreeMessage {
    * the attachment's `source_uuid`, which the server copies here.
    */
   sourceUuid?: string;
+  /**
+   * Set by the split (tagged-reply-split.ts fileStrictAnswers) when a row's place
+   * does not say whose it is: the thread id of the user row it is filed under,
+   * '' for the main conversation. A strict question's answer is the text inside
+   * its tag wherever it sits, and its turn's other words are never its answer.
+   */
+  ownerId?: string;
 }
 
 /** Row identity: the transcript uuid when the line has persisted, else the uuid
@@ -233,9 +240,15 @@ function computeThreadTree(
   // Rows before the first user row (session init, hook notices) belong to no
   // turn; they read as top level.
   const preTurnIds: string[] = [];
+  // Rows filed by their owner, not their place (assigned once every turn is known).
+  const owned: Array<{ id: string; owner: string }> = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     const id = rowIdOf(m);
+    if (m.role !== 'user' && m.ownerId !== undefined) {
+      if (id) owned.push({ id, owner: m.ownerId });
+      continue;
+    }
     if (m.role === 'user') {
       const headId = threadIdOf(m) ?? '';
       turns.push({ headId, ...(id && id !== headId ? { rowId: id } : {}), start: i, text: m.text, memberIds: [] });
@@ -312,6 +325,10 @@ function computeThreadTree(
     }
     for (const id of turn.memberIds) assign(id, node, false);
     latestKey = node.key;
+  }
+  for (const o of owned) {
+    const node = o.owner ? byKey.get(keyOfRow.get(o.owner) ?? ROOT_THREAD_KEY) ?? root : root;
+    assign(o.id, node, false);
   }
 
   // Depth-first from root. `childKeys` was filled in transcript order, so this is

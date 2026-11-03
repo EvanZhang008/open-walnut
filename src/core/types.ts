@@ -375,6 +375,16 @@ export interface SessionHintTold {
   byHookAt?: string;
 }
 
+/** One Ask here question as it was sent (SessionRecord.asksSent). */
+export interface SessionAskSent {
+  /** Its thread id, the `thread` of its `<walnut-ask>` tag: `6`, or a path when nested (`6.1.2`). */
+  thread: string;
+  name: string;
+  /** The start of its words. */
+  preview: string;
+  at: string;
+}
+
 export interface SessionHintState {
   /** Messages that went through the hint pipeline. */
   sends: number;
@@ -2767,6 +2777,11 @@ export interface SessionThreadMeta {
   /** The question's number (1..), given when it is asked and never changed:
    *  the sidebar shows it, and the model's reply opens with `[Q<seq>]`. */
   seq?: number;
+  /** Its thread id, given when it is asked and never changed: `seq` on the main
+   *  conversation, a path below the question it was asked in when nested (`6.1`,
+   *  `6.1.2`). The send's `<walnut-ask thread=...>` and the answer's tag name it.
+   *  Absent on questions from before it: their id is their `seq`. */
+  thread?: string;
   /** ISO, stamped by the server on every write to this entry. */
   updatedAt: string;
 }
@@ -3138,6 +3153,10 @@ export interface SessionRecord {
   /** Per-question metadata (status, title, takeaway, hidden), keyed by head
    *  msgId and merged by headId on write (see SessionThreadMeta). */
   threadMeta?: SessionThreadMeta[];
+  /** Ask here questions sent into this session (newest last, at most 40): what the
+   *  Stop hook names when a turn ends with one still answered outside its tag
+   *  (core/sessions/ask-unanswered.ts). Optional; older records have none. */
+  asksSent?: SessionAskSent[];
   /**
    * Git commit SHAs this session produced (extracted from `git commit` tool
    * results by the session indexer, in commit order). The structured half of

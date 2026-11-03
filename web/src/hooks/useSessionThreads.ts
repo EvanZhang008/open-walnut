@@ -18,7 +18,7 @@ import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-c
 import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
 import { clearDraft, readDraft, writeDraft } from '@/utils/drafts';
 import { carriedRootDraft, composerKeyOf, pendingPageOf } from '@/utils/composer-quote';
-import { nextQuestionSeq, questionHint, questionNumbers } from '@/utils/question-tag';
+import { nextQuestionPath, nextQuestionSeq, questionHint, questionLabels, questionPaths, withIssued } from '@/utils/question-tag';
 import { markStatesOf, sameMarkStates, type ThreadMarkState } from '@/utils/thread-mark-state';
 import { log } from '@/utils/log';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -28,6 +28,19 @@ import {
 } from '@/utils/question-write-retry';
 
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
+/** A question's thread id (its stored path, else its number): what every send
+ *  filed under it names in its `question` hint (utils/ask-answer.ts). */
+function threadIdOfKey(
+  r: { tree: ThreadTree; meta: { index: import('@/utils/thread-meta').ThreadMetaIndex } }, key: string,
+  issued: readonly SessionThreadMeta[] = [],
+): string {
+  // A question asked moments ago: the id it was given, its meta not read back yet
+  // (the tree would number it by order until then).
+  const head = r.tree.byKey.get(key)?.headId;
+  const given = head && !r.meta.index.has(head) ? issued.find((m) => m.headId === head)?.thread : undefined;
+  return given ?? questionPaths(r.tree, r.meta.index).get(key) ?? '';
+}
 const EMPTY_TIMES: ReadonlyMap<string, number> = new Map();
 
 /** One anchor per user message, so the msgId IS the row identity. */
@@ -324,8 +337,8 @@ export interface PanelThreads {
 
 export interface ComposerTarget {
   key: string;
-  /** The question's number; none for a question not asked yet. */
-  number?: number;
+  /** The question's label (its thread id, else its number, questionLabels); none for a question not asked yet. */
+  number?: string;
   title: string;
   /** An Ask not sent yet (`title` is then its passage). */
   pending: boolean;
@@ -424,6 +437,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const flushing = useRef(false);
   const laterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionRef = useRef(sessionId);
+  /** Ids and numbers given to questions this session's meta does not show yet
+   *  (withIssued): the next question's id is counted above them. */
+  const issuedRef = useRef<SessionThreadMeta[]>([]);
+  if (sessionRef.current !== sessionId) issuedRef.current = [];
   sessionRef.current = sessionId;
   const setUnsaved = useCallback((sid: string, list: UnsavedQuestion[]) => {
     if (sid === sessionRef.current) unsavedRef.current = list;
@@ -574,20 +591,30 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       msgId: userUuid, parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: pending ? 'selection' : 'manual', at,
     };
     let text: string;
-    let seq: number | undefined;
+    let thread: string;
     const metaEntries: SessionThreadMetaPatch[] = [];
-    // The question's NUMBER rides the message as the `question` hint, which the
-    // server writes ahead of the text and which asks for the `[Q<n>]` reply tag:
-    // a new question takes the next free number (stored in its meta), a
-    // follow-up reuses its question's.
+    // The question's thread id rides EVERY send filed under it as the `question`
+    // hint (2026-11-03, the user: "each ask from us in that thread also remind
+    // model about this"), which names the question and the tag its answer must
+    // sit in (utils/ask-answer.ts). A new question takes the next id below the
+    // page it was asked from (6, 6.1, 6.1.1: "the thread can be nested") and its
+    // next free number (both stored in its meta); a follow-up reuses its question's.
     if (pending) {
-      seq = nextQuestionSeq(r.tree, r.meta.index, r.meta.list);
+      // Questions asked before their meta was read back count too (two asks in a row).
+      const listNow = withIssued(r.meta.list, issuedRef.current);
+      const seq = nextQuestionSeq(r.tree, r.meta.index, listNow);
+      // The question it was asked inside: the page it was asked from, else the
+      // question holding the passage it is about.
+      const within = pending.parentKey !== ROOT_THREAD_KEY ? pending.parentKey : (r.tree.byRow.get(parent)?.key ?? ROOT_THREAD_KEY);
+      thread = nextQuestionPath(r.tree, r.meta.index, listNow, within);
+      const have = new Set((r.meta.list ?? []).map((m) => m.headId));
+      issuedRef.current = [...issuedRef.current.filter((m) => !have.has(m.headId)), { headId: userUuid, status: 'open', seq, thread, updatedAt: at }];
       text = keepCommandFirst(message, (t) => composeAnchoredText(
         t, { parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: 'selection', label: pending.title }, latestKey,
       ));
-      metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq });
+      metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq, thread });
     } else {
-      seq = questionNumbers(r.tree, r.meta.index).get(key);
+      thread = threadIdOfKey(r, key, issuedRef.current);
       text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey }));
       if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
     }
@@ -607,7 +634,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (head) r.stack.markHeadViewed(head);
     noteAsked(pending ? threadKeyOf(anchor) : key);
     log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
-    const sent = dispatch(sessionId, text, images, { userUuid, ...(seq ? { hints: questionHint(seq) } : {}) });
+    const sent = dispatch(sessionId, text, images, { userUuid, hints: questionHint(thread) });
     if (pending) {
       const stack = r.stack;
       sent.then((ok) => stack.settlePending(pending, ok), () => stack.settlePending(pending, false));
@@ -628,8 +655,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     log.info('threads', 'retry', { sessionId, headId: node.headId, rowId: userUuid });
     r.stack.markHeadViewed(node.headId);
     noteAsked(key);
-    const seq = questionNumbers(r.tree, r.meta.index).get(key);
-    void r.args.send(sessionId, text, undefined, { userUuid, ...(seq ? { hints: questionHint(seq) } : {}) });
+    void r.args.send(sessionId, text, undefined, { userUuid, hints: questionHint(threadIdOfKey(r, key, issuedRef.current)) });
   }, [sessionId, persistAnchor, noteAsked]);
 
   const requestPinJump = useCallback((pinKey: string, threadKey: string) => {
@@ -740,6 +766,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       tree, live: derived.live, spoke: derived.spoke ?? EMPTY_KEYS, answeredAt: derived.answeredAt,
       datedAt: derived.datedAt ?? EMPTY_TIMES, sentKeys: derived.sentKeys ?? EMPTY_KEYS,
       queuedKeys: derived.queuedKeys ?? EMPTY_KEYS, unsentKeys: derived.unsentKeys ?? EMPTY_KEYS,
+      awaitingKeys: derived.awaiting ?? EMPTY_KEYS,
       lastViewedAt: stack.lastViewedAt, viewingKey, askedAt,
       isResolved: (node) => statusOf(node, meta.index) === 'resolved',
     });
@@ -813,7 +840,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const pendingTitle = composerPending
     ? composerPending.quote?.exact?.replace(/\s+/g, ' ').trim() || composerPending.title : undefined;
   const targetNumber = pageKey === ROOT_THREAD_KEY || pendingTitle !== undefined ? undefined
-    : questionNumbers(tree, meta.index).get(pageKey);
+    : questionLabels(tree, meta.index).get(pageKey);
   const composerTarget = useMemo<ComposerTarget | undefined>(() => {
     if (viewMode !== 'linear' || pageKey === ROOT_THREAD_KEY) return undefined;
     if (pendingTitle !== undefined) return { key: pageKey, title: pendingTitle, pending: true };

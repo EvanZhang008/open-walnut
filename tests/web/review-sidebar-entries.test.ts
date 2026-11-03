@@ -21,14 +21,14 @@ const tree = { byKey: new Map([['q1', node('q1', ['u1', 'u3'])], ['q2', node('q2
 describe('review card entries', () => {
   const turns = reviewTurnIndex(messages);
   const entries = buildReviewEntries({
-    keys: ['q1', 'q2', 'gone'], tree, metaIndex: new Map(), numbers: new Map([['q1', 1], ['q2', 2]]), turns,
+    keys: ['q1', 'q2', 'gone'], tree, metaIndex: new Map(), numbers: new Map([['q1', '1'], ['q2', '1.1']]), turns,
     markStates: new Map([['q2', 'waiting']]),
   });
 
   it('one entry per known question, its newest round and the final reply of that round', () => {
     expect(entries.map((e) => e.key)).toEqual(['q1', 'q2']);
-    expect(entries[0]).toMatchObject({ number: 1, rounds: 2, question: 'And after a restart?', answer: 'It replays the log first.', state: 'read' });
-    expect(entries[1]).toMatchObject({ number: 2, rounds: 1, question: 'Second question', answer: '', state: 'waiting' });
+    expect(entries[0]).toMatchObject({ number: '1', rounds: 2, question: 'And after a restart?', answer: 'It replays the log first.', state: 'read' });
+    expect(entries[1]).toMatchObject({ number: '1.1', rounds: 1, question: 'Second question', answer: '', state: 'waiting' });
   });
 
   it('live words replace only the streaming card, and keep the others as they were', () => {

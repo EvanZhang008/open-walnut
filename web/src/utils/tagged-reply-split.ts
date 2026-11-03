@@ -32,17 +32,30 @@
  *
  * Pure: unit tested in tests/web/tagged-reply-split.test.ts.
  */
-import { questionSeqOfRow } from '@/utils/question-tag';
+import { parseQuestionTag, questionSeqOfRow } from '@/utils/question-tag';
+import { askNameKey, mentionsAskAnswer, parseAskAnswers, strictAskOf } from '@/utils/ask-answer';
 
 export interface SplitRow {
   role: 'user' | 'assistant' | 'system';
   text?: string;
   msgId?: string;
   sourceUuid?: string;
-  hints?: ReadonlyArray<{ kind: string; arg?: string }>;
+  hints?: ReadonlyArray<{ kind: string; arg?: string; text?: string }>;
   tools?: unknown;
   thinking?: string;
   usage?: unknown;
+  /**
+   * Set by the split when the row's place does not say whose it is: the thread
+   * id (threadIdOf) of the user row whose turn the row is filed in, '' for the
+   * main conversation. Every positional reader honors it (rowOwnerOf).
+   */
+  ownerId?: string;
+}
+
+/** The user row a row is filed under by the split ('' = the main conversation),
+ *  or undefined: its place says (the user row before it). */
+export function rowOwnerOf(m: { role: string; ownerId?: string }): string | undefined {
+  return m.role === 'user' ? undefined : m.ownerId;
 }
 
 /** `[Q4]` opening a line (bold markers allowed), anywhere in the reply. */
@@ -98,6 +111,11 @@ function fenceSpans(text: string): Array<[number, number]> {
 const partsCache = new WeakMap<object, { sig: string; segs: unknown[] }>();
 
 export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
+  return fileStrictAnswers(splitOldTaggedReplies(rows));
+}
+
+/** The `[Qn]` protocol's layout (rows from before the strict tag). */
+function splitOldTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
   if (!rows.some((m) => midTurnSeq(m) !== null)) return rows;
   const out: M[] = [];
   let changed = false;
@@ -172,4 +190,133 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
     i = end;
   }
   return changed && out.some((r, k) => r !== rows[k]) ? out : rows;
+}
+
+// ── The strict protocol (utils/ask-answer.ts) ──
+
+const strictCache = new WeakMap<object, { sig: string; segs: unknown[] }>();
+
+/**
+ * Files strict questions' answers by their tags, with explicit owners. A strict
+ * question's answer is the text inside `<walnut-ask-answer>` spans naming its
+ * thread id and name, wherever they appear after it; each span becomes its own
+ * row owned by the question's newest ask before it. Every other assistant row
+ * keeps the owner of its turn: the line that started the turn, or the main
+ * conversation ('') when a strict question started it (its untagged words are
+ * never its answer), or the turn's owner when a strict question was taken
+ * mid-turn. Rows whose place already says their owner carry no `ownerId`, so a
+ * transcript with no strict question is returned as it is (same array).
+ */
+export function fileStrictAnswers<M extends SplitRow>(rows: M[]): M[] {
+  if (!rows.some((m) => m.role === 'user' && strictAskOf(m) !== null)) return rows;
+  /** Thread id to the names its asks in the rows gave it (compared folded): the
+   *  first send fixes a name, but a follow-up's hint may carry another one (the
+   *  server's record of the first was lost), and a span may name either. */
+  const names = new Map<string, Set<string>>();
+  /** The newest strict question of a turn a strict question started: a failed
+   *  turn end is its (it reads failed with Retry), not the main conversation's. */
+  let strictTurnAsk: string | undefined;
+  /** Thread id to its newest ask row (threadIdOf) so far. */
+  const latest = new Map<string, string>();
+  /** Whose the untagged rows are now ('' = main), undefined before any user row. */
+  let turnOwner: string | undefined;
+  /** The user row the rows after it are read under by place. */
+  let placeOwner: string | undefined;
+  /** An old-protocol question's number to its newest row: its `[Qn]` tag still
+   *  files a reply to it, in a turn whose place says nothing (the live rule). */
+  const oldAsks = new Map<number, string>();
+  const out: M[] = [];
+  let changed = false;
+  const idOf = (m: M) => m.sourceUuid ?? m.msgId;
+  for (const r of rows) {
+    if (r.role === 'user') {
+      const ask = strictAskOf(r);
+      const id = idOf(r);
+      if (ask) {
+        const known = names.get(ask.thread) ?? new Set<string>();
+        known.add(askNameKey(ask.name));
+        names.set(ask.thread, known);
+        if (id) latest.set(ask.thread, id);
+        // A strict question starting a turn owns none of its untagged words; one
+        // taken mid-turn leaves the turn its owner.
+        if (!isMidTurn(r)) { turnOwner = ''; strictTurnAsk = id; }
+        else if (turnOwner === undefined) turnOwner = placeOwner ?? '';
+        else if (strictTurnAsk !== undefined && id) strictTurnAsk = id;
+      } else {
+        turnOwner = id ?? '';
+        strictTurnAsk = undefined;
+        const seq = questionSeqOfRow(r);
+        if (seq !== null && id) oldAsks.set(seq, id);
+      }
+      placeOwner = id ?? '';
+      out.push(r);
+      continue;
+    }
+    if (r.role !== 'assistant' || turnOwner === undefined) { out.push(r); continue; }
+    const ownerOf = (thread: string | null, name: string | undefined): string | null => {
+      if (thread === null || !names.get(thread)?.has(askNameKey(name))) return null;
+      return latest.get(thread) ?? null;
+    };
+    const parts = mentionsAskAnswer(r.text) ? parseAskAnswers(r.text ?? '') : null;
+    // Each part's owner: a matching span's question, else the turn's (the text
+    // of a span that names no question here stays as written, tags and all).
+    const owned = parts?.map((p) => ({ owner: ownerOf(p.thread, p.name), p })) ?? [];
+    if (!owned.some((o) => o.owner !== null)) {
+      if (turnOwner === placeOwner) { out.push(r); continue; }
+      const oldTag = parseQuestionTag(r.text);
+      const failed = strictTurnAsk !== undefined && /^API Error\b/.test((r.text ?? '').trim());
+      const owner = failed ? strictTurnAsk! : (oldTag && oldAsks.get(oldTag.seq)) ?? turnOwner;
+      if (owner === placeOwner) { out.push(r); continue; }
+      const sig = `=${owner}`;
+      const hit = strictCache.get(r);
+      const seg = hit && hit.sig === sig ? hit.segs[0] as M : { ...r, ownerId: owner };
+      if (seg !== hit?.segs[0]) strictCache.set(r, { sig, segs: [seg] });
+      out.push(seg);
+      changed = true;
+      continue;
+    }
+    // Neighbouring text outside the matching spans is one part.
+    const merged: Array<{ owner: string; text: string; span: boolean }> = [];
+    for (const o of owned) {
+      const span = o.owner !== null;
+      const text = span ? o.p.text : o.p.raw.trim();
+      const prev = merged[merged.length - 1];
+      if (!span && prev && !prev.span) { prev.text = `${prev.text}\n\n${text}`; continue; }
+      merged.push({ owner: o.owner ?? turnOwner, text, span });
+    }
+    const list = merged.filter((x) => x.text.trim());
+    const hasTools = Array.isArray(r.tools) ? r.tools.length > 0 : !!r.tools;
+    // The calls a message makes come after its words: they are the turn's, so a
+    // message ending in an answer hands them to a row of the turn's own.
+    if (hasTools && list.length > 0 && list[list.length - 1].owner !== turnOwner) list.push({ owner: turnOwner, text: '', span: false });
+    if (list.length === 0) list.push({ owner: turnOwner, text: '', span: false });
+    const sig = list.map((x) => `${x.owner}\u0001${x.text}`).join('\u0002') + `\u0003${placeOwner}`;
+    const hit = strictCache.get(r);
+    const segs = hit && hit.sig === sig ? hit.segs as M[] : list.map((x, n) => {
+      const seg: M = { ...r, text: x.text, ...(n === 0 ? {} : { msgId: `${r.msgId ?? 'row'}~a${n}` }) };
+      if (x.owner !== placeOwner) seg.ownerId = x.owner; else delete seg.ownerId;
+      if (n > 0) { delete seg.thinking; delete seg.usage; }
+      if (n < list.length - 1) delete seg.tools;
+      return seg;
+    });
+    if (segs !== hit?.segs) strictCache.set(r, { sig, segs });
+    out.push(...segs);
+    changed = true;
+  }
+  return changed ? out : rows;
+}
+
+/**
+ * Where a transcript row sits in the split rows: the row itself, else its first
+ * part (a cut or owner-stamped copy keeps the row's msgId), else null. An index
+ * that names a transcript row (the fork boundary) follows it this way.
+ */
+export function splitIndexOf<M extends SplitRow>(split: readonly M[], row: M | undefined): number | null {
+  if (!row) return null;
+  const at = split.indexOf(row);
+  if (at >= 0) return at;
+  const id = row.msgId ?? (row as { walnutMessageId?: string }).walnutMessageId;
+  if (!id) return null;
+  const by = split.findIndex((m) => (m.msgId ?? (m as { walnutMessageId?: string }).walnutMessageId) === id);
+  return by >= 0 ? by : null;
 }

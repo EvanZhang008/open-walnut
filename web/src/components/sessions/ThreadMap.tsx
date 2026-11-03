@@ -149,7 +149,7 @@ function rowStyle(depth: number): CSSProperties {
  * re-rendered for a change that touches two or three of them.
  */
 const Lead = memo(function Lead({ kind, number, expanded }: {
-  kind: TreeRow['kind']; number: number | undefined; expanded: boolean;
+  kind: TreeRow['kind']; number: string | undefined; expanded: boolean;
 }) {
   if (kind === 'pin') return <ThreadPinIcon size={11} className="thread-map-pin" />;
   if (kind === 'done-group') {
@@ -181,7 +181,7 @@ export interface MapRowProps {
   label: string;
   naming: boolean;
   depth: number;
-  number: number | undefined;
+  number: string | undefined;
   tabIndex: number;
   entry: boolean;
   unread: string | undefined;

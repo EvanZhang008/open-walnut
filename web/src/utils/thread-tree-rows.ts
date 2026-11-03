@@ -23,7 +23,7 @@ import {
 import { pinThreadKey } from '@/utils/thread-meta-counts';
 import { pinKeyOf } from '@/hooks/useSessionPins';
 import { hitSnippet, matchRanges, windowOnMatch, type MatchRange } from '@/utils/thread-search-window';
-import { questionNumbers } from '@/utils/question-tag';
+import { questionLabels } from '@/utils/question-tag';
 
 export { hitSnippet, matchRanges, segmentsOf } from '@/utils/thread-search-window';
 
@@ -44,7 +44,7 @@ export interface TreeRow {
   hue: number;
   /** The question's number (thread rows): what the sidebar, the turn label and
    *  the model's `[Q<n>]` tag call it. */
-  number?: number;
+  number?: string;
   status?: ThreadViewStatus;
   title: string;
   naming?: boolean;
@@ -168,7 +168,7 @@ interface Ctx {
   hidden: Set<string>;
   pinsByThread: Map<string, SessionPinnedMessage[]>;
   openBelow: Map<string, number>;
-  numbers: Map<string, number>;
+  numbers: Map<string, string>;
   /** Filtering: the keys (threads) and pin keys that stay, ancestors included. */
   keep?: Set<string>;
   keepPins?: Set<string>;
@@ -448,7 +448,7 @@ export function flattenTree(
   const c: Ctx = {
     tree, index, live, opts, q, hidden, pinsByThread, rows: [], matchCount: 0,
     openBelow: openBelowAll(tree, index, hidden),
-    numbers: questionNumbers(tree, index),
+    numbers: questionLabels(tree, index),
   };
   const filtering = q !== '' || opts.filter !== 'all';
   if (filtering) computeKeep(c);

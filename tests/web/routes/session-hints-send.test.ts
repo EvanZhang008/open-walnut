@@ -92,8 +92,9 @@ describe('session:send through the hint pipeline', () => {
     await drain(sid)
     await callSend({ sessionId: sid, message: 'what about the cache?', hints: { question: { arg: '12' } } })
     const text = await drain(sid)
-    expect(text.startsWith('<system-reminder>\nWalnut (question 12): this message is question 12')).toBe(true)
-    expect(text).toContain('"[Q12]"')
+    // The strict Ask here hint (src/core/sessions/ask-thread.ts): the question's tag, and the tag its answer must sit in.
+    expect(text.startsWith('<system-reminder>\nWalnut (question 12): this message is an Ask here question: <walnut-ask thread="12"')).toBe(true)
+    expect(text).toContain('<walnut-ask-answer thread="12"')
     expect(parseHinted(text).text).toBe('what about the cache?')
   })
 

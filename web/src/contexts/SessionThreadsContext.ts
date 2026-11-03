@@ -89,6 +89,9 @@ export interface ThreadDerived {
   queuedKeys?: ReadonlySet<string>;
   /** Questions whose newest send of this tab failed to deliver. */
   unsentKeys?: ReadonlySet<string>;
+  /** Questions whose newest question has no answer yet and did not fail (a
+   *  strict question waiting for its tag): they read waiting, never Answered. */
+  awaiting?: ReadonlySet<string>;
 }
 
 /** Where a comment card sits inside its host box (left/top relative to the host). */

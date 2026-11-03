@@ -29,6 +29,8 @@
  */
 
 import { buildReviewOldSession, buildReviewSession } from './threads-review-fixture';
+import { renderHintBlock } from '../../../src/core/hints/hint-format';
+import { askHintText } from '../../../src/core/sessions/ask-thread';
 
 export const DENSE_SESSION = 'pw-threads-dense-session';
 export const AI_SESSION = 'pw-threads-ai-session';
@@ -48,7 +50,7 @@ export const THREAD_AI_STUB_PREFIX = 'pw-threads-ai-';
 export const NO_THREAD_SESSION = 'pw-outline-window-session';
 
 export interface FixtureAnchor { msgId: string; parent: string; quote?: { exact: string; prefix?: string; suffix?: string }; source: 'selection' | 'sticky' | 'manual'; at: string }
-export interface FixtureMeta { headId: string; status: 'open' | 'suggested' | 'resolved' | 'older'; title?: string; titleSource?: 'ai' | 'user'; titleState?: 'pending' | 'done' | 'failed' | 'unavailable'; question?: string; takeaway?: string; takeawaySource?: 'fallback' | 'user' | 'ai'; takeawayState?: 'pending' | 'done' | 'failed'; hidden?: boolean; suggestDismissed?: boolean; seq?: number; updatedAt: string }
+export interface FixtureMeta { headId: string; status: 'open' | 'suggested' | 'resolved' | 'older'; title?: string; titleSource?: 'ai' | 'user'; titleState?: 'pending' | 'done' | 'failed' | 'unavailable'; question?: string; takeaway?: string; takeawaySource?: 'fallback' | 'user' | 'ai'; takeawayState?: 'pending' | 'done' | 'failed'; hidden?: boolean; suggestDismissed?: boolean; seq?: number; thread?: string; updatedAt: string }
 export interface FixturePin { msgId: string; label: string; role: 'user' | 'assistant' | 'system'; pinnedAt: string; timestamp?: string; id?: string; quote?: { exact: string } }
 export interface FixtureRow {
   role: 'user' | 'assistant'; uuid: string; text: string; isApiError?: boolean;
@@ -723,10 +725,46 @@ export function buildMidTurnSession(): ThreadsFixtureSession {
   };
 }
 
+/** Its own session for the strict Ask here spec (session-ask-strict-tag.spec.ts):
+ *  its sends are written into its transcript, and nothing another spec asks lands
+ *  in it. Same text as the mid-turn session; question 1 is a strict one, its send
+ *  carrying the hint the server writes (src/core/sessions/ask-thread.ts) and its
+ *  answer inside its tag. */
+export const STRICT_SESSION = 'pw-threads-strict-session';
+export const STRICT_TASK = 'pw-task-threads-strict';
+
+export function buildStrictSession(): ThreadsFixtureSession {
+  const P = 'f1a2b3';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), Q1: t(2) };
+  const name = MIDTURN_TITLES.Q1;
+  const attrs = `thread="1" name="${name}"`;
+  // The block the server writes (renderHintBlock + askHintText), so the history reader takes it off as the row's `question` hint.
+  const hint = renderHintBlock('question', askHintText('1', name), '1');
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: MIDTURN_READY },
+    {
+      role: 'assistant', uuid: ids.R1.a,
+      text: `${filler(501, 40)}\n\n${MIDTURN_PASSAGES.Q1} ${filler(502, 30)}\n\n${MIDTURN_PASSAGES.ASK} ${filler(503, 30)}\n\n${MIDTURN_PASSAGES.ASK2} ${filler(504, 30)}`,
+    },
+    { role: 'user', uuid: ids.Q1.u, text: `${hint}\n\n> ${MIDTURN_PASSAGES.Q1}\n\nIs the list shared across clusters?` },
+    { role: 'assistant', uuid: ids.Q1.a, text: `Looking at the cluster setup first.\n<walnut-ask-answer ${attrs}>\nNo, each cluster keeps its own. ${filler(505, 20)}\n</walnut-ask-answer>` },
+  ];
+  const at = '2026-11-03T01:00:00.000Z';
+  return {
+    sessionId: STRICT_SESSION, taskId: STRICT_TASK, title: 'Threads strict tag fixture session',
+    rows, parked: [], pinnedMessages: [],
+    threadAnchors: [{ msgId: ids.Q1.u, parent: ids.R1.a, quote: { exact: MIDTURN_PASSAGES.Q1 }, source: 'selection', at }],
+    threadMeta: [
+      { headId: ids.Q1.u, status: 'open', title: name, titleSource: 'ai', titleState: 'done', question: 'Is the list shared across clusters?', seq: 1, thread: '1', updatedAt: at },
+    ],
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(),
     buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];
 }

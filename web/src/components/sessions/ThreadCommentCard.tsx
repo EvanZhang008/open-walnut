@@ -73,7 +73,7 @@ export interface ThreadCommentCardProps {
   threadKey: string;
   /** No question yet: an Ask waiting for its first message. */
   draft: boolean;
-  number: number | undefined;
+  number: string | undefined;
   title: string;
   naming?: boolean;
   status: ThreadViewStatus | undefined;
