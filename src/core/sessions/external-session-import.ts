@@ -17,7 +17,8 @@
  *      PER SESSION, titled with the session's own auto-generated name. This is
  *      the normal task↔session shape (1 session per task, session in the slot),
  *      so imported sessions behave exactly like native ones — status circle,
- *      click-through, resume.
+ *      click-through, resume. The run that makes a host's project puts it under
+ *      the VP of the other import projects (import-project-vp.ts).
  *   4. Import each candidate as a `stopped` session record with its real title.
  *   5. Record the run's folders in frequent-dirs (one write), so a user whose
  *      history lives in their own Claude Code install finds those folders as
@@ -59,6 +60,7 @@ import { ENGINE_REGISTRY, engineCaps, normalizeEngine } from '../agents/engine-r
 import { EXTERNAL_SESSION_IMPORT_TAG, isExternalImportTask, type Task } from '../types.js';
 import { readMarkerForPhase } from '../phase.js';
 import type { DirectoryUse } from '../frequent-dirs.js';
+import { placeNewImportProject, projectRegistered } from './import-project-vp.js';
 
 /** Daemon capability gating the scan RPC. */
 const SCAN_CAPABILITY = 'external-scan-v1';
@@ -176,7 +178,8 @@ export interface ExternalImportResult {
   skipped: number;
   /** Hosts actually scanned. */
   hostsScanned: string[];
-  /** Hosts skipped because no connected daemon advertised the capability. */
+  /** Hosts not scanned: no connected daemon advertised the capability, or the row is a
+   *  machine found in ~/.ssh/config that joined since (its joined row is scanned). */
   hostsSkipped: string[];
   /** True when a per-host or per-run cap clipped the work — logged, never silent. */
   truncated: boolean;
@@ -190,22 +193,29 @@ export interface ExternalImportResult {
  * Hosts worth scanning: the local machine plus every host with a live pooled
  * daemon connection. Deliberately NEVER dials — an import tick must not pay SSH
  * connect costs, so a host that isn't warm is simply picked up on a later tick.
+ * One machine is scanned once: an ~/.ssh/config row that joinedTwins() names as
+ * a joined machine's is left out (hosts/joined-twins.ts).
  */
 async function scanTargets(excludedCwds: Record<string, string[]>): Promise<{ scannable: string[]; skipped: string[] }> {
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
   const { getConfig } = await import('../config-manager.js');
   const hosts = new Set<string>(['__local__']);
+  const scannable: string[] = [];
+  const skipped: string[] = [];
   try {
     const config = await getConfig();
+    const { joinedTwins } = await import('../hosts/joined-twins.js');
+    const twins = new Set(joinedTwins(config.hosts ?? {}, config.net).map((t) => t.alias));
     for (const [name, entry] of Object.entries(config.hosts ?? {})) {
       // A disabled host is hidden from the UI; don't scan it either.
       if (entry && entry.enabled === false) continue;
+      // A machine found in ~/.ssh/config that joined since is one machine: only its
+      // joined row is scanned, so its sessions never land under two projects.
+      if (twins.has(name)) { skipped.push(name); continue; }
       hosts.add(name);
     }
   } catch { /* config unavailable — local-only is still useful */ }
 
-  const scannable: string[] = [];
-  const skipped: string[] = [];
   for (const host of hosts) {
     const conn = getConnectedDaemonConnection(host);
     if (!conn || !conn.hasCapability(SCAN_CAPABILITY)) {
@@ -454,6 +464,31 @@ async function backfillImportFolders(index: FolderIndex, imports: Task[], limit:
     }
   }
   return moved;
+}
+
+/** Found ~/.ssh/config rows that are a joined machine's (hosts/joined-twins.ts), each with
+ *  the joined row's alias; [] when config is unavailable. */
+async function joinedTwinRows(): Promise<Array<{ alias: string; joined: string }>> {
+  try {
+    const { getConfig } = await import('../config-manager.js');
+    const config = await getConfig();
+    const { joinedTwins } = await import('../hosts/joined-twins.js');
+    return joinedTwins(config.hosts ?? {}, config.net);
+  } catch { return []; }
+}
+
+/** The folders a user excluded on a found twin hold for the joined row scanned in its
+ *  place: one machine, so its excluded folders stay out under the joined project too. */
+function withTwinExclusions(
+  excluded: Record<string, string[]>,
+  twins: ReadonlyArray<{ alias: string; joined: string }>,
+): Record<string, string[]> {
+  const out = { ...excluded };
+  for (const { alias, joined } of twins) {
+    const extra = excluded[alias] ?? [];
+    if (extra.length) out[joined] = [...new Set([...(out[joined] ?? []), ...extra])];
+  }
+  return out;
 }
 
 /** The per-host import projects this install can have (every configured host
@@ -979,7 +1014,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
 
   const { getConfig } = await import('../config-manager.js');
   const settings = (await getConfig()).external_session_import ?? {};
-  const excludedCwds = settings.excluded_cwds ?? {};
+  const excludedCwds = withTwinExclusions(settings.excluded_cwds ?? {}, await joinedTwinRows());
   const idleMs = (settings.auto_complete_after_days ?? DEFAULT_AUTO_COMPLETE_AFTER_DAYS) * DAY_MS;
   const folders: FolderIndex = new Map();
   const { scannable, skipped } = await scanTargets(excludedCwds);
@@ -1058,6 +1093,9 @@ async function scanAndImport(
       });
     }
     if (candidates.length === 0) continue;
+    // The run that makes this host's project puts it beside the other import projects.
+    const projectIsNew = !(await projectRegistered(externalImportProject(host)).catch(() => true));
+    const importedBefore = result.imported;
 
     for (const candidate of candidates) {
       if (result.imported >= PER_RUN_IMPORT_LIMIT) {
@@ -1091,6 +1129,7 @@ async function scanAndImport(
         });
       }
     }
+    if (projectIsNew && result.imported > importedBefore) await placeNewImportProject(externalImportProject(host), await importProjectNames());
   }
 
   // Their folders become the picker's quick paths (a native start records its own
@@ -1122,8 +1161,9 @@ const IMPORT_BY_ID_LIMIT = 300;
  * manual path for a session the scan leaves out (a program started it, or it is
  * older than the window). Same task shape and project as an automatic import,
  * but without the imported type: someone asked for it, so it is theirs. Only
- * Walnut's own sessions and copies of them are refused. Serialized with the
- * background runs.
+ * Walnut's own sessions and copies of them are refused. A found ~/.ssh/config row
+ * of a joined machine imports through the joined row, into its project. Serialized
+ * with the background runs.
  */
 export function importSessionsById(host: string, sessionIds: readonly string[]): Promise<ImportByIdResult> {
   const run = importQueue.then(() => runImportById(claimHost(host), sessionIds));
@@ -1131,13 +1171,18 @@ export function importSessionsById(host: string, sessionIds: readonly string[]):
   return run;
 }
 
-async function runImportById(host: string, sessionIds: readonly string[]): Promise<ImportByIdResult> {
+async function runImportById(asked: string, sessionIds: readonly string[]): Promise<ImportByIdResult> {
   const ids = [...new Set(sessionIds.filter((id) => typeof id === 'string' && CLAIM_ID_RE.test(id)))];
   if (ids.length === 0) throw new Error('Name at least one session id.');
   if (ids.length > IMPORT_BY_ID_LIMIT) throw new Error(`At most ${IMPORT_BY_ID_LIMIT} session ids per request.`);
+  // One machine, one project: a found twin of a joined machine imports through the joined
+  // row (same machine, same transcripts), as the scan does, never into a project of its own.
+  const host = asked === '__local__' ? asked : (await joinedTwinRows()).find((t) => t.alias === asked)?.joined ?? asked;
+  if (host !== asked) log.session.info('import by id: a found row of a joined machine imports under the joined row', { asked, host });
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
   if (!getConnectedDaemonConnection(host)?.hasCapability(DESCRIBE_CAPABILITY)) {
-    throw new Error(`Host ${host} is not connected, or its daemon is too old to look sessions up by id.`);
+    const named = host === asked ? host : `${host} (the same machine as ${asked})`;
+    throw new Error(`Host ${named} is not connected, or its daemon is too old to look sessions up by id.`);
   }
   const { listAllSessionIds } = await import('../session-tracker.js');
   const tracked = await listAllSessionIds();
@@ -1151,14 +1196,20 @@ async function runImportById(host: string, sessionIds: readonly string[]): Promi
   if (!answer) throw new Error(`Host ${host} did not answer.`);
   const byId = new Map(answer.candidates.map((c) => [c.sessionId, c]));
   const folders: FolderIndex = new Map();
-  for (const id of ask) {
-    const c = byId.get(id);
-    if (!c) { result.skipped.push({ sessionId: id, reason: 'not-found' }); continue; }
-    if (c.notExternal && UNCLAIMABLE.has(c.notExternal)) { result.skipped.push({ sessionId: id, reason: c.notExternal }); continue; }
-    const { notExternal: _verdict, spawnedBy: _spawn, ...candidate } = c;
-    const outcome = await importCandidate(candidate, host, folders, { onRequest: true });
-    if (outcome === 'imported') result.imported.push(id);
-    else result.skipped.push({ sessionId: id, reason: 'already-tracked' });
+  const projectIsNew = !(await projectRegistered(externalImportProject(host)).catch(() => true));
+  try {
+    for (const id of ask) {
+      const c = byId.get(id);
+      if (!c) { result.skipped.push({ sessionId: id, reason: 'not-found' }); continue; }
+      if (c.notExternal && UNCLAIMABLE.has(c.notExternal)) { result.skipped.push({ sessionId: id, reason: c.notExternal }); continue; }
+      const { notExternal: _verdict, spawnedBy: _spawn, ...candidate } = c;
+      const outcome = await importCandidate(candidate, host, folders, { onRequest: true });
+      if (outcome === 'imported') result.imported.push(id);
+      else result.skipped.push({ sessionId: id, reason: 'already-tracked' });
+    }
+  } finally {
+    // A later id that throws must not leave the project this request made without its VP.
+    if (projectIsNew && result.imported.length > 0) await placeNewImportProject(externalImportProject(host), await importProjectNames());
   }
   if (result.imported.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {}, [], { source: EXTERNAL_IMPORT_EVENT_SOURCE });

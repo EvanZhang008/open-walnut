@@ -58,7 +58,8 @@ curl -s -X POST http://localhost:3456/api/sessions/import-external \
   `completed` idle imports auto-completed, `foldered` old imports filed into a
   cwd folder, `removed` imports that were never outside sessions, `skipped` candidates already tracked or excluded. `hostsScanned` /
   `hostsSkipped` say whether a host was reached; a daemon that is not connected
-  or too old is skipped. `truncated` means a cap was hit, not that the import is
+  or too old is skipped, and so is an ~/.ssh/config row for a machine that has
+  joined since (its joined row is scanned instead). `truncated` means a cap was hit, not that the import is
   finished.
 
 ## Check whether a specific session made it in
@@ -70,7 +71,9 @@ walnut sessions --json | grep <session-id-prefix>
 If it's missing after an import run, the usual reasons:
 
 1. **Host not scanned**: check `hostsSkipped` in the response. The host's
-   daemon must be connected and advertise `external-scan-v1`.
+   daemon must be connected and advertise `external-scan-v1`. A machine that
+   is both in ~/.ssh/config and joined is scanned through its joined row only,
+   so its sessions land in that row's project.
 2. **Older than the window**: re-run with a bigger `days`.
 3. **A program started it**: see "Who started it" below. Bring it in by id
    (next section), or have the program's plugin claim its runs.

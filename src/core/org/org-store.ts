@@ -161,6 +161,33 @@ export interface ProjectVpResult {
   moved: string[];
   /** Nothing to do: it was already so. */
   unchanged?: boolean;
+  /** A guard (ProjectVpGuard) refused the move, so nothing changed; why. */
+  refused?: 'no_lead' | 'other_lead' | 'lead_closed' | 'project_led';
+}
+
+/**
+ * For a caller that chose the VP from an org read taken outside the lock (an automatic
+ * placement, import-project-vp.ts): what must still hold under the lock, else nothing moves.
+ * The user's drag sends none of these: a lead made or reopened on the way is what they asked.
+ * Checked for a move under a VP only (`vp` not '').
+ */
+export interface ProjectVpGuard {
+  /** Only under this lead: the target's VP resolving to another one under the lock refuses. */
+  expectLeadId?: string;
+  /** Never make a lead for the target. */
+  noCreate?: boolean;
+  /** Never reopen a closed VP. */
+  noReopen?: boolean;
+  /** Only a project nobody leads: no lead of its own, no other VP. */
+  unledOnly?: boolean;
+}
+
+function guardRefusal(guard: ProjectVpGuard, tasks: readonly Task[], name: string, found: Task | undefined): ProjectVpResult['refused'] {
+  if (!found) return guard.noCreate || guard.expectLeadId ? 'no_lead' : undefined;
+  if (guard.expectLeadId && found.id !== guard.expectLeadId) return 'other_lead';
+  if (guard.noReopen && found.phase === 'COMPLETE') return 'lead_closed';
+  if (guard.unledOnly && !leadsAlso(found, name) && (pickOwnLead(tasks, name) || tasks.some((t) => leadsAlso(t, name)))) return 'project_led';
+  return undefined;
 }
 
 /** A lead that hands its work on one project over to another lead. */
@@ -318,13 +345,15 @@ async function tellTakeOver(lead: Task, project: string): Promise<void> {
  * hand over from is closed at once. Giving it back reopens the project's own lead
  * (made, when workers need one) and withdraws a handover nobody has read. A VP is
  * one level: putting a VP's project under another moves the projects it led along.
+ * `guard` (a placement's, never the drag's) is checked under the lock: when it fails the
+ * move is refused, logged, and nothing changes (`refused` says why).
  */
-export async function setProjectVp(project: string, vp: string): Promise<ProjectVpResult> {
+export async function setProjectVp(project: string, vp: string, guard: ProjectVpGuard = {}): Promise<ProjectVpResult> {
   const name = project.trim();
   const target = vp.trim();
   if (!name) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox has no VP: its tasks are talked to one by one.');
   if (/^inbox$/i.test(target)) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox is not a VP.');
-  const { result, handovers, newLead } = await serial(() => moveProjectNow(name, target));
+  const { result, handovers, newLead } = await serial(() => moveProjectNow(name, target, guard));
   const { closeAfterHandover } = await import('./handover-close.js');
   for (const h of handovers) {
     const asked = await askHandover(h);
@@ -341,7 +370,7 @@ export async function setProjectVp(project: string, vp: string): Promise<Project
   return result;
 }
 
-async function moveProjectNow(name: string, target: string): Promise<{ result: ProjectVpResult; handovers: Handover[]; newLead?: Task }> {
+async function moveProjectNow(name: string, target: string, guard: ProjectVpGuard = {}): Promise<{ result: ProjectVpResult; handovers: Handover[]; newLead?: Task }> {
   const { completeTask, getTask, listTasks, updateTask } = await import('../task-manager.js');
   const { cancelHandovers } = await import('./handover-close.js');
   const tasks = await listTasks();
@@ -377,7 +406,15 @@ async function moveProjectNow(name: string, target: string): Promise<{ result: P
 
   if (!knownProject(tasks, target)) throw new OrgError('unknown_project', 404, `No project "${target}" in the org.`);
   // The target's VP: its own lead, or the VP it is under (one level).
-  let lead = pickLead(tasks, target) ?? await ensureLeadNow(canonicalProject(tasks, target));
+  const found = pickLead(tasks, target);
+  const refused = guardRefusal(guard, tasks, name, found);
+  if (refused) {
+    log.task.info('org: project not moved, the org is not what the caller chose from', {
+      project: canonical, target, refused, expectLeadId: guard.expectLeadId, leadId: found?.id,
+    });
+    return none({ refused });
+  }
+  let lead = found ?? await ensureLeadNow(canonicalProject(tasks, target));
   if (lead.phase === 'COMPLETE') lead = (await updateTask(lead.id, { phase: 'TODO' }, { source: 'api' })).task;
   if (projectKey(lead.project) === key || leadsAlso(lead, name)) {
     return none({ vp: (lead.project ?? '').trim(), lead: { id: lead.id, title: lead.title } });
