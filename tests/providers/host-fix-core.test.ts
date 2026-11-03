@@ -425,6 +425,8 @@ function releaseHost(opts: {
   hangWhen?: (file: string, args: string[]) => boolean
   /** Every claude probe never answers; `probes` counts them. */
   probeHang?: boolean
+  /** An npm build's launcher script already at ~/.local/bin/claude, and no node to run it. */
+  npmLauncher?: boolean
   kill?: (pid: number, signal: string) => void
   /** deps.now follows Date.now (for vi.useFakeTimers) instead of the fake clock. */
   realClock?: boolean
@@ -455,6 +457,10 @@ function releaseHost(opts: {
   for (const [k, v] of Object.entries(opts.bins ?? {})) { if (v) bins[k] = v; else delete bins[k] }
   const claude: Record<string, ClaudeProbe> = {}
   if (state.installed) { bins.claude = BIN; claude[BIN] = { ...NATIVE, path: BIN } }
+  if (opts.npmLauncher) {
+    files.set(BIN, Buffer.from(NPM_LAUNCHER))
+    claude[BIN] = { found: true, path: BIN, kind: 'npm', needsNode: true, nodeFound: false }
+  }
 
   const enoent = (p: string) => Object.assign(new Error(`ENOENT: no such file or directory, '${p}'`), { code: 'ENOENT' })
   const dlFiles = () => [...files.keys()].filter((k) => k.startsWith(DL + '/')).sort()
@@ -558,6 +564,11 @@ function releaseHost(opts: {
       const a = serve(args[args.length - 1]!)
       return a.code === 0 ? { code: 0, stdout: a.body!.toString() } : httpError(a)
     }
+    // Like the real installer (2.1.312 and 2.1.317, --force too): a file already at
+    // ~/.local/bin/claude is kept, and it still says installed.
+    if ((file === '/bin/bash' || (file.startsWith(VERSIONS_DIR + '/') && args[0] === 'install' && !state.installCode)) && files.has(BIN)) {
+      return { code: 0, stdout: 'Claude Code successfully installed!\n  Location: ~/.local/bin/claude\n' }
+    }
     if (file === '/bin/bash') {
       state.installed = '2.1.317'
       bins.claude = BIN; claude[BIN] = { ...NATIVE, path: BIN }
@@ -569,6 +580,7 @@ function releaseHost(opts: {
       bins.claude = BIN; claude[BIN] = { ...NATIVE, path: BIN }
       return { code: 0, stdout: `Claude Code successfully installed!\n  Version: ${args[1]}\n` }
     }
+    if (file === BIN && args[0] === '--version' && files.has(BIN)) return { code: 127, stderr: "/usr/bin/env: 'node': No such file or directory\n" }
     if (file === BIN && args[0] === '--version' && state.installed) return { code: 0, stdout: `${state.installed} (Claude Code)\n` }
     return { code: 127, stderr: `${file}: not found\n` }
   }
@@ -621,9 +633,30 @@ const curlUrls = (calls: Call[]) => calls.filter((c) => c.file === CURL).map((c)
 
 /** What a server that knows `waitMs` sends with a Claude Code fix: its whole 45 minutes. */
 const ASKED = { waitMs: 45 * MIN }
+const NPM_LAUNCHER = '#!/usr/bin/env node\nrequire("@anthropic-ai/claude-code/cli.js")\n'
 
 describe('install-claude-native: the native installer\'s steps, resumable on a slow line', () => {
   const V = '2.1.317'
+
+  it('an npm launcher already at ~/.local/bin/claude is moved aside, and the native one takes its place', async () => {
+    // 2026-11-03, CI's fresh Linux dev box: the installer said installed and kept the npm
+    // script, which then failed for want of node (verify-failed).
+    const h = releaseHost({ releases: { [V]: { binary: binaryOf(V) } }, npmLauncher: true })
+    const r = await h.fix.run('install-claude-native', ASKED)
+    expect(r).toMatchObject({ ok: true, claude: { path: BIN, kind: 'native', version: V } })
+    const aside = [...h.files.keys()].filter((k) => k.startsWith(`${BIN}.walnut-replaced-`))
+    expect(aside).toHaveLength(1)
+    expect(h.files.get(aside[0]!)!.toString()).toBe(NPM_LAUNCHER)
+    expect(String(r.log)).toContain(`moved the launcher that was at ${BIN} (not the native one) to ${aside[0]}`)
+  })
+
+  it('an install that fails puts that launcher back', async () => {
+    const h = releaseHost({ releases: { [V]: { binary: binaryOf(V) } }, npmLauncher: true, installCode: 1 })
+    const r = await h.fix.run('install-claude-native', ASKED)
+    expect(r).toMatchObject({ ok: false, error: 'installer-failed' })
+    expect(h.files.get(BIN)!.toString()).toBe(NPM_LAUNCHER)
+    expect([...h.files.keys()].filter((k) => k.includes('.walnut-replaced-'))).toEqual([])
+  })
 
   it('a fresh install: latest, its manifest, the binary with curl -C -, its sha256, then `claude install <v>` from the versions directory', async () => {
     const binary = binaryOf(V)

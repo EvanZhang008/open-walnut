@@ -372,8 +372,45 @@ export function createHostFix(deps: HostFixDeps) {
     var local = await probe(bin, deadline)
     if (local.found && local.kind === 'native') return reportClaude(bin, deadline, logs, true)
     if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: INSTALL_LINE }
+    var aside = moveLauncherAside(bin, logs)
     var failed = await installer.install(deadline, logs, need)
-    return failed || reportClaude(bin, deadline, logs, false)
+    var result = failed || await reportClaude(bin, deadline, logs, false)
+    if (aside) {
+      if (result.ok) logs.push('the launcher that was there stays as ' + aside + ' (rename it back to undo)')
+      else putLauncherBack(aside, bin, logs)
+    }
+    return result
+  }
+
+  /**
+   * A launcher at ~/.local/bin/claude that is not the native installer's (an npm
+   * build's script, a wrapper) is moved aside before `claude install`, which keeps
+   * any file already there: it answered installed while ~/.local/bin/claude stayed
+   * the npm script, which then failed for want of node (2026-11-03, CI's fresh
+   * Linux dev box; the same with 2.1.312 and --force, checked on a dev box). The
+   * moved file's name; null when nothing was there or it is the native one.
+   */
+  function moveLauncherAside(bin: string, logs: string[]): string | null {
+    if (!deps.fs || isNativeInstall(bin)) return null
+    var aside = bin + '.walnut-replaced-' + now()
+    try {
+      deps.fs.renameSync(bin, aside)
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'ENOENT') logs.push('could not move ' + bin + ' aside: ' + String((e as Error).message || e))
+      return null
+    }
+    logs.push('moved the launcher that was at ' + bin + ' (not the native one) to ' + aside)
+    return aside
+  }
+
+  /** The install did not end with a working native claude: the launcher that was there comes back. */
+  function putLauncherBack(aside: string, bin: string, logs: string[]): void {
+    try {
+      deps.fs!.renameSync(aside, bin)
+      logs.push('put the launcher that was there back at ' + bin)
+    } catch (e) {
+      logs.push('could not put ' + aside + ' back at ' + bin + ': ' + String((e as Error).message || e))
+    }
   }
 
   // ── update-claude ──
