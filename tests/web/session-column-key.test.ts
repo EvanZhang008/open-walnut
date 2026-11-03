@@ -34,6 +34,7 @@ const TRANSFORMS: Record<string, (cols: SessionSlot[]) => SessionSlot[]> = {
   restoreSessionColumn: (cols) => columns.restoreSessionColumn(cols, { id: 'c', locked: false }, 0, false, 6),
   replaceSessionColumn: (cols) => columns.replaceSessionColumn(cols, 'a', 'a-full'),
   toggleLockSlot: (cols) => columns.toggleLockSlot(cols, 'sess-full'),
+  settleOpenedColumns: (cols) => columns.settleOpenedColumns(cols, cols.slice(1), false, 6),
 }
 /** Exports that read a strip or build one from saved ids (which carry no key). */
 const NOT_TRANSFORMS = ['columnKey', 'realColumnCount', 'panelBudget', 'splitByLock', 'mergeUrlColumns']

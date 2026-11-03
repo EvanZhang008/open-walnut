@@ -85,6 +85,7 @@ import {
   mergeUrlColumns,
   realColumnCount,
   addSessionColumn,
+  settleOpenedColumns,
   forceAddSessionColumn,
   withDraftSlots,
   removeSessionColumn,
@@ -687,14 +688,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // trim would be a no-op there anyway, but skipping keeps a simultaneous
   // real-overflow race from evicting on the exact commit the user pressed "+".
   //
-  // The FALLING edge (a placeholder became real, or a draft closed) is an open at
-  // most, so like addSessionColumn it evicts AT MOST ONE column: the trim floor is
-  // the real-column count of the previous commit. A strip can sit over budget
-  // since an unlock (unlocking closes nothing), and a Start from a draft there must
-  // cost one panel for the one it adds, never two. A capacity change (count,
-  // resize, config settling) still trims all the way to the budget.
+  // The FALLING edge (a placeholder became real, or a draft closed) is an OPEN
+  // (`settleOpenedColumns`): the lock grant applies and the count follows, exactly
+  // as for a pill click, and it never drops the session that just became real
+  // (2026-11-03: with every panel pinned, a task started from a draft lost its own
+  // column). Like addSessionColumn it evicts AT MOST ONE column: the floor is the
+  // strip of the previous commit. A strip can sit over budget since an unlock
+  // (unlocking closes nothing), and a Start from a draft there must cost one panel
+  // for the one it adds, never two. A capacity change (count, resize, config
+  // settling) still trims all the way to the budget.
   const trimGuardRef = useRef({ placeholders: placeholderCount, max: effectiveMaxPanels, loaded: panelModeLoaded });
-  const prevRealCountRef = useRef(sessionColumns.length - placeholderCount);
+  const prevColumnsRef = useRef(sessionColumns);
   useEffect(() => {
     const prev = trimGuardRef.current;
     trimGuardRef.current = { placeholders: placeholderCount, max: effectiveMaxPanels, loaded: panelModeLoaded };
@@ -703,18 +707,26 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // (A simultaneous max change still trims: that's a real capacity shrink.)
     if (placeholderCount > prev.placeholders && effectiveMaxPanels === prev.max) return;
     const licenseExpiry = placeholderCount < prev.placeholders && effectiveMaxPanels === prev.max && prev.loaded;
-    const floor = licenseExpiry ? prevRealCountRef.current : 0;
+    if (licenseExpiry) {
+      const before = prevColumnsRef.current;
+      const settled = settleOpenedColumns(sessionColumns, before, triageOpenRef.current, effectiveMaxPanels);
+      setSessionColumns(prev2 => settleOpenedColumns(prev2, before, triageOpenRef.current, effectiveMaxPanels));
+      followGrownStrip(realColumnCount(before), realColumnCount(settled));
+      return;
+    }
     setSessionColumns(prev2 => {
       // The bare count: the strip is the setting (a grant writes the setting at
-      // once, see openSessionOrToast), and a lowered count takes the free column
+      // once, see followGrownStrip), and a lowered count takes the free column
       // even when every other panel is pinned. Pins themselves are never cut.
       const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
-      return trimUnlockedToMax(prev2, Math.max(max, floor));
+      return trimUnlockedToMax(prev2, max);
     });
+  // Keyed on the count, not the array (see above); followGrownStrip reads refs only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
-  // After the trim effect (declaration order), every commit: the count it reads
+  // After the trim effect (declaration order), every commit: the strip it reads
   // next time is the one from BEFORE the commit that fires it.
-  useEffect(() => { prevRealCountRef.current = sessionColumns.length - placeholderCount; });
+  useEffect(() => { prevColumnsRef.current = sessionColumns; });
 
   // Session finder — search existing sessions by title/task/cwd/host and open
   // one as a column. Toggled by ⌘⇧O.
@@ -1563,6 +1575,48 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* storage disabled — nothing to sweep */ }
   }, []);
 
+  // An open grew the strip past the user's count: shared by every open path (a pill
+  // click here, a placeholder becoming a real session in the trim effect).
+  const followGrownStrip = useCallback((realBefore: number, realAfter: number) => {
+    // The strip just grew past the user's count (every panel was pinned, so the
+    // open took the lock grant). The count FOLLOWS: the setting becomes the new
+    // width, so every picker (kebab, view menu, Settings) shows the number of
+    // panels on screen, and going back down is the user's own pick (2026-10-02:
+    // a strip of 3 under a picker saying "2" was "very confusing"; "if it already
+    // adjusted then keep it 3, the customer can reduce it themselves"). Say so,
+    // with the picker one click away: the task panel's view menu beside New task,
+    // right next to the strip it governs (not Settings: "that's too far away").
+    // The one-in-one-out reuse of that slot is not growth and stays quiet.
+    const count = triageOpenRef.current ? maxPanelsRef.current - 1 : maxPanelsRef.current;
+    if (realAfter > realBefore && realAfter > count) {
+      // Triage holds one slot of the setting, so the setting is one above the sessions.
+      const newCount = Math.min(realAfter + (triageOpenRef.current ? 1 : 0), MAX_PANELS);
+      // Past the ceiling (an overflow column kept by settleOpenedColumns) there is no higher count.
+      if (newCount <= maxPanelsRef.current) return;
+      const before = panelModeRef.current === 'auto' ? `Auto (${maxPanelsRef.current})` : String(maxPanelsRef.current);
+      setPanelMode(String(newCount) as SessionPanelMode);
+      // Two short lines (2026-10-02: "keep it simple, auto increased the panels from
+      // x to y, and a button to see your setting").
+      notify({
+        kind: 'hint',
+        severity: 'info',
+        title: `Panels auto-increased from ${before} to ${newCount}`,
+        body: `All ${count} were pinned, so the new session needed its own.`,
+        dedupKey: 'session-panels-grant',
+        persistent: false,
+        action: { label: 'See your setting', kind: 'callback' },
+        onAction: () => {
+          // The menu lives in the task panel: bring that panel back if it is hidden
+          // or covered, and come home if the user wandered off while the toast was up.
+          setTodoVisible(true);
+          yieldFullscreen('adjust-panels');
+          if (window.location.pathname !== '/') navigateRef?.current?.('/');
+          revealViewOption('session-panels');
+        },
+      });
+    }
+  }, [notify, navigateRef, setPanelMode]);
+
   // ── Session column handlers ──
   // Clicking a session pill always opens/moves to rightmost — use close button to dismiss.
   // Single path for "open a session, with toast if fully locked" — shared by pill
@@ -1588,44 +1642,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       sessionOpenersRef.current.set(sessionId, active);
     }
     setSessionColumns(next);
-    // The strip just grew past the user's count (every panel was pinned, so the
-    // open took the lock grant). The count FOLLOWS: the setting becomes the new
-    // width, so every picker (kebab, view menu, Settings) shows the number of
-    // panels on screen, and going back down is the user's own pick (2026-10-02:
-    // a strip of 3 under a picker saying "2" was "very confusing"; "if it already
-    // adjusted then keep it 3, the customer can reduce it themselves"). Say so,
-    // with the picker one click away: the task panel's view menu beside New task,
-    // right next to the strip it governs (not Settings: "that's too far away").
-    // The one-in-one-out reuse of that slot is not growth and stays quiet.
-    const count = triageOpenRef.current ? maxPanelsRef.current - 1 : maxPanelsRef.current;
-    const realBefore = realColumnCount(current);
-    const realAfter = realColumnCount(next);
-    if (realAfter > realBefore && realAfter > count) {
-      // Triage holds one slot of the setting, so the setting is one above the sessions.
-      const newCount = Math.min(realAfter + (triageOpenRef.current ? 1 : 0), MAX_PANELS);
-      const before = panelModeRef.current === 'auto' ? `Auto (${maxPanelsRef.current})` : String(maxPanelsRef.current);
-      setPanelMode(String(newCount) as SessionPanelMode);
-      // Two short lines (2026-10-02: "keep it simple, auto increased the panels from
-      // x to y, and a button to see your setting").
-      notify({
-        kind: 'hint',
-        severity: 'info',
-        title: `Panels auto-increased from ${before} to ${newCount}`,
-        body: `All ${count} were pinned, so the new session needed its own.`,
-        dedupKey: 'session-panels-grant',
-        persistent: false,
-        action: { label: 'See your setting', kind: 'callback' },
-        onAction: () => {
-          // The menu lives in the task panel: bring that panel back if it is hidden
-          // or covered, and come home if the user wandered off while the toast was up.
-          setTodoVisible(true);
-          yieldFullscreen('adjust-panels');
-          if (window.location.pathname !== '/') navigateRef?.current?.('/');
-          revealViewOption('session-panels');
-        },
-      });
-    }
-  }, [showOperationError, notify, navigateRef, setPanelMode]);
+    followGrownStrip(realColumnCount(current), realColumnCount(next));
+  }, [showOperationError, followGrownStrip]);
+  // For the launch resolvers below (stable callbacks): a resolved session with no
+  // column of its own to morph is a plain open, with the same grant and toast.
+  const openSessionOrToastRef = useRef(openSessionOrToast);
+  openSessionOrToastRef.current = openSessionOrToast;
 
   // ── The org (pages/OrgPage.tsx): a page of its own; the drawer's link goes there ──
   const openOrg = useCallback(() => {
@@ -2028,7 +2050,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (pendingMeta) {
         setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, sessionId));
       } else {
-        setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current, maxPanelsRef.current));
+        openSessionOrToastRef.current(sessionId);
       }
       return;
     }
@@ -2042,7 +2064,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (meta) {
         setSessionColumns(prev => replaceSessionColumn(prev, meta.id, sessionId));
       } else {
-        setSessionColumns(prev => addSessionColumn(prev, sessionId, triageOpenRef.current, maxPanelsRef.current));
+        openSessionOrToastRef.current(sessionId);
       }
       return;
     }
@@ -2075,7 +2097,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             if (pendingMeta) {
               setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, active.claudeSessionId));
             } else {
-              setSessionColumns(prev => addSessionColumn(prev, active.claudeSessionId, triageOpenRef.current, maxPanelsRef.current));
+              openSessionOrToastRef.current(active.claudeSessionId);
             }
             return;
           }
@@ -2096,7 +2118,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             if (meta) {
               setSessionColumns(prev => replaceSessionColumn(prev, meta.id, active.claudeSessionId));
             } else {
-              setSessionColumns(prev => addSessionColumn(prev, active.claudeSessionId, triageOpenRef.current, maxPanelsRef.current));
+              openSessionOrToastRef.current(active.claudeSessionId);
             }
             return;
           }

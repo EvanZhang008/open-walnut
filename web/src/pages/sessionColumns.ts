@@ -141,15 +141,16 @@ function insertLeftmost(id: string, unlocked: SessionSlot[], locked: SessionSlot
  * original array evicts what the user actually sees as last, and keeps the rest
  * of the row untouched.
  */
-export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot[] {
+export function trimUnlockedToMax(cols: SessionSlot[], max: number, keep?: ReadonlySet<string>): SessionSlot[] {
   // The budget applies to REAL columns only — placeholders ride for free.
   const real = realColumns(cols);
   if (real.length <= max) return cols;
-  let toDrop = real.length - Math.max(max, real.filter(c => c.locked).length);
+  const kept = (c: SessionSlot) => trimExempt(c) || (keep?.has(c.id) ?? false);
+  let toDrop = real.length - Math.max(max, real.filter(kept).length);
   if (toDrop <= 0) return cols;
   const doomed = new Set<SessionSlot>();
   for (let i = cols.length - 1; i >= 0 && toDrop > 0; i--) {
-    if (trimExempt(cols[i])) continue;
+    if (kept(cols[i])) continue;
     doomed.add(cols[i]);
     toDrop--;
   }
@@ -185,9 +186,41 @@ export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: bo
       : insertLeftmost(id, unlocked, locked);  // unlocked: leftmost of its region
   }
   const { unlocked, locked } = splitByLock(cols);
-  if (locked.length >= max) return cols; // every slot pinned, no grant left — caller shows toast
+  // A placeholder (a fork or quick-start on its way) is outside the budget, so it is
+  // never refused: refusing it lost the launch, whose column then had nowhere to land.
+  // Nor is an open while an unpinned real column is on screen (the overflow column
+  // settleOpenedColumns keeps past the ceiling): that one yields, one in, one out.
+  const overflowYields = locked.length >= MAX_PANELS && unlocked.some(c => !isPlaceholderColumnId(c.id));
+  if (locked.length >= max && !isPlaceholderColumnId(id) && !overflowYields) return cols; // every slot pinned, no grant left — caller shows toast
   const target = Math.max(max, realColumns(cols).length);
   return trimUnlockedToMax(insertLeftmost(id, unlocked, locked), target);
+}
+
+/**
+ * The trim after placeholders became real sessions (a draft's Start, a fork or a
+ * quick-start resolving): that is an OPEN, so it follows addSessionColumn's rules.
+ * `before` is the strip of the previous commit.
+ *
+ * The budget takes the lock grant (`panelBudget`): every pin filling the count gets
+ * one free slot on top, and the caller writes the grown width into the count, as a
+ * pill click does. Before 2026-11-03 this trimmed to the bare count, and with every
+ * column pinned the only column it could take was the session the user had just
+ * started ("new task created when all panel lock in home page get lost"). The
+ * columns that just became real are never what it drops: past the grant's ceiling
+ * (MAX_PANELS pins) the strip keeps the new session as an overflow column rather
+ * than closing it. Like any open it evicts at most one column: the floor is the
+ * real-column count of `before`.
+ */
+export function settleOpenedColumns(
+  cols: SessionSlot[],
+  before: readonly SessionSlot[],
+  triageOpen: boolean,
+  maxColumns: number,
+): SessionSlot[] {
+  const wasReal = new Set(realColumns([...before]).map(c => c.id));
+  const opened = new Set(realColumns(cols).filter(c => !wasReal.has(c.id)).map(c => c.id));
+  const budget = panelBudget(cols.filter(c => !opened.has(c.id)), triageOpen ? maxColumns - 1 : maxColumns);
+  return trimUnlockedToMax(cols, Math.max(budget, wasReal.size), opened);
 }
 
 /**
