@@ -3587,7 +3587,8 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
     }
     const { collectOpenItems } = await import('../../core/sessions/open-items.js')
     res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid, Date.now(), {
-      afterCompaction: req.query.hook === 'compact',
+      afterCompaction: req.query.hook === 'compact' || req.query.full === 'true',
+      full: req.query.full === 'true',
     }))
   } catch (err) {
     next(err)

@@ -39,6 +39,12 @@ export interface SessionStartParams {
   source: string;
   /** Answer only once the session really started or failed (an engine switch must know the new id). */
   awaitStart?: boolean;
+  /**
+   * A session's start over the running-subtask cap is queued (start-queue.ts) instead of
+   * refused. Set by the paths whose callers read a queued answer (the start route, a
+   * workspace's deferred start); an engine switch or a transfer needs the session now.
+   */
+  queueWhenFull?: boolean;
 }
 
 export interface SessionStartResult {
@@ -70,6 +76,11 @@ export interface SessionStartResult {
   applied?: string[];
   /** Where placement by load put this first start, and why (start-placement.ts). */
   placement?: import('./start-placement.js').StartPlacement;
+  /**
+   * The start waits for a free slot under the running-subtask cap (start-queue.ts): its place
+   * in its parent's queue, the subtasks running now, and the cap. Walnut starts it by itself.
+   */
+  queued?: { position: number; running: string[]; cap: number };
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -168,7 +179,32 @@ async function inheritedEngine(task: Task, params: SessionStartParams): Promise<
   return normalizeEngine(resolveDefaultEngine(config, { host }));
 }
 
+/**
+ * Start a session for a task. A session's start over the running-subtask cap is queued instead
+ * of refused (start-queue.ts) when the path asks for it (`queueWhenFull`), unless it IS the
+ * queue's own replay; any other answer means the
+ * task started (or is starting), so a start it had queued is dropped.
+ */
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
+  let result: SessionStartResult;
+  try {
+    result = await startSessionForTaskNow(params);
+  } catch (err) {
+    const { SubtaskLimitError } = await import('./subtask-limits.js');
+    if (err instanceof SubtaskLimitError && err.code === 'too_many_running_subtasks' && err.detail
+      && params.queueWhenFull && params.callerSid && params.source !== 'start-queue') {
+      const { enqueueStart } = await import('./start-queue.js');
+      const queued = await enqueueStart(err.detail, params);
+      if (queued) return queued;
+    }
+    throw err;
+  }
+  const { clearStartQueue } = await import('./start-queue.js');
+  await clearStartQueue(result.taskId, 'started');
+  return result;
+}
+
+async function startSessionForTaskNow(params: SessionStartParams): Promise<SessionStartResult> {
   // `host: "@ios"` asks for what a host has (host-select.ts): resolved to one host before anything else reads it.
   params = await resolveHostSelector(params);
   let task: Task;

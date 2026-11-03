@@ -15,16 +15,22 @@ import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { SESSION_EFFORT_IDS, SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS, type SessionEffort, type SessionOutputMode } from '../core/types.js'
 
-type Call = (method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown) => Promise<unknown>
+type Call = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<unknown>
+
+/** A task that never started but waits in the start queue (core/sessions/start-queue.ts). */
+class QueuedStart {
+  constructor(readonly taskId: string, readonly title: string) {}
+}
 
 /** The task's one session (a task keeps one conversation), as task_history finds it. */
-async function sessionOfTask(id: string, call: Call): Promise<{ taskId: string; title: string; sessionId: string }> {
+async function sessionOfTask(id: string, call: Call, opts: { queued?: boolean } = {}): Promise<{ taskId: string; title: string; sessionId: string }> {
   const body = await call('GET', `/tasks/${encodeURIComponent(id)}`) as { task?: Record<string, unknown> } | undefined
   const task = body?.task
   if (!task || typeof task.id !== 'string') throw new Error(`Task response has no id for ${id}; read task_get before retrying.`)
   const ids = task.session_ids
   const sid = task.session_id || task.exec_session_id || (Array.isArray(ids) ? ids.at(-1) : undefined)
   if (typeof sid !== 'string' || !sid) {
+    if (opts.queued && task.start_queue) throw new QueuedStart(task.id, typeof task.title === 'string' ? task.title : '')
     throw new Error(`Task ${task.id} has no session (not started). Nothing to stop or restart; task_start runs it.`)
   }
   return { taskId: task.id, title: typeof task.title === 'string' ? task.title : '', sessionId: sid }
@@ -56,11 +62,25 @@ defineOp({
     force: z.boolean().optional().describe('Stop even though the session owns scheduled jobs (cron). Default false'),
   },
   handler: async ({ id, force }, call) => {
-    const target = await sessionOfTask(String(id), call)
+    let target: { taskId: string; title: string; sessionId: string }
+    try {
+      target = await sessionOfTask(String(id), call, { queued: true })
+    } catch (err) {
+      if (!(err instanceof QueuedStart)) throw err
+      // Never started, only queued: stopping it takes it out of the queue.
+      await call('DELETE', `/tasks/${encodeURIComponent(err.taskId)}/start-queue`)
+      return withOutcome(
+        { taskId: err.taskId, title: err.title, status: 'unqueued' },
+        `Task ${err.taskId} had not started; its queued start is cancelled, so Walnut will not start it by itself.`,
+        `task_start runs it when it is wanted again.`,
+      )
+    }
     await refuseOwnSession(target.sessionId, call, 'stop')
     const path = `/sessions/${encodeURIComponent(target.sessionId)}/terminate`
     try {
       const out = await call('POST', path, { force: force === true }) as Record<string, unknown> | undefined
+      // A start it had queued would start it again later: stopping it cancels that too (best effort: an older server has no queue).
+      await call('DELETE', `/tasks/${encodeURIComponent(target.taskId)}/start-queue`).catch(() => {})
       return withOutcome(
         { ...target, ...(out ?? {}), status: out?.status ?? 'terminated' },
         `Task ${target.taskId}'s session stopped. Its conversation is kept.`,
@@ -78,7 +98,8 @@ defineOp({
       throw err
     }
   },
-  routes: [{ method: 'GET', path: '/tasks/:id' }, { method: 'GET', path: '/me' }, { method: 'POST', path: '/sessions/:id/terminate' }],
+  routes: [{ method: 'GET', path: '/tasks/:id' }, { method: 'GET', path: '/me' }, { method: 'POST', path: '/sessions/:id/terminate' },
+    { method: 'DELETE', path: '/tasks/:id/start-queue' }],
   timeoutMs: 40_000,
   tags: { readonly: false, remote: 'allow' },
 })

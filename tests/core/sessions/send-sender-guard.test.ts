@@ -88,6 +88,7 @@ const CALL_SITES: Record<string, number> = {
   'src/web/routes/personal-ai-v1.ts': 1,
   // Walnut, a task or a script sends: framed unless an envelope already frames the text
   'src/core/boards/board-delivery.ts': 1,          // a due reminder is `board-reminder`; a user's thread message is theirs
+  'src/core/sessions/start-queue.ts': 1,           // a queued start replayed as `start-queue`, framed as the asking session's
   'src/core/hints/hint-drift-live.ts': 1,
   'src/core/hooks/actions.ts': 1,
   'src/core/hosts/exec-grants.ts': 1,

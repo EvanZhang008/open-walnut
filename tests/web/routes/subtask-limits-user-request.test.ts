@@ -89,7 +89,7 @@ describe('running subtasks: the user\'s ask and workspace starts', () => {
     expect(ceiling.message).toContain('task_stop')
   })
 
-  it('the start route refuses at the brake without user_request, and refuses a token in its place', async () => {
+  it('the start route queues at the brake without user_request, and refuses a token in its place', async () => {
     const { task: lead } = await addTask({ title: 'Lead route', project: 'fanout' })
     await children(lead.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
     const [waiting] = await children(lead.id, ['TODO'])
@@ -99,9 +99,13 @@ describe('running subtasks: the user\'s ask and workspace starts', () => {
       body: JSON.stringify(body),
     })
 
+    // Past the brake a session's start is queued (start-queue.ts), never refused.
     const plain = await start({ message: 'go' })
-    expect(plain.status).toBe(409)
-    expect(((await plain.json()) as { error: { code: string } }).error.code).toBe('too_many_running_subtasks')
+    expect(plain.status).toBe(202)
+    const queued = await plain.json() as { started: boolean; queued?: { cap: number } }
+    expect(queued.started).toBe(false)
+    expect(queued.queued?.cap).toBe(MAX_RUNNING_SUBTASKS)
+    expect((await getTask(waiting)).start_queue?.parent_id).toBe(lead.id)
 
     // A too-short quote is a 400 and records nothing.
     const token = await start({ message: 'go', user_request: 'now' })

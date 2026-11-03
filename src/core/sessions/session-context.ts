@@ -101,7 +101,7 @@ import { taskDirForHost } from './task-dir-place.js'
 import { isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
-import { defaultOrgInstructions } from '../org/core-instructions.js'
+import { defaultOrgInstructions, orgSelfWorkRule, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
 
@@ -145,8 +145,8 @@ export const MAIN_DELEGATES_LINE =
   + 'project\'s lead and teams know the detail. Gather only the understanding you need to decide who should do '
   + 'the work and to write a clear hand-over, then stop. Every investigation, check, evaluation, research or '
   + 'implementation (reading code, reading logs, measuring, finding a cause) goes to a subtask: the task that '
-  + 'already owns that work (task_send), else a new subtask (task_create); never do it yourself. Do only quick '
-  + 'things yourself: one lookup, reading one record, passing on one message.\n\n'
+  + 'already owns that work (task_send), else a new subtask (task_create); never do it yourself. Look yourself only '
+  + `with at most ${ORG_SELF_COMMAND_LIMIT} commands in a turn (your core instructions say so first, and Walnut holds you to it).\n\n`
 
 /**
  * 2g. Main keeps track (2026-10-25, the user: "main agent should also keep a
@@ -480,6 +480,11 @@ export type InstructionTask = {
  * default reaches a running session the same way. The tag also keeps a user's "# heading" from
  * reading as a prompt heading.
  */
+/** Main's or a VP's core instructions block, as its prompt words it ('' for any other task): restated after a compaction (open-items.ts). */
+export function coreInstructionsBlock(task: InstructionTask): string {
+  return orgInstructionsLine(task).trim()
+}
+
 function orgInstructionsLine(task: InstructionTask): string {
   if (task.org_role !== 'main' && task.org_role !== 'lead') return ''
   const fallback = defaultOrgInstructions(task.org_role)
@@ -502,9 +507,10 @@ function orgInstructionsLine(task: InstructionTask): string {
   const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
   if (usersWords) {
     const whose = byUser ? 'your user\'s own instructions for your role' : `the instructions ${agent} wrote for your role at your user's request`
+    // Walnut's one rule for the role holds under the user's own words too (it also enforces it).
     return `Your core instructions: ${whose} (${version}, set ${when}). They replace every earlier version `
       + `and Walnut's default, and where any other part of these instructions says otherwise, they win. Each line of this version starts with [${version}]:\n`
-      + tag(version, text) + '\n\n'
+      + tag(version, text) + `\nWalnut's rule for your role still holds: ${orgSelfWorkRule(task.org_role)}\n\n`
   }
   return `Your core instructions: Walnut's default for your role, which still applies, then the instructions ${agent} wrote for your role `
     + `(${version}, set ${when}; your user may change them). The added instructions add to Walnut's default and never override it: where the two `
@@ -560,8 +566,12 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     // An org node (see 2d): the main agent, or a project's lead.
     + (task ? orgRoleLine(task) + orgInstructionsLine(task) : '')
     + 'This session is how that task runs, so the task id is how everything '
-    + 'else addresses your work. Walnut is not your toolbox: do the work with '
-    + 'your own tools. The `walnut` CLI on your '
+    + 'else addresses your work. '
+    // Main and a VP hand the work on (core-instructions.ts orgSelfWorkRule); a worker does it itself.
+    + (mainAgent || projectLead
+      ? 'Your teams do the work, never this session: Walnut is how you hand it on and follow it. '
+      : 'Walnut is not your toolbox: do the work with your own tools. ')
+    + 'The `walnut` CLI on your '
     + 'PATH reaches the layer above: read and update your task, search the '
     + 'user\'s tasks, memory and past conversations, message another task '
     + '(`task_send`). Where they are listed as `mcp__walnut__<op>` tools, prefer '

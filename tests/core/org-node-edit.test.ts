@@ -295,7 +295,9 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
 describe('Walnut\'s default core instructions for the CEO and a VP', () => {
   // 2026-10-27, the user: "inject the core instruction for each agent ... main, u don't do task
   // yourself, u delegate to other VP or task directly".
-  const first = (role: 'main' | 'lead') => DEFAULT_ORG_INSTRUCTIONS[role].split('\n')[0]!;
+  // The default's own words: its second line. The first, Walnut's 3-command rule (orgSelfWorkRule), is
+  // still said under the user's own words, so it cannot tell which instructions a prompt carries.
+  const first = (role: 'main' | 'lead') => DEFAULT_ORG_INSTRUCTIONS[role].split('\n')[1]!;
 
   it('ride the prompt of a node that has none of its own; a task with no org role gets none', async () => {
     const main = (await addTask({ title: 'Main agent', project: 'Ask Walnut', source: 'local' })).task;
@@ -306,6 +308,8 @@ describe('Walnut\'s default core instructions for the CEO and a VP', () => {
     const v = /Walnut's default for your role \((v[0-9a-f]{8}); your user may rewrite them\)/.exec(mainPrompt)?.[1];
     expect(v).toBeTruthy();
     for (const line of DEFAULT_ORG_INSTRUCTIONS.main.split('\n')) expect(mainPrompt).toContain(`[${v}] ${line}`);
+    // 2026-11-03: the 3-command rule leads both defaults (core-instructions.ts orgSelfWorkRule).
+    expect(DEFAULT_ORG_INSTRUCTIONS.main.split('\n')[0]).toMatch(/^Never do the work yourself: run at most 3 commands of your own in a turn/);
     expect(first('main')).toMatch(/^Do not do task work yourself\. Hand each piece of work on: task_send to the task that owns its deliverable/);
     for (const line of DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')) expect(defaultInstructions(lead)).toContain(line);
     expect(defaultInstructions(lead)).not.toContain(first('main'));

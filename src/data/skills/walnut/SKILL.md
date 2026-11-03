@@ -24,19 +24,24 @@ report into it, and add to it only when asked.
   requested work by its deliverable: an independent goal gets `task_create` and
   a fresh session; a continuation of the same deliverable gets `task_send` or
   `task_start` by exact ID after checking scope. Questions alone need an answer.
-- **The main agent** (a task with `org_role: main`). You run the org with the
-  user. Know Walnut and what the user means at a high level; hand every
-  investigation, check and implementation to a subtask, and do only quick
-  lookups yourself. You stay active (never `WAITING`), and your task note is your
-  tracking note: what you handed to whom, its state, and who it waits on.
+- **The main agent or a VP** (a task with `org_role: main`, or `lead` for a
+  VP). You run the org with the user, or a VP's projects under it. Know Walnut
+  and what the user means at a high level; hand every investigation, check and
+  implementation to a task (`task_send` to the one that owns it, else
+  `task_create`). Run at most 3 commands of your own in a turn, only to look:
+  Walnut refuses the next one (its own ops do not count; `host_exec` does), and
+  a full slot queues a start, so it is never a reason to do the work yourself.
+  Main stays active (never `WAITING`), and your task note is your tracking note:
+  what you handed to whom, its state, and who it waits on.
 - **A coding session.** You are the worker on one task. The work itself happens
   with your own tools (todo list, subagents, edits, tests). Walnut is the layer
   above you: read your task and the user's data, report where your task stands,
   answer other tasks that ask you something.
 
-In both roles work exists because the user asked for it. Work you discover while
-working (a missing test, a leak to chase, a guard to add) is yours to do now,
-where you are, never filed or started as another task.
+In every role work exists because the user asked for it. In a coding session,
+work you discover while working (a missing test, a leak to chase, a guard to
+add) is yours to do now, where you are, never filed or started as another task;
+Main and a VP hand it to the task that owns it instead.
 
 A coding session splits big work with its own tools first: its todo list,
 subagents, agent teams, or a workflow when the user asked for one. A Walnut task
@@ -207,7 +212,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `request_get` | Read a reply-request status (read) | id (string): Request id returned by task_create, task_start, or task_send |
 | `message_send_now` | Send a queued message now (write, primary-only) | id (string): The request id (rq-…) or the queued message id (qm-…) |
 | `app_state` | What the App beside you shows (read) | (none) |
-| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook's block answer; asked? (string): Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated; answered? (string): Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated |
+| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook's block answer; asked? (string): Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated; answered? (string): Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated; full? (boolean): Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut |
 | `status_check` | Check every task's status against its facts (read) | (none) |
 | `task_dir` | Your task directory (read) | (none) |
 | `skill_read` | Read a Walnut skill (read) | dirName (string): Skill directory name |
@@ -492,7 +497,7 @@ when that happened; the task id is unchanged, so nothing else changes for you.
   yourself: no op at all. Do it, however big, where you are.
 - **Where new work lands.** From inside a task, `task_create` puts the new task beside yours: your project, your folder (when your task has no folder, Walnut makes one holding both; when your folder also holds other work, a subfolder of it holding both), your board tier (a task split off Focus work is born in Focus; pass `focus_tier` or `pinned` to choose), and your host and directory. Omit `project` for that. Name another `project` (`""` = Inbox) only when the user asked for that project, and quote what they said in `user_words` (their words must name it): without them the create answers `409 project_elsewhere` and makes nothing. A project you chose yourself never counts, whether from a repo or directory name or a reason you wrote; a lead also files in the projects it leads. A folder never follows work into another project. Pass `group_id` (a `g_…` id from a `task_list` row) to pick another folder of that project, or `""` for none. The result's `placement` says where it landed. Called from Walnut's own chat or a terminal, an omitted project still means Inbox.
 - cwd and host resolve as a pair: what you pass, then the task's own cwd (its parent chain), then yours when the task is in your project, then the project default. `task_start` follows the same rule.
-- **Limits the server enforces.** Subtasks go at most 3 levels below a top-level task (`409 subtask_too_deep`), and at most 8 of one task's subtasks run at once (`409 too_many_running_subtasks`; `task_create` still saves the task, unstarted). Both say the same thing: do that part with your own tools, or wait for a running one (`walnut wait <id> ... --any`). When the user asked for that start now, pass their own words as `user_request`: the start goes ahead of the 8, up to 16 running. Never for work you decided on yourself.
+- **Limits the server enforces.** Subtasks go at most 3 levels below a top-level task (`409 subtask_too_deep`: do that part with your own tools, or report it back to the task that started you). At most 8 of one task's subtasks run at once: a start past that is queued, not refused (`execution.state: "queued"`, the answer's `queued` says its place and who runs), and Walnut starts it by itself when one of them stops running, highest priority first, then the oldest. Do not retry it, and do not do its work yourself: it runs as its own task. When the user asked for that start now, pass their own words as `user_request`: the start goes ahead of the 8, up to 16 running. Never for work you decided on yourself.
 - **You hear about your subtasks on your own.** Beyond the reply to your request, Walnut delivers a `kind="notification"` envelope into your session whenever a direct subtask stops (its turn ended, task still open), completes, errors, waits on the user (a permission prompt or question) or parks itself, whoever talked to it; a burst arrives as one message. A status notice reaches you while your session is alive (idle counts); a stopped session is not woken for one (a reply to a request you made still wakes it), and `open_items` lists what is still open when you next run. Every `completed` notice ends with how many of your subtasks are still open and names them; when your turn is over, a completion while another subtask still works is held, and you are woken once, when none is working any more (an error still wakes you at once). So never poll a subtask, and never count them by hand. Completing your own task while subtasks are open is allowed: they keep running untouched (the result lists them in `open_subtasks`), and a completed task hears nothing more from its subtasks until it is reopened. Complete yours only when you no longer need their results. Your own parent works the same way: when it is complete, `task_send` to it answers `409 parent_complete`, and your results stay in your own task.
 - One task runs one thing at a time. Starting a second answers `409` naming the live run: that is not a failure, it means the work is already going, so `task_send` to it instead.
 - Write `to` as the task id (a unique id prefix of 4+ characters works too); legacy session ids, `Title [8hex]` handles, and unique title substrings still resolve, but are not what new calls should use. A task with nothing running answers `409 task_has_no_session`, which is the signal to call `task_start`.

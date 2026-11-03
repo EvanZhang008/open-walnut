@@ -215,7 +215,7 @@ describe('running subtasks', () => {
     ;(await admitSubtaskStart(busy.id, a))()
   })
 
-  it('a worker session at the limit gets 409 too_many_running_subtasks from the start route, before any spawn', async () => {
+  it('a worker session at the limit is queued by the start route (202), before any spawn', async () => {
     const { task: parent } = await addTask({ title: 'Busy worker', project: 'fanout' })
     await children(parent.id, Array(MAX_RUNNING_SUBTASKS).fill('IN_PROGRESS'))
     const [waiting] = await children(parent.id, ['TODO'])
@@ -226,13 +226,17 @@ describe('running subtasks', () => {
       body: JSON.stringify({ message: 'go' }),
     })
 
-    expect(res.status).toBe(409)
-    const json = await res.json() as { error: { code: string; message: string } }
-    expect(json.error.code).toBe('too_many_running_subtasks')
-    // Refused before the start was recorded: no attempt, no session.
+    // Queued, not refused (start-queue.ts): Walnut starts it once a slot frees.
+    expect(res.status).toBe(202)
+    const json = await res.json() as { started: boolean; queued?: { position: number; running: string[]; cap: number } }
+    expect(json.started).toBe(false)
+    expect(json.queued).toMatchObject({ position: 1, cap: MAX_RUNNING_SUBTASKS })
+    expect(json.queued?.running).toHaveLength(MAX_RUNNING_SUBTASKS)
+    // Queued before the start was recorded: no attempt, no session, the start kept on the task.
     const after = await getTask(waiting)
     expect(after.last_start).toBeUndefined()
     expect(after.session_id ?? undefined).toBeUndefined()
+    expect(after.start_queue).toMatchObject({ parent_id: parent.id, caller_sid: sid, params: { message: 'go' } })
   })
 
   it('applies to worker sessions only: the human, an ask and an unknown caller are not limited', async () => {

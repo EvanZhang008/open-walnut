@@ -83,6 +83,8 @@ const realDeps: WorkspaceManagerDeps = {
         engine: pending.engine as never, callerSid: pending.caller_sid,
         ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
         replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
+        // Its workspace is ready; a full running cap now queues the start (start-queue.ts).
+        queueWhenFull: true,
       })
       return
     }

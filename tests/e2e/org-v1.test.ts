@@ -663,7 +663,8 @@ describe('/api/v1/org', () => {
       // The VP's prompt names the writer. Words written at the user's request are the user's: they replace the default.
       const { defaultInstructions } = await import('../../src/core/sessions/session-context.js')
       const { DEFAULT_ORG_INSTRUCTIONS } = await import('../../src/core/org/core-instructions.js')
-      const firstLead = DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')[0]!
+      // The default's own words (its first line, the 3-command rule, is still said under the user's own words).
+      const firstLead = DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')[1]!
       expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('the instructions the task "Sort the barn" wrote for your role at your user\'s request (v')
       expect(defaultInstructions(await getTask(vp.json.task.id))).not.toContain(firstLead)
       // An agent's own words follow Walnut's default and never outrank it, the charter or the user.
@@ -694,7 +695,7 @@ describe('/api/v1/org', () => {
 
   describe('the org\'s own names', () => {
     it('reads the defaults, saves a name and a role to config.yaml, and a blank goes back to the default', async () => {
-      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Do not do task work yourself/), lead: expect.any(String) } })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Never do the work yourself/), lead: expect.any(String) } })
       const saved = await api('PUT', '/org/settings', { name: '  Walnut  Labs ', founderTitle: 'Chair' })
       expect(saved).toMatchObject({ status: 200, json: { name: 'Walnut Labs', founderTitle: 'Chair' } })
       const { getConfig } = await import('../../src/core/config-manager.js')
@@ -705,7 +706,7 @@ describe('/api/v1/org', () => {
       expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Walnut Labs', founderTitle: 'Founder' })
       expect((await api('PUT', '/org/settings', { name: 7 })).status).toBe(400)
       await api('PUT', '/org/settings', { name: '' })
-      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Do not do task work yourself/), lead: expect.any(String) } })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Never do the work yourself/), lead: expect.any(String) } })
       // Two windows renaming at once: each change lands, neither undoes the other.
       await Promise.all([api('PUT', '/org/settings', { name: 'Seaside Labs' }), api('PUT', '/org/settings', { founderTitle: 'Chair' })])
       expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Seaside Labs', founderTitle: 'Chair' })

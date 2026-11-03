@@ -34,6 +34,7 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
   last_words: 'drawn through user_status (its ask words)',
   needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
+  start_queue: 'not drawn (the start queue keeps it; task_get execution says queued)',
 };
 
 export function tasksShallowEqual(a: Task, b: Task): boolean {

@@ -140,6 +140,14 @@ if (process.env.WALNUT_ORG_AUTOSTART === undefined) {
   process.env.WALNUT_ORG_AUTOSTART = '0'
 }
 
+// A start the running-subtask cap queued begins by itself once a sibling stops running
+// (src/core/sessions/start-queue.ts): a test that fills the cap and then moves a sibling would
+// otherwise spawn a CLI it never asked for. The start-queue tests drive the drain directly, or
+// set this to '1' themselves.
+if (process.env.WALNUT_START_QUEUE === undefined) {
+  process.env.WALNUT_START_QUEUE = '0'
+}
+
 // A Mac with no companion asks GitHub whether the newest release carries join.ps1 before it
 // shows the Windows line (src/core/net/join-ps1-published.ts): no test waits on that network
 // call. A test of the line sets this itself.

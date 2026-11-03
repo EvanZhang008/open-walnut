@@ -38,6 +38,11 @@ export function taskExecution(task: Record<string, unknown>): Record<string, unk
     && (typeof status.pid === 'number' && status.pid > 1
     || (SESSION_ENGINE_IDS.includes(status.engine as typeof SESSION_ENGINE_IDS[number])
       && engineCaps(status.engine as typeof SESSION_ENGINE_IDS[number]).idProvisioning === 'provider-issued'))
+  // A start the running-subtask cap queued (core/sessions/start-queue.ts), with no session yet.
+  const queue = task.start_queue as { at?: string } | null | undefined
+  if (queue && !sessionId && !confirmed && !(attempt?.at && queue.at && attempt.at > queue.at)) {
+    return { state: 'queued', ...(queue.at ? { queued_at: queue.at } : {}) }
+  }
   const currentAttempt = attempt && !beganAfterAttempt && (!sessionId || !attempt.session_id || attempt.session_id === sessionId
     || attempt.state === 'starting')
   if (currentAttempt && !confirmed) {
@@ -100,11 +105,32 @@ function placementNote(started: Record<string, unknown>): string {
   return ` Placed on ${p.host || 'this Mac'}: ${p.reason}${p.cwd ? `; it works in ${p.cwd}` : ''}.`
 }
 
+/**
+ * The words of a start the running-subtask cap queued (core/sessions/start-queue.ts). Never tells
+ * the caller to do the work itself: a lead whose job is to delegate read "do this part with your
+ * own tools" in the old refusal and did the work (2026-11-03).
+ */
+export function queuedOutcome(taskId: string, queued: { position?: number; running?: unknown[]; cap?: number }): [string, string] {
+  const running = Array.isArray(queued.running) ? queued.running.length : undefined
+  const cap = typeof queued.cap === 'number' ? queued.cap : undefined
+  const place = typeof queued.position === 'number' && queued.position > 1 ? ` (number ${queued.position} in its queue)` : ''
+  return [
+    `Task ${taskId} is queued${place}: ${running ?? 'the maximum number of'} subtasks of your task are running`
+      + `${cap ? ` (at most ${cap} run at once)` : ''}. Walnut starts it by itself when one of them stops running, `
+      + 'highest priority first.',
+    'Do not retry the start, and do not do its work yourself: it runs as its own task. task_get shows execution.state '
+      + '"queued" until it starts.'
+      + (cap !== undefined && cap >= 16 ? '' : ' When the user asked for it to start now, task_start with user_request quoting their words lets up to 16 run.'),
+  ]
+}
+
 export async function startTask(id: string, body: Record<string, unknown>, call: Call): Promise<Record<string, unknown>> {
   const started = await call('POST', `/tasks/${encodeURIComponent(id)}/start`, body) as Record<string, unknown> | undefined
   if (!started || typeof started.taskId !== 'string') {
     throw new Error(`Start response was incomplete. Read task_get for ${id} before retrying; do not create another task.`)
   }
+  const queued = started.queued as { position?: number; running?: unknown[]; cap?: number } | undefined
+  if (queued && typeof queued === 'object') return withOutcome({ ...started, execution: { state: 'queued' } }, ...queuedOutcome(String(started.taskId), queued))
   // Old servers only confirm that the request was accepted; a pre-assigned id does not prove the process has started.
   const state = started.started === true ? 'running' : 'starting'
   return withOutcome(

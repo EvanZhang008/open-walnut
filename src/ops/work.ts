@@ -260,6 +260,9 @@ defineOp({
       + 'stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook\'s block answer'),
     asked: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated'),
     answered: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated'),
+    full: z.boolean().optional().describe(
+      'Everything Walnut restates after a compaction, uncut (your core instructions, what is open, changed instructions, '
+      + 'hints, teams, MEMORY.md), as `text`: read it when the restatement says it was cut'),
   },
   bind: { method: 'GET', path: '/me/open' },
   mapResult: ({ body, args }) => {

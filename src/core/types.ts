@@ -703,6 +703,31 @@ export function resolveModelSwitchValue(raw: string): string | null {
   return trimmed;
 }
 
+/** A queued start (Task.start_queue, src/core/sessions/start-queue.ts). */
+export interface StartQueueEntry {
+  at: string;
+  /** The task whose running subtasks this start waits behind (the caller's task). */
+  parent_id: string;
+  /** The session that asked for the start: the replay runs as its start. */
+  caller_sid: string;
+  /** The start as asked (SessionStartParams fields, minus the task and the caller). */
+  params: {
+    message?: string;
+    cwd?: string;
+    host?: string;
+    model?: string;
+    mode?: string;
+    effort?: SessionEffort;
+    engine?: SessionEngine;
+    userRequest?: string;
+    createCwd?: boolean;
+    workspace?: { provider: string; inputs?: unknown };
+    expectReply?: boolean;
+    replyTimeoutSecs?: number;
+    handsOn?: string;
+  };
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -942,6 +967,12 @@ export interface Task {
    *  start and offer Retry. Cleared once the node has a session. Payload blob, local-only; an
    *  older Walnut ignores it. */
   org_start?: { state: 'starting' | 'failed'; at: string; error?: string; attempts?: number };
+  /** A session's start of this task that waits for a free slot under the running-subtask cap
+   *  (src/core/sessions/start-queue.ts): when it was queued, the task whose running subtasks
+   *  it waits behind, the session that asked, and the start as asked, so Walnut replays it by
+   *  itself once one of them stops running. Cleared by any start of the task; null clears it.
+   *  Payload blob, local-only, never pushed to sync backends; an older Walnut ignores it. */
+  start_queue?: StartQueueEntry | null;
   /** The Org nodes this task is pinned to (src/core/org/org-pins.ts): the user's focus on that node,
    *  apart from the board's pins. One entry per node (`main`, or `project:<key>` for a VP), with who
    *  pinned it and when. Payload blob, local-only, never pushed to sync backends; an older Walnut

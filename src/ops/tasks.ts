@@ -421,6 +421,8 @@ defineOp({
       `Task phase: ${phase}. Execution: ${execution.state}.`,
       execution.state === 'not_started'
         ? dispatchHint(id)
+        : execution.state === 'queued'
+        ? `Its start is queued behind running subtasks; Walnut starts it by itself when one stops running. Do not start it again or do its work yourself.`
         : `Read task_history for its result. Continue the same deliverable with task_send '${JSON.stringify({ to: id, text: '...', ...(phase === 'COMPLETE' ? { force: true, reason: 'What changed in this deliverable' } : {}) })}'; an independent goal needs task_create.`,
     )
   },
@@ -548,7 +550,8 @@ defineOp({
     'session cannot (another host, later, after this session ends); record_only=true when they only want ' +
     'it written down (a placeholder, nothing runs). Otherwise do the work with your own tools (todo list, ' +
     'subagents, agent teams) however big it is: size alone is never a reason, and follow-ups you find are ' +
-    'yours to do here. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
+    'yours to do here. Main and a VP (an org lead) are the opposite: they hand every piece of work on with ' +
+    'task_create or task_send, and look themselves with at most 3 commands in a turn. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
     'per ask (ask the user before splitting). Continue the SAME deliverable with task_send after checking ' +
     'the exact id and scope; an independent goal needs a new task and fresh session even in the same area. ' +
     'Explicit new-task/clean-context requests take priority. Check plausible unfinished work before creating; ' +
@@ -660,21 +663,27 @@ defineOp({
     }
     try {
       const started = await startTask(id, launch, call)
+      // A start the running-subtask cap queued (core/sessions/start-queue.ts) has no session yet.
+      const queued = (started.execution as { state?: string } | undefined)?.state === 'queued'
       return withOutcome(
         withRef({ ...view, execution: started.execution }, { ...extra, ...started }),
-        `${where}${String(started.outcome)}${await cardLine(true)}`, String(started.next),
+        `${where}${String(started.outcome)}${await cardLine(!queued)}`, String(started.next),
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
-      // The server's running-subtask cap (subtask-limits.ts): a definite "no",
-      // not an unconfirmed start, so the task is a placeholder until one finishes.
+      // An older server's running-subtask cap (subtask-limits.ts), before the start queue: a
+      // definite "no", not an unconfirmed start, so the task is a placeholder until one finishes.
+      // Its words are not repeated: they told the caller to do the work itself.
       if (error.includes('(too_many_running_subtasks)')) {
+        const running = /Running: ([^.]+)\./.exec(error)?.[1]?.split(', ').filter(Boolean) ?? []
         return withOutcome(
           withRef({ ...view, execution: { state: 'not_started', error } }, {
             ...extra, execution: { state: 'not_started', error }, start_error: error,
           }),
-          `${where}Task ${id} was created but NOT started: ${error}${await cardLine(false)}`,
-          `Start it after one of the running subtasks finishes: walnut tools call task_start '{"id":"${id}"}'. `
+          `${where}Task ${id} was created but not started yet: your task already runs the most subtasks at once, `
+            + `and this Walnut server does not queue starts.${await cardLine(false)}`,
+          `Start it once one of them stops running: walnut wait ${running.slice(0, 3).join(' ') || '<id>'} --any, then `
+            + `walnut tools call task_start '{"id":"${id}"}'. Do not do its work yourself: it is its own task. `
             + 'When the user asked for it now, pass their words as user_request.',
         )
       }

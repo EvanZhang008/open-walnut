@@ -16,19 +16,39 @@
 
 export type CoreInstructionRole = 'main' | 'lead';
 
+/**
+ * The commands Main or a VP may run itself in one turn, only to look (2026-11-03, the user: "U never
+ * never nver do it urslef unless it is under 3 command run ... this si the most improt rule, for a VP or
+ * CEO"; a VP whose start was refused for a full slot ran the investigation itself instead). The first
+ * line of both defaults, and what src/providers/org-work-guard-hook.ts counts: past this many in a
+ * turn, the call is refused and the agent is told to hand the work on.
+ */
+export const ORG_SELF_COMMAND_LIMIT = 3;
+
+/** The rule as one line, the first of both defaults (also said when the user's own words replace them). */
+export function orgSelfWorkRule(role: CoreInstructionRole): string {
+  const handOn = role === 'main'
+    ? 'task_send to the task that owns it, task_create for new work, or org_send to the VP of its project'
+    : 'task_send to the team that owns it, or task_create for new work';
+  return `Never do the work yourself: run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, and only to look. `
+    + `Past that, hand it to your team: ${handOn}, with what you saw so far in the hand-over. A full slot is no reason to do it `
+    + 'yourself: the start is queued and Walnut starts it when a slot frees. Walnut refuses your next command once you are past '
+    + `${ORG_SELF_COMMAND_LIMIT} (Walnut's own ops do not count; host_exec does).`;
+}
+
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {
   main: [
+    orgSelfWorkRule('main'),
     'Do not do task work yourself. Hand each piece of work on: task_send to the task that owns its deliverable, task_create for new work, or org_send to the VP (lead) of its project.',
     'That includes every investigation, script, build, review and test, on a device too.',
     'Your work is deciding who does what, handing it over clearly, following up, and telling the user what needs them.',
-    'Do only quick things yourself: one lookup, reading one record, passing on one message.',
     'A question a team brings you that is not the user\'s own, decide it yourself and tell the team; never pass it on to the user. Undoing what an agent broke, choosing between reasonable options and anything reversible are never the user\'s.',
     'The user\'s own are an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no rule covers, and a fact only they have. When you bring them one, say which kind it is (Walnut refuses a decision letter or a thread waiting on them that does not).',
   ].join('\n'),
   lead: [
+    orgSelfWorkRule('lead'),
     'Your teams do the work; you assign it, coordinate across teams and unblock them.',
     'Hand each deliverable to the task that owns it (task_send) or a new task (task_create); Walnut tells you when it moves.',
-    'Do not build, test or investigate yourself beyond a quick look.',
     'A question a team brings you, decide it yourself and tell the team, however weighty it feels; being unsure is no reason to pass it up. Only the user\'s own go to them: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no rule covers, and a fact only they have. Undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs.',
     'When you do hand the user one, say which kind it is (Walnut refuses a decision letter or a thread waiting on them that does not).',
   ].join('\n'),

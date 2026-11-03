@@ -33,13 +33,15 @@ const MAX_REQUESTS = 10;
  * recorded every changed instruction as told. Kept under it with room to spare.
  */
 export const HOOK_CONTEXT_MAX = 9_500;
+/** How a session reads the whole restatement when the hook's copy was cut. */
+export const READ_ALL_AFTER_COMPACTION = `walnut tools call open_items '{"full":true}'`;
 const INSTRUCTIONS_LATER = 'Walnut changed some of your default instructions since this session started. They are too long to '
   + 'restate here and come in full in front of your next message: where your system prompt differs from them, they win.';
 
 /** The hook's text within HOOK_CONTEXT_MAX: cut at a line end, saying where the rest is. */
 export function fitHookContext(text: string): string {
   if (text.length <= HOOK_CONTEXT_MAX) return text;
-  const tail = '\n\n(Cut here: a hook may add only so much. open_items, agent_memory_read and org_get read the rest.)';
+  const tail = `\n\n(Cut here: a hook may add only so much. ${READ_ALL_AFTER_COMPACTION} reads it all.)`;
   const room = HOOK_CONTEXT_MAX - tail.length;
   const end = text.lastIndexOf('\n', room);
   return `${text.slice(0, end > room / 2 ? end : room).trimEnd()}${tail}`;
@@ -126,7 +128,7 @@ export async function overdueFor(sid: string, taskId: string, now = Date.now()):
 export async function collectOpenItems(
   callerSid: string | undefined,
   now = Date.now(),
-  opts: { afterCompaction?: boolean } = {},
+  opts: { afterCompaction?: boolean; full?: boolean } = {},
 ): Promise<OpenItems> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return EMPTY;
@@ -181,7 +183,7 @@ export async function collectOpenItems(
     }
     // Where the task stands, read back after a compaction (place-notice.ts).
     const { statePlaceAfterCompaction } = await import('./place-notice.js');
-    const place = await statePlaceAfterCompaction(caller.record, task, { byHook: !!opts.afterCompaction });
+    const place = await statePlaceAfterCompaction(caller.record, task, { byHook: !!opts.afterCompaction && !opts.full });
     if (place) {
       items.place = {
         project: place.project,
@@ -215,14 +217,25 @@ export async function collectOpenItems(
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
       // Only whole and within what the hook may add: a cut notice would leave rules unsaid. Left out,
       // it is not told, so the next message carries it (the compaction made everything due again).
-      if (changed && changed.length + items.text.length + 2 <= HOOK_CONTEXT_MAX) {
-        items.text = [changed, items.text].filter(Boolean).join('\n\n');
-        await noteInstructionNoticeStatedByHook(caller.record, task);
+      // Main's or a VP's core instructions lead, always (2026-11-03: a VP spawned before they existed
+      // held them only in notices; its 47 KB restatement reached the model as a 2 KB preview, and it
+      // did the work itself right after the compaction). Counted in the room the notice needs.
+      const core = (task.org_role === 'main' || task.org_role === 'lead') && task.phase !== 'COMPLETE'
+        ? await import('./session-context.js').then((m) => m.coreInstructionsBlock(task)) : '';
+      const lead = core ? `Restated after the compaction, first because they are your role's first rules.\n${core}` : '';
+      const head = (text: string) => [lead, text].filter(Boolean).join('\n\n');
+      if (changed && (opts.full || changed.length + head(items.text).length + 2 <= HOOK_CONTEXT_MAX)) {
+        items.text = head([changed, items.text].filter(Boolean).join('\n\n'));
+        // A full read reaches the model as a tool result Claude Code may cut too: it tells nothing.
+        if (!opts.full) await noteInstructionNoticeStatedByHook(caller.record, task);
       } else if (changed) {
         // First, so a cut of the rest never takes it.
-        items.text = [INSTRUCTIONS_LATER, items.text].filter(Boolean).join('\n\n');
+        items.text = head([INSTRUCTIONS_LATER, items.text].filter(Boolean).join('\n\n'));
+      } else {
+        items.text = head(items.text);
       }
-      items.text = fitHookContext(items.text);
+      // `full` (open_items full:true): the whole restatement, uncut, for a session whose hook copy was cut.
+      if (!opts.full) items.text = fitHookContext(items.text);
     }
     return items;
   } catch {

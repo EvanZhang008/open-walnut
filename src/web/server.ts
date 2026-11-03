@@ -2014,6 +2014,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})
     // Main and the VPs that have no session yet start by themselves, a minute after boot (src/core/org/org-autostart.ts).
     if (role() === 'leader') void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: IS_EPHEMERAL })).catch(() => {})
+    // Starts the running-subtask cap queued begin by themselves once a slot frees (src/core/sessions/start-queue.ts);
+    // a companion never drains, an ephemeral server only what it queued itself.
+    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL, cloud: isCompanion() })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
@@ -6783,6 +6786,7 @@ export async function stopServer(opts: { dropConnections?: boolean } = {}): Prom
   void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
   void import('../core/sessions/status-push.js').then((m) => m.stopStatusPush()).catch(() => { /* never started */ })
   void import('../core/sessions/needs-recheck.js').then((m) => m.stopNeedsRecheck()).catch(() => { /* never started */ })
+  void import('../core/sessions/start-queue.js').then((m) => m.stopStartQueue()).catch(() => { /* never started */ })
   void import('../core/sessions/brief-refresh.js').then((m) => m.stopBriefRefreshLooks()).catch(() => { /* never started */ })
   void import('../core/sessions/status-reconcile.js').then((m) => m.stopStatusReconcile()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })

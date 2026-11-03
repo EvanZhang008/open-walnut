@@ -5,8 +5,10 @@
  *
  * Why in the server and not the prompt: a prompt line is one routine edit away
  * from deletion, and a session that files subtasks which file subtasks has no
- * natural stop. The prompt already tells a session to split work with its own
- * tools; these limits are what still holds when that advice is ignored.
+ * natural stop. These limits are what still holds when the prompt's advice is
+ * ignored. A start over the running limit is queued, not refused, for a session
+ * caller (start-queue.ts): a lead whose job is to delegate must never read a full
+ * slot as "do it yourself".
  *
  * Scope: only work a SESSION creates or starts (a caller id rides the request).
  * The human's own creates and starts, from the board, the phone or the CLI, are
@@ -35,9 +37,17 @@ export const MIN_USER_REQUEST_CHARS = 10;
 
 export type SubtaskLimitCode = 'subtask_too_deep' | 'too_many_running_subtasks';
 
+/** What a running-cap refusal was about: the start queue (start-queue.ts) records it from this. */
+export interface RunningCapDetail {
+  parentId: string;
+  taskId: string;
+  running: string[];
+  cap: number;
+}
+
 export class SubtaskLimitError extends Error {
   readonly statusCode = 409;
-  constructor(readonly code: SubtaskLimitCode, message: string) {
+  constructor(readonly code: SubtaskLimitCode, message: string, readonly detail?: RunningCapDetail) {
     super(message);
     this.name = 'SubtaskLimitError';
   }
@@ -191,14 +201,18 @@ export async function admitSubtaskStart(
     if (running.length >= cap) {
       const name = parentTitle ? `"${parentTitle}"` : parentId;
       const ids = running.slice(0, cap).map((c) => c.id);
+      // A session's start never reaches the caller as this refusal: the start queue takes it
+      // (start-queue.ts) and starts it once a slot frees. It still reads plainly for the
+      // queue's own start and for a server path that does not queue.
       const ask = opts.userAsked
         ? ` Even a start the user asked for stops at ${cap}; tell the user which running one to stop (task_stop) first.`
-        : ' When the user asked for this start now, retry with user_request quoting their words'
-          + ` (up to ${MAX_RUNNING_SUBTASKS_USER_ASKED} run then).`;
+        : ' When the user asked for this start now, user_request quoting their words'
+          + ` lets up to ${MAX_RUNNING_SUBTASKS_USER_ASKED} run.`;
       throw new SubtaskLimitError('too_many_running_subtasks',
-        `Refused: ${running.length} subtasks of ${name} are already running, and at most ${cap} run at `
-        + `once. Wait for one to finish (walnut wait ${ids.slice(0, 3).join(' ')} --any), or do this part with your `
-        + `own tools.${ask} Running: ${ids.join(', ')}.`);
+        `Not started: ${running.length} subtasks of ${name} are already running, and at most ${cap} run at `
+        + `once (walnut wait ${ids.slice(0, 3).join(' ')} --any shows when one stops; a task_start or task_create `
+        + `from a session queues instead, and Walnut starts it then).${ask} Running: ${ids.join(', ')}.`,
+        { parentId, taskId: startingTaskId, running: ids, cap });
     }
     starting.add(startingTaskId);
     admitted.set(parentId, starting);

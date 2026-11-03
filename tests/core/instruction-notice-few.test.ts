@@ -233,7 +233,9 @@ describe('the compaction hook stays within what Claude Code shows the model', ()
     expect(hook.text.length).toBeLessThanOrEqual(HOOK_CONTEXT_MAX);
     expect(hook.text).not.toContain(NOTICE);
     expect(hook.text).toContain('come in full in front of your next message');
-    expect(hook.text.startsWith('Walnut changed some of your default instructions')).toBe(true);
+    // A VP's core instructions lead (they fit whatever else is cut), then the pointer to the changes.
+    expect(hook.text.startsWith('Restated after the compaction, first because they are your role\'s first rules.')).toBe(true);
+    expect(hook.text.indexOf('Walnut changed some of your default instructions')).toBeGreaterThan(hook.text.indexOf('Your core instructions'));
     expect((await getSessionByClaudeId(sid))!.taskRoutingNoted).toBeUndefined();
     await notePlaceCompaction(sid, 'c1');
     const next = await line(sid, 'After the compaction');

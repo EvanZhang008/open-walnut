@@ -507,6 +507,8 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         callerSid,
         startAttemptId: str('start_attempt_id'),
         source: 'api-v1',
+        // A session's start over the running-subtask cap waits in the start queue (202, `queued`).
+        queueWhenFull: true,
       }))
     } catch (err) {
       if (err instanceof SessionExistsError) {
@@ -526,6 +528,27 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       }
       throw err
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /api/v1/tasks/:id/start-queue: cancel a start the running-subtask cap queued
+// (core/sessions/start-queue.ts), so Walnut does not start the task by itself. task_stop on a
+// task that never started calls it. Answers whether there was one to cancel.
+taskV1Router.delete('/tasks/:id/start-queue', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getTask } = await import('../../core/task-manager.js')
+    let task
+    try {
+      task = await getTask(paramStr(req.params.id))
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+    const { clearStartQueue } = await import('../../core/sessions/start-queue.js')
+    const cleared = await clearStartQueue(task.id, 'cancelled')
+    res.json({ taskId: task.id, cleared })
   } catch (err) {
     next(err)
   }
