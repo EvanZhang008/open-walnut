@@ -67,6 +67,9 @@ describe('host.endpoint finds the URL the way Claude Code does', () => {
     ['Bedrock with no base URL: the regional endpoint', { env: { CLAUDE_CODE_USE_BEDROCK: 'true', AWS_REGION: 'us-west-2' } }, 'https://bedrock-runtime.us-west-2.amazonaws.com', 'default'],
     ['Bedrock turned off with 0', { env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://gw.example.test' } }, 'https://gw.example.test', 'env'],
     ['Vertex with its region', { env: { CLAUDE_CODE_USE_VERTEX: '1', CLOUD_ML_REGION: 'europe-west1' } }, 'https://europe-west1-aiplatform.googleapis.com', 'default'],
+    ['Vertex in the global region', { env: { CLAUDE_CODE_USE_VERTEX: '1', CLOUD_ML_REGION: 'global' } }, 'https://aiplatform.googleapis.com', 'default'],
+    ['Foundry with its resource', { env: { CLAUDE_CODE_USE_FOUNDRY: '1', ANTHROPIC_FOUNDRY_RESOURCE: 'acme' } }, 'https://acme.services.ai.azure.com', 'default'],
+    ['Foundry with its base URL in the settings', { user: { CLAUDE_CODE_USE_FOUNDRY: '1', ANTHROPIC_FOUNDRY_BASE_URL: 'https://gw.example.test/anthropic' } }, 'https://gw.example.test', 'settings'],
     ['the project settings over the user settings', { user: { ANTHROPIC_BASE_URL: 'http://user.example.test' }, project: { ANTHROPIC_BASE_URL: 'http://project.example.test' } }, 'http://project.example.test', 'settings'],
     ['the local settings over the project settings', { project: { ANTHROPIC_BASE_URL: 'http://project.example.test' }, local: { ANTHROPIC_BASE_URL: 'http://local.example.test:9000' } }, 'http://local.example.test:9000', 'settings'],
     ['the settings over the environment', { env: { ANTHROPIC_BASE_URL: 'http://env.example.test' }, user: { ANTHROPIC_BASE_URL: 'http://settings.example.test' } }, 'http://settings.example.test', 'settings'],
@@ -113,6 +116,11 @@ describe('host.endpoint reads the connection, never an answer', () => {
     const t0 = Date.now()
     expect(await h.probe()).toMatchObject({ reachable: false, error: 'timeout' })
     expect(Date.now() - t0).toBeLessThan(2_000)
+  })
+
+  it.each(['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_HAS_EXPIRED', 'SELF_SIGNED_CERT_IN_CHAIN', 'ERR_TLS_CERT_ALTNAME_INVALID'])('%s got through: reached, so a continue tells', async (code) => {
+    const h = hostWith({ env: { ANTHROPIC_BASE_URL: 'https://gw.example.test' }, behave: () => code })
+    expect(await h.probe()).toMatchObject({ reachable: true })
   })
 
   it('any HTTP answer (a 404 here) is reached', async () => {

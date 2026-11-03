@@ -236,7 +236,7 @@ export interface UserStatusInput {
   /** Its last turn could not reach the model endpoint (SessionRecord.endpointWait): Walnut waits for
    *  it and continues the turn (sessions/endpoint-wait.ts), so it waits on its machine, not the user,
    *  until the wait gives up. The sync passes it only while no turn runs. */
-  endpointWait?: Pick<SessionEndpointWait, 'state' | 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy'> | null;
+  endpointWait?: Pick<SessionEndpointWait, 'state' | 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy' | 'probeError'> | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
   /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
@@ -497,8 +497,9 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
   const ew = input.endpointWait;
   if (ew && input.processStatus !== 'running') {
     if (ew.state === 'gave_up') return strip<UserStatus>({ state: 'needs', source: 'error', ask: endpointGaveUpWords(ew), ...w, stoppedBy: 'machine' });
-    const what = endpointWords(ew);
-    return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: `${what.charAt(0).toUpperCase()}${what.slice(1)}, to answer again: Walnut continues the turn by itself when it does`, ...w, stoppedBy: 'machine' });
+    const what = ew.probeError === 'host offline' ? ew.where : endpointWords(ew);
+    const until = ew.probeError === 'host offline' ? 'to connect again' : 'to answer again';
+    return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: `${what.charAt(0).toUpperCase()}${what.slice(1)}, ${until}: Walnut continues the turn by itself when it does`, ...w, stoppedBy: 'machine' });
   }
   const loss = input.restartLoss;
   const live = input.processStatus === 'running' || input.processStatus === 'idle';

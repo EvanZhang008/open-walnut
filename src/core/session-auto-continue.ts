@@ -45,6 +45,7 @@ import { log } from '../logging/index.js'
 import { classifyTurnError } from '../providers/daemon-core.js'
 
 import { endpointWaitEnabled, matchesEndpointUnreachable } from './sessions/endpoint-unreachable.js'
+import { endpointWaitTakes, isEndpointUnreachableError, type EndpointResultFacts } from './sessions/endpoint-wait-takes.js'
 
 export function matchesRetryExhaustion(text: string | null | undefined): boolean {
   if (!text) return false
@@ -146,16 +147,18 @@ export class SessionAutoContinue {
     if (!this.cfg.enabled) return
     switch (event.name) {
       case EventNames.SESSION_RESULT: {
-        const d = event.data as { sessionId?: string; taskId?: string; result?: string; isError?: boolean; retryExhausted?: boolean; teamActive?: boolean; backgroundActive?: boolean }
+        const d = event.data as EndpointResultFacts & { sessionId?: string; taskId?: string; result?: string; retryExhausted?: boolean }
         if (!d.sessionId || !d.isError) return
         // Intermediate results (team / background still running) are not turn-over.
         if (d.teamActive || d.backgroundActive) return
+        // The endpoint wait owns a connection the endpoint never answered at a real turn end,
+        // whatever the flag says; one it does not take (a wakeup or detached work carries the
+        // session on) is retried here as before.
+        if (endpointWaitTakes(d)) return
         // Prefer the emitter's structured signal (covers the CLI api_timeout debug
         // marker even when the result text is generic); fall back to text matching
         // for emitters that don't stamp it.
-        // The endpoint wait owns a connection the endpoint never answered, whatever the flag says.
-        if (endpointWaitEnabled() && matchesEndpointUnreachable(d.result)) return
-        if (!d.retryExhausted && !matchesRetryExhaustion(d.result)) return
+        if (!d.retryExhausted && !matchesRetryExhaustion(d.result) && !isEndpointUnreachableError(d.result)) return
         this.schedule(d.sessionId, d.taskId)
         break
       }
@@ -203,10 +206,12 @@ export class SessionAutoContinue {
    * (2026-10-05, an hour-long agent turn). A result the cap or the shape
    * excludes still gets its card.
    */
-  willResume(sessionId: string, result: string | null | undefined, retryExhausted?: boolean): boolean {
+  willResume(sessionId: string, result: string | null | undefined, retryExhausted?: boolean, facts?: EndpointResultFacts): boolean {
     if (!this.cfg.enabled || this.cfg.maxPerHour <= 0) return false
-    if (endpointWaitEnabled() && matchesEndpointUnreachable(result)) return false
-    if (!retryExhausted && !matchesRetryExhaustion(result)) return false
+    // A turn the endpoint wait takes is the wait's; without the result's facts, any unreachable text is.
+    const unreachable = isEndpointUnreachableError(result)
+    if (unreachable && (facts ? endpointWaitTakes({ ...facts, isError: true, result }) : endpointWaitEnabled())) return false
+    if (!retryExhausted && !matchesRetryExhaustion(result) && !unreachable) return false
     return this.pending.has(sessionId) || this.firesInWindow(sessionId) < this.cfg.maxPerHour
   }
 

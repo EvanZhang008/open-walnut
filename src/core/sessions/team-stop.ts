@@ -229,8 +229,10 @@ export interface WakeSources {
   members: { id: string; title: string }[];
   /** Every routine and trigger whose session executor targets one of them, paused or not. */
   routines: WakeRoutine[];
-  /** The clocks that would wake one of them: a WAITING task's wait_until, a follow-up alarm. */
-  clocks: { taskId: string; kind: 'wait_until' | 'promise_alarm'; at: string }[];
+  /** The clocks that would wake one of them: a WAITING task's wait_until, a follow-up alarm, an
+   *  endpoint wait that continues its session once the model endpoint answers (`at` = since when;
+   *  a team stop holds it: sessions/endpoint-wait.ts reads team_stop before it continues). */
+  clocks: { taskId: string; kind: 'wait_until' | 'promise_alarm' | 'endpoint_wait'; at: string }[];
   /** A team stop not resumed yet on the task. */
   stopped?: { at: string; by: string; keptSessions?: boolean };
 }
@@ -265,6 +267,13 @@ export async function wakeSourcesOf(rootRef: string, opts: { team?: boolean } = 
     if (t.wait_until && t.phase === 'WAITING') clocks.push({ taskId: t.id, kind: 'wait_until', at: t.wait_until });
     if (t.promise_alarm?.at) clocks.push({ taskId: t.id, kind: 'promise_alarm', at: t.promise_alarm.at });
   }
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    for (const t of members) {
+      const w = t.session_id ? (await getSessionByClaudeId(t.session_id).catch(() => null))?.endpointWait : undefined;
+      if (w && w.state !== 'gave_up') clocks.push({ taskId: t.id, kind: 'endpoint_wait', at: w.since });
+    }
+  } catch { /* sessions unreadable: the task clocks above still list */ }
   return {
     root: { id: root.id, title: root.title },
     members: members.map((t) => ({ id: t.id, title: t.title })),

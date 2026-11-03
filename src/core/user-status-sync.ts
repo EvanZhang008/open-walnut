@@ -289,8 +289,9 @@ function endpointWaitOf(
   endpoint: typeof import('./sessions/endpoint-wait.js'),
 ): UserStatusInput['endpointWait'] {
   if (!endpoint.endpointWaitEnabled()) return undefined;
-  if (rec.endpointWait) return rec.endpointWait;
-  if (!endpoint.recordInEndpointWait(rec)) return undefined;
+  // A continue whose turn ended cleanly is no wait any more, even before the waiter closes it.
+  if (rec.endpointWait && (rec.endpointWait.state !== 'resumed' || endpoint.recordInEndpointWait(rec))) return rec.endpointWait;
+  if (rec.endpointWait || !endpoint.recordInEndpointWait(rec)) return undefined;
   return { state: 'waiting', where: endpoint.machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0 };
 }
 

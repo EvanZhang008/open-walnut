@@ -5271,7 +5271,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // shape excludes still gets its card (the failure is then the human's).
         const { getSessionAutoContinue } = await import('../core/session-auto-continue.js')
         const resumed = !!sessionId && !!getSessionAutoContinue()?.willResume(
-          sessionId, result, eventData<'session:result'>(event).retryExhausted,
+          sessionId, result, eventData<'session:result'>(event).retryExhausted, eventData<'session:result'>(event),
         )
         if (resumed) {
           log.session.info('session error card held: auto-continue resumes this turn', { sessionId, taskId })

@@ -22,7 +22,7 @@ const REFUSED = 'API Error: Connection refused — a firewall or proxy may be bl
 const SID = 'sess-endpoint-1'
 const MIN = 60_000
 
-function rig(opts: { probe?: (n: number) => EndpointProbeAnswer } = {}) {
+function rig(opts: { probe?: (n: number) => EndpointProbeAnswer | Promise<EndpointProbeAnswer>; holdsOff?: () => string | null } = {}) {
   let now = Date.parse('2026-11-03T14:00:00Z')
   const timers: Array<{ at: number; fn: () => void; id: number }> = []
   let nextId = 1
@@ -45,6 +45,7 @@ function rig(opts: { probe?: (n: number) => EndpointProbeAnswer } = {}) {
     send: async (_sid, text, o) => { sent.push({ text, source: o.source }) },
     note: (_sid, _task, text) => { notes.push(text) },
     gaveUp: async (_rec, _w, words) => { gaveUp.push(words) },
+    holdsOff: async () => opts.holdsOff?.() ?? null,
   }
   const waiter = new EndpointWaiter(deps)
   const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
@@ -78,7 +79,7 @@ function statusOf(rec: SessionRecord) {
   return deriveUserStatus({
     phase: 'NEED_ACTION', hasSession: true, hasLeader: true, processStatus: rec.process_status,
     errorMessage: rec.errorMessage, errorReason: 'api_error',
-    endpointWait: w ? { state: w.state, url: w.url, where: w.where, since: w.since, resumes: w.resumes, gaveUpWhy: w.gaveUpWhy } : null,
+    endpointWait: w ? { state: w.state, url: w.url, where: w.where, since: w.since, resumes: w.resumes, gaveUpWhy: w.gaveUpWhy, probeError: w.probeError } : null,
   })
 }
 
@@ -117,6 +118,73 @@ describe('the endpoint wait', () => {
     expect(r.rec.endpointWait).toBeUndefined()
     await r.advance(60 * MIN)
     expect(r.sent).toHaveLength(1)
+  })
+
+  it('a continue a person stopped (interrupted) closes the wait: no continue over their Stop', async () => {
+    const r = rig({ probe: () => ({ kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true }) })
+    await r.result({ isError: true, result: REFUSED })
+    await r.advance(1 * MIN)
+    expect(r.sent).toHaveLength(1)
+    await r.result({ isError: false, interrupted: true, result: '' })
+    expect(r.rec.endpointWait).toBeUndefined()
+    await r.advance(60 * MIN)
+    expect(r.sent).toHaveLength(1)
+  })
+
+  it('a continued turn that ended cleanly with work running on closes the wait too', async () => {
+    const r = rig({ probe: () => ({ kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true }) })
+    await r.result({ isError: true, result: REFUSED })
+    await r.advance(1 * MIN)
+    await r.result({ isError: false, result: 'started a background agent', backgroundActive: true })
+    expect(r.rec.endpointWait).toBeUndefined()
+    await r.advance(60 * MIN)
+    expect(r.sent).toHaveLength(1)
+  })
+
+  it.each(['person-stopped', 'task-complete', 'team-stopped'])('%s: no continue, the wait closes', async (why) => {
+    let off: string | null = null
+    const r = rig({ probe: () => ({ kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true }), holdsOff: () => off })
+    await r.result({ isError: true, result: REFUSED })
+    off = why
+    await r.advance(60 * MIN)
+    expect(r.sent).toEqual([])
+    expect(r.rec.endpointWait).toBeUndefined()
+  })
+
+  it('a message that comes in while the probe runs wins: the wait is not brought back', async () => {
+    let r!: ReturnType<typeof rig>
+    r = rig({
+      probe: async () => {
+        // The person writes while the daemon is still answering the probe.
+        await r.emit(EventNames.SESSION_SEND, { sessionId: SID }, 'web-ui')
+        return { kind: 'probed', url: 'http://127.0.0.1:8402', probed: 'http://127.0.0.1:8402', reachable: true }
+      },
+    })
+    await r.result({ isError: true, result: REFUSED })
+    await r.advance(1 * MIN)
+    expect(r.sent).toEqual([])
+    expect(r.rec.endpointWait).toBeUndefined()
+  })
+
+  it('holds the turn notices only while the wait is open', () => {
+    const base = { claudeSessionId: SID, process_status: 'idle', errorMessage: undefined } as unknown as SessionRecord
+    const w = { since: '2026-11-03T14:00:00Z', host: '__local__', where: 'this Mac', resumes: 1 }
+    expect(recordInEndpointWait({ ...base, endpointWait: { ...w, state: 'waiting' } } as SessionRecord)).toBe(true)
+    // A continue whose turn ended cleanly: its notices are due, before the waiter closes the wait.
+    expect(recordInEndpointWait({ ...base, endpointWait: { ...w, state: 'resumed' } } as SessionRecord)).toBe(false)
+    expect(recordInEndpointWait({ ...base, process_status: 'error', errorMessage: REFUSED, endpointWait: { ...w, state: 'resumed' } } as SessionRecord)).toBe(true)
+    expect(recordInEndpointWait({ ...base, endpointWait: { ...w, state: 'gave_up' } } as SessionRecord)).toBe(false)
+    // No waiter runs here (this test started none): an unreachable error alone holds nothing.
+    expect(recordInEndpointWait({ ...base, process_status: 'error', errorMessage: REFUSED, statusUpdatedAt: new Date().toISOString() } as SessionRecord)).toBe(false)
+  })
+
+  it('a host that stays away gives up naming the machine, not the endpoint', async () => {
+    const r = rig({ probe: () => ({ kind: 'offline' }) })
+    await r.result({ isError: true, result: REFUSED })
+    await r.advance(30 * MIN)
+    expect(statusOf(r.rec).waitingOn).toMatch(/^This (Mac|machine), to connect again/)
+    await r.advance(6 * 60 * MIN)
+    expect(r.gaveUp[0]).toMatch(/^This (Mac|machine) has not been connected since 2026-11-03 14:00 UTC/)
   })
 
   it('a message from anyone else ends the wait: they drive the session now', async () => {

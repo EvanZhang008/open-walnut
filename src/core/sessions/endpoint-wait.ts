@@ -30,8 +30,8 @@ import { bus, EventNames } from '../event-bus.js'
 import type { BusEvent } from '../event-bus.js'
 import type { SessionRecord, SessionEndpointWait } from '../types.js'
 import { log } from '../../logging/index.js'
-import { classifyTurnError } from '../../providers/daemon-core.js'
-import { matchesEndpointUnreachable, endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable.js'
+import { isEndpointUnreachableError, endpointWaitTakes, type EndpointResultFacts } from './endpoint-wait-takes.js'
+import { endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable.js'
 
 export { endpointWaitEnabled, endpointGaveUpWords }
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
@@ -54,37 +54,31 @@ export const ENDPOINT_BLIND_TRIES_MS: readonly number[] = [3, 15, 60, 180].map((
 export const ENDPOINT_RESUME_CHECK_MS = 5 * 60_000
 
 
-/** The fields of a session:result this module reads. */
-export interface EndpointResultFacts {
-  isError?: boolean
-  result?: string | null
-  teamActive?: boolean
-  backgroundActive?: boolean
-  detachedBgActive?: boolean
-  wakeupPending?: boolean
-}
+export { isEndpointUnreachableError, endpointWaitTakes, type EndpointResultFacts } from './endpoint-wait-takes.js'
 
-/** The error text says the endpoint was never reached (and it is no terminal error). */
-export function isEndpointUnreachableError(text: string | null | undefined): boolean {
-  return !!text && classifyTurnError(text) === 'retryable' && matchesEndpointUnreachable(text)
-}
+/** Before the waiter writes its wait, an unreachable error is taken for one only this long. */
+export const ENDPOINT_WAIT_OPENING_MS = 60_000
 
 /**
- * This result is a turn the endpoint wait takes over: an error that never reached the model, at a
- * real turn end (no team, background work or wakeup carries the session on). Pure and synchronous,
- * so the result handler (web/server.ts) and the hooks decide the same thing as the waiter.
+ * A record whose last turn the wait holds: its wait is waiting, or its turn just failed unreachable
+ * (a continue of the wait's included) and a waiter runs here to take it. A continue whose turn ended
+ * cleanly is no longer held, even before the waiter closes the wait (its notices are due), and an
+ * unreachable error the waiter never took (it is off on this server, or it could not write) is not
+ * held past ENDPOINT_WAIT_OPENING_MS, so nothing reads Waiting with no clock behind it.
  */
-export function endpointWaitTakes(r: EndpointResultFacts): boolean {
-  if (!endpointWaitEnabled() || !r.isError) return false
-  if (r.teamActive || r.backgroundActive || r.detachedBgActive || r.wakeupPending) return false
-  return isEndpointUnreachableError(r.result)
-}
-
-/** A record whose last turn the wait holds: its error is unreachable, or its wait is open. */
-export function recordInEndpointWait(rec: Pick<SessionRecord, 'process_status' | 'errorMessage' | 'endpointWait'> | null | undefined): boolean {
+export function recordInEndpointWait(
+  rec: Pick<SessionRecord, 'process_status' | 'errorMessage' | 'endpointWait' | 'statusUpdatedAt' | 'last_status_change'> | null | undefined,
+  now: number = Date.now(),
+): boolean {
   if (!rec || !endpointWaitEnabled()) return false
-  if (rec.endpointWait) return rec.endpointWait.state !== 'gave_up'
-  return rec.process_status === 'error' && isEndpointUnreachableError(rec.errorMessage)
+  const w = rec.endpointWait
+  if (w?.state === 'gave_up') return false
+  if (w?.state === 'waiting') return true
+  if (rec.process_status !== 'error' || !isEndpointUnreachableError(rec.errorMessage)) return false
+  if (w) return true // resumed, and that continue failed the same way: the waiter reopens it
+  if (!instance) return false
+  const at = Date.parse(rec.statusUpdatedAt || rec.last_status_change || '')
+  return Number.isFinite(at) && now - at < ENDPOINT_WAIT_OPENING_MS
 }
 
 /** The machine a session runs on, in the words a person reads. */
@@ -111,9 +105,14 @@ export interface EndpointWaitDeps {
   note: (sid: string, taskId: string | undefined, text: string) => void
   /** The wait gave up: the session's failure is the user's now (phase, error card). */
   gaveUp: (rec: SessionRecord, wait: SessionEndpointWait, words: string) => Promise<void>
+  /** Why this session must not be continued now (a person stopped it, its task closed, its team was
+   *  stopped), or null. */
+  holdsOff: (rec: SessionRecord) => Promise<string | null>
 }
 
 const CONTINUE_TEXT = 'continue'
+/** probeError of a wait whose host was not connected at its last look. */
+export const HOST_OFFLINE = 'host offline'
 
 /** The clock the waiter runs on (a test shortens it). */
 export interface EndpointWaitTiming {
@@ -140,10 +139,11 @@ export class EndpointWaiter {
     switch (event.name) {
       case EventNames.SESSION_RESULT: {
         const d = event.data as EndpointResultFacts & { sessionId?: string; taskId?: string; interrupted?: boolean }
-        if (!d.sessionId || d.interrupted) return
-        if (endpointWaitTakes(d)) { void this.onUnreachable(d.sessionId, d.result ?? ''); return }
-        // Any other real turn end closes the wait: it ran, or it failed for a reason of its own.
-        if (!d.teamActive && !d.backgroundActive) void this.end(d.sessionId, d.isError ? 'other-error' : 'turn-ran')
+        if (!d.sessionId) return
+        if (!d.interrupted && endpointWaitTakes(d)) { void this.onUnreachable(d.sessionId, d.result ?? ''); return }
+        // Any other turn end closes the wait: a clean one reached the model (with or without work
+        // running on), an interrupted one was stopped by someone, another error is not this wait's.
+        void this.end(d.sessionId, d.interrupted ? 'interrupted' : d.isError ? 'other-error' : 'turn-ran')
         return
       }
       case EventNames.SESSION_SEND:
@@ -223,7 +223,7 @@ export class EndpointWaiter {
     }
   }
 
-  private async end(sid: string, why: string): Promise<void> {
+  private async end(sid: string, why: string, attempt = 0): Promise<void> {
     this.stopTimer(sid)
     try {
       const rec = await this.deps.getSession(sid)
@@ -232,7 +232,11 @@ export class EndpointWaiter {
       if (rec.endpointWait.state === 'gave_up' && why === 'other-error') return
       await this.deps.patchWait(sid, () => null)
       log.session.info('endpoint wait: closed', { sessionId: sid, taskId: rec.taskId, why })
-    } catch { /* the next result or send tries again */ }
+    } catch (err) {
+      // The wait must not stay open with nothing behind it: try the close again (never a continue).
+      log.session.warn('endpoint wait: close failed, trying again', { sessionId: sid, why, error: err instanceof Error ? err.message : String(err) })
+      if (attempt < 5) this.timers.set(sid, this.deps.setTimer(() => { this.timers.delete(sid); void this.end(sid, why, attempt + 1) }, this.t.fastMs))
+    }
   }
 
   private async tick(sid: string): Promise<void> {
@@ -240,6 +244,8 @@ export class EndpointWaiter {
       const rec = await this.deps.getSession(sid)
       let w = rec?.endpointWait
       if (!rec || rec.archived || !w || w.state === 'gave_up') return
+      const off = await this.deps.holdsOff(rec)
+      if (off) { await this.end(sid, off); return }
       if (w.state === 'resumed') {
         // The continued turn runs: its own end closes or reopens the wait; look again later.
         if (rec.process_status === 'running') { this.schedule(sid, this.t.resumeCheckMs); return }
@@ -248,8 +254,8 @@ export class EndpointWaiter {
         w = { ...w, state: 'waiting' }
         await this.deps.patchWait(sid, (cur) => cur && cur.state === 'resumed' ? { ...cur, state: 'waiting' } : cur ?? null)
       }
-      // A turn runs: someone else resumed it, and its own end decides.
-      if (rec.process_status === 'running') return
+      // A turn runs: someone else resumed it, and its own end decides; look again in case it never ends one.
+      if (rec.process_status === 'running') { this.schedule(sid, this.t.resumeCheckMs); return }
       const now = this.deps.now()
       const elapsed = now - Date.parse(w.since)
       if (!(elapsed < this.t.maxWaitMs)) { await this.giveUp(rec, w, 'time'); return }
@@ -266,6 +272,7 @@ export class EndpointWaiter {
       }
       if (answer.kind === 'offline') {
         // Its host is away: that is a machine stop of its own; look again calmly.
+        await this.deps.patchWait(sid, (cur) => cur && cur.state === 'waiting' ? { ...cur, checkedAt, probeError: HOST_OFFLINE } : cur ?? null)
         this.schedule(sid, this.t.slowMs)
         return
       }
@@ -287,7 +294,15 @@ export class EndpointWaiter {
       ...w, state: 'resumed', resumedAt: new Date(this.deps.now()).toISOString(),
       resumes: blind ? w.resumes : w.resumes + 1,
     }
-    await this.deps.patchWait(sid, () => next)
+    // Only over the wait this tick read: a message that came in during the probe closed it, and a
+    // closed wait is never brought back with a continue behind that message.
+    if (!(await this.swap(sid, w, next))) {
+      log.session.info('endpoint wait: changed during the probe, no continue', { sessionId: sid, taskId: rec.taskId })
+      return
+    }
+    // A person may have stopped it, or closed its task, while the probe ran.
+    const off = await this.deps.holdsOff((await this.deps.getSession(sid)) ?? rec)
+    if (off) { await this.end(sid, off); return }
     log.session.info('endpoint wait: endpoint answers, continuing the turn', {
       sessionId: sid, taskId: rec.taskId, host: w.host, url: w.url, blind, resumes: next.resumes,
     })
@@ -303,10 +318,23 @@ export class EndpointWaiter {
     this.schedule(sid, this.t.resumeCheckMs)
   }
 
+  /** Write `next` only while the record still holds the wait `seen` (same state, same start). */
+  private async swap(sid: string, seen: SessionEndpointWait | undefined, next: SessionEndpointWait): Promise<boolean> {
+    let wrote = false
+    await this.deps.patchWait(sid, (cur) => {
+      const same = seen ? !!cur && cur.since === seen.since && cur.state === seen.state : !cur || cur.state === 'gave_up'
+      if (!same) return cur ?? null
+      wrote = true
+      return next
+    })
+    return wrote
+  }
+
   private async giveUp(rec: SessionRecord, w: SessionEndpointWait, why: 'time' | 'resumes'): Promise<void> {
     const sid = rec.claudeSessionId
     const gave: SessionEndpointWait = { ...w, state: 'gave_up', gaveUpAt: new Date(this.deps.now()).toISOString(), gaveUpWhy: why }
-    await this.deps.patchWait(sid, () => gave)
+    // onUnreachable passes the wait it is about to write; tick passes the one it read.
+    if (!(await this.swap(sid, rec.endpointWait && rec.endpointWait.state !== 'gave_up' ? rec.endpointWait : undefined, gave))) return
     const words = endpointGaveUpWords(gave)
     log.session.warn('endpoint wait: gave up', { sessionId: sid, taskId: rec.taskId, host: w.host, url: w.url, why })
     await this.deps.gaveUp(rec, gave, words).catch((err) => {
@@ -370,7 +398,25 @@ function defaultDeps(gaveUp: EndpointWaitDeps['gaveUp']): EndpointWaitDeps {
         ['main-ai'], { source: AUTO_CONTINUE_SOURCE, urgency: 'urgent' })
     },
     gaveUp,
+    holdsOff: defaultHoldsOff,
   }
+}
+
+/** A person stopped the session, its task is closed or gone, or its team was stopped (team_stop on it
+ *  or any task above it, which also pauses this wake source: sessions/team-stop.ts). */
+async function defaultHoldsOff(rec: SessionRecord): Promise<string | null> {
+  if (rec.status_changed_by === 'user' || rec.status_reason === 'user_stopped' || rec.status_reason === 'user_terminated') return 'person-stopped'
+  if (!rec.taskId) return null
+  const { getTask } = await import('../task-manager.js')
+  let task = await getTask(rec.taskId).catch(() => null)
+  if (!task) return 'task-gone'
+  if (task.phase === 'COMPLETE') return 'task-complete'
+  for (let i = 0; task && i < 8; i++) {
+    if (task.team_stop) return 'team-stopped'
+    const parent: string | undefined = task.parent_task_id || undefined
+    task = parent ? await getTask(parent).catch(() => null) : null
+  }
+  return null
 }
 
 /** Start the waiter (primary only). `gaveUp` raises the session's error card the server owns. */

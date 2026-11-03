@@ -53,10 +53,15 @@ export function endpointWords(w: Pick<SessionEndpointWait, 'url' | 'where'>): st
 }
 
 /** What the user is asked once the wait gave up. Pure (user-status.ts and the error card say the same). */
-export function endpointGaveUpWords(w: Pick<SessionEndpointWait, 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy'>): string {
+export function endpointGaveUpWords(w: Pick<SessionEndpointWait, 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy'> & { probeError?: string }): string {
   const what = endpointWords(w)
   const head = what.charAt(0).toUpperCase() + what.slice(1)
+  const since = w.since.slice(0, 16).replace('T', ' ')
+  // Its host was away at the last look ('host offline', endpoint-wait.ts HOST_OFFLINE): the machine is the news.
+  if (w.gaveUpWhy !== 'resumes' && w.probeError === 'host offline') {
+    return `${w.where.charAt(0).toUpperCase() + w.where.slice(1)} has not been connected since ${since} UTC, so Walnut stopped waiting for its model endpoint. Bring it back, then Retry the session.`
+  }
   return w.gaveUpWhy === 'resumes'
     ? `${head} answers, but its turns still could not reach it (${w.resumes} tries). Check it there, then Retry the session.`
-    : `${head} has not answered since ${w.since.slice(0, 16).replace('T', ' ')} UTC, so Walnut stopped waiting. Start it there, then Retry the session.`
+    : `${head} has not answered since ${since} UTC, so Walnut stopped waiting. Start it there, then Retry the session.`
 }

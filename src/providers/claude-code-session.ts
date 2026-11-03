@@ -10178,8 +10178,12 @@ export class SessionRunner {
               }).then(rec => {
                 // The snapshot may reject a stale status write, so clear the link based only on the status that was finally saved.
                 if ((rec.process_status === 'stopped' || rec.process_status === 'error') && rec.taskId) {
-                  import('../core/task-manager.js').then(({ clearSessionSlot }) => {
-                    clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
+                  // A turn the endpoint wait continues keeps its task's session (sessions/endpoint-wait.ts).
+                  import('../core/sessions/endpoint-wait.js').then(({ endpointWaitTakes }) => {
+                    if (rec.process_status === 'error' && result && endpointWaitTakes(result)) return
+                    return import('../core/task-manager.js').then(({ clearSessionSlot }) => {
+                      clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
+                    })
                   }).catch(() => {})
                 }
               }).catch(() => {})

@@ -527,8 +527,11 @@ export function createHostFacts(deps: HostFactsDeps) {
     })
   }
 
-  /** Connect to `origin` and send a HEAD of '/': any answer means reached. */
+  /** Connect to `origin` and send a HEAD of '/': any answer means reached. Only a connection that was
+   *  never made (or closed before any answer) is unreachable; a TLS failure (a proxy's own CA, an
+   *  expired certificate) got through, so a continue tells, and its error is the user's to fix. */
   function reach(origin: string, ms: number): Promise<{ ok: boolean; error?: string }> {
+    var NOT_REACHED = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ENETDOWN', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'error']
     return within(new Promise<{ ok: boolean; error?: string }>(function (resolve) {
       var u: URL
       try { u = new URL(origin) } catch (_e) { resolve({ ok: false, error: 'bad-url' }); return }
@@ -541,7 +544,10 @@ export function createHostFacts(deps: HostFactsDeps) {
         })
       } catch (_e) { resolve({ ok: false, error: 'request-failed' }); return }
       req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: 'timeout' }) })
-      req.on('error', function (err: Error & { code?: string }) { resolve({ ok: false, error: err && err.code ? String(err.code) : 'error' }) })
+      req.on('error', function (err: Error & { code?: string }) {
+        var code = err && err.code ? String(err.code) : 'error'
+        resolve({ ok: NOT_REACHED.indexOf(code) < 0, error: code })
+      })
       req.end()
     }), ms + 100, { ok: false, error: 'timeout' })
   }
@@ -575,7 +581,11 @@ export function createHostFacts(deps: HostFactsDeps) {
       var region = pick('AWS_REGION').v || pick('AWS_DEFAULT_REGION').v || 'us-east-1'
       use('ANTHROPIC_BEDROCK_BASE_URL', 'https://bedrock-runtime.' + region + '.amazonaws.com')
     } else if (truthy(pick('CLAUDE_CODE_USE_VERTEX').v)) {
-      use('ANTHROPIC_VERTEX_BASE_URL', 'https://' + (pick('CLOUD_ML_REGION').v || 'us-east5') + '-aiplatform.googleapis.com')
+      var vr = pick('CLOUD_ML_REGION').v || 'us-east5'
+      use('ANTHROPIC_VERTEX_BASE_URL', vr === 'global' ? 'https://aiplatform.googleapis.com' : 'https://' + vr + '-aiplatform.googleapis.com')
+    } else if (truthy(pick('CLAUDE_CODE_USE_FOUNDRY').v)) {
+      var res = pick('ANTHROPIC_FOUNDRY_RESOURCE').v
+      use('ANTHROPIC_FOUNDRY_BASE_URL', res ? 'https://' + res + '.services.ai.azure.com' : 'https://api.anthropic.com')
     } else {
       use('ANTHROPIC_BASE_URL', 'https://api.anthropic.com')
     }
