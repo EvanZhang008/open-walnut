@@ -28,6 +28,7 @@ import { deriveUserStatus, rollUpAsks, TURN_TO_READ, type UserStatus, type UserS
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
+import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 
 const SUBSCRIBER = 'user-status-sync';
@@ -56,6 +57,8 @@ export interface StatusFacts {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
     errorKind?: string; restartLoss?: { state: string; cause?: string };
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
+    /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
+    outliving?: OutlivingSource[];
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
@@ -293,9 +296,14 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   const recovery = getSessionAutoRecover();
   await safely('sessions', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
+    const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
+      // Only a live process carries work on: a stopped one's runner state is its last word.
+      const live = rec.process_status === 'running' || rec.process_status === 'idle';
+      const outliving = live && runner ? runner.outlivingWorkOf(rec.claudeSessionId) : [];
       sessions.set(rec.claudeSessionId, {
+        ...(outliving.length ? { outliving } : {}),
         processStatus: rec.process_status, errorMessage: rec.errorMessage,
         errorReason: rec.status_reason, statusSince: rec.statusUpdatedAt || rec.last_status_change || rec.lastActiveAt,
         errorKind: rec.errorKind,
@@ -405,6 +413,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     status: task.status,
     hasSession: own.length > 0 || !!task.session_id,
     processStatus: anyRunning ? 'running' : main?.processStatus,
+    outliving: [...new Set(own.flatMap(([, s]) => s.outliving ?? []))],
     errorMessage: main?.errorMessage ?? null,
     errorReason: main?.errorReason ?? null,
     errorKind: main?.errorKind ?? null,

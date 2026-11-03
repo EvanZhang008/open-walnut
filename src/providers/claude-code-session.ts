@@ -74,6 +74,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { isWakeupArmed } from './daemon-fold.js'
+import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
@@ -1409,6 +1410,16 @@ export class ClaudeCodeSession {
   private _cronJobIds = new Set<string>()
   /** Public getter for the health monitor — extend idle timeout while armed. */
   get cronArmed(): boolean { return this._cronArmed }
+  /** The recurring /loop jobs this runner saw created, by job id (the CronCreate tool_use id until
+   *  its result names the job), with when. Unlike `_cronArmed` (over-reports on purpose, for the
+   *  reap) this is what the task's status reads: a one-shot cron ends at its fire with no
+   *  CronDelete, and the CLI ends a recurring one after 7 days, neither of which the stream shows. */
+  private _loopJobs = new Map<string, number>()
+  private static readonly LOOP_EXPIRY_MS = 7 * 24 * 3600_000
+  private _loopActive(nowMs = Date.now()): boolean {
+    for (const at of this._loopJobs.values()) if (nowMs - at < ClaudeCodeSession.LOOP_EXPIRY_MS) return true
+    return false
+  }
   /** One-way arm from a daemon snapshot push ({cronActive:true}). The daemon's
    *  full-file fold sees a CronCreate that walnut's tail-window attach fold
    *  missed; dis-arm stays with the live CronDelete handler only. */
@@ -1552,12 +1563,26 @@ export class ClaudeCodeSession {
     return this._runningBgCount() > 0
   }
 
-  /** Work this session started that runs on after its turn: a detached background command or
-   *  agent still in flight, or an armed ScheduleWakeup. Turn-over gating ignores it on purpose,
-   *  but the process is busy, so Walnut's idle reap must not end it (2026-10-27: a session whose
-   *  queued test runs were detached commands was reaped after 20 quiet minutes, which killed them). */
+  /** Work this session started that runs on after its turn, by source (core/sessions/outliving-work.ts):
+   *  a detached background command or subagent still in flight, its agent team, an armed
+   *  ScheduleWakeup, an armed /loop. Turn-over gating ignores it on purpose, but the session is on
+   *  the job, so Walnut's idle reap must not end it (2026-10-27: a session whose queued test runs
+   *  were detached commands was reaped after 20 quiet minutes, which killed them) and its task reads
+   *  Working (2026-11-03: a background subagent's 84 minutes read as stopped). */
+  get outlivingWork(): OutlivingSource[] {
+    return outlivingOf({
+      // A team counts while this runner tracks it (its idle check is armed): a team flag restored
+      // from a fold on attach has no check behind it and would read Working for good.
+      detachedBgCount: this._detachedBgCount(), teamActive: this._teamActive && this._teamIdleTimer !== null,
+      wakeupArmed: this._wakeupArmed(), cronActive: this._loopActive(),
+    })
+  }
+
+  /** The same without a /loop: between its fires nothing of the session runs, so a turn end there
+   *  is a real turn end for the idle reap's pressure rule, a request's settling and the Stop hook's
+   *  reply nudge (each fire is a turn of its own, which answers or is nudged then). */
   get workOutlivesTurn(): boolean {
-    return this._detachedBgCount() > 0 || this._wakeupArmed()
+    return this.outlivingWork.some((s) => s !== 'loop')
   }
 
   /** True when the task set holds ANY non-terminal entry, INCLUDING backgrounded ones.
@@ -4329,7 +4354,8 @@ export class ClaudeCodeSession {
     if (timer) clearTimeout(timer)
     // Work the aborted turn leaves running (a detached command, an armed wakeup, a team)
     // keeps the session 'running' for good, so waiting for it to stop is pointless.
-    const workOutlivesTurn = this._detachedBgCount() > 0 || this._wakeupArmed() || this._teamActive
+    // A /loop leaves the process idle between fires, so it does not keep the session running here.
+    const workOutlivesTurn = this.outlivingWork.some((s) => s !== 'loop')
     if (!consumed || workOutlivesTurn || !(await this.waitUntilStopped(until))) {
       log.session.warn('interrupt: turn did not settle, stopping process', {
         sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid, resultConsumed: consumed, workOutlivesTurn,
@@ -6860,14 +6886,16 @@ export class ClaudeCodeSession {
             if (block.name === 'CronCreate' && block.id) {
               this._cronToolUseIds.add(block.id)
               this._cronArmed = true
+              if ((block.input as Record<string, unknown> | undefined)?.recurring !== false) this._loopJobs.set(block.id, Date.now())
               log.session.info('cron created — extending idle-kill protection', {
                 sessionId: this.claudeSessionId, taskId: this.taskId, toolUseId: block.id,
               })
             }
             if (block.name === 'CronDelete') {
               const cronJobId = (block.input as Record<string, unknown>)?.id
-              if (typeof cronJobId === 'string') this._cronJobIds.delete(cronJobId)
+              if (typeof cronJobId === 'string') { this._cronJobIds.delete(cronJobId); this._loopJobs.delete(cronJobId) }
               if (this._cronJobIds.size === 0 && this._cronToolUseIds.size === 0) {
+                this._loopJobs.clear()
                 this._cronArmed = false
                 log.session.info('last cron deleted — resuming normal idle-kill thresholds', {
                   sessionId: this.claudeSessionId, taskId: this.taskId,
@@ -7098,10 +7126,14 @@ export class ClaudeCodeSession {
             if (block.tool_use_id && this._cronToolUseIds.has(block.tool_use_id)) {
               this._cronToolUseIds.delete(block.tool_use_id)
               const isErr = (block as { is_error?: boolean }).is_error === true
+              const loopAt = this._loopJobs.get(block.tool_use_id)
+              this._loopJobs.delete(block.tool_use_id)
               if (!isErr) {
                 const tur = (msg as unknown as { tool_use_result?: { id?: unknown } }).tool_use_result
                 // Fall back to the tool_use id so a shape change never drops an armed cron.
-                this._cronJobIds.add(typeof tur?.id === 'string' ? tur.id : block.tool_use_id)
+                const jobId = typeof tur?.id === 'string' ? tur.id : block.tool_use_id
+                this._cronJobIds.add(jobId)
+                if (loopAt !== undefined) this._loopJobs.set(jobId, loopAt)
               } else if (this._cronJobIds.size === 0 && this._cronToolUseIds.size === 0) {
                 this._cronArmed = false
               }
@@ -10644,10 +10676,15 @@ export class SessionRunner {
     return session?.cronArmed ?? false
   }
 
-  /** Detached background work or an armed wakeup still pending (see ClaudeCodeSession.workOutlivesTurn).
+  /** The session's own work that runs on after its turn (see ClaudeCodeSession.outlivingWork).
    *  In memory: the health monitor's tick has pulled the daemon's task state just before. */
   hasWorkOutlivingTurn(claudeSessionId: string): boolean {
     return this.findSessionByClaudeId(claudeSessionId)?.workOutlivesTurn ?? false
+  }
+
+  /** Which of the session's own work runs on after its turn; empty when none or no runner holds it. */
+  outlivingWorkOf(claudeSessionId: string): OutlivingSource[] {
+    return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork ?? []
   }
 
   /** The model's turn is still running (no result yet); null when this server holds no runner for it. */

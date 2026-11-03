@@ -2451,7 +2451,15 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const notices = await import('../sessions/subtask-notices.js');
       const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
       const { stoppedByTeam } = await import('../sessions/team-stop.js');
-      const parentHears = !speakers.some((r) => parentSids.has(r.fromSessionId))
+      // Its own work runs on after the turn (a background subagent or command, a team, a wakeup, a
+      // /loop: sessions/outliving-work.ts): the turn ending is no stop (2026-11-03, a lead read
+      // "stopped" over a worker's 84-minute background subagent and nudged it).
+      const childSid = sessionId ?? record?.claudeSessionId;
+      const workRunsOn = kind === 'stopped' && !!childSid && record?.process_status !== 'stopped'
+        && record?.process_status !== 'error'
+        && await import('../../providers/claude-code-session.js')
+          .then(({ sessionRunner }) => sessionRunner.outlivingWorkOf(childSid).length > 0).catch(() => false);
+      const parentHears = !workRunsOn && !speakers.some((r) => parentSids.has(r.fromSessionId))
         && !(actorSid && parentSids.has(actorSid))
         // A team stop just stopped it: whoever stopped the team knows.
         && !(kind !== 'completed' && kind !== 'error' && stoppedByTeam(task.id))

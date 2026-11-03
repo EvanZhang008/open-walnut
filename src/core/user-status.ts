@@ -10,8 +10,10 @@
  *            result is there, or its turn answered the user's message (2026-11-02, the user:
  *            these sat under Waiting wearing the needs ring, "this is not waiting").
  *   working  Working: a turn runs, or the task's own work goes on without one (its build, test
- *            run, CI run, deploy or land, which wakes it: ownWork). 2026-11-02, the user: "it is
- *            not finish it is working right, the implementaiton is working, then why it is waiting".
+ *            run, CI run, deploy or land, which wakes it: ownWork), or its session's own work runs
+ *            on after its turn (a background subagent or command, a team, a wakeup or a /loop:
+ *            sessions/outliving-work.ts). 2026-11-02, the user: "it is not finish it is working
+ *            right, the implementaiton is working, then why it is waiting".
  *   waiting  Waiting: really blocked outside its own work (a person's review or reply, another
  *            task, its lead, a set time, this machine, not started yet), or snoozed;
  *            `stuck` when it was in progress and nothing will wake it.
@@ -31,6 +33,7 @@ import { infraStopCause } from './session-error-kind.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
+import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -217,6 +220,9 @@ export interface UserStatusInput {
   hasSession?: boolean;
   /** Its session's process status (running / idle / stopped / error). */
   processStatus?: string;
+  /** Its session's own work that runs on after its turn (sessions/outliving-work.ts): a background
+   *  command or subagent, its agent team, a wakeup or a /loop it armed. Read only with a live process. */
+  outliving?: readonly OutlivingSource[];
   errorMessage?: string | null;
   /** Why its session stopped (SessionRecord.status_reason): a lost host is Walnut's to recover. */
   errorReason?: string | null;
@@ -549,11 +555,25 @@ function toRead(what: ToRead, waitingOn: string, w: Partial<UserStatus>): UserSt
  * background command), an armed watch, or its WAITING clock. Null otherwise: a claim of work with
  * nothing to wake it is a stop, which the caller reads as such.
  */
+/** A reported wait on someone or something else, which a session's own watch does not turn into Working. */
+const OTHERS_WAIT: ReadonlySet<WaitKind> = new Set<WaitKind>(['you', 'outside', 'task', 'lead', 'machine']);
+
 function ownWork(input: UserStatusInput, report: StatusReport | null, w: ReturnType<typeof words>, nowMs: number): UserStatus | null {
   // Main and a lead wait on the user and their teams; a task the user snoozed sleeps under Waiting.
-  if (input.isMain || input.isLead || !report) return null;
+  if (input.isMain || input.isLead) return null;
   const snooze = startDateMs(clean(input.snoozedUntil));
   if (Number.isFinite(snooze) && snooze > nowMs) return null;
+  // Its own work runs on after its turn (2026-11-03, the user's lead: a background subagent ran 84
+  // minutes, the task read as stopped, and its lead nudged it): the process carries it and wakes the
+  // session when it ends. Unless its current report asks the user or names a wait on someone else
+  // (a /loop that re-checks a review is watching, not working).
+  const outliving = input.outliving ?? [];
+  const waitsOnOthers = report?.state === 'needs'
+    || (report?.state === 'waiting' && !!report.waiting_kind && OTHERS_WAIT.has(report.waiting_kind));
+  if (outliving.length && input.processStatus !== 'error' && !waitsOnOthers) {
+    return strip<UserStatus>({ state: 'working', carriesOn: 'process', ...w, now: w.now ?? outlivingLine(outliving) });
+  }
+  if (!report) return null;
   const own = report.state === 'working' || (report.state === 'waiting' && report.waiting_kind === 'own');
   if (!own || input.processStatus === 'error') return null;
   const carriesOn: UserStatus['carriesOn'] | null = input.processStatus === 'idle' ? 'process'

@@ -44,6 +44,7 @@ import {
   getDivergenceCounters,
   _resetSnapshotGateForTests,
   _resetSnapshotApplyForTests,
+  DRAIN_FOLLOWUP_GRACE_MS,
 } from '../../src/core/session-snapshot-apply.js'
 import {
   createSessionRecord,
@@ -1737,6 +1738,67 @@ describe('applySnapshot settled task handback', () => {
     const { taskId, sid } = await seed()
     await applySnapshot(sid, { ...settled(), ...work }, 'pull-30s')
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  // 2026-11-03: a worker's background subagent ended; the stream said "no background tasks" about
+  // 0.1 s before the CLI's follow-up turn, that snapshot settled the turn, and its lead read "stopped".
+  describe('the drain of its own work after the turn', () => {
+    const working = () => ({ ...settled(), v: 590, detachedBgCount: 1 })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('waits for the follow-up turn: the drain alone neither settles nor hands back', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { taskId, sid } = await seed()
+      await applySnapshot(sid, working(), 'daemon-push')
+      expect(await applySnapshot(sid, settled(), 'daemon-push')).toMatchObject({ outcome: 'skipped', reason: 'drain-grace' })
+      // The 30 s pull of the same snapshot keeps waiting, once.
+      expect(await applySnapshot(sid, settled(), 'pull-30s')).toMatchObject({ outcome: 'skipped', reason: 'drain-grace' })
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+      // The follow-up turn starts: the drain is no turn end.
+      await applySnapshot(sid, snap({ v: 700, cliState: 'running', turnActive: true, lastResult: { isError: false, endOffset: 580 }, streamEpoch: 'handback-epoch' }), 'daemon-push')
+      await vi.advanceTimersByTimeAsync(DRAIN_FOLLOWUP_GRACE_MS + 1_000)
+      vi.useRealTimers()
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+      // Its own result ends the turn.
+      await applySnapshot(sid, snap({ v: 800, cliState: 'idle', turnActive: false, lastResult: { isError: false, endOffset: 780 }, streamEpoch: 'handback-epoch' }), 'daemon-push')
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+      expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+    })
+
+    it('settles once the grace passes with no follow-up turn', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { taskId, sid } = await seed()
+      await applySnapshot(sid, working(), 'daemon-push')
+      await applySnapshot(sid, settled(), 'daemon-push')
+      await vi.advanceTimersByTimeAsync(DRAIN_FOLLOWUP_GRACE_MS + 10)
+      vi.useRealTimers()
+      await expect.poll(async () => (await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+      await expect.poll(async () => (await getTask(taskId)).phase).toBe('NEED_ACTION')
+    })
+
+    it('a snapshot that already holds the follow-up turn\'s result settles at once', async () => {
+      const { taskId, sid } = await seed()
+      await applySnapshot(sid, working(), 'daemon-push')
+      expect(await applySnapshot(sid, { ...settled(), v: 700, lastResult: { isError: false, endOffset: 680 } }, 'daemon-push'))
+        .toMatchObject({ outcome: 'applied', projected: 'idle' })
+      expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+    })
+
+    it('a turn that ended in an error waits for the follow-up turn too', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { sid } = await seed()
+      const failed = { isError: true, endOffset: 580 }
+      await applySnapshot(sid, { ...settled(), v: 590, detachedBgCount: 1, lastResult: failed }, 'daemon-push')
+      expect(await applySnapshot(sid, { ...settled(), lastResult: failed }, 'daemon-push')).toMatchObject({ outcome: 'skipped', reason: 'drain-grace' })
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+    })
+
+    it('an expired wakeup is no drain: it converges at once', async () => {
+      const { sid } = await seed()
+      await applySnapshot(sid, { ...settled(), v: 590, wakeupAt: Date.now() + 3_600_000 }, 'daemon-push')
+      expect(await applySnapshot(sid, settled(), 'daemon-push')).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    })
   })
 
   it('refuses a second session for the task, and another task\'s running session does not hold the hand-back', async () => {

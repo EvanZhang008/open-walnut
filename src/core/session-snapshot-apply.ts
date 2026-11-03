@@ -44,6 +44,7 @@ import {
 } from './session-snapshot-gate.js'
 import { assertsHostUnreachable } from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
+import { outlivingOf } from './sessions/outliving-work.js'
 
 // Re-export the gate surface so consumers can treat this module as the C2
 // entry point (the gate stays import-free for session-tracker's sake).
@@ -141,8 +142,30 @@ function adoptsWatermark(s: SessionSnapshot): boolean {
   return s.turnActive === false
 }
 
+/**
+ * The drain of a session's background work that ran on after its turn (a background command or
+ * subagent: sessions/outliving-work.ts) is no turn end by itself: the CLI runs a follow-up turn for
+ * the task's notification right after it. 2026-11-03: a worker's
+ * background subagent ended, the stream said "no background tasks" about 0.1 s before the follow-up
+ * turn started, that snapshot settled the turn, the task was handed back and its lead read
+ * "stopped without completing its task" while the session went on working. Such a settle waits
+ * DRAIN_FOLLOWUP_GRACE_MS: any newer snapshot replaces it, and only a quiet one settles.
+ */
+export const DRAIN_FOLLOWUP_GRACE_MS = 8_000
+/** Per session: whether its last applied snapshot had background work running on after its turn, and its last result's end. */
+const lastOutliving = new Map<string, { outliving: boolean; resultEnd: number | null }>()
+const drainTimers = new Map<string, { v: number; timer: ReturnType<typeof setTimeout> }>()
+
+function clearDrainTimer(sessionId: string): void {
+  const pending = drainTimers.get(sessionId)
+  if (pending) clearTimeout(pending.timer)
+  drainTimers.delete(sessionId)
+}
+
 /** Test isolation for the per-session v watermarks + divergence rate limiter. */
 export function _resetSnapshotApplyForTests(): void {
+  for (const sid of [...drainTimers.keys()]) clearDrainTimer(sid)
+  lastOutliving.clear()
   divergenceState.clear()
   divergenceWarnTotal = 0
   divergenceSeenTotal = 0
@@ -239,6 +262,7 @@ export async function applySnapshot(
   snapshot: SessionSnapshot,
   source: string,
   canRecoverConnection?: (current: Readonly<SessionRecord>) => boolean,
+  opts?: { afterDrainGrace?: boolean },
 ): Promise<ApplyOutcome> {
   // Stream offsets cannot order every state change; see docs/decision/task-session-status.md.
   const mode = getSnapshotStatusMode()
@@ -388,6 +412,34 @@ export async function applySnapshot(
   const pidChanged = snapshot.cliState === 'dead' ? record.pid != null
     : projected === 'error' && snapshot.pid != null && snapshot.pid !== record.pid
   const duplicate = snapshot.v === gate && projected === actual && !recoveringConnection && !pidChanged
+
+  // ── Drain grace: the last background task ended, the follow-up turn has not started yet ──
+  // Only background work: its end is announced in the stream before the CLI's follow-up turn. A
+  // wakeup ends by firing (new bytes, a new turn) or by expiring at an unchanged v, a team never
+  // kept the projection running, and a /loop's fires are turns of their own.
+  const outlivingNow = outlivingOf({ detachedBgCount: snapshot.detachedBgCount }).includes('background')
+  const resultEnd = snapshot.lastResult?.endOffset ?? null
+  if (drainTimers.get(sessionId)?.v !== snapshot.v) clearDrainTimer(sessionId)
+  const prevOutliving = lastOutliving.get(sessionId)
+  if (mode === 'enforce' && !opts?.afterDrainGrace && !epochChanged && !recoveringConnection
+    && prevOutliving?.outliving && !outlivingNow && prevOutliving.resultEnd === resultEnd
+    && actual === 'running' && (projected === 'idle' || projected === 'error')
+    && snapshot.cliState === 'idle' && !snapshot.turnActive) {
+    if (!drainTimers.has(sessionId)) {
+      const timer = setTimeout(() => {
+        drainTimers.delete(sessionId)
+        void applySnapshot(sessionId, snapshot, `${source}:drain-grace`, canRecoverConnection, { afterDrainGrace: true })
+          .catch((err) => log.session.warn('drain-grace snapshot apply failed', { sessionId, error: String(err) }))
+      }, DRAIN_FOLLOWUP_GRACE_MS)
+      timer.unref?.()
+      drainTimers.set(sessionId, { v: snapshot.v, timer })
+      log.session.info('own work after the turn drained: waiting for the follow-up turn before settling', {
+        sessionId, v: snapshot.v, source, graceMs: DRAIN_FOLLOWUP_GRACE_MS,
+      })
+    }
+    return { outcome: 'skipped', reason: 'drain-grace', projected }
+  }
+  putBoundedEntry(lastOutliving, sessionId, { outliving: outlivingNow, resultEnd }, SNAPSHOT_REGISTRY_CAP)
 
   // From here the snapshot is live evidence for this session: it is covered.
   markSnapshotCovered(sessionId, snapshot.v)
