@@ -1221,6 +1221,8 @@ describe('a test that loads a page again after it opened full screen or a split 
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
     // Each tab keeps its own view (dc8132c6b): the second tab's load is the check.
     'view-state-tabs.spec.ts': ["another tab's session panel view never moves this tab's"],
+    // Tree Mode's split survives a reload: the pair, the path and both drafts that came back are the check.
+    'session-tree-split.spec.ts': ['A: asking splits, each half sends into its own question, a reload keeps the pair', 'B: Cmd+[ / Cmd+] move the pair'],
   }
 
   type Step = 'open' | 'toggle' | 'leave' | 'load'
