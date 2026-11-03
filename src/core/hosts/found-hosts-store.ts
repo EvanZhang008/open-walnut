@@ -15,7 +15,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { CLOUD_MODE, CRON_FILE, WALNUT_HOME } from '../../constants.js'
+import { CRON_FILE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { DiscoveredHost } from '../ssh-config-scanner.js'
 import {
@@ -123,8 +123,8 @@ async function defaultDeps(): Promise<SettleFoundHostsDeps> {
 
 /** Should this process decide found hosts? Only the server that owns config.yaml. */
 export async function settlesFoundHosts(): Promise<boolean> {
-  if (CLOUD_MODE) return false
-  const { isHostReplicaProgram } = await import('../server-role.js')
+  const { isCompanion, isHostReplicaProgram } = await import('../server-role.js')
+  if (isCompanion()) return false
   return !isHostReplicaProgram()
 }
 
@@ -211,7 +211,7 @@ export type AnswerFoundHostResult =
  */
 export async function answerFoundHost(host: string, answer: unknown): Promise<AnswerFoundHostResult> {
   if (answer !== 'yes' && answer !== 'not_now') return { ok: false, status: 400, error: 'answer is "yes" or "not_now"', code: 'bad_answer' }
-  if (CLOUD_MODE) return { ok: false, status: 409, error: 'Answer this on the computer that keeps the hosts.', code: 'not_here' }
+  if ((await import('../server-role.js')).isCompanion()) return { ok: false, status: 409, error: 'Answer this on the computer that keeps the hosts.', code: 'not_here' }
   const { getConfig, migrateStoredConfig } = await import('../config-manager.js')
   const hosts = (await getConfig()).hosts ?? {}
   const def = Object.hasOwn(hosts, host) ? hosts[host] as FoundHostRow | undefined : undefined

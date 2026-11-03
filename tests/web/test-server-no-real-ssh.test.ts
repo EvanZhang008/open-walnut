@@ -12,6 +12,9 @@
  * Under vitest the startup sweep leaves remote hosts out (reapOrphanDtach's
  * `remoteHosts` is off by default there), so the test runs the sweep with them
  * on, as a server outside a test runner does at startup.
+ *
+ * A host found in ~/.ssh/config is never dialled before the person says yes
+ * (core/hosts/found-hosts.ts, f7a70a356), so the sweep skips it until then.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
@@ -38,14 +41,17 @@ afterAll(async () => {
 })
 
 describe('a server under test', () => {
-  it('sweeps the hosts of its ssh config through the stand-in ssh only', async () => {
+  it('skips a found host until the person says yes, then sweeps it through the stand-in ssh only', async () => {
     const { reapOrphanDtach } = await import('../../src/web/terminal/dtach-lifecycle.js')
+    const swept = () => sshIsolation!.calls().some((line) => line.includes('sweep-target'))
+    await reapOrphanDtach({ remoteHosts: true })
+    expect(swept(), JSON.stringify(sshIsolation!.calls())).toBe(false)
+
+    const { answerFoundHost } = await import('../../src/core/hosts/found-hosts-store.js')
+    expect(await answerFoundHost('sweep-target', 'yes')).toMatchObject({ ok: true, answer: 'yes' })
     await reapOrphanDtach({ remoteHosts: true })
     const end = Date.now() + 45_000
-    while (Date.now() < end && !sshIsolation!.calls().some((line) => line.includes('sweep-target'))) {
-      await new Promise((r) => setTimeout(r, 250))
-    }
-    const calls = sshIsolation!.calls()
-    expect(calls.some((line) => line.includes('sweep-target')), JSON.stringify(calls)).toBe(true)
+    while (Date.now() < end && !swept()) await new Promise((r) => setTimeout(r, 250))
+    expect(swept(), JSON.stringify(sshIsolation!.calls())).toBe(true)
   }, 60_000)
 })
