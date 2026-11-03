@@ -9,6 +9,7 @@
 import { HOST_RUNTIME_MESSAGES, type HostPreflightResult } from '../../providers/host-runtime-core.js'
 import type { HostFixAction } from '../../providers/host-fix-core.js'
 import { claudeVersionAtLeast, type ClaudeCliFloor } from './claude-version-floor.js'
+import { asPackageManager, compilerInstallCommands } from './compiler-install.js'
 
 export type ReadinessProblemKind =
   | 'claude_missing' | 'claude_needs_node' | 'claude_error' | 'claude_outdated' | 'claude_not_logged_in'
@@ -83,6 +84,7 @@ export function parsePreflight(raw: unknown): HostPreflightResult | null {
     dtach: dt.found === true ? { found: true, ...(str(dt.path) ? { path: str(dt.path) } : {}) } : { found: false },
     ...(str(r.platform) ? { platform: str(r.platform)!.slice(0, 32) } : {}),
     ...(str(r.arch) ? { arch: str(r.arch)!.slice(0, 32) } : {}),
+    ...(asPackageManager(r.packageManager) ? { packageManager: asPackageManager(r.packageManager) } : {}),
   }
 }
 
@@ -188,8 +190,7 @@ export function readinessProblems(p: HostPreflightResult, ctx: ProblemContext = 
     out.push({
       kind: 'compiler_missing',
       message: `No C compiler on ${hostWhere(ctx)}, so its terminals will not survive a disconnect.`,
-      // A Mac's compiler comes with the Command Line Tools, never from yum/apt.
-      commands: p.platform === 'darwin' ? ['xcode-select --install'] : ['sudo yum install -y gcc', 'sudo apt-get install -y gcc'],
+      commands: compilerInstallCommands(p),
     })
   }
   return out

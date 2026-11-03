@@ -22,6 +22,7 @@ import type { SessionRecord } from '../../core/types.js'
 import { resolveLocalDtach, resolveRemoteDtach, type DtachResolution, type HostOs } from './dtach-provision.js'
 import { toHostOs } from './dtach-probe-script.js'
 import { log } from '../../logging/index.js'
+import { compilerInstallCommands, XCODE_TOOLS } from '../../core/hosts/compiler-install.js'
 
 export type PlainReason = 'no_compiler' | 'build_failed'
 
@@ -50,26 +51,21 @@ export interface SshFailedResult {
 
 export type TerminalModeDecision = { ok: true; mode: TerminalMode } | SshFailedResult
 
-const XCODE = 'xcode-select --install'
-const YUM = { no_compiler: 'sudo yum install -y gcc', build_failed: 'sudo yum install -y gcc glibc-devel' }
-const APT = { no_compiler: 'sudo apt-get install -y gcc', build_failed: 'sudo apt-get install -y build-essential' }
-
 /**
  * Fix command (what Copy copies) and the alternatives the tooltip lists, by the
- * TARGET's OS (`uname -s` from the probe; process.platform locally). A Mac's
- * /usr/bin/cc is a stub until the Command Line Tools exist, so yum advice there
- * would be wrong. With the OS unknown, Copy takes the yum line and the hint
- * lists all three.
+ * TARGET's OS (`uname -s` from the probe; process.platform locally) and its package
+ * manager (core/hosts/compiler-install.ts). A Mac's /usr/bin/cc is a stub until the
+ * Command Line Tools exist, so package-manager advice there would be wrong. With the
+ * OS unknown, the hint lists the Linux ones and the Mac's.
  */
-function fixFor(reason: PlainReason, os: HostOs): { command: string; alternatives: string[] } {
-  if (os === 'darwin') return { command: XCODE, alternatives: [] }
-  if (os === 'linux') return { command: YUM[reason], alternatives: [APT[reason]] }
-  return { command: YUM[reason], alternatives: [APT[reason], `${XCODE} on macOS`] }
+function fixFor(os: HostOs, packageManager?: string): { command: string; alternatives: string[] } {
+  const [command, ...alternatives] = compilerInstallCommands({ platform: os === 'darwin' ? 'darwin' : 'linux', packageManager })
+  return { command, alternatives: os === 'unknown' ? [...alternatives, `${XCODE_TOOLS} on macOS`] : alternatives }
 }
 
-function plainMode(reason: PlainReason, host: string | undefined, os: HostOs, detail?: string): TerminalMode {
+function plainMode(reason: PlainReason, host: string | undefined, os: HostOs, detail?: string, packageManager?: string): TerminalMode {
   const where = host ?? 'this machine'
-  const { command, alternatives } = fixFor(reason, os)
+  const { command, alternatives } = fixFor(os, packageManager)
   const alt = alternatives.length ? ` (or ${alternatives.join(', or ')})` : ''
   const installHint = reason === 'no_compiler'
     ? `No C compiler on ${where}, so Walnut can't build dtach and this shell won't survive a disconnect. Install one with ${command}${alt}, then Retry.`
@@ -91,8 +87,8 @@ function sshFailed(host: string, r: Extract<DtachResolution, { kind: 'ssh_failed
 export function decideTerminalMode(r: DtachResolution, host?: string): TerminalModeDecision {
   switch (r.kind) {
     case 'ok': return { ok: true, mode: { persistent: true } }
-    case 'no_compiler': return { ok: true, mode: plainMode('no_compiler', host, r.os) }
-    case 'build_failed': return { ok: true, mode: plainMode('build_failed', host, r.os, r.stderr || undefined) }
+    case 'no_compiler': return { ok: true, mode: plainMode('no_compiler', host, r.os, undefined, r.packageManager) }
+    case 'build_failed': return { ok: true, mode: plainMode('build_failed', host, r.os, r.stderr || undefined, r.packageManager) }
     case 'ssh_failed':
       // Locally there is no ssh; treat an unexpected local failure as a build failure.
       return host

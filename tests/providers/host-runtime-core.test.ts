@@ -367,6 +367,17 @@ describe('preflight', () => {
     expect(plain.calls.some((c) => c.file === '/bin/sh')).toBe(false)
   })
 
+  it('no compiler: names the package manager that would install one (an Ubuntu host has apt-get)', async () => {
+    const ubuntu = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    expect((await createHostRuntime(ubuntu.deps).preflight()).packageManager).toBe('apt-get')
+    // A host with both answers the way the automatic fix looks (dnf before yum before apt-get).
+    const both = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true }, '/usr/bin/yum': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    expect((await createHostRuntime(both.deps).preflight()).packageManager).toBe('yum')
+    // With a compiler there is nothing to install: no field.
+    const ready = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    expect((await createHostRuntime(ready.deps).preflight()).packageManager).toBeUndefined()
+  })
+
   it('claude missing entirely', async () => {
     const { deps } = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
     const out = await createHostRuntime(deps).preflight()

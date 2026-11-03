@@ -79,6 +79,8 @@ export interface HostPreflightResult {
   claude: ClaudeProbe
   compiler: { found: boolean; name?: string }
   dtach: { found: boolean; path?: string }
+  /** With no compiler: the first of dnf, yum, apt-get, apk, zypper on PATH. Absent from older daemons. */
+  packageManager?: string
   /** process.platform ('linux', 'darwin', ...) and process.arch ('x64', 'arm64');
    *  absent from older daemons. */
   platform?: string

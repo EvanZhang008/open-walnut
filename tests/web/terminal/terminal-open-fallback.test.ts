@@ -25,7 +25,8 @@ type HostScenario = 'no_compiler' | 'mac_no_clt' | 'ssh_denied' | 'walnut' | 'bu
 const hostState: { scenario: HostScenario; scripts: string[] } = { scenario: 'no_compiler', scripts: [] };
 
 function answer(input: string): { code: number; stdout: string; stderr: string } {
-  const BEGIN = 'WALNUT_DTACH_BEGIN\nOS:Linux\nARCH:x86_64\n';
+  // A yum host (the probe names the first package manager it finds).
+  const BEGIN = 'WALNUT_DTACH_BEGIN\nOS:Linux\nARCH:x86_64\nPM:yum\n';
   const MAC = 'WALNUT_DTACH_BEGIN\nOS:Darwin\nARCH:arm64\n';
   const isBuild = input.includes('base64 -d');
   switch (hostState.scenario) {
@@ -153,7 +154,7 @@ describe('terminal:open without dtach on the host', () => {
       persistent: false,
       reason: 'no_compiler',
       host: 'devbox',
-      installCommand: 'sudo yum install -y gcc',
+      installCommand: 'sudo yum install -y gcc glibc-devel',
     });
     expect(res.installHint).toMatch(/No C compiler on devbox/);
     // One probe round trip, no build attempt.

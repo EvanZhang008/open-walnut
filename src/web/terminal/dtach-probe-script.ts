@@ -50,8 +50,8 @@ export type HostOs = 'linux' | 'darwin' | 'unknown'
 export type DtachResolution =
   | { kind: 'ok'; path: string; source: DtachSource }
   | { kind: 'ssh_failed'; exitCode: number; stderr: string }
-  | { kind: 'no_compiler'; os: HostOs }
-  | { kind: 'build_failed'; stderr: string; os: HostOs }
+  | { kind: 'no_compiler'; os: HostOs; packageManager?: string }
+  | { kind: 'build_failed'; stderr: string; os: HostOs; packageManager?: string }
 
 /** One script's outcome: a final answer, or "compile with this cc next". */
 export type DtachScriptOutcome = DtachResolution | { kind: 'need_build'; cc: string }
@@ -72,10 +72,13 @@ export function toHostOs(name: string | undefined): HostOs {
 }
 
 /**
- * First lines of every script: the start marker, the OS for the fix hint, and the
- * machine for picking a shipped prebuilt.
+ * First lines of every script: the start marker, the OS and the package manager for the
+ * fix hint (core/hosts/compiler-install.ts), and the machine for picking a shipped prebuilt.
  */
-const PREAMBLE = [`echo ${BEGIN_MARKER}`, 'echo "OS:$(uname -s 2>/dev/null)"', 'echo "ARCH:$(uname -m 2>/dev/null)"']
+const PREAMBLE = [
+  `echo ${BEGIN_MARKER}`, 'echo "OS:$(uname -s 2>/dev/null)"', 'echo "ARCH:$(uname -m 2>/dev/null)"',
+  'echo "PM:$(for p in dnf yum apt-get apk zypper; do command -v "$p" >/dev/null 2>&1 && { echo "$p"; break; }; done)"',
+]
 
 /** The host's `uname -s` (as a HostOs) and raw `uname -m`, from any script's stdout. */
 export function parseHostPlatform(stdout: string): { os: HostOs; arch: string | undefined } {
@@ -219,6 +222,8 @@ export function classifyScriptRun(run: ScriptRun): DtachScriptOutcome {
   }
 
   const os = toHostOs(stdout.match(/^OS:(.*)$/m)?.[1]?.trim())
+  const pm = stdout.match(/^PM:(\S+)$/m)?.[1]
+  const fix = pm ? { packageManager: pm } : {}
   const ok = stdout.match(/^DTACH_OK:(walnut|system):(.+)$/m)
   if (ok) return { kind: 'ok', source: ok[1] as 'walnut' | 'system', path: ok[2].trim() }
   const prebuilt = stdout.match(/^PREBUILT:(.+)$/m)
@@ -227,8 +232,8 @@ export function classifyScriptRun(run: ScriptRun): DtachScriptOutcome {
   if (built) return { kind: 'ok', source: 'built', path: built[1].trim() }
   const need = stdout.match(/^NEED_BUILD:(\S+)$/m)
   if (need) return { kind: 'need_build', cc: need[1] }
-  if (/^NO_COMPILER$/m.test(stdout)) return { kind: 'no_compiler', os }
-  if (/^BUILD_FAILED$/m.test(stdout)) return { kind: 'build_failed', stderr: tail(stderr), os }
+  if (/^NO_COMPILER$/m.test(stdout)) return { kind: 'no_compiler', os, ...fix }
+  if (/^BUILD_FAILED$/m.test(stdout)) return { kind: 'build_failed', stderr: tail(stderr), os, ...fix }
 
   // The script started but printed no verdict: the connection dropped or the
   // remote shell died mid-run. ssh's own error status (or a timeout) is still
@@ -236,5 +241,5 @@ export function classifyScriptRun(run: ScriptRun): DtachScriptOutcome {
   if (run.code === SSH_ERROR_EXIT || run.timedOut) {
     return { kind: 'ssh_failed', exitCode: run.code, stderr: tail(stderr) || 'ssh connection dropped during the dtach probe' }
   }
-  return { kind: 'build_failed', stderr: tail(stderr) || `probe script exited with status ${run.code}`, os }
+  return { kind: 'build_failed', stderr: tail(stderr) || `probe script exited with status ${run.code}`, os, ...fix }
 }

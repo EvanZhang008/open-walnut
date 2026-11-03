@@ -488,6 +488,14 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     }
     var dtachPath = isExecutable(home() + '/.local/bin/walnut-dtach') ? home() + '/.local/bin/walnut-dtach' : resolveOnPath('dtach', pathStr)
     var out: HostPreflightResult = { claude: found.claude, compiler: compiler, dtach: dtachPath ? { found: true, path: dtachPath } : { found: false } }
+    if (!compiler.found) {
+      // The package manager that would install one, so the hint names its command
+      // (core/hosts/compiler-install.ts), in the order the automatic fix looks.
+      var pms = ['dnf', 'yum', 'apt-get', 'apk', 'zypper']
+      for (var j = 0; j < pms.length; j++) {
+        if (resolveOnPath(pms[j], pathStr)) { out.packageManager = pms[j]; break }
+      }
+    }
     if (deps.platform) out.platform = deps.platform
     if (deps.arch) out.arch = deps.arch
     return out

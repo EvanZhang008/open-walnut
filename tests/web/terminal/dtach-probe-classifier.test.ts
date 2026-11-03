@@ -116,18 +116,35 @@ describe('decideTerminalMode', () => {
     expect(decideTerminalMode({ kind: 'ok', path: '/x', source: 'system' }, 'devbox')).toEqual({ ok: true, mode: { persistent: true } });
   });
 
-  it('linux no_compiler → plain shell with the gcc command (command only, for Copy), apt in the hint', () => {
-    const d = decideTerminalMode({ kind: 'no_compiler', os: 'linux' }, 'devbox');
-    expect(d).toMatchObject({ ok: true, mode: { persistent: false, reason: 'no_compiler', host: 'devbox', installCommand: 'sudo yum install -y gcc' } });
-    const hint = (d as { mode: { installHint: string } }).mode.installHint;
-    expect(hint).toContain('sudo apt-get install -y gcc');
-    expect(hint).not.toContain('xcode-select');
+  it('linux no_compiler → plain shell with the command of the package manager it has (command only, for Copy)', () => {
+    const yum = decideTerminalMode({ kind: 'no_compiler', os: 'linux', packageManager: 'yum' }, 'devbox');
+    expect(yum).toMatchObject({ ok: true, mode: { persistent: false, reason: 'no_compiler', host: 'devbox', installCommand: 'sudo yum install -y gcc glibc-devel' } });
+    expect((yum as { mode: { installHint: string } }).mode.installHint).not.toMatch(/apt-get|xcode-select/);
+    // 2026-11-03: an Ubuntu machine (WSL) was told to run yum.
+    const apt = decideTerminalMode({ kind: 'no_compiler', os: 'linux', packageManager: 'apt-get' }, 'home-pc') as { mode: { installCommand: string; installHint: string } };
+    expect(apt.mode.installCommand).toBe('sudo apt-get update && sudo apt-get install -y gcc libc6-dev');
+    expect(apt.mode.installHint).not.toMatch(/yum|dnf/);
   });
 
-  it('linux build_failed → plain shell, dev-headers command, stderr as detail', () => {
-    const d = decideTerminalMode({ kind: 'build_failed', stderr: 'ld: cannot find -lutil', os: 'linux' }, 'devbox');
+  it('linux with the package manager unknown (an older probe) → apt first, dnf and yum in the hint', () => {
+    const d = decideTerminalMode({ kind: 'no_compiler', os: 'linux' }, 'devbox') as { mode: { installCommand: string; installHint: string } };
+    expect(d.mode.installCommand).toBe('sudo apt-get update && sudo apt-get install -y gcc libc6-dev');
+    expect(d.mode.installHint).toContain('sudo dnf install -y gcc glibc-devel');
+    expect(d.mode.installHint).toContain('sudo yum install -y gcc glibc-devel');
+    expect(d.mode.installHint).not.toContain('xcode-select');
+  });
+
+  it('linux build_failed → plain shell, the headers command, stderr as detail', () => {
+    const d = decideTerminalMode({ kind: 'build_failed', stderr: 'ld: cannot find -lutil', os: 'linux', packageManager: 'yum' }, 'devbox');
     expect(d).toMatchObject({ ok: true, mode: { persistent: false, reason: 'build_failed', installCommand: 'sudo yum install -y gcc glibc-devel', detail: 'ld: cannot find -lutil' } });
   });
+
+  it('the probe names the package manager, and an answer without one leaves it out', () => {
+    const run = (pm: string) => ({ code: 0, stdout: `WALNUT_DTACH_BEGIN\nOS:Linux\nARCH:x86_64\n${pm}NO_COMPILER\n`, stderr: '' })
+    expect(classifyScriptRun(run('PM:apt-get\n'))).toEqual({ kind: 'no_compiler', os: 'linux', packageManager: 'apt-get' })
+    expect(classifyScriptRun(run('PM:\n'))).toEqual({ kind: 'no_compiler', os: 'linux' })
+    expect(classifyScriptRun(run(''))).toEqual({ kind: 'no_compiler', os: 'linux' })
+  })
 
   it('darwin (remote Mac or local Mac) → xcode-select, never yum or apt', () => {
     for (const r of [{ kind: 'no_compiler', os: 'darwin' }, { kind: 'build_failed', stderr: 'xcrun: error', os: 'darwin' }] as const) {
@@ -139,9 +156,9 @@ describe('decideTerminalMode', () => {
     }
   });
 
-  it('unknown OS → yum for Copy, the hint lists yum, apt and xcode-select', () => {
+  it('unknown OS → apt for Copy, the hint lists yum, apt and xcode-select', () => {
     const d = decideTerminalMode({ kind: 'no_compiler', os: 'unknown' }, 'devbox') as { mode: { installCommand: string; installHint: string } };
-    expect(d.mode.installCommand).toBe('sudo yum install -y gcc');
+    expect(d.mode.installCommand).toBe('sudo apt-get update && sudo apt-get install -y gcc libc6-dev');
     expect(d.mode.installHint).toContain('sudo yum install -y gcc');
     expect(d.mode.installHint).toContain('sudo apt-get install -y gcc');
     expect(d.mode.installHint).toContain('xcode-select --install');
