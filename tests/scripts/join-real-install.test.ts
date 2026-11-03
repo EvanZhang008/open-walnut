@@ -10,7 +10,7 @@
  *
  * Runs against a local server laid out like GitHub Releases, with stand-in files (shell scripts).
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -69,7 +69,7 @@ function npmWalnut(home: string): { bin: string; file: string; calls: string } {
   return { bin, file, calls }
 }
 
-function join(home: string, extraPath: string[]): Promise<{ code: number; out: string }> {
+function join(home: string, extraPath: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     execFile('/bin/sh', [JOIN_SH, TICKET], {
       env: {
@@ -77,6 +77,9 @@ function join(home: string, extraPath: string[]): Promise<{ code: number; out: s
         OPEN_WALNUT_RELEASE_BASE_URL: server.url,
         OPEN_WALNUT_RELEASES_API: `${server.url}/api.json`,
         WALNUT_JOIN_INSTALL_URL: `file://${INSTALL_SH}`,
+        // Never the real registry: a test that reaches the preview build names its own.
+        WALNUT_JOIN_NPM_REGISTRY: `file://${scratch}/no-registry`,
+        ...env,
       },
       timeout: 30_000,
     }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: `${stdout}${stderr}` }))
@@ -117,6 +120,51 @@ describe('the invite script with the real installer, on a machine with an older 
     const home = fs.mkdtempSync(path.join(scratch, 'home-'))
     const r = await join(home, [])
     expect(r.code, r.out).toBe(0)
+    expect(fs.readlinkSync(path.join(home, '.local/bin/walnut'))).toBe(path.join(home, '.local/share/open-walnut/bin/walnut'))
+  })
+})
+
+/** A release that cannot join yet: no `net join` (its help is the top-level help, exit 0), and no newer build to update to. */
+const OLD_WALNUT = `#!/bin/sh
+case "$1" in
+  --version) echo '0.8.0 (fff00000, 2026-11-01)' ;;
+  net) echo 'Usage: walnut [options] [command]'; exit 0 ;;
+  update) echo 'Open Walnut 0.8.0 is the newest.' ;;
+esac
+`
+
+/** The preview build on a stand-in npm registry (file URLs: curl reads `%2f` as `/`), packed as npm packs it. */
+function npmPreview(version: string, script: string): string {
+  const reg = path.join(scratch, `npm-${crypto.randomUUID()}`)
+  const pkg = path.join(reg, 'src', 'package')
+  fs.mkdirSync(pkg, { recursive: true })
+  fs.writeFileSync(path.join(pkg, 'walnut'), script, { mode: 0o755 })
+  const tgz = path.join(reg, 'walnut.tgz')
+  const tar = spawnSync('tar', ['-czf', tgz, '-C', path.join(reg, 'src'), 'package'])
+  expect(tar.status).toBe(0)
+  const integrity = `sha512-${crypto.createHash('sha512').update(fs.readFileSync(tgz)).digest('base64')}`
+  fs.mkdirSync(path.join(reg, `-/package/@open-walnut/${HOST}`), { recursive: true })
+  fs.writeFileSync(path.join(reg, `-/package/@open-walnut/${HOST}/dist-tags`), JSON.stringify({ latest: '0.8.0', nightly: version }))
+  fs.mkdirSync(path.join(reg, `@open-walnut/${HOST}`), { recursive: true })
+  fs.writeFileSync(path.join(reg, `@open-walnut/${HOST}/${version}`), JSON.stringify({ version, dist: { tarball: `file://${tgz}`, integrity } }))
+  return `file://${reg}`
+}
+
+describe('the invite script with the real installer, when the release cannot join yet', () => {
+  it('installs the preview build from npm through install.sh, numbered below the release or not, and joins', async () => {
+    releaseFile('0.8.0', OLD_WALNUT)
+    const home = fs.mkdtempSync(path.join(scratch, 'home-'))
+    // Built after 0.8.0 and numbered below it, as 0.6.24-nightly.20261102.605 was after 0.6.24.
+    // install.sh checks the file it installs prints the version it asked for.
+    const preview = NEW_WALNUT.replace("'0.8.0 (", "'0.8.0-nightly.20261102.1 (")
+    const registry = npmPreview('0.8.0-nightly.20261102.1', preview)
+    const r = await join(home, [], { WALNUT_JOIN_NPM_REGISTRY: registry, OPEN_WALNUT_TARGET: HOST })
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain('installing the preview build 0.8.0-nightly.20261102.1 from npm')
+    expect(r.out).toContain(`JOINED net join ${TICKET} --steps`)
+    // install.sh put it where it puts a release: its own version directory, and the link to it.
+    expect(fs.readFileSync(path.join(home, '.local/share/open-walnut/bin/walnut'), 'utf8')).toBe(preview)
+    expect(fs.readdirSync(path.join(home, '.local/share/open-walnut/versions'))).toContain('0.8.0-nightly.20261102.1')
     expect(fs.readlinkSync(path.join(home, '.local/bin/walnut'))).toBe(path.join(home, '.local/share/open-walnut/bin/walnut'))
   })
 })
