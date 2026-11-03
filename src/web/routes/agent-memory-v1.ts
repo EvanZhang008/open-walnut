@@ -26,6 +26,7 @@ import { getTask, updateTaskRaw } from '../../core/task-manager.js'
 import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 
 export const agentMemoryV1Router = Router()
 
@@ -36,6 +37,7 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
       if (err instanceof AgentMemoryTooLongError) {
         return sendError(res, 413, err.code, err.message, { chars: err.chars, limit: AGENT_MEMORY_MAX_CHARS })
       }
+      if (sendLinkFailure(req, res, err)) return
       sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err))
     })
   }

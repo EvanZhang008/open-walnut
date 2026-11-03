@@ -12,7 +12,8 @@
  * Every route answers within its deadline: the companion and the daemon are both
  * a network hop away, and a pinned response starves the browser's connection pool.
  */
-import { Router, type Response } from 'express'
+import { Router, type Request, type Response } from 'express'
+import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
 import { inviteStatus, makeInvite } from '../../core/net/net-invites.js'
 import { joinedTwins } from '../../core/hosts/joined-twins.js'
@@ -30,8 +31,9 @@ function within<T>(ms: number, work: Promise<T>): Promise<T> {
   ])
 }
 
-function sendError(res: Response, err: unknown): void {
+function sendError(req: Request, res: Response, err: unknown): void {
   if (err instanceof NetError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
+  if (sendLinkFailure(req, res, err)) return
   res.status(500).json({ error: (err as Error).message ?? String(err), code: 'failed' })
 }
 
@@ -50,7 +52,7 @@ async function peerLinks(): Promise<Map<string, PeerLink & { connected: boolean 
   return out
 }
 
-hostsNetRouter.get('/', async (_req, res) => {
+hostsNetRouter.get('/', async (req, res) => {
   try {
     const state = netState()
     const [{ getConfig }, links, now] = await Promise.all([
@@ -79,7 +81,7 @@ hostsNetRouter.get('/', async (_req, res) => {
       twins: Object.fromEntries(joinedTwins(hosts, config.net).map((t) => [t.alias, t.joined])),
     })
   } catch (err) {
-    sendError(res, err)
+    sendError(req, res, err)
   }
 })
 
@@ -87,7 +89,7 @@ hostsNetRouter.post('/invites', async (req, res) => {
   try {
     res.status(201).json(await within(WRITE_DEADLINE_MS, makeInvite({ name: (req.body ?? {}).name })))
   } catch (err) {
-    sendError(res, err)
+    sendError(req, res, err)
   }
 })
 
@@ -97,11 +99,11 @@ hostsNetRouter.get('/invites/:id', (req, res) => {
   res.json(inv)
 })
 
-hostsNetRouter.post('/sync', async (_req, res) => {
+hostsNetRouter.post('/sync', async (req, res) => {
   try {
     res.json(await within(WRITE_DEADLINE_MS, syncNet()))
   } catch (err) {
-    sendError(res, err)
+    sendError(req, res, err)
   }
 })
 
@@ -109,7 +111,7 @@ hostsNetRouter.put('/relay', async (req, res) => {
   try {
     res.json(await within(WRITE_DEADLINE_MS, setRelay((req.body ?? {}).relay)))
   } catch (err) {
-    sendError(res, err)
+    sendError(req, res, err)
   }
 })
 
@@ -117,6 +119,6 @@ hostsNetRouter.delete('/machines/:host', async (req, res) => {
   try {
     res.json(await within(WRITE_DEADLINE_MS, removeMachine(String(req.params.host))))
   } catch (err) {
-    sendError(res, err)
+    sendError(req, res, err)
   }
 })

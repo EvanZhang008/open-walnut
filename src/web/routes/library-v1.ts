@@ -46,7 +46,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
-import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 
 export const libraryV1Router = Router()
@@ -528,9 +528,10 @@ libraryV1Router.delete('/repositories/:name', async (req: Request, res: Response
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
 libraryV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  // A host replica's refusal of a store it only holds a copy of: the app's error
-  // handler answers it 503 needs_leader with its why, never a 500 card.
-  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
+  // A host replica's refusal of a store it only holds a copy of, or a host link that
+  // failed: the app's error handler answers it 503 (needs_leader with its why, or
+  // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
+  if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 library route error', {
     error: err instanceof Error ? err.message : String(err),
   })

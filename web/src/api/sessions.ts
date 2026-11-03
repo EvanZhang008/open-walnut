@@ -1314,6 +1314,8 @@ export async function restartSession(sessionId: string): Promise<
 
 export interface SessionSupervision {
   available: boolean;
+  /** The host did not answer this read: the last state it confirmed. */
+  stale?: boolean;
   startup: 'boot' | 'login' | 'on-demand' | 'service' | 'unavailable';
   stopRequest: SessionRecord['stopRequest'] | null;
   supervision: {

@@ -471,4 +471,36 @@ describe('session-supervision store \u2014 a server restart', () => {
     expect(r.snap.unavailable).toBe(true);
     expect(r.snap.error).toBe('Failed to fetch');
   });
+
+  // 2026-11-03: a host that did not answer made every poll a 500. The server now sends the last
+  // state its host confirmed, marked stale: the store treats it as a failed read, never live state.
+  it('a stale answer is held through the grace like a failed read, then shows unavailable with its last state', async () => {
+    const SID = 'sess-stale';
+    serveGet(sup({ enabled: true, generation: 2 }));
+    const r = reader(SID);
+    await flush();
+    serveGet({ ...sup({ enabled: false, generation: 9 }), stale: true });
+    await refreshSessionSupervision(SID);
+    expect(r.snap.unavailable).toBe(false);
+    expect(r.snap.value?.supervision?.generation).toBe(2);
+    await vi.advanceTimersByTimeAsync(READ_FAILURE_GRACE_MS + 1_600);
+    await flush();
+    expect(r.snap.unavailable).toBe(true);
+    expect(r.snap.error).toBeNull();
+    expect(r.snap.value?.stale).toBe(true);
+    serveGet(sup({ enabled: true, generation: 3 }));
+    await refreshSessionSupervision(SID);
+    expect(r.snap.unavailable).toBe(false);
+    expect(r.snap.value?.supervision?.generation).toBe(3);
+  });
+
+  it('a stale first answer shows unavailable at once', async () => {
+    const SID = 'sess-stale-first';
+    serveGet({ ...sup({ enabled: true }), stale: true });
+    const r = reader(SID);
+    await flush();
+    expect(r.snap.loading).toBe(false);
+    expect(r.snap.unavailable).toBe(true);
+    expect(r.snap.value?.supervision?.enabled).toBe(true);
+  });
 });

@@ -59,7 +59,7 @@ import {
 import { QuickStartError } from '../../core/sessions/quick-start.js'
 import { log } from '../../logging/index.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
-import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 
 export const sessionLaunchV1Router = Router()
 
@@ -452,9 +452,10 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
 // Same form as apiV1Router's funnel: guard headersSent (a handler may fail
 // after partially writing) and treat err as unknown.
 sessionLaunchV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  // A host replica's refusal of a store it only holds a copy of: the app's error
-  // handler answers it 503 needs_leader with its why, never a 500 card.
-  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
+  // A host replica's refusal of a store it only holds a copy of, or a host link that
+  // failed: the app's error handler answers it 503 (needs_leader with its why, or
+  // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
+  if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
   log.web.error('api-v1 session launch error', {
     error: err instanceof Error ? err.message : String(err),
   })

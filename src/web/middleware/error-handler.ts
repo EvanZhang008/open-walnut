@@ -8,6 +8,7 @@ import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/rout
 import { NEEDS_LEADER_HEADERS, isNeedsLeaderError, needsLeaderBody, shouldLogNeedsLeader } from '../../core/replication/needs-leader.js'
 import { isTaskSyncError } from '../../core/task-sync-error.js'
 import { markHandledFailure } from './handled-failure.js'
+import { sendLinkFailure } from './link-failure-answer.js'
 
 /**
  * 404 handler for unknown API routes.
@@ -29,6 +30,9 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     res.status(503).set(NEEDS_LEADER_HEADERS).json(needsLeaderBody(err.why, err.message))
     return
   }
+  // A host that did not answer, or whose link dropped mid-command: 503 or 504, a
+  // warn line and no card, whichever route sent the command (link-failure-answer.ts).
+  if (sendLinkFailure(req, res, err)) return
   const status = (err as { status?: number }).status ?? 500
   const message = err.message || 'Internal server error'
 

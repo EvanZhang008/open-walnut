@@ -22,7 +22,8 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { NeedsLeaderError, isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { logRouteError } from './route-error-log.js'
 import { replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
@@ -4560,9 +4561,10 @@ apiV1Router.use(instanceRoutesV1Router)
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  // A host replica's refusal of a store it only holds a copy of: the app's error
-  // handler answers it 503 needs_leader with its why, never a 500 card.
-  if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
+  // A host replica's refusal of a store it only holds a copy of, or a host link that
+  // failed: the app's error handler answers it 503 (needs_leader with its why, or
+  // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
+  if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
   const message = err instanceof Error ? err.message : String(err)
   logRouteError(err, 'api-v1 unhandled error', res)
   if (res.headersSent) { res.end(); return }

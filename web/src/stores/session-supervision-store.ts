@@ -41,6 +41,10 @@ const READ_RETRY_MS = 1_500;
 
 const entries = new Map<string, Entry>();
 
+class StaleSupervisionRead extends Error {
+  constructor(readonly value: SessionSupervision) { super('The host did not answer'); }
+}
+
 function entryFor(sid: string): Entry {
   let entry = entries.get(sid);
   if (!entry) {
@@ -95,6 +99,9 @@ export function refreshSessionSupervision(sid: string): Promise<void> {
   entry.read = (async () => {
     try {
       const value = await fetchSessionSupervision(sid);
+      // The host did not answer this read and the server sent the last state it
+      // confirmed: a failed read, held through the same grace, never live state.
+      if (value.stale) throw new StaleSupervisionRead(value);
       entry.failingSince = 0;
       if (entry.revision === revision) {
         publish(entry, { value, loading: false, unavailable: false, error: entry.actionError, stopPending: value.stopRequest?.state === 'pending' });
@@ -108,7 +115,12 @@ export function refreshSessionSupervision(sid: string): Promise<void> {
           entry.retry = setTimeout(() => { entry.retry = null; void refreshSessionSupervision(sid); }, READ_RETRY_MS);
         }
       } else if (entry.revision === revision) {
-        publish(entry, { loading: false, unavailable: true, error: entry.actionError ?? (error instanceof Error ? error.message : String(error)) });
+        if (error instanceof StaleSupervisionRead) {
+          // Its title already says the status is unavailable; the last state stays readable under it.
+          publish(entry, { value: error.value, loading: false, unavailable: true, error: entry.actionError, stopPending: error.value.stopRequest?.state === 'pending' });
+        } else {
+          publish(entry, { loading: false, unavailable: true, error: entry.actionError ?? (error instanceof Error ? error.message : String(error)) });
+        }
       }
     } finally {
       entry.read = null;

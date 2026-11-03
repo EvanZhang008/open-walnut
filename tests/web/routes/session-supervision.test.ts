@@ -16,6 +16,8 @@ import { sessionStops } from '../../../src/core/sessions/session-stop.js'
 import { enqueueMessage, getQueue, resetCache } from '../../../src/core/session-message-queue.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { bus } from '../../../src/core/event-bus.js'
+import { markLinkFailure } from '../../../src/providers/link-failure.js'
+import { _resetSupervisionLastKnownForTesting } from '../../../src/core/sessions/session-supervision.js'
 
 const SID = '10000000-0000-4000-8000-000000000202'
 const HOST = 'supervision-test-host'
@@ -46,6 +48,7 @@ beforeEach(async () => {
   _resetSessionTrackerForTesting()
   resetCache()
   bus.clear()
+  _resetSupervisionLastKnownForTesting()
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   await createSessionRecord(SID, 'supervision-api-task', 'test', WALNUT_HOME, { host: HOST, initialProcessStatus: 'idle' })
 })
@@ -168,5 +171,77 @@ describe('session supervision API with real stop persistence', () => {
     expect(response.body.status).toBe('pending')
     expect(markExpectedTeardown).toHaveBeenCalledWith('user_terminated')
     expect(undo).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-11-03: a daemon swap and tunnel drops on the host timed these reads out, and each was a 500 card.
+  describe('a host that does not answer', () => {
+    const timeout = () => markLinkFailure(new Error('daemon command timeout: cron.supervision (5000ms) [traceId=t1]'), 'no-answer')
+    const lost = () => markLinkFailure(new Error('daemon command lost: cron.supervision: connection closed before host answered'), 'lost')
+
+    it('a read with nothing kept answers the host unavailable, never a 500', async () => {
+      const { send } = daemon()
+      for (const failure of [timeout, lost]) {
+        send.mockRejectedValueOnce(failure())
+        const response = await request(app()).get(`/api/sessions/${SID}/supervision`)
+        expect(response.status).toBe(200)
+        expect(response.body).toEqual({ stopRequest: null, available: false, startup: 'unavailable', supervision: null })
+      }
+    })
+
+    it('a read after a good one answers the last confirmed state marked stale, then the live one again', async () => {
+      const { send } = daemon()
+      const good = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      expect(good.body.supervision.state).toBe('checking')
+      for (let round = 0; round < 3; round++) {
+        send.mockRejectedValueOnce(round % 2 ? lost() : timeout())
+        const stale = await request(app()).get(`/api/sessions/${SID}/supervision`)
+        expect(stale.status).toBe(200)
+        expect(stale.body).toEqual({ ...good.body, stale: true })
+      }
+      const back = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      expect(back.status).toBe(200)
+      expect(back.body.stale).toBeUndefined()
+    })
+
+    it('a stale read still carries a stop persisted since', async () => {
+      const { connection, send } = daemon()
+      await request(app()).get(`/api/sessions/${SID}/supervision`)
+      connection.connected = false
+      await sessionStops.request(SID)
+      connection.connected = true
+      send.mockRejectedValueOnce(timeout())
+      const response = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      expect(response.status).toBe(200)
+      expect(response.body.stopRequest?.state).toBe('pending')
+    })
+
+    it('a change the host did not answer is a 504 that says it may have applied; one never sent is a 503', async () => {
+      const { send } = daemon()
+      send.mockRejectedValueOnce(timeout())
+      const response = await request(app()).put(`/api/sessions/${SID}/supervision`).send({ enabled: false })
+      expect(response.status).toBe(504)
+      expect(response.body.error).toMatch(/did not answer.*may have changed/)
+      send.mockRejectedValueOnce(markLinkFailure(new Error('not connected'), 'no-link'))
+      const refused = await request(app()).put(`/api/sessions/${SID}/supervision`).send({ enabled: false })
+      expect(refused.status).toBe(503)
+      expect(refused.body.error).toMatch(/was not changed/)
+    })
+
+    it('a change the host did not answer forgets the kept state, so a later failed read claims nothing', async () => {
+      const { send } = daemon()
+      await request(app()).get(`/api/sessions/${SID}/supervision`)
+      send.mockRejectedValueOnce(timeout())
+      expect((await request(app()).put(`/api/sessions/${SID}/supervision`).send({ enabled: false })).status).toBe(504)
+      send.mockRejectedValueOnce(timeout())
+      const read = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      expect(read.status).toBe(200)
+      expect(read.body).toMatchObject({ available: false, startup: 'unavailable', supervision: null })
+    })
+
+    it('an error of the host\'s own is not hidden', async () => {
+      const { send } = daemon()
+      send.mockRejectedValueOnce(new Error('a real bug'))
+      expect((await request(app()).get(`/api/sessions/${SID}/supervision`)).status).toBe(500)
+    })
   })
 })
