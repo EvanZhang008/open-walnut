@@ -106,18 +106,23 @@ final class LifecycleHygieneTests: XCTestCase {
     func testVoiceRecorderInitIsCheapAndSideEffectFree() {
         // Warm one instance (class metadata, first-touch costs).
         _ = VoiceRecorder()
-        let t0 = DispatchTime.now()
+        // Five batches of 50, judged on the median (PerfGate): a heavy init is
+        // heavy in every batch, a runner stall slows one.
         var recorders: [VoiceRecorder] = []
-        for _ in 0..<50 {
-            recorders.append(VoiceRecorder())
+        let batches = PerfGate.passes(5) { _ in
+            PerfGate.ms {
+                for _ in 0..<50 {
+                    recorders.append(VoiceRecorder())
+                }
+            }
         }
-        let totalMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
-        print(String(format: "[voice] 50 VoiceRecorder inits: %6.2fms total (n=50)", totalMs))
+        let totalMs = PerfGate.median(batches)
+        print("[voice] 50 VoiceRecorder inits: \(PerfGate.summary(batches))")
         // Pre-fix each init built a WalnutAPI (fresh URLSession) + mutated the
         // LifecycleHub registry; ComposerBar's @State default runs this at
         // body-eval rate during streaming (audit OBS-5). 50 inits in single-
         // digit ms = the lazy path is intact.
-        XCTAssertLessThan(totalMs, 10.0,
+        XCTAssertLessThan(PerfGate.median(batches), 10.0,
             "50 throwaway VoiceRecorder inits cost \(totalMs)ms — the @State default value is doing real work again (audit OBS-5)")
         withExtendedLifetime(recorders) {}
     }

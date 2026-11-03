@@ -886,6 +886,9 @@ jobs:
     # 2.7x (run 41198110591: a 150 ms tick took 193 ms), and the UI classes that need
     # their own fixture server (run-media-ui.sh, run-inbox-items-ui.sh, the peer and
     # stub servers, a real voice model) and fail, by design, on the offline pairing.
+    # The timed gates it does run are judged on the median of their passes
+    # (ios-native/WalnutTests/PerfGate.swift), so a stall in one pass of three (or two
+    # of five) fails none of them; a stall in most passes still can.
     env:
       IOS_CI_SKIP_UNIT: >-
         -skip-testing:WalnutTests/MarkdownPerfTests

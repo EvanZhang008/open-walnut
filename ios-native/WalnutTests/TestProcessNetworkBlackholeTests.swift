@@ -59,17 +59,22 @@ final class TestProcessNetworkBlackholeTests: XCTestCase {
     /// Fail-FAST, not fail-eventually: a 30s URLSession timeout per call would
     /// make the suite unrunnable, and an unrunnable suite gets bypassed.
     func testReachingForTheNetworkFailsImmediately() async {
-        let started = Date()
-        do {
-            _ = try await WalnutAPI().status()
-            XCTFail("a request from the test process reached SOMETHING — the blackhole is not blackholing")
-        } catch {
-            // Connection refused on loopback; the error kind is URLSession's
-            // business, the latency is ours.
+        // Three requests, judged on the median (PerfGate): a swallowed connection is slow
+        // every time, a runner stall once.
+        var requestsMs: [Double] = []
+        for _ in 0..<3 {
+            let started = DispatchTime.now()
+            do {
+                _ = try await WalnutAPI().status()
+                XCTFail("a request from the test process reached SOMETHING — the blackhole is not blackholing")
+            } catch {
+                // Connection refused on loopback; the error kind is URLSession's
+                // business, the latency is ours.
+            }
+            requestsMs.append(Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000)
         }
-        let elapsed = Date().timeIntervalSince(started)
-        XCTAssertLessThan(elapsed, 2.0,
-            "a blackholed request took \(String(format: "%.2f", elapsed))s — the override points at "
+        XCTAssertLessThan(PerfGate.median(requestsMs), 2_000,
+            "blackholed requests took \(PerfGate.summary(requestsMs)) — the override points at "
             + "something that swallows the connection instead of refusing it; every networked test now "
             + "pays a timeout")
     }

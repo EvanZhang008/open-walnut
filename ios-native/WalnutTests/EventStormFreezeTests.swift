@@ -268,8 +268,8 @@ final class EventStormFreezeTests: XCTestCase {
     /// whole page (multi-second, watchdog territory at 3-5x on device);
     /// post-fix the storm is background noise.
     ///
-    /// n note: the wall budget is asserted on the WORST of 3 passes to keep
-    /// single-run scheduler noise out of the verdict.
+    /// n note: the wall budget is asserted on the MEDIAN of 5 passes (PerfGate),
+    /// so one pass a runner stall slowed stays out of the verdict.
     func testHostedPageSurvivesThinkingDeltaStorm() {
         let store = seededStore(rows: 105)
         _ = hostConversationPage(store: store)
@@ -281,8 +281,9 @@ final class EventStormFreezeTests: XCTestCase {
         store.flushPendingDelta()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
 
-        var worstMs = 0.0
-        for pass in 0..<3 {
+        // Five passes, judged on the median: a real regression raises every
+        // pass, a runner stall only one.
+        let storms = PerfGate.passes(5) { pass in
             let stormMs = ms {
                 // 589 thinking + 60 text deltas ≈ the 55s death window's event
                 // mix (measured); delivered back-to-back = the microburst case
@@ -295,13 +296,14 @@ final class EventStormFreezeTests: XCTestCase {
                 // THIS is where pre-fix layout invalidations actually ran.
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             } - 200.0 // subtract the fixed drain window; keep only work above it
-            worstMs = max(worstMs, stormMs)
             print(String(format: "[storm] pass %d: 589-event thinking storm on hosted 105-row page: %7.1fms over drain floor", pass, stormMs))
+            return stormMs
         }
+        print("[storm] 589-event thinking storm: \(PerfGate.summary(storms))")
         // Budget: the whole storm's extra main-thread work must stay under
         // 1s on this sim (~3-5x device ≈ the watchdog line). Pre-fix this was
         // 589 full-page diffs of a 105-row LazyVStack.
-        XCTAssertLessThan(worstMs, 1_000.0,
+        XCTAssertLessThan(PerfGate.median(storms), 1_000.0,
             "thinking-delta storm re-layouts the whole page per event — the build-36 0x8BADF00D mechanism is back")
     }
 }

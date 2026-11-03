@@ -257,10 +257,14 @@ final class SessionPageOperationsTests: XCTestCase {
         super.tearDown()
     }
 
-    private func waitUntil(_ what: String, _ condition: () -> Bool, line: UInt = #line) async {
+    private func waitUntil(_ what: String, detail: () -> String = { "" }, line: UInt = #line,
+                           _ condition: () -> Bool) async {
         let deadline = Date().addingTimeInterval(5)
         while !condition() {
-            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)", line: line) }
+            guard Date() < deadline else {
+                let seen = detail()
+                return XCTFail("timed out waiting for \(what)\(seen.isEmpty ? "" : " (\(seen))")", line: line)
+            }
             try? await Task.sleep(for: .milliseconds(5))
         }
     }
@@ -286,10 +290,43 @@ final class SessionPageOperationsTests: XCTestCase {
         DemoURLProtocol.requestLog.filter { $0.path == "/api/v1/sessions/\(id)/stream" }.count
     }
 
-    private func assertOneStream(_ id: String, afterRequests: Int) async {
-        await waitUntil("the page to own exactly one new stream") {
+    private func streamCounts(_ id: String, afterRequests: Int) -> String {
+        "\(streamRequests(id) - afterRequests) new stream requests, "
+            + "\(DemoServer.shared.streams.subscriberCount(.session(id))) subscribers"
+    }
+
+    private func assertOneStream(_ id: String, afterRequests: Int, line: UInt = #line) async {
+        await waitUntil("the page to own exactly one new stream",
+                        detail: { streamCounts(id, afterRequests: afterRequests) }, line: line) {
             streamRequests(id) == afterRequests + 1
                 && DemoServer.shared.streams.subscriberCount(.session(id)) == 1
+        }
+    }
+
+    /// Subscriptions the demo hub has opened on the session's channel so far.
+    private func streamsOpened(_ id: String) -> Int {
+        DemoServer.shared.streams.subscriptions(.session(id)).opened
+    }
+
+    /// An open replaces the page's stream, and the new request reaches the demo
+    /// server later, on URLSession's own thread. Stopped before it got there, it
+    /// can still land after the test has counted the stream requests, and then
+    /// reads as a second stream once the page opens again (run 41549657834:
+    /// "timed out waiting for the page to own exactly one new stream"). So a test
+    /// that stops a stream an open just started first waits until the hub has
+    /// subscribed it and it is the only one left (the stream it replaced is gone):
+    /// its request is logged by then, so every count read after the stop is final.
+    /// Read on the hub's own queue, so neither the old stream's late callbacks nor
+    /// its late detach can pass for the new one.
+    private func waitForTheOpenedStream(_ id: String, openedBefore: Int, line: UInt = #line) async {
+        await waitUntil("the opened stream to attach",
+                        detail: {
+                            let s = DemoServer.shared.streams.subscriptions(.session(id))
+                            return "\(s.opened - openedBefore) new subscriptions, \(s.live) live"
+                        },
+                        line: line) {
+            let s = DemoServer.shared.streams.subscriptions(.session(id))
+            return s.opened > openedBefore && s.live == 1
         }
     }
 
@@ -372,8 +409,10 @@ final class SessionPageOperationsTests: XCTestCase {
         transport.transcriptGate = gate
         defer { gate.open() }
         let initialReads = transport.transcriptReads.count
+        let openedBefore = streamsOpened(session.id)
         let refreshing = Task { await owner.refresh() }
         await waitUntil("refresh to enter its transcript read") { transport.transcriptReads.count > initialReads }
+        await waitForTheOpenedStream(session.id, openedBefore: openedBefore)
         owner.disappear()
         await waitUntil("the refresh stream to detach") { DemoServer.shared.streams.subscriberCount(.session(session.id)) == 0 }
         let closedRequests = streamRequests(session.id)
@@ -565,8 +604,10 @@ final class SessionPageOperationsTests: XCTestCase {
         defer { cachedGate.open() }
         transport.transcriptGate = cachedGate
         let beforeReads = transport.transcriptReads.count
+        let openedBefore = streamsOpened(session.id)
         let oldOpening = Task { await owner.refresh() }
         await waitUntil("the old cached read to block") { transport.transcriptReads.count > beforeReads }
+        await waitForTheOpenedStream(session.id, openedBefore: openedBefore)
         owner.disappear()
         await waitUntil("the old opening to detach") {
             DemoServer.shared.streams.subscriberCount(.session(session.id)) == 0
@@ -760,8 +801,10 @@ final class SessionPageOperationsTests: XCTestCase {
         let owner = SessionPageOperations(store: store)
         defer { owner.disappear(); LifecycleHub.shared.resumeAll() }
         owner.appear()
+        let openedBefore = streamsOpened(session.id)
         let opening = Task { await owner.refresh() }
         await waitForRead("the first cached read to block") { await transport.cachedReads == 1 }
+        await waitForTheOpenedStream(session.id, openedBefore: openedBefore)
         owner.setActive(false)
         LifecycleHub.shared.suspendAll()
         await waitUntil("the stream to pause") {

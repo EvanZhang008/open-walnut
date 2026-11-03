@@ -942,11 +942,17 @@ final class LetterReplyFieldSessionTests: XCTestCase {
     func testWithNothingComposingTheWordsAreReadAtOnce() async {
         let (view, controller, box) = makeField()
         sessionWrote("ready to go", into: view)
-        let clock = ContinuousClock()
-        let started = clock.now
-        let read = await controller.commitAndRead(fallback: "")
-        XCTAssertEqual(read, "ready to go")
-        XCTAssertLessThan(clock.now - started, .milliseconds(100), "nothing was composing, so there is nothing to wait for")
+        // Three reads, judged on the median (PerfGate): the old wait (200ms)
+        // is in every read, a runner stall in one.
+        var readsMs: [Double] = []
+        var read = ""
+        for _ in 0..<3 {
+            let t0 = DispatchTime.now()
+            read = await controller.commitAndRead(fallback: "")
+            readsMs.append(Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000)
+            XCTAssertEqual(read, "ready to go")
+        }
+        XCTAssertLessThan(PerfGate.median(readsMs), 100.0, "nothing was composing, so there is nothing to wait for: \(PerfGate.summary(readsMs))")
         XCTAssertEqual(box.text, "ready to go")
     }
 

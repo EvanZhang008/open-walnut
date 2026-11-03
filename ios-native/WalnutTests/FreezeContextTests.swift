@@ -141,14 +141,18 @@ final class FreezeContextTests: XCTestCase {
     /// writes under a lock — no allocation, no string building.
     func testPushPathIsCheapEnoughForAHotPath() {
         let iterations = 100_000
-        let started = Date()
-        for i in 0..<iterations {
-            context.setDraftChars(i)
-            context.setLiveText(chars: i, truncated: false)
+        // Three runs, judged on the median (PerfGate), so a runner stall in one
+        // run is not charged to the push path.
+        let runs = PerfGate.passes(3) { _ in
+            PerfGate.ms {
+                for i in 0..<iterations {
+                    context.setDraftChars(i)
+                    context.setLiveText(chars: i, truncated: false)
+                }
+            }
         }
-        let elapsed = Date().timeIntervalSince(started)
         // 200k locked scalar writes. Generous ceiling for a loaded CI machine;
         // a regression that starts allocating or formatting blows well past it.
-        XCTAssertLessThan(elapsed, 2.0, "push path cost \(elapsed)s for \(iterations) iterations")
+        XCTAssertLessThan(PerfGate.median(runs), 2_000.0, "push path cost for \(iterations) iterations: \(PerfGate.summary(runs))")
     }
 }

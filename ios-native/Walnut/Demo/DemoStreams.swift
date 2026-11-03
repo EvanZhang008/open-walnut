@@ -58,6 +58,9 @@ final class DemoStreams: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "dev.openwalnut.demo.streams")
     private var subscribers: [UUID: Subscriber] = [:]
+    /// Subscriptions ever opened per channel, so a test can tell a new stream from the one
+    /// it replaced (a count of live ones cannot).
+    private var opened: [Channel: Int] = [:]
     private var nextEventID = 1
     /// Frames of the turn in flight (or the last one) per channel.
     private var ring: [Channel: [Frame]] = [:]
@@ -79,6 +82,7 @@ final class DemoStreams: @unchecked Sendable {
         let key = UUID()
         queue.async { [self] in
             subscribers[key] = Subscriber(channel: channel, send: send, close: close)
+            opened[channel, default: 0] += 1
             for frame in attachFrames?(channel) ?? [] {
                 send(Frame(id: nil, event: frame.event, data: frame.data).wire)
             }
@@ -100,6 +104,12 @@ final class DemoStreams: @unchecked Sendable {
     /// How many subscribers a channel has right now (tests).
     func subscriberCount(_ channel: Channel) -> Int {
         queue.sync { subscribers.values.filter { $0.channel == channel }.count }
+    }
+
+    /// A channel's live subscribers and the subscriptions it has ever opened, read
+    /// together (tests).
+    func subscriptions(_ channel: Channel) -> (live: Int, opened: Int) {
+        queue.sync { (subscribers.values.filter { $0.channel == channel }.count, opened[channel] ?? 0) }
     }
 
     // MARK: - Publish
@@ -145,6 +155,7 @@ final class DemoStreams: @unchecked Sendable {
         queue.sync {
             for subscriber in subscribers.values { subscriber.close() }
             subscribers.removeAll()
+            opened.removeAll()
             ring.removeAll()
             turnLive.removeAll()
             pingTimer?.cancel()

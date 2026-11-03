@@ -419,29 +419,37 @@ final class ComposerFreezeTests: XCTestCase {
             drafts.setDraft(String(repeating: Self.voiceBurst148, count: 3), key: "session:filler-\(i)")
         }
         let key = "session:freeze-repro"
-        var worstMs = 0.0
-        var totalMs = 0.0
-        var text = ""
-        for ch in Self.voiceBurst148 {
-            text.append(ch)
-            let stepMs = ms { drafts.setDraft(text, key: key) }
-            worstMs = max(worstMs, stepMs)
-            totalMs += stepMs
+        // Five passes of the burst; each pass's worst keystroke, judged on the
+        // median (PerfGate): a slow keystroke is slow in every pass, a runner
+        // stall lands in one.
+        var steps: [Double] = []
+        let passWorsts = PerfGate.passes(5) { _ in
+            drafts.clear(key)
+            var text = ""
+            var pass: [Double] = []
+            for ch in Self.voiceBurst148 {
+                text.append(ch)
+                pass.append(ms { drafts.setDraft(text, key: key) })
+            }
+            steps += pass
+            return pass.max() ?? 0
         }
+        let worstMs = steps.max() ?? 0
+        let totalMs = steps.reduce(0, +) / Double(passWorsts.count)
         drafts.clear(key)
         for i in 0..<(40 - 1) { drafts.clear("session:filler-\(i)") }
         print(String(format: "[composer] %d keystrokes with a full (40-draft) store: worst %6.2fms, total %7.1fms, mean %5.2fms (frame %.1fms)",
                      Self.voiceBurst148.count, worstMs, totalMs, totalMs / Double(Self.voiceBurst148.count), frameBudgetMs))
         // The watchdog gate: no single keystroke may approach the stall line.
-        XCTAssertLessThan(worstMs, mainThreadBudgetMs,
-            "one keystroke's draft persist approaches the watchdog-scaled budget")
+        XCTAssertLessThan(PerfGate.median(passWorsts), mainThreadBudgetMs,
+            "one keystroke's draft persist approaches the watchdog-scaled budget: worst keystroke per pass \(PerfGate.summary(passWorsts))")
         // The FELT gate: typing must fit the frame budget. A per-keystroke cost
         // above one frame means the main thread cannot drain the keyboard's
         // input faster than it arrives — the accumulation mechanism behind a
         // multi-second continuous stall (same shape as the round-2 saturation
         // gate on delta flush).
-        XCTAssertLessThan(worstMs, frameBudgetMs,
-            "per-keystroke draft persist exceeds one frame — typing saturates the main thread")
+        XCTAssertLessThan(PerfGate.median(passWorsts), frameBudgetMs,
+            "per-keystroke draft persist exceeds one frame — typing saturates the main thread: worst keystroke per pass \(PerfGate.summary(passWorsts))")
     }
 
     // MARK: - H2: giant-draft TextField text measurement
@@ -474,14 +482,19 @@ final class ComposerFreezeTests: XCTestCase {
         for chars in [148, 500, 1_000, 5_000, 10_000, 50_000] {
             var draft = ""
             while draft.count < chars { draft += Self.voiceBurst148 }
-            drafts.setDraft(String(draft.prefix(chars)), key: key)
-
-            let host = hostRealComposer(draftKey: key)
             // The timed step: what a geometry change costs — invalidate and
-            // re-measure the composer with this draft in it.
-            let measureMs = ms { relayout(host) }
-            retire(host)
-            drafts.clear(key)
+            // re-measure the composer with this draft in it. Three fresh hosts
+            // per rung, judged on the median, so a runner stall in one is not
+            // charged to the rung.
+            let passes = PerfGate.passes(3) { _ in
+                drafts.setDraft(String(draft.prefix(chars)), key: key)
+                let host = hostRealComposer(draftKey: key)
+                let passMs = ms { relayout(host) }
+                retire(host)
+                drafts.clear(key)
+                return passMs
+            }
+            let measureMs = PerfGate.median(passes)
 
             samples.append((chars, measureMs))
             // Label WHICH editor this rung measured. The threshold is in UTF-8 BYTES
@@ -493,7 +506,7 @@ final class ComposerFreezeTests: XCTestCase {
             let view = bytes > ComposerBar.longDraftThreshold ? "LongDraftEditor" : "TextField      "
             print(String(format: "[composer] REAL ComposerBar relayout, draft %6d chars (%7d B, %@): %7.2fms (frame %.1fms, budget %.0f)",
                          chars, bytes, view, measureMs, frameBudgetMs, mainThreadBudgetMs))
-            if measureMs >= mainThreadBudgetMs { over.append("\(chars)ch=\(Int(measureMs))ms") }
+            if measureMs >= mainThreadBudgetMs { over.append("\(chars)ch=\(PerfGate.summary(passes))") }
         }
         // Growth across the WHOLE ladder spans two different views, so it is not a
         // cost curve for either one. Report it only within the TextField rungs, and
@@ -612,7 +625,7 @@ final class ComposerFreezeTests: XCTestCase {
 
         /// Type `target` characters into the REAL composer one at a time,
         /// forcing a full layout pass per keystroke, and return the cost.
-        func typeIntoRealComposer(_ target: Int) -> (worst: Double, total: Double) {
+        func typeIntoRealComposer(_ target: Int) -> (worst: Double, total: Double, steps: [Double]) {
             drafts.clear(key)
             // A real window, or SwiftUI short-circuits layout for an unhosted view.
             let host = hostRealComposer(draftKey: key)
@@ -620,7 +633,7 @@ final class ComposerFreezeTests: XCTestCase {
             var source = ""
             while source.count < target { source += Self.voiceBurst148 }
             var draft = ""
-            var worst = 0.0, total = 0.0
+            var steps: [Double] = []
             var typed = 0
             for ch in source.prefix(target) {
                 draft.append(ch)
@@ -631,7 +644,7 @@ final class ComposerFreezeTests: XCTestCase {
                     drafts.setDraft(draft, key: key)
                     relayout(host)
                 }
-                worst = max(worst, stepMs); total += stepMs
+                steps.append(stepMs)
                 // BREATHE, or the harness reproduces the bug on ITSELF (2026-08-07):
                 // typing 1,480 characters holds the main thread for 10-26s with no
                 // return to the run loop, and the simulator SIGKILLs the app-hosted
@@ -645,13 +658,20 @@ final class ComposerFreezeTests: XCTestCase {
             }
             retire(host)
             drafts.clear(key)
-            return (worst, total)
+            return (steps.max() ?? 0, steps.reduce(0, +), steps)
         }
 
         let short = typeIntoRealComposer(148)   // the field burst size
-        let long = typeIntoRealComposer(1_480)  // 10x
+        // The 10x typing, three times. Each run crosses ComposerBar.longDraftThreshold
+        // once (about char 667 of the CJK burst), and that ONE keystroke swaps the
+        // TextField for LongDraftEditor, so a gate that drops a run's worst step would
+        // drop exactly the swap. Judge the median of the runs' worst steps instead: a slow
+        // swap is slow in every run, a runner stall in one.
+        let longRuns = (0..<3).map { _ in typeIntoRealComposer(1_480) }
+        let long = longRuns.sorted { $0.total < $1.total }[1] // the median run, for the report
         print(String(format: "[composer] REAL TextField, typing  148 chars: worst %6.2fms total %8.1fms", short.worst, short.total))
         print(String(format: "[composer] REAL TextField, typing 1480 chars: worst %6.2fms total %8.1fms", long.worst, long.total))
+        print("[composer] REAL composer, typing 1480 chars, worst keystroke per run: \(PerfGate.summary(longRuns.map(\.worst)))")
         let ratio = long.total / max(short.total, 0.001)
         print(String(format: "[composer] REAL per-keystroke growth: %.1fx total cost for 10x the text (linear≈10x, quadratic≈100x)", ratio))
 
@@ -726,8 +746,10 @@ final class ComposerFreezeTests: XCTestCase {
         // not a 5-10s-freeze mechanism. Spend your effort on the unbounded cycle
         // count; this test exists mainly to keep anyone from RE-introducing a
         // superlinear cost here (see the ladder's hard gate for that).
-        XCTAssertLessThan(long.worst, mainThreadBudgetMs,
-            "one keystroke's composer layout approaches the watchdog-scaled budget")
+        // Judged on the median of the three runs' worst keystrokes (PerfGate, see above).
+        let longWorsts = longRuns.map(\.worst)
+        XCTAssertLessThan(PerfGate.median(longWorsts), mainThreadBudgetMs,
+            "one keystroke's composer layout approaches the watchdog-scaled budget: worst keystroke per run \(PerfGate.summary(longWorsts))")
         // The RATIO is reported but deliberately NOT asserted on. Before the yield it
         // ranged 28-39x across runs of identical code purely with host load; after the
         // yield 11.1-14.0x. Either way a threshold near the measured band is a
@@ -741,7 +763,7 @@ final class ComposerFreezeTests: XCTestCase {
         // failing the suite when it doesn't — a strict wrapper here fails with
         // "expected failure but none recorded" on the fast runs.
         XCTExpectFailure("SMELL (borderline, load-sensitive): the WORST per-keystroke composer layout at the field's 148-char burst size sometimes exceeds the 60fps frame budget (16.7ms) — measured 6.5-26.0ms across runs, straddling it. The MEAN keystroke (4.5-6.5ms) is inside budget, so this is spiky, not saturated. Not a hard gate.", strict: false) {
-            XCTAssertLessThan(short.worst, frameBudgetMs,
+            XCTAssertLessThan(PerfGate.worstButOne(short.steps), frameBudgetMs,
                 "per-keystroke composer layout at the field burst size exceeds one frame: \(String(format: "%.1f", short.worst))ms")
         }
     }
@@ -772,22 +794,27 @@ final class ComposerFreezeTests: XCTestCase {
             // page is the field scenario (the user had been reading, then tapped
             // the composer), so cold-parse cost must not be double-counted.
             for m in rows { evaluateRow(m) }
-            var worstMs = 0.0
-            var totalMs = 0.0
-            // 12 transitions = the "keyboard flashing in and out" the user saw.
-            for cycle in 0..<12 {
-                // One screenful of mounted rows re-evaluates per transition.
-                let start = (cycle * 8) % max(rows.count - 12, 1)
-                let mounted = rows[start..<min(start + 12, rows.count)]
-                let cycleMs = ms { for m in mounted { evaluateRow(m) } }
-                worstMs = max(worstMs, cycleMs)
-                totalMs += cycleMs
+            // 12 transitions = the "keyboard flashing in and out" the user saw,
+            // played three times; each play's worst cycle, judged on the median
+            // (PerfGate): a slow window is slow every play, a runner stall in one.
+            var cycles: [Double] = []
+            let playWorsts = PerfGate.passes(3) { _ in
+                let play = PerfGate.passes(12) { cycle in
+                    // One screenful of mounted rows re-evaluates per transition.
+                    let start = (cycle * 8) % max(rows.count - 12, 1)
+                    let mounted = rows[start..<min(start + 12, rows.count)]
+                    return ms { for m in mounted { evaluateRow(m) } }
+                }
+                cycles += play
+                return play.max() ?? 0
             }
+            let worstMs = cycles.max() ?? 0
+            let totalMs = cycles.reduce(0, +) / Double(playWorsts.count)
             // Swift String through %s yields garbage — interpolate it instead.
             print("[composer] keyboard transition, \(label) page: "
                   + String(format: "worst cycle %6.2fms, 12 cycles %7.2fms (frame %.1fms)",
                            worstMs, totalMs, frameBudgetMs))
-            XCTAssertLessThan(worstMs, mainThreadBudgetMs,
+            XCTAssertLessThan(PerfGate.median(playWorsts), mainThreadBudgetMs,
                 "keyboard-transition row re-evaluation breaches the watchdog-scaled budget (\(label))")
         }
     }
@@ -810,33 +837,37 @@ final class ComposerFreezeTests: XCTestCase {
         let drafts = ComposerDrafts.shared
         let key = "session:freeze-repro-composite"
 
-        // The REAL composer, hosted — step 2 below must measure the product's own
-        // layout, not a stand-in (see the class note "MEASURE THE PRODUCT").
-        drafts.clear(key)
-        let host = hostRealComposer(draftKey: key)  // mount, untimed
-
-        let totalMs = ms {
-            // 1. appendToDraft's write (ComposerView.swift appendToDraft).
-            drafts.setDraft(Self.voiceBurst148, key: key)
-            // 2. ComposerBar's body re-evaluates and the real TextField measures.
-            relayout(host)
-            // 3. focused = true → keyboard appears → safe-area inset changes →
-            //    the scroll view relayouts its mounted rows.
-            for m in rows.prefix(12) { evaluateRow(m) }
-            // 4. KeyboardBottomRepin's repin() → scrollToBottom() → another
-            //    geometry pass over the mounted tail.
-            for m in rows.suffix(12) { evaluateRow(m) }
+        // Three passes from a fresh empty composer, judged on the median
+        // (PerfGate): a real cost is in every pass, a runner stall in one.
+        let passes = PerfGate.passes(3) { _ in
+            // The REAL composer, hosted — step 2 below must measure the product's own
+            // layout, not a stand-in (see the class note "MEASURE THE PRODUCT").
+            drafts.clear(key)
+            let host = hostRealComposer(draftKey: key)  // mount, untimed
+            let passMs = ms {
+                // 1. appendToDraft's write (ComposerView.swift appendToDraft).
+                drafts.setDraft(Self.voiceBurst148, key: key)
+                // 2. ComposerBar's body re-evaluates and the real TextField measures.
+                relayout(host)
+                // 3. focused = true → keyboard appears → safe-area inset changes →
+                //    the scroll view relayouts its mounted rows.
+                for m in rows.prefix(12) { evaluateRow(m) }
+                // 4. KeyboardBottomRepin's repin() → scrollToBottom() → another
+                //    geometry pass over the mounted tail.
+                for m in rows.suffix(12) { evaluateRow(m) }
+            }
+            retire(host)
+            drafts.clear(key)
+            return passMs
         }
-        retire(host)
-        drafts.clear(key)
-        print(String(format: "[composer] voice-append(148) on an idle %d-row session: %7.2fms one main-thread turn (budget %.0f)",
-                     Scale.fieldRows, totalMs, mainThreadBudgetMs))
+        print("[composer] voice-append(148) on an idle \(Scale.fieldRows)-row session, one main-thread turn: "
+              + "\(PerfGate.summary(passes)) (budget \(Int(mainThreadBudgetMs)))")
         // Measured ~2-13ms, i.e. GREEN and never close to the budget. Read that
         // honestly: ONE pass of the field's ignition sequence is cheap, which is
         // itself evidence that the kill is not a single expensive turn but an
         // unbounded REPETITION of a cheap one. This test's job is to keep that
         // one pass cheap; the loop bound is asserted by the repin tests.
-        XCTAssertLessThan(totalMs, mainThreadBudgetMs,
+        XCTAssertLessThan(PerfGate.median(passes), mainThreadBudgetMs,
             "one pass of the voice-append ignition sequence breaches the watchdog-scaled budget")
     }
 

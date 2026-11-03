@@ -269,18 +269,24 @@ final class DemoModeTests: XCTestCase {
     }
 
     func testUnknownRouteIsAClearNotFoundNotAHang() async throws {
-        let started = Date()
-        do {
-            struct Anything: Decodable {}
-            let _: Anything = try await api.get("/no-such-route")
-            XCTFail("an unknown route must fail")
-        } catch let APIError.server(status, code, message, _, _) {
-            XCTAssertEqual(status, 404)
-            XCTAssertEqual(code, "not_found")
-            XCTAssertTrue(message.contains("/api/v1/no-such-route"), message)
+        // Three asks, judged on the median (PerfGate): a hang is in every ask, a runner
+        // stall in one.
+        var asksMs: [Double] = []
+        for _ in 0..<3 {
+            let started = DispatchTime.now()
+            do {
+                struct Anything: Decodable {}
+                let _: Anything = try await api.get("/no-such-route")
+                XCTFail("an unknown route must fail")
+            } catch let APIError.server(status, code, message, _, _) {
+                XCTAssertEqual(status, 404)
+                XCTAssertEqual(code, "not_found")
+                XCTAssertTrue(message.contains("/api/v1/no-such-route"), message)
+            }
+            asksMs.append(Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000)
         }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2, "a 404, not a timeout")
-        XCTAssertEqual(DemoServer.shared.unansweredRoutes, ["GET /api/v1/no-such-route"])
+        XCTAssertLessThan(PerfGate.median(asksMs), 2_000, "a 404, not a timeout: \(PerfGate.summary(asksMs))")
+        XCTAssertEqual(DemoServer.shared.unansweredRoutes, Array(repeating: "GET /api/v1/no-such-route", count: 3))
     }
 
     // MARK: - Writes update reads

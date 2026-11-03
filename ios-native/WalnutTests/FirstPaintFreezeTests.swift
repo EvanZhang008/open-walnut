@@ -113,8 +113,10 @@ final class FirstPaintFreezeTests: XCTestCase {
     /// iOS may have purged NSCaches (14:20). Measures the synchronous
     /// mount+layout+run-loop-settle cost of the full field-scale page.
     func testColdCacheFirstPaintOfFieldScalePage() {
-        var worst = 0.0
-        for pass in 0..<3 {
+        // Five passes, judged on the median: a real regression raises every
+        // pass, a runner stall one (run 41505408126: settle 2 / 7 / 1371 ms
+        // with mount ~60 ms each time).
+        let totals = PerfGate.passes(5) { pass in
             MarkdownParser.resetCacheForTesting()
             let store = SessionConversationStore(session: ScriptedSSE.session())
             store.reconcile(fieldShapeTranscript(rows: 108)) // untimed: data landing
@@ -128,14 +130,15 @@ final class FirstPaintFreezeTests: XCTestCase {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
             } - 500.0
             let total = mountMs + max(0, settleMs)
-            worst = max(worst, total)
             print(String(format: "[first-paint] pass %d: cold-cache 108-row mount %7.1fms + settle-over-drain %7.1fms (budget %.0f)",
                          pass, mountMs, max(0, settleMs), budgetMs))
             hostWindow?.rootViewController = nil
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            return total
         }
-        XCTAssertLessThan(worst, budgetMs,
-            "cold-cache first paint of a field-scale session page breaches the watchdog-scaled budget (n=3, worst)")
+        print("[first-paint] cold-cache 108-row first paint: \(PerfGate.summary(totals))")
+        XCTAssertLessThan(PerfGate.median(totals), budgetMs,
+            "cold-cache first paint of a field-scale session page breaches the watchdog-scaled budget (n=5, median): \(PerfGate.summary(totals))")
     }
 
     // MARK: - 2. Scene-resume composite (14:20 shape)
@@ -152,8 +155,7 @@ final class FirstPaintFreezeTests: XCTestCase {
         _ = hostPage(store: store)
         RunLoop.current.run(until: Date().addingTimeInterval(0.5)) // untimed mount settle
 
-        var worst = 0.0
-        for pass in 0..<3 {
+        let bursts = PerfGate.passes(5) { pass in
             store.suspend()
             MarkdownParser.resetCacheForTesting() // background purged the caches
             // 6 hours later: the tail moved on — a fully NEW window (every row
@@ -164,12 +166,13 @@ final class FirstPaintFreezeTests: XCTestCase {
                 store.reconcile(fresh)
                 RunLoop.current.run(until: Date().addingTimeInterval(0.3))
             } - 300.0
-            worst = max(worst, max(0, burstMs))
             print(String(format: "[scene-resume] pass %d: resume+full-reconcile burst %7.1fms over drain (budget %.0f)",
                          pass, max(0, burstMs), budgetMs))
+            return max(0, burstMs)
         }
-        XCTAssertLessThan(worst, budgetMs,
-            "scene-resume reconcile burst breaches the watchdog-scaled budget (n=3, worst)")
+        print("[scene-resume] resume+full-reconcile burst: \(PerfGate.summary(bursts))")
+        XCTAssertLessThan(PerfGate.median(bursts), budgetMs,
+            "scene-resume reconcile burst breaches the watchdog-scaled budget (n=5, median): \(PerfGate.summary(bursts))")
     }
 
     // MARK: - 3. The post-entry quiet window (14:29 shape)
@@ -188,17 +191,21 @@ final class FirstPaintFreezeTests: XCTestCase {
         _ = hostPage(store: store)
         RunLoop.current.run(until: Date().addingTimeInterval(0.5)) // untimed
 
-        let churnMs = ms {
-            for _ in 0..<20 {
-                // status re-emits (daemon reconcile echo) + identical-content
-                // poll reconciles — the only store inputs in the quiet window.
-                store.handle(SSEEvent(id: nil, event: "status", data: "{\"processStatus\":\"running\"}"))
-                store.reconcile(transcript)
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-        } - 200.0
-        print(String(format: "[quiet-window] 20x (status echo + identical reconcile) on mounted 91-row page: %7.1fms over drain", max(0, churnMs)))
-        XCTAssertLessThan(max(0, churnMs), 250.0,
-            "no-op churn on a settled page must stay near-free — the equality gates regressed")
+        // Five passes on the same settled page, judged on the median.
+        let churns = PerfGate.passes(5) { pass in
+            let churnMs = ms {
+                for _ in 0..<20 {
+                    // status re-emits (daemon reconcile echo) + identical-content
+                    // poll reconciles — the only store inputs in the quiet window.
+                    store.handle(SSEEvent(id: nil, event: "status", data: "{\"processStatus\":\"running\"}"))
+                    store.reconcile(transcript)
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            } - 200.0
+            print(String(format: "[quiet-window] pass %d: 20x (status echo + identical reconcile) on mounted 91-row page: %7.1fms over drain", pass, max(0, churnMs)))
+            return max(0, churnMs)
+        }
+        XCTAssertLessThan(PerfGate.median(churns), 250.0,
+            "no-op churn on a settled page must stay near-free — the equality gates regressed: \(PerfGate.summary(churns))")
     }
 }

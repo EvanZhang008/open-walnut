@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
+import { wallClockGates } from '../helpers/swift-wall-clock-gates'
 
 const ROOT = path.resolve(__dirname, '../..')
 const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
@@ -190,6 +191,85 @@ describe('the iOS job in ci.yml', () => {
     const boot = job.steps.find((s) => s.name === 'Boot an iPhone simulator')!
     expect(boot.run).toContain('simctl list devices available -j')
     expect(job.steps.map((s) => s.run ?? '').join('\n')).not.toMatch(/name=iPhone/)
+  })
+
+  // A wall-clock gate CI runs is judged through PerfGate (the median of its passes, or the
+  // worst step but one), never on one timed pass or the worst of several: a shared runner
+  // stalls one pass now and then, and run 41505408126 charged a 1.37 s stall in one 0.5 s
+  // drain to the page (FirstPaintFreezeTests, mount ~60 ms in all three passes).
+  it('judges no CI-run wall-clock gate on one pass or its worst', () => {
+    const skipList = skips(job.env?.IOS_CI_SKIP_UNIT, 'WalnutTests')
+    const isSkipped = (cls: string, method: string) => skipList.some((s) => s.cls === cls && (!s.method || s.method === method))
+    const offenders = testClasses('WalnutTests').flatMap((c) => wallClockGates(c.body)
+      .filter((g) => !isSkipped(c.name, g.method))
+      .map((g) => `${c.file} ${c.name}/${g.method}: ${g.assert}`))
+    expect(offenders, 'judge the gate with PerfGate.median of 3+ passes (or PerfGate.worstButOne for one long loop of like steps), check it without the clock, or skip it in IOS_CI_SKIP_UNIT').toEqual([])
+  })
+
+  it('catches every shape of a timed bound, and lets PerfGate, counts, indices, waits and lower bounds through', () => {
+    const method = (name: string, lines: string[]) => `    func ${name}() async {\n${lines.map((l) => `        ${l}`).join('\n')}\n    }\n`
+    const caught = [
+      method('testDateSingleShot', ['let started = Date()', 'work()', 'XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "fast")']),
+      method('testDispatchTime', ['let t0 = DispatchTime.now()', 'work()', 'let totalMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6', 'XCTAssertLessThan(totalMs, 10.0)']),
+      method('testContinuousClock', ['let clock = ContinuousClock()', 'let started = clock.now', 'await work()', 'XCTAssertLessThan(clock.now - started, .milliseconds(100))']),
+      method('testMsHelper', ['let burstMs = ms { work() }', 'XCTAssertLessThan(burstMs, 1_000.0)']),
+      method('testWorstOfLoop', ['var worst = 0.0', 'for _ in 0..<3 {', '    let total = ms { work() }', '    worst = max(worst, total)', '}', 'XCTAssertLessThan(worst, budgetMs)']),
+      method('testFreeMax', ['let a = ms { work() }', 'let b = ms { work() }', 'XCTAssertLessThan(max(a, b), 5)']),
+      method('testAssertComparison', ['let elapsed = ms { work() }', 'XCTAssert(elapsed < 5, "fast")']),
+      method('testAssertReversed', ['let elapsed = ms { work() }', 'XCTAssertTrue(5 > elapsed)']),
+      method('testGreaterThanBudget', ['let elapsed = ms { work() }', 'XCTAssertGreaterThan(5.0, elapsed)']),
+      method('testAppendedSamples', ['var bursts: [Double] = []', 'for _ in 0..<40 { bursts.append(ms { work() }) }', 'XCTAssertLessThan(bursts.max() ?? 0, 1_000.0)']),
+      method('testVerdict', ['var over: [String] = []', 'let measureMs = ms { work() }', 'if measureMs >= budget { over.append("slow") }', 'XCTAssertTrue(over.isEmpty)']),
+      method('testHelperFunction', ['func typeInto(_ n: Int) -> (worst: Double, steps: [Double]) {', '    var steps: [Double] = []', '    for _ in 0..<n { steps.append(ms { work() }) }', '    return (steps.max() ?? 0, steps)', '}', 'let long = typeInto(1_480)', 'XCTAssertLessThan(long.worst, budget)']),
+      // Each pass judged alone: the slowest decides, so one stall fails the run.
+      method('testForEachPass', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for p in passes { XCTAssertLessThan(p, 100) }']),
+      method('testForEachClosure', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'passes.forEach { XCTAssertLessThan($0, 100) }']),
+      method('testNestedPasses', ['var runs: [[Double]] = []', 'for _ in 0..<3 { runs.append((0..<5).map { _ in ms { work() } }) }', 'runs.forEach { run in', '    for step in run { XCTAssertLessThan(step, 16.7) }', '}']),
+      method('testNamedClosure', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'passes.forEach { pass in XCTAssertLessThanOrEqual(pass, 100) }']),
+      method('testAllSatisfy', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertTrue(passes.allSatisfy { $0 < 100 })']),
+      // The clock against a deadline, a property, a call chained on the next line.
+      method('testClockBeforeDeadline', ['let deadline = Date().addingTimeInterval(2)', 'await work()', 'XCTAssertLessThan(Date(), deadline)']),
+      method('testContinuousClockDeadline', ['let deadline = ContinuousClock.now + .seconds(2)', 'await work()', 'XCTAssertTrue(ContinuousClock.now < deadline)']),
+      '    func measureIt() {\n        self.lastMs = ms { work() }\n    }\n' + method('testPropertyDuration', ['measureIt()', 'XCTAssertLessThan(self.lastMs, 10)']),
+      method('testMultiLineDate', ['let started = Date()', 'await work()', 'let elapsed = Date()', '    .timeIntervalSince(started)', 'XCTAssertLessThan(elapsed, 2)']),
+      // A tuple loop: the element of enumerated(), each sequence of a zip.
+      method('testEnumeratedLoop', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for (i, p) in passes.enumerated() { XCTAssertLessThan(p, 100, "pass \\(i)") }']),
+      method('testEnumeratedMultiLine', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for (i, p) in passes.enumerated() {', '    XCTAssertLessThan(p, 100, "pass \\(i)")', '}']),
+      method('testEnumeratedElement', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'passes.enumerated().forEach { XCTAssertLessThan($0.element, 100) }']),
+      method('testZipLoop', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for (p, b) in zip(passes, budgets) { XCTAssertLessThan(p, b) }']),
+      method('testZipMultiLine', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for (b, p) in zip(budgets, passes) {', '    XCTAssertGreaterThan(b, p)', '}']),
+      // An XCTFail an upper bound decides, a search asserted empty, a distance, a helper.
+      method('testFailIf', ['let e = ms { work() }', 'if e > 100 { XCTFail("slow: \\(e)") }']),
+      method('testFailIfMultiLine', ['let e = ms { work() }', 'if e > 100 {', '    XCTFail("slow")', '}']),
+      method('testGuardFail', ['let e = ms { work() }', 'guard e < 100 else { return XCTFail("slow") }']),
+      method('testNilSearch', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertNil(passes.first { $0 > 100 })']),
+      method('testDispatchDistance', ['let t0 = DispatchTime.now()', 'work()', 'XCTAssertLessThan(t0.distance(to: DispatchTime.now()), .milliseconds(100))']),
+      '    private var runMs = 0.0\n    private func run() { runMs = ms { work() } }\n' + method('testBarePropertyDuration', ['run()', 'XCTAssertLessThan(runMs, 100)']),
+      '    private func assertFast(_ v: Double, line: UInt = #line) { XCTAssertLessThan(v, 100, line: line) }\n' + method('testAssertHelper', ['let e = ms { work() }', 'assertFast(e)']),
+      method('testOneLineNestedHelper', ['func timeOnce() -> Double { let t0 = Date(); work(); return Date().timeIntervalSince(t0) }', 'XCTAssertLessThan(timeOnce(), 0.1)']),
+    ]
+    const through = [
+      method('testMedian', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertLessThan(PerfGate.median(passes), 1, "slow: \\(PerfGate.summary(passes))")']),
+      method('testWorstButOne', ['var steps: [Double] = []', 'for _ in 0..<40 { steps.append(ms { work() }) }', 'XCTAssertLessThan(PerfGate.worstButOne(steps), 1)']),
+      method('testJudgedName', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'let measureMs = PerfGate.median(passes)', 'var over: [String] = []', 'if measureMs >= budget { over.append("slow") }', 'XCTAssertTrue(over.isEmpty)']),
+      method('testCounts', ['var worstCount = 0', 'for frame in frames { worstCount = max(worstCount, frame.cells) }', 'XCTAssertLessThan(worstCount, 40)', 'XCTAssertLessThanOrEqual(worstStepCells, 12)', 'XCTAssertLessThan(rows.map(\\.count).max() ?? 0, 9)']),
+      method('testLowerBound', ['let started = Date()', 'await waitABit()', 'XCTAssertGreaterThan(Date().timeIntervalSince(started), 0.2)', 'XCTAssertGreaterThanOrEqual(ms { work() }, 0)']),
+      method('testDomainDates', ['let twoDays = calendar.startOfDay(for: clock.now.addingTimeInterval(-86_400))', 'XCTAssertTrue(calls.contains { abs($0.from.timeIntervalSince(twoDays)) < 86_400 })', 'XCTAssertLessThan(abs(AppClock.now().timeIntervalSince(pin)), 5)', 'XCTAssertLessThan(created.timeIntervalSince1970, 2_000_000_000)']),
+      method('testCountOfPasses', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertLessThan(passes.count, 4)', 'XCTAssertLessThan(PerfGate.median(passes), 100)']),
+      method('testClosureOnCounts', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertLessThan(PerfGate.median(passes), 100)', 'rows.forEach { XCTAssertLessThan($0.cells, 12) }', 'for row in rows { XCTAssertLessThan(row.cells, 12) }']),
+      // Dates worked out from a reading are not timings.
+      method('testDatesFromNow', ['let now = Date()', 'let exp = now.addingTimeInterval(3_600)', 'XCTAssertLessThan(exp.timeIntervalSince(now), 3_601)', 'let backoff = retry.nextAttempt.timeIntervalSince(now)', 'XCTAssertLessThan(backoff, 31)', 'XCTAssertLessThan(Date().timeIntervalSince(item.createdAt), 86_400)', 'XCTAssertLessThan(token.expiry.timeIntervalSinceNow, 3_600)', 'XCTAssertGreaterThan(Date(), started)']),
+      // An index, the count of slow passes (a vote), a wait's timeout in its poll loop.
+      method('testTupleIndex', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'for (i, p) in passes.enumerated() { XCTAssertLessThan(i, 3); print(p) }', 'passes.enumerated().forEach { XCTAssertLessThan($0.offset, 3) }', 'for i in passes.indices { XCTAssertLessThan(i, 3) }', 'for (p, b) in zip(passes, budgets) { XCTAssertLessThan(b, 200); print(p) }']),
+      method('testCountOfSlowPasses', ['let passes = PerfGate.passes(3) { _ in ms { work() } }', 'XCTAssertLessThan(passes.filter { $0 > 100 }.count, 2)', 'if passes.isEmpty { XCTFail("no passes") }']),
+      method('testPollWait', ['let deadline = Date().addingTimeInterval(5)', 'while !done() { guard Date() < deadline else { return XCTFail("timed out") }; try await Task.sleep(for: .milliseconds(5)) }', 'repeat {', '    if Date() > deadline { XCTFail("timed out"); break }', '    await Task.yield()', '} while !done()']),
+      method('testInAComment', ['// XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)', 'XCTAssertEqual(name, "XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)")']),
+    ]
+    const body = [...caught, ...through].join('')
+    const found = wallClockGates(body).map((g) => g.method)
+    expect([...new Set(found)]).toEqual(caught.map((m) => [...m.matchAll(/func (test\w+)/g)].pop()![1]))
+    // Each one's line points at its assertion.
+    for (const g of wallClockGates(body)) expect(body.split('\n')[g.line - 1]).toMatch(/XCTAssert|XCTFail|\bif\b|\bguard\b|assertFast\(/)
   })
 })
 

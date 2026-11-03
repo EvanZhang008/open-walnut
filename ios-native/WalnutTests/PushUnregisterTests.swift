@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import Walnut
 
@@ -70,19 +71,36 @@ final class PushUnregisterTests: XCTestCase {
                      "the upload memo goes too, so the next pairing uploads its token again")
     }
 
+    /// What the fake server's call did, written by the call's task and read by the test:
+    /// behind a lock, so neither side reads a half-written state.
+    private final class ServerCall: Sendable {
+        private let state = OSAllocatedUnfairLock(initialState: (ended: false, cancelled: false))
+        var ended: Bool { state.withLock { $0.ended } }
+        var cancelled: Bool { state.withLock { $0.cancelled } }
+        func end(cancelled: Bool) { state.withLock { $0 = (ended: true, cancelled: $0.cancelled || cancelled) } }
+    }
+
     func testAnUnreachableServerNeverHoldsUpDisconnect() async {
         let system = PushPermissionGateTests.FakeSystem()
-        // A server that never answers.
-        let push = registration(system) { _ in try await Task.sleep(for: .seconds(30)) }
+        // A server that never answers: its call can only end by being cancelled.
+        let serverCall = ServerCall()
+        let push = registration(system) { _ in
+            do { try await Task.sleep(for: .seconds(30)) } catch { serverCall.end(cancelled: true); throw error }
+            serverCall.end(cancelled: false)
+        }
         push.unregisterDeadline = 0.2
 
-        let started = Date()
+        // Judged by order, not by the clock (a runner stall would fail a timed check):
+        // Disconnect returns while the server's call is still open, so it did not wait
+        // for an answer or for the deadline.
         let call = push.unregisterFromServer()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "Disconnect does not wait for the server")
+        XCTAssertFalse(serverCall.ended, "Disconnect does not wait for the server")
         XCTAssertNotNil(call)
         XCTAssertEqual(system.unregistrations, 1, "APNs delivery stops whether or not the server answers")
         await call?.value
-        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the call is abandoned at its deadline")
+        // The call ended long before the server's 30 s: it was cancelled at its deadline.
+        XCTAssertTrue(serverCall.ended)
+        XCTAssertTrue(serverCall.cancelled, "the call is abandoned at its deadline")
     }
 
     func testARefusedCallStillEndsQuietly() async {

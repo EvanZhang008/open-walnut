@@ -45,7 +45,6 @@ final class ScrollPerfTests: XCTestCase {
             row += "## 结论\n\n" + TranscriptFixtures.cjk + "\n\n" + TranscriptFixtures.table(1, rows: 4) + "\n\n"
         }
         let rows = (0..<400).map { i in row + "\n\nrow-\(i)" }
-        var worstBurstMs = 0.0
         var bursts: [Double] = []
         for frame in 0..<40 { // 40 frames x 10 rows = the whole page
             let slice = rows[(frame * 10)..<(frame * 10 + 10)]
@@ -53,14 +52,15 @@ final class ScrollPerfTests: XCTestCase {
                 for (i, text) in slice.enumerated() { materializeRow(text, cacheBuster: "\u{0}scroll\(frame)-\(i)") }
             }
             bursts.append(burstMs)
-            worstBurstMs = max(worstBurstMs, burstMs)
         }
-        let median = bursts.sorted()[bursts.count / 2]
-        print(String(format: "[scroll] 10-row cold burst (4KB heavy rows): median %6.1fms worst %6.1fms (frame=16.7ms, felt-jank=100ms)", median, worstBurstMs))
+        print(String(format: "[scroll] 10-row cold burst (4KB heavy rows): median %6.1fms worst %6.1fms (frame=16.7ms, felt-jank=100ms)",
+                     PerfGate.median(bursts), bursts.max() ?? 0))
         // Cold parse of 10 heavy rows will exceed one frame — that is known
         // (parse is main-thread by design). The gate is FELT-FREEZE territory:
-        // a single burst must stay well under 1s on this sim (~3-5x device).
-        XCTAssertLessThan(worstBurstMs, 1_000.0, "one scroll frame's materialization approaches watchdog territory")
+        // a burst must stay well under 1s on this sim (~3-5x device). Every burst
+        // is the same shape, so the worst but one: a burst slow twice is the
+        // code's, one slow burst may be the runner's.
+        XCTAssertLessThan(PerfGate.worstButOne(bursts), 1_000.0, "one scroll frame's materialization approaches watchdog territory")
     }
 
     /// Cache thrash lock: a round trip (scroll up 200 rows, back down 200)
@@ -84,16 +84,24 @@ final class ScrollPerfTests: XCTestCase {
         // now routes the tail with cache: .skip (the fix): one-shot strings
         // must never enter the shared cache and evict the visible page.
         let tailUnit = TranscriptFixtures.cjk + "\n\n"
-        for t in 0..<300 { _ = MarkdownParser.parse(tailUnit + "\u{0}tick\(t)", cache: .skip, clipOversized: false) }
-        let smallRoundTripMs = ms {
-            for r in smallRows.reversed() { _ = MarkdownParser.parse(r) } // up
-            for r in smallRows { _ = MarkdownParser.parse(r) }            // down
+        // Three round trips, judged on the median (a runner stall slows one). Each is
+        // preceded by 300 NEW ticks, untimed: a round trip re-parses whatever ticks
+        // evicted and puts it back, so ticks once before the first trip would leave the
+        // second and third all hits and the median would hide the thrash.
+        let smallRoundTrips = PerfGate.passes(3) { pass in
+            for t in 0..<300 {
+                _ = MarkdownParser.parse(tailUnit + "\u{0}tick\(pass)-\(t)", cache: .skip, clipOversized: false)
+            }
+            return ms {
+                for r in smallRows.reversed() { _ = MarkdownParser.parse(r) } // up
+                for r in smallRows { _ = MarkdownParser.parse(r) }            // down
+            }
         }
-        print(String(format: "[scroll] round trip 400x4KB rows after 300 live ticks: %6.1fms (hits expected; misses = tick entries evicted history)", smallRoundTripMs))
+        print("[scroll] round trip 400x4KB rows after 300 live ticks: \(PerfGate.summary(smallRoundTrips)) (hits expected; misses = tick entries evicted history)")
         // HARD GATE (was XCTExpectFailure until the 2026-08-07 fix — 916ms
         // red): live ticks now route through cache: .skip, so they can no
         // longer evict the visible page from the shared cache.
-        XCTAssertLessThan(smallRoundTripMs, 100.0,
+        XCTAssertLessThan(PerfGate.median(smallRoundTrips), 100.0,
             "round-trip scroll re-parses after streaming — live tick entries evict history rows from the parse cache (countLimit too small for page+stream)")
 
         // Oversized legacy rows: 400 x 64KB blows the cost cap → evictions.
@@ -101,16 +109,18 @@ final class ScrollPerfTests: XCTestCase {
         while big.utf8.count < 64_000 { big += TranscriptFixtures.cjk + "\n\n" + TranscriptFixtures.table(2, rows: 8) + "\n\n" }
         let bigRows = (0..<400).map { "\(big)\n\nbig-\($0)" }
         for r in bigRows { _ = MarkdownParser.parse(r) }
-        let bigRoundTripMs = ms {
-            for r in bigRows.reversed() { _ = MarkdownParser.parse(r) }
-            for r in bigRows { _ = MarkdownParser.parse(r) }
+        let bigRoundTrips = PerfGate.passes(3) { _ in
+            ms {
+                for r in bigRows.reversed() { _ = MarkdownParser.parse(r) }
+                for r in bigRows { _ = MarkdownParser.parse(r) }
+            }
         }
-        print(String(format: "[scroll] round trip 400x64KB rows: %7.1fms (cost-cap eviction scenario; ~3-5x on device)", bigRoundTripMs))
+        print("[scroll] round trip 400x64KB rows: \(PerfGate.summary(bigRoundTrips)) (cost-cap eviction scenario; ~3-5x on device)")
         // HARD GATE (was XCTExpectFailure until the 2026-08-07 fix — 25,027ms
         // red): parse() now clips oversized rows to 16K chars before keying,
         // so a worst-case 400-row page fits the (raised) cost cap and the
         // round trip is cache hits.
-        XCTAssertLessThan(bigRoundTripMs, 1_000.0,
+        XCTAssertLessThan(PerfGate.median(bigRoundTrips), 1_000.0,
             "oversized-row round trip thrashes the parse cache into re-parse storms")
     }
 }
