@@ -1,6 +1,7 @@
 // An unconfirmed stop must never look stopped: only an ok && stopped ACK writes stopped; everything else stays pending for a flush retry.
 import { describe, it, expect, vi } from 'vitest'
 import {
+  STOP_RETRY_DELAYS_MS,
   SessionStopCoordinator,
   type SessionStopConnection,
   type SessionStopDeps,
@@ -138,9 +139,17 @@ function makeHarness(records: SessionRecord[]) {
     log.push(`changed:${record.claudeSessionId}:${record.stopRequest?.state}:${record.process_status}`)
   })
 
-  const deps: SessionStopDeps = { get, save, confirm, pending, park, connection, changed }
+  // Retries are armed here and fired by the test (never by a real clock).
+  const scheduled: Array<{ fn: () => void; ms: number; cancelled: boolean }> = []
+  const schedule = (fn: () => void, ms: number) => {
+    const entry = { fn, ms, cancelled: false }
+    scheduled.push(entry)
+    return () => { entry.cancelled = true }
+  }
+
+  const deps: SessionStopDeps = { get, save, confirm, pending, park, connection, changed, schedule }
   return {
-    deps, log, store,
+    deps, log, store, scheduled,
     get, save, confirm, pending, park, connection, changed,
     build: () => new SessionStopCoordinator(deps),
     read: (sid: string): SessionRecord => clone(store.get(sid)!),
@@ -600,5 +609,67 @@ describe('SessionStopCoordinator fence + dispatch', () => {
     await expect(failing).rejects.toThrow('upload failed')
     await expect(stopping).resolves.toMatchObject({ state: 'confirmed' })
     expect(h.read('s1').process_status).toBe('stopped')
+  })
+})
+
+describe('SessionStopCoordinator retries a stop the host did not confirm', () => {
+  // 2026-11-03: the CLI exited under SIGINT while a child still held its process group, the daemon
+  // answered "process identity changed", and with the Mac's own host never reconnecting nothing
+  // asked again: sends and restarts were refused as "awaiting host confirmation" for good.
+  function replying(replies: Record<string, unknown>[]): SessionStopConnection {
+    let i = 0
+    return { connected: true, send: vi.fn(async () => replies[Math.min(i++, replies.length - 1)]!) }
+  }
+  const settled = () => new Promise((r) => setTimeout(r, 0))
+
+  it('sends the stop again after a refusal, and the next answer confirms it', async () => {
+    const h = makeHarness([makeRecord('s1')])
+    h.setConnection('devbox', replying([
+      { ok: false, error: 'stop: process identity changed; no further signals sent' },
+      { ok: true, stopped: true, noop: true, reason: 'not_in_registry' },
+    ]))
+    const first = await h.build().request('s1')
+    expect(first.state).toBe('pending')
+    expect(first.error).toContain('process identity changed')
+    expect(h.scheduled.map((e) => e.ms)).toEqual([STOP_RETRY_DELAYS_MS[0]])
+
+    h.scheduled[0]!.fn()
+    await vi.waitFor(() => expect(h.read('s1').stopRequest?.state).toBe('confirmed'))
+    expect(h.read('s1').process_status).toBe('stopped')
+    await settled()
+    expect(h.scheduled).toHaveLength(1)
+  })
+
+  it('tries on every delay, then waits for the host to reconnect, which starts the tries over', async () => {
+    const h = makeHarness([makeRecord('s1')])
+    const conn = replying([{ ok: false, error: 'stop: process group still exists without its original leader; stop confirmation is pending' }])
+    h.setConnection('devbox', conn)
+    const c = h.build()
+    await c.request('s1')
+    for (let i = 0; i < STOP_RETRY_DELAYS_MS.length; i++) {
+      expect(h.scheduled).toHaveLength(i + 1)
+      h.scheduled[i]!.fn()
+      await vi.waitFor(() => expect(conn.send).toHaveBeenCalledTimes(i + 2))
+      await settled()
+    }
+    expect(h.scheduled.map((e) => e.ms)).toEqual(STOP_RETRY_DELAYS_MS)
+    expect(h.read('s1').stopRequest?.state).toBe('pending')
+
+    await c.flush('devbox')
+    expect(h.scheduled).toHaveLength(STOP_RETRY_DELAYS_MS.length + 1)
+    expect(h.scheduled.at(-1)!.ms).toBe(STOP_RETRY_DELAYS_MS[0])
+  })
+
+  it('a stop confirmed another way ends its retries without another send', async () => {
+    const h = makeHarness([makeRecord('s1')])
+    const conn = replying([{ ok: false, error: 'stop: process liveness is unknown; refusing to signal' }])
+    h.setConnection('devbox', conn)
+    await h.build().request('s1')
+    const id = h.read('s1').stopRequest!.id
+    h.replaceStopRequest('s1', { id, requestedAt: '2026-09-11T00:20:00.000Z', state: 'confirmed' })
+    h.scheduled[0]!.fn()
+    await settled(); await settled()
+    expect(conn.send).toHaveBeenCalledTimes(1)
+    expect(h.scheduled).toHaveLength(1)
   })
 })

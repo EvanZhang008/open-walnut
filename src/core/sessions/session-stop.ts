@@ -28,10 +28,24 @@ export interface SessionStopDeps {
   park(sid: string): Promise<void>
   connection(host: string): Promise<SessionStopConnection | null>
   changed(record: SessionRecord): void
+  /** Run `fn` after `ms` (tests drive their own clock); returns a cancel. */
+  schedule?(fn: () => void, ms: number): () => void
 }
+
+/**
+ * A stop the host did not confirm is sent again on these delays while it stays
+ * pending, then only when the host reconnects (flush). 2026-11-03: a stop whose
+ * CLI exited while a child of it still held the process group was answered
+ * "process identity changed", and with the Mac's own host never reconnecting,
+ * nothing asked again: every send and restart of that session was refused with
+ * "awaiting host confirmation" for good, though one more stop confirmed it.
+ */
+export const STOP_RETRY_DELAYS_MS = [5_000, 15_000, 60_000, 300_000]
 
 export class SessionStopCoordinator {
   private readonly pending = new Map<string, Promise<unknown>>()
+  /** Pending stops waiting for their next try: the try it is, and its cancel. */
+  private readonly retries = new Map<string, { attempt: number; armed: boolean; cancel: () => void }>()
 
   constructor(private readonly deps: SessionStopDeps) {}
 
@@ -65,15 +79,49 @@ export class SessionStopCoordinator {
         : { id: randomUUID(), requestedAt: new Date().toISOString(), state: 'pending' }
       const record = await this.deps.save(sid, { stopRequest })
       this.deps.changed(record)
-      return this.deliver(record)
+      return this.settle(sid, await this.deliver(record))
     })
+  }
+
+  /** After a try: a stop still pending is tried again later (STOP_RETRY_DELAYS_MS), one that settled is done. */
+  private settle(sid: string, request: StopRequest): StopRequest {
+    const held = this.retries.get(sid)
+    if (request.state !== 'pending') {
+      held?.cancel()
+      this.retries.delete(sid)
+      return request
+    }
+    if (held?.armed) return request
+    const attempt = held?.attempt ?? 0
+    // Tries used up: the next is when the host reconnects (flush), which starts them over.
+    if (attempt >= STOP_RETRY_DELAYS_MS.length) { this.retries.delete(sid); return request }
+    const schedule = this.deps.schedule ?? ((fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms)
+      t.unref?.()
+      return () => clearTimeout(t)
+    })
+    const entry = { attempt: attempt + 1, armed: true, cancel: () => {} }
+    this.retries.set(sid, entry)
+    entry.cancel = schedule(() => {
+      if (this.retries.get(sid) !== entry) return
+      entry.armed = false
+      void this.serial(sid, async () => {
+        const current = await this.deps.get(sid)
+        if (current?.stopRequest?.state !== 'pending' || current.stopRequest.id !== request.id) {
+          if (this.retries.get(sid) === entry) this.retries.delete(sid)
+          return
+        }
+        this.settle(sid, await this.deliver(current))
+      }).catch(() => {})
+    }, STOP_RETRY_DELAYS_MS[attempt]!)
+    return request
   }
 
   async flush(host: string, connection?: SessionStopConnection): Promise<void> {
     for (const record of await this.deps.pending(host)) {
       await this.serial(record.claudeSessionId, async () => {
         const current = await this.deps.get(record.claudeSessionId)
-        if (current?.stopRequest?.state === 'pending') await this.deliver(current, connection)
+        if (current?.stopRequest?.state === 'pending') this.settle(record.claudeSessionId, await this.deliver(current, connection))
       })
     }
   }
