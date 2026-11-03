@@ -7,7 +7,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, TaskPhase } from '@/types/session';
-import { storedUserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
 
 // ── Session ID resolution ──
 
@@ -58,7 +58,7 @@ export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status
   return task.phase === 'IN_PROGRESS' ? 'working' : 'waiting';
 }
 
-/** Color class for the task circle (the clickable To Do ↔ Complete toggle).
+/** Color class for the task circle (the clickable open ↔ Completed toggle).
  *
  *  THREE colors, deliberately (2026-08-14 user request — the short-lived
  *  5-state version with red/green circles was "过于复杂"):
@@ -101,13 +101,37 @@ export const PROCESS_LABELS: Record<ProcessStatus, string> = {
   error: 'Error',
 };
 
+/** A task nobody started yet (its phase TODO, its user status a wait of kind `not-started`). */
+export const NOT_STARTED_LABEL = 'Not started';
+
+/**
+ * The words for a PHASE, in the user's status names (2026-11-03, the user's call: no surface he reads
+ * shows a phase name such as "Need Action" or "In Progress"). THE one phase-to-words map of the web:
+ * filters and the phase menu show these and still store and send the phase itself. A spot that shows
+ * the state of one task and holds the task reads `taskStatusLabel` instead, which weighs its real
+ * user status. Guard: tests/web/no-phase-words-on-user-surfaces.test.ts.
+ */
 export const PHASE_LABELS: Record<TaskPhase, string> = {
-  TODO: 'To Do',
-  WAITING: 'Waiting',
-  IN_PROGRESS: 'In Progress',
-  NEED_ACTION: 'Need Action',
-  COMPLETE: 'Complete',
+  TODO: NOT_STARTED_LABEL,
+  WAITING: stateWord('waiting'),
+  IN_PROGRESS: USER_STATE_LABELS.working,
+  NEED_ACTION: USER_STATE_LABELS.needs,
+  COMPLETE: USER_STATE_LABELS.done,
 };
+
+/**
+ * The status words of ONE task, as the user reads it everywhere: its user status (`taskUserState`),
+ * To read drawn as Needs you (`shownState`), a wait read as Not started, Snoozed or Waiting.
+ * `snoozed`: the caller's reading of the start date, for a task the server has not derived yet.
+ */
+export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'>, snoozed = false): string {
+  const state = shownState(taskUserState(task, snoozed));
+  if (state !== 'waiting') return USER_STATE_LABELS[state];
+  const us = task.user_status;
+  const isSnoozed = us ? !!us.snoozed : snoozed;
+  if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO')) return NOT_STARTED_LABEL;
+  return stateWord('waiting', isSnoozed);
+}
 
 // ── Colors ──
 
@@ -171,7 +195,7 @@ export const PHASE_COLORS: Record<TaskPhase, string> = {
 // ── Phase picker choices (simplified) ──
 
 /**
- * Phases offered in ALL phase-picker menus: just To Do and Complete.
+ * Phases offered in ALL phase-picker menus: just Not started and Completed.
  * The full lifecycle (IN_PROGRESS → NEED_ACTION → …) still exists in the
  * data model and is set by agents/automation; it's only hidden from manual
  * pickers. If the task currently sits in a hidden phase, that phase is

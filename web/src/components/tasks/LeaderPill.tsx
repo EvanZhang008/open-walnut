@@ -7,7 +7,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { locateTaskOnHome } from '@/utils/open-session';
-import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass, taskUserState } from '@/utils/session-status';
+import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
@@ -184,7 +184,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         </span>
                         <span className="leader-sub-title">{sub.title}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
-                        <span className="leader-sub-phase-label">{PHASE_LABELS[sub.phase] ?? sub.phase}</span>
+                        <span className="leader-sub-phase-label">{taskStatusLabel(sub)}</span>
                       </button>
                       <button
                         type="button"

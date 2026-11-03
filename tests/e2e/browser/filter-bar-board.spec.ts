@@ -113,7 +113,7 @@ test.describe('Status, sections and persistence', () => {
       await expect(filterChip(page, 'status')).toHaveCount(0)
       await setStatusSectionOpen(page, 'waiting', false)
       await expect(statusSectionCard(page, 'waiting', waiting)).toHaveCount(0)
-      await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
+      await setStatus(page, ['Not started', 'Working', 'Needs you', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
       await expect(statusSectionCard(page, 'working', open)).toBeVisible()
       await expect(statusSectionCard(page, 'working', waiting)).toHaveCount(0)
@@ -123,7 +123,7 @@ test.describe('Status, sections and persistence', () => {
       await setStatusSectionOpen(page, 'waiting', false)
 
       // C8: Open + Complete likewise keeps the done row in its Completed section.
-      await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+      await setStatus(page, ['Not started', 'Working', 'Needs you', 'Completed'])
       await expect(filterChip(page, 'status')).toContainText('Open, Complete')
       await expect(statusSectionCard(page, 'working', open)).toBeVisible()
       await expect(statusSectionCard(page, 'working', done)).toHaveCount(0)
@@ -135,13 +135,13 @@ test.describe('Status, sections and persistence', () => {
 
       // C10: Complete alone shows only completed rows; Need Action alone only those. A
       // narrower pick is a plain filter: the list, under its project.
-      await setStatus(page, ['Complete'])
+      await setStatus(page, ['Completed'])
       await openListProject(page, garden)
       await expect(filterChip(page, 'status')).toHaveText(/Complete/)
       await expect(row(page, done)).toBeVisible()
       await expect(row(page, open)).toHaveCount(0)
       await expect(row(page, need)).toHaveCount(0)
-      await setStatus(page, ['Need Action'])
+      await setStatus(page, ['Needs you'])
       await expect(row(page, need)).toBeVisible()
       await expect(row(page, open)).toHaveCount(0)
       await expect(row(page, done)).toHaveCount(0)
@@ -160,7 +160,7 @@ test.describe('Status, sections and persistence', () => {
       await filterProjects(page, [garden])
       // Open + Waiting, picked through the Status chip menu: Working keeps the open
       // row, the waiting row lives in the folded Waiting / snoozed section.
-      await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
+      await setStatus(page, ['Not started', 'Working', 'Needs you', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
       await setStatusSectionOpen(page, 'working', true)
       await expect(statusSectionCard(page, 'working', open)).toBeVisible()
@@ -228,7 +228,7 @@ test.describe('Status, sections and persistence', () => {
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden, empty])
-      await setStatus(page, ['Complete'])
+      await setStatus(page, ['Completed'])
       await expect(row(page, ids[0])).toBeVisible()
       const before = {
         badge: await page.getByTestId('filter-badge').textContent(),
@@ -272,12 +272,12 @@ test.describe('Clear, empty state and the archive', () => {
     await openHome(page, baseURL!, 90_000)
     await expect(anyRow(page, 'fb-mia-h1').first()).toBeVisible({ timeout: 20_000 })
     await filterProjects(page, ['Home', 'Garden'])
-    await setStatus(page, ['Need Action'])
+    await setStatus(page, ['Needs you'])
     const empty = page.getByTestId('todo-filter-empty')
     await expect(empty).toContainText('No tasks match these filters')
     await expect(page.getByTestId('filter-count')).toHaveAttribute('aria-label', '0 tasks')
     await page.screenshot({ path: `${SHOTS}/empty-match.png`, clip: await panelClip(page) })
-    await setStatus(page, ['To Do', 'Waiting'])
+    await setStatus(page, ['Not started', 'Waiting'])
     await addFilter(page, 'source', 'Local')
     await addFilter(page, 'tags', 'urgent')
     await expect(page.getByTestId('filter-badge')).toHaveText('4')
@@ -294,10 +294,10 @@ test.describe('Clear, empty state and the archive', () => {
     await expect(page.getByTestId('filter-badge')).toHaveText('4')
     expect(await page.evaluate(() => localStorage.getItem('walnut-todo-filters'))).toBe(storedBefore)
     expect((await hitIds(page)).sort()).toEqual(hitsBefore)
-    await expect(filterChip(page, 'status')).toContainText('To Do, Waiting')
+    await expect(filterChip(page, 'status')).toContainText('Not started, Waiting')
 
     // The empty state's own button runs the same Clear.
-    await setStatus(page, ['Need Action'])
+    await setStatus(page, ['Needs you'])
     await page.getByTestId('todo-filter-empty').getByRole('button', { name: 'Clear filters' }).click()
     await expect(page.getByTestId('todo-filter-empty')).toHaveCount(0)
     await expect(filterRow(page)).toHaveCount(0)
@@ -328,7 +328,7 @@ test.describe('Clear, empty state and the archive', () => {
       // A Status of Complete alone draws completed rows in the list and loads the
       // archive at once (Open + Complete keeps them in the Completed section, which
       // loads the archive only from its Show more).
-      await setStatus(page, ['Complete'])
+      await setStatus(page, ['Completed'])
       await expect(filterChip(page, 'status')).toHaveText(/Complete/)
       const toast = page.getByText('Could not load older completed tasks. Showing the ones already loaded.')
       await expect(toast).toHaveCount(1, { timeout: 45_000 })

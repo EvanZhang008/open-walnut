@@ -72,7 +72,7 @@ test('search finds a future-start task that the Now date filter hides', async ({
 
 test('search honors a Status chip the user added', async ({ page, baseURL }) => {
   await boot(page, baseURL!);
-  await setStatus(page, ['Complete']);
+  await setStatus(page, ['Completed']);
   await search(page, 'marmalade');
   await expect(hit(page, DONE)).toBeVisible({ timeout: 10_000 });
   await expect(hit(page, DEFERRED)).toHaveCount(0);

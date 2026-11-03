@@ -4,11 +4,13 @@
  * Prefers the new single-slot model (sessionId + sessionStatus).
  * Falls back to legacy 2-slot props (planSessionId/execSessionId + statuses) for backward compat.
  *
- * Three-layer badge format: "Session · {Mode} · {PhaseLabel} / {ProcessLabel}"
+ * Three-layer badge format: "Session · {Mode} · {Status} / {ProcessLabel}"
  * Examples:
- *   Session · Plan · In Progress / Running
- *   Session · Bypass · Agent Complete / Stopped
- *   Session · Plan · Wait / Stopped
+ *   Session · Plan · Working / Running
+ *   Session · Bypass · Needs you / Stopped
+ *   Session · Plan · Waiting / Stopped
+ * {Status} is the task's user status (`statusLabel`, from taskStatusLabel) when the caller
+ * holds the task, else the phase in the same words (PHASE_LABELS).
  */
 import { PHASE_LABELS, PROCESS_LABELS, pillPhaseClassSuffix } from '@/utils/session-status';
 import type { TaskPhase, ProcessStatus } from '@/types/session';
@@ -17,7 +19,7 @@ import type { SessionMode } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { ICON_ROBOT } from '@/components/common/Icons';
 import { useCanonicalSessionId, useSessionStatus } from '@/hooks/useSessionStatus';
-import { resolveTaskSessionId } from '@/utils/session-status';
+import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { phoneSessionLabel } from '@/utils/phone-session-label';
 
@@ -46,6 +48,8 @@ interface SessionPillProps {
   sessionStatus?: SessionStatus;
   /** Task phase — used for display label and CSS class. */
   phase?: TaskPhase;
+  /** The task's own status words (taskStatusLabel), shown in place of the phase's. */
+  statusLabel?: string;
   /** @deprecated Legacy 2-slot prop. */
   planSessionId?: string;
   /** @deprecated Legacy 2-slot prop. */
@@ -106,7 +110,7 @@ function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus |
   return pillPhaseClassSuffix(phase);
 }
 
-export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick, isActive }: SessionPillProps) {
+export function SessionPill({ sessionId, sessionStatus, phase, statusLabel, planSessionId, execSessionId, planStatus, execStatus, sessionIds, mode, onClick, isActive }: SessionPillProps) {
   // A phone has no tooltip: the pill's words are the four readings of
   // phoneSessionLabel (no permission mode, no phase / process pair; spec 4.2).
   const phone = usePhoneLayout();
@@ -138,15 +142,15 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   if (sessionId || sessionStatus) {
     const status = resolvedSessionStatus;
     const cls = stateClass(status, phase);
-    const wl = phaseLabel(phase);
-    // Waiting outranks the raw process label: "Session · Plan · In Progress /
+    const wl = statusLabel ?? phaseLabel(phase);
+    // Waiting outranks the raw process label: "Session · Plan · Working /
     // Idle" hides that the CLI is blocked on a human click.
     const pl = isWaiting(status) ? 'Waiting' : processLabel(status);
     const isEmbedded = status?.provider === 'embedded';
     const title = isWaiting(status)
       ? `Waiting for your answer: ${status!.pendingPermissionTool}`
       : status
-        ? `Session · ${modeLabel}: ${phase ?? 'unknown'} / ${status.process_status}${isEmbedded ? ' (embedded)' : ''}`
+        ? `Session · ${modeLabel}: ${wl} / ${status.process_status}${isEmbedded ? ' (embedded)' : ''}`
         : 'Session';
 
     return (
@@ -179,7 +183,7 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
 
   // Pick the primary session for the process label (prefer exec over plan)
   const primary = hasExec ? resolvedExecStatus : resolvedPlanStatus;
-  const wl = phaseLabel(phase);
+  const wl = statusLabel ?? phaseLabel(phase);
   const pl = processLabel(primary);
 
   // Detect embedded provider
@@ -193,8 +197,8 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
 
   // Build title with full details for both slots
   const titleParts: string[] = [];
-  if (hasPlan && resolvedPlanStatus) titleParts.push(`plan: ${phase ?? 'unknown'} / ${resolvedPlanStatus.process_status}${resolvedPlanStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
-  if (hasExec && resolvedExecStatus) titleParts.push(`exec: ${phase ?? 'unknown'} / ${resolvedExecStatus.process_status}${resolvedExecStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
+  if (hasPlan && resolvedPlanStatus) titleParts.push(`plan: ${wl} / ${resolvedPlanStatus.process_status}${resolvedPlanStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
+  if (hasExec && resolvedExecStatus) titleParts.push(`exec: ${wl} / ${resolvedExecStatus.process_status}${resolvedExecStatus.provider === 'embedded' ? ' (embedded)' : ''}`);
   const title = titleParts.join('  |  ') || 'Session';
 
   return (
@@ -236,6 +240,7 @@ export function TaskSessionPill({ task, onOpenSession, isActive }: TaskSessionPi
       sessionId={displaySessionId}
       sessionStatus={sessionStatus}
       phase={task.phase}
+      statusLabel={taskStatusLabel(task)}
       mode={sessionStatus?.mode
         ?? task.session_status?.mode
         ?? task.exec_session_status?.mode

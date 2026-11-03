@@ -1,10 +1,14 @@
 import type { ReactNode } from 'react';
-import type { TaskStatus, TaskPhase } from '@open-walnut/core';
+import type { Task, TaskStatus, TaskPhase } from '@open-walnut/core';
+import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
 import { phaseIcon } from './Icons';
 
 interface StatusBadgeProps {
   status: TaskStatus;
   phase?: TaskPhase;
+  /** The task itself, when the caller holds it: the badge then reads its user status
+   *  (taskStatusLabel), not its phase. */
+  task?: Pick<Task, 'phase' | 'status' | 'user_status'> | null;
 }
 
 const phaseSymbols: Record<string, ReactNode> = {
@@ -15,13 +19,6 @@ const phaseSymbols: Record<string, ReactNode> = {
   COMPLETE: phaseIcon('COMPLETE'),
 };
 
-const phaseLabels: Record<string, string> = {
-  TODO: 'To Do',
-  WAITING: 'Waiting',
-  IN_PROGRESS: 'In Progress',
-  NEED_ACTION: 'Need Action',
-  COMPLETE: 'Complete',
-};
 
 const statusSymbols: Record<string, string> = {
   todo: '\u25CB',
@@ -33,11 +30,11 @@ const statusLabels: Record<string, string> = {
   done: 'Done',
 };
 
-export function StatusBadge({ status, phase }: StatusBadgeProps) {
+export function StatusBadge({ status, phase, task }: StatusBadgeProps) {
   if (phase) {
     return (
       <span className={`badge badge-phase-${phase.toLowerCase()}`}>
-        {phaseSymbols[phase] ?? '?'} {phaseLabels[phase] ?? phase}
+        {phaseSymbols[phase] ?? '?'} {task ? taskStatusLabel(task) : (PHASE_LABELS[phase] ?? phase)}
       </span>
     );
   }

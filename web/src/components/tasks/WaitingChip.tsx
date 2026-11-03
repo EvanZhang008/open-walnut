@@ -9,7 +9,7 @@
  *          and one with only a result to read "To read" (2026-11-02, the user: "wait is just
  *          acutally waitng, if it is runnig it shoud be i progress right?")
  *   card   on hover, focus or a tap: when it wakes by itself, on whom or what it
- *          waits, its triggers, and that a message here moves it to In Progress
+ *          waits, its triggers, and that a message here moves it to Working
  *
  * Overlay rules (web/src/AGENTS.md): the card is portalled to <body>, placed by
  * useMenuPlacement, stops pointerdown, and closes on an outside pointerdown,
@@ -78,7 +78,7 @@ export function waitingDetailLines(
   const next = task.user_status?.next?.trim();
   if (next) lines.push(`Next: ${next}`);
   for (const t of triggersText.split('\n').map((l) => l.trim()).filter(Boolean)) lines.push(`Trigger ${t}`);
-  lines.push('A message here moves it to In Progress.');
+  lines.push('A message here moves it to Working.');
   return lines;
 }
 

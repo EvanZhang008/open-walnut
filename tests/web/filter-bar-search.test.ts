@@ -28,15 +28,15 @@ describe('searchFilterDims', () => {
     expect(rows('ios')).toEqual(['Project  iOS App', 'Tags  ios']);
   });
   it('C26b: "todo" puts the unselected Source first and the default Status after it', () => {
-    expect(rows('todo')).toEqual(['Source  Microsoft To Do', 'Status  To Do *']);
+    expect(rows('todo')).toEqual(['Source  Microsoft To Do', 'Status  Not started *']);
   });
-  it('C26: "gard" finds nothing else; "doing" finds In Progress', () => {
+  it('C26: "gard" finds nothing else; "doing" finds Working', () => {
     const garden = { ...lists, projects: [...lists.projects, 'Garden'] };
     expect(searchFilterDims('gard', S0, garden).hits.map((h) => `${h.dimLabel}  ${h.valueLabel}`)).toEqual(['Project  Garden']);
-    expect(rows('doing')).toEqual(['Status  In Progress *']);
+    expect(rows('doing')).toEqual(['Status  Working *']);
   });
-  it('done, complete, completed all find Complete', () => {
-    for (const q of ['done', 'complete', 'completed', 'COMPLETED']) expect(rows(q)).toContain('Status  Complete');
+  it('done, complete, completed all find Completed', () => {
+    for (const q of ['done', 'complete', 'completed', 'COMPLETED']) expect(rows(q)).toContain('Status  Completed');
   });
   it('phase finds the whole Status dimension', () => {
     expect(rows('phase')).toHaveLength(5);

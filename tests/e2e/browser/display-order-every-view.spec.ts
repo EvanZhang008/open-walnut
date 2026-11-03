@@ -304,28 +304,28 @@ test('Status: an Open row over its three statuses toggles them as one; every pag
   const open = filterValue(page, 'status', 'Open')
   await expect(open).toHaveAttribute('aria-pressed', 'true')
   await expect(open.locator('.fb-opt-default')).toHaveText('Default')
-  expect(await filterPage(page, 'status').locator('.fb-opt.is-child .fb-opt-label').allInnerTexts()).toEqual(['To Do', 'In Progress', 'Need Action'])
+  expect(await filterPage(page, 'status').locator('.fb-opt.is-child .fb-opt-label').allInnerTexts()).toEqual(['Not started', 'Working', 'Needs you'])
   // The open block is all that is on: Open cannot be turned off (aria-disabled, so forced).
   await expect(open).toHaveAttribute('aria-disabled', 'true')
   await open.click({ force: true })
   await expect(open).toHaveAttribute('aria-pressed', 'true')
   // One child off: Open draws a dash; a click puts the whole block back.
-  await filterValue(page, 'status', 'In Progress').click()
+  await filterValue(page, 'status', 'Working').click()
   await expect(open).toHaveAttribute('aria-pressed', 'mixed')
   await open.click()
   await expect(open).toHaveAttribute('aria-pressed', 'true')
-  await expect(filterValue(page, 'status', 'In Progress')).toHaveAttribute('aria-pressed', 'true')
+  await expect(filterValue(page, 'status', 'Working')).toHaveAttribute('aria-pressed', 'true')
   // With Complete on, Open turns the block off and leaves Complete.
-  await filterValue(page, 'status', 'Complete').click()
+  await filterValue(page, 'status', 'Completed').click()
   await open.click()
-  for (const s of ['To Do', 'In Progress', 'Need Action']) await expect(filterValue(page, 'status', s)).toHaveAttribute('aria-pressed', 'false')
-  await expect(filterValue(page, 'status', 'Complete')).toHaveAttribute('aria-pressed', 'true')
+  for (const s of ['Not started', 'Working', 'Needs you']) await expect(filterValue(page, 'status', s)).toHaveAttribute('aria-pressed', 'false')
+  await expect(filterValue(page, 'status', 'Completed')).toHaveAttribute('aria-pressed', 'true')
   await filterPage(page, 'status').screenshot({ path: `${SHOTS}/status-open-off.png` })
   // Only on Open: just the block, the default again.
   await open.hover()
   await page.getByRole('button', { name: 'Only Open', exact: true }).click()
   await expect(open).toHaveAttribute('aria-pressed', 'true')
-  await expect(filterValue(page, 'status', 'Complete')).toHaveAttribute('aria-pressed', 'false')
+  await expect(filterValue(page, 'status', 'Completed')).toHaveAttribute('aria-pressed', 'false')
   await closeFilterMenu(page)
 
   // Date tags Available now; Project starts with Any project, which clears a pick.

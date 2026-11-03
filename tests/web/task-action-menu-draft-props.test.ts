@@ -18,7 +18,7 @@ vi.mock('@/contexts/FocusBarContext', () => ({ useFocusBarContextSafe: () => nul
 vi.mock('@/hooks/useProjectRegistry', () => ({ useProjectRegistry: () => ({ projects: [] }) }));
 vi.mock('@/hooks/useShowPriority', () => ({ useShowPriority: () => true, useShowPriorityState: () => true }));
 vi.mock('@/hooks/useIntegrations', () => ({ getIntegrationMeta: () => undefined, useIntegrations: () => [] }));
-vi.mock('@/utils/session-status', () => ({ resolveTaskSessionId: () => undefined }));
+vi.mock('@/utils/session-status', async (importOriginal) => ({ ...(await importOriginal<object>()), resolveTaskSessionId: () => undefined }));
 vi.mock('@/components/tasks/PluginFieldPicker', () => ({ PluginFieldsSection: () => null }));
 vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: () => null }));
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));

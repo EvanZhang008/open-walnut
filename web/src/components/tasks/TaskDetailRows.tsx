@@ -66,6 +66,8 @@ interface TaskRowProps {
   title: string;
   phase: TaskPhase | string;
   done: boolean;
+  /** The task's own status words (taskStatusLabel), when the caller holds the task. */
+  status?: string;
   onOpen: () => void;
 }
 
@@ -75,7 +77,7 @@ const PHASE_DOT: Partial<Record<string, string>> = {
   COMPLETE: '#34c759',
 };
 
-export function TaskRow({ title, phase, done, onOpen }: TaskRowProps) {
+export function TaskRow({ title, phase, done, status, onOpen }: TaskRowProps) {
   return (
     <div
       className={`tdp-row tdp-task-row${done ? ' is-done' : ''}`}
@@ -88,7 +90,7 @@ export function TaskRow({ title, phase, done, onOpen }: TaskRowProps) {
       <div className="tdp-row-line">
         <span className="tdp-dot" style={{ background: (done ? PHASE_DOT.COMPLETE : PHASE_DOT[phase]) ?? 'var(--fg-muted)' }} />
         <span className="tdp-row-title">{title}</span>
-        <span className="tdp-row-end">{PHASE_LABELS[phase as TaskPhase] ?? phase}</span>
+        <span className="tdp-row-end">{status ?? PHASE_LABELS[phase as TaskPhase] ?? phase}</span>
       </div>
     </div>
   );

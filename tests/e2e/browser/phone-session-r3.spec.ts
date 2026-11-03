@@ -154,11 +154,11 @@ test('N2-06: keyboard up, a Waiting task keeps its header chip, its words are th
   await line.tap()
   await expect(page.getByTestId('session-waiting-card')).toContainText(/^Wait until /)
   await page.screenshot({ path: `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${test.info().project.name}/phone-chip-card.png` })
-  await expect(page.getByTestId('session-waiting-card')).toContainText('A message here moves it to In Progress.')
+  await expect(page.getByTestId('session-waiting-card')).toContainText('A message here moves it to Working.')
   await line.tap()
   await expect(page.getByTestId('session-waiting-card')).toHaveCount(0)
   // The empty field says what a message does.
-  await expect(panel.locator('.session-panel-input textarea').first()).toHaveAttribute('placeholder', 'Message: moves it to In Progress')
+  await expect(panel.locator('.session-panel-input textarea').first()).toHaveAttribute('placeholder', 'Message: moves it to Working')
   await page.evaluate(() => {
     const r = document.documentElement.style
     r.setProperty('--wn-safe-top', '47px')

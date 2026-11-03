@@ -157,7 +157,7 @@ test('C58: completing a task whose session runs asks first; Cancel sends nothing
   await openSessionTaskDetail(page)
   expect(await markerId(page)).toBe(`task-detail:${SESSION_TASK_ID}`)
   const phaseRow = page.getByTestId('phone-phase-row')
-  await expect(phaseRow).toContainText('Phase')
+  await expect(phaseRow).toContainText('Status')
   // Whatever phase the shared fixture task is in now; it must not move.
   const phaseBefore = (await phaseRow.textContent()) ?? ''
   expect(phaseBefore).not.toMatch(/Complete/)

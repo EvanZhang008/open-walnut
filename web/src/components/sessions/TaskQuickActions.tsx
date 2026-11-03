@@ -13,8 +13,8 @@ import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
 import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
-import { taskCircleClass, taskUserState } from '@/utils/session-status';
-import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
+import { taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
+import { NEEDS_CATEGORY_LABELS, needsLineOf } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
@@ -33,23 +33,12 @@ const PHASE_ICON: Record<string, ReactNode> = {
   COMPLETE: '✓✓',
 };
 
-const PHASE_LABEL: Record<string, string> = {
-  TODO: 'To Do',
-  WAITING: 'Waiting',
-  IN_PROGRESS: 'In Progress',
-  NEED_ACTION: 'Need Action',
-  COMPLETE: 'Complete',
-};
-
-/** The phase as the user reads it: a parked task whose own work runs is Working, one with only a
- *  result to read is To read, never Waiting (2026-11-02; Icons.tsx binaryPhaseIcon). */
+/** The task's status as the user reads it (taskStatusLabel: Needs you, Working, Waiting, Not
+ *  started, Completed); one with only a result to read names what to do with it, the category of
+ *  its Needs you line (2026-11-02; Icons.tsx binaryPhaseIcon). */
 function quickPhaseLabel(task: Task): string {
-  const label = PHASE_LABEL[task.phase] ?? task.phase;
-  const state = taskUserState(task);
-  if (label !== PHASE_LABEL.WAITING) return label;
-  if (state === 'working') return USER_STATE_LABELS.working;
-  if (state === 'read') { const line = task.user_status ? needsLineOf(task.user_status) : null; return NEEDS_CATEGORY_LABELS[line?.category ?? 'look']; }
-  return label;
+  if (taskUserState(task) === 'read') { const line = task.user_status ? needsLineOf(task.user_status) : null; return NEEDS_CATEGORY_LABELS[line?.category ?? 'look']; }
+  return taskStatusLabel(task);
 }
 
 
@@ -347,7 +336,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
   return (
     <div className="task-quick-actions">
-      {/* Phase badge — one click toggles To Do ↔ Complete */}
+      {/* Phase badge — one click toggles open ↔ Completed */}
       {slot !== 'kebab' && task && (
       <div className="task-quick-phase">
         <button

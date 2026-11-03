@@ -1193,7 +1193,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
           ))}
           <PhoneRowExtras task={task} needsAction={needsAction} childCount={childCount} isExpanded={isExpanded} onToggleExpand={onToggleExpand} />
-          {/* Phase icon — one click toggles To Do ↔ Complete (an hourglass while Waiting) */}
+          {/* Phase icon — one click toggles open ↔ Completed (an hourglass while Waiting) */}
           <button
             className={`task-phase-icon-btn ${circleClass}`}
             {...phonePhaseAttrs()}
@@ -1201,7 +1201,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               e.stopPropagation();
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
             }}
-            aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+            aria-label={isDone ? 'Reopen' : 'Mark complete'}
             title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
@@ -2168,7 +2168,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
-      {/* Phase icon — one click toggles To Do ↔ Complete */}
+      {/* Phase icon — one click toggles open ↔ Completed */}
       <button
         className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
         {...phonePhaseAttrs()}
@@ -2176,7 +2176,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
-        aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+        aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}

@@ -243,14 +243,6 @@ const PHASE_ICON: Record<string, ReactNode> = {
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
 };
 
-const PHASE_LABEL: Record<string, string> = {
-  TODO: 'To Do',
-  WAITING: 'Waiting',
-  IN_PROGRESS: 'In Progress',
-  NEED_ACTION: 'Need Action',
-  COMPLETE: 'Complete',
-};
-
 // ── SortableTierCard — unified draggable card for any tier ──
 // Wrapped in React.memo (invariant #4) to prevent re-render cascades during drag.
 // Without memo, every RAF tick from bumpDragTick would re-render all cards in all tiers,
@@ -427,14 +419,14 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
-      {/* Phase icon — one click toggles To Do ↔ Complete */}
+      {/* Phase icon — one click toggles open ↔ Completed */}
       <button
         className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
-        aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+        aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}

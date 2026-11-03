@@ -182,7 +182,7 @@ test.describe('landing, the named cap, and the success sentence', () => {
     await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
-    await expect(railButton(page, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+    await expect(railButton(page, 'Needs you')).toHaveAttribute('aria-current', 'true')
     // Needs Action is the asks alone: no card and no mount; the task panel keeps its card.
     await expect(page.locator('.notification-panel .nfc-perm-card')).toHaveCount(2)
     await expect(panelMount(page)).toHaveCount(0)

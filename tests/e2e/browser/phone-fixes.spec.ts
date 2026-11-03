@@ -283,7 +283,7 @@ test('C73, N13: home rows, the session menu and the center draw no emoji-prone g
   expect(await emojiProneText(page, '.todo-panel')).toEqual([])
   await page.locator('.phone-topbar').getByTestId('phone-bell').tap()
   await expect(page.locator('.notification-panel')).toBeVisible()
-  for (const name of ['Needs Action', 'Inbox', 'Errors', 'All']) {
+  for (const name of ['Needs you', 'Inbox', 'Errors', 'All']) {
     await page.locator('.notification-panel .nfc-rail-btn', { hasText: name }).first().tap()
     await page.waitForTimeout(300)
     for (const t of await page.locator('.notification-panel .nfc-card-toggle').all()) await t.tap().catch(() => {})

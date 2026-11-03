@@ -175,10 +175,10 @@ describe('FilterHome: the first page', () => {
     expect(summary(loading, 'project')?.textContent).toBe('Loading')
   })
 
-  it('summaries use the chip words: Home, Garden; To Do, Need Action', () => {
+  it('summaries use the chip words: Home, Garden; Not started, Needs you', () => {
     const doc = home(controller({ state: withState({ projects: ['Home', 'Garden'], status: ['TODO', 'NEED_ACTION'] as TaskPhase[] }) }))
     expect(summary(doc, 'project')?.textContent).toBe('Home, Garden')
-    expect(summary(doc, 'status')?.textContent).toBe('To Do, Need Action')
+    expect(summary(doc, 'status')?.textContent).toBe('Not started, Needs you')
     expect(summary(doc, 'project')?.className).not.toContain('is-default')
   })
 
@@ -198,7 +198,7 @@ describe('FilterHome: the first page', () => {
 describe('FilterValuesPage: the second page', () => {
   it('C3: defaults press the three open statuses; Available now on the Date page', () => {
     const doc = page(controller(), 'status')
-    expect(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'].map((v) => pressed(doc, v)))
+    expect(['Not started', 'Working', 'Needs you', 'Waiting', 'Completed'].map((v) => pressed(doc, v)))
       .toEqual(['true', 'true', 'true', 'false', 'false'])
     const date = page(controller(), 'date')
     expect(date.querySelector('[data-date-value="now"]')?.getAttribute('aria-pressed')).toBe('true')
@@ -206,7 +206,7 @@ describe('FilterValuesPage: the second page', () => {
       .toEqual(['now', '', 'overdue', 'this-week'])
   })
 
-  it('Status: an Open row over To Do, In Progress and Need Action; a dash while part of it is on', () => {
+  it('Status: an Open row over Not started, Working and Needs you; a dash while part of it is on', () => {
     const doc = page(controller(), 'status')
     const open = opt(doc, 'Open')!
     expect(open.getAttribute('data-status-group')).toBe('open')
@@ -215,7 +215,7 @@ describe('FilterValuesPage: the second page', () => {
     expect(open.getAttribute('aria-disabled')).toBe('true')
     expect(doc.querySelector('[aria-label="Only Open"]')).toBeNull()
     const children = Array.from(doc.querySelectorAll('.fb-opt.is-child .fb-opt-label')).map((el) => el.textContent)
-    expect(children).toEqual(['To Do', 'In Progress', 'Need Action'])
+    expect(children).toEqual(['Not started', 'Working', 'Needs you'])
     const some = page(controller({ state: withState({ status: ['TODO', 'COMPLETE'] as TaskPhase[] }) }), 'status')
     expect(opt(some, 'Open')?.getAttribute('aria-pressed')).toBe('mixed')
     expect(opt(some, 'Open')?.querySelector('.fb-check-dash')).not.toBeNull()
@@ -295,19 +295,19 @@ describe('FilterValuesPage: the second page', () => {
 
   it('C11: the last selected status is aria-disabled with the explaining title and has no Only', () => {
     const doc = page(controller({ state: withState({ status: ['COMPLETE'] as TaskPhase[] }) }), 'status')
-    const v = opt(doc, 'Complete')!
+    const v = opt(doc, 'Completed')!
     expect(v.getAttribute('aria-disabled')).toBe('true')
     expect(v.getAttribute('title')).toBe('At least one status stays on')
-    expect(doc.querySelector('[aria-label="Only Complete"]')).toBeNull()
-    expect(doc.querySelector('[aria-label="Only To Do"]')).not.toBeNull()
+    expect(doc.querySelector('[aria-label="Only Completed"]')).toBeNull()
+    expect(doc.querySelector('[aria-label="Only Not started"]')).not.toBeNull()
   })
 
   it('C61 + C50 + F04: a tick only on selected values; the STATUS_OPTIONS words; no phase icon', () => {
     const doc = page(controller(), 'status')
-    const complete = opt(doc, 'Complete')!
+    const complete = opt(doc, 'Completed')!
     expect(complete.innerHTML).not.toContain(CHECK_POINTS)
     expect(complete.querySelector('svg')).toBeNull()
-    const todo = opt(doc, 'To Do')!
+    const todo = opt(doc, 'Not started')!
     expect(todo.innerHTML.split(CHECK_POINTS).length - 1).toBe(1)
     expect(todo.querySelectorAll('svg').length).toBe(1)
     for (const o of STATUS_OPTIONS) {
@@ -315,7 +315,7 @@ describe('FilterValuesPage: the second page', () => {
       expect(el?.textContent).toBe(o.label)
       expect(el?.querySelector('.fb-val-icon, .fb-item-icon')).toBeNull()
     }
-    expect(labels(doc)).toEqual(['Open', 'To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
+    expect(labels(doc)).toEqual(['Open', 'Not started', 'Working', 'Needs you', 'Waiting', 'Completed'])
   })
 
   it('the search text filters the rows by label, case-insensitive; a miss says so', () => {
@@ -506,7 +506,7 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     return draw(c, query, hits.map((hit) => ({ kind: 'filter' as const, hit })))
   }
 
-  it('C26: "gard" lists only Project Garden; "doing" finds In Progress; a miss says Nothing matches', () => {
+  it('C26: "gard" lists only Project Garden; "doing" finds Working; a miss says Nothing matches', () => {
     const c = controller()
     const hits = Array.from(results(c, 'gard').querySelectorAll('[role="option"]'))
     expect(hits.map((h) => h.textContent)).toEqual(['ProjectGarden'])
@@ -519,7 +519,7 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     expect(hits[0].querySelector('.fb-hit-dim')?.textContent).toBe('Project')
     expect(hits[0].querySelector('.fb-hit-value')?.textContent).toBe('Garden')
     const doing = results(c, 'doing').querySelector('[role="option"]')
-    expect(doing?.getAttribute('data-filter-value')).toBe('In Progress')
+    expect(doing?.getAttribute('data-filter-value')).toBe('Working')
     expect(results(c, 'xyz').querySelector('.fb-empty')?.textContent).toBe('Nothing matches "xyz"')
   })
 

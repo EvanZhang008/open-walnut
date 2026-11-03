@@ -86,7 +86,8 @@ test('a busy task reads as one header, a main column of rows and a rail of facts
   await expect(modal.locator('.todo-detail-project')).toHaveText('Console')
   await expect(modal.locator('.todo-detail-title')).toHaveText('Time slots fixture task')
   const badges = modal.locator('.todo-detail-badges')
-  await expect(badges).toContainText('In Progress')
+  // Its user status: IN_PROGRESS with no turn running reads Waiting (taskStatusLabel).
+  await expect(badges).toContainText('Waiting')
   await expect(badges.locator('[data-testid="tag-editor"]')).toContainText('review')
 
   // Sessions: four rows, each its title, never its id.

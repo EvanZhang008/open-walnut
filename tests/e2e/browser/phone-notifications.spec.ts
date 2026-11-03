@@ -127,7 +127,7 @@ test('N1, N2-05: letters alone count on both bells alike, and Needs Action says 
   await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications, 3 new')
   await expect(bell(page).locator('.phone-bell-count')).toHaveText('3')
   await openCenter(page)
-  await page.locator('.notification-panel .nfc-rail-btn', { hasText: 'Needs Action' }).first().tap()
+  await page.locator('.notification-panel .nfc-rail-btn', { hasText: 'Needs you' }).first().tap()
   const empty = page.locator('.notification-panel .notification-feed-empty').first()
   await expect(empty).toBeVisible()
   const e = (await empty.boundingBox())!
@@ -340,7 +340,7 @@ test('C19: a decision letter in the center takes a finger (Pin, Mark read, Archi
   const { errors } = await bootWithFeed(page, [])
   await openCenter(page)
   // Needs Action holds only live session asks: the decision letter is not there…
-  await center(page).getByRole('button', { name: /^Needs Action/ }).tap()
+  await center(page).getByRole('button', { name: /^Needs you/ }).tap()
   await expect(center(page).locator('.notification-feed-empty').first()).toBeVisible({ timeout: 15_000 })
   await expect(center(page).locator('.hib-row')).toHaveCount(0)
   // …it sits in the Inbox.

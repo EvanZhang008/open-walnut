@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import type { Task } from '@open-walnut/core';
-import { PHASE_LABELS, resolveTaskSessionId } from '@/utils/session-status';
+import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -122,9 +122,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
         <div className="dock-task-header-top">
           <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>
           <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
-            {/* A row still carrying a retired phase (BLOCKED) has no label — show
-                the raw value rather than inventing one here. */}
-            {PHASE_LABELS[task.phase] ?? task.phase ?? 'To Do'}
+            {/* The task's own status in the user's words (taskStatusLabel). */}
+            {taskStatusLabel(task)}
           </span>
           {sessionId && (
             <button

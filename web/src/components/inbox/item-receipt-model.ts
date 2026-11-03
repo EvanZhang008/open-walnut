@@ -1,9 +1,10 @@
 import type { InboxItemAction, InboxItemReceipt, InboxLetterItem, InboxCurrentTaskStatus } from '@/api/human-inbox-items';
 import type { ContentItem } from '@/utils/content-actions';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { PHASE_LABELS } from '@/utils/session-status';
 
-export const PHASE_TEXT: Record<string, string> = {
-  TODO: 'To do', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs action', WAITING: 'Waiting', COMPLETE: 'Completed',
-};
+/** A task's phase in the user's status words: the one web map (PHASE_LABELS), keyed by any string. */
+export const PHASE_TEXT: Record<string, string> = PHASE_LABELS;
 export function askAILabel(label: string): string {
   return /^Ask AI:/i.test(label) ? label : `Ask AI: ${label}`;
 }
@@ -99,7 +100,7 @@ export function currentTaskText(current?: InboxCurrentTaskStatus, stale = false)
   if (!current || current.status === 'unavailable') return 'Current task status unavailable';
   if (stale && current.status === 'running') return `Current task status unavailable · Last observed Running at ${timeText(current.observedAt)}`;
   const labels: Record<string, string> = { running: 'Running', starting: 'Starting', idle: 'Idle', stopped: 'Stopped',
-    error: 'Error', waiting_permission: 'Waiting for permission', waiting_user: 'Waiting for you', waiting: 'Waiting', completed: 'Completed', deleted: 'Target deleted' };
+    error: 'Error', waiting_permission: 'Waiting for permission', waiting_user: USER_STATE_LABELS.needs, waiting: 'Waiting', completed: 'Completed', deleted: 'Target deleted' };
   return `${labels[current.status]} · ${stale ? 'Last observed' : 'Checked'} ${timeText(current.observedAt)}`;
 }
 export function accountIdentity(item: InboxLetterItem): string {

@@ -165,7 +165,7 @@ test('the Team row is collapsed, expands on click, and releases a worker', async
   expect(order.slice(0, 2).sort()).toEqual([waiting, cjk].sort())
   expect(order[2]).toBe(finished)
   const rowOf = (id: string) => flyout(page).locator(`[data-testid="release-worker-row"][data-task-id="${id}"]`)
-  await expect(rowOf(waiting)).toContainText('Need Action')
+  await expect(rowOf(waiting)).toContainText('Needs you')
   await expect(rowOf(finished)).toContainText('Complete')
   await expect(flyout(page).locator('.adopt-worker-filter')).toHaveCount(0)
   await inViewport(page, flyout(page))

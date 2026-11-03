@@ -4,12 +4,14 @@
  * row under the menu's Start / Snooze until. (A Waiting task's wait shows as a
  * chip in the session header: WaitingChip.tsx.)
  *
- * All five phases are offered. The row checkbox still toggles To Do / Complete;
- * this is where Waiting, In Progress and Need Action can be read and set by hand.
+ * All five phases are offered, in the user's status words (PHASE_LABELS: Not started,
+ * Waiting, Working, Needs you, Completed). The row checkbox still toggles open /
+ * Completed; this is where the other phases can be set by hand. The row and the
+ * badge show the task's own user status (taskStatusLabel), not its phase name.
  *
  * Waiting IS a status (2026-09-30): the task is set aside until something
  * happens. A trigger fire, a message from a human or a peer, or a prompt for the
- * human moves it to In Progress, and that turn ends as Need Action as usual. Its
+ * human moves it to Working, and that turn ends as Needs you as usual. Its
  * `wait_until` is the server's own clock on it: picking Waiting opens an "Until"
  * row under the options; the server fills 4 hours from now when none is named
  * (DEFAULT_WAIT_HOURS), the row sets another time or no time limit. A Waiting
@@ -36,19 +38,16 @@ import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/uti
 // the shared formatter.
 import { formatDraftDate } from '@/components/sessions/draft-decisions';
 import { log } from '@/utils/log';
+import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
 import '@/styles/task-status.css';
 
 export const STATUS_OPTIONS: { value: TaskPhase; label: string; icon: ReactNode }[] = [
-  { value: 'TODO', label: 'To Do', icon: ICONS.ICON_PHASE_TODO },
-  { value: 'WAITING', label: 'Waiting', icon: ICONS.ICON_PHASE_WAITING },
-  { value: 'IN_PROGRESS', label: 'In Progress', icon: ICONS.ICON_PHASE_IN_PROGRESS },
-  { value: 'NEED_ACTION', label: 'Need Action', icon: ICONS.ICON_PHASE_NEED_ACTION },
-  { value: 'COMPLETE', label: 'Complete', icon: ICONS.ICON_PHASE_COMPLETE },
+  { value: 'TODO', label: PHASE_LABELS.TODO, icon: ICONS.ICON_PHASE_TODO },
+  { value: 'WAITING', label: PHASE_LABELS.WAITING, icon: ICONS.ICON_PHASE_WAITING },
+  { value: 'IN_PROGRESS', label: PHASE_LABELS.IN_PROGRESS, icon: ICONS.ICON_PHASE_IN_PROGRESS },
+  { value: 'NEED_ACTION', label: PHASE_LABELS.NEED_ACTION, icon: ICONS.ICON_PHASE_NEED_ACTION },
+  { value: 'COMPLETE', label: PHASE_LABELS.COMPLETE, icon: ICONS.ICON_PHASE_COMPLETE },
 ];
-
-export function statusLabel(phase: string | undefined): string {
-  return STATUS_OPTIONS.find((o) => o.value === phase)?.label ?? phase ?? '';
-}
 
 /** Hourglass, 16px stroke=currentColor (the "+" menu's action-icon contract). */
 export const WAIT_UNTIL_ICON = (
@@ -273,7 +272,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
         >
           <span className="task-kebab-icon">{option?.icon ?? ICONS.ICON_PHASE_TODO}</span>
           <span className="task-kebab-status-value">
-            Status: <b>{statusLabel(task.phase)}</b>
+            Status: <b>{taskStatusLabel(task)}</b>
             {until ? <span className="task-kebab-status-until"> · until {until}</span> : null}
           </span>
           <span className={`task-kebab-status-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
@@ -340,7 +339,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil }: { task: Ta
         data-testid="task-status-badge"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {option?.icon ?? '○'} {statusLabel(task.phase)} <span className="task-status-caret" aria-hidden="true">▾</span>
+        {option?.icon ?? '○'} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
       </button>
       {open && createPortal(
         <div

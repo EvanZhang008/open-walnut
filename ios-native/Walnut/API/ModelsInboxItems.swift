@@ -150,19 +150,26 @@ struct InboxFrozenInput: Codable, Equatable {
 }
 struct InboxLaunchParameters: Codable, Equatable { let host: String; let cwd: String; let engine: String; let model: String; let mode: String }
 struct InboxPlannedOp: Codable, Equatable { let tool: String; let args: InboxJSON }
+/// A task's phase in the user's status words, the same as the web's PHASE_LABELS
+/// (web/src/utils/session-status.ts): no surface shows a phase name ("Need Action",
+/// "In Progress"). Guard: tests/web/no-phase-words-on-user-surfaces.test.ts.
+enum PhaseWords {
+    static func label(_ phase: String) -> String? {
+        switch phase {
+        case "TODO": return "Not started"
+        case "IN_PROGRESS": return "Working"
+        case "NEED_ACTION": return "Needs you"
+        case "WAITING": return "Waiting"
+        case "COMPLETE": return "Completed"
+        default: return nil
+        }
+    }
+}
+
 struct InboxTaskCandidate: Codable, Equatable, Hashable, Identifiable {
     let id: String; let title: String; let project: String; let phase: String
     var canAttach: Bool { !id.isEmpty && ["TODO", "IN_PROGRESS", "NEED_ACTION", "WAITING"].contains(phase) }
-    var phaseLabel: String {
-        switch phase {
-        case "TODO": return "To do"
-        case "IN_PROGRESS": return "In progress"
-        case "NEED_ACTION": return "Needs action"
-        case "WAITING": return "Waiting"
-        case "COMPLETE": return "Completed"
-        default: return "Status unavailable"
-        }
-    }
+    var phaseLabel: String { PhaseWords.label(phase) ?? "Status unavailable" }
     var projectLabel: String { project.isEmpty ? "Inbox" : InboxEmailItem.safe(project) }
 }
 struct InboxTaskPreview: Codable, Equatable, Identifiable {
@@ -184,7 +191,7 @@ struct InboxCurrentTaskStatus: Codable, Equatable {
         case "stopped": return "Stopped"
         case "error": return "Error"
         case "waiting_permission": return "Waiting for permission"
-        case "waiting_user": return "Needs action"
+        case "waiting_user": return "Needs you"
         case "waiting": return "Waiting"
         case "completed": return "Completed"
         case "deleted": return "Target deleted"

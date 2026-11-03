@@ -1569,7 +1569,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               >
                 &times;
               </button>
-              <StatusBadge status={focusedTask.status} phase={focusedTask.phase} />
+              <StatusBadge status={focusedTask.status} phase={focusedTask.phase} task={focusedTask} />
               <span className="pill-title">{focusedTask.title}</span>
             </div>
           )}

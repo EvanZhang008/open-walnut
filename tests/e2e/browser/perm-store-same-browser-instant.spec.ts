@@ -116,7 +116,7 @@ async function openNeedsAction(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Notifications' }).click()
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
-  await panel.locator('.nfc-rail-btn', { hasText: 'Needs Action' }).click()
+  await panel.locator('.nfc-rail-btn', { hasText: 'Needs you' }).click()
   return panel
 }
 

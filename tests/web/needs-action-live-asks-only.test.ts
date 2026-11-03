@@ -134,7 +134,7 @@ describe('no web file that counts or renders Needs Action reaches for letters', 
   }
 
   /** What makes a file part of the Needs Action surface. */
-  const NEEDS_ACTION = /Needs Action|counts\.action|\.action\b\s*[+-]?=(?!=)|\.action\+\+|answerableCount|landingSectionFor|section\s*===\s*['"]action['"]|case\s+['"]action['"]/;
+  const NEEDS_ACTION = /label="Needs you" count=\{counts\.action\}|counts\.action|\.action\b\s*[+-]?=(?!=)|\.action\+\+|answerableCount|landingSectionFor|section\s*===\s*['"]action['"]|case\s+['"]action['"]/;
   /** What a letter in Needs Action would need. */
   const LETTER = /isOpenDecision|isUnseenDecision|isAwaitingDecision|decisionGraceEndsAt|DECISION_SEEN_GRACE_MS|LetterEnvelopeRow|liveLetters\.filter|action_required|decisionLetterCount|attentionLetterCount/;
 
@@ -173,7 +173,7 @@ describe('no web file that counts or renders Needs Action reaches for letters', 
   it('the panel badges Needs Action with counts.action and lists only feed asks there; letters render only in the Inbox', () => {
     const src = code(read('web/src/components/common/NotificationPanel.tsx'));
     // The rail badge is the pure count, nothing added to it.
-    expect(src).toMatch(/label="Needs Action" count=\{counts\.action\}\s/);
+    expect(src).toMatch(/label="Needs you" count=\{counts\.action\}\s/);
     // Every letter list (InboxPane, the reader's rows) sits behind the Inbox branch.
     const panes = [...src.matchAll(/<InboxPane\b/g)];
     expect(panes.length).toBeGreaterThan(0);

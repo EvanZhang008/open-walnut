@@ -30,7 +30,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 export type FilterDimKey =
   | 'status' | 'project' | 'date' | 'source' | 'priority' | 'blocked' | 'tags' | 'sprint' | 'time'
 
-export const STATUS_LABELS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'] as const
+export const STATUS_LABELS = ['Not started', 'Working', 'Needs you', 'Waiting', 'Completed'] as const
 
 /** Date labels to their `data-date-value` ids (4.1); ids pass through unchanged. */
 const DATE_IDS: Record<string, string> = {

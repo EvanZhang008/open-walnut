@@ -696,7 +696,7 @@ struct TasksView: View {
                 toggleDone(task)
             } label: {
                 Label(
-                    task.isDone ? "Mark as To Do" : "Mark as Done",
+                    task.isDone ? "Reopen" : "Mark as Done",
                     systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
                 )
             }

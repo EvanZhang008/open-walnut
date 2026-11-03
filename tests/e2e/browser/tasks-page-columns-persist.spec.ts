@@ -105,15 +105,16 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
 
   // The table re-lays out live behind the open menu.
   const after = await headerLabels(page)
-  expect(after).toEqual(expect.arrayContaining(['Title', 'Phase', 'Session', 'Created']))
+  expect(after).toEqual(expect.arrayContaining(['Title', 'Status', 'Session', 'Created']))
   expect(after).not.toContain('Updated')
-  // Display order is fixed: Phase precedes Session, Session precedes the timestamps.
-  expect(after.indexOf('Phase')).toBeLessThan(after.indexOf('Session'))
+  // Display order is fixed: Status precedes Session, Session precedes the timestamps.
+  expect(after.indexOf('Status')).toBeLessThan(after.indexOf('Session'))
   expect(after.indexOf('Session')).toBeLessThan(after.indexOf('Created'))
 
   const r = row(page, OPEN_RECENT)
   await expect(r.locator('[data-col="created"]')).toHaveText(/^\d+d ago$/)
-  await expect(r.locator('[data-col="phase"]')).toHaveText('In Progress')
+  // The Status column reads the user status: IN_PROGRESS with no session is Not started.
+  await expect(r.locator('[data-col="phase"]')).toHaveText('Not started')
   await expect(r.locator('[data-col="session"]')).toHaveCount(1)
   await expect(r.locator('[data-col="updated"]')).toHaveCount(0)
   // Tooltip carries the full timestamp.

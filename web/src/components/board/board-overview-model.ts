@@ -32,7 +32,7 @@
 import type { Task } from '@open-walnut/core';
 import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
-import { PHASE_LABELS, deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskUserState } from '@/utils/session-status';
+import { deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { subtaskPlaceLabel, subtasksOf } from '@/components/tasks/subtask-index';
 import type { ProcessStatus } from '@/types/session';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
@@ -339,7 +339,7 @@ export function describeTask(
               : task.phase === 'NEED_ACTION' && !needsYou
                 ? (userState === 'working' ? { label: 'Working', tone: 'amber' } : { label: 'Waiting', tone: 'violet' })
                 : {
-                  label: PHASE_LABELS[task.phase] ?? task.phase,
+                  label: taskStatusLabel(task),
                   tone: needsYou ? 'red' : userState === 'working' ? 'amber' : 'grey',
                 };
 

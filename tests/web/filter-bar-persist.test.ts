@@ -104,7 +104,7 @@ describe('Recent (4.7, G35)', () => {
     expect(recentEntriesFor(S0, { ...S0, time: { ...S0.time, preset: '24h' } })).toEqual([]);
   });
   it('C68: labels are drawn from ids through the registry', () => {
-    expect(recentEntryLabel({ dim: 'status', value: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] }, lists)).toBe('Status: Open, Complete');
+    expect(recentEntryLabel({ dim: 'status', value: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] }, lists)).toBe('Status: Open, Completed');
     expect(recentEntryLabel({ dim: 'date', value: 'this-week' }, lists)).toBe('Date: Starting within 7 days');
     expect(recentEntryLabel({ dim: 'source', value: 'ms-todo' }, lists)).toBe('Source: Microsoft To Do');
     expect(recentEntryLabel({ dim: 'tags', value: 'label:urgent' }, lists)).toBe('Tags: urgent');

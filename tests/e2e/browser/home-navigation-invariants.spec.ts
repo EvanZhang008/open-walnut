@@ -214,7 +214,7 @@ test('/tasks has one Status section in the status words, matching the home hit s
   try {
     await boot(page, baseURL!);
     // Home: Status Complete only, in this project.
-    await setStatus(page, ['Complete']);
+    await setStatus(page, ['Completed']);
     await page.locator('#home-task-navigation .todo-search-bar input').fill(`parity`);
     const homeRow = (id: string) => page.locator(`#home-task-navigation [data-task-id="${id}"]`).first();
     await expect(homeRow(ids[2])).toBeVisible({ timeout: 15_000 });
@@ -235,7 +235,7 @@ test('/tasks has one Status section in the status words, matching the home hit s
     await expect(panel.locator('[data-rail-section="q-status"] .vd-rail-name')).toHaveText('Status');
     await panel.locator('[data-rail-section="q-status"]').click();
     const values = panel.locator('.vd-query .vd-cat[data-filter-value]');
-    await expect(values.locator('.vd-cat-name')).toHaveText(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete']);
+    await expect(values.locator('.vd-cat-name')).toHaveText(['Not started', 'Working', 'Needs you', 'Waiting', 'Completed']);
     expect(await panel.innerText()).not.toMatch(/\b(Done|Doing)\b/);
     // The page's default (open work) reads as the four not-complete statuses; make it Complete only.
     for (const value of ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE']) {

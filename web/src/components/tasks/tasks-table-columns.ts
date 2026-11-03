@@ -27,7 +27,7 @@ export interface TpColumnDef {
 /** Every column the chooser can offer, in DISPLAY order (choosing never reorders). */
 export const TP_COLUMNS: readonly TpColumnDef[] = [
   { id: 'priority', label: 'Priority', width: '120px', sortKey: 'priority' },
-  { id: 'phase', label: 'Phase', width: '110px', sortKey: 'phase' },
+  { id: 'phase', label: 'Status', width: '110px', sortKey: 'phase' },
   { id: 'due', label: 'Due', width: '90px', sortKey: 'due' },
   { id: 'start', label: 'Start', width: '90px', sortKey: 'start' },
   { id: 'session', label: 'Session', width: '170px', sortKey: 'session' },

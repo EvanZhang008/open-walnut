@@ -55,7 +55,7 @@ test.describe('the notification panel is a dialog for the keyboard (N5)', () => 
     expect(stops.every((s) => s.startsWith('panel:')), JSON.stringify(stops)).toBe(true)
     const close = stops.indexOf('panel:Close')
     expect(close, JSON.stringify(stops)).toBeGreaterThanOrEqual(0)
-    expect(stops[close + 1], JSON.stringify(stops)).toMatch(/^panel:Needs Action/)
+    expect(stops[close + 1], JSON.stringify(stops)).toMatch(/^panel:Needs you/)
     // On along the rail to System, and into it by keyboard.
     for (let i = 0; i < 12 && !(await where(page)).startsWith('panel:System'); i++) await page.keyboard.press(TAB(browserName))
     await expect(railButton(page, 'System')).toBeFocused()

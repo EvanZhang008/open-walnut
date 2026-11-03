@@ -72,7 +72,7 @@ export async function arrange(page: Page, label: string): Promise<void> {
   await closeViewMenu(page)
 }
 
-/** Show or hide completed tasks: Status gains or loses `Complete`. */
+/** Show or hide completed tasks: Status gains or loses `Completed`. */
 export async function setShowCompleted(page: Page, on: boolean): Promise<void> {
   // The values are on the Status page (page two), not on the menu's first page.
   await openFilterPage(page, 'status')
@@ -80,10 +80,10 @@ export async function setShowCompleted(page: Page, on: boolean): Promise<void> {
   for (const label of STATUS_LABELS) {
     if ((await filterValue(page, 'status', label).getAttribute('aria-pressed')) === 'true') current.push(label)
   }
-  const next = on ? [...new Set([...current, 'Complete'])] : current.filter((l) => l !== 'Complete')
+  const next = on ? [...new Set([...current, 'Completed'])] : current.filter((l) => l !== 'Completed')
   if (next.length === current.length && next.every((l) => current.includes(l))) {
     await closeFilterMenu(page)
     return
   }
-  await setStatus(page, next.length ? next : ['To Do', 'In Progress', 'Need Action'])
+  await setStatus(page, next.length ? next : ['Not started', 'Working', 'Needs you'])
 }

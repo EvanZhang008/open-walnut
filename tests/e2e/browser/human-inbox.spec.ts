@@ -222,8 +222,8 @@ test('an action_required letter arrives, reads in the reader, and one click answ
 
   // A decision letter is Inbox mail, never Needs Action: that section is only what
   // a session asks live (2026-11-01, the user: "two separate things").
-  await rail(panel, 'Needs Action').click()
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await rail(panel, 'Needs you').click()
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
   await expect(panel.locator('.hib-row')).toHaveCount(0)
   await expect(envelope(panel, DECISION_SUBJECT)).toHaveCount(0)
 
@@ -511,10 +511,10 @@ test('a decision letter stays in the Inbox, read or unread, and never counts or 
   await expect(row.locator('.hib-type')).toHaveText('Action needed')
   // Whatever live asks the shared fixture server holds, the letter adds no row,
   // and reading or unreading it never moves the badge.
-  await rail(panel, 'Needs Action').click()
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await rail(panel, 'Needs you').click()
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
   await expect(panel.locator('.hib-row')).toHaveCount(0)
-  const asks = await railBadge(panel, 'Needs Action')
+  const asks = await railBadge(panel, 'Needs you')
   await shot(page, 'e2e-09-needs-action-holds-no-letter')
 
   // Read it in the Inbox: its buttons are there; closing without answering
@@ -530,17 +530,17 @@ test('a decision letter stays in the Inbox, read or unread, and never counts or 
   await expect(row).toBeVisible()
   await expect(row).not.toHaveClass(/hib-unread/)
   await expect(row.locator('.hib-answered-chip')).toHaveCount(0)
-  await rail(panel, 'Needs Action').click()
+  await rail(panel, 'Needs you').click()
   await expect(panel.locator('.hib-row')).toHaveCount(0)
-  expect(await railBadge(panel, 'Needs Action')).toBe(asks)
+  expect(await railBadge(panel, 'Needs you')).toBe(asks)
 
   // Mark unread from the Inbox: back to unread there, still nothing in Needs Action.
   await openInbox(panel)
   await rowButton(row, 'Mark unread').click()
   await expect(row).toHaveClass(/hib-unread/)
-  await rail(panel, 'Needs Action').click()
+  await rail(panel, 'Needs you').click()
   await expect(panel.locator('.hib-row')).toHaveCount(0)
-  expect(await railBadge(panel, 'Needs Action')).toBe(asks)
+  expect(await railBadge(panel, 'Needs you')).toBe(asks)
   await shot(page, 'e2e-10-decision-only-in-inbox')
 
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])

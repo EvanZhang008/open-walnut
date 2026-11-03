@@ -7,7 +7,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { locateTaskOnHome } from '@/utils/open-session';
-import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass, taskUserState } from '@/utils/session-status';
+import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
 import { leaderWord } from './team-menu-model';
@@ -116,7 +116,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         <span className="leader-sub-title">{role === 'leader' ? orgDisplayTitle(t) : t.title}</span>
         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
         <span className="leader-sub-phase-label">
-          {role === 'leader' ? leaderWord(t) : isSelf ? 'This task' : (PHASE_LABELS[t.phase] ?? t.phase)}
+          {role === 'leader' ? leaderWord(t) : isSelf ? 'This task' : taskStatusLabel(t)}
         </span>
       </button>
     );

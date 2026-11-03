@@ -144,7 +144,7 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
   // Collapsed by default: one row that says the status, no options until clicked.
   // It is not a date row: the menu's first level has one (Snooze until); Start and Due wait in Dates.
   await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(1)
-  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: To Do/)
+  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: Not started/)
   await expect(menu.getByTestId('task-status-row').getByRole('radio')).toHaveCount(0)
   // Snooze until is the menu's first row (2026-11-02, the user: "snooze until should be top").
   await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snooze until$/)
@@ -156,11 +156,11 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
   await shot(menu, 'menu-collapsed', browserName)
 
   let row = await statusRow(menu)
-  await expect(row.getByRole('radio')).toHaveText(['To Do', 'Waiting', 'In Progress', 'Need Action', 'Complete'])
+  await expect(row.getByRole('radio')).toHaveText(['Not started', 'Waiting', 'Working', 'Needs you', 'Completed'])
   // The until row belongs to Waiting alone.
   await expect(row.getByTestId('task-status-until')).toHaveCount(0)
-  await expect(statusPill(row, 'To Do')).toHaveAttribute('aria-checked', 'true')
-  await expect(statusPill(row, 'Need Action')).toHaveAttribute('aria-checked', 'false')
+  await expect(statusPill(row, 'Not started')).toHaveAttribute('aria-checked', 'true')
+  await expect(statusPill(row, 'Needs you')).toHaveAttribute('aria-checked', 'false')
   await expectInViewport(page, menu)
   await shot(menu, 'menu-status-row', browserName)
   // Clicking the row again folds it back.
@@ -168,21 +168,21 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
   await expect(row.getByRole('radio')).toHaveCount(0)
 
   row = await statusRow(menu)
-  await statusPill(row, 'Need Action').click()
+  await statusPill(row, 'Needs you').click()
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
 
   // Reopened: the row says the new status, and it is the lit one.
   menu = await openRowKebab(page, task)
-  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: Need Action/)
+  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: Needs you/)
   row = await statusRow(menu)
-  await expect(statusPill(row, 'Need Action')).toHaveAttribute('aria-checked', 'true')
-  await statusPill(row, 'In Progress').click()
+  await expect(statusPill(row, 'Needs you')).toHaveAttribute('aria-checked', 'true')
+  await statusPill(row, 'Working').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('IN_PROGRESS')
 
   // A lit pill is a no-op that only closes the menu.
   menu = await openRowKebab(page, task)
-  await statusPill(await statusRow(menu), 'In Progress').click()
+  await statusPill(await statusRow(menu), 'Working').click()
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   expect((await taskOf(task.id)).phase).toBe('IN_PROGRESS')
 
@@ -198,11 +198,11 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
 
   // Complete from the menu, then back to To Do: a completed task has nothing to snooze.
   menu = await openRowKebab(page, task)
-  await statusPill(await statusRow(menu), 'Complete').click()
+  await statusPill(await statusRow(menu), 'Completed').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('COMPLETE')
   menu = await openRowKebab(page, task)
   await expect(menu.getByTestId('task-snooze-row')).toHaveCount(0)
-  await statusPill(await statusRow(menu), 'To Do').click()
+  await statusPill(await statusRow(menu), 'Not started').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
 })
 
@@ -212,7 +212,7 @@ test('the detail pane badge shows the status and changes it', async ({ page, bro
   await page.waitForLoadState('networkidle')
   const detail = await openDetail(page, task)
   const badge = detail.getByTestId('task-status-badge')
-  await expect(badge).toHaveText(/To Do/)
+  await expect(badge).toHaveText(/Not started/)
   await expect(badge).toHaveAttribute('aria-expanded', 'false')
 
   await badge.click()
@@ -224,11 +224,12 @@ test('the detail pane badge shows the status and changes it', async ({ page, bro
   await shot(detail.locator('.todo-detail-meta'), 'detail-badge', browserName)
   await shot(page, 'detail-badge-menu', browserName)
 
-  await statusPill(menu, 'In Progress').click()
+  // The menu sets the phase; the badge reads the task's user status, which a person's
+  // NEED_ACTION makes Needs you once the server has derived it.
+  await statusPill(menu, 'Needs you').click()
   await expect(menu).toHaveCount(0)
-  await expect(badge).toHaveText(/In Progress/, { timeout: 10_000 })
-  // The badge is optimistic; the write lands a beat later.
-  await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('IN_PROGRESS')
+  await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
+  await expect(badge).toHaveText(/Needs you/, { timeout: 10_000 })
 
   // Escape and an outside click both close it without a change.
   await badge.click()
@@ -241,7 +242,7 @@ test('the detail pane badge shows the status and changes it', async ({ page, bro
   await expect(menu).toBeVisible()
   await detail.locator('.todo-detail-title').click()
   await expect(menu).toHaveCount(0)
-  expect((await taskOf(task.id)).phase).toBe('IN_PROGRESS')
+  expect((await taskOf(task.id)).phase).toBe('NEED_ACTION')
 })
 
 test('Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it', async ({ page, browserName }) => {
@@ -327,7 +328,7 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
 
   // Picking another status by hand ends the wait and drops the time.
   await detail.getByTestId('task-status-badge').click()
-  await statusPill(page.locator('.task-status-menu'), 'To Do').click()
+  await statusPill(page.locator('.task-status-menu'), 'Not started').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
   expect((await taskOf(task.id)).wait_until).toBeUndefined()
   await expect(detail.getByTestId('task-detail-wait-until')).toHaveCount(0)
@@ -380,7 +381,7 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
 
   // Open + Waiting holds every open phase, so it keeps the sections: the parked task
   // stays in the folded Waiting / snoozed section, not in the list or its tier.
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
+  await setStatus(page, ['Not started', 'Working', 'Needs you', 'Waiting'])
   await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
   await expect(waitingHeading).toBeVisible()
   await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
@@ -538,7 +539,7 @@ test('the Projects view keeps only Running and Collapse; Waiting comes back thro
   await setStatus(page, ['Waiting'])
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
   await shot(page.locator('.todo-panel'), 'projects-waiting-on', browserName)
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action'])
+  await setStatus(page, ['Not started', 'Working', 'Needs you'])
   await expect(rowEl).toHaveCount(0)
 })
 
@@ -642,7 +643,7 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await box.fill('')
 })
 
-test('a Waiting task\'s header chip says until when and why, and a message moves it to In Progress, then Need Action', async ({ page, request, browserName }) => {
+test('a Waiting task\'s header chip says until when and why, and a message moves it to Working, then Needs you', async ({ page, request, browserName }) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-waiting-session-'))
   const started = await request.post('/api/sessions/quick-start', { data: { cwd, message: '' } })
   expect(started.ok(), await started.text()).toBeTruthy()
@@ -663,7 +664,7 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   const card = page.getByTestId('session-waiting-card')
   await expect(card).toBeVisible()
   await expect(card).toContainText('Wakes by itself')
-  await expect(card).toContainText('A message here moves it to In Progress.')
+  await expect(card).toContainText('A message here moves it to Working.')
   await shot(panel.locator('.session-panel-header'), 'session-waiting-chip', browserName)
   await page.screenshot({ path: `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${browserName}/header-chip-card.png` })
   await page.mouse.move(5, 5)

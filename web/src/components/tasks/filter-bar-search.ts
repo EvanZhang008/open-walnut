@@ -34,7 +34,9 @@ const DIM_ALIASES: Partial<Record<FilterDim, readonly string[]>> = {
 /** Extra words that find one value. */
 const VALUE_ALIASES: Partial<Record<FilterDim, Record<string, readonly string[]>>> = {
   status: {
-    IN_PROGRESS: ['doing'],
+    // The phase names the values wore before they took the status words (2026-11-03) still find them.
+    IN_PROGRESS: ['doing', 'inprogress'],
+    NEED_ACTION: ['needaction', 'needsaction'],
     COMPLETE: ['done', 'complete', 'completed', 'finished'],
     TODO: ['todo'],
   },

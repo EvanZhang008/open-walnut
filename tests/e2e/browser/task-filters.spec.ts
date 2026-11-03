@@ -195,7 +195,7 @@ test('Status Complete + last 6 hours resolves to the single matching task, drawn
   await expect(filterChip(page, 'time')).toContainText('Updated in 30d')
   await expect(page.locator(`.todo-panel [data-task-id="${openPinId}"]`).first()).toBeVisible()
 
-  await setStatus(page, ['Complete'])
+  await setStatus(page, ['Completed'])
   await setHomeTime(page, 'updated', '6h')
   await expect(page.locator(`.todo-panel [data-task-id="${PINNED_DONE_RECENT}"]`).first()).toBeVisible({ timeout: 10_000 })
   // Exactly once anywhere in the panel: a done pin that Status lets through draws as its
@@ -277,7 +277,7 @@ test('/tasks reached through the UI matches the homepage hit set', async ({ page
   await openHomePanel(page)
   // A COMPLETED hit: the two surfaces agree only if the shared evaluator decides it.
   await addFilter(page, 'project', 'Lantern')
-  await setStatus(page, ['Complete'])
+  await setStatus(page, ['Completed'])
   await setHomeTime(page, 'updated', '6h')
   await expect(page.locator(`.todo-panel [data-task-id="${PINNED_DONE_RECENT}"]`).first()).toBeVisible({ timeout: 10_000 })
   const home = await homeHits(page)

@@ -89,11 +89,11 @@ const PRESET_WINDOWS: Record<Exclude<TimePresetKey, 'custom'>, { value: number; 
 };
 
 export const COMPLETION_OPTIONS: { value: TaskCompletion; label: string }[] = [
-  { value: 'todo', label: 'To Do' },
-  // Same words as the Status values (STATUS_OPTIONS): a legacy completion chip
+  { value: 'todo', label: PHASE_LABELS.TODO },
+  // Same words as the Status values (PHASE_LABELS): a legacy completion chip
   // read back from an older saved query must not show Doing or Done.
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'complete', label: 'Complete' },
+  { value: 'in_progress', label: PHASE_LABELS.IN_PROGRESS },
+  { value: 'complete', label: PHASE_LABELS.COMPLETE },
 ];
 
 /**

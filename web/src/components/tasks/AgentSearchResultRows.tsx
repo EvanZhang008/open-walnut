@@ -20,7 +20,7 @@ import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { PHASE_LABELS, taskUserState } from '@/utils/session-status';
+import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
 
 export interface SearchResultRowView {
@@ -52,7 +52,7 @@ function circleClassForPhase(phase: string | undefined): string {
 }
 
 function rowTooltip(row: SearchResultRowView): string {
-  const where = [row.phase ? (PHASE_LABELS[row.phase as TaskPhase] ?? row.phase) : '', row.project || 'Inbox']
+  const where = [row.phase ? taskStatusLabel({ phase: row.phase as TaskPhase, status: 'todo', user_status: row.user_status }) : '', row.project || 'Inbox']
     .filter(Boolean).join(' · ');
   return [row.title ?? row.taskId, row.evidence ? `“${row.evidence}”` : '', where].filter(Boolean).join('\n');
 }

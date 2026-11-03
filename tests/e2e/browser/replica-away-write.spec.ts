@@ -228,7 +228,7 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
       await row(page, doneTitle).getByRole('button', { name: 'Mark complete' }).click()
       // In view for the completion's grace window, done and marked.
       await expect(row(page, doneTitle).getByTestId('away-sync-mark')).toHaveText(AWAY_SYNC, { timeout: 2_500 })
-      await expect(row(page, doneTitle).getByRole('button', { name: 'Reopen (mark To Do)' })).toBeVisible()
+      await expect(row(page, doneTitle).getByRole('button', { name: 'Reopen' })).toBeVisible()
       await shot(page, '3-completed')
     }
     await expect.poll(async () => (await control<{ records: Array<{ kind: string; acked: boolean }> }>('GET', '/control/journal')).records.filter((r) => !r.acked).length, { timeout: 15_000 }).toBe(3)

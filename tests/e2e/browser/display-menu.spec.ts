@@ -427,7 +427,7 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   await expect(viewSummary(page)).toHaveText('Pinned')
   await closeDisplayMenu(page)
   // Clear removes chips (the badge counts them, never the view item), never the view.
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+  await setStatus(page, ['Not started', 'Working', 'Needs you', 'Completed'])
   await expect(page.getByTestId('filter-badge')).toHaveText('1')
   await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
   await expect(page.getByTestId('filter-badge')).toHaveCount(0)
@@ -477,7 +477,7 @@ test('a tier view: opening Display covers neither the tier heading nor the tab b
   await expect(displayMenu(page)).toBeVisible()
   await closeDisplayMenu(page)
   // A chip: the row comes in under the heading and the bar, one line, right above the list.
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+  await setStatus(page, ['Not started', 'Working', 'Needs you', 'Completed'])
   const [r, t2] = [await box(filterRow(page)), await box(tabs)]
   expect(r.y).toBeGreaterThanOrEqual(t2.y + t2.height - 1)
   expect(r.height).toBeLessThanOrEqual(33)

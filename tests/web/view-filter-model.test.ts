@@ -47,7 +47,7 @@ describe('buildFilterSentence', () => {
       timePreset: '24h',
     };
     expect(text(buildFilterSentence(state))).toBe(
-      'Showing [In Progress] or [Need Action], priority [Immediate], in [Walnut] or [iOS App], updated in [24h].',
+      'Showing [Working] or [Needs you], priority [Immediate], in [Walnut] or [iOS App], updated in [24h].',
     );
   });
 
@@ -92,7 +92,7 @@ describe('buildFilterSentence', () => {
     // Non-empty query: sort stays out of the sentence (distinguishes "sort
     // excluded" from "empty query short-circuits").
     expect(text(buildFilterSentence({ ...base, sort: 'priority', phases: ['TODO'] })))
-      .toBe('Showing [To Do].');
+      .toBe('Showing [Not started].');
   });
 });
 
@@ -225,7 +225,7 @@ describe('tagChipOptions', () => {
  * meaning), and it writes exact phases with completion cleared.
  */
 describe('merged Status', () => {
-  const STATUS_WORDS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'];
+  const STATUS_WORDS = ['Not started', 'Working', 'Needs you', 'Waiting', 'Completed'];
 
   it('has the filter bar order and the status words', () => {
     expect([...QUERY_STATUS_ORDER]).toEqual([...STATUS_FILTER_ORDER]);
@@ -261,7 +261,7 @@ describe('merged Status', () => {
 
   it('puts one Status group in the sentence whose chips remove one status each', () => {
     const state: TaskQueryFilterState = { ...base, completion: ['complete'] };
-    expect(text(buildFilterSentence(state))).toBe('Showing [Complete].');
+    expect(text(buildFilterSentence(state))).toBe('Showing [Completed].');
     const tokens = buildFilterSentence({ ...base, phases: ['TODO', 'WAITING'] });
     const chips = tokens.filter((t) => t.kind === 'chip');
     expect(chips.map((c) => c.kind === 'chip' && c.dim)).toEqual(['status', 'status']);
@@ -300,7 +300,7 @@ describe('merged Status', () => {
  * value both read "Status: <word>", never Phase, Doing or Done.
  */
 describe('/tasks chips use the Status words (C50)', () => {
-  const WORDS = ['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'];
+  const WORDS = ['Not started', 'Working', 'Needs you', 'Waiting', 'Completed'];
   it('legacy completion and phase values label as Status with a Status word', async () => {
     const { buildTaskFilterChips } = await import('../../web/src/components/tasks/TaskFilterChips');
     const query: TaskQueryFilterState = {

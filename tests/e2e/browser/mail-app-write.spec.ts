@@ -150,7 +150,7 @@ async function pasteInto(field: Locator, text: string): Promise<void> {
 }
 
 /** Open the human inbox the way a human does: the bell, then the section. */
-async function openLetters(page: Page, section: 'Needs Action' | 'Inbox'): Promise<void> {
+async function openLetters(page: Page, section: 'Needs you' | 'Inbox'): Promise<void> {
   await page.locator('.sidebar-notification-btn').click()
   await expect(page.locator('.notification-panel')).toBeVisible({ timeout: 30_000 })
   await page.locator('.nfc-rail-btn', { hasText: section }).first().click()
@@ -169,7 +169,7 @@ async function openLetters(page: Page, section: 'Needs Action' | 'Inbox'): Promi
  */
 async function openLettersUntil(
   page: Page,
-  section: 'Needs Action' | 'Inbox',
+  section: 'Needs you' | 'Inbox',
   wanted: Locator,
 ): Promise<void> {
   await openLetters(page, section)
@@ -376,7 +376,7 @@ test('compose, approve from the web inbox, reply, and re-ask after an edit', asy
   await expect(live).toHaveCount(1, { timeout: 30_000 })
   await expect(live.locator('.hib-answered-chip')).toHaveCount(0)
   // Neither letter is in Needs Action, which holds only live session asks.
-  await page.locator('.nfc-rail-btn', { hasText: 'Needs Action' }).first().click()
+  await page.locator('.nfc-rail-btn', { hasText: 'Needs you' }).first().click()
   await expect(page.locator('.hib-row', { hasText: 'Approve this message' })).toHaveCount(0)
   await expect(page.locator('.hib-row', { hasText: 'Second look' })).toHaveCount(0)
   await closeLetters(page)

@@ -3265,7 +3265,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             isStreaming={isStreaming}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={threads.composerPlaceholder ?? (phoneLayer || phoneWidth
-              ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to In Progress' : 'Message')
+              ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
               : 'Send a message to this session... (/ for commands)')}
             onValueChange={handleComposerValue}
             showCommands={false}

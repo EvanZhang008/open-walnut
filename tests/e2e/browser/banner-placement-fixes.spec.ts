@@ -494,7 +494,7 @@ test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-
     expect(await item.evaluate((el) => !el.closest('[data-testid="nfc-problems"]'))).toBe(true)
     await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
-    await expect(railButton(page, 'Needs Action')).toBeFocused()
+    await expect(railButton(page, 'Needs you')).toBeFocused()
     await railButton(page, 'All').focus()
     await page.keyboard.press(TAB)
     await expect(problemRow(page, 'keybox').locator('.hpb-actions button').first()).toBeFocused()

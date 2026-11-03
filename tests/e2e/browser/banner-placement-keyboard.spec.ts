@@ -83,13 +83,13 @@ test.describe('Tab order around the task panel card', () => {
     await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
     // No card between the header and the rail any more: Close hands over to the first rail entry.
-    await expect(railButton(page, 'Needs Action')).toBeFocused()
+    await expect(railButton(page, 'Needs you')).toBeFocused()
     const rail: string[] = []
     for (let i = 0; i < 12 && await activeIn(page, '.nfc-rail'); i++) {
       rail.push((await activeName(page)) ?? '')
       await page.keyboard.press(TAB)
     }
-    expect(rail[0], JSON.stringify(rail)).toMatch(/^Needs Action/)
+    expect(rail[0], JSON.stringify(rail)).toMatch(/^Needs you/)
     expect(rail[rail.length - 1], JSON.stringify(rail)).toMatch(/^All/)
     expect(rail.some((r) => /^System/.test(r)), JSON.stringify(rail)).toBe(true)
     // The section's first block: this machine's Claude Code notice, whole, before the hosts.

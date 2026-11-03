@@ -308,7 +308,7 @@ async function showSection(panel: Locator, label: string): Promise<void> {
  * claim; "the badge is gone" is a race.
  */
 async function actionBadge(panel: Locator): Promise<number> {
-  const badge = rail(panel, 'Needs Action').locator('.nfc-rail-badge')
+  const badge = rail(panel, 'Needs you').locator('.nfc-rail-badge')
   if (await badge.count() === 0) return 0
   return Number((await badge.textContent())?.replace('+', '') ?? 0)
 }
@@ -334,9 +334,9 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   const panel = await openCenter(page)
 
   // Landing section is Needs Action, because one ask is still pending.
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
   // The action badge counts PENDING permissions only — the resolved twin is history.
-  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveText('1')
+  await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveText('1')
 
   // The pending card renders WHAT is being asked plus WHERE it came from.
   const bashCard = seededPermCards(panel)
@@ -503,11 +503,11 @@ test('with no pending ask the center lands on All, and Needs Action reads empty'
 
   const panel = await openCenter(page)
   await expect(rail(panel, 'All')).toHaveAttribute('aria-current', 'true')
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'false')
-  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveCount(0)
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'false')
+  await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveCount(0)
   await expect(seededItems(panel)).toHaveCount(4)
 
-  await showSection(panel, 'Needs Action')
+  await showSection(panel, 'Needs you')
   // No SEEDED pending ask; another spec's real permission could add one, so this
   // asserts the seeded half is empty rather than the whole section.
   await expect(seededPermCards(panel)).toHaveCount(0)
@@ -556,8 +556,8 @@ test('Needs Action lists and counts only live session asks; a decision letter st
   await expect(page.locator('.notification-badge-count')).toHaveText('3', { timeout: 15_000 })
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
-  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveText('2')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveText('2')
   await expect(seededPermCards(panel)).toHaveCount(2)
   await expect(panel.locator('.hib-row')).toHaveCount(0)
   await expect(panel.getByText(decision.subject)).toHaveCount(0)
@@ -578,8 +578,8 @@ test('Needs Action lists and counts only live session asks; a decision letter st
   await reader.getByRole('button', { name: 'Close letter' }).click()
 
   // Read now; Needs Action still holds the two asks and nothing else.
-  await showSection(panel, 'Needs Action')
-  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveText('2')
+  await showSection(panel, 'Needs you')
+  await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveText('2')
   await expect(seededPermCards(panel)).toHaveCount(2)
   await expect(panel.locator('.hib-row')).toHaveCount(0)
 })
@@ -594,7 +594,7 @@ test('AskUserQuestion card submits the real answers map to the permission route'
   await loadHome(page)
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
 
   const card = seededPermCards(panel)
   await expect(card).toHaveCount(1)
@@ -825,7 +825,7 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   await waitForWs(page)
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
   const badgeBefore = await actionBadge(panel)
   expect(badgeBefore).toBeGreaterThanOrEqual(1)
   await expect(seededPermCards(panel).getByRole('button', { name: 'Approve' })).toBeVisible()
@@ -874,7 +874,7 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   // 3. Needs Action decrements — a DELTA, not "the badge is gone": another spec's
   //    real ask on this shared fixture server can share the count.
   await expect.poll(() => actionBadge(panel), { timeout: 10_000 }).toBe(badgeBefore - 1)
-  await showSection(panel, 'Needs Action')
+  await showSection(panel, 'Needs you')
   await expect(seededPermCards(panel).filter({ hasText: 'Bash' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/resolved-elsewhere-converged.png`, fullPage: true })
 })
@@ -908,7 +908,7 @@ test('Open session from the panel card navigates and leaves the ask pending', as
   // whole point — a click-through that dismissed or settled the ask would silently
   // drop a session's blocker on the floor.
   const reopened = await openCenter(page)
-  await expect(rail(reopened, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(reopened, 'Needs you')).toHaveAttribute('aria-current', 'true')
   expect(await actionBadge(reopened)).toBeGreaterThanOrEqual(1)
   const stillPending = seededPermCards(reopened)
   await expect(stillPending).toHaveCount(1)

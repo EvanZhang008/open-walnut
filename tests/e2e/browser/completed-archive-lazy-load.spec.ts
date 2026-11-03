@@ -75,7 +75,7 @@ function watchListRequests(page: Page): { windowed: () => number; whole: () => n
  * sections and leaves completed rows in the Completed section.
  */
 async function setShowCompleted(page: Page, on: boolean): Promise<void> {
-  await setStatus(page, on ? ['Complete'] : ['To Do', 'In Progress', 'Need Action'])
+  await setStatus(page, on ? ['Completed'] : ['Not started', 'Working', 'Needs you'])
   if (on) await expect(filterChip(page, 'status')).toHaveText(/Complete/)
   else await expect(filterChip(page, 'status')).toHaveCount(0)
 }
@@ -134,7 +134,7 @@ test('a board load leaves old completions on the server; Status Complete loads t
 
   // Open + Complete holds every open phase, so it keeps the sections: the completed
   // task stays out of the list and the folded Completed section reads nothing yet.
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+  await setStatus(page, ['Not started', 'Working', 'Needs you', 'Completed'])
   await expect(filterChip(page, 'status')).toContainText('Open, Complete')
   await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
   await expect(rowFor(done.title)).toHaveCount(0)

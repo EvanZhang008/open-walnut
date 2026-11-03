@@ -226,7 +226,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           e.stopPropagation();
           handlers.onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
-        aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+        aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : snoozeDate ? 'Snoozed: click to complete'
           : sectionKey === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
         data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : need ? (taskUserState(task) === 'read' ? 'needs-read' : `needs-${need.category}`) : 'open'}

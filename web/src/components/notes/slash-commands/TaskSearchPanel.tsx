@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
+import { taskStatusLabel } from '@/utils/session-status';
 
 const MAX_RESULTS = 15;
 
@@ -124,9 +125,8 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
           <div className="notes-slash-empty">No tasks found</div>
         ) : (
           results.map((task, i) => {
-            const phase = task.status === 'done' ? 'Done'
-              : (task.phase && task.phase !== 'TODO') ? task.phase.replace(/_/g, ' ')
-              : '';
+            // Its status in the user's words; a task nobody started shows nothing.
+            const phase = task.status !== 'done' && (!task.phase || task.phase === 'TODO') ? '' : taskStatusLabel(task);
             return (
               <div
                 key={task.id}

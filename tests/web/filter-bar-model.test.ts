@@ -138,11 +138,11 @@ describe('chip text (4.2, 4.4, 4.5)', () => {
   it('statusChipLabel covers every branch', () => {
     expect(statusChipLabel([...OPEN_PHASES])).toBe('Open');
     expect(statusChipLabel([...OPEN_PHASES, 'WAITING'])).toBe('Open, Waiting');
-    expect(statusChipLabel([...OPEN_PHASES, 'COMPLETE'])).toBe('Open, Complete');
+    expect(statusChipLabel([...OPEN_PHASES, 'COMPLETE'])).toBe('Open, Completed');
     expect(statusChipLabel(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE'])).toBe('Any');
-    expect(statusChipLabel(['COMPLETE'])).toBe('Complete');
-    expect(statusChipLabel(['WAITING', 'TODO'])).toBe('To Do, Waiting');
-    expect(statusChipLabel(['TODO', 'WAITING', 'COMPLETE'])).toBe('To Do, Waiting, Complete');
+    expect(statusChipLabel(['COMPLETE'])).toBe('Completed');
+    expect(statusChipLabel(['WAITING', 'TODO'])).toBe('Not started, Waiting');
+    expect(statusChipLabel(['TODO', 'WAITING', 'COMPLETE'])).toBe('Not started, Waiting, Completed');
     expect(statusChipLabel(['TODO', 'IN_PROGRESS', 'WAITING', 'COMPLETE'])).toBe('4 statuses');
   });
   it('timeChipText uses words, never a comparison sign', () => {
@@ -163,9 +163,9 @@ describe('chip text (4.2, 4.4, 4.5)', () => {
     };
     const chips = buildFilterChips(s, lists);
     expect(chips.map((c) => c.dim)).toEqual(['status', 'project', 'date', 'source', 'blocked', 'tags', 'time']);
-    expect(chips.map((c) => c.value)).toEqual(['Complete', '3 projects', 'Starting within 7 days', 'Microsoft To Do', 'Not blocked', 'urgent', 'Updated in 24h']);
+    expect(chips.map((c) => c.value)).toEqual(['Completed', '3 projects', 'Starting within 7 days', 'Microsoft To Do', 'Not blocked', 'urgent', 'Updated in 24h']);
     expect(chips[1].title).toBe('Garden, Home, Inbox');
-    expect(chipSummary(chips.slice(0, 2))).toBe('Status: Complete, Project: 3 projects');
+    expect(chipSummary(chips.slice(0, 2))).toBe('Status: Completed, Project: 3 projects');
     expect(chipSummary([chips[4]])).toBe('Not blocked');
     expect(chips[1].reset(s).projects).toEqual([]);
     expect(chips[0].reset(s).status).toEqual([...OPEN_PHASES]);
@@ -180,7 +180,7 @@ describe('chip text (4.2, 4.4, 4.5)', () => {
   it('every Status word is a PHASE_LABELS label (C50)', () => {
     const labels = new Set(Object.values(PHASE_LABELS));
     for (const o of dimValues('status', S0, lists)) expect(labels.has(o.label)).toBe(true);
-    expect(dimValues('status', S0, lists).map((o) => o.label)).toEqual(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete']);
+    expect(dimValues('status', S0, lists).map((o) => o.label)).toEqual(['Not started', 'Working', 'Needs you', 'Waiting', 'Completed']);
   });
 });
 
@@ -195,7 +195,7 @@ describe('popover values (4.1, G9)', () => {
   });
   it('first-layer titles are exact', () => {
     const status = Object.fromEntries(dimValues('status', S0, lists).map((o) => [o.value, o.title]));
-    expect(status.TODO).toBe('To Do: not started yet');
+    expect(status.TODO).toBe('Not started: nobody has started it yet');
     expect(status.WAITING).toBe('Waiting: on hold until a date or an event, hidden by default');
     const proj = dimValues('project', S0, lists);
     expect(proj.map((o) => o.label)).toEqual(['Inbox', 'Home', 'Garden']);

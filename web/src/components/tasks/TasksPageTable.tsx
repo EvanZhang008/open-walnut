@@ -27,7 +27,7 @@ import { TasksColumnsMenu } from './TasksColumnsMenu';
 import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
 import { useTagDisplay } from '@/stores/tag-display-store';
-import { PHASE_LABELS, taskNeedsAction, taskUserState } from '@/utils/session-status';
+import { taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
@@ -297,7 +297,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
 }
 
 /**
- * The row's To Do ↔ Complete toggle — the SAME circle the home list draws
+ * The row's open ↔ Completed toggle — the SAME circle the home list draws
  * (useTaskCircle: grey = no session, blue = session attached, pulsing = running,
  * green check = done), so a task reads the same on both surfaces. A component,
  * not a branch of `row()`, because the colour subscribes to live session status.
@@ -323,7 +323,7 @@ function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (
       type="button"
       className={`tp-status-circle task-phase-icon-btn ${circleClass}`}
       title={isDone ? 'Done — click to reopen' : 'Click to complete'}
-      aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
+      aria-label={isDone ? 'Reopen' : 'Mark complete'}
       onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
     >
       {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
@@ -574,7 +574,7 @@ export function TasksPageTable({
       case 'phase':
         return (
           <span key={col.id} data-col={col.id} className={`tp-cell-phase ph-${t.phase.toLowerCase()}`}>
-            {PHASE_LABELS[t.phase] ?? t.phase}
+            {taskStatusLabel(t)}
           </span>
         );
       case 'due':

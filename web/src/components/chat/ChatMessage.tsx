@@ -2,7 +2,8 @@ import { useMemo, useState, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import type { Task } from '@open-walnut/core';
+import type { Task, TaskPhase } from '@open-walnut/core';
+import { PHASE_LABELS } from '@/utils/session-status';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
@@ -168,7 +169,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
         <span className="chat-task-context-badges">
           {ctx.phase && (
             <span className={`badge badge-phase-${ctx.phase.toLowerCase()}`}>
-              {PHASE_SYMBOLS[ctx.phase] ?? '?'} {ctx.phase.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}
+              {PHASE_SYMBOLS[ctx.phase] ?? '?'} {PHASE_LABELS[ctx.phase as TaskPhase] ?? ctx.phase}
             </span>
           )}
           {showPriority && ctx.priority && ctx.priority !== 'none' && (
@@ -1055,7 +1056,9 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
 
       // Fallback: phase/outcome or just task label
       const phaseMatch = content.match(/Phase:\s*(.+)/);
-      const phase = phaseMatch ? phaseMatch[1].trim() : '';
+      const rawPhase = phaseMatch ? phaseMatch[1].trim() : '';
+      // An agent writes the phase value (NEED_ACTION); the user reads its status words.
+      const phase = PHASE_LABELS[rawPhase as TaskPhase] ?? rawPhase;
       if (taskLabel && phase) return `${taskLabel} — ${phase}`.slice(0, 200);
       if (taskLabel) return taskLabel.slice(0, 150);
     }

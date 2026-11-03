@@ -49,11 +49,11 @@ describe('dimSummary: the value at the right of a property row', () => {
     for (const dim of FILTER_DIMS) expect(summaryOf(dim, S0), dim).toEqual({ text: want[dim], isDefault: true });
   });
 
-  it('a set property reads the chip value: Home, Garden; To Do, Need Action; 3 projects', () => {
+  it('a set property reads the chip value: Home, Garden; Not started, Needs you; 3 projects', () => {
     expect(summaryOf('project', st({ projects: ['Home', 'Garden'] }))).toEqual({ text: 'Home, Garden', isDefault: false });
     expect(summaryOf('project', st({ projects: ['Home', 'Garden', 'Shed'] }))).toEqual({ text: '3 projects', isDefault: false });
-    expect(summaryOf('status', st({ status: ['TODO', 'NEED_ACTION'] as TaskPhase[] }))).toEqual({ text: 'To Do, Need Action', isDefault: false });
-    expect(summaryOf('status', st({ status: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] as TaskPhase[] })).text).toBe('Open, Complete');
+    expect(summaryOf('status', st({ status: ['TODO', 'NEED_ACTION'] as TaskPhase[] }))).toEqual({ text: 'Not started, Needs you', isDefault: false });
+    expect(summaryOf('status', st({ status: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] as TaskPhase[] })).text).toBe('Open, Completed');
     expect(summaryOf('project', st({ projects: [''] })).text).toBe('Inbox');
   });
 
@@ -157,9 +157,9 @@ describe('matchScore and rankByMatch: the label the text names outright comes fi
     expect(matchScore(' Recent ', '  RECENT')).toBe(2);
     expect(matchScore('Waiting', 'wait')).toBe(1);
     expect(matchScore('Updated in 24h', 'up')).toBe(1);
-    expect(matchScore('In Progress', 'progress')).toBe(0);
-    // A keyword hit (doing finds In Progress) has no label match at all.
-    expect(matchScore('In Progress', 'doing')).toBe(0);
+    expect(matchScore('Needs you', 'you')).toBe(0);
+    // A keyword hit (doing finds Working) has no label match at all.
+    expect(matchScore('Working', 'doing')).toBe(0);
   });
 
   it('an empty or blank text scores 0 for every label', () => {

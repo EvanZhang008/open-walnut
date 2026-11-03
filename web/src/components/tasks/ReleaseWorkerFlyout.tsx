@@ -4,7 +4,7 @@ import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
-import { PHASE_LABELS } from '@/utils/session-status';
+import { taskStatusLabel } from '@/utils/session-status';
 import { subtaskPlaceLabel } from './subtask-index';
 import { RELEASE_FILTER_FROM, releaseCandidates } from './team-menu-model';
 import '@/styles/subtask-pill.css';
@@ -138,7 +138,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
               >
                 <span className="adopt-worker-row-title">{t.title}</span>
                 <span className="adopt-worker-row-meta">
-                  {PHASE_LABELS[t.phase] ?? t.phase}
+                  {taskStatusLabel(t)}
                   {place ? ` · ${place}` : ''}
                 </span>
               </button>

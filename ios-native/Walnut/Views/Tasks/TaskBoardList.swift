@@ -754,7 +754,7 @@ struct BoardRowGestures: ViewModifier {
                     Label(affordance.menuLabel, systemImage: affordance.menuIcon)
                 }
                 Button(action: onToggleDone) {
-                    Label(row.isDone ? "Mark as To Do" : "Mark as Done",
+                    Label(row.isDone ? "Reopen" : "Mark as Done",
                           systemImage: row.isDone ? "circle" : "checkmark.circle.fill")
                 }
                 // Watch keeps the task in the Watching section on top, whatever its state.

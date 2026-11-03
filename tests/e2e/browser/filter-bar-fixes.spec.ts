@@ -31,11 +31,11 @@ test('F04 + F15: Status rows carry one selected signal; single-select rows keep 
   const status = filterPage(page, 'status')
   // No phase icons in the rows: the square is the one selected signal.
   await expect(status.locator('.fb-val-icon, .fb-item-icon')).toHaveCount(0)
-  const complete = filterValue(page, 'status', 'Complete')
+  const complete = filterValue(page, 'status', 'Completed')
   await expect(complete).toHaveAttribute('aria-pressed', 'false')
   await expect(complete.locator('svg')).toHaveCount(0)
   await expect(complete.locator('.fb-check.fb-check-box')).toHaveCount(1)
-  const todo = filterValue(page, 'status', 'To Do')
+  const todo = filterValue(page, 'status', 'Not started')
   await expect(todo).toHaveAttribute('aria-pressed', 'true')
   await expect(todo.locator('.fb-check svg')).toHaveCount(1)
   await expect(todo.locator('svg')).toHaveCount(1)

@@ -15,12 +15,12 @@ import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { PhoneConfirmSheet } from '@/components/common/PhoneConfirmSheet';
 import { ChevronRightIcon } from '@/components/common/PhoneIcons';
-import { PHASE_LABELS, phasePickerChoices, resolveTaskSessionId } from '@/utils/session-status';
+import { PHASE_LABELS, phasePickerChoices, resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
 import { log } from '@/utils/log';
 
 export function phaseLabelOf(phase: string | undefined): string {
-  return PHASE_LABELS[(phase ?? 'TODO') as TaskPhase] ?? phase ?? 'To Do';
+  return PHASE_LABELS[(phase ?? 'TODO') as TaskPhase] ?? phase ?? PHASE_LABELS.TODO;
 }
 
 /** A live process stops when its task completes: that is what the sheet warns about. */
@@ -83,15 +83,16 @@ export function PhonePhaseSheet({ task, onSetPhase }: PhonePhaseSheetProps) {
         aria-expanded={listOpen}
         data-testid="phone-phase-row"
       >
-        <span className="phone-detail-row-label">Phase</span>
-        <span className="phone-detail-row-value">{phaseLabelOf(current)}</span>
+        <span className="phone-detail-row-label">Status</span>
+        {/* The task's own status words; the sheet below still sets its phase. */}
+        <span className="phone-detail-row-value">{taskStatusLabel(task)}</span>
         <ChevronRightIcon size={18} />
       </button>
       {listOpen && createPortal(
         <div className="phone-confirm-sheet-root phone-phase-sheet-root" data-testid="phone-phase-sheet">
           <button type="button" className="phone-confirm-sheet-backdrop" aria-label="Close" onClick={() => list.close()} />
-          <div className="phone-confirm-sheet phone-phase-sheet" role="listbox" aria-label="Phase">
-            <h2 className="phone-confirm-sheet-title">Phase</h2>
+          <div className="phone-confirm-sheet phone-phase-sheet" role="listbox" aria-label="Status">
+            <h2 className="phone-confirm-sheet-title">Status</h2>
             {choices.map((phase) => (
               <button
                 key={phase}

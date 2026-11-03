@@ -340,9 +340,9 @@ struct TaskDetailExtras: View {
         .interactiveDismissDisabled()
     }
 
-    /// Phase enum → readable Title Case.
+    /// A phase in the user's status words (PhaseWords); an unknown one title-cased.
     static func phaseLabel(_ phase: String) -> String {
-        phase.split(separator: "_")
+        PhaseWords.label(phase) ?? phase.split(separator: "_")
             .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
             .joined(separator: " ")
     }

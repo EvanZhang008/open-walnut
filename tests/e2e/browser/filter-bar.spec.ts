@@ -25,7 +25,7 @@ test.describe.configure({ timeout: 120_000 })
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
-const OPEN_STATUS = [['To Do', 'true'], ['In Progress', 'true'], ['Need Action', 'true'], ['Waiting', 'false'], ['Complete', 'false']] as const
+const OPEN_STATUS = [['Not started', 'true'], ['Working', 'true'], ['Needs you', 'true'], ['Waiting', 'false'], ['Completed', 'false']] as const
 const shownDims = (l: Locator) => l.locator('.fb-home[data-section="filters"] > .fb-prop')
   .evaluateAll((els) => els.map((e) => e.getAttribute('data-filter-dim')))
 const summary = (page: Parameters<typeof filterDimRow>[0], dim: Parameters<typeof filterDimRow>[1]) => filterDimRow(page, dim).locator('.fb-prop-summary')
@@ -171,7 +171,7 @@ test.describe('Mia: removing and clearing', () => {
   test('C7: Clear puts every property back, keeps Sort, and the row goes', async ({ page }) => {
     const sortBefore = await page.evaluate(() => localStorage.getItem('walnut-todo-sortBy'))
     await addFilter(page, 'project', 'Garden')
-    await setStatus(page, ['To Do', 'Waiting'])
+    await setStatus(page, ['Not started', 'Waiting'])
     await addFilter(page, 'date', 'Overdue')
     await expect(filterRow(page).locator('.fb-chip')).toHaveCount(3)
     await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
@@ -193,17 +193,17 @@ test.describe('Mia: removing and clearing', () => {
   })
 
   test('C11 + C12 + C13 + C13b + C50: last status stays on; no native checkbox; plain words with titles on both pages', async ({ page }) => {
-    await setStatus(page, ['Complete'], { keepOpen: true })
-    const complete = filterValue(page, 'status', 'Complete')
+    await setStatus(page, ['Completed'], { keepOpen: true })
+    const complete = filterValue(page, 'status', 'Completed')
     await expect(complete).toHaveAttribute('aria-disabled', 'true')
     await expect(complete).toHaveAttribute('title', 'At least one status stays on')
-    await expect(filterPage(page, 'status').getByRole('button', { name: 'Only Complete' })).toHaveCount(0)
+    await expect(filterPage(page, 'status').getByRole('button', { name: 'Only Completed' })).toHaveCount(0)
     await complete.click({ force: true })
     await expect(complete).toHaveAttribute('aria-pressed', 'true')
     await expect(filterChip(page, 'status')).toContainText('Complete')
     expect(await page.locator('.fb-menu input[type="checkbox"], .fb-menu select').count()).toBe(0)
     // C50: the status words, in order (the Open row over its three), each with a title that names no tier.
-    await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['Open', 'To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
+    await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['Open', 'Not started', 'Working', 'Needs you', 'Waiting', 'Completed'])
     const titles = await filterPage(page, 'status').locator('.fb-opt-body').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
     expect(titles).toHaveLength(6)
     for (const t of titles) { expect(t).not.toBe(''); expect(t).not.toMatch(/tier|focus|satellite|backlog|parked/i) }
@@ -214,7 +214,7 @@ test.describe('Mia: removing and clearing', () => {
     const homeTitles = await filterMenu(page).locator('.fb-home [title]').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
     expect(homeTitles.length).toBeGreaterThan(3)
     for (const t of homeTitles) expect(t).not.toMatch(/tier|focus|satellite|backlog|parked/i)
-    await expect(summary(page, 'status')).toHaveText('Complete')
+    await expect(summary(page, 'status')).toHaveText('Completed')
     expect(await page.locator('.fb-menu input[type="checkbox"], .fb-menu select').count()).toBe(0)
     await closeFilterMenu(page)
   })
@@ -240,9 +240,9 @@ test.describe('Mia: menu layout and words', () => {
     await settled(filterMenu(page))
     const statusRows = filterPage(page, 'status').locator('.fb-opt-body')
     const s0 = await rects(statusRows)
-    const st = [await at(filterValue(page, 'status', 'Waiting')), await at(filterValue(page, 'status', 'Complete'))]
+    const st = [await at(filterValue(page, 'status', 'Waiting')), await at(filterValue(page, 'status', 'Completed'))]
     for (const t of st) await page.mouse.click(t.x, t.y)
-    for (const v of ['Waiting', 'Complete']) await expect(filterValue(page, 'status', v)).toHaveAttribute('aria-pressed', 'true')
+    for (const v of ['Waiting', 'Completed']) await expect(filterValue(page, 'status', v)).toHaveAttribute('aria-pressed', 'true')
     same(await rects(statusRows), s0)
     // Project: two plain clicks add two values (no modifier, no add square).
     await openFilterPage(page, 'project')
@@ -430,12 +430,12 @@ test.describe('Themes, narrow panels and the view item', () => {
     await expect(page.getByTestId('filter-count')).toHaveAttribute('aria-label', /^\d+ tasks?$/)
     await page.screenshot({ path: `${SHOTS}/narrow-panel.png`, clip: await clipAround(page) })
     await addFilter(page, 'source', 'Microsoft To Do')
-    await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+    await setStatus(page, ['Not started', 'Working', 'Needs you', 'Completed'])
     await closeFilterMenu(page)
     // F02: three filters are all on screen, no +N while the row has room for them.
     await expect(filterRow(page).locator('.fb-chip[data-chip-dim]')).toHaveCount(3)
     await expect(filterRow(page).locator('.fb-chip-plus')).toHaveCount(0)
-    await expect(filterChip(page, 'status').locator('.fb-chip-body')).toHaveText(/^Status:\s*Open, Complete\s*$/, { useInnerText: true })
+    await expect(filterChip(page, 'status').locator('.fb-chip-body')).toHaveText(/^Status:\s*Open, Completed\s*$/, { useInnerText: true })
     await addFilter(page, 'date', 'Any date')
     await addFilter(page, 'blocked', 'Not blocked')
     await addFilter(page, 'time', '24h')

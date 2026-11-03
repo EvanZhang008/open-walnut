@@ -246,7 +246,7 @@ test.describe('the card holds still around it', () => {
     const y0 = (await first.boundingBox())!.y
     await openBell(page)
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
-    for (const label of ['System', 'Needs Action', 'System', 'Inbox', 'System', 'Errors', 'System', 'Automation', 'System', 'All']) {
+    for (const label of ['System', 'Needs you', 'System', 'Inbox', 'System', 'Errors', 'System', 'Automation', 'System', 'All']) {
       await pickRail(page, label)
       await expect(panelBanner(page), label).toHaveCount(0)
       await expectHomeCardStill(page, place, label)

@@ -30,11 +30,11 @@ export const STATUS_FILTER_ORDER: readonly TaskPhase[] = [
 ];
 
 export const STATUS_TITLES: Record<TaskPhase, string> = {
-  TODO: 'To Do: not started yet',
-  IN_PROGRESS: 'In Progress: someone is working on it now',
-  NEED_ACTION: 'Need Action: an agent is waiting for your reply',
-  WAITING: 'Waiting: on hold until a date or an event, hidden by default',
-  COMPLETE: 'Complete: finished, hidden by default',
+  TODO: `${PHASE_LABELS.TODO}: nobody has started it yet`,
+  IN_PROGRESS: `${PHASE_LABELS.IN_PROGRESS}: someone is working on it now`,
+  NEED_ACTION: `${PHASE_LABELS.NEED_ACTION}: the next move is yours`,
+  WAITING: `${PHASE_LABELS.WAITING}: on hold until a date or an event, hidden by default`,
+  COMPLETE: `${PHASE_LABELS.COMPLETE}: finished, hidden by default`,
 };
 
 export const STATUS_LAST_VALUE_TITLE = 'At least one status stays on';
@@ -54,9 +54,9 @@ export function hasAllOpen(set: readonly TaskPhase[]): boolean {
   return OPEN_PHASES.every((p) => set.includes(p));
 }
 
-/** The Status page's parent row: To Do, In Progress and Need Action as one pick. */
+/** The Status page's parent row: the three open phases (OPEN_PHASES) as one pick. */
 export const OPEN_GROUP_VALUE = 'OPEN';
-export const OPEN_GROUP_TITLE = 'Open: To Do, In Progress and Need Action';
+export const OPEN_GROUP_TITLE = `Open: ${PHASE_LABELS.TODO}, ${PHASE_LABELS.IN_PROGRESS} and ${PHASE_LABELS.NEED_ACTION}`;
 /** A value row that puts its property back at the default (`Any project`, `Any time`). */
 export const DEFAULT_VALUE = '__default__';
 

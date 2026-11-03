@@ -105,7 +105,7 @@ test.describe('the notification panel holds no card', () => {
     // Picking System again is no change: the list is not remounted.
     await railButton(page, 'System').click()
     await expect(systemHosts(page)).toHaveAttribute('data-bp-mark', 'kept')
-    for (const label of ['Needs Action', 'Inbox', 'Errors', 'Automation', 'System', 'All']) {
+    for (const label of ['Needs you', 'Inbox', 'Errors', 'Automation', 'System', 'All']) {
       await pickRail(page, label)
       await expect(panelMount(page), label).toHaveCount(0)
       await expect(panelBanner(page), label).toHaveCount(0)

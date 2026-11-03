@@ -24,7 +24,7 @@ vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: ()
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
 
 const {
-  STATUS_OPTIONS, statusLabel, formatWaitUntil, waitUntilFromPick,
+  STATUS_OPTIONS, formatWaitUntil, waitUntilFromPick,
   TaskStatusMenuSection,
 } = await import('../../web/src/components/tasks/TaskStatusControl');
 const { waitingChipLabel, waitingDetailLines } = await import('../../web/src/components/tasks/WaitingChip');
@@ -74,10 +74,10 @@ const task = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('status options', () => {
-  it('offer Waiting between To Do and In Progress, in the lifecycle order', () => {
+  it('offer Waiting between Not started and Working, in the lifecycle order', () => {
     expect(STATUS_OPTIONS.map((o) => o.value)).toEqual(['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
-    expect(STATUS_OPTIONS.map((o) => o.label)).toEqual(['To Do', 'Waiting', 'In Progress', 'Need Action', 'Complete']);
-    expect(statusLabel('WAITING')).toBe('Waiting');
+    expect(STATUS_OPTIONS.map((o) => o.label)).toEqual(['Not started', 'Waiting', 'Working', 'Needs you', 'Completed']);
+    expect(STATUS_OPTIONS.find((o) => o.value === 'WAITING')?.label).toBe('Waiting');
   });
 });
 
@@ -126,7 +126,7 @@ describe('the Waiting chip\'s detail card', () => {
     expect(lines).toContain('Waiting on the CR review.');
     expect(lines).toContain('Next: merge it');
     expect(lines).toContain('Trigger review-watch: every 10m');
-    expect(lines.at(-1)).toBe('A message here moves it to In Progress.');
+    expect(lines.at(-1)).toBe('A message here moves it to Working.');
   });
 
   it('with no clock says it waits for something to happen; nothing for another phase', () => {
@@ -208,8 +208,8 @@ describe('TaskStatusMenuSection and Waiting', () => {
     expect(s.afterAction).toHaveBeenCalledTimes(1);
   });
 
-  it('a To Do task never shows a time on the collapsed row', async () => {
+  it('a Not started task never shows a time on the collapsed row', async () => {
     const host = await mount(TaskStatusMenuSection, { task: task({ wait_until: '2026-10-02T16:00:00.000Z' }), ...spies() });
-    expect(host.querySelector('.task-kebab-status-value')!.textContent).toBe('Status: To Do');
+    expect(host.querySelector('.task-kebab-status-value')!.textContent).toBe('Status: Not started');
   });
 });

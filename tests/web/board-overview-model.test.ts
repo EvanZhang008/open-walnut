@@ -116,8 +116,8 @@ describe('describeTask', () => {
   });
 
   it('a task with no session shows its phase', () => {
-    expect(describeTask(task('t'), null, [])).toMatchObject({ group: 'open', badge: { label: 'To Do', tone: 'grey' }, now: 'Not started' });
-    expect(describeTask(task('n', { phase: 'NEED_ACTION' }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'Need Action', tone: 'red' } });
+    expect(describeTask(task('t'), null, [])).toMatchObject({ group: 'open', badge: { label: 'Not started', tone: 'grey' }, now: 'Not started' });
+    expect(describeTask(task('n', { phase: 'NEED_ACTION' }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'Needs you', tone: 'red' } });
     // A status the store still holds for a task with no session slot is not this task's.
     expect(describeTask(task('t'), live({ process_status: 'running' }), []).group).toBe('open');
   });
@@ -134,7 +134,7 @@ describe('describeTask', () => {
     expect(describeTask(withSession('n', { phase: 'NEED_ACTION' }), live({ process_status: 'idle' }), [])).toMatchObject({ group: 'needs', reason: 'need-action' });
     // A status that needs the user does, whatever the phase.
     const letter = { state: 'needs', source: 'letter', ask: 'Pick a date' } as Task['user_status'];
-    expect(describeTask(task('l', { phase: 'TODO', user_status: letter }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'To Do', tone: 'red' } });
+    expect(describeTask(task('l', { phase: 'TODO', user_status: letter }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'Needs you', tone: 'red' } });
   });
 
   it('To read is under Needs you, its line saying what to do with it; no To read badge', () => {
@@ -186,7 +186,7 @@ describe('describeTask', () => {
 function row(id: string, extra: Partial<OverviewRow> = {}): OverviewRow {
   return {
     id, task: task(id), depth: 1, parentId: 'lead', signals: [], openSubtasks: 0, place: '', circle: 'task-circle-todo',
-    group: 'open', reason: null, badge: { label: 'To Do', tone: 'grey' }, now: '', at: '', running: false,
+    group: 'open', reason: null, badge: { label: 'Not started', tone: 'grey' }, now: '', at: '', running: false,
     ...extra,
   };
 }

@@ -105,7 +105,7 @@ test('a host replica: sign in through it, read away, an away complete kept on th
   await row(page, 'Release plan').getByRole('button', { name: 'Mark complete' }).click()
   const done = row(page, 'Release plan')
   await expect(done.getByTestId('away-sync-mark')).toHaveText(AWAY_SYNC, { timeout: 2_500 })
-  await expect(done.getByRole('button', { name: 'Reopen (mark To Do)' })).toBeVisible()
+  await expect(done.getByRole('button', { name: 'Reopen' })).toBeVisible()
   await expect(page.getByText(NEEDS_MAC, { exact: true })).toHaveCount(0)
   // The replica's copy is the Mac's alone: the write is in the host's journal, not in it.
   const copied = (c.stores().taskRows as Array<{ id: string; phase: string }>).find((t) => t.id === c.ids.board)

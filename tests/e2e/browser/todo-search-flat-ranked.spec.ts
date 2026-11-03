@@ -247,7 +247,7 @@ test('a completed task is found by its own title: the three latest inline, the r
   const inline = [openLiteral, doneLiteral, olderDone[2], olderDone[1]];
   await expect.poll(() => rowIds(page)).toEqual(inline);
   const doneRow = page.locator(`#home-task-navigation .todo-search-results .todo-panel-item[data-task-id="${doneLiteral}"]`);
-  await expect(doneRow.locator('.task-phase-icon-btn')).toHaveAttribute('aria-label', 'Reopen (mark To Do)');
+  await expect(doneRow.locator('.task-phase-icon-btn')).toHaveAttribute('aria-label', 'Reopen');
   const completed = page.locator('#home-task-navigation .todo-search-completed-toggle');
   await expect(completed).toHaveText(/Completed \(1\)/);
   releaseServer();

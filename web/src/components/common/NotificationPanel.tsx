@@ -531,7 +531,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               honest list of buttons does. */}
           <div className="nfc-rail" aria-label="Notification sections">
             <RailButton
-              label="Needs Action" count={counts.action} warn
+              label="Needs you" count={counts.action} warn
               active={section === 'action'} onClick={() => pickSection('action')}
             />
             {/* Inbox shows UNREAD letters (not the list length): a letter is read

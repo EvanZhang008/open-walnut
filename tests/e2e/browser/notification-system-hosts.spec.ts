@@ -26,7 +26,7 @@ import {
 } from './banner-placement-helpers'
 
 const SHOTS = '/tmp/walnut-nfc-system/shots'
-const SECTIONS = ['Needs Action', 'Inbox', 'Errors', 'Automation', 'System', 'All']
+const SECTIONS = ['Needs you', 'Inbox', 'Errors', 'Automation', 'System', 'All']
 /** The Settings order of fixtureHosts(), which is the System list's order. */
 const LISTED = ['devbox', 'buildbox', 'signbox', 'keybox', 'certbox', 'netbox']
 const PROBLEM_ROWS = ['signbox', 'keybox', 'certbox', 'netbox']
