@@ -10,9 +10,9 @@
  * row background in its own column band) is read from a 2x screenshot, so the
  * resolution is half a CSS pixel.
  *
- * Real density: the task carries the labels a busy task has (Trigger, Worker,
- * Leader · 1), which the title row folds into one labels control (2026-11-02:
- * no pill and no status badge beside the title), and the kebab, in both marker
+ * Real density: the task carries the pills a busy task has (Trigger, Worker,
+ * Leader · 1), which stay on the title row (2026-11-03: only link tags fold into
+ * the tags control; no status badge beside the title), and the kebab, in both marker
  * states (solid unread dot, hollow read ring), in a session column and in the
  * Ask Walnut slot.
  */
@@ -156,18 +156,33 @@ async function rowShot(page: Page, row: Locator, name: string): Promise<void> {
 const HEADER_ITEMS = {
   marker: '.session-panel-unread-dot',
   circle: '.task-quick-phase-btn svg',
-  labels: '.session-panel-title-meta [data-testid="session-header-labels"]',
+  trigger: '.session-panel-title-meta [data-testid="task-trigger-pill"]',
+  worker: '.session-panel-title-meta [data-testid="subtask-pill"]',
+  leader: '.session-panel-title-meta [data-testid="leader-pill"]',
   kebab: '.session-panel-title-meta .task-kebab-btn',
 }
 
-/** Every item's ink on the row's center line; the title's line box too. */
+/** The pills drawn as text alone, measured by their box (below). */
+const TEXT_PILLS = ['trigger', 'worker', 'leader']
+
+/** Every item's ink on the row's center line (a text pill's box); the title's line box too. */
 async function expectRowAligned(page: Page, panel: Locator, label: string): Promise<Record<string, Ink>> {
   const row = panel.locator('.session-panel-header-top')
   const { rowCy, ink } = await inkOf(page, row, HEADER_ITEMS)
   const offsets = Object.fromEntries(Object.entries(ink).map(([k, v]) => [k, +(v.cy - rowCy).toFixed(2)]))
   await fs.writeFile(`${SCREENSHOT_DIR}/${test.info().project.name}-${label}.json`, JSON.stringify({ rowCy, offsets, ink }, null, 2))
   for (const [name, off] of Object.entries(offsets)) {
+    if (TEXT_PILLS.includes(name)) continue
     expect(Math.abs(off), `${label}: ${name} is ${off}px off the row's center line`).toBeLessThanOrEqual(CENTER_TOLERANCE)
+  }
+  // A text pill has no fill, so its ink is its letters, and a descender ("g" in Trigger)
+  // moves that by the font's own metrics: its box is what sits on the line.
+  const boxes = await row.evaluate((el, sels) => Object.fromEntries(sels.map(([name, sel]) => {
+    const b = el.querySelector(sel)!.getBoundingClientRect()
+    return [name, b.y + b.height / 2]
+  })), TEXT_PILLS.map((n) => [n, HEADER_ITEMS[n as keyof typeof HEADER_ITEMS]] as [string, string]))
+  for (const [name, cy] of Object.entries(boxes)) {
+    expect(Math.abs(cy - rowCy), `${label}: ${name}'s box is ${(cy - rowCy).toFixed(2)}px off the row's center line`).toBeLessThanOrEqual(CENTER_TOLERANCE)
   }
   const titleCy = await row.locator('.session-panel-title').first().evaluate((el) => {
     const range = document.createRange()
@@ -188,7 +203,7 @@ async function listGap(page: Page, taskId: string): Promise<number> {
   return ink.circle.left - ink.dot.right
 }
 
-test('a session column header: dot or ring, circle, labels control and kebab share one center line', async ({ page }) => {
+test('a session column header: dot or ring, circle, Trigger, Worker, Leader and kebab share one center line', async ({ page }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))

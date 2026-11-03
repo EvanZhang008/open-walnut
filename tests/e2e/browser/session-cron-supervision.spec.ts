@@ -2,7 +2,6 @@ import fs from 'node:fs/promises'
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
-import { HEADER_LABELS_FLYOUT, closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 import type { SessionSupervision } from '../../../web/src/api/sessions'
 
@@ -124,31 +123,23 @@ async function pushCron(page: Page, metadata: SessionCronMetadata): Promise<void
 }
 
 /**
- * The header's CRON pill sits in the header's labels flyout (SessionHeaderLabels.tsx),
- * portalled to <body> and mounted while closed, so `HEADER_CRON` finds the header pill
- * of every panel on the page and never the task row's.
+ * The header's CRON pill sits on the panel's title row, beside the title
+ * (`.session-panel-title-meta`); only link tags fold into the tags control. Scoped to
+ * the title row, it never matches the task row's pill.
  */
-const HEADER_CRON = `${HEADER_LABELS_FLYOUT} .session-cron-pill`
-const CRON_LABEL = /(^| · )Cron( · |$)/
-
-/** Whether this panel's header shows the Cron pill: its labels control names it. */
-async function expectHeaderCron(panel: Locator, shown: boolean): Promise<void> {
-  const button = headerLabelsButton(panel)
-  if (shown) {
-    await expect(button).toHaveAttribute('title', CRON_LABEL)
-    return
-  }
-  await expect.poll(async () => (await button.count()) === 0 ? '' : (await button.getAttribute('title')) ?? '').not.toMatch(CRON_LABEL)
+function headerCron(panel: Locator): Locator {
+  return panel.locator('.session-panel-title-meta .session-cron-pill')
 }
 
-/** Run `check` on this panel's header Cron pill, with its labels flyout open. */
+/** Whether this panel's header shows the Cron pill on its title row. */
+async function expectHeaderCron(panel: Locator, shown: boolean): Promise<void> {
+  if (shown) await expect(headerCron(panel)).toBeVisible()
+  else await expect(headerCron(panel)).toHaveCount(0)
+}
+
+/** Run `check` on this panel's header Cron pill. */
 async function withHeaderCron(panel: Locator, check: (pill: Locator) => Promise<void>): Promise<void> {
-  const flyout = await openHeaderLabels(panel)
-  try {
-    await check(flyout.locator('.session-cron-pill'))
-  } finally {
-    await closeHeaderLabels(panel)
-  }
+  await check(headerCron(panel))
 }
 
 /**
@@ -544,15 +535,14 @@ test('the cron pill rides the task row and the session header, and only a newer 
   await expect(row).toHaveClass(/task-focused/)
   const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
   await expect(column).toBeVisible()
-  // Only the column shows this session, so the one header Cron pill is its own.
-  const headerPill = page.locator(HEADER_CRON)
+  const headerPill = headerCron(column)
   await expectHeaderCron(column, true)
   await expect(headerPill).toHaveText('Cron')
   await expect(headerPill).toHaveAttribute('data-cron-presence', 'active')
   await expect(headerPill).toHaveAttribute('data-cron-source', 'cron')
-  // The pill folds into the header's labels control: nothing on the title row
-  // beside the title, and no status badge there at all (2026-11-02).
-  await expect(column.locator('.session-panel-header-top .session-cron-pill')).toHaveCount(0)
+  // The pill stays on the title row beside the title (only link tags fold into the
+  // tags control), and the header shows no status badge at all (2026-11-02).
+  await expect(column.locator('.session-panel-header-top .session-cron-pill')).toHaveCount(1)
   await expect(column.locator('.session-panel-header .session-panel-badge')).toHaveCount(0)
   await expect(column.locator('.session-supervision')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-pill-active-css.png`, scale: 'css' })
@@ -574,9 +564,9 @@ test('the cron pill rides the task row and the session header, and only a newer 
   const headerTop = column.locator('.session-panel-header-top')
   expect(await headerTop.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   const headerBox = (await headerTop.boundingBox())!
-  const labelsBox = (await headerLabelsButton(column).boundingBox())!
-  expect(labelsBox.width).toBeGreaterThan(20)
-  expect(labelsBox.x + labelsBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1)
+  const headerPillBox = (await headerPill.boundingBox())!
+  expect(headerPillBox.width).toBeGreaterThan(28)
+  expect(headerPillBox.x + headerPillBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1)
 
   const statusResponse = await page.request.get(`/api/sessions/status?ids=${SID}`)
   expect(statusResponse.ok()).toBe(true)
@@ -831,7 +821,7 @@ test('a response issued before disconnect cannot clear reconnect uncertainty', a
     held.release()
     const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
     await expectHeaderCron(column, true)
-    await expect(page.locator(HEADER_CRON)).toHaveAttribute('data-cron-presence', 'active')
+    await expect(headerCron(column)).toHaveAttribute('data-cron-presence', 'active')
     await expect(pill).toHaveAttribute('data-cron-presence', 'active')
   } finally { held.release(); requested.release() }
 })

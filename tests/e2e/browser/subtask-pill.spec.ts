@@ -176,8 +176,20 @@ test('a subtask in another project is a top-level row there, and its Worker pill
   await expectTriggerShape(farPill)
   await expect(row(near).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
-  // Clicking the pill locates the PARENT (selects it), not the row it sits in.
+  // Clicking the pill opens its team (2026-11-03, the user: "worker when click should not
+  // directly jump"): the leader first, then both workers; the leader's row locates the
+  // PARENT (selects it), not the row the pill sits in.
+  // Searched to this run's rows first, so the pill holds still under the click (below the
+  // fold, the stacked Home scrolls smoothly and a click lands on whatever slid under it).
+  await page.locator('.todo-search-input').fill(stamp)
+  await expect(row(far)).toBeInViewport()
   await farPill.click()
+  const team = page.locator('[data-testid="worker-team-flyout"]')
+  await expect(team.locator('[data-testid="worker-team-leader"]')).toHaveAttribute('data-task-id', parent)
+  await expect(team.locator('[data-testid="worker-team-row"]')).toHaveCount(2)
+  await expect(team.locator(`[data-testid="worker-team-row"][data-task-id="${far}"]`)).toHaveAttribute('aria-current', 'true')
+  await team.locator('[data-testid="worker-team-leader"]').click()
+  await expect(team).toHaveCount(0)
   await expect(row(parent)).toHaveClass(/task-focused/, { timeout: 10_000 })
   await expect(row(far)).not.toHaveClass(/task-focused/)
 
@@ -246,6 +258,10 @@ test('the Leader pill counts and lists only open subtasks, and leaves when the l
   await expect(leaderPill).toHaveText('Leader · 2')
   await expect(leaderPill).toHaveAttribute('title', 'Leads 2 open subtasks (1 done). Click to list them.')
 
+  // Searched to this run's rows, so the row is at the top: below the fold, the stacked Home
+  // scrolls smoothly and a click while it still glides lands on whatever slid under it.
+  await page.locator('.todo-search-input').fill(stamp)
+  await expect(row(parent)).toBeInViewport()
   await leaderPill.click()
   const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')
   await expect(flyout).toBeVisible()

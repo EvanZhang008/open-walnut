@@ -148,6 +148,7 @@ import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusAction
 import { useToolRowFit } from './useSessionHeaderFit';
 import { SessionHeaderMoreMenu } from './SessionHeaderMore';
 import { SessionHeaderLabels } from './SessionHeaderLabels';
+import { useTitleRowTight } from './useTitleRowTight';
 import '@/styles/session-header-fit.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
@@ -472,6 +473,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // menu). Hidden items stay mounted under data-hidden="true"; the menu proxies to
   // them. The title row has nothing to fold: its labels are one control already.
   const toolRowRef = useRef<HTMLDivElement>(null);
+  // A narrow title row draws its state pills as letters (useTitleRowTight.ts).
+  const [titleRowRef, titleRowTight] = useTitleRowTight();
   const toolFit = useToolRowFit(toolRowRef);
   const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
   // Fork, Board and Locate need the session's task. Whether they exist is decided
@@ -1937,23 +1940,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // A host that draws the header (headerSlot): the badge and the kebab go there, the full desktop menu.
   // Not in fullscreen: the panel is an overlay then, over the host too, and needs its own header to come back.
   const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !isFullscreen;
-  // Every label of the session's task, in one order, for the folded labels control
-  // (SessionHeaderLabels.tsx): its links and tags, the wait, Embedded, Cron, Trigger,
-  // then the team pills.
-  const headerLabels = (
+  // The session's link tags (threads, docs, CRs), folded behind one control
+  // (SessionHeaderLabels.tsx) and counted there.
+  const headerTags = sessionTask
+    ? <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst max={Number.MAX_SAFE_INTEGER} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />
+    : null;
+  // Every other label stays on the row, seen at a glance (2026-11-03, the user: "only tag
+  // go there, other should still outside, like trigger ... leader ... worker"): the wait,
+  // Embedded, Cron, Trigger, then the team pills. A narrow header draws each as its letter.
+  const headerPills = (
     <>
-      {sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst max={Number.MAX_SAFE_INTEGER} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />}
       <WaitingChip task={sessionTask} />
       {session?.provider === 'embedded' && (
-        <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded">
+        <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded" data-short="E">
           {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
         </span>
       )}
       <CronPill sessionId={sessionId} expanded={cronDetailOpen} onClick={() => setCronDetailOpen((open) => !open)} />
       <TriggerPill taskId={session?.taskId} />
-      {/* The team links, as on the task rows: Sub leads to this task's parent, Leader
-          lists its subtasks. A Personal AI ask is never a board row, so its session
-          header is the one place an ask that split work off shows it. */}
+      {/* The team, as on the task rows: Worker lists this task's leader and its fellow
+          workers, Leader lists its subtasks. A Personal AI ask is never a board row, so its
+          session header is the one place an ask that split work off shows it. */}
       {sessionTask && <SubtaskPill task={sessionTask} />}
       {sessionTask && <LeaderPill task={sessionTask} />}
     </>
@@ -2627,7 +2634,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
           {/* ROW 2 — the title gets the whole line; only the folded labels and the
               kebab sit beside it (plus the host's one leading control, when
               embedded). Every window/tool icon button lives on row 1. */}
-          <div className="session-panel-header-top">
+          <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined}>
             {headerLeading && !isFullscreen && (
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}
@@ -2675,15 +2682,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
               </div>
             )}
             <div className="session-panel-title-meta">
-              {/* Beside the title only the folded labels and the kebab (2026-11-02, the user:
-                  "all collapse, user can click ... so have more room to have good name"). Every
-                  label (links and tags, the wait, Cron, Trigger, Worker, Leader) is in that one
-                  control; the run status (Running, Idle) is in the task detail, never here.
-                  Nothing else joins this row: tests/web/session-header-labels-guard.test.ts. */}
-              {!loading && !hostHeader && <SessionHeaderLabels>{headerLabels}</SessionHeaderLabels>}
+              {/* Beside the title: the state pills (headerPills), the link tags folded into one
+                  control (2026-11-02, the user: "the tag still noisy, all collapse"), and the kebab.
+                  The run status (Running, Idle) is in the task detail, never here. Nothing else
+                  joins this row: tests/web/session-header-labels-guard.test.ts. */}
+              {!loading && !hostHeader && headerPills}
+              {!loading && !hostHeader && <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
               {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
-              {/* The host's header (headerSlot): the folded labels (the wait among them) and the
+              {/* The host's header (headerSlot): the same pills, the folded link tags and the
                   kebab, the kebab led by the view rows the hidden header held. */}
               {!loading && hostHeader && headerSlot && createPortal(
                 <>
@@ -2694,7 +2701,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                       onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
                     />
                   )}
-                  <SessionHeaderLabels>{headerLabels}</SessionHeaderLabels>
+                  {headerPills}
+                  <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>
                   {sessionId && renderSessionKebab()}
                 </>,
                 headerSlot,

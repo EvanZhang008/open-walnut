@@ -411,7 +411,7 @@ test('the Worker pill, Adopt a worker… from the kebab and the Leader pill, and
   await openHome(page)
   const row = (id: string) => page.locator(`.todo-panel-item[data-task-id="${id}"]`)
   await expect(row(worker).locator('[data-testid="subtask-pill"]')).toHaveText('Worker', { timeout: 90_000 })
-  await expect(row(worker).locator('[data-testid="subtask-pill"]')).toHaveAttribute('title', `Worker of "${engine}-board-lead ${stamp}". Click to go to that task.`)
+  await expect(row(worker).locator('[data-testid="subtask-pill"]')).toHaveAttribute('title', `Worker of "${engine}-board-lead ${stamp}". Click to see its team.`)
   await expect(row(third).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
   // Kebab → Team (collapsed) → Adopt a worker… → the picker never offers the task itself.

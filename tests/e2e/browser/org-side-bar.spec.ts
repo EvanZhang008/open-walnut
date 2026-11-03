@@ -123,16 +123,24 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
   expect((await chat.locator('> .session-panel-header').boundingBox())?.height ?? 0).toBeLessThanOrEqual(1)
   await expect(detail.getByText(`${LED} VP`, { exact: true }).filter({ visible: true })).toHaveCount(1)
   await expect(detail.locator('[data-testid^="org-tab-"]')).toHaveCount(0)
-  // The chat's folded labels and its kebab are in the node's header; Changed, Files and Terminal
-  // are not on it, and neither is a run status (Running, Idle) or a coloured wait pill
-  // (2026-11-02, the user: "it is so ugly"): SessionHeaderLabels.tsx.
+  // The chat's state pills (the wait, Cron, Trigger, Worker, Leader), its folded link tags and its
+  // kebab are in the node's header, as on a session's title row; Changed, Files and Terminal are
+  // not on it, and neither is a run status (Running, Idle): SessionPanel headerPills.
   const tools = detail.getByTestId('org-detail-chat-tools')
   await expect(tools.locator('.task-kebab-btn')).toBeVisible({ timeout: 30_000 })
-  await expect(tools.locator('.session-panel-badge, .task-waiting-chip, .task-tag-pills, .task-team-pill, .task-trigger-pill')).toHaveCount(0)
+  await expect(tools.locator('.session-panel-badge:not([data-header-pill]), .task-tag-pills')).toHaveCount(0)
   expect(await tools.innerText()).not.toMatch(/\b(Running|Idle|Stopped)\b/)
   const kinds = await tools.evaluate((el) => Array.from(el.children).map((c) =>
-    c.matches('[data-testid="session-header-labels"]') ? 'labels' : c.querySelector('.task-kebab-btn') ? 'kebab' : c.matches('.thread-mode-pill') ? 'thread-mode' : `UNKNOWN:${c.className}`))
-  expect(kinds.filter((k) => k.startsWith('UNKNOWN'))).toEqual([])
+    c.matches('[data-testid="session-header-labels"]') ? 'labels'
+      : c.querySelector('.task-kebab-btn') ? 'kebab'
+      : c.matches('.thread-mode-pill') ? 'thread-mode'
+      : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill'
+      : `UNKNOWN:${c.className}`))
+  expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
+  // The pills come before the tags control, and the kebab is last.
+  const order = kinds.filter((k) => k !== 'thread-mode')
+  expect(order.lastIndexOf('pill') < Math.max(order.indexOf('labels'), order.indexOf('kebab')), `header tools: ${kinds}`).toBe(true)
+  expect(order[order.length - 1], `header tools: ${kinds}`).toBe('kebab')
   await expect(detail.locator('.org-detail-head').getByText('Changed', { exact: true })).toHaveCount(0)
   await expect(detail.locator('.org-detail-head').getByText('Files', { exact: true })).toHaveCount(0)
   await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'true')

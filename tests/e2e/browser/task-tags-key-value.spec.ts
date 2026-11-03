@@ -19,7 +19,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
+import { closeHeaderLabels, headerLabelsButton, openHeaderLabels, openLabelsFlyout } from './session-header-labels-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOT_DIR = '/tmp/task-tags-key-value'
@@ -147,7 +147,8 @@ test('a value key reads as its id on every row, and the session header shows the
   expect(layout.inside).toBe(true)
   expect(layout.title).toBeGreaterThan(layout.pills)
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-session-header.png` })
-  const labels = await openHeaderLabels(panel)
+  await openHeaderLabels(panel)
+  const labels = openLabelsFlyout(panel)
   const headerPills = labels.locator('[data-testid="task-tag-pills"] .tag-chip')
   expect(await chipTexts(headerPills)).toEqual([expect.stringMatching(/^V\d{10}$/), 'sev:2', 'oncall'])
   await expect(headerPills.first()).toHaveAttribute('title', /^tkt:V\d{10} \(opens tickets\.example\.test\)$/)

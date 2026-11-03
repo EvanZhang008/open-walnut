@@ -1,13 +1,14 @@
 /**
- * The session header's title row holds the title, ONE folded labels control and the
- * kebab (2026-11-02, the user: "idle and running don't need to show ... the tag still
- * noisy, all collapse, user can click"). Every label lives inside <SessionHeaderLabels>;
- * the run status (Running, Idle) is not in the header at all.
+ * The session header's title row holds the title, the state pills (headerPills: the wait,
+ * Cron, Trigger, Worker, Leader, Embedded), ONE folded control for the link tags
+ * (headerTags inside <SessionHeaderLabels>), and the kebab. 2026-11-02, the user: "idle
+ * and running don't need to show ... the tag still noisy, all collapse"; 2026-11-03: "only
+ * tag go there, other should still outside, like trigger ... leader ... worker".
  *
- * This reads SessionPanel.tsx's header JSX and fails when a pill, chip or badge
- * component is rendered there outside the labels control, or when the run status
- * comes back. A new pill kind (any component named *Pill, *Pills, *Chip or *Badge)
- * is caught without being listed here. The browser half is
+ * This reads SessionPanel.tsx and fails when a pill, chip or badge component is rendered
+ * on the row outside those two fragments, when a tag lands among the pills or a pill among
+ * the tags, or when the run status comes back. A new pill kind (any component named *Pill,
+ * *Pills, *Chip or *Badge) is caught without being listed here. The browser half is
  * tests/e2e/browser/session-header-labels.spec.ts.
  */
 import { describe, expect, it } from 'vitest';
@@ -29,18 +30,21 @@ function headerJsx(): string {
 /** The title row alone (row 2), where the labels used to crowd the title. */
 function titleRowJsx(): string {
   const header = headerJsx();
-  const start = header.indexOf('<div className="session-panel-header-top">');
+  const start = header.indexOf('<div className="session-panel-header-top"');
   expect(start).toBeGreaterThan(0);
   return header.slice(start);
 }
 
-/** The labels fragment SessionPanel hands to <SessionHeaderLabels>. */
-function labelsFragment(): string {
-  const start = src.indexOf('const headerLabels = (');
-  expect(start).toBeGreaterThan(0);
-  const end = src.indexOf('\n  );\n', start);
-  return src.slice(start, end);
+/** A fragment SessionPanel defines once: `const <name> = ...;` up to its end. */
+function fragment(name: string, end: string): string {
+  const start = src.indexOf(`const ${name} = `);
+  expect(start, `SessionPanel defines ${name}`).toBeGreaterThan(0);
+  const stop = src.indexOf(end, start);
+  expect(stop).toBeGreaterThan(start);
+  return src.slice(start, stop);
 }
+const tagsFragment = () => fragment('headerTags', ';\n');
+const pillsFragment = () => fragment('headerPills', '\n  );\n');
 
 const PILL_LIKE = /<([A-Z][A-Za-z0-9]*(?:Pill|Pills|Chip|Badge))\b/g;
 
@@ -55,40 +59,49 @@ describe('session header title row', () => {
   it('renders no pill, chip or badge outside the folded labels control', () => {
     const row = titleRowJsx()
       .replace(/<SessionHeaderLabels>[\s\S]*?<\/SessionHeaderLabels>/g, '<SessionHeaderLabels />')
+      .replace(/\bheaderPills\b/g, 'HEADER_PILLS')
       // The phone has no title row: its own top bar carries the wait as an hourglass
       // button beside its kebab (PhoneTopBar's action slot), and nothing else.
       .replace('createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_WAIT, kebabSlot');
     const found = [...row.matchAll(PILL_LIKE)].map((m) => m[1]).filter((name) => !(name in ALLOWED_ON_ROW));
-    expect(found, 'a label beside the title: put it in headerLabels (SessionHeaderLabels.tsx)').toEqual([]);
+    expect(found, 'a label beside the title: put it in headerPills, or a tag in headerTags').toEqual([]);
     // A label drawn as a plain element (a badge span, a tag chip) counts too. The one badge the
     // row keeps is the "Loading..." placeholder while the record loads.
     const raw = [...row.matchAll(/className=["{`][^"}`]*\b(session-panel-badge|tag-chip|task-team-pill|task-trigger-pill|session-cron-pill|task-waiting-chip)\b[^>]*>([^<{]*)/g)]
       .filter((m) => !(m[1] === 'session-panel-badge' && /^Loading/.test(m[2] ?? '')))
       .map((m) => m[1]);
-    expect(raw, 'a label drawn beside the title: put it in headerLabels').toEqual([]);
+    expect(raw, 'a label drawn beside the title: put it in headerPills or headerTags').toEqual([]);
   });
 
   it('never shows the run status (Running, Idle) in the header, its labels included', () => {
     // The status words are the task detail's (TaskDetailRows.tsx SessionRow), never the header's.
-    for (const [where, jsx] of [['header', headerJsx()], ['headerLabels', labelsFragment()]] as const) {
+    for (const [where, jsx] of [['header', headerJsx()], ['headerTags', tagsFragment()], ['headerPills', pillsFragment()]] as const) {
       expect(jsx, where).not.toMatch(/ProcessStatusBadge|process_status|\bps\b|processStatus/);
       expect(jsx, where).not.toMatch(/PROCESS_LABELS|PROCESS_COLORS|deriveDisplayStatus/);
     }
   });
 
-  it('draws every label inside the labels control, the same set wherever the header is', () => {
+  it('draws the same pills and the same folded tags wherever the header is', () => {
     const header = headerJsx();
-    const uses = [...header.matchAll(/<SessionHeaderLabels>\{headerLabels\}<\/SessionHeaderLabels>/g)];
+    const folded = [...header.matchAll(/<SessionHeaderLabels>\{headerTags\}<\/SessionHeaderLabels>/g)];
     // The title row's own, and the host header's (an Org node draws the panel's header in its own).
-    expect(uses.length).toBe(2);
-    // headerLabels is used nowhere else.
-    expect([...src.matchAll(/\{headerLabels\}/g)].length).toBe(uses.length);
+    expect(folded.length).toBe(2);
+    expect([...src.matchAll(/\{headerTags\}/g)].length).toBe(folded.length);
+    // Drawn twice (the row and the host header), and nowhere else: its definition plus those two.
+    expect([...header.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
+    expect([...src.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
+    // The control folds the tags and nothing else.
+    expect(src).not.toMatch(/<SessionHeaderLabels>(?!\{headerTags\}<\/SessionHeaderLabels>)/);
   });
 
-  it('keeps the label components in the labels fragment', () => {
-    const labels = labelsFragment();
-    for (const name of ['TaskTagPills', 'WaitingChip', 'CronPill', 'TriggerPill', 'SubtaskPill', 'LeaderPill']) {
-      expect(labels, `${name} belongs in headerLabels`).toContain(`<${name}`);
+  it('folds only the link tags; every state pill stays on the row', () => {
+    const tags = tagsFragment();
+    expect(tags).toContain('<TaskTagPills');
+    expect([...tags.matchAll(PILL_LIKE)].map((m) => m[1]), 'headerTags holds the tags alone').toEqual(['TaskTagPills']);
+    const pills = pillsFragment();
+    for (const name of ['WaitingChip', 'CronPill', 'TriggerPill', 'SubtaskPill', 'LeaderPill']) {
+      expect(pills, `${name} stays on the row (headerPills)`).toContain(`<${name}`);
     }
+    expect(pills, 'a tag among the pills').not.toContain('<TaskTagPills');
   });
 });

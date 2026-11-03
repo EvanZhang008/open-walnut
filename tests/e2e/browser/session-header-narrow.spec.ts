@@ -4,22 +4,21 @@
  * chip per line, drew the window buttons over the chips, and ran the title row's
  * pills past the panel edge over the phase circle).
  *
- * Real density: the task carries the labels a busy task has (Trigger, Worker,
- * Leader · 1), on a real session on the fixture server. The title row holds only
- * the title, the folded labels control and the kebab (2026-11-02: no status
- * badge, no pill beside the title, SessionHeaderLabels.tsx). The column is
- * clamped to the widths the report showed (400 → 180px); at each one every row
- * is a single line inside the panel, the hidden chips sit in a "..." menu that
- * opens them, the title keeps all the room the labels control and the kebab
- * leave it, the labels flyout lists every label and opens each one, and a
- * widened column gets everything back.
+ * Real density: the task carries the pills a busy task has (Trigger, Worker,
+ * Leader · 1), on a real session on the fixture server. They stay on the title
+ * row (2026-11-03: only link tags fold into the tags control; no status badge),
+ * as words in a wide row and as letters in a narrow one. The column is clamped
+ * to the widths the report showed (400 → 180px); at each one every row is a
+ * single line inside the panel, the hidden chips sit in a "..." menu that opens
+ * them, the title keeps all the room the pills and the kebab leave it, each pill
+ * opens what it opens, and a widened column gets everything back.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { clampColumn } from './composer-controls-overflow-helpers'
-import { closeHeaderLabels, expectHeaderLabel, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
+import { expectHeaderLabel, headerLabelsButton } from './session-header-labels-helpers'
 
 const SHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-narrow'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -88,11 +87,12 @@ interface HeaderState {
   toolRow: { lines: number; visible: string[]; hidden: string[]; overflowBy: number }
   titleRow: {
     lines: number; overflowBy: number; titleWidth: number; pillsStartAfterTitle: boolean
-    /** What the title row's right side shows, in order: only 'labels' and 'kebab' belong there. */
+    /** What the title row's right side shows, in order: 'pill', 'labels' (the tags control), 'kebab'. */
     items: string[]
-    /** Room between the title's end and the labels control when the title is cut (else 0). */
+    /** Room between the title's end and the first thing after it when the title is cut (else 0). */
     slackWhenCut: number
-    labelCount: string
+    pillCount: string
+    letters: boolean
   }
   moreVisible: boolean
 }
@@ -132,9 +132,12 @@ async function headerState(panel: Locator): Promise<HeaderState> {
         overflowBy: overflow(metaKids),
         titleWidth: Math.round(titleBox.width),
         pillsStartAfterTitle: metaKids.every((el) => el.getBoundingClientRect().left >= titleBox.right - 1),
-        items: metaKids.map((el) => el === labels ? 'labels' : el.matches('.task-kebab-btn') || el.querySelector('.task-kebab-btn') ? 'kebab' : `other:${el.className}`),
-        slackWhenCut: cut && labels ? Math.round(labels.getBoundingClientRect().left - titleBox.right) : 0,
-        labelCount: labels?.querySelector('.session-header-labels-count')?.textContent ?? '',
+        items: metaKids.map((el) => el === labels ? 'labels'
+          : el.matches('.task-kebab-btn') || el.querySelector('.task-kebab-btn') ? 'kebab'
+            : el.matches('.task-row-pill, .task-waiting-chip') ? 'pill' : `other:${el.className}`),
+        slackWhenCut: cut && metaKids[0] ? Math.round(metaKids[0].getBoundingClientRect().left - titleBox.right) : 0,
+        pillCount: String(metaKids.filter((el) => el.matches('.task-row-pill, .task-waiting-chip')).length),
+        letters: header.querySelector('.session-panel-header-top')!.getAttribute('data-header-fit') === 'tight',
       },
       moreVisible: !!header.querySelector('[data-header-more]'),
     }
@@ -160,9 +163,11 @@ function expectInsidePanel(state: HeaderState, label: string) {
   expect(state.toolRow.overflowBy, `${label}: the tool row runs past the panel`).toBeLessThanOrEqual(0)
   expect(state.titleRow.lines, `${label}: the title row wrapped`).toBeLessThanOrEqual(1)
   expect(state.titleRow.overflowBy, `${label}: the title row runs past the panel`).toBeLessThanOrEqual(0)
-  expect(state.titleRow.pillsStartAfterTitle, `${label}: the labels control or the kebab overlaps the title`).toBe(true)
-  expect(state.titleRow.items, `${label}: only the labels control and the kebab sit beside the title`).toEqual(['labels', 'kebab'])
-  // The title takes the whole row but those two: when it is cut, it is cut at the labels control.
+  expect(state.titleRow.pillsStartAfterTitle, `${label}: a pill or the kebab overlaps the title`).toBe(true)
+  // The task has no link tag, so no tags control: its three state pills (Trigger, Worker,
+  // Leader) and the kebab sit beside the title.
+  expect(state.titleRow.items, `${label}: the state pills and the kebab sit beside the title`).toEqual(['pill', 'pill', 'pill', 'kebab'])
+  // The title takes the whole row but those: when it is cut, it is cut at the first pill.
   expect(state.titleRow.slackWhenCut, `${label}: the cut title leaves room unused`).toBeLessThanOrEqual(12)
   expect(state.toolRow.visible, `${label}: close must stay`).toContain('close')
   expect(state.toolRow.visible, `${label}: expand must stay`).toContain('expand')
@@ -202,8 +207,8 @@ function expectRules(state: HeaderState, label: string) {
   }
   const listedHidden = LISTED.some((id) => hidden.has(id))
   expect(state.moreVisible, `${label}: the "..." chip shows exactly when it has something to list`).toBe(listedHidden)
-  // The labels never fold further: the same three at every width.
-  expect(state.titleRow.labelCount, `${label}: the labels control counts Trigger, Worker and Leader`).toBe('3')
+  // The pills never leave the row: the same three at every width.
+  expect(state.titleRow.pillCount, `${label}: Trigger, Worker and Leader stay on the row`).toBe('3')
 }
 
 /** Narrower never shows a chip that wider hid (a window button can return where a chip left). */
@@ -252,8 +257,14 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
   expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))
   expect(states[180].toolRow.visible[0]).toBe('fork')
-  // The title keeps real room at 180px: only the labels control and the kebab share its row.
-  expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(50)
+  // A narrow row draws the pills as letters (W, T, L); a wide one keeps the words.
+  expect(wide.titleRow.letters).toBe(false)
+  expect(states[240].titleRow.letters).toBe(true)
+  expect(states[180].titleRow.letters).toBe(true)
+  // The title keeps room at 180px beside the three letters and the kebab (a few letters
+  // and the ellipsis; the hover text has the rest), and more at 240px.
+  expect(states[180].titleRow.titleWidth).toBeGreaterThanOrEqual(38)
+  expect(states[240].titleRow.titleWidth).toBeGreaterThanOrEqual(65)
 
   // 180px: the "..." menu names every hidden view, then the hidden window buttons (the
   // tool row's overflow stays on the tool row; the kebab below is the task's menu). Opening
@@ -289,25 +300,22 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   await page.keyboard.press('Escape')
   await expect(kebab).toHaveCount(0, { timeout: 10_000 })
 
-  // At 180px the labels control lists every label whole, inside the window, and each one
-  // opens what it opens: the Trigger flyout anchors to a real box.
-  const labels = await openHeaderLabels(panel)
-  await expect(labels.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
-  await expect(labels.locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
-  await expect(labels.locator('[data-testid="task-trigger-pill"]')).toHaveText('Trigger')
-  const labelsBox = (await labels.boundingBox())!
+  // At 180px the letters still are the pills (the words stay for readers), and each one
+  // opens what it opens: the Trigger flyout anchors to a real box inside the window.
+  await expect(meta.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
+  await expect(meta.locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
+  await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('Trigger')
+  await expect(headerLabelsButton(panel)).toHaveCount(0)
+  await meta.locator('[data-testid="task-trigger-pill"]').click()
+  const jobs = page.getByTestId('trigger-jobs-flyout')
+  await expect(jobs).toBeVisible({ timeout: 10_000 })
+  const jobsBox = (await jobs.boundingBox())!
   const viewport = page.viewportSize()!
-  expect(labelsBox.x, 'the labels flyout starts inside the window').toBeGreaterThanOrEqual(0)
-  expect(labelsBox.x + labelsBox.width, 'the labels flyout ends inside the window').toBeLessThanOrEqual(viewport.width)
-  await shootHeader(panel, '180-labels', 120)
-  await labels.locator('[data-testid="task-trigger-pill"]').click()
-  await expect(page.getByTestId('trigger-jobs-flyout')).toBeVisible({ timeout: 10_000 })
-  // A click inside the pill's own flyout does not close the labels.
-  await expect(headerLabelsButton(panel)).toHaveAttribute('aria-expanded', 'true')
+  expect(jobsBox.x, 'the trigger flyout starts inside the window').toBeGreaterThanOrEqual(0)
+  expect(jobsBox.x + jobsBox.width, 'the trigger flyout ends inside the window').toBeLessThanOrEqual(viewport.width)
   await shootHeader(panel, '180-trigger-open', 220)
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('trigger-jobs-flyout')).toHaveCount(0, { timeout: 10_000 })
-  await closeHeaderLabels(panel)
+  await expect(jobs).toHaveCount(0, { timeout: 10_000 })
 
   // 320px: something is in the "..." menu while the pills are still on the row; Lock and Expand
   // are still buttons. It goes full screen, where the whole header comes back;
@@ -350,16 +358,14 @@ test('a second trigger while narrow stays one Trigger label that names both watc
     run: `echo '{"fire": false}'`, every: '5m', prompt: 'Nothing to do.', session: taskId,
   })
   litterRoutines.push(second.job.id)
-  const labels = await openHeaderLabels(panel)
-  const trigger = labels.locator('[data-testid="task-trigger-pill"]')
+  const trigger = panel.locator('.session-panel-title-meta [data-testid="task-trigger-pill"]')
   await expect(trigger).toHaveText('Trigger', { timeout: 20_000 })
   await expect(trigger).toHaveAttribute('data-trigger-count', '2', { timeout: 20_000 })
   await expect(trigger).toHaveAttribute('title', /Narrow header watch[\s\S]*Narrow header second watch|Narrow header second watch[\s\S]*Narrow header watch/)
-  await closeHeaderLabels(panel)
   // Still one Trigger label: the count and the row did not change.
   const still = await settleAt(page, panel, 260)
   expectInsidePanel(still, '260px with two triggers')
-  expect(still.titleRow.labelCount).toBe(narrow.titleRow.labelCount)
+  expect(still.titleRow.pillCount).toBe(narrow.titleRow.pillCount)
 
   const wide = await settleAt(page, panel, null)
   expectInsidePanel(wide, 'wide with two triggers')

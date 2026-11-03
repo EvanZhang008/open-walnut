@@ -117,10 +117,11 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
       e.stopPropagation();
       setOpen(false);
     };
-    document.addEventListener('pointerdown', onPointerDown);
+    // Capture phase: every pill on a row stops its own pointerdown (see LeaderPill.tsx).
+    document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey, true);
     return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKey, true);
     };
   }, [open]);

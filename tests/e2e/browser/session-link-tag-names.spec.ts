@@ -8,9 +8,10 @@
  *     no pill and counts as no label, a task whose links are all gone draws no labels control,
  *     and a file that comes back brings its pill back (2026-10-26, the user: "if a file is
  *     removed please don't show the tag");
- *   - the header folds every label into ONE control beside the title (2026-11-02,
- *     SessionHeaderLabels.tsx): its flyout lists every link whole, 20px, uncut (2026-10-25, "it
- *     somehow get cropped out"), and the title keeps its room, in a wide and a narrow column.
+ *   - the header folds the link tags into ONE control beside the title (2026-11-02,
+ *     SessionHeaderLabels.tsx; the state pills stay on the row): its flyout lists every link
+ *     whole, 20px, uncut (2026-10-25, "it somehow get cropped out"), and the title keeps its
+ *     room, in a wide and a narrow column.
  *
  * The fixture task `pw-task-links` (test-server.ts) holds the tags; its two existing files are
  * written by the fixture, the third never is. `pw-task-links-gone-<browser>` links only files
@@ -19,7 +20,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { closeHeaderLabels, expectHeaderLabel, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
+import { closeHeaderLabels, expectHeaderLabel, headerLabelsButton, openHeaderLabels, openLabelsFlyout } from './session-header-labels-helpers'
 
 const SHOT_DIR = '/tmp/session-link-tag-names'
 const TASK = 'pw-task-links'
@@ -82,7 +83,8 @@ test('each link pill reads a name after its icon, and the labels flyout shows ea
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-header.png` })
 
   // The flyout: every link, its name after its kind's icon; no "+N" (it holds them all).
-  const labels = await openHeaderLabels(panel)
+  await openHeaderLabels(panel)
+  const labels = openLabelsFlyout(panel)
   const links = labels.locator('.tag-chip-link-tag')
   await expect(links.locator('.tag-chip-value')).toHaveText(['Test matrix r5', 'Fix plan r5b', 'app#12'])
   const head = links.first()
@@ -132,7 +134,8 @@ test('a narrow column keeps the labels control in the header and every pill whol
   expect(title!.width).toBeGreaterThanOrEqual(48)
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-narrow-header.png` })
-  const labels = await openHeaderLabels(panel)
+  await openHeaderLabels(panel)
+  const labels = openLabelsFlyout(panel)
   const flyout = (await labels.boundingBox())!
   expect(flyout.x).toBeGreaterThanOrEqual(0)
   expect(flyout.x + flyout.width).toBeLessThanOrEqual(900)
@@ -171,7 +174,8 @@ test('a narrower column never squeezes the title out, and the links stay one cli
   }
   // The labels never fold away: at the narrowest the flyout still names the link whole.
   await expect(button).toHaveAttribute('title', /Test matrix r5/)
-  const labels = await openHeaderLabels(panel)
+  await openHeaderLabels(panel)
+  const labels = openLabelsFlyout(panel)
   await expect(labels.locator('.tag-chip-link-tag .tag-chip-value').first()).toHaveText('Test matrix r5')
   await expect(labels.locator('.tag-chip-link-tag .tag-chip-value').first()).toBeVisible()
   await closeHeaderLabels(panel)
@@ -208,7 +212,8 @@ test('a task whose links are all gone draws no labels, and a file that comes bac
     await expect(button).toBeVisible()
     // The other link is still gone: one label.
     await expect(button.locator('.session-header-labels-count')).toHaveText('1')
-    const labels = await openHeaderLabels(panel)
+    await openHeaderLabels(panel)
+    const labels = openLabelsFlyout(panel)
     const pills = labels.locator('.tag-chip-link-tag')
     await expect(pills).toHaveCount(1)
     await expect(pills.locator('svg.tag-chip-icon')).toHaveAttribute('data-kind-group', 'doc')

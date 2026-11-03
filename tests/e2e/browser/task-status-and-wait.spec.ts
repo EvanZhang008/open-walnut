@@ -32,7 +32,6 @@ import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
 import { endRunningTurn, interruptTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
-import { closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 import { DEFAULT_WAIT_HOURS } from '../../../src/core/types'
 import { TRIGGER_ACTION_LABEL } from '../../../web/src/components/sessions/trigger-picker-model'
 import { openKebabGroup } from './kebab-group-helpers'
@@ -653,13 +652,9 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING', wait_until: until })
 
   const [panel] = await openPanels(page, [sid])
-  // The wait is one of the header's labels (SessionHeaderLabels.tsx, 2026-11-02): the labels
-  // control names it, its flyout holds the chip; never a bar above the composer.
-  const labelsBtn = headerLabelsButton(panel)
-  const waitLabel = (re: RegExp) => expect(labelsBtn).toHaveAttribute('title', re, { timeout: 15_000 })
-  await waitLabel(/(^| · )Wait until /)
-  const labels = await openHeaderLabels(panel)
-  const line = labels.getByTestId('session-waiting-chip')
+  // The wait is a chip on the header's title row, beside the title (only link tags fold
+  // into the tags control), never a bar above the composer.
+  const line = panel.locator('.session-panel-title-meta').getByTestId('session-waiting-chip')
   await expect(line).toBeVisible({ timeout: 15_000 })
   await expect(line).toHaveText(/^Wait until /)
   await expect(panel.locator('.session-panel-input .task-waiting-line')).toHaveCount(0)
@@ -673,7 +668,6 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   await page.screenshot({ path: `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${browserName}/header-chip-card.png` })
   await page.mouse.move(5, 5)
   await expect(card).toHaveCount(0)
-  await closeHeaderLabels(panel)
 
   // A message: In Progress at once, the line goes, and the turn ends as Need Action.
   const box = composerTextarea(panel)
@@ -681,7 +675,7 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   await box.press('Enter')
   await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).not.toBe('WAITING')
   // The page hears the phase move over its socket: give a loaded machine the time the phase poll above has.
-  await expect.poll(async () => (await labelsBtn.count()) === 0 ? '' : (await labelsBtn.getAttribute('title')) ?? '', { timeout: 30_000 }).not.toMatch(/(^| · )Wait/)
+  await expect(line).toHaveCount(0, { timeout: 30_000 })
   await expect(panel.getByText(/I processed your message: how is it going\?/).first()).toBeVisible({ timeout: 60_000 })
   await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).toBe('NEED_ACTION')
   const after = await taskOf(taskId)
@@ -692,11 +686,9 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   // Parked again with no time named: the default clock shows; an explicit ""
   // (no limit) is the one way to a wait with no time at all, and the chip says so.
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING' })
-  await waitLabel(/(^| · )Wait until \S/)
+  await expect(line).toHaveText(/^Wait until \S/, { timeout: 15_000 })
   await api('PATCH', `/api/tasks/${taskId}`, { wait_until: '' })
-  await waitLabel(/(^| · )Waiting( · |$)/)
-  const again = (await openHeaderLabels(panel)).getByTestId('session-waiting-chip')
-  await expect(again).toHaveText('Waiting', { timeout: 15_000 })
-  await again.hover()
+  await expect(line).toHaveText('Waiting', { timeout: 15_000 })
+  await line.hover()
   await expect(page.getByTestId('session-waiting-card')).toContainText('No clock: it waits until something happens', { timeout: 5_000 })
 })

@@ -324,3 +324,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The Worker pill's team list (SubtaskPill.tsx) reuses the Leader flyout; the worker whose
+   pill opened it reads as "This task", its title a step bolder. */
+.worker-team-flyout .leader-sub-row.is-self .leader-sub-title { font-weight: 600; }
+.worker-team-flyout .leader-subtasks-list + .leader-subtasks-title { margin-top: 4px; }

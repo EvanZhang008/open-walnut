@@ -13,7 +13,7 @@
 import { test, expect, type Page, type Response } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
-import { expectHeaderLabel } from './session-header-labels-helpers'
+import { headerPill } from './session-header-labels-helpers'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -93,8 +93,8 @@ test('the header ring completes a leader whose workers are still open, round aft
   await loadHome(page)
   await expect(homeColumns(page)).toHaveCount(3, { timeout: 30_000 })
   await expect(col(page, k).getByText(`roll-up ${k} answer 45`)).toBeVisible({ timeout: 30_000 })
-  // The header says this is a leader with two open workers (one of its folded labels).
-  await expectHeaderLabel(col(page, k), 'Leader · 2')
+  // The header says this is a leader with two open workers (its Leader pill, beside the title).
+  await expect(headerPill(col(page, k), '[data-testid="leader-pill"]')).toHaveText('Leader · 2', { timeout: 20_000 })
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-before.png` })
 
   for (let round = 1; round <= 2; round++) {

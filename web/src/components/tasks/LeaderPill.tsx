@@ -5,6 +5,7 @@ import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass, taskUserState } from '@/utils/session-status';
 import { log } from '@/utils/log';
@@ -51,6 +52,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
   const [adoptOpen, setAdoptOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const markOpen = useKeyboardOpenFocus(open, menuRef);
   const placement = useMenuPlacement(open, triggerRef, menuRef, {
     align: 'start',
     preferSide: 'down',
@@ -81,8 +83,10 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
       if (triggerRef.current?.contains(target)) return;
       close(false);
     };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
+    // Capture phase: every pill on a row stops its own pointerdown, so a press on the next
+    // pill would never reach a bubbling listener and two flyouts would stay open.
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [open, close]);
 
   useEffect(() => {
@@ -141,6 +145,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
           e.stopPropagation();
           // An open picker is this pill's too: a click on the pill closes it.
           if (adoptOpen) { setAdoptOpen(false); return; }
+          markOpen(e);
           setOpen((v) => !v);
         }}
       >

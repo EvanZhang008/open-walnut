@@ -181,14 +181,16 @@ test('the session title owns the second header row and reveals its full text on 
   }
   await expect(toolsRow.getByRole('button', { name: 'Changed' })).toHaveCount(1)
 
-  // 2. ONLY the folded labels control and the kebab share the title row: no status
-  //    badge and no pill (SessionHeaderLabels.tsx holds every label).
+  // 2. The title row holds only the state pills, the folded tags control and the kebab:
+  //    no status badge and no loose tag (SessionHeaderLabels.tsx holds the tags).
   await expect(titleRow.locator('.session-panel-title-meta .task-kebab-btn')).toHaveCount(1)
   await expectBareTitleRow(panel)
   const metaKids = await titleRow.locator('.session-panel-title-meta').evaluate((el) =>
     [...el.children].filter((c) => getComputedStyle(c).display !== 'none').map((c) =>
-      c.matches('[data-testid="session-header-labels"]') ? 'labels' : c.querySelector('.task-kebab-btn') || c.matches('.task-kebab-btn') ? 'kebab' : c.className))
-  expect(metaKids.filter((k) => k !== 'labels' && k !== 'kebab'), `title row extras: ${metaKids}`).toEqual([])
+      c.matches('[data-testid="session-header-labels"]') ? 'labels'
+        : c.querySelector('.task-kebab-btn') || c.matches('.task-kebab-btn') ? 'kebab'
+          : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill' : c.className))
+  expect(metaKids.filter((k) => k !== 'labels' && k !== 'kebab' && k !== 'pill'), `title row extras: ${metaKids}`).toEqual([])
   for (const cls of ['locate', 'lock', 'popout', 'expand', 'close', 'vscode']) {
     await expect(titleRow.locator(`.session-panel-${cls}`)).toHaveCount(0)
   }

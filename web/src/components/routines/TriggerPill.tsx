@@ -336,8 +336,10 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
       if (triggerRef.current?.contains(target)) return;
       close(false);
     };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
+    // Capture phase: every pill on a row stops its own pointerdown, so a press on the next
+    // pill would never reach a bubbling listener and two flyouts would stay open.
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [open, close]);
 
   useEffect(() => {

@@ -1,24 +1,28 @@
 /**
- * The session header's labels (its links and tags, the wait, Cron, Trigger, Worker,
- * Leader, Embedded) folded behind ONE small control beside the title: a tag icon and
- * how many there are. A click opens them all in a flyout, each pill as it is
- * everywhere else, so every one still opens what it opens.
+ * The session header's link tags (threads, docs, CRs and the other tags of its task)
+ * folded behind ONE small control beside the title: a tag icon and how many there are.
+ * A click opens them all in a flyout, each pill as it is everywhere else, so every one
+ * still opens what it opens.
  *
  * 2026-11-02, the user: "the tag still noisy, all collapse, user can click, and because
- * it is collapsed so have more room to have good name". The run status (Running, Idle)
- * is not a label and is not in the header at all: the task detail shows it.
+ * it is collapsed so have more room to have good name". 2026-11-03, the user: "only tag
+ * go there, other should still outside, like trigger ... leader ... worker": the state
+ * pills (the wait, Cron, Trigger, Worker, Leader) stay on the row (SessionPanel
+ * headerPills). The run status (Running, Idle) is in the task detail, not the header.
  *
- * The pills stay mounted while the flyout is closed (a hidden portal), so the count
- * reads the pills that actually render (each decides for itself whether it has
- * anything to show) and opening it fetches nothing. The header must not grow a pill of
- * its own beside the title again: tests/web/session-header-labels-guard.test.ts.
+ * The tags stay mounted while the flyout is closed (a hidden portal), so the count reads
+ * the tags that actually render and opening it fetches nothing; with no tag there is no
+ * control. Guard: tests/web/session-header-labels-guard.test.ts.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import '@/styles/session-header-labels.css';
 
-/** How many labels the list shows: each tag of the tag group, and every other pill. */
+/** A body child that only announces (a toast region), never a card or menu over the list. */
+export const LIVE_REGION = '[role="status"], [role="alert"], [role="log"], [aria-live]';
+
+/** How many tags the list shows: each pill of the tag group (anything else counts as one). */
 export function countLabels(list: Element): { count: number; text: string } {
   const names: string[] = [];
   for (const child of Array.from(list.children)) {
@@ -78,12 +82,11 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  // A label that takes the user somewhere (a link, the parent task, the cron detail) closes
-  // the list; one that opens its own flyout from here (Leader, Trigger, the wait) keeps it.
+  // A tag that takes the user somewhere (a link opens its page or file) closes the list.
   const closeAfterLeave = useCallback((e: MouseEvent) => {
-    if ((e.target as Element).closest('.tag-chip-linked, .todo-item-subtask-pill, .session-cron-pill')) {
+    if ((e.target as Element).closest('.tag-chip-linked')) {
       // A keyboard user (no pointer, detail 0) keeps their place: the focus goes back to the
-      // control, not to <body>. A mouse click leaves the focus to what the label opened.
+      // control, not to <body>. A mouse click leaves the focus to what the tag opened.
       const fromKeyboard = e.detail === 0;
       setTimeout(() => {
         const focusInside = !!menuRef.current?.contains(document.activeElement);
@@ -95,10 +98,13 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!open) return;
-    // A pill's own flyout (the Leader's subtasks, the Trigger's jobs, the wait's card)
-    // is portalled to <body> after this opened: a click there belongs to it, not outside.
+    // A tag's own card (its hover card, a picker) is portalled to <body> after this
+    // opened: a click there belongs to it, not outside.
+    // A live region (a toast's status line) mounting there meanwhile is no layer of this
+    // list: counted as one, it swallowed every Escape for as long as it stayed.
     const before = new Set(Array.from(document.body.children));
-    const isChildPortal = (el: Element) => el.parentElement === document.body && !before.has(el);
+    const isChildPortal = (el: Element) => el.parentElement === document.body && !before.has(el)
+      && !el.matches(LIVE_REGION);
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (!t || buttonRef.current?.contains(t) || menuRef.current?.contains(t)) return;
@@ -107,8 +113,8 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
       if (top && isChildPortal(top)) return;
       setOpen(false);
     };
-    // Escape closes one layer at a time: a pill's own flyout first (it listens too), then
-    // the labels, and nothing else (a full-screen panel stays full screen).
+    // Escape closes one layer at a time: a tag's own card first (it listens too), then
+    // the list, and nothing else (a full-screen panel stays full screen).
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const childOpen = Array.from(document.body.children).some((el) => isChildPortal(el) && el.getClientRects().length > 0);
@@ -118,10 +124,12 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
       setOpen(false);
       buttonRef.current?.focus();
     };
-    document.addEventListener('pointerdown', onPointerDown);
+    // Capture phase: the state pills beside it stop their own pointerdown, so a press on
+    // one would never reach a bubbling listener and both flyouts would stay open.
+    document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey, true);
     return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKey, true);
     };
   }, [open]);
@@ -137,9 +145,9 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
           data-testid="session-header-labels"
           aria-haspopup="dialog"
           aria-expanded={open}
-          aria-label={`Labels (${count}): ${text}`}
+          aria-label={`Tags (${count}): ${text}`}
           title={text}
-          // No pointerdown stop here: a pill's flyout still open must hear this press to close.
+          // No pointerdown stop here: another flyout still open must hear this press to close.
           onClick={(e) => {
             e.stopPropagation();
             // From the keyboard (no pointer, detail 0) the focus moves into the list.
@@ -156,7 +164,7 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
           ref={menuRef}
           className="session-header-labels-flyout"
           role="dialog"
-          aria-label="Labels"
+          aria-label="Tags"
           hidden={!open}
           style={open ? menuPlacementStyle(placement) : undefined}
           onPointerDown={(e) => e.stopPropagation()}

@@ -1,5 +1,7 @@
-/* The session header's folded labels (web/src/components/sessions/SessionHeaderLabels.tsx):
-   one small control beside the title, and the flyout that lists every label. */
+/* The session header's folded link tags (web/src/components/sessions/SessionHeaderLabels.tsx):
+   one small control beside the title, and the flyout that lists every tag. The state pills
+   (the wait, Cron, Trigger, Worker, Leader) stay on the row; their size and their letters
+   in a narrow row are at the end of this file. */
 
 .session-header-labels-btn {
   /* As quiet as the ⋮ beside it (.task-kebab-btn): no fill, no border, the same 22px
@@ -53,20 +55,11 @@
   gap: 6px;
 }
 
-/* Every pill one size, the header's (20px, 11px text), as they were beside the title. */
-.session-header-labels-list :is(.tag-chip, .session-panel-badge) {
+/* Every tag one size, the header's (20px, 11px text). */
+.session-header-labels-list .tag-chip {
   box-sizing: border-box;
   height: 20px;
   padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  line-height: 16px;
-  max-width: none;
-}
-.session-header-labels-list :is(.task-trigger-pill, .task-team-pill, .session-cron-pill, .task-waiting-chip) {
-  box-sizing: border-box;
-  height: 20px;
-  padding: 1px 7px;
   border-radius: 10px;
   font-size: 11px;
   line-height: 16px;
@@ -87,12 +80,47 @@
   white-space: nowrap;
 }
 
+/* ── The state pills on the row ── */
+
 /* Embedded (a session run in-process): a fact, in the accent colour. */
-.session-header-labels-list .session-panel-embedded-badge {
+:is(.session-panel-title-meta, .org-detail-chat-tools) .session-panel-embedded-badge {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-weight: 600;
+}
+
+/* The wait says when it ends; it gives way first, so the title keeps its room. */
+.session-panel-title-meta .task-waiting-chip { max-width: 150px; height: 20px; box-sizing: border-box; }
+
+/* The Org node draws the chat's header in its own (SessionPanel headerSlot): the same
+   20px pills there (session-header-pills.css sizes them inside the panel's header). */
+.org-detail-chat-tools :is(.task-trigger-pill, .task-team-pill, .session-cron-pill) {
+  box-sizing: border-box;
+  height: 20px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.org-detail-chat-tools .task-waiting-chip { max-width: 180px; }
+
+/* A narrow row (data-header-fit="tight", useTitleRowTight.ts): every state pill reads as
+   its letter (W, T, L, C, E) and the wait is cut shorter, the whole row at once. The word
+   stays in the DOM for readers and tests; the hover text keeps the rest. */
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta [data-short] > .task-pill-long {
+  display: none;
+}
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta [data-short]::after {
+  content: attr(data-short);
+}
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .session-panel-embedded-badge > svg { display: none; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .task-waiting-chip { max-width: 72px; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta { gap: 2px; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta :is(.task-trigger-pill, .task-team-pill, .session-cron-pill, .session-panel-embedded-badge) {
+  min-width: 16px;
+  padding-inline: 3px;
+  justify-content: center;
 }
