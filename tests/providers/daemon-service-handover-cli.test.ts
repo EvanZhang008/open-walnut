@@ -301,6 +301,8 @@ describe('every refusal a daemon gives a handover is classified', () => {
   const KNOWN: Record<string, boolean> = {
     'service.handover: daemon mode or instance does not match the requested operation': false,
     'service.handover: active ACP workers or relay requests must finish first': true,
+    // 2026-11-03: a daemon swap ended a running iOS test run; the run's end is asked again for.
+    'service.handover: running host_exec jobs must finish first': true,
     'service.handover: unsupported platform': false,
     'Service preparation timed out; existing work is still running, retry after it finishes': false,
     'Daemon is shutting down; retry after reconnecting': false,

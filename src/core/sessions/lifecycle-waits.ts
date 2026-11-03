@@ -76,6 +76,14 @@ export const LIFECYCLE_WAITS: readonly LifecycleWait[] = [
     restart: 'resumes (the clock is kept per host in WALNUT_HOME/cache)',
   },
   {
+    id: 'daemon-upgrade-exec-runs',
+    file: 'src/providers/exec-runs-hold.ts',
+    waitsFor: 'a daemon update while host_exec runs go on on its host (local, SSH, host network, boot-start install)',
+    limits: ['EXEC_UPGRADE_HOLD_MAX_MS'],
+    atEnd: 'the update goes ahead (each run also ends by its own deadline: 10 min foreground, 2 h background)',
+    restart: 'resumes (the same per-host clock in WALNUT_HOME/cache as the ACP wait)',
+  },
+  {
     id: 'host-server-update-hold',
     file: 'src/core/host-server/update-hold.ts',
     waitsFor: 'a host server update while its host is busy',

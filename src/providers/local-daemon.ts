@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
+import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
@@ -420,9 +421,15 @@ export class LocalDaemon {
       }
       if (helloResult.alive) {
         if (helloResult.capabilities?.includes('cron-supervision-v1')) {
+          if (expectedVersion && helloResult.version !== expectedVersion && this.deferForExecRuns(helloResult, existingPort, expectedVersion)) {
+            return existingPort
+          }
           if (expectedVersion && helloResult.version !== expectedVersion) {
             const updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion)
-            if (updatedPort !== null) {
+            if (updatedPort === 'busy') {
+              // Work of its own started after the hello (a host_exec run): the old daemon keeps serving.
+              this.scheduleUpgradeRecheck()
+            } else if (updatedPort !== null) {
               existingPort = updatedPort
               helloResult = await this.ping(updatedPort)
               if (!helloResult.alive || helloResult.version !== expectedVersion) throw new Error('Updated managed daemon did not answer with the expected version')
@@ -467,6 +474,7 @@ export class LocalDaemon {
             this.scheduleUpgradeRecheck()
             return existingPort
           }
+          if (this.deferForExecRuns(helloResult, existingPort, expectedVersion)) return existingPort
           // Prepare the new daemon's fold checkpoints first, while this one
           // still serves (fold-prewarm.ts): its adopt otherwise folds every
           // live stream before listening, minutes on a checkpoint format change.
@@ -534,7 +542,23 @@ export class LocalDaemon {
     return this._wsUrl
   }
 
-  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null> {
+  /**
+   * host_exec runs in the running daemon end with it (exec-runs-hold.ts): keep it serving
+   * and ask again on the upgrade clock. True when the upgrade waits.
+   */
+  private deferForExecRuns(hello: { version?: string; instanceId?: string; execRunning?: number }, port: number, expected: string): boolean {
+    const why = execRunsWait('__local__', execRunsReason(hello.execRunning))
+    if (!why) return false
+    log.session.warn('local daemon version mismatch — upgrade DEFERRED (host_exec runs)', { running: hello.version, expected, why })
+    this._port = port
+    this._wsUrl = `ws://localhost:${port}`
+    this._instanceId = hello.instanceId ?? this.readInstanceIdFile()
+    this.auditOwnerOnAdopt(this._instanceId)
+    this.scheduleUpgradeRecheck()
+    return true
+  }
+
+  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy'> {
     if (!isProductionDaemonDir(this.daemonDir) || binaryPath.endsWith('.cjs')) return null
     const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
@@ -546,6 +570,12 @@ export class LocalDaemon {
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
     const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath])
+    if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
+      // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.
+      this._lastManagedUpdate = null
+      log.session.warn('local daemon: managed update refused while the daemon is busy; trying again later', { expected, said: (result.stdout || result.stderr).slice(0, 300) })
+      return 'busy'
+    }
     if (result.code !== 0) throw new Error(`Managed daemon update failed; no unmanaged replacement was started: ${result.stdout || result.stderr}`)
     const reply = JSON.parse(result.stdout) as { ok?: boolean }
     if (reply.ok !== true) throw new Error('Managed daemon update was not confirmed')
@@ -754,6 +784,8 @@ export class LocalDaemon {
 
   private async ping(port: number, timeoutMs = 2000): Promise<{
     alive: boolean; version?: string; capabilities?: string[]; instanceId?: string
+    /** host_exec runs going on in it (exec-runs-hold.ts); absent from a daemon older than that. */
+    execRunning?: number
     /** Set when not alive: a timeout means something accepted or is holding the
      *  connection without answering; an error means nothing is listening. */
     failure?: 'timeout' | 'error' | 'bad-reply'
@@ -762,9 +794,11 @@ export class LocalDaemon {
       // 2s is generous for localhost WebSocket (typically <10ms) but handles
       // daemon startup jitter. This blocks Walnut server startup, so keep short.
       let ws: WebSocket | null = null
+      // An answered hello whose follow-up ask (exec.list) is still out: a timeout keeps it.
+      let hello: { alive: boolean; version?: string; capabilities?: string[]; instanceId?: string } | null = null
       const timeout = setTimeout(() => {
         try { ws?.terminate() } catch { /* already closed */ }
-        resolve({ alive: false, failure: 'timeout' })
+        resolve(hello ?? { alive: false, failure: 'timeout' })
       }, timeoutMs)
       try {
         const socket = new WebSocket(`ws://localhost:${port}`)
@@ -773,26 +807,40 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
-          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string } | null = null
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; jobs?: unknown } | null = null
           try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
+          if (hello && msg && msg.id === 2) {
+            clearTimeout(timeout)
+            socket.close()
+            resolve(msg.ok === true ? { ...hello, execRunning: runningJobs(msg) } : hello)
+            return
+          }
           // The daemon pushes its events (a session's state, cron metadata) to
           // every client, this one too, and echoes a command's id: only the
           // answer to this hello counts. Taking the first message called a daemon
           // that had just ended a turn dead, and the respawn that followed failed
           // every local read for a while.
           if (msg && msg.id !== 1) return
-          clearTimeout(timeout)
-          socket.close()
-          if (!msg) { resolve({ alive: false, failure: 'bad-reply' }); return }
-          resolve({
+          if (!msg) { clearTimeout(timeout); socket.close(); resolve({ alive: false, failure: 'bad-reply' }); return }
+          const answer = {
             alive: msg.ok === true,
             version: msg.version,
             capabilities: msg.capabilities,
             instanceId: msg.instanceId,
+            ...(typeof msg.execRunning === 'number' ? { execRunning: msg.execRunning } : {}),
             ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
-          })
+          }
+          // A daemon older than the count in its hello still lists its host_exec runs (exec-runs-hold.ts).
+          if (answer.alive && answer.execRunning === undefined && answer.capabilities?.includes('host-exec-v1')) {
+            hello = answer
+            socket.send(JSON.stringify({ id: 2, cmd: 'exec.list' }))
+            return
+          }
+          clearTimeout(timeout)
+          socket.close()
+          resolve(answer)
         })
-        socket.on('error', () => { clearTimeout(timeout); resolve({ alive: false, failure: 'error' }) })
+        socket.on('error', () => { clearTimeout(timeout); resolve(hello ?? { alive: false, failure: 'error' }) })
       } catch {
         clearTimeout(timeout)
         resolve({ alive: false, failure: 'error' })

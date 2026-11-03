@@ -292,6 +292,8 @@ describe.each([
         readStartTime: () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
         acp: { workers: new Map() }, sttRelayPending: new Map(), launchRelayPending: new Map(),
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(),
+        // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).
+        hostExec: { running: () => 0 },
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
         persistRegistry: (strict: boolean) => {
           expect(strict).toBe(true)

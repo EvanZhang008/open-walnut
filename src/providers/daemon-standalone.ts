@@ -2808,6 +2808,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
       taskDirRoot: TASK_DIR_ROOT,
+      // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
+      execRunning: hostExec.running(),
     })
     case 'logs.tail': return cmdLogsTail(ws, id as number, cmd)
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
@@ -2822,6 +2824,8 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   if (acp.workers.size || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some((pending) => pending.size)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
+  // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
+  if (hostExec.running()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown

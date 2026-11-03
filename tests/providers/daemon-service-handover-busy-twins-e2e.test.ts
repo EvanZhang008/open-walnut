@@ -124,7 +124,8 @@ describe.each(TWINS)('$name', (twin) => {
     const started = Date.now()
     expect(await requestDaemonServiceHandover(daemonDir, stateDir, { pauseMs: 200, note: (text) => notes.push(text) })).toBe(true)
     expect(notes).toHaveLength(1)
-    expect(notes[0]).toContain('has active operations; retry after they finish')
+    // The run is a host_exec job: refused for it before the drain is even asked (exec-runs-hold.ts).
+    expect(notes[0]).toContain('running host_exec jobs must finish first')
     // Handed over only after the command finished, never by cutting it short.
     expect(Date.now() - started).toBeGreaterThan(1000)
     expect(await running).toMatchObject({ ok: true })
@@ -133,5 +134,28 @@ describe.each(TWINS)('$name', (twin) => {
     const exited = proc!.exitCode !== null || proc!.signalCode !== null
       || await new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 5000); proc!.once('exit', () => { clearTimeout(t); r(true) }) })
     expect(exited).toBe(true)
+  }, 90_000)
+
+  it('a background host_exec run holds the handover until it ends, and hello counts it', async () => {
+    // 2026-11-03: a deploy updated a Mac's daemon under an iOS test run started in the
+    // background through host_exec; the run ended with the old daemon.
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-bg')
+    const { home, daemonDir } = await boot(twin, dir)
+    const stateDir = daemonInstallRoot(process.platform === 'darwin' ? 'darwin' : 'linux', home)
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    fs.chmodSync(stateDir, 0o700)
+    const taskId = 'handover-bg-task'
+    const started = await rpc({ cmd: 'exec.run', jobId: 'hx-handover-bg', taskId, command: 'sleep 3; echo finished', cwd: '~', background: true, caller: { task: taskId, host: 'devbox' } })
+    expect(started).toMatchObject({ ok: true })
+    expect(await rpc({ cmd: 'hello' })).toMatchObject({ ok: true, execRunning: 1 })
+
+    const notes: string[] = []
+    const asked = Date.now()
+    expect(await requestDaemonServiceHandover(daemonDir, stateDir, { pauseMs: 300, note: (text) => notes.push(text) })).toBe(true)
+    expect(notes[0]).toContain('running host_exec jobs must finish first')
+    expect(Date.now() - asked).toBeGreaterThan(2000)
+    // The run went to its end before the daemon left.
+    const logFile = path.join(dir, 'state', 'tasks', taskId, 'host-exec', 'hx-handover-bg.log')
+    expect(fs.readFileSync(logFile, 'utf8')).toContain('finished')
   }, 90_000)
 })

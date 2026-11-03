@@ -46,7 +46,7 @@ export interface NetUpdateIoOptions {
   pollMs?: number
   waitMs?: number
   /** Asked right before the detached start: a reason holds the update (nothing changed yet). */
-  beforeLaunch?: () => string | null
+  beforeLaunch?: () => string | null | Promise<string | null>
   /** How long a hold met there is waited out, the upload already on the host, before giving up. */
   holdWaitMs?: number
   /** The file naming the latest update's staging dir (tests point it elsewhere). */
@@ -207,10 +207,10 @@ export function createNetUpdateIo(conn: NetUpdateConn, opts: NetUpdateIoOptions 
       // The upload is on the host: a short hold (a file write, a dropped link) is waited out, not paid for with another upload.
       const holdWait = opts.holdWaitMs ?? HOLD_WAIT_MS
       const holdUntil = now() + holdWait
-      let held = opts.beforeLaunch?.() ?? null
+      let held = (await opts.beforeLaunch?.()) ?? null
       while (held && now() < holdUntil && !opts.cancelled?.()) {
         await sleep(Math.min(2_000, Math.max(50, holdWait / 4)))
-        held = opts.beforeLaunch?.() ?? null
+        held = (await opts.beforeLaunch?.()) ?? null
       }
       if (held) throw new NetUpdateHeldError(held)
       const said = await run(launcherScript(directory, opts.latestMarker), 30_000).catch((err: Error) => `${err.message}`)

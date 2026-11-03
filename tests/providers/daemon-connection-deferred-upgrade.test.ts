@@ -151,8 +151,8 @@ describe('the background update of a service-managed daemon', () => {
       state(c)._connected = false
     })
     let during: { pending: boolean; reads: unknown } | null = null
-    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean }) => {
-      expect(opts?.onStaged?.()).toBe(true)
+    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+      expect(await opts?.onStaged?.()).toBe(true)
       // The old daemon exits under the swap: the link drops.
       priv(c).setConnected(false)
       setPooledConnectionForTest('devbox', c)
@@ -180,16 +180,116 @@ describe('the background update of a service-managed daemon', () => {
     stub(c, { probe: MANAGED, version: OLD })
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
-    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean }) => {
+    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
       // A session write went out while the file uploaded.
       ;(state(c).pendingCommands as Map<number, unknown>).set(99, { cmd: 'send', timer: setTimeout(() => {}, 0), resolve: () => {}, reject: () => {} })
-      return opts?.onStaged?.() === false ? 'held' : 'applied'
+      return (await opts?.onStaged?.()) === false ? 'held' : 'applied'
     })
     live(c)
     await priv(c).recheckPostponedUpgrade()
     expect(state(c)._handoverUntil).toBe(0)
     expect(state(c).upgradeRecheckTimer).not.toBeNull()
     expect(state(c)._lastUpgradeAttempt).toBeNull()
+  })
+
+  it.each([['managed', MANAGED], ['unmanaged', probe()]])('host_exec runs on a %s host hold the update before anything is uploaded or stopped; it goes ahead once they end', async (_kind, probeReply) => {
+    // 2026-11-03: a deploy swapped a Mac's daemon under a five minute iOS test run there,
+    // and the run ended with the old daemon (exec-runs-hold.ts).
+    const c = make()
+    const seen = stub(c, { probe: probeReply, version: OLD })
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
+    vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+    managedUpdate.mockResolvedValue('applied')
+    let runs = [{ jobId: 'hx-ios', running: true }, { jobId: 'hx-done', running: false }]
+    const send = vi.spyOn(c, 'send').mockImplementation((async (cmd: string) => (cmd === 'exec.list' ? { ok: true, jobs: runs } : { ok: true })) as never)
+    state(c)._capabilities = ['host-exec-v1']
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(send).toHaveBeenCalledWith('exec.list', {}, expect.any(Number))
+    expect(destructive(seen)).toEqual([])
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect(state(c).upgradeRecheckTimer).not.toBeNull()
+
+    runs = [{ jobId: 'hx-done', running: false }]
+    clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
+    state(c).upgradeRecheckTimer = null
+    await priv(c).recheckPostponedUpgrade()
+    if (_kind === 'managed') expect(managedUpdate).toHaveBeenCalledTimes(1)
+    else expect(seen).toContain('DEPLOY')
+  })
+
+  it('a daemon without host_exec is never asked, and an ask that fails holds nothing', async () => {
+    for (const caps of [[], ['host-exec-v1']]) {
+      const c = make()
+      const seen = stub(c, { probe: probe(), version: OLD })
+      vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
+      vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+      const send = vi.spyOn(c, 'send').mockRejectedValue(new Error('exec.list timed out'))
+      state(c)._capabilities = caps
+      live(c)
+      await priv(c).recheckPostponedUpgrade()
+      expect(send.mock.calls.filter(([cmd]) => cmd === 'exec.list')).toHaveLength(caps.length ? 2 : 0)
+      expect(seen).toContain('DEPLOY')
+    }
+  })
+
+  it('a run that starts during the upload holds the stop (unmanaged) and the swap (managed)', async () => {
+    for (const probeReply of [probe(), MANAGED]) {
+      const c = make()
+      const seen = stub(c, { probe: probeReply, version: OLD })
+      vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+      vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
+      vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+      let uploaded = false
+      vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); uploaded = true; return 'node' })
+      managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+        uploaded = true
+        return (await opts?.onStaged?.()) === false ? 'held' : 'applied'
+      })
+      vi.spyOn(c, 'send').mockImplementation((async (cmd: string) => (cmd === 'exec.list' ? { ok: true, jobs: uploaded ? [{ jobId: 'hx-late', running: true }] : [] } : { ok: true })) as never)
+      state(c)._capabilities = ['host-exec-v1']
+      live(c)
+      await priv(c).recheckPostponedUpgrade()
+      expect(uploaded).toBe(true)
+      expect(seen.filter((cmd) => cmd.includes('--stop') || cmd.includes('walnut-daemon-stop-confirmed'))).toEqual([])
+      expect(state(c)._handoverUntil).toBe(0)
+      expect(state(c).upgradeRecheckTimer).not.toBeNull()
+    }
+  })
+
+  it('a managed update the daemon refused as busy is asked again in a minute, not a service error with a cooldown', async () => {
+    const c = make()
+    stub(c, { probe: MANAGED, version: OLD })
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+      expect(await opts?.onStaged?.()).toBe(true)
+      throw new Error('Managed daemon update failed: service.handover: running host_exec jobs must finish first; the old service config was put back')
+    })
+    live(c)
+    await expect(priv(c).recheckPostponedUpgrade()).resolves.toBeUndefined()
+    expect(state(c)._handoverUntil).toBe(0)
+    expect(state(c).upgradeRecheckTimer).not.toBeNull()
+    expect(state(c)._lastUpgradeAttempt).toBeNull()
+  })
+
+  it('a boot-start install waits for host_exec runs too', async () => {
+    vi.stubEnv('WALNUT_DAEMON_BOOT_START', '1')
+    const c = make()
+    state(c)._connected = true
+    state(c)._capabilities = ['host-exec-v1']
+    vi.spyOn(c, 'send').mockImplementation((async (cmd: string) => (cmd === 'exec.list' ? { ok: true, jobs: [{ jobId: 'hx-ios', running: true }] } : { ok: true })) as never)
+    const keeper = (c as unknown as { _bootStart: { io: { hold: () => Promise<string | null> } } | null })._bootStart
+    expect(keeper).not.toBeNull()
+    expect(await keeper!.io.hold()).toBe('1 host_exec run on the host would end with the daemon')
+    vi.unstubAllEnvs()
   })
 
   it('a failed upload keeps the old daemon serving and is asked again later, not a service error', async () => {
@@ -217,9 +317,9 @@ describe('the background update of a service-managed daemon', () => {
     let release!: () => void
     const uploading = new Promise<void>((r) => { release = r })
     const staged: boolean[] = []
-    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean }) => {
+    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
       if (managedUpdate.mock.calls.length === 1) await uploading
-      const go = opts?.onStaged?.() ?? true
+      const go = (await opts?.onStaged?.()) ?? true
       staged.push(go)
       return go ? 'applied' : 'held'
     })

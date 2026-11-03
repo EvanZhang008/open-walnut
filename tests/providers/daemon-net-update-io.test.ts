@@ -251,6 +251,19 @@ describe('the host network update io', () => {
     expect(host.writes.filter((p) => /\/update\.sh$/.test(p))).toHaveLength(1)
   }, 60_000)
 
+  it('a hold asked of the host right before the launch (a host_exec run there) is awaited and waited out the same way', async () => {
+    const binary = fakeDaemon()
+    const host = miniHost()
+    let asked = 0
+    const beforeLaunch = async () => { await new Promise((r) => setTimeout(r, 5)); return ++asked < 2 ? '1 host_exec run on the host would end with the daemon' : null }
+    await updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(host, fast({ holdWaitMs: 5_000, beforeLaunch })), 'user')
+    expect(asked).toBe(2)
+    expect(calls()).toHaveLength(1)
+    await expect(updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(miniHost(), fast({ holdWaitMs: 300, beforeLaunch: async () => '1 host_exec run on the host would end with the daemon' })), 'user'))
+      .rejects.toThrow('1 host_exec run on the host would end with the daemon')
+    expect(calls()).toHaveLength(1)
+  }, 60_000)
+
   it('stops reading after its wait, or once nobody waits, and says the update may still finish', async () => {
     await expect(updateRemoteDaemonService({ binary: fakeDaemon({ sleep: 3 }) }, VERSION, createNetUpdateIo(miniHost(), fast({ waitMs: 500 })), 'user'))
       .rejects.toThrow(/did not report back within 1 s; it may still finish there/)

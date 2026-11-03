@@ -144,7 +144,7 @@ export class DaemonUpdateStageError extends Error {
  */
 export async function updateRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user',
-  opts: { onStaged?: () => boolean } = {},
+  opts: { onStaged?: () => boolean | Promise<boolean> } = {},
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
@@ -152,7 +152,7 @@ export async function updateRemoteDaemonService(
     throw new DaemonUpdateStageError(error instanceof Error ? error.message : String(error))
   })
   try {
-    if (opts.onStaged && !opts.onStaged()) return 'held'
+    if (opts.onStaged && !(await opts.onStaged())) return 'held'
     const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`
     const output = io.serviceUpdate ? await io.serviceUpdate({ command, directory, executable }) : await io.run(command, 600_000)
     const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }

@@ -203,7 +203,8 @@ describe('NetDaemonUpdater', () => {
     expect(version).toBe(NEW)
     expect(scope).toBe('user')
     expect(typeof io.serviceUpdate).toBe('function')
-    expect(conn.sends).toEqual(['exec.run'])
+    // It asks the host for host_exec runs first (exec-runs-hold.ts), then reads the service.
+    expect(conn.sends).toEqual(['exec.list', 'exec.run'])
     // The status line names the service file quoted (a Mac's install root has spaces), and the
     // host's macOS guard would let it run.
     // It prints a marker first: only what follows it is the answer, never what the login profile printed.
@@ -254,6 +255,31 @@ describe('NetDaemonUpdater', () => {
     await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
     expect(update).not.toHaveBeenCalled()
     writes = 0
+    await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+    expect(update).toHaveBeenCalledTimes(1)
+    u.stop()
+  })
+
+  it('host_exec runs on the host postpone it before anything is uploaded, also on request; it goes ahead once they end', async () => {
+    // 2026-11-03: a deploy updated a Mac's daemon under a five minute iOS test run there through host_exec.
+    let runs = [{ jobId: 'hx-ios', running: true }]
+    const base = link()
+    const conn = link({
+      async send(cmd, params) {
+        if (cmd === 'exec.list') { base.sends.push(cmd); return { ok: true, jobs: runs } }
+        return base.send(cmd, params)
+      },
+    })
+    const { u, update } = updater({}, conn)
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+    expect(u.state.message).toBe('waiting: 1 host_exec run on the host would end with the daemon')
+    expect(update).not.toHaveBeenCalled()
+    expect(base.lines).toEqual([])
+    // Someone asks for it: the run still holds it, and the answer says why.
+    expect(await u.request()).toMatchObject({ phase: 'postponed', message: 'waiting: 1 host_exec run on the host would end with the daemon' })
+    expect(update).not.toHaveBeenCalled()
+    runs = []
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     expect(update).toHaveBeenCalledTimes(1)
     u.stop()

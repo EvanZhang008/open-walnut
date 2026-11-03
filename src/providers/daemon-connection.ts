@@ -44,6 +44,7 @@ import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
 import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
+import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
@@ -971,7 +972,9 @@ export class DaemonConnection {
       hold: async () => {
         if (!this._connected || this._connecting || this._reconnectInFlight) return 'the connection is not settled'
         const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
-        return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
+        if (writes > 0) return `${writes} daemon command(s) that change a session or a file are in flight`
+        // The install hands the daemon over: a host_exec run there would end with it (exec-runs-hold.ts).
+        return execRunsHold(this, this.hostKey)
       },
       expectedVersion: () => this.getExpectedDaemonVersion(),
       hasDaemonFile: () => this.hasDaemonBinary(),
@@ -3346,6 +3349,7 @@ export class DaemonConnection {
       if (takeover.managed) {
         if (remoteVersion !== expected) {
           if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+          if (await this.execRunsOpen(expected, remoteVersion)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           if (updated === 'held') return false
           if (updated) return true
@@ -3389,6 +3393,8 @@ export class DaemonConnection {
       // writes turn-interrupted:shutdown into live user work. Defer while busy
       // (stale >2min = not busy, so this can never wedge upgrades).
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
+      // A host_exec run ends with the daemon: asked before the upload too, so a 2 h run is not paid an upload a minute.
+      if (await this.execRunsOpen(expected, remoteVersion)) return false
       if (this.holdUpgrade(gate, expected, remoteVersion)) return false
       // The new daemon's checkpoints first, while this one still serves; the
       // gate is asked again after it, right before the stop.
@@ -3412,7 +3418,7 @@ export class DaemonConnection {
         return false
       }
       // The upload may have taken minutes: work that started meanwhile still holds the stop.
-      if (await this.acpTurnsOpen(expected, remoteVersion) || this.holdUpgrade(gate, expected, remoteVersion)) {
+      if (await this.acpTurnsOpen(expected, remoteVersion) || await this.execRunsOpen(expected, remoteVersion) || this.holdUpgrade(gate, expected, remoteVersion)) {
         this._staged = null
         return false
       }
@@ -3547,6 +3553,22 @@ export class DaemonConnection {
     } catch {}
     return false
   }
+
+  /** host_exec runs on the host (exec-runs-hold.ts): a stop would end them, so the update is asked again in a minute. */
+  private async execRunsOpen(expected: string, remoteVersion: string): Promise<boolean> {
+    const why = await execRunsHold(this, this.hostKey)
+    if (!why) { this._execRunsNoted = null; return false }
+    // Asked again every minute while a run lasts (up to 2 h): said once per reason.
+    if (this._execRunsNoted !== `${expected} ${why}`) {
+      this._execRunsNoted = `${expected} ${why}`
+      log.session.warn('DaemonConnection: daemon upgrade DEFERRED (host_exec runs)', {
+        host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', why,
+      })
+    }
+    this.postponeUpgrade(why, expected, remoteVersion, { steady: true })
+    return true
+  }
+  private _execRunsNoted: string | null = null
 
   /** A re-check's gate said not now: drop the decision (stale) or ask again (busy). */
   private holdUpgrade(gate: (() => UpgradeHold) | undefined, expected: string, remoteVersion: string): boolean {
@@ -3700,6 +3722,8 @@ export class DaemonConnection {
   private async upgradeBeforeServing(opts: { strict?: boolean } = {}): Promise<boolean> {
     this._upgradeDeferred = false
     if (this.isReadOnlyRemote) return false
+    // Not held for host_exec runs (exec-runs-hold.ts): a daemon that refuses this server's
+    // handshake cannot serve it at all, and the refused link has no exec.list to ask.
     log.session.warn('DaemonConnection: the running daemon refused the handshake; updating it before serving it', { host: this.hostKey })
     this.closeTransport()
     let port = await this.checkDaemonRunning(opts)
@@ -3806,8 +3830,9 @@ export class DaemonConnection {
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
       }, scope, {
         // The upload may have taken minutes: work that started meanwhile holds the swap.
-        onStaged: () => {
+        onStaged: async () => {
           if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+          if (await this.execRunsOpen(expected, remoteVersion)) return false
           this._stageFail = null
           this._lastUpgradeAttempt = { expected, at: Date.now() }
           swapping = true
@@ -3820,6 +3845,14 @@ export class DaemonConnection {
       // By name: the class lives in daemon-service-update.ts, which tests replace with a double.
       if (error instanceof Error && error.name === 'DaemonUpdateStageError') return stageFailed(error)
       if (swapping) this.endHandover('the service update failed')
+      // The daemon refused before it changed anything (a host_exec run or a relay of its own
+      // started after the check): asked again in a minute, not a failure with a cooldown.
+      if (daemonBusyRefusal(error)) {
+        // Not an attempt: the update's cooldown would otherwise hold the next minute's try off.
+        this._lastUpgradeAttempt = null
+        this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion, { steady: true })
+        return 'held'
+      }
       // A double without the hook never asked: the attempt still counts against the cooldown.
       if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
       throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)

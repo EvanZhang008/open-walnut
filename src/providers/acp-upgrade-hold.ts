@@ -75,21 +75,29 @@ export function acpUpgradeHoldFlushedForTest(): Promise<void> {
  * `heldMs` is how long it has waited so far (0 when it does not wait).
  */
 export function acpUpgradeHolds(host: string, busy: boolean, now: number = Date.now()): { holds: boolean; heldMs: number } {
+  return upgradeHoldClock(host, busy, ACP_UPGRADE_HOLD_MAX_MS, now)
+}
+
+/**
+ * The same clock for another reason an upgrade waits (`key`, e.g. `exec:<host>` for
+ * host_exec runs, exec-runs-hold.ts), with its own limit.
+ */
+export function upgradeHoldClock(key: string, busy: boolean, maxMs: number, now: number = Date.now()): { holds: boolean; heldMs: number } {
   const s = load()
   if (!busy) {
-    if (host in s) { delete s[host]; void persist() }
+    if (key in s) { delete s[key]; void persist() }
     return { holds: false, heldMs: 0 }
   }
-  const cur = s[host]
+  const cur = s[key]
   const valid = !!cur && typeof cur === 'object' && Number.isFinite(cur.since) && Number.isFinite(cur.seen)
     && cur.since <= now && now - cur.seen < ACP_UPGRADE_HOLD_STALE_MS
   if (!valid) {
-    s[host] = { since: now, seen: now }
+    s[key] = { since: now, seen: now }
     void persist()
     return { holds: true, heldMs: 0 }
   }
   cur.seen = now
   void persist()
   const heldMs = now - cur.since
-  return { holds: heldMs < ACP_UPGRADE_HOLD_MAX_MS, heldMs }
+  return { holds: heldMs < maxMs, heldMs }
 }

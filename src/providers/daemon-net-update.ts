@@ -29,6 +29,7 @@
  * per build, and the update runs on request (`host_daemon_update`, this file's
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
  */
+import { execRunsHold } from './exec-runs-hold.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
@@ -197,6 +198,8 @@ export interface NetUpdaterDeps {
   expectedVersion: () => string | null
   /** Why the daemon must not stop now (session or file writes in flight), or null. */
   hold: () => string | null
+  /** Why the host's daemon must not stop now, asked of the host (host_exec runs there: exec-runs-hold.ts), or null. */
+  busy?: () => Promise<string | null>
   cooldownMs: number
   autofixOff?: () => Promise<string | null>
   /** The host's target, read with host-target.ts's probe over exec.run (as the SSH path reads it). */
@@ -324,10 +327,10 @@ export class NetDaemonUpdater {
     const expected = facts.expected!
     const io = createNetUpdateIo(c, {
       ...this.d.io,
-      beforeLaunch: () => (!c.connected ? 'the link dropped' : this.d.hold()),
+      beforeLaunch: async () => (!c.connected ? 'the link dropped' : this.d.hold() ?? await this.hostBusy()),
       cancelled: () => this.stopped,
     })
-    const held = this.d.hold()
+    const held = this.d.hold() ?? await this.hostBusy()
     if (held) return this.postpone(held)
     const scope = scopeFromStatus(await io.run(`${shq(facts.serviceExecutable!)} walnut daemon status 2>/dev/null || true`, 60_000))
     if (!('scope' in scope)) return this.skipped({ go: false, skip: 'unmanaged', why: scope.why }, trigger)
@@ -392,8 +395,15 @@ export class NetDaemonUpdater {
     return this.set('skipped', d.why, { skip: d.skip })
   }
 
+  private hostBusy(): Promise<string | null> {
+    return (this.d.busy ?? (() => execRunsHold(this.d.conn, this.d.conn.host)))()
+  }
+
   private postpone(reason: string, delayMs = this.d.recheckMs ?? 60_000): NetUpdateState {
-    log.session.info('DaemonConnection: host network daemon update postponed', { host: this.d.conn.host, reason, retryInMs: delayMs })
+    // A wait asked again every minute (a 2 h host_exec run) is logged when its reason changes.
+    if (this.state.phase !== 'postponed' || this.state.message !== `waiting: ${reason}`) {
+      log.session.info('DaemonConnection: host network daemon update postponed', { host: this.d.conn.host, reason, retryInMs: delayMs })
+    }
     if (!this.stopped) this.later(delayMs)
     return this.set('postponed', `waiting: ${reason}`)
   }
