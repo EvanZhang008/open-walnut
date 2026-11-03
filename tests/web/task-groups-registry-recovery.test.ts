@@ -42,6 +42,8 @@ vi.mock('../../web/node_modules/react', () => ({
   },
   useCallback: <T,>(fn: T) => fn,
   useEffect: () => {},
+  // useCommittedRef (useTasks) writes its ref in a layout effect; the commit is not modelled here.
+  useLayoutEffect: () => {},
   useRef: <T,>(initial: T) => ({ current: initial }),
   startTransition: (fn: () => void) => fn(),
 }))
