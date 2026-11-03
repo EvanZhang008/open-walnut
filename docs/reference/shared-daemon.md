@@ -44,7 +44,9 @@ Replacing never ends a session: the new daemon adopts every running CLI, and the
 still waits for open ACP turns, `host_exec` runs and a held gate. The same check runs on
 every update path: SSH hosts, this Mac's own daemon, and machines on the host network
 (where `host_daemon_update` still updates on request). `WALNUT_DAEMON_KEEP_SHARED=0`
-turns the rule off for one server.
+turns the rule off for one server. The cloud companion's tunnel daemon is exempt
+(`soleManager` in `local-daemon.ts`): its record names the Mac, whose pushes come
+through the companion, so a companion on a new build always replaces it.
 
 The trade: on a shared host, a newer build that only fixes the daemon (no new capability)
 does not replace the build already running there. It arrives once the other Walnut has

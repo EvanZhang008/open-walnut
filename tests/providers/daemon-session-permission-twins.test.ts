@@ -9,6 +9,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { createLiveSettings } from '../../src/providers/live-settings-core.js'
+import { missingNames } from '../helpers/extracted-free-names.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
@@ -81,9 +82,19 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     followerScope: vi.fn(() => false),
     // The Walnut the session belongs to ('' = none recorded).
     sessionHomeOf: () => owner,
+    // The served-Walnuts note handleCommand takes for a server socket's per-Walnut push.
+    servedWalnuts: { note: vi.fn() },
+    walnutScope: { askedHome: () => '' },
+    gatewayClientHomes: new WeakMap(),
   }
-  const code = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession']
-    .map((name) => functionText(sources[kind], name)).join('\n')
+  const names = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
+  const code = names.map((name) => functionText(sources[kind], name)).join('\n')
+  // Every module-level name the extracted functions read is handed in, whichever branch
+  // reads it, judged against the vm context's own globals (no process, timers or Buffer).
+  // dispatchCommand is the table of every command; this run drives only session.permission.
+  const vmGlobals = vm.runInContext('globalThis', vm.createContext({})) as object
+  const checked = names.filter((name) => name !== 'dispatchCommand').map((name) => functionText(sources[kind], name)).join('\n')
+  expect(missingNames(checked, [...Object.keys(injected), ...names], vmGlobals), 'names the extracted functions read that this run lacks').toEqual([])
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const context = vm.createContext(injected, { codeGeneration: { strings: false, wasm: false } })
   const handle = vm.runInContext(js + '\nhandleCommand', context) as (ws: unknown, line: string) => void

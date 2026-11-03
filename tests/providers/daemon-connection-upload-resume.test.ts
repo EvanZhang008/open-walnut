@@ -129,8 +129,9 @@ describe('uploadFile: a file the host already has', () => {
   })
 
   it('takes the caller\'s sha, and computes the same one without it, off the event loop', async () => {
-    const spy = vi.spyOn(crypto, 'createHash')
     const a = setup(DATA, { precheck: `sha=${SHA}\nsize=${DATA.length}` })
+    // Spied after the constructor, which hashes this Walnut's data dir for its key (walnutKeyOf), not the file.
+    const spy = vi.spyOn(crypto, 'createHash')
     await a.conn.uploadFile(REMOTE, DATA)
     expect(spy).not.toHaveBeenCalled()
     expect(a.execs[0]).toContain(`'${SHA}'`)

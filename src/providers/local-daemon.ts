@@ -230,6 +230,13 @@ export interface LocalDaemonOptions {
   persistent?: boolean
   /** Applied last to the spawn env (undefined deletes a key). */
   envOverrides?: Record<string, string | undefined>
+  /**
+   * Only this server ever puts a build on this daemon, and the Walnut it serves reaches it
+   * through this server (the companion's tunnel daemon: the Mac's pushes arrive with the
+   * Mac's home). Its record then names another Walnut than this server's, which is no reason
+   * to keep an old build: a server on a new build always replaces it (daemon-shared.ts).
+   */
+  soleManager?: boolean
 }
 
 export class LocalDaemon {
@@ -260,6 +267,7 @@ export class LocalDaemon {
   private readonly busyHelloMs: number
   private readonly persistent: boolean
   private readonly envOverrides: Record<string, string | undefined>
+  private readonly soleManager: boolean
 
   constructor(opts: LocalDaemonOptions = {}) {
     this.daemonDir = path.resolve(opts.daemonDir ?? DEFAULT_DAEMON_DIR)
@@ -271,6 +279,7 @@ export class LocalDaemon {
     this.busyHelloMs = opts.busyHelloMs ?? BUSY_DAEMON_HELLO_MS
     this.persistent = opts.persistent === true
     this.envOverrides = opts.envOverrides ?? {}
+    this.soleManager = opts.soleManager === true
   }
 
   get port(): number | null { return this._port }
@@ -401,6 +410,7 @@ export class LocalDaemon {
 
   /** Whether to keep another build's daemon that another Walnut shares (daemon-shared.ts). */
   private keepSharedDaemon(hello: { version?: string; served?: DaemonServes | null }, expected: string): boolean {
+    if (this.soleManager) return false
     const now = Date.now()
     const verdict = sharedDaemonVerdict({
       ourKey: walnutKeyOf(WALNUT_HOME), runningVersion: hello.version ?? '', running: hello.served ?? null, now,

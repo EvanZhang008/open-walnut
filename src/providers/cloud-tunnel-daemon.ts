@@ -91,6 +91,9 @@ export function getTunnelDaemon(owner?: string): LocalDaemon {
     persistent: true,
     binaryPath: process.env.WALNUT_TUNNEL_DAEMON_BINARY || undefined,
     envOverrides: tunnelDaemonEnv(dir),
+    // Its record names the Mac, whose pushes come through this replica: never a reason to
+    // keep an old build here (daemon-shared.ts). A replica on a new build replaces it.
+    soleManager: true,
   })
   instances.set(dir, daemon)
   return daemon

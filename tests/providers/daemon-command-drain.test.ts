@@ -15,6 +15,7 @@ import {
   applyTurnRetry, clearTurnRetryStreak, decideTurnRetry, newTurnRetryState, parseTurnErrorLine,
   turnRetryGiveUpText, turnRetryMarkerText, turnRetryMessage, TURN_RETRY_DEFAULTS,
 } from '../../src/providers/daemon-core.js'
+import { missingNames } from '../helpers/extracted-free-names.js'
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -59,6 +60,32 @@ function claudeFixInFlight() {
 function compile<T>(source: string, environment: Record<string, unknown>): T {
   const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   return new Function(...Object.keys(environment), js)(...Object.values(environment)) as T
+}
+
+/** A twin's `NAME = new Set([...])` literal. */
+function literalSet(source: string, name: string): Set<string> {
+  const match = source.match(new RegExp(name + ' = new Set\\(\\[([\\s\\S]*?)\\]'))
+  if (!match) throw new Error(`Missing ${name}`)
+  return new Set([...match[1]!.replace(/\/\/[^\n]*/g, '').matchAll(/'([^']+)'/g)].map((m) => m[1]!))
+}
+
+/**
+ * A twin's handleCommand with its real dispatcher. Every module-level name handleCommand
+ * reads is handed in (missingNames), whichever branch reads it: what its preamble reads is
+ * here, a test's own `environment` adds the handlers it drives.
+ */
+function compileHandle(source: string, environment: Record<string, unknown>): (ws: unknown, msg: string) => void {
+  const text = extract(source, 'handleCommand')
+  const env: Record<string, unknown> = {
+    SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
+    isServerClient: compile<(ws: unknown) => boolean>(`return ${extract(source, 'isServerClient')};`, {}),
+    servedWalnuts: { note: vi.fn() }, walnutScope: { askedHome: () => '' }, gatewayClientHomes: new WeakMap(),
+    BRIDGE_ALLOWED_COMMANDS: new Set(), BRIDGE_SESSION_COMMANDS: new Set(), FOLLOWER_ALLOWED_COMMANDS: new Set(), LANE_ALLOWED_COMMANDS: new Set(),
+    bridgeHearsSession: () => true, followerScope: () => false, safeSend: vi.fn(), sendError: vi.fn(), logMsg: vi.fn(),
+    ...environment,
+  }
+  expect(missingNames(text, [...Object.keys(env), 'dispatchCommand']), 'names handleCommand reads that this run lacks').toEqual([])
+  return compile(`${text}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, env)
 }
 
 const standalone = fs.readFileSync(path.resolve('src/providers/daemon-standalone.ts'), 'utf8')
@@ -245,7 +272,7 @@ describe.each([
     const accepted = deferred()
     const operation = vi.fn(() => accepted.promise)
     const sendError = vi.fn()
-    const handle = compile<(ws: unknown, msg: string) => void>(`${extract(source, 'handleCommand')}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, {
+    const handle = compileHandle(source, {
       daemonCommands, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(), resolveAgentCommand,
       cmdStart: operation, cmdSend: operation, cmdSendRaw: operation, cmdStop: operation,
       cmdHooksConfigure: operation, cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
@@ -491,8 +518,8 @@ describe.each([
     const download = deferred()
     const cmdVscodeEnsure = vi.fn(() => download.promise)
     const sendError = vi.fn()
-    const handle = compile<(ws: unknown, msg: string) => void>(`${extract(source, 'handleCommand')}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, {
-      daemonCommands, cmdVscodeEnsure, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(),
+    const handle = compileHandle(source, {
+      daemonCommands, cmdVscodeEnsure, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
     })
     handle({}, JSON.stringify({ id: 1, cmd: 'vscode.ensure' }))
     await daemonCommands.close()
@@ -743,7 +770,7 @@ describe('standalone ACP command lifetime', () => {
     const response = deferred()
     const operation = vi.fn(() => response.promise)
     const sendError = vi.fn()
-    const handle = compile<(ws: unknown, msg: string) => void>(`${extract(standalone, 'handleCommand')}\n${extract(standalone, 'dispatchCommand')}\nreturn handleCommand;`, {
+    const handle = compileHandle(standalone, {
       daemonCommands, cmdAcpStart: operation, cmdAcpOp: operation, sendError, resolveAgentCommand,
       logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(),
     })
