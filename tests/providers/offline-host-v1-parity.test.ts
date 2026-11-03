@@ -12,7 +12,7 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { JHOME, SID_A, TASK_A, DEVICE, journalTmpDir, cleanupJournalDirs, journalHost, jslice } from '../helpers/offline-journal-harness.js'
-import { oldMacDrain, cleanupOldSources } from '../helpers/v1-daemon-sources.js'
+import { oldMacDrain, cleanupOldSources, OLD_BUILD_FETCH_MS } from '../helpers/v1-daemon-sources.js'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 
@@ -44,7 +44,7 @@ beforeAll(async () => {
     './peers/walnut-message-tag.js': { buildWalnutMessage: () => '' },
     './sessions/session-send-core.js': { deliverToSession: async () => {} },
   })
-})
+}, OLD_BUILD_FETCH_MS)
 
 afterEach(() => { cleanupJournalDirs(); applied.length = 0 })
 afterEach(() => cleanupOldSources())

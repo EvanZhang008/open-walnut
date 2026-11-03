@@ -3,7 +3,8 @@
  * host's writes over it (src/providers/offline-host-core.ts). Real files in temp dirs;
  * a second store on the same dir stands in for a daemon restart or a second process.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll } from 'vitest'
+import { ensureOldBuild, OLD_BUILD_FETCH_MS } from '../helpers/v1-daemon-sources.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -449,6 +450,8 @@ describe('journal v2: v1 journals written by the 1fe1fd194 daemon migrate at eve
   }
   const v1File = (dir: string) => path.join(dir, `journal-${keyOf(JHOME)}.json`)
 
+  // A shallow clone fetches the old build here, never inside a test's own budget.
+  beforeAll(() => ensureOldBuild(), OLD_BUILD_FETCH_MS)
   afterEach(async () => { (await import('../helpers/v1-daemon-sources.js')).cleanupOldSources() })
 
   it('appends every v1 record as v2 in order, keeps its time, merges its rows, renames the file', async () => {

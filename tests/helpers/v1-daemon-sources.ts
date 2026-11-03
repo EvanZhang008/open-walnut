@@ -13,6 +13,13 @@ import path from 'node:path'
 export const OLD_BUILD = '1fe1fd194'
 /** Its full sha: a shallow clone fetches a commit only by the whole name. */
 export const OLD_BUILD_SHA = '1fe1fd19431ee0accf9bff5839f4ef005b5df894'
+/**
+ * How long a file's `beforeAll(ensureOldBuild)` may take: up to four fetches of 120 s each on a
+ * shallow CI clone. The fetch runs there, never inside a test, whose 15 s quick-tier budget a slow
+ * fetch used to eat (2026-11-03, CI: two journal migration tests timed out at their first read).
+ * tests/providers/old-build-fetch-guard.test.ts fails on a file that reads the old build without it.
+ */
+export const OLD_BUILD_FETCH_MS = 9 * 60_000
 const ROOT = path.resolve(__dirname, '../..')
 const tmp: string[] = []
 

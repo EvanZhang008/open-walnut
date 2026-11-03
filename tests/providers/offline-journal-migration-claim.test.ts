@@ -11,7 +11,7 @@
  * The v1 writer is the real 1fe1fd194 offline host (tests/helpers/v1-daemon-sources.ts); the
  * race is injected through deps.fs, never by timing.
  */
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,7 +19,10 @@ import { randomBytes } from 'node:crypto'
 import { JHOME, SID_A, journalStore, jslice, keyOf, type Clock } from '../helpers/offline-journal-harness.js'
 import { createJournalMigration } from '../../src/providers/offline-journal-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
-import { oldOfflineHost, cleanupOldSources } from '../helpers/v1-daemon-sources.js'
+import { oldOfflineHost, cleanupOldSources, ensureOldBuild, OLD_BUILD_FETCH_MS } from '../helpers/v1-daemon-sources.js'
+
+// A shallow clone fetches the old build here, never inside a test's own budget.
+beforeAll(() => ensureOldBuild(), OLD_BUILD_FETCH_MS)
 
 const scratch: string[] = []
 afterAll(() => {

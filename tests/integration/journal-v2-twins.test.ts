@@ -27,7 +27,7 @@ import { JOURNAL_V2_DRAINS, createOfflineJournal } from '../../src/providers/off
 import { createHash, randomBytes } from 'node:crypto'
 import { buildSync } from 'esbuild'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
-import { OLD_BUILD_SHA, ensureOldBuild } from '../helpers/v1-daemon-sources.js'
+import { OLD_BUILD_SHA, ensureOldBuild, OLD_BUILD_FETCH_MS } from '../helpers/v1-daemon-sources.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -316,6 +316,8 @@ function op(follower: WebSocket, name: string, args: Record<string, unknown>, op
 }
 
 beforeAll(() => { base = fs.mkdtempSync(path.join(os.tmpdir(), 'jv2-')) })
+// A shallow clone fetches the old build here, never inside a test's own budget.
+beforeAll(() => ensureOldBuild(), OLD_BUILD_FETCH_MS)
 
 afterAll(() => {
   // The mock CLIs these daemons ran for the test (each recorded its own pid), then the rest.
