@@ -750,8 +750,9 @@ enum BoardModel {
         guard let task else { return false }
         if task.isDone || task.phase == "COMPLETE" { return false }
         // The one user status when the server derived it (2026-10): a turn that ended with
-        // nothing for the user is not "needs you". The phase is the fallback.
-        if task.userStatus != nil, let s = TeamStatusModel.userState(task.userStatus) { return s == .needs }
+        // nothing for the user is not "needs you", while one with something to read (To read)
+        // is, as the user asked (2026-11-03). The phase is the fallback.
+        if task.userStatus != nil, let s = TeamStatusModel.userState(task.userStatus) { return s.shown == .needs }
         // No status, or a state this build does not know: the phase, as TeamStatusModel reads it.
         return task.phase == "NEED_ACTION"
     }
@@ -766,13 +767,13 @@ enum BoardModel {
     }
 
     /// The mark of a row drawn under a status section: the row's group decides, never its phase.
-    /// Under To read, Waiting / snoozed or Completed a row never wears the needs mark (a snoozed
+    /// Under Waiting / snoozed or Completed a row never wears the needs mark (a snoozed
     /// or parked task is not asking the user now); unread still shows.
     static func dot(_ task: WalnutTask?, in section: BoardStatusSection?) -> BoardRowDot? {
         let mark = dot(task)
         guard mark == .needsAction, let section else { return mark }
         switch section {
-        case .read, .waiting, .done: return nil
+        case .waiting, .done: return nil
         case .watching, .needs, .working: return mark
         }
     }

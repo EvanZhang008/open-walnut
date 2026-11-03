@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 @testable import Walnut
 
-/// The board's status sections (Watching, Needs you, To read, Working, Waiting / snoozed, Completed):
+/// The board's status sections (Watching, Needs you, Working, Waiting / snoozed, Completed):
 /// which row goes where, in what order, what is open by default and how that is stored, and
 /// the Watch write. The model is `BoardStatusSections.swift`; `BoardModel.assemble` is where
 /// the bands give their rows up to it.
@@ -87,32 +87,43 @@ final class BoardStatusSectionsTests: XCTestCase {
         }
     }
 
-    /// To read sits right under Needs you: a stored `read`, or an older server's `waiting` with
-    /// `toRead`; a snoozed status stays under Waiting / snoozed whatever it holds, and a needs
-    /// row is never To read.
-    func testToReadHoldsWhatThereIsToReadAndNothingSnoozed() {
+    /// There is no To read section (2026-11-03, the user: "I dont wnat serpeate to read"): a
+    /// stored `read`, or an older server's `waiting` with `toRead`, is a Needs you row, sorted
+    /// with the others by latest activity and wearing the needs mark; a snoozed status stays
+    /// under Waiting / snoozed whatever it holds.
+    func testToReadRowsAreNeedsYouRowsAndNothingSnoozed() {
         let tasks = [
             task("read", phase: "NEED_ACTION", updated: "2026-08-25T00:00:00Z",
-                 user: .init(state: "read", waitingOn: "It finished, and its result is there to read", toRead: "result")),
+                 user: .init(state: "read", waitingOn: "The result is ready", toRead: "result")),
             task("legacy", phase: "NEED_ACTION", updated: "2026-08-26T00:00:00Z",
-                 user: .init(state: "waiting", waitingOn: "It answered your message", toRead: "answer")),
+                 user: .init(state: "waiting", waitingOn: "It answered your question", toRead: "answer")),
             task("snoozed", phase: "WAITING",
                  user: .init(state: "waiting", snoozed: .init(until: "2026-09-01"), toRead: "result")),
             task("needs", phase: "NEED_ACTION", user: .init(state: "needs", ask: "Pick one", toRead: "result")),
             task("open"),
         ]
         let s = board(tasks).sections
-        XCTAssertEqual(s.read.map(\.id), ["legacy", "read"], "latest activity first")
-        XCTAssertEqual(s.needs.map(\.id), ["needs"])
+        XCTAssertEqual(s.needs.map(\.id), ["needs", "legacy", "read"], "latest activity first, To read among them")
+        XCTAssertEqual(s.count(.needs), 3)
         XCTAssertEqual(s.waiting.map(\.id), ["snoozed"])
-        XCTAssertEqual(BoardStatusSection.allCases.filter { s.isShown($0) }, [.needs, .read, .working, .waiting])
-        XCTAssertEqual(s.count(.read), 2)
-        // A To read row never wears the needs dot, whatever its phase.
-        XCTAssertNil(BoardModel.dot(tasks[0]))
-        XCTAssertNil(BoardModel.dot(tasks[1]))
+        XCTAssertEqual(BoardStatusSection.allCases.filter { s.isShown($0) }, [.needs, .working, .waiting])
+        // No To read section exists at all.
+        XCTAssertEqual(BoardStatusSection.allCases, [.watching, .needs, .working, .waiting, .done])
+        XCTAssertNil(BoardStatusSection(rawValue: "read"))
+        XCTAssertFalse(BoardStatusSection.allCases.map(\.label).contains("To read"))
+        // A stored "read: true" open preference from the build that had the section is ignored.
+        XCTAssertEqual(BoardStatusSectionPrefs.decode(#"{"read":false,"needs":true}"#).keys.sorted { $0.rawValue < $1.rawValue },
+                       BoardStatusSection.allCases.sorted { $0.rawValue < $1.rawValue })
+        // A To read row wears the needs mark in Needs you, whatever its phase.
+        XCTAssertEqual(BoardModel.dot(tasks[0], in: .needs), .needsAction)
+        XCTAssertEqual(BoardModel.dot(tasks[1], in: .needs), .needsAction)
+        XCTAssertNil(BoardModel.dot(tasks[2], in: .waiting))
+        // Each Needs you row's third line: the ask, or what there is to read.
+        XCTAssertEqual(s.needs.map { TeamStatusModel.needLine($0.task?.userStatus)?.line },
+                       ["Decide: Pick one", "Take a look: It answered your question", "Can close: The result is ready"])
     }
 
-    /// The mark follows the row's group: under To read, Waiting / snoozed or Completed no row
+    /// The mark follows the row's group: under Waiting / snoozed or Completed no row
     /// wears the needs dot, even one whose phase alone (an older server) would ask for it.
     /// Unread still shows everywhere.
     func testTheRowMarkFollowsItsSectionNotThePhase() {
@@ -120,7 +131,7 @@ final class BoardStatusSectionsTests: XCTestCase {
         XCTAssertEqual(BoardModel.dot(phaseOnly), .needsAction)
         XCTAssertEqual(BoardModel.dot(phaseOnly, in: nil), .needsAction)
         XCTAssertEqual(BoardModel.dot(phaseOnly, in: .needs), .needsAction)
-        for section in [BoardStatusSection.read, .waiting, .done] {
+        for section in [BoardStatusSection.waiting, .done] {
             XCTAssertNil(BoardModel.dot(phaseOnly, in: section), "\(section)")
         }
         var unread = task("u", phase: "NEED_ACTION")
@@ -276,8 +287,8 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     func testDefaultsAndWords() {
         XCTAssertEqual(BoardStatusSection.allCases.map(\.label),
-            ["Watching", "Needs you", "To read", "Working", "Waiting / snoozed", "Completed"])
-        XCTAssertEqual(BoardStatusSection.allCases.filter(\.defaultOpen), [.watching, .needs, .read, .working])
+            ["Watching", "Needs you", "Working", "Waiting / snoozed", "Completed"])
+        XCTAssertEqual(BoardStatusSection.allCases.filter(\.defaultOpen), [.watching, .needs, .working])
         XCTAssertEqual(BoardWatchItem.label(watched: false), "Watch")
         XCTAssertEqual(BoardWatchItem.label(watched: true), "Stop watching")
         XCTAssertEqual(BoardWatchItem.systemImage(watched: false), "eye")

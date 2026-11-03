@@ -32,15 +32,13 @@ struct TaskStatusCard: View {
                         .background(Theme.warning.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
                 }
             }
-            if state == .needs, let ask = s?.ask, !ask.isEmpty {
-                (Text("You decide: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
+            // What it needs from the user, its category word first ("Decide: ...", "Can close:
+            // The result is ready"): the whole sentence here, where it is read.
+            if state == .needs, let need = TeamStatusModel.needLine(s) {
+                (Text("\(need.category.label): ").bold().foregroundColor(NeedLineView.color(need.category)) + Text(need.text))
                     .font(.subheadline)
-                CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked")
-            }
-            if state == .read {
-                Text(TeamStatusModel.readLine(s))
-                    .font(.subheadline.weight(.medium))
-                    .accessibilityIdentifier("task.userStatus.read")
+                    .accessibilityIdentifier(TeamStatusModel.isToRead(s) ? "task.userStatus.read" : "task.userStatus.ask")
+                if !TeamStatusModel.isToRead(s) { CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked") }
             }
             if state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
@@ -95,8 +93,8 @@ struct UserStatePill: View {
     /// Nonisolated: the timeline's layout actor colors a pill's dot with it.
     nonisolated static func color(_ s: UserState) -> Color {
         switch s {
-        case .needs: return Color(red: 0.88, green: 0.38, blue: 0.10)
-        case .read: return Color(red: 0.12, green: 0.62, blue: 0.70)
+        // To read is drawn as Needs you, never in a colour of its own.
+        case .needs, .read: return Color(red: 0.88, green: 0.38, blue: 0.10)
         case .working: return Color(red: 0.18, green: 0.44, blue: 0.94)
         case .waiting: return .secondary
         case .done: return Theme.success
@@ -106,8 +104,7 @@ struct UserStatePill: View {
     /// The same states as words, readable on both backgrounds (the tints above are for dots).
     static func textColor(_ s: UserState) -> Color {
         switch s {
-        case .needs: return Theme.needsText
-        case .read: return Theme.readText
+        case .needs, .read: return Theme.needsText
         case .working: return Theme.workingText
         case .waiting: return .primary
         case .done: return Theme.doneText
@@ -137,7 +134,8 @@ struct UserStatePill: View {
 }
 
 /// A lead's team in its detail sheet, the web Board's Status view on the phone: a brief
-/// that names what needs the user, the five state chips that filter, and one row per task.
+/// that names what needs the user, the four state chips that filter (To read rows are under
+/// Needs you), and one row per task.
 /// Shown only for a task with a team (a subtask at least).
 struct TeamStatusSection: View {
     let ownerId: String
@@ -254,8 +252,7 @@ struct TeamStatusSection: View {
     static func emptyText(_ filter: UserState?) -> String {
         switch filter {
         case nil: return "No open tasks on this team."
-        case .needs: return "Nothing needs you right now."
-        case .read: return "Nothing to read right now."
+        case .needs, .read: return "Nothing needs you right now."
         case .working: return "Nothing is working right now."
         case .waiting: return "Nothing is waiting right now."
         case .done: return "Nothing was done in the last \(TeamStatusModel.doneWindowDays) days."
@@ -289,7 +286,7 @@ struct TeamStatusSection: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
-                ForEach(UserState.allCases, id: \.self) { s in
+                ForEach(UserState.groups, id: \.self) { s in
                     chip("\(b.counts[s]) \(s.label)", on: filter == s, dot: UserStatePill.color(s)) { filter = s }
                 }
             }
@@ -356,14 +353,11 @@ struct TeamStatusRowView: View {
             if row.depth == 0 {
                 Text("Lead").font(.caption2).foregroundStyle(.secondary)
             }
-            if row.state == .needs, let ask = s?.ask, !ask.isEmpty {
-                (Text("You: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
-                    .font(.footnote)
-                CheckedCaption(status: s, font: .caption, id: "task.team.checked")
-            } else if row.state == .read {
-                Text(TeamStatusModel.readLine(s))
-                    .font(.footnote.weight(.medium))
-                    .accessibilityIdentifier("task.team.read")
+            if row.state == .needs {
+                if let need = TeamStatusModel.needLine(s) {
+                    NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need")
+                }
+                if !row.isToRead { CheckedCaption(status: s, font: .caption, id: "task.team.checked") }
             } else if row.state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))
@@ -425,6 +419,45 @@ struct TeamStatusRowView: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+}
+
+/// A Needs you row's third line: its category word in bold and its colour, then what it needs
+/// from the user (its ask, or what there is to read) muted, ONE line truncated with an ellipsis,
+/// never wrapping. A To read row leads it with a small document mark; neither wears Waiting's
+/// marks.
+struct NeedLineView: View {
+    let need: TeamStatusModel.NeedLine
+    let toRead: Bool
+    let font: Font
+    let id: String
+
+    /// The category word's colour: Decide red, Review orange, Take a look blue, Can close green.
+    static func color(_ c: NeedCategory) -> Color {
+        switch c {
+        case .decide: return Theme.decideText
+        case .review: return Theme.reviewText
+        case .look: return Theme.workingText
+        case .close: return Theme.doneText
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            if toRead {
+                Image(systemName: "doc.text")
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            (Text("\(need.category.label): ").bold().foregroundColor(Self.color(need.category))
+                + Text(need.text).foregroundColor(.secondary))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .font(font)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(id)
     }
 }
 

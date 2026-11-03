@@ -597,6 +597,10 @@ struct WalnutUserStatus: Codable, Equatable {
     /// Working with no turn running: its own work carries on, `process` | `watch` | `clock`
     /// (additive, 2026-11-02).
     var carriesOn: String? = nil
+    /// needs and To read: what kind of thing the user does, `look` | `decide` | `review` |
+    /// `close`, the word that leads the row's third line. Absent from an older server, which
+    /// the phone derives (`TeamStatusModel.needCategory`; additive, 2026-11-03).
+    var category: String? = nil
 }
 
 /// `user_status.snoozed`: until when, and the ask it holds back meanwhile. Decoded leniently: a

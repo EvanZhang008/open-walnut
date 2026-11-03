@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { USER_STATE_LABELS } from '../../src/core/user-status.js'
+import { USER_STATE_LABELS, shownState, type UserState } from '../../src/core/user-status.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -223,7 +223,8 @@ describe('one set of state names', () => {
     const ios = fs.readFileSync(path.join(ROOT, 'ios-native/Walnut/Views/Tasks/TeamStatusModel.swift'), 'utf8')
     for (const [state, label] of Object.entries(USER_STATE_LABELS)) {
       expect(frame, `frame USER.${state}`).toContain(`${state}: '${label}'`)
-      expect(ios, `iOS .${state}`).toContain(`case .${state}: return "${label}"`)
+      // The phone draws a state by its shown name (To read under Needs you), as the web does.
+      expect(ios, `iOS .${state}`).toContain(`case .${state}: return "${USER_STATE_LABELS[shownState(state as UserState)]}"`)
     }
   })
 

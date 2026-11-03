@@ -95,7 +95,8 @@ enum ChatOrgModel {
             // A VP leading several projects waits on the user once, on its own project's row.
             let leadNeeds = p.lead != nil && p.vp == nil
                 && ownState(p.lead?.id, phase: p.lead?.phase, tasks: tasks) == .needs ? 1 : 0
-            let needs = counts.needsYou + leadNeeds
+            // To read is Needs you on the phone: the server counts it apart (`toRead`).
+            let needs = counts.needsYou + counts.read + leadNeeds
             let state: UserState = needs > 0 ? .needs : counts.running > 0 ? .working : .waiting
             let name = p.lead?.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? p.project.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -121,11 +122,10 @@ enum ChatOrgModel {
 
     private static func rank(_ s: UserState) -> Int {
         switch s {
-        case .needs: return 0
-        case .read: return 1
-        case .working: return 2
-        case .waiting: return 3
-        case .done: return 4
+        case .needs, .read: return 0
+        case .working: return 1
+        case .waiting: return 2
+        case .done: return 3
         }
     }
 

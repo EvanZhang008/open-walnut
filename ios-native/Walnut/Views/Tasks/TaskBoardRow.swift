@@ -210,7 +210,8 @@ enum BoardRowSurface {
 
 /// One board row. A row, and nothing else: a dot in the leading gutter (unread, or
 /// waiting on you), the done ring, the title, and the project in grey when the band
-/// heading does not already say it.
+/// heading does not already say it. Under Needs you, one more grey line: what it needs from
+/// the user (2026-11-03, the user: "thridline cna show what need u ... in one line").
 ///
 /// TAP GOES STRAIGHT INTO THE SESSION. There is no expansion. The first version
 /// of this row grew an inline panel on tap (session header, host/model/count
@@ -320,6 +321,9 @@ struct TaskBoardRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if showsProject { projectLine }
+                if let need {
+                    NeedLineView(need: need, toRead: isToRead, font: .caption, id: "board.row.need.\(row.id)")
+                }
             }
             // Spans to the trailing edge so the whole width right of the ring opens
             // the session, not just the glyph-width of the text.
@@ -341,8 +345,9 @@ struct TaskBoardRow: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("board.row.\(row.id)")
             .accessibilityLabel(row.title)
-            // The dot is drawn, never read, so its meaning rides on the row itself.
-            .accessibilityValue(dot?.accessibilityValue ?? "")
+            // The dot is drawn, never read, so its meaning rides on the row itself, and so
+            // does the third line (the label above is the title alone).
+            .accessibilityValue([dot?.accessibilityValue, need?.line].compactMap { $0 }.joined(separator: ", "))
             // The hint follows where the tap GOES, which is not "does the list have a
             // session for this task": a task whose session is known only by id opens
             // that session, and a task nobody has asked about yet opens whichever of the
@@ -351,6 +356,9 @@ struct TaskBoardRow: View {
             // and neither of them may promise a NEW session on a row that has one.
             .accessibilityHint(BoardModel.affordance(row).accessibilityHint)
             .accessibilityAddTraits(.isButton)
+            // A finished result that can close: one tap closes it, beside its third line. A
+            // sibling of the tap target, like the ring, so it never opens the session.
+            if need?.category == .close, !row.isDone { closeButton }
         }
         // The mark lives in the card's own leading inset, LEFT of the ring, where the
         // web puts its dot. An overlay rather than a column, so the ring, the title and
@@ -417,6 +425,38 @@ struct TaskBoardRow: View {
     }
 
     // MARK: - Row parts
+
+    /// Under Needs you, the third line: what the row needs from the user, its ask or what there
+    /// is to read (`TeamStatusModel.needLine`). Absent when it has no words, and in any other
+    /// section or band.
+    private var need: TeamStatusModel.NeedLine? {
+        guard section == .needs else { return nil }
+        return TeamStatusModel.needLine(row.task?.userStatus)
+    }
+
+    private var isToRead: Bool { TeamStatusModel.isToRead(row.task?.userStatus) }
+
+    /// "Close" on a Can close row: marks the task done the way the ring does (`onToggleDone`).
+    private var closeButton: some View {
+        Button(action: onToggleDone) {
+            Text("Close")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.doneText)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .overlay(Capsule().stroke(Theme.doneText.opacity(0.55), lineWidth: 1))
+                // The capsule stays small; a 44pt band around it takes the tap.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .accessibilityIdentifier("board.row.close.\(row.id)")
+        .accessibilityLabel("Close")
+        .accessibilityHint("Marks the task done")
+    }
 
     /// One glyph: an open ring, or a filled ring with a tick when done. It is the
     /// done TOGGLE (Reminders muscle memory) — the row's tap belongs to the

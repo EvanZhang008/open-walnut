@@ -49,34 +49,117 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusModel.state(of: task("x", phase: "COMPLETE", status: "done")), .done)
     }
 
-    // MARK: - To read (2026-11-02)
+    // MARK: - To read is Needs you (2026-11-02, folded 2026-11-03)
 
-    @MainActor func testTheFiveStatesInOrderWithTheirWords() {
-        XCTAssertEqual(UserState.allCases, [.needs, .read, .working, .waiting, .done])
-        XCTAssertEqual(UserState.allCases.map(\.label), ["Needs you", "To read", "Working", "Waiting / snoozed", "Completed"])
-        XCTAssertEqual(TeamStatusSection.emptyText(.read), "Nothing to read right now.")
+    @MainActor func testFourGroupsInOrderWithTheirWordsAndNoToRead() {
+        // `read` is still decoded, but never a group of its own: no chip, no words, no count.
+        XCTAssertEqual(UserState.groups, [.needs, .working, .waiting, .done])
+        XCTAssertFalse(UserState.groups.contains(.read))
+        XCTAssertEqual(UserState.groups.map(\.label), ["Needs you", "Working", "Waiting / snoozed", "Completed"])
+        XCTAssertEqual(UserState.read.shown, .needs)
+        XCTAssertEqual(UserState.read.label, "Needs you")
+        XCTAssertFalse(UserState.allCases.map(\.label).contains("To read"))
+        XCTAssertEqual(TeamStatusSection.emptyText(.read), TeamStatusSection.emptyText(.needs))
     }
 
-    func testToReadFromTheServerAndFromAnOlderOne() {
-        let words = "It finished, and its result is there to read"
+    func testToReadFromTheServerAndFromAnOlderOneIsNeedsYou() {
+        let words = "The result is ready"
         // This server: state "read".
-        let now = task("r", user: .init(state: "read", waitingOn: words, toRead: "result"))
-        XCTAssertEqual(TeamStatusModel.state(of: now), .read)
+        let now = task("r", phase: "WAITING", user: .init(state: "read", waitingOn: words, toRead: "result"))
+        XCTAssertEqual(TeamStatusModel.userState(now.userStatus), .read)
+        XCTAssertEqual(TeamStatusModel.state(of: now), .needs)
+        XCTAssertTrue(TeamStatusModel.isToRead(now.userStatus))
         // A server from before the To read state: "waiting" with toRead set.
-        let legacy = task("l", user: .init(state: "waiting", waitingOn: words, toRead: "result"))
-        XCTAssertEqual(TeamStatusModel.state(of: legacy), .read)
+        let legacy = task("l", phase: "WAITING", user: .init(state: "waiting", waitingOn: words, toRead: "result"))
+        XCTAssertEqual(TeamStatusModel.userState(legacy.userStatus), .read)
+        XCTAssertEqual(TeamStatusModel.state(of: legacy), .needs)
         // A snoozed status stays Waiting whatever it holds.
         let snoozed = task("s", user: .init(state: "waiting", snoozed: .init(until: "2026-11-05"), toRead: "result"))
         XCTAssertEqual(TeamStatusModel.state(of: snoozed), .waiting)
+        XCTAssertFalse(TeamStatusModel.isToRead(snoozed.userStatus))
+        XCTAssertFalse(BoardModel.needsHuman(snoozed))
         // An empty toRead is no To read.
         XCTAssertEqual(TeamStatusModel.state(of: task("e", user: .init(state: "waiting", toRead: " "))), .waiting)
-        // Not the needs mark, whatever the phase.
-        XCTAssertFalse(BoardModel.needsHuman(now))
-        XCTAssertFalse(BoardModel.needsHuman(legacy))
-        // Its line is its words, never "Waiting on".
-        XCTAssertEqual(TeamStatusModel.readLine(now.userStatus), words)
-        XCTAssertEqual(TeamStatusModel.readLine(.init(state: "read", toRead: "answer")), "It answered your message, and its answer is there to read")
-        XCTAssertFalse(TeamStatusModel.readLine(.init(state: "read")).hasPrefix("Waiting"))
+        // The needs mark, whatever the phase: it is in Needs you.
+        XCTAssertTrue(BoardModel.needsHuman(now))
+        XCTAssertTrue(BoardModel.needsHuman(legacy))
+    }
+
+    /// The third line of a Needs you row: its category word, then the ask, else what there is
+    /// to read (the server's words, else by kind), else nothing.
+    func testTheNeedLine() {
+        typealias L = TeamStatusModel.NeedLine
+        // A real ask: its text, a decision by default.
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "needs", ask: "Approve the deploy?", source: "session")),
+                       L(category: .decide, text: "Approve the deploy?"))
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "needs", ask: "Approve the deploy?", source: "session"))?.line,
+                       "Decide: Approve the deploy?")
+        // A needs with no words at all: no line is invented, whatever its category.
+        XCTAssertNil(TeamStatusModel.needLine(.init(state: "needs")))
+        XCTAssertNil(TeamStatusModel.needLine(.init(state: "needs", ask: "  ", category: "review")))
+        XCTAssertNil(TeamStatusModel.needLine(nil))
+        // To read with the server's words: those words, for each kind.
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", waitingOn: "The result is ready", toRead: "result"))?.line,
+                       "Can close: The result is ready")
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", waitingOn: "It answered your question", toRead: "answer"))?.line,
+                       "Take a look: It answered your question")
+        let turnWords = "Its turn ended without asking you anything: Deployed build 42 to prod."
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", waitingOn: turnWords, toRead: "turn")),
+                       L(category: .look, text: turnWords))
+        // An older server's "waiting" with toRead reads the same.
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "waiting", waitingOn: "It answered your question", toRead: "answer"))?.line,
+                       "Take a look: It answered your question")
+        // To read with no words: by kind, never "take a look" twice.
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", toRead: "result"))?.line, "Can close: The result is ready")
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", waitingOn: " ", toRead: "answer"))?.line, "Take a look: It answered your question")
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "read", toRead: "turn"))?.line, "Take a look: Its turn ended without asking you anything")
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "waiting", toRead: "result"))?.line, "Can close: The result is ready")
+        for kind in ["result", "answer", "turn"] {
+            let text = TeamStatusModel.needLine(.init(state: "read", toRead: kind))?.text ?? ""
+            XCTAssertFalse(text.lowercased().contains("take a look"), kind)
+            XCTAssertFalse(text.hasPrefix("Waiting"), kind)
+        }
+        // To read naming no kind and no words: nothing.
+        XCTAssertNil(TeamStatusModel.needLine(.init(state: "read")))
+        // A waiting row's words are never a need line, nor a snoozed To read's.
+        XCTAssertNil(TeamStatusModel.needLine(.init(state: "waiting", kind: "task", waitingOn: "Another task")))
+        XCTAssertNil(TeamStatusModel.needLine(.init(state: "waiting", waitingOn: "The result is ready", snoozed: .init(until: "2026-11-05"), toRead: "result")))
+    }
+
+    /// The four categories as the server names them, and what an older server's status (no
+    /// `category`) reads as.
+    func testNeedCategories() {
+        XCTAssertEqual(NeedCategory.allCases, [.look, .decide, .review, .close])
+        XCTAssertEqual(NeedCategory.allCases.map(\.label), ["Take a look", "Decide", "Review", "Can close"])
+        // The server's word wins, on a needs and on a To read alike.
+        for c in NeedCategory.allCases {
+            XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "x", source: "session", category: c.rawValue)), c)
+            XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "read", toRead: "turn", category: c.rawValue)), c)
+            XCTAssertEqual(TeamStatusModel.needLine(.init(state: "needs", ask: "Look at the PR", category: c.rawValue))?.line,
+                           "\(c.label): Look at the PR")
+        }
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "x", category: " Review ")), .review)
+        // No category (an older server), or one this build does not know: derived.
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "read", toRead: "result")), .close)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "waiting", toRead: "result")), .close)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "read", toRead: "answer")), .look)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "read", toRead: "turn")), .look)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "Build failed", source: "error")), .look)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "Allow Bash?", source: "prompt")), .decide)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "Pick one", source: "session")), .decide)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "needs", ask: "Pick one", category: "later-kind")), .decide)
+        XCTAssertEqual(TeamStatusModel.needCategory(.init(state: "read", toRead: "result", category: "later-kind")), .close)
+        XCTAssertEqual(TeamStatusModel.needLine(.init(state: "needs", ask: "Build failed", source: "error"))?.line, "Take a look: Build failed")
+    }
+
+    func testDecodesCategoryAndAnOlderServerWithout() throws {
+        let json = #"{"id":"t1","title":"T","status":"in_progress","phase":"NEED_ACTION","priority":"none","project":"","user_status":{"state":"needs","ask":"Look over the diff","source":"session","category":"review"}}"#
+        let t = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        XCTAssertEqual(t.userStatus?.category, "review")
+        XCTAssertEqual(TeamStatusModel.needLine(t.userStatus)?.line, "Review: Look over the diff")
+        let old = try JSONDecoder().decode(WalnutTask.self, from: Data(json.replacingOccurrences(of: #","category":"review""#, with: "").utf8))
+        XCTAssertNil(old.userStatus?.category)
+        XCTAssertEqual(TeamStatusModel.needLine(old.userStatus)?.line, "Decide: Look over the diff")
     }
 
     func testAnUnknownStateFallsBackToThePhase() {
@@ -87,30 +170,37 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertTrue(BoardModel.needsHuman(task("x", phase: "NEED_ACTION", user: .init(state: "later-kind"))))
     }
 
-    func testCountsAndOrderWithToRead() {
+    func testToReadIsCountedAndSortedUnderNeedsYou() {
         let tasks = [
             task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),
             task("n", user: .init(state: "needs", ask: "Pick one", source: "session")),
-            task("r1", user: .init(state: "read", waitingOn: "It finished", at: "2026-10-26T01:00:00Z", toRead: "result")),
-            task("r2", user: .init(state: "waiting", waitingOn: "It answered your message", at: "2026-10-26T04:00:00Z", toRead: "answer")),
+            task("r1", user: .init(state: "read", waitingOn: "The result is ready", at: "2026-10-26T01:00:00Z", toRead: "result")),
+            task("r2", user: .init(state: "waiting", waitingOn: "It answered your question", at: "2026-10-26T04:00:00Z", toRead: "answer")),
             task("w", phase: "WAITING", user: .init(state: "waiting", kind: "task", waitingOn: "Another task")),
             task("z", phase: "WAITING", user: .init(state: "waiting", kind: "time", snoozed: .init(until: "2026-11-05"), toRead: "result")),
             task("c", phase: "IN_PROGRESS", user: .init(state: "working", carriesOn: "process")),
             task("d", phase: "COMPLETE", status: "done", completed: "2026-10-25T00:00:00Z"),
         ]
         let b = TeamStatusModel.build(ownerId: "lead", tasks: tasks, now: Self.now)
-        XCTAssertEqual(b.counts, TeamStatusCounts(needs: 1, read: 2, working: 2, waiting: 2, done: 1))
-        XCTAssertEqual(UserState.allCases.map { b.counts[$0] }, [1, 2, 2, 2, 1])
-        // Latest status time first, like the other open groups.
-        XCTAssertEqual(b.rows(.read).map(\.id), ["r2", "r1"])
+        XCTAssertEqual(b.counts, TeamStatusCounts(needs: 3, working: 2, waiting: 2, done: 1))
+        XCTAssertEqual(UserState.groups.map { b.counts[$0] }, [3, 2, 2, 1])
+        XCTAssertEqual(b.counts[.read], b.counts.needs)
+        // One Needs you group, latest status time first, To read rows among the others.
+        XCTAssertEqual(b.needs.map(\.id), ["n", "r2", "r1"])
+        XCTAssertEqual(b.rows(.read).map(\.id), b.needs.map(\.id))
+        XCTAssertEqual(b.needs.map(\.state), [.needs, .needs, .needs])
+        XCTAssertEqual(b.needs.map(\.isToRead), [false, true, true])
         XCTAssertEqual(b.open.map(\.id).prefix(3), ["n", "r2", "r1"])
         XCTAssertEqual(Set(b.waiting.map(\.id)), ["w", "z"])
         XCTAssertEqual(Set(b.working.map(\.id)), ["lead", "c"])
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "2 To read, 2 Working, 2 Waiting / snoozed, 1 Completed in the last 7 days.")
-        // No To read, no words for it.
-        let none = TeamStatusModel.build(ownerId: "lead", tasks: [tasks[0], tasks[4]], now: Self.now)
-        XCTAssertEqual(TeamStatusModel.countsLine(none), "1 Working, 1 Waiting / snoozed, 0 Completed in the last 7 days.")
+        // The counts line names no To read: those tasks are Needs you.
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "2 Working, 2 Waiting / snoozed, 1 Completed in the last 7 days.")
+        XCTAssertFalse(TeamStatusModel.countsLine(b).contains("To read"))
+        // Each row's third line.
+        XCTAssertEqual(b.needs.map { TeamStatusModel.needLine($0.status)?.line },
+                       ["Decide: Pick one", "Take a look: It answered your question", "Can close: The result is ready"])
     }
+
 
     func testDecodesToReadCarriesOnAndSnoozed() throws {
         let json = #"{"id":"t1","title":"T","status":"in_progress","phase":"NEED_ACTION","priority":"none","project":"","user_status":{"state":"read","toRead":"turn","waitingOn":"Its turn ended without asking you anything","carriesOn":"watch","snoozed":{"until":"2026-11-05","ask":"Approve"}}}"#

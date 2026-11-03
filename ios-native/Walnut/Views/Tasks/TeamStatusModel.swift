@@ -4,17 +4,43 @@ import Foundation
 /// a lead's team by the one user status the server keeps on each task (`user_status`,
 /// `src/core/user-status.ts`), in the same order and with the same counts as the web
 /// Board, the Org page and the task list. Pure: unit-pinned in `TeamStatusModelTests`.
+///
+/// `read` (To read, 2026-11-02) is decoded but never drawn as its own group (2026-11-03, the
+/// user: "I dont wnat serpeate to read"): a To read task is shown and counted under Needs you,
+/// its third line saying what there is to read (`needLine`). `shown` is that fold.
 enum UserState: String, CaseIterable {
     case needs, read, working, waiting, done
 
-    /// The five names a person reads on every surface (src/core/user-status.ts USER_STATE_LABELS).
+    /// The groups a person sees, in order: no To read among them.
+    static let groups: [UserState] = [.needs, .working, .waiting, .done]
+
+    /// The group a state is drawn in: To read is Needs you.
+    var shown: UserState { self == .read ? .needs : self }
+
+    /// The four names a person reads on every surface (src/core/user-status.ts USER_STATE_LABELS).
     var label: String {
         switch self {
         case .needs: return "Needs you"
-        case .read: return "To read"
+        // To read is drawn and named as Needs you (`shown`).
+        case .read: return "Needs you"
         case .working: return "Working"
         case .waiting: return "Waiting / snoozed"
         case .done: return "Completed"
+        }
+    }
+}
+
+/// What a Needs you row asks of the user, the word that leads its third line (server
+/// `user_status.category`, the web's labels).
+enum NeedCategory: String, CaseIterable {
+    case look, decide, review, close
+
+    var label: String {
+        switch self {
+        case .look: return "Take a look"
+        case .decide: return "Decide"
+        case .review: return "Review"
+        case .close: return "Can close"
         }
     }
 }
@@ -27,15 +53,17 @@ struct TeamStatusRow: Identifiable, Equatable {
     let depth: Int
     var id: String { task.id }
     var isStuck: Bool { state == .waiting && status?.kind == "stuck" }
+    /// A Needs you row whose status only has something to read (To read).
+    var isToRead: Bool { state == .needs && TeamStatusModel.isToRead(status) }
 }
 
 struct TeamStatusCounts: Equatable {
-    var needs = 0, read = 0, working = 0, waiting = 0, done = 0
+    /// To read tasks count under `needs`.
+    var needs = 0, working = 0, waiting = 0, done = 0
 
     subscript(_ s: UserState) -> Int {
         switch s {
-        case .needs: return needs
-        case .read: return read
+        case .needs, .read: return needs
         case .working: return working
         case .waiting: return waiting
         case .done: return done
@@ -45,21 +73,20 @@ struct TeamStatusCounts: Equatable {
 
 struct TeamStatusBoard: Equatable {
     var counts = TeamStatusCounts()
+    /// Needs you, To read rows among them.
     var needs: [TeamStatusRow] = []
-    var read: [TeamStatusRow] = []
     var working: [TeamStatusRow] = []
     var waiting: [TeamStatusRow] = []
     var done: [TeamStatusRow] = []
     var stuck: Int { waiting.filter(\.isStuck).count }
     var notStarted: Int { waiting.filter { $0.status?.kind == "not-started" }.count }
-    var open: [TeamStatusRow] { needs + read + working + waiting }
+    var open: [TeamStatusRow] { needs + working + waiting }
     /// The lead has a team to show (one subtask at least, open or recently done).
     var hasTeam: Bool { open.count + done.count > 1 }
 
     func rows(_ s: UserState) -> [TeamStatusRow] {
         switch s {
-        case .needs: return needs
-        case .read: return read
+        case .needs, .read: return needs
         case .working: return working
         case .waiting: return waiting
         case .done: return done
@@ -76,10 +103,10 @@ enum TeamStatusModel {
     /// The stored status, else what the phase alone says (a server that predates `user_status`,
     /// or a state this build does not know), as an older Walnut meant it: NEED_ACTION was
     /// "handed back to you", the row dot's rule (`BoardModel.needsHuman`) and the server's
-    /// `fallbackUserState`.
+    /// `fallbackUserState`. The state as drawn: To read is Needs you (`UserState.shown`).
     static func state(of task: WalnutTask) -> UserState {
         if task.isDone || task.phase == "COMPLETE" { return .done }
-        if let s = userState(task.userStatus) { return s }
+        if let s = userState(task.userStatus) { return s.shown }
         switch task.phase {
         case "IN_PROGRESS": return .working
         case "NEED_ACTION": return .needs
@@ -97,6 +124,9 @@ enum TeamStatusModel {
         }
         return state
     }
+
+    /// The status only has something to read (To read), nothing asked: drawn under Needs you.
+    static func isToRead(_ s: WalnutUserStatus?) -> Bool { userState(s) == .read }
 
     private static let waitOrder: [String: Int] = [
         "stuck": 0, "you": 1, "task": 2, "lead": 3, "outside": 4, "machine": 4, "time": 5, "other": 6, "not-started": 9,
@@ -134,8 +164,7 @@ enum TeamStatusModel {
             if s == .done, (WalnutTask.parseISO(task.completedAt ?? task.updatedAt) ?? .distantPast) < cutoff { continue }
             let row = TeamStatusRow(task: task, state: s, status: s == .done ? nil : task.userStatus, depth: depth)
             switch s {
-            case .needs: board.needs.append(row); board.counts.needs += 1
-            case .read: board.read.append(row); board.counts.read += 1
+            case .needs, .read: board.needs.append(row); board.counts.needs += 1
             case .working: board.working.append(row); board.counts.working += 1
             case .waiting: board.waiting.append(row); board.counts.waiting += 1
             case .done: board.done.append(row); board.counts.done += 1
@@ -143,7 +172,6 @@ enum TeamStatusModel {
         }
         let newest: (TeamStatusRow, TeamStatusRow) -> Bool = { rowTime($0) > rowTime($1) }
         board.needs.sort(by: newest)
-        board.read.sort(by: newest)
         board.working.sort(by: newest)
         board.done.sort(by: newest)
         board.waiting.sort { a, b in
@@ -154,14 +182,13 @@ enum TeamStatusModel {
         return board
     }
 
-    /// "2 To read, 10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed
-    /// in the last 7 days." To read only when there is some, as the server's counts line.
+    /// "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in
+    /// the last 7 days." To read tasks are Needs you, named in the line above it, never here.
     static func countsLine(_ b: TeamStatusBoard) -> String {
         let extra = [b.stuck > 0 ? "\(b.stuck) with nothing to wake it" : nil, b.notStarted > 0 ? "\(b.notStarted) not started" : nil]
             .compactMap { $0 }.joined(separator: ", ")
         let waiting = "\(b.counts.waiting) \(UserState.waiting.label)" + (extra.isEmpty ? "" : " (\(extra))")
-        let read = b.counts.read > 0 ? "\(b.counts.read) \(UserState.read.label), " : ""
-        return "\(read)\(b.counts.working) \(UserState.working.label), \(waiting), \(b.counts.done) \(UserState.done.label) in the last \(doneWindowDays) days."
+        return "\(b.counts.working) \(UserState.working.label), \(waiting), \(b.counts.done) \(UserState.done.label) in the last \(doneWindowDays) days."
     }
 
     /// An agent's sentence (or a title) as a clause inside other words: no closing period,
@@ -216,16 +243,48 @@ enum TeamStatusModel {
         return ("Checked \(ago)\(watched)", false)
     }
 
-    /// A To read row's line: its words ("It finished, and its result is there to read"), else
-    /// what there is to read. Never the word Waiting: nothing is waited on.
-    static func readLine(_ s: WalnutUserStatus?) -> String {
-        let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespaces)
+    /// A To read status's words: the server's ("The result is ready"), else what there is to
+    /// read. Nil when it says nothing and names no kind. Never the word Waiting; never "take a
+    /// look" either, which the category word already says.
+    static func readLine(_ s: WalnutUserStatus?) -> String? {
+        let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !on.isEmpty { return on }
-        switch s?.toRead {
-        case "answer": return "It answered your message, and its answer is there to read"
+        switch s?.toRead?.trimmingCharacters(in: .whitespaces) {
+        case "result": return "The result is ready"
+        case "answer": return "It answered your question"
         case "turn": return "Its turn ended without asking you anything"
-        default: return "It finished, and its result is there to read"
+        default: return nil
         }
+    }
+
+    /// What a Needs you row's third line says: the category word, then its words.
+    struct NeedLine: Equatable {
+        let category: NeedCategory
+        let text: String
+        /// "Decide: Approve the deploy?"
+        var line: String { "\(category.label): \(text)" }
+    }
+
+    /// A Needs you row's third line (2026-11-03, the user: "thridline cna show what need u ... in
+    /// one line", then "give more category ... read, makde decison, review, see if can closed"):
+    /// what kind of thing it needs, then its ask, else (To read) what there is to read. Nil when
+    /// it has no words: no line is invented.
+    static func needLine(_ s: WalnutUserStatus?) -> NeedLine? {
+        let ask = (s?.ask ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = !ask.isEmpty ? ask : isToRead(s) ? readLine(s) : nil
+        guard let text else { return nil }
+        return NeedLine(category: needCategory(s), text: text)
+    }
+
+    /// The server's `category`, else (an older server, or a word this build does not know) what
+    /// the status says: a finished result can close, anything else to read is a look, an error
+    /// is a look, any other ask is a decision.
+    static func needCategory(_ s: WalnutUserStatus?) -> NeedCategory {
+        if let raw = s?.category?.trimmingCharacters(in: .whitespaces).lowercased(),
+           let c = NeedCategory(rawValue: raw) { return c }
+        if isToRead(s) { return s?.toRead?.trimmingCharacters(in: .whitespaces) == "result" ? .close : .look }
+        if s?.source == "error" { return .look }
+        return .decide
     }
 
     /// A waiting row's line: "Waiting on another task: …", "Nothing will wake it. …", "Not started yet".

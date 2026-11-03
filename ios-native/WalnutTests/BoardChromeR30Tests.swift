@@ -321,8 +321,9 @@ final class BoardChromeR30Tests: XCTestCase {
                 "TaskBoardRow reads `\(phrase)` again — the row is back to narrating the process"
             )
         }
+        // The rule, by the row's status section since 2026-11-02 (`dot(_:in:)`).
         XCTAssertTrue(
-            source.contains("BoardModel.dot(row.task)"),
+            source.contains("BoardModel.dot(row.task, in: section)"),
             "the row stopped reading the one rule that decides its mark"
         )
     }

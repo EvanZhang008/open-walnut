@@ -23,9 +23,12 @@ enum Theme {
     /// on the dark one, where the bright tints above only work as dots and washes.
     static let needsText = Color(dynamic: UIColor(light: 0xB23A06, dark: 0xFF9A5C))
     static let workingText = Color(dynamic: UIColor(light: 0x1D4FC4, dark: 0x7FA8FF))
-    /// To read: a calm teal, apart from Working's blue and never the needs orange-red.
-    static let readText = Color(dynamic: UIColor(light: 0x0B6E78, dark: 0x5AC8D8))
     static let doneText = Color(dynamic: UIColor(light: 0x186A2C, dark: 0x4CD964))
+    /// A Needs you row's category word (`NeedCategory`): Decide in red and Review in orange,
+    /// readable as bold caption text on both backgrounds (Take a look is workingText, Can close
+    /// doneText).
+    static let decideText = Color(dynamic: UIColor(light: 0xC4161C, dark: 0xFF6B66))
+    static let reviewText = Color(dynamic: UIColor(light: 0xA84B00, dark: 0xFFA64D))
     static let stuckText = Color(dynamic: UIColor(light: 0x854E00, dark: 0xFFD60A))
     /// A secondary line at 4.5:1 or more on secondarySystemBackground in both
     /// appearances (the system's secondary label reaches only 3.3:1 there).
