@@ -129,6 +129,7 @@ describe('every source of a "needs you" is live or re-checked', () => {
     letter: 'letter-recheck.ts asks its sender again',
     session: 'needs-recheck.ts asks its session again (stampChecked)',
     choice: 'needs-recheck.ts asks its Board owner again (stampChoiceChecked)',
+    thread: "live: the node's thread store now (user-status-sync re-reads it on every threads change)",
   }
   it('names a rule for each', () => {
     const src = readFileSync(join(process.cwd(), 'src/core/user-status.ts'), 'utf8')
