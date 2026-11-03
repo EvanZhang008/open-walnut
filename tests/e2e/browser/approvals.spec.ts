@@ -127,16 +127,20 @@ test('Needs you: an approval is a row on Home, a click opens the request, and Ma
   expect((await waitFor(request, second.approval.id, second.waitToken)).approval.status).toBe('denied')
   await expect(dialog).toHaveCount(0)
 
-  // A folded Needs you still shows a waiting approval (its tasks stay folded).
+  // A folded Needs you still shows a waiting approval (its tasks stay folded). The section is
+  // drawn only while something is in it, so the approval comes first, then the fold.
+  const folded = await ask(request, { what: `Folded ${stamp()}` })
+  const foldedRow = page.locator(`.status-section-block-needs [data-testid="approval-row"][data-approval-id="${folded.approval.id}"]`)
+  await expect(foldedRow).toBeVisible({ timeout: 15_000 })
   const heading = page.getByTestId('status-section-needs').locator('button.navigation-heading-open')
   if ((await heading.getAttribute('aria-expanded')) === 'true') await heading.click()
   await expect(heading).toHaveAttribute('aria-expanded', 'false')
-  const folded = await ask(request, { what: `Folded ${stamp()}` })
-  await expect(page.locator(`.status-section-block-needs [data-testid="approval-row"][data-approval-id="${folded.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(foldedRow).toBeVisible()
   await expect(page.getByTestId('status-section-needs-rows')).toHaveCount(0)
   await page.locator(`.status-section-block-needs [data-approval-id="${folded.approval.id}"]`).getByRole('button', { name: 'Deny' }).click()
   expect((await waitFor(request, folded.approval.id, folded.waitToken)).approval.status).toBe('denied')
-  await heading.click()
+  // Put the fold back for the person's next view (the section may be gone once it is empty).
+  if ((await heading.count()) > 0 && (await heading.getAttribute('aria-expanded')) === 'false') await heading.click()
 
   // Org: Main answers for the person, so its Needs you lists the approval, and its row counts it.
   const third = await ask(request, { what: `Rotate keys ${stamp()}` })
