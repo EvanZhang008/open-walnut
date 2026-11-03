@@ -6,6 +6,120 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.24] - 2026-11-03
+
+### Added
+
+- Import per-day token sums from a provider bill for the days before Walnut kept usage
+- Import per-day token sums from a provider bill for the days before Walnut kept usage
+- A task on a host the user registered uses the other hosts without a letter
+- A picture reaches the model in the message, not as a path to Read
+- Every page keeps the view it was left on
+- Every new Claude Code session gets the Walnut tools, served by its own host daemon
+- Threads read as conversations, and each node keeps them clean itself
+- Comment beside Quote in the selection pill, and quotes stack in the composer until one send
+- A picked task, note or file is drawn as a pill in the input bar, not as raw @[text]
+- Styles and e2e scaffolding for the task-pill overlay (early draft)
+- Draw @ task references as pills over the textarea (early draft)
+- No chat shows a message hint; the raw view still does
+- A compact brief_read for refreshes
+- Session mode is a normal Claude Code session in Walnut
+- Every hint says whose words it is, Walnut's built-in or the user's own
+- A VP and Main follow the tasks that report to them the way a leader follows its workers
+- ACP engines list Walnut's core tools, with tool_help and tool_call for the rest
+- The tasks a reply is about, as live pills under Main's and a lead's replies
+- Costs by week and month, by token type and kind of work, kept after transcripts go
+- Switch the music during a block, and preview each choice first
+- The model picker no longer has a custom model ID box
+- The speed readout shows each subagent's model as its own row
+- The Threads follow-up is an AnswerBox, and a reply names the task it made
+- One answer box, cards for every Needs you, and the tasks a reply is about
+- Pin tasks to an Org node, and a resizable Task rail
+- Walnut AI with tools, and follow-ups in the Raycast chat
+- A host offers MCP servers to other hosts only, and a tool's images land in the calling task's directory
+- A task calls another host's MCP servers and web services, under the grant host_exec uses
+- Threads view of the user's own requests to Main and the leads
+- The overview charts each host's last 12 hours, and shows disk as a ring
+- Message a found task, search notes and send a copied screenshot from Raycast
+- A finished task's directory sheds its clean clones and build output after a day
+- Pick the block's length and music at Start, Spotify included
+- Pick the block's length and music at Start, Spotify included
+- The Remote Hosts overview becomes a fleet dashboard with a diagram
+- The wait is a header chip, fullscreen keeps side margins, and the folded question bar is a slim band
+- Reach Walnut from a key anywhere on the Mac: Spotlight, Raycast and Alfred
+- A task's status words are asked at its turn end, and status moves go up one level
+- Run a command on another host under the user's grant, and secrets the Mac copies to the hosts the user picks
+- A host's daemon starts again after a reboot, with no root
+- Off until you press Start; a run is one block and its break, then it asks once
+- The Brief is a document its node keeps current, and org nodes never read Needs you
+
+### Fixed
+
+- A person's own message carries the reply language, and his turn is corrected at its first wrong-language line
+- A session process that exits with an error makes one card, not a second from its log line
+- The sidebar holds the row being read when the smart group lands above it, in WebKit too
+- The unsubscribe checklist hears Escape in WebKit; clipboard checks run in both engines
+- The grouped inbox says an account stopped syncing, and a cold open reads each page once
+- The add-account dialog never takes the caret back from a field being typed in
+- A CLI that exited but is not reaped yet no longer holds its session
+- A completed task's worker is stopped again after its turn-end summary
+- Completing a task stops its ACP worker, and a long ACP turn is not cleared as stuck
+- The keyword ask shows its answer: a script sits between the Script Filter and the Conditional
+- Drop two stale routing tests a mis-staged commit brought back; name the import label through the host-label hook
+- A test run's drafts stay in its own copy, and a cleared box reaches the server at once
+- The JS twin sets its picture folders beside DAEMON_DIR, not in the send section
+- The Comment box is an AnswerBox whose words are kept as a draft, and the pill memo keys on the query span's numbers
+- The Walnut MCP mount asks isCompanion(), not raw CLOUD_MODE
+- Answer only on the leader, read through role()
+- A reload opens straight on the kept node and view, with no Task flash first
+- The companion's Caddy admin API is root and caddy only, and Walnut listens on loopback
+- The cloud companion gets its own hard-stop switch in Tasks using other hosts
+- The mic no longer stalls mid-speech in the Mac app: echo cancellation is off for dictation
+- A thread's older messages read their answers from the node's live session
+- Fold checkpoint format 5, for the fold that reads the rotation's carry line
+- Host bounds use plain aliases, not double-quoted ones the macOS SQLite refuses
+- The wait chip reads the park through one helper, listed in the task-state ratchet
+- A session on an already titled task is named after the task
+- Task_list with a scope and no calling task follows the filters given
+- A status question is answered in text, never with tools
+- A write made as the page hides or leaves is sent with keepalive, at once
+- An ACP engine's persona carries the skills index in a short form
+- The Focus music screen keeps an action's answer until the block moves on
+- A hand-back with no report asks in the words its last turn ended with
+- Needs Action holds only live session asks, never letters
+- A cron replay whose watcher starts behind the new process reads nothing, not a cut stream
+- Review fixes for the wait-on-user and lead-ask commits
+- An ask a worker addresses to its lead reads Waiting on its lead, not Needs you
+- A wait on the user reads Needs you, a wait on a lead or task reads Waiting on it
+- A trigger parks its task only with wait:true, and a turn that answered the user reports needs-you
+- A data home with no git repo is unpaired, not a failed bridge push
+- A model the local server lacks falls back to the main model
+- An unknown argument key names its usual other name or the keys the op takes
+- Regenerate the walnut skill's ops table, org_pin in registry order
+- Threads card keeps a CJK title readable and reads the state names from the shared map
+- Host_mcp_list and host_exec_stop wait for their route's answer, not the 10 s default
+- A few seconds of stalled audio no longer says the mic is dead
+- A not-started Board card has Start, and a narrowed Board closes its chat
+- A folded host row is one line again, and the card holds still
+- A wait a worker told its lead itself is not news in the lead's team note
+- A stream file rotates while its session has a loop armed, carrying the loop
+- A task whose status the server derives just after a park leaves Working
+- A compiled Mac sets up a host's boot start from the walnut file in its daemon slot
+- A word typed short anywhere in the query finds the title that names it in full
+- A short word in a binary counts only where the bytes around it read as words
+- A turn that answered the user never parks its task from its report
+- The Spotlight task picker lists open tasks, and intents keep a path's query
+- A machine stop in a lead's team note waits for the hour like the rest
+- The pattern-kill guard passes the signal-call ratchet
+- Needs you has its own heading, and every section heading wears its mark
+- The host_exec redaction test builds its key armour from parts, and the scan allowlists it
+- Keep only the build in use and the one before it in the host file cache
+- A CLI's command line carries file paths, and a kill by name pattern is refused
+- Host_exec runs under the session shell rule, not a bare $SHELL
+- The iOS UI leg leaves the classes that drive the home screen to the Mac
+- The notes in front of a person's message join the fold before it
+- Home task sections are each task's user status, and a Waiting row says why
+
 ## [0.6.23] - 2026-11-02
 
 ### Added
