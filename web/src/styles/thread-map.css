@@ -318,7 +318,8 @@
 .thread-map-rail:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .thread-map-rail:focus:not(:focus-visible) { outline: none; }
 
-/* The rail's list: the panel's content as a card over the text. */
+/* The rail's list: the panel's content as a card over the text, as wide as its
+   longest title within the bounds ThreadMap sets (mapOverlayWidth). */
 .thread-map-overlay {
   position: absolute;
   top: 0;
@@ -326,7 +327,9 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  width: var(--thread-map-overlay-w, 280px);
+  width: max-content;
+  min-width: var(--thread-map-overlay-min, 240px);
+  max-width: var(--thread-map-overlay-max, 480px);
   max-height: var(--thread-map-maxh, 60vh);
   padding: 4px;
   border: 1px solid var(--border);

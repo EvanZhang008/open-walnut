@@ -94,10 +94,12 @@ export const FileQuestionRail = memo(function FileQuestionRail({ rows, top, room
   const stops = rows.map((r) => rowDomId(r.key));
   const tabStop = (cursor && stops.includes(cursor) ? cursor : undefined)
     ?? (currentId ? rowDomId(currentId) : undefined) ?? stops[0];
+  const overlay = mapOverlayWidth(boxWidth);
   const style = {
     top,
     ['--thread-map-maxh' as string]: `${Math.max(120, room - 8)}px`,
-    ['--thread-map-overlay-w' as string]: `${mapOverlayWidth(boxWidth)}px`,
+    ['--thread-map-overlay-min' as string]: `${overlay.min}px`,
+    ['--thread-map-overlay-max' as string]: `${overlay.max}px`,
   } as CSSProperties;
   const label = `Questions in this file: ${rows.length}`;
   return (

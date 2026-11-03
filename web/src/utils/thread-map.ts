@@ -21,7 +21,14 @@ export type ThreadMapShape = 'panel' | 'rail';
  *  (at 640 the text column keeps about 410px), so the map becomes the rail. */
 export const MAP_PANEL_MIN_BOX = 640;
 export const MAP_PANEL_MIN_W = 176;
-export const MAP_PANEL_MAX_W = 260;
+/** 2026-11-03, the user: "can be wider so show more please" (260 cut most titles). */
+export const MAP_PANEL_MAX_W = 320;
+/** The text column the panel always leaves beside it, once the box is wide enough. */
+export const MAP_PANEL_TEXT_KEEP = 600;
+/** The rail's list: as wide as its longest row, up to this. */
+export const MAP_OVERLAY_MAX_W = 480;
+/** ...and never narrower than this while the box holds it. */
+export const MAP_OVERLAY_MIN_W = 240;
 /** Vertical pitch of one rail mark. 10px reads as one shape (2026-10-02: at
  *  14px two marks sat apart like two unrelated dashes); the rail is one hit
  *  target, so the marks need no height of their own. */
@@ -35,17 +42,21 @@ export function mapShapeFor(boxWidth: number, collapsed: boolean): ThreadMapShap
   return !collapsed && boxWidth >= MAP_PANEL_MIN_BOX ? 'panel' : 'rail';
 }
 
-/** The panel's width: a quarter of the box, clamped. Whole pixels (the gutter pads by it). */
+/** The panel's width: 28% of the box, clamped, and never so wide that the text
+ *  keeps under MAP_PANEL_TEXT_KEEP (the chat comes first). Whole pixels (the
+ *  gutter pads by it). */
 export function mapPanelWidth(boxWidth: number): number {
-  return Math.round(Math.min(MAP_PANEL_MAX_W, Math.max(MAP_PANEL_MIN_W, boxWidth * 0.25)));
+  const want = Math.min(MAP_PANEL_MAX_W, boxWidth * 0.28, Math.max(0, boxWidth - MAP_PANEL_TEXT_KEEP));
+  return Math.round(Math.max(MAP_PANEL_MIN_W, want));
 }
 
-/** The rail's list over the text: 280px, or less in a box that cannot hold it
- *  (the list starts 4px in and the box clips sideways; 16px keeps it off the
- *  scrollbar). Never under 160px: below that no title reads at all. */
-export function mapOverlayWidth(boxWidth: number): number {
-  if (boxWidth <= 0) return 280;
-  return Math.max(160, Math.min(280, Math.floor(boxWidth - 20)));
+/** The rail's list over the text sizes to its longest row (CSS max-content),
+ *  between these two widths: at most MAP_OVERLAY_MAX_W, or less in a box that
+ *  cannot hold it (the list starts 4px in and the box clips sideways; 16px keeps
+ *  it off the scrollbar), never under 160px: below that no title reads at all. */
+export function mapOverlayWidth(boxWidth: number): { min: number; max: number } {
+  const max = boxWidth <= 0 ? MAP_OVERLAY_MAX_W : Math.max(160, Math.min(MAP_OVERLAY_MAX_W, Math.floor(boxWidth - 20)));
+  return { min: Math.min(MAP_OVERLAY_MIN_W, max), max };
 }
 
 export interface MapRowsInput {

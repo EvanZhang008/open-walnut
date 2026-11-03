@@ -620,6 +620,18 @@ test.describe('Question map', () => {
     await expect(overlay).toBeVisible()
     await expect(rowNamed(overlay, MAP_TITLES.Q2)).toBeVisible()
     await expectSettledOverlay(overlay)
+    // 2026-11-03, the user: "can be wider so show more please". The list grows to
+    // its longest title (up to 480px, inside the box): every title that fits is
+    // whole, and only the one longer than that is cut, with its full text on hover.
+    const sizes = await overlay.evaluate((el) => ({
+      width: el.getBoundingClientRect().width,
+      box: (el.closest('.session-history') as HTMLElement).getBoundingClientRect().width,
+      cut: Array.from(el.querySelectorAll<HTMLElement>('.thread-map-label')).filter((l) => l.scrollWidth > l.clientWidth + 1).map((l) => l.textContent),
+    }))
+    expect(sizes.width).toBeGreaterThan(400)
+    expect(sizes.width).toBeLessThanOrEqual(Math.min(480, sizes.box - 20) + 1)
+    expect(sizes.cut).toEqual([MAP_TITLES.Q1b])
+    await expect(rowNamed(overlay, /What happens to the reader/)).toHaveAttribute('title', MAP_TITLES.Q1b)
     await page.screenshot({ path: `${dir}/default-rail-open.png` })
     // Keep open: the labelled panel, saved as `open`.
     await mouseClick(page, map.locator('.thread-map-keep'))

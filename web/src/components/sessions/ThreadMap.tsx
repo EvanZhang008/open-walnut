@@ -479,9 +479,11 @@ function MapList(p: ListProps) {
 export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
   const { shape, rows } = p;
   const maxHeight = useVisibleHeight(p.scrollerRef);
+  const overlay = mapOverlayWidth(p.boxWidth);
   const style = {
     ['--thread-map-maxh' as string]: `${maxHeight}px`,
-    ['--thread-map-overlay-w' as string]: `${mapOverlayWidth(p.boxWidth)}px`,
+    ['--thread-map-overlay-min' as string]: `${overlay.min}px`,
+    ['--thread-map-overlay-max' as string]: `${overlay.max}px`,
   } as CSSProperties;
   const [open, setOpen] = useState(false);
   // Read by the close-out timer, which is older than the confirm state it guards.

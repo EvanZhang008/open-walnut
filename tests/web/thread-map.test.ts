@@ -10,7 +10,7 @@ import { indexMeta } from '@/utils/thread-meta';
 import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
 import { flattenTree, type TreeRow } from '@/utils/thread-tree-rows';
 import {
-  MAP_PANEL_MAX_W, MAP_PANEL_MIN_BOX, MAP_PANEL_MIN_W, MAP_RAIL_PITCH, mapHasContent, mapOverlayWidth, mapPanelWidth,
+  MAP_OVERLAY_MAX_W, MAP_OVERLAY_MIN_W, MAP_PANEL_MAX_W, MAP_PANEL_MIN_BOX, MAP_PANEL_MIN_W, MAP_PANEL_TEXT_KEEP, MAP_RAIL_PITCH, mapHasContent, mapOverlayWidth, mapPanelWidth,
   mapRows, mapShapeFor, mapStep, onPathIds, railMarks,
 } from '@/utils/thread-map';
 import { buildDenseSession } from '../e2e/browser/threads-fixture';
@@ -45,19 +45,23 @@ describe('mapShapeFor / mapPanelWidth', () => {
     expect(mapShapeFor(0, false)).toBe('rail');
   });
 
-  it('takes a quarter of the box, clamped, in whole pixels', () => {
+  it('takes 28% of the box, clamped, and leaves the text its room, in whole pixels', () => {
     expect(mapPanelWidth(640)).toBe(MAP_PANEL_MIN_W);
-    expect(mapPanelWidth(820)).toBe(205);
+    // 28% of 820 is 230, but the text keeps 600: 220.
+    expect(mapPanelWidth(820)).toBe(220);
+    expect(mapPanelWidth(1000)).toBe(280);
     expect(mapPanelWidth(1800)).toBe(MAP_PANEL_MAX_W);
     expect(Number.isInteger(mapPanelWidth(777))).toBe(true);
+    for (const box of [900, 1000, 1100, 1400]) expect(box - mapPanelWidth(box)).toBeGreaterThanOrEqual(MAP_PANEL_TEXT_KEEP);
   });
 
-  it('keeps the rail list inside a narrow box', () => {
-    expect(mapOverlayWidth(480)).toBe(280);
-    expect(mapOverlayWidth(250)).toBe(230);
-    expect(mapOverlayWidth(120)).toBe(160);
+  it('lets the rail list grow to its longest title, inside a narrow box', () => {
+    expect(mapOverlayWidth(1050)).toEqual({ min: MAP_OVERLAY_MIN_W, max: MAP_OVERLAY_MAX_W });
+    expect(mapOverlayWidth(480)).toEqual({ min: 240, max: 460 });
+    expect(mapOverlayWidth(250)).toEqual({ min: 230, max: 230 });
+    expect(mapOverlayWidth(120)).toEqual({ min: 160, max: 160 });
     // Unmeasured: the full width (the first measure corrects it before paint).
-    expect(mapOverlayWidth(0)).toBe(280);
+    expect(mapOverlayWidth(0)).toEqual({ min: MAP_OVERLAY_MIN_W, max: MAP_OVERLAY_MAX_W });
   });
 });
 
