@@ -5,7 +5,7 @@
  *
  *   1. Tailscale on this Mac   install (the Mac App Store, or Homebrew), open and sign in
  *   2. Tailscale on your phone the App Store QR, until a phone peer is online
- *   3. Pair the phone          already paired, or pick the tailnet address below
+ *   3. Pair the phone          already paired, or pick the tailnet address on Phones & Cloud
  *
  * The state comes from GET /api/devices/tailscale, polled every 5s while step 1
  * or 2 is open and every 60s once both are done, never while the tab is
@@ -38,7 +38,7 @@ interface Props {
   devices: readonly PairedDeviceLike[] | null;
   /** The pairing picker offers the tailnet address right now. */
   tailnetOffered: boolean;
-  /** Step 3: pick the tailnet address in the picker below. */
+  /** Step 3: pick the tailnet address in the pairing picker (on Phones & Cloud itself). */
   onChooseTailnet: () => void;
   /** This Mac joined or left the tailnet: the picker's addresses changed. */
   onTailnetChange: () => void;
@@ -258,7 +258,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
 
   const pairHelp = pair.paired
     ? 'Already paired: open Walnut on the phone once and it learns the Tailscale route by itself.'
-    : 'Pair the phone below with the Tailscale address.';
+    : 'Pair the phone on Phones & Cloud with the Tailscale address.';
 
   return (
     <SettingsGroup heading={heading} className="remote-access-card" data-testid="remote-access-card">

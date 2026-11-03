@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getDeviceToken } from '@/api/device-token';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
@@ -7,97 +8,29 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useSettingsSaved } from '../settings-pane-context';
 import { formatAbsoluteTime } from './addons-format';
-import { apiGet, apiDelete } from '@/api/client';
-import { devicesListChanged, fetchDevicesList } from './cloud/devices-list';
-import { log } from '@/utils/log';
+import { apiDelete } from '@/api/client';
+import { devicesListChanged } from './cloud/devices-list';
 import { PairQrDialog, type PairQrPhase } from './cloud/PairQrDialog';
 import { WaysOverview } from './cloud/WaysOverview';
 import { deriveWays, type WayId } from './cloud/ways-model';
-import { SETTINGS_ANCHOR_EVENT } from '../settings-anchor-event';
-import type { ExposeStatus } from './cloud/browser-access-status';
+import { WAY_PANES } from '../settings-way-panes';
 import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
 import { browserRowLabels } from './browser-labels';
-import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
+import { usePairDevice, type PairTargetKind } from './cloud/usePairDevice';
+import { clearRequestedPairTarget, peekRequestedPairTarget, useDevicesData, useExposeStatus, type DeviceEntry } from './cloud/useDevicesData';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
-import { RemoteAccessCard } from './cloud/RemoteAccessCard';
-import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
-import { CompanionKeepGroup } from './cloud/CompanionKeepGroup';
-import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
-import type { Config } from '@open-walnut/core';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
 import { isIosSafariTab, ownFirst, useDeviceCaller } from './cloud/device-caller';
 import { OwnDeviceSignOut } from './cloud/OwnDeviceSignOut';
+import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
 import '@/styles/settings-sections-addons.css';
 
-/** Self-reported hardware identity, absent until the phone checks in once. */
-interface DeviceSelfInfo {
-  model?: string;
-  os?: string;
-  deviceName?: string;
-  appVersion?: string;
-  reportedAt?: string;
-}
-
-interface DeviceEntry {
-  name: string;
-  createdAt: string;
-  lastUsedAt?: string;
-  /** What this credential actually is: not everything in the list is a phone. */
-  role?: 'phone' | 'simulator' | 'mac' | 'self' | 'browser';
-  info?: DeviceSelfInfo;
-}
-
-/**
- * A raw hardware id (`iPhone18,2`) reads as its family (`iPhone`): the id means
- * nothing to a person and a model table would go stale (F24).
- */
-export function humanDeviceModel(model?: string): string | undefined {
-  if (!model) return undefined;
-  const m = /^(iPhone|iPad|iPod|Watch|Mac)\d+,\d+$/.exec(model.trim());
-  if (!m) return model;
-  return m[1] === 'Watch' ? 'Apple Watch' : m[1] === 'iPod' ? 'iPod touch' : m[1];
-}
-
-/** "iPhone, iOS 26.1, Walnut 1.0 (26)": omits whatever wasn't reported. */
-export function describeDevice(info?: DeviceSelfInfo): string | null {
-  if (!info) return null;
-  const parts = [humanDeviceModel(info.model), info.os, info.appVersion ? `Walnut ${info.appVersion}` : undefined]
-    .filter((p): p is string => Boolean(p));
-  return parts.length > 0 ? parts.join(', ') : null;
-}
-
-/** Said in place of the cloud half after this Mac unpaired itself: a state, not an error. */
-export const CLOUD_UNPAIRED_NOTICE = 'This Mac is no longer paired with the cloud companion.';
-
-/** Settings › Cloud Companion listens, so its "Connected" never outlives an unpair made here. */
-export const DEVICES_CHANGED_EVENT = 'walnut:devices-changed';
-
-
-/** "Mac, Walnut 0.5.1, paired …, last used …": a Mac's row says nothing about phones. */
-export function describeMacRow(d: DeviceEntry): string {
-  const model = humanDeviceModel(d.info?.model);
-  return [
-    ...(model && model !== 'Computer' ? [model] : []),
-    ...(d.info?.appVersion ? [`Walnut ${d.info.appVersion}`] : []),
-    `paired ${formatAbsoluteTime(d.createdAt)}`,
-    ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
-  ].join(', ');
-}
-
-const ROLE_NOTE: Record<'simulator' | 'self' | 'browser', string> = {
-  self: "This Mac's own pairing with the cloud companion. Cloud sync, your phones' way to this Mac, and the Cloud host run on it.",
-  simulator: 'iOS Simulator on this computer (development).',
-  browser: 'A browser you signed in with a code; removing it signs that browser out.',
-};
-
-/** Said before "Unpair this Mac" goes through: what stops working, and the way back. */
-export const UNPAIR_SELF_WARNING =
-  'Unpairing this Mac stops cloud sync, cuts your phones off from this Mac through the companion, and takes the Cloud host offline. Pairing it again needs a new token made on the companion.';
+export { humanDeviceModel, describeDevice, describeMacRow, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT, UNPAIR_SELF_WARNING } from './cloud/device-rows-copy';
 
 type RowError = { name: string; verb: 'remove' | 're-pair' | 'unpair'; message: string };
 
@@ -107,14 +40,6 @@ type RowError = { name: string; verb: 'remove' | 're-pair' | 'unpair'; message: 
  */
 type TargetKind = PairTargetKind;
 
-/** GET /api/devices (its `tailscale` summary is read by the card through its own endpoint). */
-interface DevicesListResponse {
-  devices: DeviceEntry[];
-  cloudDevices?: DeviceEntry[];
-  targets?: PairingTarget[];
-  tailscale?: { installed: boolean; running: boolean };
-}
-
 /** The pairing QR dialog: which phone, whether it replaces a paired phone's code, and its step. */
 interface QrDialogState {
   name: string;
@@ -122,25 +47,6 @@ interface QrDialogState {
   target?: TargetKind;
   phase: PairQrPhase;
   error: string | null;
-}
-
-/** Which way's settings are open under the cards; kept for the tab's session. */
-const OPEN_WAY_KEY = 'walnut:devices-open-way';
-/**
- * A Find a setting hit (or a deep link) on a row inside a way's settings opens that
- * way first, so the row exists to scroll to (SettingsPage's holdAnchor announces it).
- */
-function wayForAnchor(id: string): WayId | null {
-  if (id === 'devices-backup-leader' || id.startsWith('companion-keep')) return 'cloud';
-  if (id.startsWith('browser-access')) return 'browser';
-  if (id.startsWith('remote-access')) return 'tailscale';
-  return null;
-}
-function readOpenWay(): WayId | null {
-  try {
-    const v = sessionStorage.getItem(OPEN_WAY_KEY);
-    return v === 'cloud' || v === 'tailscale' || v === 'browser' ? v : null;
-  } catch { return null; }
 }
 
 /**
@@ -153,15 +59,38 @@ function readOpenWay(): WayId | null {
  * any address learns the other addresses by itself, so pick the one the phone
  * can reach right now: a Wi-Fi QR scanned over cellular never connects at all.
  */
-export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (partial: Partial<Config>) => Promise<void> } = {}) {
-  const [devices, setDevices] = useState<DeviceEntry[]>([]);
-  const [cloudDevices, setCloudDevices] = useState<DeviceEntry[]>([]);
-  const [targets, setTargets] = useState<PairingTarget[]>([]);
+export function DevicesSection() {
   const replica = useIsCloudReplica();
-  // Until the list answers, nothing is known: no "No phones" line and no "no address" notice
-  // that then vanish and pull a deep-linked section below them upward (C74).
-  const [listState, setListState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const navigate = useNavigate();
   const [target, setTarget] = useState<TargetKind>('lan');
+  // "Use the tailnet address" on the Tailscale sub-page: picked here once the list offers it.
+  const [firstWanted] = useState(peekRequestedPairTarget);
+  const wantedTarget = useRef<TargetKind | null>(firstWanted);
+  useEffect(() => clearRequestedPairTarget(), []);
+  const [focusName, setFocusName] = useState(false);
+  // Keep the current pick while it is still offered. The first pick is this network when
+  // there is one (the phone usually pairs next to this machine, then learns the other
+  // addresses), else Cloud, else the tailnet.
+  const data = useDevicesData({
+    replica,
+    onTargets: (kinds) => {
+      // Asked for once, by the list this pane reads first: a later read never overrides a pick.
+      const wanted = wantedTarget.current;
+      wantedTarget.current = null;
+      if (wanted && kinds.includes(wanted)) {
+        setTarget(wanted);
+        setFocusName(true);
+        return;
+      }
+      setTarget((prev) => (kinds.includes(prev) ? prev : bestOfferedKind(kinds)));
+    },
+  });
+  const { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, refresh } = data;
+  useEffect(() => {
+    if (!focusName) return;
+    setFocusName(false);
+    document.getElementById('devices-new-name')?.focus();
+  }, [focusName]);
   // A device name typed and not paired yet survives leaving the pane; a successful pairing ends it.
   const nameDraft = useDraft(draftKey('pair-device-name', 'new'));
   const { text: newName, setText: setNewName } = nameDraft;
@@ -169,105 +98,18 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   // Minting + QR rendering is shared with the Cloud Companion section.
   const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
   const [rowError, setRowError] = useState<RowError | null>(null);
-  // The cloud half of the list failed to load (the reason, from the server):
-  // said in the section, never shown as "no phones".
-  const [cloudError, setCloudError] = useState<string | null>(null);
-  // This Mac unpaired itself: the cloud half is gone on purpose, said plainly.
-  const [cloudUnpaired, setCloudUnpaired] = useState(false);
   // "Unpair this Mac" is two deliberate clicks with the warning between them.
   const [unpairArmed, setUnpairArmed] = useState(false);
   // Show QR and Pair new device: the code opens in a dialog in front of the user.
   const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
   const qrReturnFocus = useRef<HTMLElement | null>(null);
-  const [tailscale, setTailscale] = useState<DevicesListResponse['tailscale']>(undefined);
-  const [cloudWithheld, setCloudWithheld] = useState(false);
-  const [expose, setExpose] = useState<ExposeStatus | null | 'failed'>(null);
-  const [openWay, setOpenWayState] = useState<WayId | null>(readOpenWay);
-  const setOpenWay = useCallback((next: WayId | null) => {
-    setOpenWayState(next);
-    try {
-      if (next) sessionStorage.setItem(OPEN_WAY_KEY, next);
-      else sessionStorage.removeItem(OPEN_WAY_KEY);
-    } catch { /* private mode: open state is per page then */ }
-  }, []);
+  const expose = useExposeStatus(replica);
   const { notifySaved } = useSettingsSaved();
   // A browser signed in with a code: its own row says so, other rows offer no Remove.
   const caller = useDeviceCaller();
   // Only a Safari tab signed in with a token can lose it after a week (N2-36):
   // a tab on the Mac's own address holds none, so the tip would say nothing true.
   const [homeScreenHint] = useState(() => isIosSafariTab() && !!getDeviceToken());
-
-  // Reads can land out of order (a pairing's read can beat the pane's first one):
-  // only the newest read writes the list.
-  const readSeq = useRef(0);
-  const refresh = useCallback(async () => {
-    const seq = ++readSeq.current;
-    try {
-      const res = await fetchDevicesList<DevicesListResponse & { cloudError?: string; cloudUnpaired?: { origin: string }; cloudWithheld?: string }>();
-      if (seq !== readSeq.current) return;
-      setDevices(res.devices);
-      setCloudDevices(res.cloudDevices ?? []);
-      setCloudError(res.cloudError ?? null);
-      setCloudUnpaired(Boolean(res.cloudUnpaired));
-      setTailscale(res.tailscale);
-      setCloudWithheld(Boolean(res.cloudWithheld));
-      const list = res.targets ?? [];
-      setTargets(list);
-      // Keep the current pick while it is still offered. The first pick is this
-      // network when there is one (the phone usually pairs next to this machine,
-      // then learns the other addresses), else Cloud, else the tailnet.
-      setTarget((prev) => (list.some((t) => t.kind === prev) ? prev : bestOfferedKind(list.map((t) => t.kind))));
-      setListState('ready');
-    } catch (err) {
-      log.error('settings', 'devices list failed', { error: String(err) });
-      if (seq !== readSeq.current) return;
-      setListState((prev) => (prev === 'ready' ? prev : 'failed'));
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  // The server leaves Tailscale out of the list until its first probe answers: ask
-  // again a few times, so the card does not sit on "Checking..." (an older server never says).
-  const tailscaleAsks = useRef(0);
-  useEffect(() => {
-    if (replica || listState !== 'ready' || tailscale || tailscaleAsks.current >= 3) return;
-    const t = setTimeout(() => { tailscaleAsks.current += 1; void refresh(); }, 4_000);
-    return () => clearTimeout(t);
-  }, [replica, listState, tailscale, refresh]);
-
-  // The browser link card's state (GET /api/expose): read when a way opens or closes,
-  // then every 30s, every 5s while it moves or its settings are open (they change it
-  // there), never while the tab is hidden. A companion has none.
-  const exposeMoving = expose !== null && expose !== 'failed' && ['starting', 'retrying', 'needs-sign-in'].includes(expose.state);
-  useEffect(() => {
-    if (replica) return;
-    let live = true;
-    const read = () => {
-      if (document.hidden) return;
-      apiGet<{ status: ExposeStatus }>('/api/expose')
-        .then((res) => { if (live) setExpose(res.status); })
-        .catch((err) => {
-          log.warn('settings', 'expose state read failed', { error: String(err) });
-          if (live) setExpose((prev) => (prev && prev !== 'failed' ? prev : 'failed'));
-        });
-    };
-    read();
-    const timer = setInterval(read, openWay === 'browser' || exposeMoving ? 5_000 : 30_000);
-    return () => { live = false; clearInterval(timer); };
-  }, [replica, openWay, exposeMoving]);
-
-  // A row inside a folded way was asked for: open that way.
-  useEffect(() => {
-    const onAnchor = (e: Event) => {
-      const way = wayForAnchor(String((e as CustomEvent<{ id?: string }>).detail?.id ?? ''));
-      if (way) setOpenWay(way);
-    };
-    window.addEventListener(SETTINGS_ANCHOR_EVENT, onAnchor);
-    return () => window.removeEventListener(SETTINGS_ANCHOR_EVENT, onAnchor);
-  }, [setOpenWay]);
 
   const openQrDialog = (next: QrDialogState) => {
     qrReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -356,12 +198,6 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
 
   const activeTarget = targets.find((t) => t.kind === target);
   const showPicker = targets.length > 1;
-  // How to reach Walnut from anywhere without a cloud server: the guided card
-  // (cloud/RemoteAccessCard.tsx), on a primary only (a companion has nothing to install).
-  const chooseTailnet = () => {
-    setTarget('tailnet');
-    document.getElementById('devices-new-name')?.focus();
-  };
   const targetHelp = activeTarget?.kind === 'cloud'
     ? 'Works from anywhere, including cellular; the token is created on your cloud companion.'
     : activeTarget?.kind === 'tailnet'
@@ -427,15 +263,8 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     tailscale,
     expose,
   });
-  const onWayAction = (id: WayId) => {
-    if (openWay === id) { setOpenWay(null); return; }
-    // A companion not set up yet: its setup is the Cloud Companion section below.
-    if (id === 'cloud' && waysView.ways[0].action.primary) {
-      document.getElementById('cloud')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      return;
-    }
-    setOpenWay(id);
-  };
+  // Each way is its own sub-page (Settings > Phones & Cloud > Tailscale): a card drills in.
+  const onWayAction = (id: WayId) => navigate({ hash: `#${WAY_PANES[id]}` }, { replace: true });
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
 
   /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
@@ -550,41 +379,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           </p>
         )}
         {showWays && (
-          <WaysOverview now={waysView.now} ways={waysView.ways} openWay={openWay} onAction={onWayAction} />
-        )}
-        {showWays && openWay && (
-          <div className="devices-way-panel" id={`devices-way-panel-${openWay}`} data-testid={`devices-way-panel-${openWay}`}>
-            {openWay === 'tailscale' && (
-              <RemoteAccessCard
-                heading="Tailscale"
-                devices={listState === 'ready' ? [...devices, ...cloudDevices] : null}
-                tailnetOffered={targets.some((t) => t.kind === 'tailnet')}
-                onChooseTailnet={chooseTailnet}
-                onTailnetChange={refresh}
-              />
-            )}
-            {/* A tunnel and browser codes: a companion is reached through its own address. */}
-            {openWay === 'browser' && <BrowserAccessGroup heading="Browser link" />}
-            {openWay === 'cloud' && (
-              <>
-                <SettingsGroup heading="Cloud companion">
-                  <SettingsRow
-                    label="Setup and updates"
-                    help="The companion's address, its updates, and pairing this Mac with it."
-                    control={<a className="settings-button settings-button-default" href="#cloud" data-testid="devices-cloud-open">Open</a>}
-                  />
-                </SettingsGroup>
-                {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
-                {config && onSave && targets.some((t) => t.kind === 'cloud') && (
-                  <BackupLeaderGroup config={config} onSave={onSave} />
-                )}
-                {/* What the companion keeps: the same rows and defaults as a host's (Remote Hosts). */}
-                {config && onSave && targets.some((t) => t.kind === 'cloud') && (
-                  <CompanionKeepGroup config={config} onSave={onSave} />
-                )}
-              </>
-            )}
-          </div>
+          <WaysOverview now={waysView.now} ways={waysView.ways} onAction={onWayAction} />
         )}
 
         {/* A phone signed in only by browser: its group is Signed-in browsers, no empty box here. */}
@@ -713,12 +508,4 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
       )}
     </SectionCard>
   );
-}
-
-/** What the code in the dialog reaches, in the words the cards use. */
-function reachWords(kind?: TargetKind): string | undefined {
-  if (kind === 'cloud') return 'Uses the cloud companion, so it works from anywhere.';
-  if (kind === 'tailnet') return 'Uses Tailscale, so it works anywhere the phone is on your tailnet.';
-  if (kind === 'lan') return 'Uses this Wi-Fi; the phone learns the other ways once it connects.';
-  return undefined;
 }

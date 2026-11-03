@@ -25,6 +25,7 @@ import {
 } from '../sessions/host-connect-hint.js'
 
 import { OFF_PHASE_LABEL } from './host-problem.js'
+import { foundHostUnadopted } from './found-hosts.js'
 
 export type { HostWarmupState }
 
@@ -44,6 +45,8 @@ export interface HostDef {
   label?: string
   enabled?: boolean
   discovered?: boolean
+  /** A found host's answer (found-hosts.ts). */
+  connect?: 'ask' | 'yes' | 'not_now'
   /** The paired cloud box (core/hosts/cloud-box-host.ts): reached over the companion's tunnel, not SSH. */
   cloud_box?: boolean
   /** 'net': a machine on the host network (core/net/net-mac.ts), reached through walnut-net, not SSH. */
@@ -216,7 +219,8 @@ export function buildHostStatus(
   }
   if (state.retryInMs !== undefined) status.retryInMs = state.retryInMs
   if (warmup) status.warmup = warmup
-  if (hostDef.discovered) status.discovered = true
+  // Known only from ~/.ssh/config, with no yes on it (found-hosts.ts): a yes is a configured host.
+  if (foundHostUnadopted(hostDef)) status.discovered = true
   // The cloud box has two of the steps: the companion's tunnel (which, on a
   // first connect, waits for the companion to start this Mac's daemon), then
   // the daemon's hello. SSH, probe and deploy never happen there.

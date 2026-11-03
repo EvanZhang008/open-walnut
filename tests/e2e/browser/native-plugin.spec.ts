@@ -77,7 +77,16 @@ async function expectAppStaysInItsBox(page: Page): Promise<void> {
     box.appendChild(dialog)
     dialog.showModal()
     await frame()
-    const modal = { rect: rect(dialog), backdrop: getComputedStyle(dialog, '::backdrop').backgroundColor }
+    // Its backdrop covers the box alone.
+    const backdrop = getComputedStyle(dialog, '::backdrop')
+    const modal = { rect: rect(dialog), backdrop: [backdrop.left, backdrop.top].map((v) => Math.round(parseFloat(v))) }
+    // What it holds stops at the box too: a full-window child of its own leaves the sidebar alone.
+    const child = document.createElement('div')
+    Object.assign(child.style, { position: 'fixed', inset: '0', background: 'rgba(0,0,255,0.2)' })
+    dialog.appendChild(child)
+    await frame()
+    const childHit = document.elementFromPoint(outside.x, outside.y)
+    const childStays = childHit !== child
     dialog.close()
     await frame()
     const released = dialog.style.translate
@@ -118,6 +127,20 @@ async function expectAppStaysInItsBox(page: Page): Promise<void> {
     const tipReleased = tip.style.translate === tipOwn
     tip.remove()
 
+    // One the plugin moves after it opened (a drag, a tip following the pointer), and one that
+    // animates every change it gets (`transition: all`): both end inside the box.
+    const moving = document.createElement('div')
+    moving.setAttribute('popover', 'manual')
+    Object.assign(moving.style, { position: 'fixed', inset: 'auto', left: `${Math.round(b.left + 200)}px`, top: '200px', width: '150px', height: '50px', margin: '0', transition: 'all 0.3s' })
+    box.appendChild(moving)
+    moving.showPopover()
+    await frame()
+    moving.style.left = `${Math.round(b.left - 120)}px`
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    const movedAt = rect(moving)
+    moving.hidePopover()
+    moving.remove()
+
     let fullscreen = 'refused'
     const target = document.createElement('div')
     box.appendChild(target)
@@ -127,10 +150,11 @@ async function expectAppStaysInItsBox(page: Page): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 300))
       if (document.fullscreenElement) fullscreen = 'kept'
     } catch {
-      // A headless browser may not offer fullscreen at all: nothing left the box either way.
+      // A headless browser may refuse fullscreen itself: then this run cannot tell ours apart.
+      fullscreen = 'unavailable'
     }
     target.remove()
-    return { box: rect(box), at, scrolled, pinnedAt, overlay, modal, released, centred: centredSeen, menu, tipAt, tipReleased, fullscreen }
+    return { box: rect(box), at, scrolled, pinnedAt, overlay, modal, childStays, released, centred: centredSeen, menu, tipAt, tipReleased, movedAt, fullscreen }
   })
   expect(seen.box.x, 'the App starts right of the sidebar').toBeGreaterThan(20)
   expect(seen.overlay.sidebarHit, 'a fixed overlay at the top z-index leaves the sidebar clickable').toBe(true)
@@ -144,14 +168,17 @@ async function expectAppStaysInItsBox(page: Page): Promise<void> {
   expect(r.w).toBeGreaterThanOrEqual(seen.box.w - 20)
   expect(r.h).toBeLessThanOrEqual(seen.box.h)
   expect(r.h).toBeGreaterThanOrEqual(seen.box.h - 20)
-  expect(seen.modal.backdrop).toBe('rgba(0, 0, 0, 0)')
+  expect(seen.modal.backdrop, 'its backdrop starts at the box').toEqual([seen.box.x, seen.box.y])
+  expect(seen.childStays, 'a fixed child of the dialog stays off the sidebar').toBe(true)
   expect(seen.released, 'closed: the dialog is the plugin\'s own again').toBe('')
   expect(seen.centred.translate, 'a centred dialog inside the box keeps its own translate').toBe(seen.centred.own)
   expect(Math.abs(seen.centred.rect.x + seen.centred.rect.w / 2 - (seen.box.x + seen.box.w / 2)), 'and its place').toBeLessThanOrEqual(1)
   expect(seen.menu.x, 'a menu half over the sidebar slides into the App').toBe(seen.box.x)
   expect(seen.tipAt.x, 'a centred tip by the edge slides in on top of its own translate').toBe(seen.box.x)
   expect(seen.tipReleased, 'closed: its own translate is back').toBe(true)
-  expect(seen.fullscreen).toBe('refused')
+  expect(seen.movedAt.x, 'a popover the plugin moves out after opening, with a transition on everything, ends in the App').toBe(seen.box.x)
+  if (seen.fullscreen === 'unavailable') test.info().annotations.push({ type: 'note', description: 'this browser offers no fullscreen: the refusal went unchecked' })
+  else expect(seen.fullscreen, 'fullscreen asked for inside the App is left at once').toBe('refused')
 }
 
 async function reservePort(): Promise<number> {
@@ -260,8 +287,7 @@ async function ensureSourceInstalled(page: Page): Promise<void> {
   await openAddForm(page)
   const pluginStore = page.locator('#plugin-store')
   await pluginStore.locator('#plugin-source-url').fill(pathToFileURL(path.join(fixtureHome, 'native-plugin-repo')).href)
-  await pluginStore.getByTestId('plugin-trust-confirm').check()
-  await pluginStore.getByRole('button', { name: 'Add', exact: true }).click()
+  await pluginStore.getByRole('button', { name: 'Install', exact: true }).click()
   await expect(page.getByTestId('plugin-source-native-plugin-repo')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -389,15 +415,17 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await pluginStore.locator('#plugin-source-url').fill(
     pathToFileURL(path.join(fixtureHome, 'native-plugin-repo')).href,
   )
-  const addButton = pluginStore.getByRole('button', { name: 'Add', exact: true })
-  await expect(addButton).toBeDisabled()
-  await pluginStore.getByTestId('plugin-trust-confirm').check()
+  const addButton = pluginStore.getByRole('button', { name: 'Install', exact: true })
+  await expect(addButton).toBeEnabled()
   await addButton.click()
   await expect(page.getByText(/Added.*found 1 plugin/)).toBeVisible({ timeout: 30_000 })
-  await expect(pluginStore.getByTestId('plugin-trust-confirm')).not.toBeChecked()
-  const sourceCard = page.getByTestId('plugin-source-native-plugin-repo')
-  await expect(sourceCard.getByText('Walnut Plugin Demo').first()).toBeVisible()
-  await expect(sourceCard.getByTestId('plugin-source-status-native-plugin-repo')).toHaveText('Active')
+  // The Apps page groups plugins by source: the source's section holds its head and the
+  // plugin's own card, which says it is on.
+  const section = page.getByTestId('apps-source-native-plugin-repo')
+  await expect(section.getByTestId('plugin-source-native-plugin-repo')).toBeVisible()
+  const demoCard = section.getByTestId('plugin-card-walnut-demo')
+  await expect(demoCard).toContainText('Walnut Plugin Demo')
+  await expect(demoCard).toContainText('On')
   const skillsResponse = await page.request.get(`http://127.0.0.1:${fixturePort}/api/skills`)
   if (!skillsResponse.ok()) throw new Error(`Skills catalogue failed: ${await skillsResponse.text()}`)
   const skills = await skillsResponse.json() as { skills: Array<{ dirName: string }> }
@@ -1437,8 +1465,7 @@ test.describe('update status', () => {
     await openAddForm(page)
     const pluginStore = page.locator('#plugin-store')
     await pluginStore.locator('#plugin-source-url').fill(pathToFileURL(repo).href)
-    await pluginStore.getByTestId('plugin-trust-confirm').check()
-    await pluginStore.getByRole('button', { name: 'Add', exact: true }).click()
+    await pluginStore.getByRole('button', { name: 'Install', exact: true }).click()
     await expect(page.getByTestId('plugin-card-sample-second')).toBeVisible({ timeout: 30_000 })
     // Remove the source later: its card goes, and status is re-read for what is left. The
     // plugin's page owns Remove while the plugin is loaded; the source card has none (N3-17).

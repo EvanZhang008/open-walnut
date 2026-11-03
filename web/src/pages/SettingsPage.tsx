@@ -29,6 +29,7 @@ import { SettingsGroup, SettingsRow, SettingsSection } from '@/components/settin
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { APPS_PATH, LEGACY_PLUGINS_HASH } from '@/utils/open-link'
 import { SettingsBuildLine } from '@/components/settings/SettingsBuildLine'
+import { SettingsPaneBack } from '@/components/settings/SettingsPaneBack'
 import type { SaveSectionOptions } from '@/components/settings/core-settings-registry'
 import {
   DEFAULT_PANE_ID,
@@ -514,6 +515,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
         >
           <SettingsPaneStickyBar />
           <div className="settings-pane-inner" key={`${view.kind}:${paneId}`}>
+            {view.kind === 'core' && <SettingsPaneBack paneId={paneId} metaFor={model.metaFor} />}
             {body}
             {(labelled || view.kind === 'plugin-off') && <SettingsBuildLine />}
             {anchorRoom > 0 && <div className="settings-pane-anchor-room" aria-hidden="true" style={{ height: anchorRoom }} />}

@@ -58,8 +58,7 @@ test('C2: each nav entry mounts only its own pane', async ({ page }) => {
   await openSettings(page)
   await expect(page.locator('#general.settings-section')).toBeVisible({ timeout: 20_000 })
   const folded: Record<string, string[]> = {
-    tasks: ['tasks', 'focus-tiers'],
-    devices: ['devices', 'cloud'],
+    tasks: ['tasks', 'focus-tiers', 'tags', 'task-providers'],
     advanced: ['advanced', 'providers'],
   }
   const panes = await page.$$eval('.settings-nav button.settings-nav-item[data-testid^="settings-nav-"]',
@@ -70,6 +69,13 @@ test('C2: each nav entry mounts only its own pane', async ({ page }) => {
   for (const id of panes.filter((p) => !p.includes(':'))) {
     await clickNav(page, id)
     await expect.poll(() => mountedSections(page)).toEqual(folded[id] ?? [id])
+  }
+  // Phones & Cloud's sub-pages: their rows show under it once it is open, each mounting only itself.
+  expect(panes).not.toContain('devices-tailscale')
+  for (const id of ['cloud', 'devices-tailscale', 'devices-browser']) {
+    await clickNav(page, 'devices')
+    await clickNav(page, id)
+    await expect.poll(() => mountedSections(page)).toEqual([id])
   }
 })
 
@@ -214,7 +220,7 @@ test('C73: model, all clear, cloud companion, focus tiers, use an api, agent', a
   await filter.fill('all clear')
   await expect.poll(() => visibleNavKeys(page)).not.toContain(NAV('general'))
   await filter.fill('cloud companion')
-  await expect.poll(() => visibleNavKeys(page)).toContain(NAV('devices'))
+  await expect.poll(() => visibleNavKeys(page)).toContain(NAV('cloud'))
   await filter.fill('focus tiers')
   await expect.poll(() => visibleNavKeys(page)).toContain(NAV('tasks'))
   await filter.fill('use an api')

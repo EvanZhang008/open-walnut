@@ -68,7 +68,7 @@ exposeRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       status: getExposeRuntime()?.status() ?? offStatus(),
       providers,
       // Where it can run (a host the provider names as always on, and here); empty: here only.
-      places: exposePlaces(cfg.run_on, def, config.hosts),
+      places: exposePlaces(cfg.run_on, def, config.hosts, config.net),
       settings: {
         enabled: cfg.enabled === true,
         provider: cfg.provider ?? null,

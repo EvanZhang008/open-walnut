@@ -9,7 +9,6 @@ import { PluginDependentsError } from '../../core/plugins/dependency-gate.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
 import type {
   LinkedCheckoutInfo,
-  LinkedCheckoutListing,
   LinkedCheckoutStatus,
   LinkedUpdateResult,
 } from '../../core/plugins/linked-checkout.js'
@@ -30,6 +29,7 @@ import {
   linkedRowKeyOf,
   type LinkedCheckoutOps,
 } from './plugin-linked-ops.js'
+import { LINKED_LISTING_COLD_GRACE_MS, createLinkedListingCache, type LinkedListingCache } from './plugin-linked-listing.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { mountBundledPluginRoutes, type BundledPluginConfigWriter } from './plugin-bundled-routes.js'
 import { mountPluginJobsRoutes } from './plugin-jobs-routes.js'
@@ -129,6 +129,11 @@ export interface PluginRuntimeRouterDeps {
   walnutHome?: string
   /** Linked-checkout detection and its two git actions. */
   linked?: LinkedCheckoutOps
+  /**
+   * The in-memory linked listing the registry reads (shared with /api/plugin-updates in
+   * server.ts). Absent: one is built over `linked`.
+   */
+  linkedListing?: LinkedListingCache
   /** The update-status cache the check/update actions write into (shared with /api/plugin-updates). */
   cache?: UpdateStatusCache
   /** Override for the 60 s update deadline (tests only). */
@@ -197,9 +202,8 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
   // linked scan realpaths its checkouts (macOS: /var -> /private/var) and a symlinked home
   // would never prefix-match otherwise. Resolved once; a failure keeps the plain form.
   const homeDirPromise = fsp.realpath(os.homedir()).catch(() => os.homedir())
-  /** `listDetailed` when the unit has it (a test's fake may not); a plain list skipped nothing it can name. */
-  const listLinkedDetailed = async (): Promise<LinkedCheckoutListing> =>
-    linked.listDetailed ? linked.listDetailed() : { found: await linked.list(), skipped: [] }
+  /** The listing runs git on every linked checkout (seconds), so the registry reads it from memory. */
+  const linkedListing = deps.linkedListing ?? createLinkedListingCache(linked)
   /**
    * The linked checkout for ONE plugin, using the dir the registry recorded as a fallback
    * matcher for a link whose name is not the plugin id.
@@ -293,13 +297,17 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         try {
           pendingSchemas = await resolveUnconfiguredSchemas()
         } catch { /* no Configure button for a needs-config row; the reason still shows */ }
-        try {
-          // Host-local and self-budgeting: a slow git leaves rows without the linked line,
-          // which is exactly how they read before this existed.
-          const listing = await listLinkedDetailed()
+        // From memory: the git scan behind it takes seconds, and runs in the background when
+        // the listing is old. With none yet (the first open after a start) the rows read as
+        // they do when the scan runs out of budget, "not scanned", and the scan's end tells
+        // the page to read again (plugin-linked-listing.ts).
+        const listing = await linkedListing.read({ graceMs: LINKED_LISTING_COLD_GRACE_MS })
+        if (listing) {
           linkedCheckouts = listing.found
           linkedScanSkipped = listing.skipped.length > 0
-        } catch { /* no Check/Update buttons; the row still lists */ }
+        } else {
+          linkedScanSkipped = true
+        }
         try {
           owners = await resolveSourceOwners()
         } catch {
@@ -415,6 +423,8 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         ? (await managePrimary(pluginId, 'discover')).plugin
         : await deps.discover!(pluginId)
       if (!plugin) throw new PluginRuntimeRelayError('Primary did not return the discovered Plugin', 502)
+      // A discover usually follows `walnut-plugin link`: the listing may lack the new link.
+      if (!cloudMode) linkedListing.invalidate()
       publishCloudChange(pluginId, 'discovered')
       res.json({ plugin, ...(plugin.alreadyLoaded ? { note: ALREADY_LOADED_NOTE } : {}) })
     } catch (error) {
@@ -684,7 +694,10 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         res.status(409).json({ plugin, error: plugin.error ?? plugin.reason ?? `Plugin "${pluginId}" is ${plugin.state}` })
         return
       }
-      if (!cloudMode) clearRestartPending(pluginId)
+      if (!cloudMode) {
+        clearRestartPending(pluginId)
+        linkedListing.invalidate()
+      }
       publishCloudChange(pluginId, 'reloaded')
       res.json({ plugin })
     } catch (error) {
@@ -779,6 +792,8 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         ROW_CHECK_DEADLINE_MS,
         () => ({ behind: null, ahead: null, dirty: info.dirty, sha: info.sha, branch: info.branch, fetched: false, reason: ROW_TIMEOUT_REASON }),
       )
+      // The person asked about this checkout now: the registry's copy of it may be old.
+      linkedListing.invalidate()
       if (!cache) {
         res.json(status)
         return
@@ -825,6 +840,8 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         throw error
       } finally {
         cache?.setBusy(rowKey, false)
+        // Pulled, refused or timed out: git saw the tree, so the registry's copy may be old.
+        linkedListing.invalidate()
       }
       // The whole checkout moved, so every plugin sharing the rowKey is current at `sha`.
       const row = cache?.recordUpdated(rowKey, result.sha)
@@ -834,7 +851,8 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       // reloading an off plugin would turn it on behind the user's back. The rest are
       // named in `skipped` rather than silently left out.
       const live = new Map(deps.list().map((plugin) => [plugin.id, plugin.state]))
-      const siblings = [...(await linked.list().catch(() => new Map<string, LinkedCheckoutInfo>()))]
+      // The rescan the pull started names the siblings, so one scan serves both.
+      const siblings = [...(await linkedListing.refresh().then((listing) => listing.found).catch(() => new Map<string, LinkedCheckoutInfo>()))]
         .filter(([id, sibling]) => id !== pluginId && sibling.checkout === info.checkout && live.has(id))
         .map(([id]) => id)
         .sort()

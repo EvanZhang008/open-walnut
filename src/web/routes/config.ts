@@ -651,6 +651,19 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       for (const [key, host] of Object.entries(sent)) {
         const kept = (current as Record<string, { server?: unknown }>)[key]?.server
         if (host && typeof host === 'object' && host.server === undefined && kept !== undefined) sent[key] = { ...host, server: kept }
+        // A found host's answer (core/hosts/found-hosts.ts) the sender left out (an editor
+        // from before the field) is kept, with the `enabled` it implies, so a stale save
+        // neither dials a host waiting for the yes nor drops a yes.
+        // Who gave it (`connect_by`) rides along while the answer is the same one: an editor
+        // that does not know the field never turns Walnut's own yes into the person's.
+        const was = (current as Record<string, { discovered?: unknown; connect?: unknown; connect_by?: unknown }>)[key]
+        const row = sent[key]
+        if (row && typeof row === 'object' && was?.discovered === true && row.discovered === true) {
+          let next = row
+          if (row.connect === undefined && was.connect !== undefined) next = { ...next, connect: was.connect, ...(was.connect === 'yes' ? {} : { enabled: false }) }
+          if (!('connect_by' in row) && was.connect_by !== undefined && next.connect === was.connect) next = { ...next, connect_by: was.connect_by }
+          sent[key] = next
+        }
       }
       // A machine on the host network is written by the network only (core/net/net-mac.ts):
       // the editor has no field for it, and one it leaves out is removed with Remove,

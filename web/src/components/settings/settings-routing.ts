@@ -9,6 +9,9 @@
 import { log } from '@/utils/log'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import type { FilterEntry } from './settings-filter'
+import { WAY_PANES, wayPaneForRow } from './settings-way-panes'
+
+export { WAY_PANES, wayPaneForRow } from './settings-way-panes'
 
 export const DEFAULT_PANE_ID = 'general'
 /** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
@@ -26,6 +29,26 @@ export const NAV_OWNER: Readonly<Record<string, string>> = (() => {
   }
   return owner
 })()
+
+/** Sub-page id -> the entry it sits under (core-settings-registry `parent`). */
+export const PANE_PARENT: Readonly<Record<string, string>> = Object.fromEntries(
+  CORE_SETTINGS_CONTRIBUTIONS.flatMap((entry) => (entry.parent ? [[entry.id, entry.parent] as const] : [])),
+)
+
+/** The entry a sub-page sits under, or null for a top-level pane. */
+export function parentPane(paneId: string): string | null {
+  return PANE_PARENT[paneId] ?? null
+}
+
+/**
+ * Whether a nav row shows: a sub-page's row only while its parent or one of its
+ * siblings is the open pane, or while Find a setting is filtering (a hit must show).
+ */
+export function navRowShown(rowKey: string, activePane: string, filtering: boolean): boolean {
+  const parent = PANE_PARENT[rowKey]
+  if (!parent || filtering) return true
+  return activePane === parent || PANE_PARENT[activePane] === parent
+}
 
 /** Visible core panes in registry order. */
 export const CORE_PANE_IDS: readonly string[] = CORE_SETTINGS_CONTRIBUTIONS
@@ -104,6 +127,10 @@ export function resolvePane(
   if (retired) return { paneId: retired, targetId: null, known: true }
   const row = ROW_TARGETS[id]
   if (row) return { paneId: row.paneId, targetId: row.elementId, known: true, row: true }
+  const way = /^devices-way-(?:panel-)?(cloud|tailscale|browser)$/.exec(id)?.[1] as keyof typeof WAY_PANES | undefined
+  if (way) return { paneId: WAY_PANES[way], targetId: null, known: true }
+  const wayPane = wayPaneForRow(id)
+  if (wayPane) return { paneId: wayPane, targetId: id, known: true, row: true }
   // One host's row inside Remote Hosts (`#rh-host-<alias>`, host-settings-nav.ts):
   // open the pane that section renders under and scroll to that row.
   if (id.startsWith(HOST_ROW_PREFIX)) {

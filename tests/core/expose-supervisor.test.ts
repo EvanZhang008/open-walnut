@@ -2,15 +2,18 @@
  * The tunnel supervisor (src/core/expose/supervisor.ts) with a fake child and a
  * fake clock: the URL is read from output, exits retry with growing waits, a
  * sign-in line and a missing command retry slowly, a missing command with an
- * install command is installed once (Retry allows one more), a stop ends the
+ * install command runs one at a time, again after a failure, a stop ends the
  * child, and a replaced run's late events change nothing. The check through the
  * address counts an error page as down and another Walnut holding the name as no
  * failure (probe.ts). The install's shell runs for real in expose-install-cli.test.ts.
  */
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   BACKOFF_MS, ExposeSupervisor, HEALTHY_MS, INSTALL_TIMEOUT_MS, MISSING_RETRY_MS, NO_URL_MS, PROBE_EVERY_MS, PROBE_FAILURES,
-  SIGN_IN_RETRY_MS, resolveRun, urlInLine, type ExposeChild, type InstallResult, type SupervisorDeps,
+  SIGN_IN_RETRY_MS, INSTALL_RETRY_MS, resolveRun, urlInLine, type ExposeChild, type InstallResult, type SupervisorDeps,
 } from '../../src/core/expose/supervisor.js'
 import type { ProbeAnswer } from '../../src/core/expose/probe.js'
 import { validateExposeDefinition } from '../../src/core/expose/registry.js'
@@ -333,7 +336,7 @@ describe('ExposeSupervisor, a missing CLI it installs (installCommand)', () => {
     expect(h.sup.status()).toMatchObject({ state: 'connected', url: 'https://me-acme-demo.example.test' })
   })
 
-  it('a failed install is missing, with its last line and the hint, and waits like a missing CLI; it never runs twice', async () => {
+  it('a failed install is missing, with its last line and the hint, and runs again on the next timed try by itself', async () => {
     await h.sup.start(resolveRun(INSTALLABLE, 5000), 5000)
     h.children[0]!.failSpawn('ENOENT')
     f.calls[0]!.resolve({ ok: false, output: 'downloading\n\u001b[31merror: no access to the registry\u001b[0m\n\n' })
@@ -341,12 +344,56 @@ describe('ExposeSupervisor, a missing CLI it installs (installCommand)', () => {
     expect(h.sup.status()).toMatchObject({
       state: 'missing', lastError: 'Installing Fake tunnel failed: error: no access to the registry.', hint: 'Install faketunnel.',
     })
-    expect(h.sup.status().nextRetryAt! - h.now()).toBe(MISSING_RETRY_MS)
-    await h.advance(MISSING_RETRY_MS)
+    expect(h.sup.status().nextRetryAt! - h.now()).toBe(INSTALL_RETRY_MS[0])
+    await h.advance(INSTALL_RETRY_MS[0])
     expect(h.children).toHaveLength(2)
     h.children[1]!.failSpawn('ENOENT')
-    expect(f.calls).toHaveLength(1)
-    expect(h.sup.status()).toMatchObject({ state: 'missing', lastError: 'Installing Fake tunnel failed: error: no access to the registry.' })
+    // The cause was fixed meanwhile (the person got access): no Retry needed.
+    expect(f.calls).toHaveLength(2)
+    expect(h.sup.status()).toMatchObject({ state: 'starting', activity: 'Installing Fake tunnel...' })
+    f.calls[1]!.resolve({ ok: true, output: '' })
+    await flush()
+    expect(h.children).toHaveLength(3)
+    h.children[2]!.say('https://me-acme-demo.example.test')
+    expect(h.sup.status()).toMatchObject({ state: 'connected' })
+  })
+
+  it('an install that fails on an expired sign-in asks for the sign-in, and the next try installs again after a wait', async () => {
+    await h.sup.start(resolveRun(INSTALLABLE, 5000), 5000)
+    h.children[0]!.failSpawn('ENOENT')
+    f.calls[0]!.resolve({ ok: false, output: 'registry: 401\nYour sign-in has expired, sign in again.\nhttps://docs.example.test/help\n' })
+    await flush()
+    expect(h.sup.status()).toMatchObject({
+      state: 'needs-sign-in', lastError: 'Installing Fake tunnel failed: https://docs.example.test/help.', hint: 'Sign in again, then press Retry.',
+    })
+    expect(h.sup.status().nextRetryAt! - h.now()).toBe(INSTALL_RETRY_MS[0])
+    await h.advance(INSTALL_RETRY_MS[0])
+    h.children[1]!.failSpawn('ENOENT')
+    expect(f.calls).toHaveLength(2)
+  })
+
+  it('failed installs in a row wait longer each time, capped at an hour; Retry starts over', async () => {
+    await h.sup.start(resolveRun(INSTALLABLE, 5000), 5000)
+    h.children[0]!.failSpawn('ENOENT')
+    const waits: number[] = []
+    for (let i = 0; i < 6; i++) {
+      f.calls[i]!.resolve({ ok: false, output: 'no network' })
+      await flush()
+      const wait = h.sup.status().nextRetryAt! - h.now()
+      waits.push(wait)
+      await h.advance(wait)
+      h.children.at(-1)!.failSpawn('ENOENT')
+    }
+    expect(waits).toEqual([INSTALL_RETRY_MS[0], INSTALL_RETRY_MS[1], INSTALL_RETRY_MS[2], INSTALL_RETRY_MS[3], INSTALL_RETRY_MS[3], INSTALL_RETRY_MS[3]])
+    // About a day at the cap is 24 installs plus the first four, never one a minute.
+    expect(f.calls).toHaveLength(7)
+    f.calls[6]!.resolve({ ok: false, output: 'no network' })
+    await flush()
+    h.sup.retryNow()
+    h.children.at(-1)!.failSpawn('ENOENT')
+    f.calls[7]!.resolve({ ok: false, output: 'no network' })
+    await flush()
+    expect(h.sup.status().nextRetryAt! - h.now()).toBe(INSTALL_RETRY_MS[0])
   })
 
   it('an install that throws, or prints nothing, still says it failed', async () => {
@@ -452,5 +499,58 @@ describe('ExposeSupervisor.hold, what a handover reads', () => {
     expect(h.sup.hold()).toEqual({ url: 'https://me-acme-demo.example.test' })
     await h.sup.stop()
     expect(h.sup.hold()).toEqual({})
+  })
+})
+
+describe('ExposeSupervisor.refresh: a plugin update that keeps the command', () => {
+  // 2026-11-02: the Tunnels plugin gained an install command, but a host server already running
+  // the tunnel kept the old definition (the command and arguments had not changed, so nothing
+  // restarted), and a colleague's Retry still read "Tunnels is not installed ... Install it with".
+  const OLD: ExposeProviderDefinition = { ...DEF, title: 'Old tunnel' }
+  const NEW: ExposeProviderDefinition = { ...DEF, title: 'Fake tunnel', installCommand: 'sh install.sh' }
+  let f: ReturnType<typeof fakeInstall>
+  let h: ReturnType<typeof harness>
+  beforeEach(() => { f = fakeInstall(); h = harness({ install: f.install }) })
+
+  it('a CLI found missing is installed at once when the update brings an install command', async () => {
+    await h.sup.start(resolveRun(OLD, 5000), 5000)
+    h.children[0]!.failSpawn('ENOENT')
+    expect(h.sup.status()).toMatchObject({ state: 'missing', lastError: 'Old tunnel is not installed (/usr/local/bin/faketunnel not found).' })
+    h.sup.refresh(resolveRun(NEW, 5000))
+    expect(h.children).toHaveLength(2)
+    h.children[1]!.failSpawn('ENOENT')
+    expect(f.calls).toHaveLength(1)
+    expect(h.sup.status()).toMatchObject({ state: 'starting', activity: 'Installing Fake tunnel...' })
+    f.calls[0]!.resolve({ ok: true, output: '' })
+    await flush()
+    h.children[2]!.say('https://me-acme-demo.example.test')
+    expect(h.sup.status()).toMatchObject({ state: 'connected' })
+  })
+
+  it('a running tunnel is left running, and the next start uses the new definition', async () => {
+    await h.sup.start(resolveRun(OLD, 5000), 5000)
+    h.children[0]!.say('https://me-acme-demo.example.test')
+    h.sup.refresh(resolveRun(NEW, 5000))
+    expect(h.children).toHaveLength(1)
+    expect(h.sup.status()).toMatchObject({ state: 'connected' })
+    // The CLI is uninstalled under it; the next start finds it missing and installs it.
+    h.sup.retryNow()
+    await flush()
+    expect(h.children).toHaveLength(2)
+    h.children[1]!.failSpawn('ENOENT')
+    expect(f.calls).toHaveLength(1)
+  })
+
+  it('every place that keeps a run whose command did not change hands it the new definition', () => {
+    // The class: a runtime that compares the running command before it replaces a run. Each one
+    // must refresh in the same breath, or a definition change short of the command is lost.
+    const root = path.resolve(__dirname, '../..')
+    const files = execFileSync('git', ['grep', '-l', 'supervisor.running()', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim().split('\n')
+    expect(files.length).toBeGreaterThan(1)
+    for (const file of files) {
+      const text = fs.readFileSync(path.join(root, file), 'utf8')
+      if (!/const same = /.test(text)) continue
+      expect(text, file).toMatch(/if \(!same\) await supervisor\.start\([^)]*\)\n\s*else supervisor\.refresh\(run\)/)
+    }
   })
 })

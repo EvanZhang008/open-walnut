@@ -3,6 +3,8 @@ import { log } from '../../web/src/utils/log.js'
 import {
   CORE_PANE_IDS,
   NAV_OWNER,
+  navRowShown,
+  parentPane,
   resolvePane,
   sectionsForPane,
 } from '../../web/src/components/settings/settings-routing.js'
@@ -29,8 +31,36 @@ describe('resolvePane', () => {
 
   it('opens the owner of a folded section and targets the section', () => {
     expect(resolvePane('#focus-tiers', [])).toMatchObject({ paneId: 'tasks', targetId: 'focus-tiers' })
-    expect(resolvePane('#cloud', [])).toMatchObject({ paneId: 'devices', targetId: 'cloud' })
     expect(resolvePane('#providers', [])).toMatchObject({ paneId: 'advanced', targetId: 'providers' })
+  })
+
+  it('opens each of Phones & Cloud\'s ways as its own sub-page, old in-page anchors included', () => {
+    // `#cloud` was a section folded into Phones & Cloud; it is the Cloud companion sub-page now.
+    expect(resolvePane('#cloud', [])).toEqual({ paneId: 'cloud', targetId: null, known: true })
+    expect(resolvePane('#devices-tailscale', [])).toEqual({ paneId: 'devices-tailscale', targetId: null, known: true })
+    expect(resolvePane('#devices-browser', [])).toEqual({ paneId: 'devices-browser', targetId: null, known: true })
+    for (const [way, pane] of [['cloud', 'cloud'], ['tailscale', 'devices-tailscale'], ['browser', 'devices-browser']]) {
+      expect(resolvePane(`#devices-way-${way}`, [])).toEqual({ paneId: pane, targetId: null, known: true })
+      expect(resolvePane(`#devices-way-panel-${way}`, [])).toEqual({ paneId: pane, targetId: null, known: true })
+    }
+    // A row on a sub-page opens that page at the row.
+    expect(resolvePane('#devices-backup-leader', [])).toEqual({ paneId: 'cloud', targetId: 'devices-backup-leader', known: true, row: true })
+    expect(resolvePane('#companion-keep', [])).toMatchObject({ paneId: 'cloud', targetId: 'companion-keep' })
+    expect(resolvePane('#browser-access-runs-on', [])).toMatchObject({ paneId: 'devices-browser', targetId: 'browser-access-runs-on' })
+    expect(resolvePane('#remote-access-card', [])).toMatchObject({ paneId: 'devices-tailscale', targetId: 'remote-access-card' })
+    expect(resolvePane('#devices-new-name', [])).toMatchObject({ known: false })
+    expect(parentPane('devices-tailscale')).toBe('devices')
+    expect(parentPane('cloud')).toBe('devices')
+    expect(parentPane('devices')).toBeNull()
+  })
+
+  it('shows a sub-page row only while its parent or a sibling is open, or while filtering', () => {
+    expect(navRowShown('devices', 'general', false)).toBe(true)
+    expect(navRowShown('devices-tailscale', 'general', false)).toBe(false)
+    expect(navRowShown('devices-tailscale', 'devices', false)).toBe(true)
+    expect(navRowShown('devices-tailscale', 'cloud', false)).toBe(true)
+    expect(navRowShown('devices-tailscale', 'devices-tailscale', false)).toBe(true)
+    expect(navRowShown('cloud', 'general', true)).toBe(true)
   })
 
   it('opens Remote Hosts for one host row and targets that row', () => {
@@ -74,7 +104,8 @@ describe('resolvePane', () => {
 
   it('mounts each pane lead first, then its folded sections', () => {
     expect(sectionsForPane('tasks').map((s) => s.id)).toEqual(['tasks', 'focus-tiers', 'tags', 'task-providers'])
-    expect(sectionsForPane('devices').map((s) => s.id)).toEqual(['devices', 'cloud'])
+    expect(sectionsForPane('devices').map((s) => s.id)).toEqual(['devices'])
+    expect(sectionsForPane('cloud').map((s) => s.id)).toEqual(['cloud'])
     expect(sectionsForPane('advanced').map((s) => s.id)).toEqual(['advanced', 'providers'])
     expect(sectionsForPane('general').map((s) => s.id)).toEqual(['general'])
     for (const id of CORE_PANE_IDS) expect(NAV_OWNER[id]).toBe(id)

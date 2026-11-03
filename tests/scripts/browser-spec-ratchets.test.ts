@@ -331,7 +331,10 @@ describe('specs that open a gated Settings pane', () => {
   // on every Linux runner: permissions-session-access clicked an entry that was never
   // drawn and timed out on all of CI's runs (2026-11-01). A spec that opens such a pane
   // sets the fact itself, as that spec stubs the rest of a Mac.
-  const FACT_OF_GATE: Record<string, string> = { 'mac-access': 'macAccess' }
+  // `primary` (Tailscale and Browser link under Phones & Cloud) is closed only on a cloud
+  // companion's own console: every fixture server is a primary, so no spec sets a fact for it,
+  // and a spec that stubs `cloud: true` does so to see those entries gone.
+  const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null }
   const registry = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
   const gated = [...registry.matchAll(/\bid: '([\w-]+)'[^{}]*?\brequires: '([\w-]+)'/g)].map((m) => ({ id: m[1]!, gate: m[2]! }))
 
@@ -341,7 +344,7 @@ describe('specs that open a gated Settings pane', () => {
   })
 
   it('every spec that clicks a gated pane\'s nav entry sets its fact', () => {
-    const offenders = gated.flatMap((g) => sources
+    const offenders = gated.filter((g) => FACT_OF_GATE[g.gate] !== null).flatMap((g) => sources
       .filter(({ text }) => text.includes(`settings-nav-${g.id}'`) && !new RegExp(`\\b${FACT_OF_GATE[g.gate]}: true`).test(text))
       .map(({ file }) => `${file}: opens ${g.id} without ${FACT_OF_GATE[g.gate]}: true`))
     expect(offenders).toEqual([])

@@ -12,7 +12,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
-import { openWay, type DeviceWay } from './devices-ways-helpers'
+import { backToDevices, openWay, type DeviceWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -87,9 +87,8 @@ async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   const section = page.locator('#devices')
   await expect(section).toBeVisible()
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
-  // The Tailscale steps sit under the Tailscale card until it is opened.
-  if (way) await openWay(page, way)
-  return section
+  // The Tailscale steps are the Tailscale sub-page, opened from its card.
+  return way ? openWay(page, way) : section
 }
 
 async function shot(page: Page, name: string, region: Locator) {
@@ -111,10 +110,10 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
 
     const card = section.getByTestId('remote-access-card')
     await expect(card).toBeVisible()
-    // Opened from its card, it is named after it and sits right under the cards.
-    await expect(card.getByRole('heading', { name: 'Tailscale', exact: true })).toBeVisible()
-    const addHeading = section.getByRole('heading', { name: 'Add a phone', exact: true })
-    expect((await card.boundingBox())!.y).toBeLessThan((await addHeading.boundingBox())!.y)
+    // Opened from its card, the sub-page is named after it and holds only this way.
+    await expect(page.locator('#devices-tailscale-title')).toHaveText('Tailscale')
+    await expect(card.getByRole('heading', { name: 'Steps', exact: true })).toBeVisible()
+    await expect(page.locator('#devices')).toHaveCount(0)
 
     const mac = step(card, 'mac')
     await expect(mac).toHaveAttribute('data-dot', 'action')
@@ -165,8 +164,9 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     await expect(mac).toHaveAttribute('data-dot', 'done', { timeout: 15_000 })
     await expect(mac).toContainText('Connected as studio-mac.tail1234.ts.net')
     await expect.poll(() => calls.listGets).toBeGreaterThan(listReadsBefore)
-    await expect(section.getByTestId('devices-target-tailnet')).toBeVisible()
     await expect(step(card, 'phone')).toHaveAttribute('data-dot', 'action')
+    const main = await backToDevices(page)
+    await expect(main.getByTestId('devices-target-tailnet')).toBeVisible()
   })
 
   test('(a2) a failed install shows its sentence and keeps both buttons', async ({ page }) => {
@@ -277,19 +277,22 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     expect([doneColor, actionColor]).not.toContain(pendingColor)
     await shot(page, 'd1-phone-step', card)
 
-    // The picker starts on this network; the row moves it to Tailscale and puts the cursor in the name.
-    await expect(section.getByTestId('devices-target-lan')).toHaveAttribute('aria-checked', 'true')
+    // The row takes the person back to Phones & Cloud with the picker on Tailscale and the
+    // cursor in the name (the picker starts on this network otherwise).
     const pair = step(card, 'pair')
-    await expect(pair).toContainText('Pair the phone below with the Tailscale address')
+    await expect(pair).toContainText('Pair the phone on Phones & Cloud with the Tailscale address')
     await pair.click()
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await expect(section.locator('#devices-new-name')).toBeFocused()
+    const main = page.locator('#devices')
+    await expect(main.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
+    await expect(main.locator('#devices-new-name')).toBeFocused()
     // The button does the same by keyboard.
-    await section.getByTestId('devices-target-lan').click()
-    await card.getByTestId('remote-access-use-tailnet').focus()
+    await main.getByTestId('devices-target-lan').click()
+    await expect(main.getByTestId('devices-target-lan')).toHaveAttribute('aria-checked', 'true')
+    const again = await openWay(page, 'tailscale')
+    await again.getByTestId('remote-access-use-tailnet').focus()
     await page.keyboard.press('Enter')
-    await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await shot(page, 'd2-section', section)
+    await expect(page.locator('#devices').getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
+    await shot(page, 'd2-section', page.locator('#devices'))
   })
 
   test('(f) real fixture server, no mocks: the card reads this machine\'s own Tailscale state (nothing is clicked)', async ({ page }) => {

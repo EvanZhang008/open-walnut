@@ -3,12 +3,11 @@
  *
  *   - `UpdatesHead`: the Installed header's right half (one "Checked 3 min ago" for the
  *     whole list, Retry, Check now).
- *   - `PluginSourcesGroup`: the Sources list under the plugins. A source is not a plugin
- *     (one repo can carry several), and it is the source that gets updated or removed, so
- *     it keeps its own cards. Same chip, same row key and ONE Update per slug page-wide as
- *     the plugin pages, so scrolling down never lands on an older design.
- *
- * Rendered under Get more on the Apps page (apps-page/PluginStoreGrid.tsx).
+ *   - `PluginSourceHead`: one installed source's head on the Apps page, which groups the
+ *     plugins by source (apps-page/source-sections.ts). A source is not a plugin (one repo
+ *     can carry several), and it is the source that gets updated or removed, so its verbs
+ *     live on its head. Same chip, same row key and ONE Update per slug page-wide as the
+ *     plugin pages.
  */
 import { useEffect, useState } from 'react';
 import type { UsePluginUpdates } from '@/hooks/usePluginUpdates';
@@ -18,7 +17,7 @@ import { PluginUpdateFeedback } from '../PluginUpdateFeedback';
 import { PluginProvenanceFlyout } from '../PluginProvenanceFlyout';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
+import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { formatAbsoluteTime } from './addons-format';
 import type { SourceAutoState } from '../plugin-auto-update-view';
 import { plainText, resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
@@ -158,8 +157,8 @@ export function UpdatesHead({ updates, slowLoad, onCheckAll }: {
   );
 }
 
-export interface PluginSourcesGroupProps {
-  sources: PluginSource[];
+export interface PluginSourceHeadProps {
+  source: PluginSource;
   /** Slugs an installed plugin already carries: its page owns the Update verb, the card does not. */
   ownedSlugs: ReadonlySet<string>;
   updates: UsePluginUpdates;
@@ -167,147 +166,133 @@ export interface PluginSourcesGroupProps {
   busy: string | null;
   copiedKey: string | null;
   feedback: Record<string, Feedback>;
+  /** Whether the Apps page shows this source's plugins as cards under the head (then the head lists none). */
+  cardsShown: boolean;
   onCopy: (text: string, key: string) => void;
   onUpdate: (slug: string, kind: 'git' | 'npm', feedbackId: string) => void;
   onRemove: (slug: string) => void;
   setRowFeedback: (rowId: string, next: Feedback | null) => void;
 }
 
-export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
-  const { sources, ownedSlugs, updates, busy, copiedKey, feedback } = props;
-  if (sources.length === 0) return null;
+/**
+ * One installed source's head on the Apps page, under its section title: where it comes from,
+ * whether it is current, and its verbs (Copy install link, Update, Remove). Its plugins are the
+ * cards below it; only a source whose plugins are not on the page (its clone is gone, a plugin
+ * that did not load) lists them here.
+ */
+export function PluginSourceHead(props: PluginSourceHeadProps) {
+  const { source, ownedSlugs, updates, busy, copiedKey, feedback, cardsShown } = props;
+  // The plugin page owns the verbs (Update AND Remove, N3-17) while a plugin from
+  // this source is loaded; the head here offers Restore / Update / Remove only when no
+  // plugin row does (missing, failed load). Copy install link is its own verb.
+  const rowId = `source-${source.slug}`;
+  const rowKey = sourceRowKey(source.slug);
+  const kind: 'git' | 'npm' = source.kind === 'npm' || source.type === 'npm' ? 'npm' : 'git';
+  const updateRow = updates.rows[rowKey];
+  const owned = ownedSlugs.has(source.slug);
+  const state = resolveRowState({ known: updateRow?.state, loaded: updates.loaded, refreshing: updates.refreshing });
+  const rowBusy = updates.busy[rowKey];
+  const buttonMode = owned ? { render: false as const } : updateButtonMode(state, rowBusy);
+  // A source whose clone is gone still has a name: the plugins it carried last time.
+  const known = source.plugins.length > 0 ? source.plugins : (source.lastKnownPlugins ?? []);
+  const names = known.map((plugin) => plugin.name ?? plugin.id).filter((name): name is string => Boolean(name));
+  const title = names.length > 0 ? names.join(', ') : source.slug;
+  // A source carrying ONE plugin that is not on the page as a card folds its status here.
+  const only = !cardsShown && source.cloned && source.plugins.length === 1 ? source.plugins[0] : null;
+  const onlyStatus = only ? (STATUS_LABELS[only.status] ?? STATUS_LABELS.error) : null;
   return (
-    <SettingsGroup
-      heading="Sources"
-      headingTrailing={<span className="settings-addons-muted">{sources.length}</span>}
-      className="plugin-store-group plugin-sources-group"
-      data-testid="plugin-store-sources"
-    >
-      {sources.map((source) => {
-        // The plugin page owns the verbs (Update AND Remove, N3-17) while a plugin from
-        // this source is loaded; the row here offers Restore / Update / Remove only when no
-        // plugin row does (missing, failed load). Copy install link is its own verb.
-        const rowId = `source-${source.slug}`;
-        const rowKey = sourceRowKey(source.slug);
-        const kind: 'git' | 'npm' = source.kind === 'npm' || source.type === 'npm' ? 'npm' : 'git';
-        const updateRow = updates.rows[rowKey];
-        const owned = ownedSlugs.has(source.slug);
-        const state = resolveRowState({ known: updateRow?.state, loaded: updates.loaded, refreshing: updates.refreshing });
-        const rowBusy = updates.busy[rowKey];
-        const buttonMode = owned ? { render: false as const } : updateButtonMode(state, rowBusy);
-        // A source whose clone is gone still has a name: the plugins it carried last time
-        // (server memo), never the slug, which belongs in the Provenance flyout (N2-3).
-        const known = source.plugins.length > 0 ? source.plugins : (source.lastKnownPlugins ?? []);
-        const names = known.map((plugin) => plugin.name ?? plugin.id).filter((name): name is string => Boolean(name));
-        const title = names.length > 0 ? names.join(', ') : source.slug;
-        // A source carrying ONE plugin folds that plugin's version and status into the
-        // title line instead of repeating its name on a list of one (N16).
-        const only = source.cloned && source.plugins.length === 1 ? source.plugins[0] : null;
-        const onlyStatus = only ? (STATUS_LABELS[only.status] ?? STATUS_LABELS.error) : null;
-        return (
-          <div
-            key={`${kind}:${source.slug}:${source.spec ?? source.url ?? ''}`}
-            className="settings-addons-rows plugin-store-source"
-            data-testid={`plugin-source-${source.slug}`}
-          >
-            <SettingsRow
-              className="plugin-store-source-head"
-              label={
-                <span className="settings-addons-inline plugin-store-source-title">
-                  <span className="settings-addons-ellipsis" title={title}>{title}</span>
-                  {only?.version && <span className="settings-addons-muted plugin-store-version">v{only.version}</span>}
-                  {onlyStatus && (
-                    <span data-testid={`plugin-source-status-${source.slug}`}>
-                      <SettingsTag tone={onlyStatus.tone}>{onlyStatus.label}</SettingsTag>
-                    </span>
-                  )}
-                  <PluginUpdateChip
-                    rowId={rowId}
-                    state={state}
-                    checkedAt={updateRow?.checkedAt ?? null}
-                    busy={rowBusy}
-                    transient={updateRow?.transient}
-                    toRef={updateRow?.target?.toRef}
-                    offline={updates.offline}
-                    updateElsewhere={owned}
-                    onCheck={() => {
-                      props.setRowFeedback(rowId, null);
-                      void updates.checkRow(rowKey, { kind: 'source', slug: source.slug });
-                    }}
-                  />
-                </span>
-              }
-              help={
-                <span className="settings-addons-inline plugin-store-origin">
-                  {plainText(sourceShortLabel(source))}
-                  <PluginProvenanceFlyout
-                    rowId={rowId}
-                    kind="source"
-                    rows={sourceProvenance(source.slug, kind, source)}
-                    checkedAt={updateRow?.checkedAt ?? null}
-                  />
-                </span>
-              }
-              control={
-                <span className="settings-addons-inline plugin-store-source-actions">
-                  {(source.installLink ?? source.shareSnippet) && (
-                    <SettingsButton
-                      reserve={['Copy install link', 'Copied']}
-                      title="A link teammates click (Mac app) or paste into the Plugin Store, Ask Walnut or `walnut plugin add`"
-                      onClick={() => props.onCopy((source.installLink ?? source.shareSnippet)!, source.slug)}
-                    >
-                      {copiedKey === source.slug ? 'Copied' : 'Copy install link'}
-                    </SettingsButton>
-                  )}
-                  {buttonMode.render && (
-                    <PluginUpdateButton rowId={rowId} mode={buttonMode} onClick={() => props.onUpdate(source.slug, kind, rowId)} />
-                  )}
-                  {!owned && (
-                    <InlineConfirmButton
-                      disabled={busy === source.slug}
-                      aria-label={`Remove ${title}`}
-                      onConfirm={() => props.onRemove(source.slug)}
-                    />
-                  )}
-                </span>
-              }
+    <div className="settings-addons-rows plugin-store-source" data-testid={`plugin-source-${source.slug}`}>
+      <SettingsRow
+        className="plugin-store-source-head"
+        label={
+          <span className="settings-addons-inline plugin-store-source-title">
+            <span className="settings-addons-inline plugin-store-origin">
+              {plainText(sourceShortLabel(source))}
+              <PluginProvenanceFlyout
+                rowId={rowId}
+                kind="source"
+                rows={sourceProvenance(source.slug, kind, source)}
+                checkedAt={updateRow?.checkedAt ?? null}
+              />
+            </span>
+            {onlyStatus && (
+              <span data-testid={`plugin-source-status-${source.slug}`}>
+                <SettingsTag tone={onlyStatus.tone}>{onlyStatus.label}</SettingsTag>
+              </span>
+            )}
+            <PluginUpdateChip
+              rowId={rowId}
+              state={state}
+              checkedAt={updateRow?.checkedAt ?? null}
+              busy={rowBusy}
+              transient={updateRow?.transient}
+              toRef={updateRow?.target?.toRef}
+              offline={updates.offline}
+              updateElsewhere={owned}
+              onCheck={() => {
+                props.setRowFeedback(rowId, null);
+                void updates.checkRow(rowKey, { kind: 'source', slug: source.slug });
+              }}
             />
-            {feedback[rowId] && (
-              <div className="settings-row settings-row-indent">
-                <PluginUpdateFeedback rowId={rowId} feedback={feedback[rowId]} />
-              </div>
+          </span>
+        }
+        control={
+          <span className="settings-addons-inline plugin-store-source-actions">
+            {(source.installLink ?? source.shareSnippet) && (
+              <SettingsButton
+                reserve={['Copy install link', 'Copied']}
+                title="A link teammates click (Mac app) or paste into the Plugin Store, Ask Walnut or `walnut plugin add`"
+                onClick={() => props.onCopy((source.installLink ?? source.shareSnippet)!, source.slug)}
+              >
+                {copiedKey === source.slug ? 'Copied' : 'Copy install link'}
+              </SettingsButton>
             )}
-            {source.lastError && (
-              <p className="settings-row-error settings-row-error-indent" role="alert">{source.lastError}</p>
+            {buttonMode.render && (
+              <PluginUpdateButton rowId={rowId} mode={buttonMode} onClick={() => props.onUpdate(source.slug, kind, rowId)} />
             )}
-            {/* Not cloned: the chip says "Not installed here" and Restore is the verb. One
-                plugin: its facts are on the title line already, only its error is left. */}
-            {!source.cloned ? null : only ? (
-              only.error ? <SettingsRow indent label="Error" help={only.error} state="warning" /> : null
-            ) : source.plugins.length === 0 ? (
-              <SettingsRow indent label={`No plugins found in this ${kind === 'npm' ? 'package' : 'repo'}.`} />
-            ) : (
-              source.plugins.map((plugin) => {
-                const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;
-                return (
-                  <SettingsRow
-                    key={plugin.dir}
-                    indent
-                    label={
-                      <span className="settings-addons-inline">
-                        <span>{plugin.name ?? plugin.id ?? 'Unnamed'}</span>
-                        {plugin.version && <span className="settings-addons-muted">v{plugin.version}</span>}
-                      </span>
-                    }
-                    help={plugin.error}
-                    control={<SettingsTag tone={status.tone}>{status.label}</SettingsTag>}
-                  />
-                );
-              })
+            {!owned && (
+              <InlineConfirmButton
+                disabled={busy === source.slug}
+                aria-label={`Remove ${title}`}
+                onConfirm={() => props.onRemove(source.slug)}
+              />
             )}
-          </div>
-        );
-      })}
-    </SettingsGroup>
+          </span>
+        }
+      />
+      {feedback[rowId] && (
+        <div className="settings-row settings-row-indent">
+          <PluginUpdateFeedback rowId={rowId} feedback={feedback[rowId]} />
+        </div>
+      )}
+      {source.lastError && (
+        <p className="settings-row-error settings-row-error-indent" role="alert">{source.lastError}</p>
+      )}
+      {/* Not cloned: the chip says "Not installed here" and Restore is the verb. Cards shown:
+          the plugins are the cards below. Otherwise the plugins the source carries, here. */}
+      {!source.cloned || cardsShown ? null : only ? (
+        <SettingsRow indent label={only.name ?? only.id ?? 'Unnamed'} help={only.error} state={only.error ? 'warning' : undefined} />
+      ) : source.plugins.length === 0 ? (
+        <SettingsRow indent label={`No plugins found in this ${kind === 'npm' ? 'package' : 'repo'}.`} />
+      ) : (
+        source.plugins.map((plugin) => {
+          const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;
+          return (
+            <SettingsRow
+              key={plugin.dir}
+              indent
+              label={
+                <span className="settings-addons-inline">
+                  <span>{plugin.name ?? plugin.id ?? 'Unnamed'}</span>
+                  {plugin.version && <span className="settings-addons-muted">v{plugin.version}</span>}
+                </span>
+              }
+              help={plugin.error}
+              control={<SettingsTag tone={status.tone}>{status.label}</SettingsTag>}
+            />
+          );
+        })
+      )}
+    </div>
   );
 }

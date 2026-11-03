@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { apiGet, apiPost, apiPut } from '@/api/client';
+import { answerFoundHost } from '@/api/hosts';
 import { log } from '@/utils/log';
 import { SettingsEmpty, SettingsGroup, SettingsRow } from '../../SettingsSection';
 import { SettingsButton } from '../../inputs/SettingsButton';
@@ -150,6 +151,22 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
     }
   };
 
+  // "Connect <host> first": the person's yes for an always-on host found in ~/.ssh/config
+  // (src/core/hosts/found-hosts.ts), after which it is a place like the others.
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const connectFound = async (host: string) => {
+    setConnecting(host);
+    setError(null);
+    try {
+      await answerFoundHost(host, 'yes');
+    } catch (err) {
+      setError(saveErrorMessage(err));
+    } finally {
+      setConnecting(null);
+      void load();
+    }
+  };
+
   const retry = async () => {
     try {
       const res = await apiPost<{ status: ExposeStatus }>(`${PATH}/retry`);
@@ -196,7 +213,10 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
   }
 
   const { status, providers, settings } = data;
-  const places = data.places ?? [];
+  const allPlaces = data.places ?? [];
+  // A found host waiting for the yes is offered as "Connect <host> first", never picked directly.
+  const places = allPlaces.filter((p) => !p.needsConnect);
+  const toConnect = allPlaces.filter((p) => p.needsConnect);
   const placedOn = settings.placedOn ?? 'here';
   const placedHost = places.find((p) => p.id === placedOn && p.id !== 'here');
   const providerId = settings.provider ?? providers[0]?.id ?? null;
@@ -267,21 +287,37 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
               }
             />
           ))}
-          {places.length > 0 && (
+          {allPlaces.length > 0 && (
             <SettingsRow
               label="Runs on"
               help={placedHost
                 ? `${placedHost.label} stays on, so the address answers while this computer sleeps.`
-                : 'The address answers while this computer is awake.'}
+                : toConnect.length > 0
+                  ? `${toConnect[0].label} stays on, but Walnut found it in ~/.ssh/config and does not connect to it until you say so.`
+                  : 'The address answers while this computer is awake.'}
               data-testid="browser-access-runs-on"
               control={
-                <SegmentedControl
-                  aria-label="Runs on"
-                  value={placedOn}
-                  disabled={busy}
-                  onChange={(v) => { if (v !== placedOn) void write({ run_on: v }); }}
-                  options={places.map((p) => ({ value: p.id, label: p.label, testId: `browser-access-runs-on-${p.id}` }))}
-                />
+                <span className="settings-addons-inline">
+                  {places.length > 1 && (
+                    <SegmentedControl
+                      aria-label="Runs on"
+                      value={placedOn}
+                      disabled={busy}
+                      onChange={(v) => { if (v !== placedOn) void write({ run_on: v }); }}
+                      options={places.map((p) => ({ value: p.id, label: p.label, testId: `browser-access-runs-on-${p.id}` }))}
+                    />
+                  )}
+                  {toConnect.map((p) => (
+                    <SettingsButton
+                      key={p.id}
+                      disabled={connecting !== null}
+                      onClick={() => void connectFound(p.id)}
+                      data-testid={`browser-access-connect-${p.id}`}
+                    >
+                      {connecting === p.id ? 'Connecting...' : `Connect ${p.label} first`}
+                    </SettingsButton>
+                  ))}
+                </span>
               }
             />
           )}

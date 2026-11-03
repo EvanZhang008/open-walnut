@@ -50,7 +50,10 @@
 }
 /* The way the phone used last: framed, so "which one is active" reads at a glance. */
 .devices-way[data-in-use='true'] { border-color: var(--success); box-shadow: inset 0 0 0 1px var(--success); }
-.devices-way[data-open='true'] { border-color: var(--accent); }
+/* A card opens its way's sub-page from anywhere on it. */
+.devices-way { cursor: pointer; }
+.devices-way:hover { border-color: var(--accent); }
+.devices-way-chevron { margin-left: 6px; font-size: 15px; line-height: 1; }
 .devices-way-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .devices-way-title { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 20px; color: var(--fg); }
 .devices-way-tag {
@@ -84,7 +87,7 @@
 .devices-way-foot { margin-top: auto; padding-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
 .devices-ways-home { margin: 8px 0 0; padding: 0 calc(var(--settings-row-pad-x, 16px) + 1px); }
 
-/* A way's own settings, opened from its card, right under the cards. */
+/* A way's own settings, on its sub-page (Phones & Cloud > Tailscale). */
 .devices-way-panel { margin: 0 0 22px; }
 
 /* The pairing QR dialog. */

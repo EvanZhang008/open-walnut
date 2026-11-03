@@ -30,6 +30,9 @@ export interface ExposePlace {
   id: string;
   label: string;
   alwaysOn: boolean;
+  /** A host found in ~/.ssh/config that Walnut does not connect to until the person says so:
+   *  offered as "Connect <label> first", never picked directly. */
+  needsConnect?: true;
 }
 
 export interface ExposeProviderOption {

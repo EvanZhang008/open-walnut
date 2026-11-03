@@ -535,15 +535,23 @@ export class UpdateStatusCache {
       for (const id of target.pluginIds) rowKeyOf[id] = target.rowKey
       if (!seen.has(target.rowKey)) seen.set(target.rowKey, target)
     }
+    // Each row's local facts are a few git reads in its own directory: read them all at once
+    // (a row per checkout, so no two reads share a `.git`), then build the rows in order.
+    const reads = await mapLimit([...seen], LOCAL_READS_AT_ONCE, async ([rowKey, target]) => {
+      const entry = this.entries.get(rowKey)
+      if ((target.kind !== 'linked' && target.cloned === false) || !entry) return { entry, local: null }
+      return { entry, local: await this.localState(target, entry) }
+    })
+    let index = 0
     for (const [rowKey, target] of seen) {
+      const { entry, local } = reads[index++]
       // Rule 0 (spec 4, C47): a source whose directory is gone is `missing` before any
       // cache, memo or fetch error has a say. The memo of the last check said `current`
       // about files that no longer exist, and nothing here can fetch its way out of that.
       if (target.kind !== 'linked' && target.cloned === false) {
-        rows[rowKey] = this.rowOf(rowKey, this.entries.get(rowKey), { kind: 'missing' }, target.kind)
+        rows[rowKey] = this.rowOf(rowKey, entry, { kind: 'missing' }, target.kind)
         continue
       }
-      const entry = this.entries.get(rowKey)
       if (!entry) {
         rows[rowKey] = this.rowOf(rowKey, undefined, { kind: 'unchecked' }, target.kind)
         needRefresh.push(target)
@@ -554,7 +562,6 @@ export class UpdateStatusCache {
       // about it: `unchecked`, refreshed in the background.
       const memo = this.memos.get(rowKey)
       let state: UpdateState = memo?.state ?? { kind: 'unchecked' }
-      const local = await this.localState(target, entry)
       if (local) {
         state = local.state
         if (local.moved) needRefresh.push(target)
@@ -581,4 +588,21 @@ export class UpdateStatusCache {
       } : {}),
     }
   }
+}
+
+/** Rows whose local git facts are read at once: a page poll never starts a git process per row. */
+const LOCAL_READS_AT_ONCE = 4
+
+/** `items` mapped by `fn`, at most `limit` running at a time, results in order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      out[index] = await fn(items[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
 }

@@ -368,7 +368,9 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  await expect(page.locator('#cloud.settings-section')).toBeAttached()
+  // The Cloud companion is its own sub-page now: not on this one, a row under it in the nav.
+  await expect(page.locator('#cloud.settings-section')).toHaveCount(0)
+  await expect(page.getByTestId(NAV('cloud'))).toBeVisible()
   const row = page.locator('.devices-row', { hasText: 'Test phone' })
   await expect(row).toBeVisible()
 

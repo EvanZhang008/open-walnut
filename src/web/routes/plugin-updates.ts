@@ -31,6 +31,7 @@ import {
 } from '../../core/plugins/update-status.js'
 import { createSubsystemLogger } from '../../logging/index.js'
 import { CLOUD_LINKED_NOTE, linkedRowKeyOf, type LinkedCheckoutOps } from './plugin-linked-ops.js'
+import { LINKED_LISTING_COLD_GRACE_MS, createLinkedListingCache, type LinkedListingCache } from './plugin-linked-listing.js'
 
 const log = createSubsystemLogger('plugin-updates')
 
@@ -41,6 +42,8 @@ export interface PluginUpdatesRouterDeps {
   cache: UpdateStatusCache
   /** Linked-checkout listing (its real implementation carries its own 5 s budget). */
   linked: LinkedCheckoutOps
+  /** The in-memory listing shared with the registry (server.ts). Absent: one is built over `linked`. */
+  linkedListing?: LinkedListingCache
   listSources(): Promise<PluginSourceView[]>
   /** Ids of the plugins the store lists, builtin ones excluded. */
   installedIds(): string[]
@@ -55,6 +58,8 @@ interface CollectedTargets {
   targets: UpdatableTarget[]
   /** Linked rows a replica cannot check: answered `unsupported` without touching git. */
   cloudLinked: Array<{ rowKey: string; pluginIds: string[] }>
+  /** No linked listing yet (first ask after a start): its rows are missing from `targets`. */
+  linkedPending?: boolean
 }
 
 function emptyResponse(minIntervalMs: number): PluginUpdatesResponse {
@@ -70,20 +75,28 @@ const CLOUD_LINKED_ROW: UpdateStatusRow = {
 export function createPluginUpdatesRouter(deps: PluginUpdatesRouterDeps): Router {
   const router = Router()
   const cloudMode = deps.cloudMode ?? CLOUD_MODE
+  const linkedListing = deps.linkedListing ?? createLinkedListingCache(deps.linked)
 
   /**
    * Everything the cache should know about. Linked checkouts are grouped by realpath;
    * sources ride as one row per slug (a `cloned: false` source has no plugins yet and
    * still gets a row, so the store can offer Restore). Each half fails on its own.
    */
-  const collectTargets = async (): Promise<CollectedTargets> => {
+  const collectTargets = async (opts: { freshLinked?: boolean } = {}): Promise<CollectedTargets> => {
     const installed = new Set(deps.installedIds())
     const targets: UpdatableTarget[] = []
     const cloudLinked: CollectedTargets['cloudLinked'] = []
 
+    // From memory (the scan behind it runs git on every checkout and takes seconds); Check
+    // now waits for a fresh one, so a link made a minute ago is in its batch.
     let checkouts = new Map<string, LinkedCheckoutInfo>()
+    let linkedPending = false
     try {
-      checkouts = await deps.linked.list()
+      const listing = opts.freshLinked
+        ? await linkedListing.refresh()
+        : await linkedListing.read({ graceMs: LINKED_LISTING_COLD_GRACE_MS })
+      if (listing) checkouts = listing.found
+      else linkedPending = true
     } catch (error) {
       log.warn('plugin updates: linked scan failed', { error: String(error) })
     }
@@ -130,14 +143,14 @@ export function createPluginUpdatesRouter(deps: PluginUpdatesRouterDeps): Router
         ...(kind === 'npm' && source.resolved ? { resolved: source.resolved } : {}),
       })
     }
-    return { targets, cloudLinked }
+    return { targets, cloudLinked, ...(linkedPending ? { linkedPending } : {}) }
   }
 
   router.get('/', async (req, res) => {
     const refresh = req.query.refresh === '1'
     let collected: CollectedTargets = { targets: [], cloudLinked: [] }
     try {
-      collected = await collectTargets()
+      collected = await collectTargets({ freshLinked: refresh })
     } catch (error) {
       log.warn('plugin updates: could not collect targets', { error: String(error) })
     }
@@ -146,7 +159,9 @@ export function createPluginUpdatesRouter(deps: PluginUpdatesRouterDeps): Router
       // Force first, so the snapshot below already reports the batch as in flight and its
       // own stale check joins that batch instead of starting a second one.
       if (refresh) void deps.cache.refreshAll(collected.targets, { force: true }).catch(() => undefined)
-      body = await deps.cache.snapshot(collected.targets)
+      // Without the linked rows a background batch would check only half the list; the
+      // page polls while `refreshing` says so, and that poll finds the listing in memory.
+      body = await deps.cache.snapshot(collected.targets, collected.linkedPending ? { autoRefresh: false } : {})
     } catch (error) {
       log.warn('plugin updates: snapshot failed', { error: String(error) })
       body = emptyResponse(PLUGIN_UPDATE_MIN_INTERVAL_MS)
@@ -155,7 +170,7 @@ export function createPluginUpdatesRouter(deps: PluginUpdatesRouterDeps): Router
       body.rows[row.rowKey] = CLOUD_LINKED_ROW
       for (const id of row.pluginIds) body.rowKeyOf[id] = row.rowKey
     }
-    if (refresh) body.refreshing = true
+    if (refresh || collected.linkedPending) body.refreshing = true
     res.status(refresh ? 202 : 200).json(body)
   })
 

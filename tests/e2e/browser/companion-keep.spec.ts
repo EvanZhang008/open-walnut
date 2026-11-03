@@ -378,6 +378,8 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
     const section = page.locator('#devices')
     await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
     await expect(section.locator('.settings-row').first()).toBeVisible()
+    // Its sub-page holds only the companion's setup.
+    await openWay(page, 'cloud')
     await expect(page.getByTestId('companion-keep')).toHaveCount(0)
   })
 })

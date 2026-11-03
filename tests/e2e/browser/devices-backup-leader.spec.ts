@@ -56,13 +56,12 @@ async function openDevices(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  const section = page.locator('#devices')
-  await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
-  await openWay(page, 'cloud')
-  return section
+  await expect(page.locator('#devices')).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  // The Cloud companion sub-page holds the row.
+  return openWay(page, 'cloud')
 }
 
-async function shot(page: Page, name: string, region = page.locator('#devices')) {
+async function shot(page: Page, name: string, region = page.locator('#cloud')) {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
   await region.screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
@@ -146,7 +145,7 @@ test.describe('Settings → Phones & Cloud: the cloud companion takes over', () 
   test('no cloud companion: no row', async ({ page }) => {
     await mockDevices(page, [LAN])
     const section = await openDevices(page)
-    await expect(section.locator('.settings-row').first()).toBeVisible()
+    await expect(section).toBeVisible()
     await expect(page.locator('#devices-backup-leader')).toHaveCount(0)
     await expect(section).not.toContainText('Cloud companion takes over')
   })

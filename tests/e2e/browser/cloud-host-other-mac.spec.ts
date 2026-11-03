@@ -29,6 +29,7 @@ import { execFileSync } from 'node:child_process'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { expandSystemAttention } from './host-problems-helpers'
 import { draftCwdPill, loadHome, openDraft } from './draft-helpers'
+import { backToDevices, openWay } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -215,28 +216,32 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   // 5. Unpair this Mac, confirmed: the companion drops it and the credential it
   // minted. The section says so plainly (no red, no "may have been"), Cloud is
   // no longer a pairing target, and Cloud Companion no longer says Connected.
+  // The Cloud companion sub-page says Connected first.
   section = await openDevices(page)
+  const cloudCard = await openWay(page, 'cloud')
+  await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
+  section = await backToDevices(page)
   await openOthers(section)
   const me = section.locator('.devices-row[data-device-role="self"]')
   await me.getByTestId('devices-unpair-self').click()
   await expect(me.getByRole('alert')).toHaveText(UNPAIR_WARNING)
-  const cloudCard = page.locator('#cloud')
-  await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
   await me.getByTestId('devices-unpair-self-confirm').click()
   await expect(section.locator('.settings-notice-info', { hasText: UNPAIRED })).toHaveText(UNPAIRED, { timeout: 30_000 })
   await expect(section.locator('.settings-notice-error')).toHaveCount(0)
   await expect(section).not.toContainText('may have been unpaired')
   await expect(section.locator('.settings-empty')).toHaveText('No phones paired with this Mac.')
   await expect(section.getByTestId('devices-target-cloud')).toHaveCount(0)
-  await expect(cloudCard.getByText('Not paired', { exact: true })).toBeVisible({ timeout: 30_000 })
-  await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
-  await expect(cloudCard).toContainText(UNPAIRED)
   await expect(section).not.toContainText('No phones paired yet.')
   await expect(section.locator('.devices-row[data-device-role="self"]')).toHaveCount(0)
   const boxNames = (JSON.parse(fs.readFileSync(f.boxAuth, 'utf-8')) as { devices: Array<{ name: string }> }).devices.map((d) => d.name)
   expect(boxNames).not.toContain('mac-second')
   expect(owners(f)).toEqual([])
   await section.screenshot({ path: path.join(SHOTS, `devices-unpaired-plain-${browserName}.png`) })
+  // And its sub-page no longer says Connected.
+  await openWay(page, 'cloud')
+  await expect(cloudCard.getByText('Not paired', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
+  await expect(cloudCard).toContainText(UNPAIRED)
   await cloudCard.scrollIntoViewIfNeeded()
   await cloudCard.screenshot({ path: path.join(SHOTS, `cloud-companion-unpaired-${browserName}.png`) })
   expect(errors).toEqual([])

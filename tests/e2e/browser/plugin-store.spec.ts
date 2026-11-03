@@ -267,65 +267,36 @@ test('lists what is installed and what the catalog offers, in one section', asyn
   expect(pageErrors, 'rendering the store must not throw').toEqual([])
 })
 
-test('installing still requires the trust acknowledgement, catalog entries included', async ({ page }) => {
+test('Install is the consent: no trust switch, the free-form form and a catalog entry both say what installing means', async ({ page }) => {
   await openPlugins(page)
 
   const store = page.locator('#plugin-store')
   const urlField = store.locator('#plugin-source-url')
-  const addButton = store.getByRole('button', { name: 'Add', exact: true })
-  const trust = store.getByTestId('plugin-trust-confirm')
+  const addButton = store.getByRole('button', { name: 'Install', exact: true })
 
   // The free-form install is folded away until asked for.
   await expect(urlField).toHaveCount(0)
-  await expect(trust).toHaveCount(0)
   await page.getByTestId('apps-add-from-link').click()
   await expect(urlField).toBeVisible({ timeout: 30_000 })
+  await expect(store.getByTestId('plugin-trust-confirm')).toHaveCount(0)
 
-  // Nothing typed: nothing to add.
+  // Nothing typed: nothing to install. A source typed in is enough.
   await expect(urlField).toHaveValue('')
   await expect(addButton).toBeDisabled()
-
-  // A source typed in fills the URL and NOTHING else.
   await urlField.fill('https://example.invalid/store-fixture-plugin.git')
-  await expect(trust).not.toBeChecked()
-  await expect(addButton).toBeDisabled()
-
-  // Only the explicit acknowledgement enables it.
-  await trust.check()
   await expect(addButton).toBeEnabled()
-
-  // The sentence a person has to READ must not be shouted. `.form-group label`
-  // uppercases every label, which caught this one too.
-  await expect(store.locator('.plugin-trust-label')).toHaveCSS('text-transform', 'none')
-  await shoot(page, 'store-1680-install-trust')
-
-  // And unticking takes the ability away again.
-  await trust.uncheck()
-  await expect(addButton).toBeDisabled()
+  await expect(store.locator('.apps-add-form')).toContainText('full access')
+  await shoot(page, 'store-1680-install-consent')
   // The url is a draft the server keeps; leave none behind for the next test.
   await urlField.fill('')
   await expect(urlField).toHaveValue('')
 
-  // A catalog entry's own Install is gated the same way, on its page.
+  // A catalog entry's own Install, on its page: enabled, with the same sentence beside it.
   const id = fixture!.overlayEntryId
   await openPluginDetail(page, id)
-  const install = page.getByTestId(`plugin-install-${id}`)
-  const entryTrust = page.getByTestId(`plugin-trust-${id}`)
-  await expect(entryTrust).toHaveAttribute('aria-checked', 'false')
-  await expect(install).toBeDisabled()
-  await entryTrust.click()
-  await expect(entryTrust).toHaveAttribute('aria-checked', 'true')
-  await expect(install).toBeEnabled()
-  await entryTrust.click()
-  await expect(install).toBeDisabled()
-
-  // Trust is granted per visit, never sticky: on, leave, come back, and it is off.
-  await entryTrust.click()
-  await expect(install).toBeEnabled()
-  await backToApps(page)
-  await openPluginDetail(page, id)
-  await expect(page.getByTestId(`plugin-trust-${id}`)).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId(`plugin-install-${id}`)).toBeDisabled()
+  await expect(page.getByTestId(`plugin-trust-${id}`)).toHaveCount(0)
+  await expect(page.getByTestId(`plugin-install-${id}`)).toBeEnabled()
+  await expect(page.getByTestId(`plugin-install-consent-${id}`)).toContainText('full access')
   await backToApps(page)
 })
 
@@ -450,7 +421,9 @@ test('a bundled plugin installs in one click, and Remove takes it back to Get mo
   // And a fresh page load agrees with what the store just said.
   await openPlugins(page)
   await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 30_000 })
-  expect(pageErrors, 'installing and removing a bundled plugin must not throw').toEqual([])
+  // WebKit reports a request a runtime reload cut off as "Fetch API cannot load ... due to
+  // access control checks", even one the page caught (plugin-install-link.spec.ts test 1).
+  expect(pageErrors.filter((m) => !/due to access control checks/.test(m)), 'installing and removing a bundled plugin must not throw').toEqual([])
 })
 
 test('a part has no card: its parent names it, lists it with its switch, and its own page holds its settings', async ({ page }) => {

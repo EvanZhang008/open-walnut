@@ -34,6 +34,7 @@ import {
   BLOCKING_READINESS_KINDS, HOST_REMOVED_NOTE, OVERRIDABLE_KINDS, REMOTE_OFF_NOTE, hostFailureHeadline, hostGateBody,
   type HostGateBody,
 } from '../hosts/host-problem.js'
+import { foundHostWaitingNote, foundHostWaits } from '../hosts/found-hosts.js'
 import type { HostReadiness } from '../hosts/host-readiness.js'
 import type { HostStatus } from '../hosts/host-status.js'
 import type { ConfigHostDef, ConnectNowResult } from '../hosts/host-connect-action.js'
@@ -136,6 +137,8 @@ export async function hostStartGate(input: HostStartGateInput, depsArg?: HostSta
   const budget = input.deadlineMs ?? GATE_CONNECT_DEADLINE_MS + GATE_CHECK_DEADLINE_MS
   const left = () => Math.max(0, budget - (now() - started))
   const def = await deps.configDef(host)
+  // A found host waiting for the person's yes (core/hosts/found-hosts.ts): say where the yes is given.
+  if (def && foundHostWaits(def)) return hostGateBody({ code: 'host_removed', host, headline: foundHostWaitingNote(def.label ?? host) })
   if (!def || def.enabled === false) return hostGateBody({ code: 'host_removed', host, headline: HOST_REMOVED_NOTE })
   const label = def.label ?? host
   let status = deps.frame(host, def)

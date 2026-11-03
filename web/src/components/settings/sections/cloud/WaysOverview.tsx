@@ -1,8 +1,8 @@
 /**
  * Top of Settings › Phones & Cloud: one line on how the phone reaches Walnut right
- * now, then the three ways to reach it away from home side by side. Each card's
- * button opens that way's own settings right under the cards (DevicesSection owns
- * which one is open). The words and states come from ways-model.ts.
+ * now, then the three ways to reach it away from home side by side. Each card opens
+ * that way's own sub-page (Phones & Cloud > Tailscale, as in System Settings), from
+ * its button or anywhere on the card. The words and states come from ways-model.ts.
  */
 import type { NowLine, Way, WayId } from './ways-model';
 import { SAME_WIFI_LINE } from './ways-model';
@@ -12,11 +12,10 @@ import '@/styles/devices-ways.css';
 interface Props {
   now: NowLine;
   ways: readonly Way[];
-  openWay: WayId | null;
   onAction: (id: WayId) => void;
 }
 
-export function WaysOverview({ now, ways, openWay, onAction }: Props) {
+export function WaysOverview({ now, ways, onAction }: Props) {
   return (
     <div className="devices-ways" data-testid="devices-ways">
       <div className="devices-now" data-tone={now.tone} data-testid="devices-now">
@@ -39,17 +38,17 @@ export function WaysOverview({ now, ways, openWay, onAction }: Props) {
       </div>
       <div className="devices-ways-grid">
         {ways.map((w) => {
-          const open = openWay === w.id;
           return (
+            // The whole card drills in; its button is the keyboard and screen reader way there.
             <section
               key={w.id}
               className="devices-way"
               data-way={w.id}
               data-dot={w.dot}
               data-in-use={w.inUse ? 'true' : undefined}
-              data-open={open ? 'true' : undefined}
               aria-label={w.title}
               data-testid={`devices-way-${w.id}`}
+              onClick={(e) => { if (!(e.target as Element).closest('button') && !window.getSelection()?.toString()) onAction(w.id); }}
             >
               <div className="devices-way-head">
                 <h5 className="devices-way-title">{w.title}</h5>
@@ -64,13 +63,12 @@ export function WaysOverview({ now, ways, openWay, onAction }: Props) {
               </dl>
               <div className="devices-way-foot">
                 <SettingsButton
-                  variant={w.action.primary && !open ? 'primary' : 'default'}
-                  aria-expanded={open}
-                  aria-controls={`devices-way-panel-${w.id}`}
+                  variant={w.action.primary ? 'primary' : 'default'}
                   data-testid={`devices-way-${w.id}-action`}
                   onClick={() => onAction(w.id)}
                 >
-                  {open ? 'Close' : w.action.label}
+                  {w.action.label}
+                  <span className="devices-way-chevron" aria-hidden="true">›</span>
                 </SettingsButton>
               </div>
             </section>

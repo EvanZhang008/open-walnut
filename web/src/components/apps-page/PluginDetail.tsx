@@ -7,7 +7,7 @@
  * A plugin that is a part of another (`slack-mcp` of Slack) has a page too, reached from
  * its parent's Parts, and says whose part it is.
  */
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { useAppCatalog } from '@/apps/hooks'
@@ -35,6 +35,7 @@ import { appsOfPlugin, StoreNotices } from './PluginStoreGrid'
 import { PartsSection, SourceSection, VersionSection } from './plugin-detail-sections'
 import { isRunning, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import type { PluginStore } from './usePluginStore'
+import { ExposeGuide } from './ExposeGuide'
 import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
 
 export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen }: {
@@ -67,7 +68,7 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen }
     )
   }
   // Keyed by plugin: moving to another plugin's page (a part, a dependency) must never carry
-  // this one's trust switch or an armed Remove along with it.
+  // this one's armed Remove along with it.
   return <PluginDetailBody key={row.id} store={store} row={row} config={config} onSave={onSave} onBack={onBack} onOpen={onOpen} back={back} />
 }
 
@@ -83,7 +84,6 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
   const navigate = useNavigate()
   const catalog = useAppCatalog()
   const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
-  const [trusted, setTrusted] = useState(false)
   const tints = pluginTileTints(store.rows)
   const parentOf = partParents(store.installed)
   const parentId = parentOf.get(row.id)
@@ -231,15 +231,12 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
       )}
       {(row.source.kind === 'git' || row.source.kind === 'npm') && (
         <>
-          <label className="apps-trust">
-            <ToggleSwitch id={`plugin-trust-${row.id}`} data-testid={`plugin-trust-${row.id}`} checked={trusted} onChange={setTrusted} />
-            I trust this source
-          </label>
+          <span className="apps-install-consent" data-testid={`plugin-install-consent-${row.id}`}>
+            Its code runs inside Walnut with full access to your tasks, notes, credentials and this computer.
+          </span>
           <SettingsButton
             variant="primary"
             data-testid={`plugin-install-${row.id}`}
-            disabled={!trusted}
-            title={!trusted ? 'Turn on the trust switch first: its code runs inside Walnut with full access to your tasks, notes, credentials and this computer.' : undefined}
             busy={store.busy === 'add'}
             busyLabel="Installing..."
             onClick={async () => {
@@ -248,7 +245,6 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
               try {
                 // Anything it needs is asked on this page, where the install was pressed.
                 await store.installSource(row.source.kind === 'npm' ? { spec: row.source.spec ?? row.id } : { url: row.source.url ?? '' }, { rowId: row.id })
-                setTrusted(false)
               } catch (err) {
                 store.setError(err instanceof Error ? err.message : String(err))
               } finally {
@@ -315,6 +311,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
           ) : null}
         </div>
       </header>
+      {row.installed && row.status !== 'disabled' && <ExposeGuide pluginIds={[row.id]} />}
 
       {(asking && store.cascadeAsk) || row.status === 'needs-dependency' || store.pending?.rowId === row.id ? (
         <SettingsGroup className="apps-detail-group">

@@ -74,9 +74,17 @@ export type PluginStore = ReturnType<typeof usePluginStore>
 export function usePluginStore() {
   const [registry, setRegistry] = useState<RegistryResponse | null>(() => lastRegistry)
   const [sources, setSources] = useState<PluginSource[]>([])
+  // The first read of the installed sources answered (or failed): until then nobody can say
+  // whether an install link names a source that is already installed.
+  const [sourcesLoaded, setSourcesLoaded] = useState(false)
+  // The last read of them failed: what is installed is not known now.
+  const [sourcesFailed, setSourcesFailed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null) // 'add' | 'link' | plugin id | source slug | busy key
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // The plugins the install behind `notice` brought in: its notice leads to what they set up next.
+  const [addedPluginIds, setAddedPluginIds] = useState<string[]>([])
+  useEffect(() => { if (notice === null) setAddedPluginIds([]) }, [notice])
   const [restartNeeded, setRestartNeeded] = useState(false)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   // Account links, by plugin id: which plugins have one, and their latest state.
@@ -112,9 +120,12 @@ export function usePluginStore() {
     if (registryRes.status === 'fulfilled' && registryRes.value.ok) {
       try { lastRegistry = await registryRes.value.json(); setRegistry(lastRegistry) } catch { /* keep the last list */ }
     }
+    let sourcesRead = false
     if (sourcesRes.status === 'fulfilled' && sourcesRes.value.ok) {
-      try { setSources(await sourcesRes.value.json()) } catch { /* keep the last list */ }
+      try { setSources(await sourcesRes.value.json()); sourcesRead = true } catch { /* keep the last list */ }
     }
+    setSourcesFailed(!sourcesRead)
+    setSourcesLoaded(true)
     if (connectionsRes.status === 'fulfilled' && connectionsRes.value.ok) {
       try {
         const body = await connectionsRes.value.json() as { connections?: ConnectionReport[] }
@@ -144,6 +155,9 @@ export function usePluginStore() {
 
   // A change made anywhere else (another tab, the author CLI, a reload) arrives as this event.
   useEvent('plugin:runtime-changed', () => { void requestRefresh() })
+  // The server keeps the linked-checkout listing in memory and rescans it in the background;
+  // a rescan that found something new (or the first one after a start) says so here.
+  useEvent('plugin:linked-changed', () => { void requestRefresh() })
 
   const rows = registry?.rows ?? []
   const installed = rows.filter((row) => row.installed)
@@ -246,6 +260,7 @@ export function usePluginStore() {
     // Only this source was installed. Anything its plugins need is a second question.
     const plan = (body.pendingDependencies ?? []) as DependencyPlanItem[]
     setPending(plan.length > 0 && body.slug ? { slug: body.slug as string, plan, ...(opts.rowId ? { rowId: opts.rowId } : {}) } : null)
+    setAddedPluginIds(((body.plugins ?? []) as Array<{ id?: string | null }>).map((p) => p.id).filter((id): id is string => typeof id === 'string'))
     setNotice(count > 0
       ? `Added${what}: found ${count} plugin${count === 1 ? '' : 's'}. New plugins are active now; open one that needs setup to finish it.`
       : `Added${what}, but no plugins found (no manifest.json at the root or in top-level folders).`)
@@ -471,7 +486,7 @@ export function usePluginStore() {
     .filter((slug): slug is string => Boolean(slug) && updates.rows[sourceRowKey(slug!)]?.state.kind !== 'missing'))
 
   return {
-    registry, rows, installed, available, sources, connections, onConnectionReport,
+    registry, rows, installed, available, sources, sourcesLoaded, sourcesFailed, addedPluginIds, connections, onConnectionReport,
     busy, setBusy, error, setError, notice, setNotice, restartNeeded, copiedKey, copy,
     feedback, setRowFeedback, cascadeAsk, setCascadeAsk, pending, setPending,
     pendingToggle, toggleError, nameOf, requestRefresh,

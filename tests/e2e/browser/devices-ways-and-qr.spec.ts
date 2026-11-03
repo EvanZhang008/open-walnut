@@ -3,8 +3,9 @@
  *
  *   1. One line on how the phone reaches Walnut now, then the three ways to reach
  *      it away from home side by side (cloud companion, Tailscale, browser link),
- *      the one in use framed. Each card's button opens that way's own settings
- *      right under the cards, one at a time; nothing of them shows until asked.
+ *      the one in use framed. Each way is its own sub-page (2026-11-02, the user:
+ *      "sub menus, like ios, mac"): its card, or its row indented under Phones &
+ *      Cloud in the sidebar, opens it; a back link (and on a phone, Back) returns.
  *   2. Show QR and Pair new device open the code in a dialog in front of the user:
  *      a paired phone's new code asks first (it signs the phone out), the code says
  *      how to scan it, and the dialog cannot be closed while the code is being made.
@@ -154,39 +155,112 @@ test('the pane says how the phone reaches Walnut now, then the three ways side b
   await shot(page, 'pane')
 })
 
-test('each card opens its own settings under the cards, one at a time', async ({ page }) => {
+test('each way is its own sub-page under Phones & Cloud: card, sidebar row, back link, deep links', async ({ page }) => {
   await mockDevices(page)
-  const section = await openDevices(page)
+  let section = await openDevices(page)
+  const layout = page.locator('.settings-layout')
 
+  // The sidebar: Phones & Cloud is the main entry; its three sub-pages show indented under it.
+  const subRows = page.locator('.settings-nav-subitem')
+  await expect(subRows).toHaveText(['Cloud companion', 'Tailscale', 'Browser link'])
+  await expect(page.getByTestId('settings-nav-devices')).toHaveAttribute('aria-current', 'page')
+  const parentX = (await page.getByTestId('settings-nav-devices').locator('.settings-pane-tile').boundingBox())!.x
+  expect((await subRows.first().locator('.settings-pane-tile').boundingBox())!.x).toBeGreaterThan(parentX + 10)
+  await expect(page.getByTestId('settings-pane-back')).toHaveCount(0)
+  await shot(page, 'main-entry', layout)
+
+  // A card's button drills in: only that way, a back link above its title.
   const tsBtn = section.getByTestId('devices-way-tailscale-action')
-  await expect(tsBtn).toHaveText('Set up Tailscale')
+  await expect(tsBtn).toContainText('Set up Tailscale')
   await tsBtn.click()
-  await expect(tsBtn).toHaveText('Close')
-  await expect(tsBtn).toHaveAttribute('aria-expanded', 'true')
-  const tsPanel = section.getByTestId('devices-way-panel-tailscale')
-  await expect(tsPanel.getByRole('heading', { name: 'Tailscale', exact: true })).toBeVisible()
-  await expect(tsPanel.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store')
-  // The panel sits right under the cards, above the phones.
-  const panelTop = (await tsPanel.boundingBox())!.y
-  expect(panelTop).toBeGreaterThan((await section.getByTestId('devices-way-tailscale').boundingBox())!.y)
-  expect(panelTop).toBeLessThan((await section.getByTestId('devices-phones-group').boundingBox())!.y)
-  await shot(page, 'tailscale-open')
+  await expect(page).toHaveURL(/#devices-tailscale$/)
+  const ts = page.locator('#devices-tailscale')
+  await expect(page.locator('#devices-tailscale-title')).toHaveText('Tailscale')
+  await expect(ts.getByTestId('devices-way-panel-tailscale').locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store')
+  await expect(page.locator('#devices')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-devices-tailscale')).toHaveAttribute('aria-current', 'page')
+  await expect(subRows).toHaveCount(3)
+  const back = page.getByTestId('settings-pane-back')
+  await expect(back).toHaveText(/Phones & Cloud/)
+  expect((await back.boundingBox())!.y).toBeLessThan((await page.locator('#devices-tailscale-title').boundingBox())!.y)
+  await shot(page, 'sub-page-tailscale', layout)
 
-  // Another card: the first closes.
-  await section.getByTestId('devices-way-browser-action').click()
-  await expect(section.getByTestId('devices-way-panel-tailscale')).toHaveCount(0)
-  const browserPanel = section.getByTestId('devices-way-panel-browser')
-  await expect(browserPanel.getByRole('heading', { name: 'Browser link', exact: true })).toBeVisible()
-  await expect(browserPanel.getByTestId('browser-access')).toBeVisible()
+  // Back to the main entry, then the sidebar row for Browser link.
+  await back.click()
+  await expect(page).toHaveURL(/#devices$/)
+  section = page.locator('#devices')
+  await expect(section.getByTestId('devices-ways')).toBeVisible()
+  await page.getByTestId('settings-nav-devices-browser').click()
+  await expect(page.locator('#devices-browser').getByTestId('browser-access')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('devices-way-panel-browser')).toBeVisible()
 
-  // Cloud companion's own settings: the companion is on, so its groups show.
-  await section.getByTestId('devices-way-cloud-action').click()
-  const cloudPanel = section.getByTestId('devices-way-panel-cloud')
-  await expect(cloudPanel.getByRole('heading', { name: 'While this Mac is away' })).toBeVisible()
-  await expect(cloudPanel.getByTestId('devices-cloud-open')).toHaveAttribute('href', '#cloud')
+  // By keyboard the back link lands focus on the main entry's title, never on the page body.
+  await page.getByTestId('settings-pane-back').focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('#devices-title')).toBeFocused()
 
-  await section.getByTestId('devices-way-cloud-action').click()
-  await expect(section.locator('.devices-way-panel')).toHaveCount(0)
+  // Anywhere on a card drills in too: the Cloud companion page holds its setup and its own settings.
+  await page.locator('#devices').getByTestId('devices-way-cloud').locator('.devices-way-what').click()
+  await expect(page).toHaveURL(/#cloud$/)
+  const cloudPanel = page.locator('#cloud').getByTestId('devices-way-panel-cloud')
+  await expect(cloudPanel.getByRole('heading', { name: 'While this Mac is away' })).toBeVisible({ timeout: 30_000 })
+  await expect(cloudPanel.getByTestId('companion-keep')).toBeVisible()
+
+  // Old in-page anchors and rows on a sub-page open that sub-page (a link written to the hash).
+  for (const [hash, pane] of [['#devices-way-panel-tailscale', 'devices-tailscale'], ['#devices-way-browser', 'devices-browser'], ['#devices-backup-leader', 'cloud']] as const) {
+    await page.evaluate((h) => { window.location.hash = h }, hash)
+    await expect(page.getByTestId(`settings-nav-${pane}`)).toHaveAttribute('aria-current', 'page')
+  }
+  await expect(page.locator('#devices-backup-leader')).toBeInViewport()
+
+  // Another pane folds the sub-page rows away.
+  await page.getByTestId('settings-nav-general').click()
+  await expect(subRows).toHaveCount(0)
+})
+
+test('on a phone, a way opens from its card and Back returns to Phones & Cloud, then the list', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockDevices(page)
+  await page.goto('/')
+  await page.waitForLoadState('domcontentloaded')
+  await page.getByRole('button', { name: 'Menu', exact: true }).click({ timeout: 60_000 })
+  await page.locator('#primary-sidebar').getByRole('link', { name: /settings/i }).first().click()
+  const layout = page.locator('.settings-layout')
+  await expect(layout).toHaveAttribute('data-phone-settings', 'list', { timeout: 60_000 })
+  const topbar = page.locator('.phone-topbar')
+  // The list keeps the sub-pages folded: a phone drills in from the pane, as iOS does.
+  await page.getByTestId('settings-nav-devices').click()
+  await expect(layout).toHaveAttribute('data-phone-settings', 'pane')
+  await expect(topbar).toContainText('Phones & Cloud')
+  await expect(page.locator('.settings-nav-subitem')).toHaveCount(0)
+
+  // The layer's own history entry keeps its marker through every move inside it, so each
+  // Back pops exactly one entry (no empty Back).
+  const marker = () => page.evaluate(() => (history.state as { walnutOverlay?: { id?: string } } | null)?.walnutOverlay?.id ?? null)
+  for (const via of ['bar', 'history'] as const) {
+    await page.locator('#devices').getByTestId('devices-way-tailscale-action').click()
+    await expect(page.locator('#devices-tailscale-title')).toHaveText('Tailscale')
+    await expect(topbar).toContainText('Tailscale')
+    await expect(page.getByTestId('settings-pane-back')).toBeVisible()
+    await expect.poll(marker).toBe('settings-pane:devices-tailscale')
+    if (via === 'bar') await topbar.getByRole('button', { name: 'Back' }).click()
+    else await page.goBack()
+    await expect(layout).toHaveAttribute('data-phone-settings', 'pane')
+    await expect(page.locator('#devices')).toBeVisible({ timeout: 30_000 })
+    await expect(topbar).toContainText('Phones & Cloud')
+    await expect.poll(marker).toBe('settings-pane:devices')
+  }
+  // The in-page back link does the same.
+  await page.locator('#devices').getByTestId('devices-way-browser-action').click()
+  await expect(page.locator('#devices-browser-title')).toHaveText('Browser link')
+  await shot(page, 'phone-sub-page', page.locator('body'))
+  await page.getByTestId('settings-pane-back').click()
+  await expect(page.locator('#devices')).toBeVisible()
+  await expect.poll(marker).toBe('settings-pane:devices')
+  // One more Back reaches the list, on an entry no layer claims.
+  await topbar.getByRole('button', { name: 'Back' }).click()
+  await expect(layout).toHaveAttribute('data-phone-settings', 'list')
+  await expect.poll(marker).toBeNull()
 })
 
 test('Show QR asks in a dialog, then shows the code with how to scan it', async ({ page }) => {
@@ -299,12 +373,12 @@ test('at phone width the cards stack and the dialog fits the screen', async ({ p
   await shot(page, 'phone-width', page.locator('body'))
 })
 
-test('Find a setting reaches a row inside a folded way: the way opens and the row is shown', async ({ page }) => {
+test('Find a setting reaches a row on a way\'s sub-page: the sub-page opens with the row shown', async ({ page }) => {
   await mockDevices(page)
   await openDevices(page)
-  await expect(page.getByTestId('devices-way-cloud-action')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('settings-filter').fill('take over')
+  // The hit is the Cloud companion's own row in the sidebar, named after the row it found.
   await page.locator('.settings-nav').getByText('Cloud companion takes over').first().click()
-  await expect(page.getByTestId('devices-way-cloud-action')).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId('settings-nav-cloud')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#devices-backup-leader')).toBeInViewport({ timeout: 10_000 })
 })

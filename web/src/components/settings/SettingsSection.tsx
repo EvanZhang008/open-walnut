@@ -187,6 +187,8 @@ export interface SettingsGroupProps {
   className?: string
   id?: string
   'data-testid'?: string
+  /** Every other `data-*` attribute goes where the test id goes (the outer element). */
+  [data: `data-${string}`]: string | undefined
 }
 
 export function SettingsGroup({
@@ -198,7 +200,9 @@ export function SettingsGroup({
   className,
   id,
   'data-testid': testId,
+  ...rest
 }: SettingsGroupProps) {
+  const data = Object.fromEntries(Object.entries(rest).filter(([key]) => key.startsWith('data-')))
   const boxRef = useRef<HTMLDivElement>(null)
   // Nesting guard: one closest() per group mount, cheap enough to run always.
   useEffect(() => {
@@ -213,14 +217,14 @@ export function SettingsGroup({
     <div
       ref={boxRef}
       className={`settings-group settings-subcard${className ? ` ${className}` : ''}`}
-      {...(framed ? {} : { id, 'data-testid': testId, ...dim })}
+      {...(framed ? {} : { id, 'data-testid': testId, ...data, ...dim })}
     >
       {children}
     </div>
   )
   if (!framed) return box
   return (
-    <div className="settings-group-block" id={id} data-testid={testId} {...dim}>
+    <div className="settings-group-block" id={id} data-testid={testId} {...data} {...dim}>
       {(hasContent(heading) || hasContent(headingTrailing)) && (
         <div className="settings-group-heading">
           <h4 className="settings-group-title settings-subcard-title">{heading}</h4>

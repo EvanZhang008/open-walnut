@@ -96,8 +96,7 @@ export async function ensureSourceInstalled(page: Page, home: string): Promise<v
   // The free-form install form opens from Get more's "Add from a git or npm link" card.
   if (!(await store.locator('#plugin-source-url').count())) await store.getByTestId('apps-add-from-link').click()
   await store.locator('#plugin-source-url').fill(pathToFileURL(path.join(home, 'native-plugin-repo')).href)
-  await store.getByTestId('plugin-trust-confirm').check()
-  await store.getByRole('button', { name: 'Add', exact: true }).click()
+  await store.getByRole('button', { name: 'Install', exact: true }).click()
   await expect(page.getByTestId('plugin-source-native-plugin-repo')).toBeVisible({ timeout: 30_000 })
 }
 

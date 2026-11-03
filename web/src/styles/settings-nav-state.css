@@ -1,6 +1,6 @@
 /*
- * Settings nav states added after the nav sheet: the scrolled-list edge and
- * two-line match hints. Loaded right after settings-nav.css.
+ * Settings nav states added after the nav sheet: the scrolled-list edge,
+ * two-line match hints, sub-page rows and the back link. Loaded right after settings-nav.css.
  */
 /* N3-14: once the list scrolls, a hairline under the pinned filter gives the
    rows an edge to pass under, like the pane's compact bar. */
@@ -25,3 +25,38 @@
   -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
+
+/* A sub-page's row (Phones & Cloud > Tailscale): indented under its parent's
+   row, with a smaller tile, as macOS nests a sidebar item. The 56px icon rail
+   keeps every tile centred. */
+.settings-container .settings-nav-item.settings-nav-subitem {
+  padding-left: 30px;
+  min-height: 28px;
+  font-size: 13px;
+}
+.settings-container .settings-nav-subitem .settings-pane-tile {
+  transform: scale(0.85);
+}
+@container settings (max-width: 639px) {
+  .settings-container .settings-nav:not(.is-overlay-open) .settings-nav-item.settings-nav-subitem {
+    padding-left: 0;
+  }
+}
+
+/* The way back from a sub-page to the entry it sits under ("< Phones & Cloud"),
+   above the pane title, as System Settings draws its back chevron. */
+.settings-container .settings-pane-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 10px -4px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+}
+.settings-container .settings-pane-back:hover { background: var(--bg-hover); }
+.settings-container .settings-pane-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-container .settings-pane-back-chevron { font-size: 17px; line-height: 1; }

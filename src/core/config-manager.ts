@@ -13,6 +13,7 @@ import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
+import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -278,49 +279,21 @@ export async function getConfig(): Promise<Config> {
 }
 
 /**
- * Merge auto-discovered SSH config hosts into config.hosts.
- * Rules:
- *  - Discovered hosts are added with enabled=true, discovered=true
- *  - Existing manual hosts are never touched (enabled defaults to true if unset)
- *  - A discovered host is skipped when its alias OR its hostname already exists
- *    in config — the user's entry IS that machine (e.g. user-defined 'clouddev'
- *    pointing at the same dev box); showing the raw FQDN again is just noise.
+ * Merge the ~/.ssh/config hosts into config.hosts (core/hosts/found-hosts.ts): a
+ * found host is listed, and once the server asks it waits for the person's yes
+ * before anything dials it. Existing entries are never touched, and a found host
+ * is skipped when its alias OR its hostname already exists in config (the user's
+ * entry IS that machine). Then the read rule: a found host without the yes is off.
  */
 async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
   // A server under test reads no real ~/.ssh/config: its hosts would be swept
   // over real ssh at startup (src/lib/real-ssh-guard.ts).
-  if (!realSshReachAllowed()) return;
-  const discovered = await scanSshConfig();
-  if (discovered.size === 0) return;
-
-  // Initialize hosts if not present
-  if (!config.hosts) {
-    config.hosts = {};
+  if (realSshReachAllowed()) {
+    const discovered = await scanSshConfig();
+    // `companion` names the cloud companion (replication/companion-keep.ts): no host takes it.
+    mergeFoundHosts(config, discovered, { reserved: new Set([COMPANION_ALIAS]), asking: askingAboutFoundHosts(config) });
   }
-
-  // Hostnames already covered by an existing entry (manual or previously merged).
-  const knownHostnames = new Set(
-    Object.values(config.hosts).map((h) => h.hostname.toLowerCase()),
-  );
-
-  for (const [alias, host] of discovered) {
-    // Skip if the alias OR the machine (hostname) is already configured. `companion`
-    // names the cloud companion (replication/companion-keep.ts): no host takes it.
-    if (alias === COMPANION_ALIAS || config.hosts[alias] || knownHostnames.has(host.hostname.toLowerCase())) {
-      continue;
-    }
-
-    // Add discovered host
-    config.hosts[alias] = {
-      hostname: host.hostname,
-      user: host.user,
-      port: host.port,
-      label: host.label,
-      enabled: true,
-      discovered: true,
-    };
-    knownHostnames.add(host.hostname.toLowerCase());
-  }
+  applyFoundHostAnswers(config.hosts);
 }
 
 

@@ -60,6 +60,10 @@ async function openCloud(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
+  // The Cloud companion is its own sub-page under Phones & Cloud, in the sidebar too.
+  const sub = page.getByTestId('settings-nav-cloud')
+  await sub.click()
+  await expect(sub).toHaveAttribute('aria-current', 'page')
   const section = page.locator('#cloud')
   await expect(section).toContainText('Cloud sync', { timeout: 30_000 })
   await expect(section).not.toHaveAttribute('data-crashed', 'true')

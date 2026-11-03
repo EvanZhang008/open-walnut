@@ -120,7 +120,7 @@
   margin: 0 0 12px;
   color: var(--fg-muted);
 }
-.apps-kind .apps-section-title { margin-bottom: 10px; }
+.apps-source .apps-section-title { margin-bottom: 6px; }
 .apps-empty {
   margin-top: 26px;
   padding: 18px;
@@ -345,7 +345,7 @@
   color: var(--fg);
   cursor: pointer;
 }
-.apps-trust { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); }
+.apps-install-consent { color: var(--fg-muted); font-size: 12.5px; max-width: 360px; }
 .apps-detail-group { margin-bottom: 14px; }
 .apps-detail-box:empty { display: none; }
 .apps-about { padding: 12px 16px; }
@@ -412,7 +412,20 @@
 .apps-plugins-bar:empty { display: none; }
 .apps-plugins .settings-notice { margin-top: 16px; }
 .apps-plugins .plugin-link-request { margin-top: 16px; }
-.apps-plugins .apps-kind { margin-top: 14px; }
+.apps-plugins .apps-source { margin-top: 14px; }
+/* A source's head: where it comes from, whether it is current, its verbs; the cards follow. */
+.apps-source-head {
+  margin: 0 0 12px;
+  border-radius: 12px;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--border);
+}
+.apps-source-head .plugin-store-source-head { padding: 8px 14px; min-height: 0; }
+.plugin-install-consent {
+  display: block;
+  margin-top: 6px;
+  color: var(--fg-muted);
+}
 .apps-get-more .settings-group + .settings-group { margin-top: 14px; }
 
 /* ── Make your own ── */
@@ -534,3 +547,7 @@
 /* An Update's result line under the Version row: top-aligned, so opening Details grows it
    downward and the toggle the user pressed stays put (N3-6). */
 .apps-detail .plugin-store-feedback-row { align-items: flex-start; }
+
+/* The next step after a plugin that brings a tunnel: the browser link page. */
+.apps-expose-guide { margin: 12px 0; }
+.apps-expose-guide .settings-notice-action .settings-button { text-decoration: none; white-space: nowrap; }

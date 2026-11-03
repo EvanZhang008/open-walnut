@@ -27,13 +27,14 @@ async function openCloudSection(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-  // The Cloud Companion card has no nav button of its own: it renders right under
-  // the Phones & Cloud (devices) card and shares that pane.
+  // The Cloud companion is a sub-page of Phones & Cloud: its card there opens it.
   const nav = page.getByTestId('settings-nav-devices')
   await expect(nav).toHaveCount(1)
   await expect(nav).toContainText('Phones & Cloud')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', /page|true/)
+  await page.getByTestId('devices-way-cloud-action').click()
+  await expect(page.getByTestId('settings-nav-cloud')).toHaveAttribute('aria-current', 'page')
 
   const section = page.locator('#cloud')
   await section.scrollIntoViewIfNeeded()

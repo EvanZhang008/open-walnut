@@ -16,7 +16,7 @@ export type SettingsGlyphName =
   | 'hand-raised' | 'heart-pulse' | 'tray' | 'magnifier' | 'archive-box'
   | 'phone' | 'server-stack' | 'sliders' | 'bar-chart' | 'target' | 'display'
   | 'ladybug' | 'layers' | 'cloud' | 'key' | 'arrow-up-right' | 'circle-x'
-  | 'filter'
+  | 'filter' | 'network' | 'globe'
 
 export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
   'two-person': (
@@ -167,6 +167,20 @@ export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
   ),
   layers: <path d="M12 4l8.5 4.5L12 13 3.5 8.5zM3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" />,
   cloud: <path d="M7 18.5a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 18 9.8a4.4 4.4 0 0 1-.6 8.7z" />,
+  network: (
+    <>
+      <circle cx="12" cy="5.5" r="2.2" />
+      <circle cx="5.5" cy="18" r="2.2" />
+      <circle cx="18.5" cy="18" r="2.2" />
+      <path d="M11 7.5l-4.4 8.5M13 7.5l4.4 8.5M7.7 18h8.6" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.4 2.4 3.6 5.2 3.6 8.5s-1.2 6.1-3.6 8.5c-2.4-2.4-3.6-5.2-3.6-8.5s1.2-6.1 3.6-8.5z" />
+    </>
+  ),
   key: (
     <>
       <circle cx="8" cy="15" r="4" />

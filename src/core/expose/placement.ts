@@ -22,6 +22,8 @@
 
 import crypto from 'node:crypto'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition, type ExposeRunsOn, type ExposeStatus } from './types.js'
+import { foundHostWaits } from '../hosts/found-hosts.js'
+import { joinedTwins } from '../hosts/joined-twins.js'
 
 export const RUN_ON_HERE = 'here'
 
@@ -33,6 +35,10 @@ export interface PlacementHost {
   enabled?: unknown
   cloud_box?: unknown
   server?: { enabled?: unknown } | null
+  /** Found in ~/.ssh/config (core/hosts/found-hosts.ts). */
+  discovered?: unknown
+  /** A found host's answer: one without the yes never carries the tunnel. */
+  connect?: unknown
 }
 
 export type ExposePlacement =
@@ -46,6 +52,11 @@ export interface ExposePlace {
   label: string
   /** A host the provider names as always on. */
   alwaysOn: boolean
+  /**
+   * A host found in ~/.ssh/config that waits for the person's yes: listed so Runs on can
+   * lead there ("Connect <host> first"), never picked and never placed on until connected.
+   */
+  needsConnect?: true
 }
 
 type Hosts = Record<string, PlacementHost | null | undefined> | undefined
@@ -55,7 +66,7 @@ function hostLabel(hostKey: string, host: PlacementHost): string {
 }
 
 function usable(host: PlacementHost | null | undefined): host is PlacementHost {
-  return !!host && typeof host === 'object' && !host.cloud_box && host.enabled !== false
+  return !!host && typeof host === 'object' && !host.cloud_box && host.enabled !== false && !foundHostWaits(host)
 }
 
 /** A host config.yaml names (never one inherited from Object.prototype, `__proto__` say). */
@@ -97,16 +108,33 @@ export function exposePlacement(runOn: unknown, def: ExposeProviderDefinition | 
   return { where: 'here', auto: true }
 }
 
-/** The places Settings offers: the always-on hosts, the one picked (if another), and here. */
-export function exposePlaces(runOn: unknown, def: ExposeProviderDefinition | null, hosts: Hosts): ExposePlace[] {
+/** Always-on hosts found in ~/.ssh/config that wait for the person's yes, by key. */
+export function waitingAlwaysOnHosts(def: ExposeProviderDefinition | null, hosts: Hosts): string[] {
+  const pattern = alwaysOnPattern(def)
+  if (!pattern || def?.id === COMMAND_PROVIDER_ID) return []
+  return Object.keys(hosts ?? {}).sort().filter((key) => {
+    const host = hostAt(hosts, key)
+    return !!host && !host.cloud_box && foundHostWaits(host) && typeof host.hostname === 'string' && pattern.test(host.hostname.trim())
+  })
+}
+
+/**
+ * The places Settings offers: the always-on hosts, the one picked (if another), here,
+ * and last the always-on hosts that wait for the person's yes (`needsConnect`).
+ */
+export function exposePlaces(runOn: unknown, def: ExposeProviderDefinition | null, hosts: Hosts, net?: unknown): ExposePlace[] {
   if (def?.id === COMMAND_PROVIDER_ID) return []
   const keys = alwaysOnHosts(def, hosts)
   const placed = exposePlacement(runOn, def, hosts)
   if (placed.where === 'host' && !keys.includes(placed.hostKey)) keys.push(placed.hostKey)
-  if (keys.length === 0) return []
+  // A found row of a machine that joined the host network is that machine, listed once (joined-twins.ts).
+  const twins = new Set(hosts ? joinedTwins(hosts as Parameters<typeof joinedTwins>[0], net).map((t) => t.alias) : [])
+  const waiting = waitingAlwaysOnHosts(def, hosts).filter((key) => !twins.has(key))
+  if (keys.length === 0 && waiting.length === 0) return []
   return [
     ...keys.map((key) => ({ id: key, label: hostLabel(key, hostAt(hosts, key)!), alwaysOn: alwaysOnHosts(def, hosts).includes(key) })),
     { id: RUN_ON_HERE, label: 'This computer', alwaysOn: false },
+    ...waiting.map((key) => ({ id: key, label: hostLabel(key, hostAt(hosts, key)!), alwaysOn: true, needsConnect: true as const })),
   ]
 }
 

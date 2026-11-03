@@ -9,6 +9,7 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
+import { answerFoundHost } from '@/api/hosts';
 import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
@@ -42,6 +43,8 @@ interface HostEntry {
   shell_setup: string;
   enabled: boolean;
   discovered: boolean;
+  /** A found host's answer to "Connect to it?" (src/core/hosts/found-hosts.ts); absent on a host added by hand. */
+  connect?: FoundAnswer;
   /** Only `false` is ever written (config-only switch, no control here yet). */
   autofix?: boolean;
   /** What the host keeps a read copy of (core/host-replica.ts); undefined = everything. */
@@ -51,6 +54,13 @@ interface HostEntry {
 }
 
 type HostKeep = ReplicaKeep;
+type FoundAnswer = 'ask' | 'yes' | 'not_now';
+
+/** A found host Walnut does not connect to until the person says so (asked, or Not now). */
+function waitsForYes(h: Pick<HostEntry, 'discovered' | 'connect'>): boolean {
+  return h.discovered && (h.connect === 'ask' || h.connect === 'not_now');
+}
+
 
 /**
  * The persisted `hosts` map from local entries, dropping incomplete rows (no
@@ -70,6 +80,7 @@ function entriesToHosts(hosts: HostEntry[]): NonNullable<Config['hosts']> {
       shell_setup: h.shell_setup || undefined,
       enabled: h.enabled,
       discovered: h.discovered,
+      ...(h.discovered && h.connect ? { connect: h.connect } : {}),
       // Kept through a save: the editor has no control for it, and dropping it
       // would silently turn a host's automatic fixes back on.
       ...(h.autofix === false ? { autofix: false } : {}),
@@ -97,6 +108,7 @@ function normalizeHosts(h: Config['hosts']): NonNullable<Config['hosts']> {
       shell_setup: v.shell_setup || undefined,
       enabled: v.enabled ?? true,
       discovered: v.discovered ?? false,
+      ...(v.discovered && v.connect ? { connect: v.connect } : {}),
       ...(v.autofix === false ? { autofix: false } : {}),
       ...(keep ? { keep } : {}),
     };
@@ -122,6 +134,7 @@ function hostsFromConfig(config: Config): HostEntry[] {
     shell_setup: h.shell_setup ?? '',
     enabled: h.enabled ?? true,
     discovered: h.discovered ?? false,
+    ...(h.discovered && h.connect ? { connect: h.connect } : {}),
     ...(h.autofix === false ? { autofix: false } : {}),
     ...(h.keep ? { keep: h.keep } : {}),
   }));
@@ -151,13 +164,36 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // A config that already says what the rows say (this editor's own save coming
   // back) keeps the rows as typed: rebuilding them would drop a comma typed in
   // "Leave out folders" before the save, and any draft row.
+  // The same goes for the echo of a save sent before the latest typing (a label typed while
+  // the Connect save was still out): the rows are newer than it, and the autosave writes them.
+  const sentHostsRef = useRef<string | null>(null);
   useEffect(() => {
-    setHosts((prev) => (JSON.stringify(entriesToHosts(prev)) === JSON.stringify(normalizeHosts(config.hosts)) ? prev : hostsFromConfig(config)));
+    const incoming = JSON.stringify(normalizeHosts(config.hosts));
+    setHosts((prev) => (JSON.stringify(entriesToHosts(prev)) === incoming || incoming === sentHostsRef.current ? prev : hostsFromConfig(config)));
     setSessionLimits(config.session_limits ?? {});
   }, [config]);
 
+  // Editing a found host that waits for the yes keeps it waiting: only Connect says yes
+  // (src/core/hosts/found-hosts.ts), so a changed label never dials a host.
   const updateHost = <K extends keyof HostEntry>(idx: number, field: K, value: HostEntry[K]) => {
     setHosts((prev) => prev.map((h, i) => (i === idx ? { ...h, [field]: value } : h)));
+  };
+
+  // Connect / Not now on a found host: the server writes the answer (and dials on a yes);
+  // the row takes it at once, and the config that comes back says the same.
+  const [answering, setAnswering] = useState<{ alias: string; answer: 'yes' | 'not_now' } | null>(null);
+  const [answerError, setAnswerError] = useState<{ alias: string; text: string } | null>(null);
+  const answerFound = async (alias: string, answer: 'yes' | 'not_now') => {
+    setAnswering({ alias, answer });
+    setAnswerError(null);
+    try {
+      await answerFoundHost(alias, answer);
+      setHosts((prev) => prev.map((h) => (h.alias === alias ? { ...h, connect: answer, enabled: answer === 'yes' } : h)));
+    } catch (err) {
+      setAnswerError({ alias, text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setAnswering(null);
+    }
   };
 
   const addHost = () => {
@@ -184,7 +220,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   };
 
   const handleSave = async () => {
-    await onSave({ hosts: buildHostsConfig(), session_limits: normalizeLimits(sessionLimits) });
+    const sent = buildHostsConfig();
+    sentHostsRef.current = JSON.stringify(normalizeHosts(sent));
+    await onSave({ hosts: sent, session_limits: normalizeLimits(sessionLimits) });
   };
 
   // Fingerprint the VALIDATED hosts map (not raw entries) so typing a partial host, or a row
@@ -331,6 +369,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
           const open = expanded === idx;
           const sub = hostSub(host, idx);
           const alias = hostAlias(host);
+          // Found in ~/.ssh/config and not connected yet: the question instead of the switch.
+          const found = host.alias && waitsForYes(host) ? host.connect : null;
+          const busyAnswer = answering?.alias === host.alias;
           return (
             <Fragment key={host._key}>
               <SettingsRow
@@ -345,12 +386,19 @@ export function RemoteHostsSection({ config, onSave }: Props) {
                     {host.discovered && <SettingsTag>Auto-discovered</SettingsTag>}
                   </span>
                 }
-                help={host.alias ? <RemoteHostStatus alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : 'Add an alias and hostname to save this host.'}
+                help={found
+                  ? <span data-testid="rh-found-question">{found === 'ask'
+                    ? `Walnut found ${host.alias} in ~/.ssh/config. Connect to it?`
+                    : `Found in ~/.ssh/config. Walnut does not connect to it.`}</span>
+                  : host.alias ? <RemoteHostStatus alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : 'Add an alias and hostname to save this host.'}
                 // The failure and the readiness lines, below the status line (spec 5.2 / 5.3).
-                children={host.alias ? <RemoteHostDetail alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : undefined}
+                children={found
+                  ? (answerError?.alias === host.alias ? <span className="rh-status-error">{answerError.text}</span> : undefined)
+                  : host.alias ? <RemoteHostDetail alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : undefined}
+                data-found={found ?? undefined}
                 // Off: only the name and address fade; Edit, Remove and the
                 // switch that turns it back on stay at full strength (N10).
-                data-host-off={host.enabled ? undefined : 'true'}
+                data-host-off={host.enabled || found ? undefined : 'true'}
                 control={
                   <>
                     {/* Remove first: its reserved width for "Confirm remove" opens on
@@ -359,11 +407,25 @@ export function RemoteHostsSection({ config, onSave }: Props) {
                     <SettingsButton variant="text" aria-expanded={open} onClick={() => setExpanded(open ? null : idx)}>
                       {open ? 'Done' : 'Edit'}
                     </SettingsButton>
-                    <ToggleSwitch
-                      checked={host.enabled}
-                      onChange={(v) => updateHost(idx, 'enabled', v)}
-                      aria-label={`Use ${hostName(host, idx)}`}
-                    />
+                    {found ? (
+                      <>
+                        {found === 'ask' && (
+                          <SettingsButton variant="text" disabled={busyAnswer} onClick={() => void answerFound(host.alias, 'not_now')} data-testid="rh-found-not-now">
+                            Not now
+                          </SettingsButton>
+                        )}
+                        <SettingsButton disabled={busyAnswer} onClick={() => void answerFound(host.alias, 'yes')} data-testid="rh-found-connect"
+                          aria-label={`Connect to ${hostName(host, idx)}`}>
+                          {busyAnswer && answering?.answer === 'yes' ? 'Connecting...' : 'Connect'}
+                        </SettingsButton>
+                      </>
+                    ) : (
+                      <ToggleSwitch
+                        checked={host.enabled}
+                        onChange={(v) => updateHost(idx, 'enabled', v)}
+                        aria-label={`Use ${hostName(host, idx)}`}
+                      />
+                    )}
                   </>
                 }
               />

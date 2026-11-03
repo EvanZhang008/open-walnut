@@ -295,6 +295,15 @@ describe('control markup', () => {
     expect(list).toContain('class="settings-group settings-subcard settings-checklist"')
   })
 
+  it('group: every data-* attribute reaches the element that carries the test id', () => {
+    // A data attribute a caller passed used to be dropped silently (TS does not check hyphenated
+    // JSX names), so a spec waiting on data-link-checking waited on nothing.
+    const framed = renderToStaticMarkup(h(SettingsGroup, { heading: 'H', 'data-testid': 'g', 'data-link-installed': 'true', 'data-state': undefined } as never, 'x'))
+    expect(framed).toMatch(/^<div class="settings-group-block" data-testid="g" data-link-installed="true">/)
+    const bare = renderToStaticMarkup(h(SettingsGroup, { 'data-testid': 'b', 'data-link-checking': 'true' } as never, 'x'))
+    expect(bare).toBe('<div class="settings-group settings-subcard" data-testid="b" data-link-checking="true">x</div>')
+  })
+
   it('tag, loading row and mono block', () => {
     expect(renderToStaticMarkup(h(SettingsTag, { tone: 'warning' }, 'Needs setup'))).toBe(
       '<span class="settings-tag settings-tag-warning">Needs setup</span>',

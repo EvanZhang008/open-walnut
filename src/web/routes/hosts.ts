@@ -109,6 +109,37 @@ hostsRouter.post('/:host/connect', async (req, res, next) => {
   }
 })
 
+// POST /api/hosts/:host/found-answer {answer: 'yes'|'not_now'}: the person's answer to
+// "Connect to it?" for a host found in ~/.ssh/config (core/hosts/found-hosts.ts). A yes
+// makes it a normal host and dials it now; Not now keeps it listed and quiet.
+hostsRouter.post('/:host/found-answer', async (req, res, next) => {
+  try {
+    const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
+    const { answerFoundHost } = await import('../../core/hosts/found-hosts-store.js')
+    const r = await answerFoundHost(host, (req.body as { answer?: unknown } | undefined)?.answer)
+    if (!r.ok) {
+      res.status(r.status).json({ error: r.error, code: r.code })
+      return
+    }
+    const [{ emitConfigChanged }, { withoutCloudBoxHost }] = await Promise.all([
+      import('../../core/config-broadcast.js'), import('../../core/hosts/cloud-box-host.js'),
+    ])
+    const config = await getConfig()
+    const hosts = withoutCloudBoxHost(config.hosts)
+    emitConfigChanged(hosts === config.hosts ? config : { ...config, hosts }, ['web-ui'], { source: 'api' })
+    let status: HostStatus | undefined
+    if (r.answer === 'yes') {
+      // The dial starts now (progress arrives as host:status); a refusal (remote hosts
+      // off on this server, say) leaves the yes written for the next start.
+      const c = await connectHostNow(host)
+      status = (c.body as { status?: HostStatus }).status
+    }
+    res.json({ ok: true, host, answer: r.answer, ...(status ? { status } : {}) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // POST /api/hosts/:host/check: Check again. The primary re-runs the host's
 // readiness probe (force) and answers with the fresh frame; a replica relays it
 // to the primary ('server.host-readiness-refresh') and the result comes back as

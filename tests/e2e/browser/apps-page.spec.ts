@@ -239,46 +239,54 @@ test('Home, Apps and Settings always stay on the sidebar: a lock, never a switch
   }
 })
 
-test('the page opens on the plugins: with a screen, then in the background, and Built in last', async ({ page }) => {
+test('the page groups plugins by where they come from: built in, each source, this computer; built-in apps last', async ({ page }) => {
   await home(page)
   await openApps(page)
-  const ui = page.getByTestId('apps-kind-ui')
-  const background = page.getByTestId('apps-kind-background')
-  await expect(ui).toBeVisible({ timeout: 30_000 })
-  await expect(background).toBeVisible()
-  // A plugin with a web entry has a screen; one with none runs in the background.
-  for (const id of ['walnut-time', 'sigma']) await expect(ui.getByTestId(`plugin-card-${id}`), id).toBeVisible()
-  // tau's web entry fails to load, so no App of it is ever registered: only the server's
-  // word (its manifest declares a web entry) puts it here.
-  await expect(ui.getByTestId('plugin-card-tau')).toBeVisible()
-  await expect(page.getByTestId('plugin-card-open-tau')).toHaveCount(0)
-  for (const id of ['alpha', 'kappa']) await expect(background.getByTestId(`plugin-card-${id}`), id).toBeVisible()
-  await expect(ui.getByTestId('plugin-card-alpha')).toHaveCount(0)
-  await expect(background.getByTestId('plugin-card-walnut-time')).toHaveCount(0)
-  // In document order: screen, background, Get more, Make your own, then Built in.
+  const builtin = page.getByTestId('apps-source-builtin')
+  await expect(builtin).toBeVisible({ timeout: 30_000 })
+  await expect(builtin.locator('.apps-section-title')).toContainText('Built-in plugins')
+  // A plugin that ships with Walnut is in Built-in plugins, and nothing else is: walnut-time is
+  // linked from a folder (the author way), so it is on this computer.
+  expect(await builtin.locator('.apps-card').count()).toBeGreaterThan(0)
+  await expect(page.getByTestId('apps-source-local').getByTestId('plugin-card-walnut-time')).toBeVisible()
+  await expect(builtin.getByTestId('plugin-card-walnut-time')).toHaveCount(0)
+  for (const id of ['sigma', 'tau', 'alpha', 'kappa']) {
+    await expect(page.getByTestId(`plugin-card-${id}`), id).toBeVisible()
+    await expect(builtin.getByTestId(`plugin-card-${id}`), id).toHaveCount(0)
+  }
+  // Every card carries its icon tile.
+  const cards = page.locator('[data-testid^="apps-source-"] .apps-card')
+  expect(await cards.count()).toBeGreaterThan(3)
+  expect(await page.locator('[data-testid^="apps-source-"] .apps-card .plugin-icon').count()).toBe(await cards.count())
+  // In document order: built in, the sources and this computer, Get more, Make your own, then the built-in apps.
   const order = await page.evaluate(() => Array.from(document.querySelectorAll('[data-testid="apps-page"] .apps-section'))
-    .map((el) => el.getAttribute('data-testid')))
-  expect(order).toEqual(['apps-kind-ui', 'apps-kind-background', 'apps-get-more', 'apps-make', 'apps-builtin'])
-  // Chips read All, the plugin groups, Get more, then Built in.
+    .map((el) => el.getAttribute('data-testid') ?? ''))
+  expect(order[0]).toBe('apps-source-builtin')
+  expect(order.slice(-3)).toEqual(['apps-get-more', 'apps-make', 'apps-builtin'])
+  for (const id of order.slice(1, -3)) expect(id).toMatch(/^apps-source-/)
+  // The separate Sources list is gone: a source's verbs live on its own section's head.
+  await expect(page.getByTestId('plugin-store-sources')).toHaveCount(0)
+  // Chips read All, the plugin categories, Get more, then the built-in apps.
   const chips = await page.locator('.apps-chips button').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')))
   expect(chips[0]).toBe('apps-chip-all')
   expect(chips.slice(-2)).toEqual(['apps-chip-get', 'apps-chip-builtin'])
 
-  // Turning a plugin with a screen off keeps its card in that group (it reads Off there).
+  // Turning a plugin off keeps its card where it was (it reads Off there).
+  const sigmaSection = page.locator('[data-testid^="apps-source-"]', { has: page.getByTestId('plugin-card-sigma') })
+  const sigmaSectionId = await sigmaSection.getAttribute('data-testid')
   await openPluginDetail(page, 'sigma')
   const sigmaSwitch = page.locator('#plugin-toggle-sigma')
   await sigmaSwitch.click()
   await expect(page.getByTestId('plugin-row-sigma')).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 })
   await backToApps(page)
-  // Its App is gone (no Open), so the group comes from the server, not from a live App.
   await expect(page.getByTestId('plugin-card-open-sigma')).toHaveCount(0, { timeout: 30_000 })
-  await expect(ui.getByTestId('plugin-card-sigma')).toBeVisible()
+  await expect(page.getByTestId(sigmaSectionId!).getByTestId('plugin-card-sigma')).toBeVisible()
   await expect(page.getByTestId('plugin-card-sigma-status')).toHaveText('Off')
   await openPluginDetail(page, 'sigma')
   await sigmaSwitch.click()
   await expect(page.getByTestId('plugin-row-sigma')).not.toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 })
   await backToApps(page)
-  await expect(ui.getByTestId('plugin-card-sigma')).toBeVisible()
+  await expect(page.getByTestId(sigmaSectionId!).getByTestId('plugin-card-sigma')).toBeVisible()
 })
 
 test('a category chip narrows the plugins and stays picked; a search with no match says so and Clear restores', async ({ page }) => {
@@ -286,8 +294,8 @@ test('a category chip narrows the plugins and stays picked; a search with no mat
   await isolateUiPrefs(page)
   await home(page)
   await openApps(page)
-  const kinds = page.locator('[data-testid^="apps-kind-"]')
-  const cards = page.locator('[data-testid^="apps-kind-"] .apps-card')
+  const kinds = page.locator('[data-testid^="apps-source-"]')
+  const cards = page.locator('[data-testid^="apps-source-"] .apps-card')
   await expect.poll(() => cards.count(), { timeout: 30_000 }).toBeGreaterThan(1)
   const total = await cards.count()
   // The fixture's plugins fall into more than one category, so narrowing is visible.

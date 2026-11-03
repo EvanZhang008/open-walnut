@@ -1,24 +1,24 @@
 /**
- * The plugin half of the Apps page, as a store: one card per plugin, in two groups, the
- * plugins with a screen of their own (an App, a page, a panel) and the ones that only run
- * in the background (a sync, tools for the AI, a connection); a category chip narrows
- * both. Then Get more (what you can add, a git or npm link, the installed sources). A card says
+ * The plugin half of the Apps page, as a store: one card per plugin, grouped by where it
+ * comes from (source-sections.ts): built into Walnut, one section per installed source with
+ * that source's verbs on its head, and plugins in a folder on this computer; a category chip
+ * narrows them all. Then Get more (what you can add, a git or npm link). A card says
  * what it is and its one status; everything else (settings, the switch, where it comes
  * from, Update) lives on its detail page. A plugin that is a part of another (`slack-mcp`
  * of Slack, a mail account of Mail) has no card of its own: its parent's card names it,
  * and its parent's detail page holds it.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import type { RegisteredApp } from '@/apps/registry'
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
-import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
 import { PluginIcon, pluginTileTints } from '@/components/settings/PluginIcon'
 import { CONNECTION_BADGE } from '@/components/settings/PluginConnectionPanel'
 import { PluginPendingDependencies } from '@/components/settings/sections/PluginDependencyRows'
-import { PluginSourcesGroup, UpdatesHead } from '@/components/settings/sections/PluginSourcesGroup'
+import { PluginSourceHead, UpdatesHead } from '@/components/settings/sections/PluginSourcesGroup'
+import { sourceRowKey } from '@/components/settings/plugin-update-types'
 import { firstSentence } from '@/components/settings/sections/plugin-row-view'
 import { BUNDLED_AVAILABLE_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
 import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../src/core/plugin-install-link'
@@ -30,6 +30,8 @@ import { AppBadge } from './app-bits'
 import { StoreCard } from './StoreCard'
 import { cardStatus, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import type { PluginStore } from './usePluginStore'
+import { ExposeGuide } from './ExposeGuide'
+import { installedSourceFor, sourceDisplayName, sourceSections, type SourceSection } from './source-sections'
 import '@/styles/settings-sections-addons.css'
 
 export interface PluginStoreSummary {
@@ -38,11 +40,14 @@ export interface PluginStoreSummary {
   matches: number
 }
 
-/** The two groups of installed plugins, in page order. */
-const PLUGIN_KINDS = [
-  { id: 'ui', title: 'With a screen', sub: 'Each adds a page, a panel or a sidebar entry you open.' },
-  { id: 'background', title: 'In the background', sub: 'No screen of their own: they sync tasks, give the AI tools or keep a connection. Open one to set it up.' },
-] as const
+/** What a section of installed plugins says under its title (a source's head says it for a source). */
+const SECTION_SUB: Record<'builtin' | 'local', string> = {
+  builtin: 'They ship with Walnut. Open one to turn it on or off, or to set it up.',
+  local: 'In a folder on this computer that no source installed, so nothing updates them.',
+}
+
+/** The one line an install says before it runs: clicking Install is the consent. */
+const INSTALL_CONSENT = "Install only from a source you trust: a plugin's code runs inside Walnut with full access to your tasks, notes, credentials and this computer."
 
 /** A git remote the local git can clone; anything else is treated as an npm spec. */
 function looksLikeGitUrl(value: string): boolean {
@@ -78,6 +83,7 @@ export function StoreNotices({ store }: { store: PluginStore }) {
       {store.restartNeeded && <SettingsNotice kind="warn">Restart Walnut to finish removing that plugin&apos;s code.</SettingsNotice>}
       {store.error && <SettingsNotice kind="error" role="alert">{store.error}</SettingsNotice>}
       {store.notice && <SettingsNotice kind="success">{store.notice}</SettingsNotice>}
+      {store.notice && store.addedPluginIds.length > 0 && <ExposeGuide pluginIds={store.addedPluginIds} testId="expose-guide-added" />}
     </>
   )
 }
@@ -96,22 +102,19 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
   // A source typed or pasted and not installed yet survives leaving the page; a successful Add ends it.
   const urlDraft = useDraft(draftKey('plugin-source', 'new'))
   const { text: url, setText: setUrl } = urlDraft
-  const [trusted, setTrusted] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const urlInputRef = useRef<HTMLInputElement>(null)
   // A source an install link asked for (utils/open-link.ts), shown in its own card.
   const [linkRequest, setLinkRequest] = useState<InstallLinkTarget | null>(null)
-  const [linkTrusted, setLinkTrusted] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
 
-  // An install link someone clicked: its own card at the top, where the page lands, with
-  // trust off. A newer link replaces it. It stays pending until Install or Cancel.
+  // An install link someone clicked: its own card at the top, where the page lands. A newer
+  // link replaces it. It stays pending until Install, Cancel or (already installed) Done.
   useEffect(() => {
     const take = () => {
       const target = peekPendingInstall()
       if (!target) return
       setLinkRequest(target)
-      setLinkTrusted(false)
       setLinkError(null)
       store.setNotice(null)
       store.setError(null)
@@ -126,7 +129,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
 
   const handleAdd = async () => {
     const value = url.trim()
-    if (!value || !trusted) return
+    if (!value) return
     store.setBusy('add')
     store.setError(null)
     store.setNotice(null)
@@ -136,7 +139,6 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
       const isInstallLink = value.toLowerCase().startsWith(INSTALL_LINK_SCHEME)
       await store.installSource(isSnippet || isInstallLink || looksLikeGitUrl(value) ? { url: value } : { spec: value })
       urlDraft.clear(sentKey)
-      setTrusted(false) // trust is granted per install, never sticky
     } catch (err) {
       store.setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -145,7 +147,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
   }
 
   const handleLinkInstall = async () => {
-    if (!linkRequest || !linkTrusted) return
+    if (!linkRequest) return
     const target = linkRequest
     store.setBusy('link')
     setLinkError(null)
@@ -155,7 +157,6 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
       await store.installSource({ url: buildInstallLink(target) })
       settlePendingInstall(target)
       setLinkRequest((current) => (current === target ? null : current))
-      setLinkTrusted(false)
     } catch (err) {
       setLinkError(linkFailureText(err))
     } finally {
@@ -173,22 +174,24 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
 
   const showGroups = filter === 'all' || (PLUGIN_CATEGORY_ORDER as readonly string[]).includes(filter)
   const showGetMore = filter === 'all' || filter === 'get'
-  // A plugin is in the screen group when it ships a web entry (the registry says so, on or
-  // off) or, on an older server or a replica, when one of its Apps is registered now.
-  const hasUi = (row: RegistryRow) => row.hasUi === true || appsOfPlugin(catalog.all, row.id).length > 0
-    || partsOf(row.id).some((part) => part.hasUi === true)
   const categoryRank = (row: RegistryRow) => PLUGIN_CATEGORY_ORDER.indexOf(categoryOf(row))
   const shown = topLevel
     .filter((row) => matches(row) && (filter === 'all' || categoryOf(row) === filter))
     .map((row, index) => ({ row, index }))
     .sort((a, b) => categoryRank(a.row) - categoryRank(b.row) || a.index - b.index)
     .map(({ row }) => row)
-  const groups = PLUGIN_KINDS
-    .map((kind) => ({ ...kind, rows: shown.filter((row) => hasUi(row) === (kind.id === 'ui')) }))
-    .filter((group) => group.rows.length > 0)
+  const narrowed = filter !== 'all' || query.trim() !== ''
+  // A source whose plugins did not load keeps its section on the full page (its Restore and
+  // Remove live on its head); a filter or a search shows only sections with a match.
+  const groups = sourceSections(shown, store.sources)
+    .filter((section) => section.rows.length > 0 || (section.kind === 'source' && !narrowed))
   const matchingAvailable = available.filter((row) => pluginMatches(row, query))
   const searching = query.trim() !== ''
   const presentKey = PLUGIN_CATEGORY_ORDER.filter((category) => topLevel.some((row) => categoryOf(row) === category)).join(',')
+  const linkInstalled = linkRequest ? installedSourceFor(linkRequest, store.sources) : null
+  // Until the installed sources are read, the card cannot tell a fresh install from one already
+  // there: it says it is checking rather than offer an Install that may be wrong.
+  const linkChecking = linkRequest !== null && !store.sourcesLoaded
   const matchCount = (showGroups ? groups.reduce((n, group) => n + group.rows.length, 0) : 0) + (showGetMore ? matchingAvailable.length : 0)
   const loaded = registry !== null
   useEffect(() => {
@@ -234,15 +237,57 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
     <div id="plugin-store" className="apps-plugins" data-testid="apps-plugins">
       <StoreNotices store={store} />
 
-      {linkRequest && (
-        <SettingsGroup heading="Install from a link" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request">
+      {linkRequest && linkInstalled && (
+        <SettingsGroup heading="Already installed" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request" data-link-installed="true">
+          <SettingsRow
+            label={`${sourceDisplayName(linkInstalled)} is installed`}
+            help={
+              <span>
+                {(linkInstalled.plugins.length > 0 ? linkInstalled.plugins : linkInstalled.lastKnownPlugins ?? [])
+                  .map((plugin) => plugin.name ?? plugin.id).filter(Boolean).join(', ') || 'Its plugins are listed below.'}
+                {' '}Nothing to install. Its section below says whether it is up to date.
+              </span>
+            }
+            control={
+              <span className="settings-addons-inline">
+                <SettingsButton
+                  variant="text"
+                  onClick={() => {
+                    void store.updates.checkRow(sourceRowKey(linkInstalled.slug), { kind: 'source', slug: linkInstalled.slug })
+                    document.querySelector(`[data-testid="apps-source-${CSS.escape(linkInstalled.slug)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                  }}
+                  data-testid="plugin-link-check"
+                >
+                  Check for updates
+                </SettingsButton>
+                <SettingsButton
+                  variant="primary"
+                  onClick={() => { settlePendingInstall(linkRequest); setLinkRequest(null); setLinkError(null) }}
+                  data-testid="plugin-link-done"
+                >
+                  Done
+                </SettingsButton>
+              </span>
+            }
+          />
+        </SettingsGroup>
+      )}
+
+      {linkRequest && !linkInstalled && (
+        <SettingsGroup heading="Install from a link" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request" data-link-checking={linkChecking ? 'true' : undefined}>
           <SettingsRow
             label="Source"
             help={
-              <code className="settings-addons-mono" data-testid="plugin-link-source">
-                {linkRequest.kind === 'npm' ? linkRequest.spec : linkRequest.url}
-                {linkRequest.kind === 'git' && linkRequest.ref ? ` (branch ${linkRequest.ref})` : ''}
-              </code>
+              <span>
+                <code className="settings-addons-mono" data-testid="plugin-link-source">
+                  {linkRequest.kind === 'npm' ? linkRequest.spec : linkRequest.url}
+                  {linkRequest.kind === 'git' && linkRequest.ref ? ` (branch ${linkRequest.ref})` : ''}
+                </code>
+                <span className="plugin-install-consent" data-testid="plugin-link-consent">{INSTALL_CONSENT}</span>
+                {store.sourcesFailed && (
+                  <span className="plugin-install-consent" data-testid="plugin-link-unknown">Walnut could not read its installed sources just now, so this one may be installed already.</span>
+                )}
+              </span>
             }
             error={linkError ?? undefined}
             control={
@@ -252,10 +297,9 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
                 </SettingsButton>
                 <SettingsButton
                   variant="primary"
-                  disabled={!linkTrusted}
-                  title={!linkTrusted ? 'Turn on the trust switch first.' : undefined}
-                  busy={store.busy === 'link'}
-                  busyLabel="Installing..."
+                  busy={store.busy === 'link' || linkChecking}
+                  busyLabel={linkChecking ? 'Checking...' : 'Installing...'}
+                  reserve={['Checking...']}
                   onClick={() => void handleLinkInstall()}
                   data-testid="plugin-link-install"
                 >
@@ -263,12 +307,6 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
                 </SettingsButton>
               </span>
             }
-          />
-          <SettingsRow
-            label={<span className="plugin-trust-label">I trust this source</span>}
-            htmlFor="plugin-link-trust"
-            help="A link only names the source. Its code runs inside Walnut with full access to your tasks, notes, credentials and this computer."
-            control={<ToggleSwitch id="plugin-link-trust" data-testid="plugin-link-trust" checked={linkTrusted} onChange={setLinkTrusted} />}
           />
         </SettingsGroup>
       )}
@@ -288,15 +326,8 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
           ) : groups.length === 0 ? (
             searching ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
           ) : (
-            groups.map((group) => (
-              <section key={group.id} className="apps-section apps-kind" data-testid={`apps-kind-${group.id}`} aria-labelledby={`apps-kind-${group.id}-title`}>
-                <h2 className="apps-section-title" id={`apps-kind-${group.id}-title`}>
-                  {group.title}
-                  <span className="apps-section-count">{group.rows.length}</span>
-                </h2>
-                <p className="apps-section-sub">{group.sub}</p>
-                <div className="apps-grid">{group.rows.map(card)}</div>
-              </section>
+            groups.map((section) => (
+              <SourceSectionView key={section.id} section={section} store={store} card={card} />
             ))
           )}
         </div>
@@ -339,7 +370,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
               <SettingsRow
                 label="Git URL or npm package"
                 htmlFor="plugin-source-url"
-                help="A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off."
+                help={`A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off. ${INSTALL_CONSENT}`}
                 wide
                 className="settings-row-stacked"
                 control={
@@ -358,22 +389,17 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
                     />
                     <SettingsButton
                       variant="primary"
-                      disabled={!url.trim() || !trusted}
-                      title={!url.trim() ? 'Paste a Git URL or an npm package first.' : !trusted ? 'Turn on the trust switch first.' : undefined}
+                      disabled={!url.trim()}
+                      title={!url.trim() ? 'Paste a Git URL or an npm package first.' : undefined}
                       busy={store.busy === 'add'}
                       busyLabel="Installing..."
                       onClick={() => void handleAdd()}
+                      data-testid="plugin-source-add"
                     >
-                      Add
+                      Install
                     </SettingsButton>
                   </span>
                 }
-              />
-              <SettingsRow
-                label={<span className="plugin-trust-label">I trust this source</span>}
-                htmlFor="plugin-trust-confirm"
-                help="Its code runs inside Walnut with full access to your tasks, notes, credentials and this computer."
-                control={<ToggleSwitch id="plugin-trust-confirm" data-testid="plugin-trust-confirm" checked={trusted} onChange={setTrusted} />}
               />
             </SettingsGroup>
           )}
@@ -392,22 +418,49 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
             </SettingsGroup>
           )}
 
-          {/* A source is not a plugin: one repo can carry several, and it is the source that
-              gets updated or removed, so it keeps its own group. */}
-          <PluginSourcesGroup
-            sources={store.sources}
+        </section>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One section of installed plugins: its title (the source's name), the source's head with
+ * its verbs (a source only), and the plugins' cards.
+ */
+function SourceSectionView({ section, store, card }: {
+  section: SourceSection
+  store: PluginStore
+  card: (row: RegistryRow) => ReactElement
+}) {
+  const testId = section.source ? `apps-source-${section.source.slug}` : `apps-source-${section.id}`
+  const titleId = `${testId}-title`
+  return (
+    <section className="apps-section apps-source" data-testid={testId} data-source-kind={section.kind} aria-labelledby={titleId}>
+      <h2 className="apps-section-title" id={titleId}>
+        {section.title}
+        {section.rows.length > 0 && <span className="apps-section-count">{section.rows.length}</span>}
+      </h2>
+      {section.source ? (
+        <div className="apps-source-head">
+          <PluginSourceHead
+            source={section.source}
             ownedSlugs={store.ownedSlugs}
             updates={store.updates}
             busy={store.busy}
             copiedKey={store.copiedKey}
             feedback={store.feedback}
+            cardsShown={section.rows.length > 0}
             onCopy={store.copy}
             onUpdate={(slug, kind, feedbackId) => void store.handleUpdate(slug, kind, feedbackId)}
             onRemove={(slug) => void store.handleRemove(slug)}
             setRowFeedback={store.setRowFeedback}
           />
-        </section>
+        </div>
+      ) : (
+        <p className="apps-section-sub">{SECTION_SUB[section.kind as 'builtin' | 'local']}</p>
       )}
-    </div>
+      {section.rows.length > 0 && <div className="apps-grid">{section.rows.map(card)}</div>}
+    </section>
   )
 }

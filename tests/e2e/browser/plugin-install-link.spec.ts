@@ -78,8 +78,12 @@ async function expectCard(page: Page, source: string): Promise<void> {
   await expect(card).toBeVisible({ timeout: 60_000 })
   await expect(card).toBeInViewport()
   await expect(page.getByTestId('plugin-link-source')).toHaveText(source)
-  await expect(page.getByTestId('plugin-link-trust')).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId('plugin-link-install')).toBeDisabled()
+  // Install is the consent: no separate trust switch, and the card says what installing means.
+  await expect(page.getByTestId('plugin-link-trust')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-link-consent')).toContainText('full access')
+  // It may say Checking... first, while the installed sources are read; never Install for one already there.
+  await expect(card).not.toHaveAttribute('data-link-checking', 'true', { timeout: 30_000 })
+  await expect(page.getByTestId('plugin-link-install')).toBeEnabled()
   expect(page.url()).not.toContain('open-link')
 }
 
@@ -109,7 +113,7 @@ test.afterAll(async () => {
   if (child.exitCode === null) child.kill('SIGKILL')
 })
 
-test('1. a link opened as an address shows its card, trust off; Cancel installs nothing', async ({ page }) => {
+test('1. a link opened as an address shows its card; Cancel installs nothing', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const before = await configSources()
@@ -147,8 +151,6 @@ test('2. the app hands a link to an open page in place; Install brings in the wh
   expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload)).toBe(true)
   await pause(page, 1500)
 
-  await page.getByTestId('plugin-link-trust').click()
-  await expect(page.getByTestId('plugin-link-install')).toBeEnabled()
   await pause(page)
   await page.getByTestId('plugin-link-install').click()
   await expect(page.getByTestId('plugin-link-request')).toHaveCount(0, { timeout: 60_000 })
@@ -159,6 +161,11 @@ test('2. the app hands a link to an open page in place; Install brings in the wh
     await expect(card).toHaveAttribute('data-plugin-status', 'active', { timeout: 30_000 })
   }
   expect(await configSources()).toContain(fixture!.packUrl)
+  // pack-board brings a tunnel: the install notice leads straight to the browser link page.
+  const guide = page.getByTestId('expose-guide-added')
+  await expect(guide).toBeVisible({ timeout: 30_000 })
+  await expect(guide).toContainText('Pack Tunnel opens this Walnut from your phone or any browser')
+  await expect(page.getByTestId('expose-guide-added-open')).toHaveAttribute('href', '/settings#devices-browser')
   await page.getByTestId('plugin-card-pack-notes').scrollIntoViewIfNeeded()
   await pause(page, 2000)
   await page.screenshot({ path: `/tmp/plugin-install-link/${test.info().project.name}-2-installed.png` })
@@ -170,7 +177,6 @@ test('3. a repo that cannot be read: the error stays on the card, and nothing is
   const missing = 'file:///nonexistent/team-pack.git'
   await page.evaluate((link) => window.__walnutDesktop?.openLink(link), linkTo(missing))
   await expectCard(page, missing)
-  await page.getByTestId('plugin-link-trust').click()
   await page.getByTestId('plugin-link-install').click()
   const card = page.getByTestId('plugin-link-request')
   await expect(card).toContainText(/git clone failed/i, { timeout: 30_000 })
@@ -186,7 +192,44 @@ test('4. a hash change carries a link the same way; a link this build does not k
   await home(page)
   expect(await page.evaluate(() => window.__walnutDesktop?.openLink('open-walnut://something-else?x=1'))).toBe(false)
   await expect(page.getByTestId('plugin-link-request')).toHaveCount(0)
-  await page.evaluate((hash) => { window.location.hash = hash }, fragment(linkTo(fixture!.packUrl)))
-  await expectCard(page, fixture!.packUrl)
+  const missing = 'file:///nonexistent/other-pack.git'
+  await page.evaluate((hash) => { window.location.hash = hash }, fragment(linkTo(missing)))
+  await expectCard(page, missing)
+  await page.getByTestId('plugin-link-cancel').click()
   await pause(page)
+})
+
+test('5. a link to a source already installed says so: nothing to install, Done answers it', async ({ page }) => {
+  await home(page)
+  const before = await configSources()
+  // The pack from test 2, named without its branch: the same repo, so the same install.
+  await page.evaluate((link) => window.__walnutDesktop?.openLink(link), linkTo(fixture!.packUrl))
+  const card = page.getByTestId('plugin-link-request')
+  await expect(card).toBeVisible({ timeout: 60_000 })
+  // Install is never offered on the way: while the sources load the card says Checking...
+  const sawInstall = await page.evaluate(() => new Promise<boolean>((resolve) => {
+    const offered = () => {
+      const button = document.querySelector('[data-testid="plugin-link-install"]') as HTMLButtonElement | null
+      return button !== null && !button.disabled
+    }
+    let seen = offered()
+    const observer = new MutationObserver(() => { seen ||= offered() })
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+    const done = () => { observer.disconnect(); resolve(seen) }
+    const poll = setInterval(() => {
+      if (document.querySelector('[data-link-installed="true"]')) { clearInterval(poll); done() }
+    }, 50)
+    setTimeout(() => { clearInterval(poll); done() }, 30_000)
+  }))
+  expect(sawInstall, 'an Install button was offered for a source already installed').toBe(false)
+  await expect(card).toHaveAttribute('data-link-installed', 'true')
+  await expect(card).toContainText('is installed')
+  await expect(page.getByTestId('plugin-link-install')).toHaveCount(0)
+  await pause(page, 1500)
+  await page.screenshot({ path: `/tmp/plugin-install-link/${test.info().project.name}-5-already.png` })
+  await page.getByTestId('plugin-link-done').click()
+  await expect(card).toHaveCount(0)
+  await awayAndBack(page)
+  await expect(page.getByTestId('plugin-link-request')).toHaveCount(0)
+  expect(await configSources()).toEqual(before)
 })

@@ -9,6 +9,7 @@
  */
 
 import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js'
+import { foundHostWaitingNote, foundHostWaits } from './found-hosts.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import {
@@ -108,6 +109,8 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
   if (CLOUD_MODE) return refuse(409, 'a cloud replica cannot connect to hosts; run this on the primary')
   const def = await configHostDef(host)
   if (!def) return refuse(404, `Unknown host: ${host}`)
+  // A found host waits for the person's yes on Remote Hosts (found-hosts.ts): no dial before it.
+  if (foundHostWaits(def)) return refuse(409, foundHostWaitingNote(def.label ?? host), 'host_found')
   // The warmup would skip it silently and the button would look dead.
   if (def.enabled === false) return refuse(409, `${host} is disabled; enable it in Settings > Remote Hosts first`, 'host_disabled')
 

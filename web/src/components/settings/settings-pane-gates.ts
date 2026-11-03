@@ -8,22 +8,28 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { fetchMacAccess, peekMacAccess } from '@/api/config'
+import { useIsCloudReplica } from '@/hooks/useIsCloudReplica'
 
-export type SettingsPaneGate = 'mac-access'
+/** `primary`: the console of the Mac itself, never the cloud companion's (Tailscale, a browser link). */
+export type SettingsPaneGate = 'mac-access' | 'primary'
 
-type GateState = Readonly<Record<SettingsPaneGate, boolean | null>>
+type GateState = Readonly<Record<'mac-access', boolean | null>>
 
 function peekGates(): GateState {
   return { 'mac-access': peekMacAccess() }
 }
 
 /** The gates that are known closed on this server. */
-export function closedGates(state: GateState): ReadonlySet<SettingsPaneGate> {
-  return new Set((Object.keys(state) as SettingsPaneGate[]).filter((g) => state[g] === false))
+export function closedGates(state: GateState, replica = false): ReadonlySet<SettingsPaneGate> {
+  const closed = new Set<SettingsPaneGate>((Object.keys(state) as Array<keyof GateState>).filter((g) => state[g] === false))
+  if (replica) closed.add('primary')
+  return closed
 }
 
 export function useClosedPaneGates(): ReadonlySet<SettingsPaneGate> {
   const [state, setState] = useState<GateState>(peekGates)
+  // Unknown reads as the Mac (false), so the Mac never loses an entry to a slow answer.
+  const replica = useIsCloudReplica()
   useEffect(() => {
     let live = true
     void fetchMacAccess().then((macAccess) => {
@@ -31,5 +37,5 @@ export function useClosedPaneGates(): ReadonlySet<SettingsPaneGate> {
     })
     return () => { live = false }
   }, [])
-  return useMemo(() => closedGates(state), [state])
+  return useMemo(() => closedGates(state, replica), [state, replica])
 }

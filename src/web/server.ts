@@ -2229,12 +2229,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   await pluginUpdateCache.load().catch(() => undefined)
   const linkedCheckoutOps = defaultLinkedCheckoutOps()
+  // One in-memory linked listing for both routers: the scan runs git on every linked checkout.
+  const { createLinkedListingCache } = await import('./routes/plugin-linked-listing.js')
+  const linkedListing = createLinkedListingCache(linkedCheckoutOps)
   // Lazy indirection: pluginSoftReload is assigned later in startup, after the
   // initial loadPlugins — the router must call the CURRENT value, not capture it.
   app.use('/api/plugin-sources', createPluginSourcesRouter(() => pluginSoftReload(), { reloadPlugin, reloadPlugins, cache: pluginUpdateCache }))
   app.use('/api/plugin-updates', createPluginUpdatesRouter({
     cache: pluginUpdateCache,
     linked: linkedCheckoutOps,
+    linkedListing,
     listSources: async () => (await import('../core/plugin-sources.js')).listSources(),
     // Same rule as plugin-sources' cloneDirFor, spelled out so that module stays lazy here.
     sourceDir: (slug) => path.join(PLUGIN_STORES_DIR, slug),
@@ -2265,6 +2269,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/plugin-runtime', createPluginRuntimeRouter({
     registry,
     linked: linkedCheckoutOps,
+    linkedListing,
     cache: pluginUpdateCache,
     list: () => getPluginLifecycleRecords(registry),
     catalogueLoading: () => isPluginCatalogueLoading(registry),
@@ -2773,6 +2778,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       error: err instanceof Error ? err.message : String(err),
     })
     throw err
+  }
+
+  // Found hosts an older Walnut left undecided get their answer before anything can dial
+  // them (core/hosts/found-hosts-store.ts). Never fatal: undecided rows read as before.
+  try {
+    const { settleFoundHosts, settlesFoundHosts } = await import('../core/hosts/found-hosts-store.js')
+    if (await settlesFoundHosts()) await settleFoundHosts()
+  } catch (err) {
+    log.web.warn('found hosts: settle failed', { error: err instanceof Error ? err.message : String(err) })
   }
 
   // -- HTTP + WebSocket --
@@ -4330,6 +4344,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     } else {
       const { hostRunsServer } = await import('../core/host-server/index.js')
       const { onExposeProvidersChanged } = await import('../core/expose/registry.js')
+      const { foundHostUnadopted } = await import('../core/hosts/found-hosts.js')
       const warmable = (key: string) => !onlyHost || key === onlyHost
       hostWarmup = new HostWarmup({
         // Every configured host, flags included: the warmup itself decides what
@@ -4342,7 +4357,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             // No hostname: the warmup skips it (host-warmup.ts), as before the link layer.
             sshTarget: def.hostname ? linkTarget(key, { hosts }) : { hostname: '' },
             enabled: def.enabled,
-            discovered: def.discovered,
+            // Known only from ~/.ssh/config: no yes on it (core/hosts/found-hosts.ts). A yes is a configured host.
+            discovered: foundHostUnadopted(def),
             // A server runs there (its switch, or this computer's tunnel placed on it): dialled
             // even when the host is known only from ~/.ssh/config.
             standing: hostRunsServer(key, config),

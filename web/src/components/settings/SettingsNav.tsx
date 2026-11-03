@@ -14,10 +14,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
-import { isPhoneLayout } from '@/hooks/usePhoneLayout'
+import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import { useClosedPaneGates, type SettingsPaneGate } from './settings-pane-gates'
-import { corePaneFilterEntry } from './settings-routing'
+import { corePaneFilterEntry, navRowShown } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
 import { SettingsIcon, assignPluginTint, monogramFor, tileKey, type SettingsGlyphName } from './settings-icons'
 import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './settings-pane-context'
@@ -56,6 +56,8 @@ export interface NavRow {
   to?: string
   /** True for rows a plugin contributed (counted for the placeholder cache). */
   fromPlugin?: boolean
+  /** A sub-page's row: indented under this pane's row (core-settings-registry `parent`). */
+  parent?: string
   meta: SettingsPaneMeta
   filter: FilterEntry
 }
@@ -100,6 +102,7 @@ function coreRow(entry: CoreSettingsContribution): NavRow {
     group: entry.group,
     testId: `settings-nav-${entry.id}`,
     label: entry.label,
+    parent: entry.parent,
     meta: CORE_META.get(entry.id)!,
     filter: corePaneFilterEntry(entry.id),
   }
@@ -281,14 +284,17 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   const hitByKey = useMemo(() => new Map<string, FilterHit>(hits.map((h) => [h.key, h])), [hits])
 
   // Display order: groups keep their order; inside a group, rank order while filtering.
+  // A phone drills in from the pane itself (iOS Settings): its list keeps sub-pages folded.
+  const phone = usePhoneLayout()
+  const navOpenPane = phone ? '' : activePane
   const groups = useMemo(() => NAV_GROUPS.map((group) => {
-    let rows = model.rows.filter((r) => r.group === group)
+    let rows = model.rows.filter((r) => r.group === group && navRowShown(r.key, navOpenPane, filtering))
     if (filtering) {
       rows = rows.filter((r) => hitByKey.has(r.key))
         .sort((a, b) => compareHits(hitByKey.get(a.key)!, hitByKey.get(b.key)!))
     }
     return { group, rows }
-  }), [model.rows, filtering, hitByKey])
+  }), [model.rows, filtering, hitByKey, navOpenPane])
   const visibleRows = useMemo(() => groups.flatMap((g) => g.rows), [groups])
 
   useEffect(() => {
@@ -392,6 +398,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
     const highlighted = filtering && row.key === highlight
     const className = 'settings-nav-item'
       + (row.kind === 'link' ? ' settings-nav-page-link' : '')
+      + (row.parent ? ' settings-nav-subitem' : '')
       + (active ? ' settings-nav-active' : '')
       + (highlighted ? ' is-highlighted' : '')
     const body = (
@@ -437,6 +444,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
         type="button"
         className={className}
         data-testid={row.testId}
+        data-parent={row.parent}
         aria-current={active ? 'page' : undefined}
         title={row.label}
         // WebKit (the Mac app) skips buttons on Tab unless they carry a tabindex (N20).

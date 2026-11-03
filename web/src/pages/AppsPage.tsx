@@ -123,7 +123,7 @@ function AppsPageBody() {
     { id: 'all', label: 'All' },
     ...summary.categories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
     { id: 'get', label: 'Get more' },
-    { id: 'builtin', label: 'Built in' },
+    { id: 'builtin', label: 'Built-in apps' },
   ]
 
   return (
@@ -199,7 +199,7 @@ function AppsPageBody() {
         {showBuiltin && builtinHits > 0 && (
           <section className="apps-section" data-testid="apps-builtin" aria-labelledby="apps-builtin-title">
             <h2 className="apps-section-title" id="apps-builtin-title">
-              Built in
+              Built-in apps
               <span className="apps-section-count">{`${onRail} of ${builtins.length} on the sidebar`}</span>
             </h2>
             <BuiltinAppsGrid query={query} onOpen={openApp} />

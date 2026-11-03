@@ -97,6 +97,7 @@ export function createHostExpose(opts: { port: number; stateFile: string; deps?:
     const now = supervisor.running()
     const same = now && now.providerId === run.providerId && now.command === run.command && JSON.stringify(now.args) === JSON.stringify(run.args)
     if (!same) await supervisor.start(run, opts.port)
+    else supervisor.refresh(run)
     return status()
   }
 

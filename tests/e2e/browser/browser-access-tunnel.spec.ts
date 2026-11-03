@@ -27,7 +27,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type Locator, type Page } from '@playwright/test'
-import { openWay } from './devices-ways-helpers'
+import { backToDevices, openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 
 test.setTimeout(180_000)
@@ -322,7 +322,8 @@ test.describe('Open from a browser', () => {
     expect(mine.name).toMatch(/^browser-[0-9a-f]{6}$/)
 
     await openDevices(page)
-    const devices = page.locator('#devices')
+    // The list of signed-in browsers is on Phones & Cloud itself.
+    const devices = await backToDevices(page)
     await expect(devices.getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')
     const row = devices.locator(`[data-device-name="${mine.name}"]`)
     await expect(row).toBeVisible()
@@ -399,7 +400,7 @@ test.describe('Open from a browser', () => {
     const mine = listed.devices.filter((d) => d.role === 'browser').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
     expect(mine.info?.deviceName).toBe('iPhone Home Screen')
     await openDevices(page)
-    const row = page.locator('#devices').locator(`[data-device-name="${mine.name}"]`)
+    const row = (await backToDevices(page)).locator(`[data-device-name="${mine.name}"]`)
     // " 2" only when an earlier run on the same fixture signed one in too.
     await expect(row.locator('.devices-name')).toHaveText(/^iPhone Home Screen( \d+)?$/)
     await shot(page, '8b-home-screen-listed', row)

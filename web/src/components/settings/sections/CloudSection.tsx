@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Config } from '@open-walnut/core';
 import { apiGet } from '@/api/client';
 import { fetchDevicesList } from './cloud/devices-list';
 import {
@@ -46,7 +47,8 @@ import { CloudManualPaste } from './cloud/CloudManualPaste';
 import { CloudProviderPicker } from './cloud/CloudProviderPicker';
 import { CloudSetupSteps, SetupLog } from './cloud/CloudSetupSteps';
 import { PairPhoneCard } from './cloud/PairPhoneCard';
-import { CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './DevicesSection';
+import { CloudWayExtras } from './cloud/CloudWayExtras';
+import { CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
 /** The companion refuses this Mac's token: said on the Cloud card in place of "Connected". */
 export const CLOUD_REFUSED_NOTICE = 'The cloud companion no longer accepts this Mac\'s token, so cloud sync and the Cloud host stop. Pairing this Mac again needs a new token made on the companion.';
@@ -68,7 +70,11 @@ function isLive(job: CloudSetupJob | null): boolean {
   return job != null && (job.status === 'running' || job.status === 'awaiting-input');
 }
 
-export function CloudSection() {
+/**
+ * Settings > Phones & Cloud > Cloud companion. `config`/`onSave` carry the companion's own
+ * settings under its status (CloudWayExtras), shown once one is set up.
+ */
+export function CloudSection({ config, onSave }: { config?: Config; onSave?: (partial: Partial<Config>) => Promise<void> } = {}) {
   const [job, setJob] = useState<CloudSetupJob | null>(null);
   const [providers, setProviders] = useState<CloudSetupProvider[] | null>(null);
   const [stage, setStage] = useState<Stage>('hero');
@@ -334,7 +340,7 @@ export function CloudSection() {
   return (
     <SectionCard
       id="cloud"
-      title="Cloud Companion"
+      title="Cloud companion"
       description="A server you run in the cloud keeps sessions reachable from your phone while this Mac sleeps."
     >
       <div className="cloud-section">
@@ -500,6 +506,7 @@ export function CloudSection() {
             <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>
           </SettingsGroup>
         )}
+        {cloudOrigin && config && onSave && <CloudWayExtras config={config} onSave={onSave} />}
       </div>
     </SectionCard>
   );

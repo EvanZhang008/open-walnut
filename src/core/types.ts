@@ -1440,12 +1440,21 @@ export interface Config {
     /** Shell snippet run before claude on remote sessions (e.g. 'source $HOME/.nvm/nvm.sh').
      *  Use to set up PATH for node managers (nvm, fnm, volta, asdf) or other env. */
     shell_setup?: string;
-    /** Whether this host is enabled (shown in session path selector).
-     *  Auto-discovered hosts default to true. User can toggle off to hide. */
+    /** Whether this host is enabled (shown in session path selector). The user
+     *  can toggle it off to hide it. A found host (`discovered`) that has not had
+     *  the user's yes (`connect`) reads as off (core/hosts/found-hosts.ts). */
     enabled?: boolean;
-    /** Whether this host was auto-discovered from SSH config (vs manually added).
-     *  Informational only — doesn't affect behavior. */
+    /** Whether this host was auto-discovered from SSH config (vs manually added). */
     discovered?: boolean;
+    /** A found host's answer to "Connect to it?" (core/hosts/found-hosts.ts): `ask`
+     *  (listed, never dialled, Remote Hosts asks), `yes` (a normal host), `not_now`
+     *  (listed, never dialled, not asked again). Absent on a found host: not decided
+     *  yet (an older Walnut wrote the row); the server decides it at start from what
+     *  Walnut recorded. Read only on a found host. */
+    connect?: 'ask' | 'yes' | 'not_now';
+    /** Who gave `connect`: absent for the person, `walnut` for an older row Walnut decided
+     *  from what it recorded. Walnut's own yes dials the host when used, never at every start. */
+    connect_by?: 'walnut';
     /** Automatic host fixes after a preflight (install the native Claude Code,
      *  gcc under passwordless sudo, build dtach). Default on; `false` turns them
      *  off for this host. WALNUT_HOST_AUTOFIX=0 turns them off for every host. */
@@ -1497,6 +1506,13 @@ export interface Config {
    *  Set `enabled: false` to keep connects strictly on demand. */
   hosts_warmup?: {
     enabled?: boolean;
+  };
+  /** Found hosts (core/hosts/found-hosts.ts): set once the server decided the found
+   *  hosts an older Walnut left; from then on a newly found host waits for the
+   *  user's yes. */
+  hosts_found?: {
+    /** When Walnut started asking (ISO time). */
+    asking_since?: string;
   };
   /** Files a login command writes outside ~/.ssh (an SSH proxy's own sign-in, a
    *  token file; a directory counts by its newest file, `~/` is expanded). While

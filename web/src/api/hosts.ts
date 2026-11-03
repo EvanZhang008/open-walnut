@@ -150,6 +150,15 @@ export async function connectHost(host: string): Promise<HostStatus> {
 }
 
 /**
+ * The person's answer to "Connect to it?" for a host found in ~/.ssh/config
+ * (src/core/hosts/found-hosts.ts): `yes` makes it a normal host and dials it now,
+ * `not_now` keeps it listed and quiet. The config change arrives as config:changed.
+ */
+export async function answerFoundHost(host: string, answer: 'yes' | 'not_now'): Promise<{ ok: true; host: string; answer: 'yes' | 'not_now'; status?: HostStatus }> {
+  return apiPost(`/api/hosts/${encodeURIComponent(host)}/found-answer`, { answer });
+}
+
+/**
  * Re-run the host's readiness check now (the "Check again" button). Answers the
  * fresh status; the same answer also arrives as a host:status push. On a replica
  * the server relays the ask to the Mac.

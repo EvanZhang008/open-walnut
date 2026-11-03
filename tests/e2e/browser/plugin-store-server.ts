@@ -245,6 +245,19 @@ export function activate() { throw new Error('tau web fixture fails on purpose')
 const packRepo = path.join(tmpBase, 'pack-repo')
 await writeFixturePlugin('pack-notes', { name: 'Pack Notes', description: 'The first plugin of a team pack.' }, packRepo)
 await writeFixturePlugin('pack-board', { name: 'Pack Board', description: 'The second plugin of a team pack.' }, packRepo)
+// pack-board also brings a tunnel provider (never started: the browser link stays off), so the
+// install notice and its page lead to the browser link page.
+await fs.writeFile(path.join(packRepo, 'pack-board', 'dist', 'server.mjs'), `
+let registration = null
+export function activate(walnut) {
+  registration = walnut.expose?.register?.({
+    id: 'pack-tunnel', title: 'Pack Tunnel', command: '/nonexistent/pack-tunnel', args: ['{port}'],
+    urlPattern: 'https://[a-z0-9.-]+\\.example\\.invalid',
+  }) ?? null
+  return { dispose() { registration?.dispose?.() } }
+}
+export function deactivate() { registration?.dispose?.() }
+`)
 {
   const { execFileSync } = await import('node:child_process')
   const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' }

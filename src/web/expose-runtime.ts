@@ -370,6 +370,7 @@ export function startExposeRuntime(opts: ExposeRuntimeOptions): ExposeRuntime {
     const same = now && now.providerId === run.providerId && now.command === run.command && now.port === port
       && JSON.stringify(now.args) === JSON.stringify(run.args)
     if (!same) await supervisor.start(run, port)
+    else supervisor.refresh(run)
     runningKey = tunnelKey(def, cfg.options ?? {})
     return status()
   }

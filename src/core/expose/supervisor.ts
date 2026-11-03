@@ -19,8 +19,10 @@
  * ready line brings it back), a command that is not installed
  * is `missing`: both retry slowly, so renewing the sign-in or installing the tool
  * is all the person has to do. A provider with an `installCommand` is installed
- * first, once per command in this process (`activity` says so meanwhile; Retry
- * allows one more try). Every callback carries the run's generation, so a late
+ * first, one install at a time per command (`activity` says so meanwhile); a failed
+ * one runs again on the next timed try or Retry, and one whose output matches a
+ * sign-in pattern is `needs-sign-in`; failed ones in a row wait
+ * longer each time (INSTALL_RETRY_MS). Every callback carries the run's generation, so a late
  * event from a replaced child changes nothing.
  */
 
@@ -47,6 +49,8 @@ export const PROBE_FAILURES = 3
 export const KILL_AFTER_MS = 5_000
 /** An install of the provider's CLI that takes longer is stopped. */
 export const INSTALL_TIMEOUT_MS = 10 * 60_000
+/** After a failed install, the wait before the next one, by how many failed in a row: an install is network, a registry and CPU, never once a minute. */
+export const INSTALL_RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000] as const
 
 export interface ExposeChild {
   readonly pid?: number
@@ -171,6 +175,8 @@ export class ExposeSupervisor {
   private restartNow = false
   /** Install commands run in this process, by command: one try each (Retry allows one more). */
   private installs = new Map<string, { done: boolean; result?: InstallResult; promise: Promise<InstallResult> }>()
+  /** Failed installs in a row, by command: the next one waits INSTALL_RETRY_MS for that count. Retry and a success reset it. */
+  private installFailures = new Map<string, number>()
   /** Bumped by every start attempt: a wait for an install that a newer attempt replaced does nothing. */
   private attemptSeq = 0
   private activity: string | undefined
@@ -209,6 +215,24 @@ export class ExposeSupervisor {
     return { providerId: this.current.run.providerId, command: this.current.run.command, args: this.current.run.args, port: this.current.port }
   }
 
+  /**
+   * The same command and arguments with something else changed (a plugin update: its title,
+   * hints, patterns, install command): taken without restarting a running tunnel, from the next
+   * start on. A CLI found missing that the new definition can install is tried at once, so an
+   * update that adds an install command does not wait out the missing clock.
+   */
+  refresh(run: ExposeRun): void {
+    const cur = this.current
+    if (!cur || this.stopping) return
+    const before = cur.run
+    cur.run = run
+    if (this.state === 'missing' && !cur.child && run.installCommand && run.installCommand !== before.installCommand) {
+      this.attempt = 0
+      this.clearTimers()
+      this.spawnNow()
+    }
+  }
+
   /** Start `run`, replacing whatever runs now. */
   async start(run: ExposeRun, port: number): Promise<void> {
     await this.stop({ quiet: true })
@@ -227,6 +251,7 @@ export class ExposeSupervisor {
     this.attempt = 0
     // One more try of an install that ran (one still running is waited for, never run twice).
     for (const [command, entry] of this.installs) if (entry.done) this.installs.delete(command)
+    this.installFailures.clear()
     if (this.current.child) {
       this.restartNow = true
       this.current.child.kill('SIGTERM')
@@ -407,7 +432,10 @@ export class ExposeSupervisor {
     const { run } = cur
     if (error.code === 'ENOENT') {
       const tried = run.installCommand ? this.installs.get(run.installCommand) : undefined
-      if (run.installCommand && !tried?.done) {
+      // A failed install runs again on the next timed try: what failed it (an expired sign-in,
+      // no network, a missing installer) is often fixed by then without anyone pressing Retry.
+      if (run.installCommand && (!tried?.done || tried.result?.ok === false)) {
+        if (tried?.done) this.installs.delete(run.installCommand)
         this.installThenStart(run)
         return
       }
@@ -456,12 +484,21 @@ export class ExposeSupervisor {
       if (this.current?.gen !== gen || this.attemptSeq !== seq || this.stopping) return
       this.activity = undefined
       if (result.ok) {
+        this.installFailures.delete(command)
         this.spawnNow()
         return
       }
+      const failures = (this.installFailures.get(command) ?? 0) + 1
+      this.installFailures.set(command, failures)
+      const wait = INSTALL_RETRY_MS[Math.min(failures, INSTALL_RETRY_MS.length) - 1]!
       this.lastError = installFailure(run.title, result.output)
-      this.hint = run.installHint
-      this.scheduleRetry(MISSING_RETRY_MS, 'missing')
+      // An installer that needs the same sign-in as the tunnel (a package registry behind it)
+      // says so in its output: that is a sign-in to renew. Either way the next try installs
+      // again, after a wait that grows with each failure in a row.
+      const lines = result.output.split('\n')
+      const signIn = run.signInPatterns.some((p) => lines.some((line) => p.test(line)))
+      this.hint = signIn ? run.signInHint ?? run.installHint : run.installHint
+      this.scheduleRetry(wait, signIn ? 'needs-sign-in' : 'missing')
     })
   }
 

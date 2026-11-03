@@ -34,6 +34,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, seedColumns } from './draft-helpers'
+import { openWay } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -465,7 +466,7 @@ test('the operator removes this Mac on the companion: the Cloud card stops sayin
   await setLinkOf(fx)('pass')
   await loadHome(page)
   let section = await openDevices(page)
-  const cloudCard = page.locator('#cloud')
+  const cloudCard = await openWay(page, 'cloud')
   await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 60_000 })
   // On the box, as its operator runs it (its own data dir, a local caller).
   const out = execFileSync(bunRuntime(), [path.join(REPO, 'src', 'cli.ts'), 'device', 'revoke', 'mac-primary'], {
@@ -481,6 +482,7 @@ test('the operator removes this Mac on the companion: the Cloud card stops sayin
   await page.getByTestId('sidebar-core-app-home').click()
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
   section = await openDevices(page)
+  await openWay(page, 'cloud')
   await expect(cloudCard.getByText('Not accepted', { exact: true })).toBeVisible({ timeout: 60_000 })
   await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
   await expect(cloudCard).toContainText("The cloud companion no longer accepts this Mac's token")

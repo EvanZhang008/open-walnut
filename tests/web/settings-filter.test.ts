@@ -37,8 +37,10 @@ describe('Find a setting matcher', () => {
   })
 
   it('counts folded sections under their owner pane', () => {
-    expect(primaryHit(filterEntries(ENTRIES, 'cloud companion'))?.key).toBe('devices')
-    expect(hit('cloud companion', 'devices')?.level).toBe(0)
+    // The Cloud companion is a sub-page of Phones & Cloud now, with its own nav row.
+    expect(primaryHit(filterEntries(ENTRIES, 'cloud companion'))?.key).toBe('cloud')
+    expect(primaryHit(filterEntries(ENTRIES, 'tailscale'))?.key).toBe('devices-tailscale')
+    expect(primaryHit(filterEntries(ENTRIES, 'browser link'))?.key).toBe('devices-browser')
     expect(primaryHit(filterEntries(ENTRIES, 'focus tiers'))?.key).toBe('tasks')
     expect(hit('focus tiers', 'tasks')?.hint).toBe('Focus Tiers')
     expect(primaryHit(filterEntries(ENTRIES, 'use an api'))?.key).toBe('advanced')

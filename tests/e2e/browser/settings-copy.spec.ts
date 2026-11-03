@@ -211,11 +211,13 @@ test('N21: Search and Hooks copy agrees with what the pane does', async ({ page 
 test('N24: Cloud Companion has a one-sentence description and names the chat agent Ask Walnut', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
+  // Its own sub-page under Phones & Cloud, whose row shows once Phones & Cloud is open.
   await clickNav(page, 'devices')
+  await clickNav(page, 'cloud')
   const cloud = page.locator('.settings-pane #cloud')
   await expect(cloud).toBeVisible({ timeout: 20_000 })
   const desc = await cloud.evaluate((el) => {
-    const title = Array.from(el.querySelectorAll<HTMLElement>('h2, h3, [class*="title"]')).find((t) => /Cloud Companion/.test(t.textContent ?? ''))
+    const title = Array.from(el.querySelectorAll<HTMLElement>('h2, h3, [class*="title"]')).find((t) => /Cloud companion/i.test(t.textContent ?? ''))
     const next = title?.nextElementSibling as HTMLElement | null
     return { text: (next?.textContent ?? '').trim(), size: next ? parseFloat(getComputedStyle(next).fontSize) : 0 }
   })
@@ -250,7 +252,7 @@ test('N27: opening Voice asks for the speech scan once', async ({ page }) => {
   expect(scans.length).toBeLessThanOrEqual(1)
 })
 
-test('C74: Phones & Cloud claims nothing before the devices list answers, so #cloud never moves', async ({ page }) => {
+test('C74: Phones & Cloud claims nothing before the devices list answers', async ({ page }) => {
   let release: () => void = () => {}
   const gate = new Promise<void>((r) => { release = r })
   await page.route((url) => url.pathname === '/api/devices', async (route) => {
@@ -273,14 +275,10 @@ test('C74: Phones & Cloud claims nothing before the devices list answers, so #cl
   // No "no address" notice and no "No phones" claim while the list is unknown.
   await expect(devices).not.toContainText('No address for this machine')
   await expect(devices).not.toContainText('No phones paired yet.')
-  const offsetOf = () => page.evaluate(() => {
-    const pane = document.querySelector('.settings-pane')!
-    return document.getElementById('cloud')!.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop
-  })
-  const before = await offsetOf()
   release()
   await expect(devices).not.toContainText('Loading paired phones...', { timeout: 20_000 })
-  await page.waitForTimeout(300)
-  // The fixture pairs no phone and has a pairing address: nothing above #cloud changes height.
-  expect(Math.abs((await offsetOf()) - before)).toBeLessThanOrEqual(1)
+  // The Cloud companion it once guarded is its own sub-page now, so nothing deep-linked sits
+  // below this list; the pane's own row link (#devices-new-name) is held by holdAnchor while
+  // content above it grows (settings-panes.spec.ts C74).
+  await expect(devices.getByTestId('devices-add-group')).toBeVisible()
 })

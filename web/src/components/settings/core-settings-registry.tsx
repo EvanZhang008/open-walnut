@@ -7,6 +7,7 @@ import { BugReportSection } from './sections/BugReportSection'
 import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
 import { DevicesSection } from './sections/DevicesSection'
+import { DevicesWaySection } from './sections/DevicesWaySection'
 import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HooksSection } from './sections/HooksSection'
@@ -55,6 +56,12 @@ export interface CoreSettingsContribution {
   divider?: boolean
   /** Rendered in its owner's pane (keeps its `#id` deep link) but has no nav entry of its own. */
   navHidden?: boolean
+  /**
+   * A sub-page of another entry (iOS / macOS Settings style): its nav row sits indented
+   * under the parent and shows while the parent or one of its sub-pages is open, and the
+   * pane leads with a way back to the parent (SettingsPaneBack).
+   */
+  parent?: string
   /**
    * A server fact the pane needs to have anything to show (settings-pane-gates.ts).
    * A section that can render nothing names one, so no nav entry opens an empty pane
@@ -245,24 +252,43 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: ['s3', 'bucket', 'region', 'prefix', 'aws', 'profile', 'access key'],
     render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} />,
   },
-  // Machines: phones + the cloud companion they reach this Mac through share one
-  // nav entry ("Phones & Cloud"); SSH hosts for remote sessions are their own.
+  // Machines: Phones & Cloud is the main entry (paired phones and browsers, pairing a
+  // phone, and the three ways at a glance); each way is its own sub-page under it.
+  // SSH hosts for remote sessions are their own entry.
   {
     owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure',
     icon: 'phone', tint: '#5856D6',
     description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a browser link.',
-    keywords: ['phone', 'iphone', 'pair', 'tailscale', 'tunnel', 'browser link',
+    keywords: ['phone', 'iphone', 'pair', 'paired phones', 'signed-in browsers',
       { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
-      { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
       { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],
-    render: ({ config, saveSection }) => <DevicesSection config={config} onSave={saveSection} />,
+    render: () => <DevicesSection />,
+  },
+  // `#cloud` keeps its old deep link: it is the Cloud companion sub-page now.
+  {
+    owner: 'walnut', id: 'cloud', label: 'Cloud companion', title: 'Cloud companion', group: 'configure', parent: 'devices',
+    icon: 'cloud', tint: '#5856D6',
+    description: 'A small server of yours in the cloud that your phone talks to, even while this Mac sleeps.',
+    keywords: ['cloud', 'companion', 'bridge', 'relay', 'updates',
+      { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
+      { word: 'keeps copies', rowLabel: 'What the cloud companion keeps', anchor: 'companion-keep' }],
+    render: ({ config, saveSection }) => <CloudSection config={config} onSave={saveSection} />,
   },
   {
-    owner: 'walnut', id: 'cloud', label: 'Cloud Companion', title: 'Cloud Companion', group: 'configure', navHidden: true,
-    icon: 'cloud', tint: '#5856D6',
-    description: 'The cloud relay your phones reach this Mac through.',
-    keywords: ['cloud', 'companion', 'bridge'],
-    render: () => <CloudSection />,
+    owner: 'walnut', id: 'devices-tailscale', label: 'Tailscale', title: 'Tailscale', group: 'configure', parent: 'devices',
+    requires: 'primary',
+    icon: 'network', tint: '#5856D6',
+    description: 'A private network between this Mac and your phone, so the phone talks to this Mac directly.',
+    keywords: ['tailscale', 'tailnet', 'vpn', 'from anywhere'],
+    render: () => <DevicesWaySection way="tailscale" />,
+  },
+  {
+    owner: 'walnut', id: 'devices-browser', label: 'Browser link', title: 'Browser link', group: 'configure', parent: 'devices',
+    requires: 'primary',
+    icon: 'globe', tint: '#5856D6',
+    description: 'An HTTPS address that opens Walnut in any browser after you sign in.',
+    keywords: ['browser link', 'tunnel', 'open from a browser', 'sign-in code', 'https'],
+    render: () => <DevicesWaySection way="browser" />,
   },
   {
     owner: 'walnut', id: 'remote-hosts', label: 'Remote Hosts', title: 'Remote Hosts', group: 'configure',

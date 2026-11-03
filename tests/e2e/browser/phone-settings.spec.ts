@@ -13,7 +13,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { openWay } from './devices-ways-helpers'
+import { backToDevices, openWay } from './devices-ways-helpers'
 import { findSmallTargets, findSmallText } from './phone-helpers'
 
 test.setTimeout(240_000)
@@ -279,6 +279,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     // N2-36: this tab is on the computer's own address and holds no device token,
     // so nothing can sign it out after a week: no Home Screen tip here.
     await expect(page.getByTestId('devices-pane-loaded').or(page.getByTestId('browser-access-make-code')).first()).toBeVisible()
+    await backToDevices(page)
     await expect(page.getByTestId('devices-home-screen-hint')).toHaveCount(0)
     await expect(page.getByText('Add Walnut to your Home Screen', { exact: false })).toHaveCount(0)
   })
@@ -344,6 +345,8 @@ test.describe('a phone signed in through a tunnel', () => {
     await openWay(phone, 'browser')
     await expect(phone.getByTestId('browser-access-make-code')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('Make sign-in codes on the computer Walnut runs on.')
+    // The Browser link sub-page leads back to the list of devices on Phones & Cloud.
+    await backToDevices(phone)
     await expect(devices).not.toContainText('No phones paired yet.')
     const group = devices.getByTestId('devices-browsers-group')
     await expect(group).toContainText('Signed-in browsers')

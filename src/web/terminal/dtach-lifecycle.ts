@@ -307,8 +307,13 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
       // A host that cannot open a terminal (the cloud box: no SSH) has no dtach
       // sockets to sweep, and listing them would only fail on every start.
       const { hostOffersTerminal } = await import('../../core/hosts/host-status.js')
+      // A found host waiting for the person's yes is never dialled (core/hosts/found-hosts.ts);
+      // a live session there would have made it a yes.
+      const { foundHostWaits } = await import('../../core/hosts/found-hosts.js')
+      const live = new Set(sessions.map((s) => s.host).filter(Boolean))
       for (const [h, def] of Object.entries(config.hosts ?? {})) {
         if (def && !hostOffersTerminal(def)) hosts.delete(h)
+        else if (def && foundHostWaits(def) && !live.has(h)) hosts.delete(h)
       }
     } catch (err) {
       log.web.warn('reapOrphanDtach: failed to load config hosts', { error: String(err) })

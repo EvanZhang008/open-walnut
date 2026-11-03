@@ -16,7 +16,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { openWay, qrDialog } from './devices-ways-helpers'
+import { backToDevices, openWay, qrDialog } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -180,20 +180,21 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     // One target: no picker; the card says what to do.
     await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
-    await openWay(page, 'tailscale')
-    const macStep = section.locator('.remote-access-step[data-step="mac"]')
+    const ts = await openWay(page, 'tailscale')
+    const macStep = ts.locator('.remote-access-step[data-step="mac"]')
     await expect(macStep).toContainText('Get Tailscale from the App Store, then come back here.')
-    const link = section.getByTestId('remote-access-download')
+    const link = ts.getByTestId('remote-access-download')
     await expect(link).toHaveAttribute('href', 'https://apps.apple.com/app/tailscale/id1475387142')
     await expect(link).toHaveAttribute('target', '_blank')
     await expect(link).toHaveAttribute('rel', /noopener/)
     // Inside the section, never a banner or a notice box.
-    await expect(section.locator('.settings-notice')).toHaveCount(0)
-    await shot(page, 'install-card-lan-only')
+    await expect(ts.locator('.settings-notice')).toHaveCount(0)
+    await shot(page, 'install-card-lan-only', ts)
 
-    // Pairing still works on Wi-Fi with the card showing.
-    await section.locator('#devices-new-name').fill('Spare phone')
-    await section.getByRole('button', { name: /Pair new device/i }).click()
+    // Pairing still works on Wi-Fi, back on Phones & Cloud.
+    const main = await backToDevices(page)
+    await main.locator('#devices-new-name').fill('Spare phone')
+    await main.getByRole('button', { name: /Pair new device/i }).click()
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Spare-phone', target: 'lan' })
     await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 60_000 })
@@ -208,12 +209,13 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     const picker = section.getByRole('radiogroup', { name: 'Pairing target' })
     await expect(picker.getByRole('radio')).toHaveCount(2)
-    await openWay(page, 'tailscale')
-    await expect(section.locator('.remote-access-step[data-step="mac"]')).toContainText('Open Tailscale and sign in')
-    await expect(section.getByTestId('remote-access-open')).toBeVisible()
+    const ts = await openWay(page, 'tailscale')
+    await expect(ts.locator('.remote-access-step[data-step="mac"]')).toContainText('Open Tailscale and sign in')
+    await expect(ts.getByTestId('remote-access-open')).toBeVisible()
     // Switching target swaps only the target sentence.
-    const pickerRow = section.locator('.settings-row', { has: page.getByRole('radiogroup', { name: 'Pairing target' }) })
-    await section.getByTestId('devices-target-lan').click()
+    const main = await backToDevices(page)
+    const pickerRow = main.locator('.settings-row', { has: page.getByRole('radiogroup', { name: 'Pairing target' }) })
+    await main.getByTestId('devices-target-lan').click()
     await expect(pickerRow).toContainText('Works only while the phone is on the same Wi-Fi as this Mac.')
     await shot(page, 'not-connected-card-picker')
   })
@@ -222,8 +224,8 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await mockDevices(page, { targets: [LAN, CLOUD] })
     const section = await openDevices(page)
     await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toBeVisible()
-    await openWay(page, 'tailscale')
-    await expect(section.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store, then come back here.')
+    const ts = await openWay(page, 'tailscale')
+    await expect(ts.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store, then come back here.')
   })
 
   test('cloud companion: the line stays hidden even if the field comes through', async ({ page }) => {
@@ -240,8 +242,12 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     })
     const section = await openDevices(page)
     await expect(section.locator('#devices-new-name')).toBeVisible()
-    // The replica flag hides the line and the guided card alike.
+    // The replica flag hides the line and the guided card alike, and the Tailscale and
+    // Browser link sub-pages have no nav row there.
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
+    await expect(page.getByTestId('settings-nav-cloud')).toBeVisible()
+    await expect(page.getByTestId('settings-nav-devices-tailscale')).toHaveCount(0)
+    await expect(page.getByTestId('settings-nav-devices-browser')).toHaveCount(0)
   })
 
   test('a phone paired while the first list read is still out shows up in the list', async ({ page }) => {
