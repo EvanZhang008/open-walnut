@@ -125,6 +125,7 @@
   text-overflow: ellipsis;
 }
 .org-channel-latest.is-alert { color: var(--error, #d70015); }
+.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 3px; color: var(--accent, #0a84ff); }
 
 .org-badge {
   flex: none;

@@ -34,6 +34,8 @@ export interface OrgThread {
   opener?: { text: string; at: string; from: string; ref?: string; by: string };
   /** Put aside until `until` (core/org/thread-view.ts snoozedNow says whether it still is). */
   snoozed?: { until: string; at: string; by: string };
+  /** Pinned to the top of his view, whatever its state (core/org/thread-view.ts pinnedNow). */
+  pinned?: { at: string; by: string };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;
@@ -50,6 +52,8 @@ export interface OrgThreadPatch {
   reopen?: boolean;
   /** An ISO time it comes back at, or '' to take the snooze off. */
   snooze?: string;
+  /** Pin it to the top of his view, or unpin it. */
+  pin?: boolean;
   merge_into?: string;
 }
 

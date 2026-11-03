@@ -93,6 +93,12 @@
 .org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
 .org-thread-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .org-thread-snoozed { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
+/* A pinned thread leads the list: its mark beside the time, and a quiet accent edge. */
+.org-thread.is-pinned { border-color: color-mix(in srgb, var(--accent, #0a84ff) 45%, var(--border)); }
+.org-thread-pin { display: inline-flex; align-items: center; gap: 3px; color: var(--accent, #0a84ff); }
+.org-thread-pin .thread-icon { flex: none; }
+.org-thread-pin-btn { display: inline-flex; align-items: center; justify-content: center; padding-left: 8px; padding-right: 8px; }
+.org-thread-pin-btn[aria-pressed="true"] { color: var(--accent, #0a84ff); }
 .org-thread-closed { font-size: 12px; color: var(--fg-muted, #86868b); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
 .org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }

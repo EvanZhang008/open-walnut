@@ -251,6 +251,29 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertNil(ChatOrgModel.threadsOf("lead-x", tasks: ["lead-x": node("lead-x", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts()))]))
     }
 
+    /// A pinned thread named on a row's line wears a pin (web `latestPinned`); the counts decode
+    /// from the server and read as unpinned from an older one.
+    func testAPinnedThreadOnTheLineIsMarked() throws {
+        let decoded = try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"needs":0,"pinned":1,"title":"Watch list","id":"th-2","titlePinned":true}"#.utf8))
+        XCTAssertEqual(decoded, WalnutThreadCounts(shown: 2, needs: 0, pinned: 1, title: "Watch list", id: "th-2", titlePinned: true))
+        XCTAssertEqual(try JSONDecoder().decode(WalnutThreadCounts.self, from: Data(#"{"shown":2,"pinned":"1","titlePinned":"yes"}"#.utf8)), WalnutThreadCounts(shown: 2))
+        let rows = ChatOrgModel.rows(tree: try tree(), tasks: [
+            node("lead-o", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Watch list", titlePinned: true))),
+            node("lead-w", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Rename", titlePinned: true))),
+            node("main-1", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, pinned: 1, title: "Plan", titlePinned: true))),
+        ])
+        let by = Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0) })
+        let ops = try XCTUnwrap(by["Ops"])
+        XCTAssertEqual(ops.line, "1 thread: Watch list")
+        XCTAssertTrue(ops.linePinned)
+        // A task's ask holds Walnut's line: the pin is not on it.
+        XCTAssertEqual(by["Walnut"]?.line, "Needs you")
+        XCTAssertEqual(by["Walnut"]?.linePinned, false)
+        // The CEO's line names a thread only while one waits on him.
+        XCTAssertEqual(by["CEO"]?.linePinned, false)
+        XCTAssertTrue(ChatDrawerOrgList.accessibilityText(ops).contains("pinned, 1 thread: Watch list"))
+    }
+
     /// The CEO's own Threads lead its line; one waiting on him names itself there and is its
     /// badge, never counted twice with the status it gives Main.
     func testTheCEOLineStartsWithItsThreads() throws {

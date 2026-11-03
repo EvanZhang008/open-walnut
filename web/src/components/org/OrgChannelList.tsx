@@ -17,6 +17,7 @@
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { threadCountLabel } from '@open-walnut/thread-view';
+import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -101,7 +102,10 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
           {/* The time of the line under it (when that news was written), else of the last move. */}
           <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
-        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>{row.latest}</span>
+        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
+          {/* A pinned thread named on the line wears the Threads card's pin. */}
+          {row.latestPinned && <ThreadPinIcon size={11} className="org-channel-pin" />}{row.latest}
+        </span>
       </span>
       {badge}
     </button>

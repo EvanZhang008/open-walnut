@@ -36,6 +36,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   opener?: { text: string; at: string; from: string; ref?: string };
   /** He put it aside until `until` (threads-model.ts ThreadSnoozed). */
   snoozed?: { until: string; at: string };
+  /** He (or the node) pinned it to the top of his view (threads-model.ts ThreadPinned). */
+  pinned?: { at: string; by?: string };
 }
 
 /** One exchange: his message (or a few in a row the node answered at once) and the answer. */
@@ -140,9 +142,24 @@ export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: rea
  */
 export function snoozedNow(t: ViewThread, now: number = Date.now()): boolean {
   const s = t.snoozed;
-  if (!s || t.closed || !(Date.parse(s.until) > now)) return false;
+  // A pinned thread stays in his sight: never in the Snoozed section.
+  if (!s || t.closed || pinnedNow(t) || !(Date.parse(s.until) > now)) return false;
   return !newsSince(t, s.at);
 }
+
+/** Pinned to the top of his view now (2026-11-03, the user: "have a pin thread feature"): open and pinned. */
+export function pinnedNow(t: Pick<ViewThread, 'pinned' | 'closed'>): boolean {
+  return !!t.pinned && !t.closed;
+}
+
+/** The pinned threads first (the newest pin on top), the rest after them in the order given. */
+export function pinnedFirst<T extends Pick<ViewThread, 'pinned' | 'closed'>>(threads: readonly T[]): T[] {
+  const pinned = threads.filter(pinnedNow).sort((a, b) => b.pinned!.at.localeCompare(a.pinned!.at));
+  return pinned.length ? [...pinned, ...threads.filter((t) => !pinnedNow(t))] : [...threads];
+}
+
+/** The states a thread is out of his sight in, unless pinned or an answer waits (threads-model.ts HIDDEN_STATES). */
+const QUIET_STATES: ReadonlySet<string> = new Set(['new', 'working', 'pending']);
 
 /** A message of his or an answer of the node's came after `at`. */
 function newsSince(t: ViewThread, at: string): boolean {
@@ -157,7 +174,10 @@ function newsSince(t: ViewThread, at: string): boolean {
  * instead of just show working"); pending stays out even with an answer (the node judged it no news).
  */
 export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
-  if (t.closed || t.state === 'pending' || snoozedNow(t, now)) return false;
+  if (t.closed) return false;
+  // Pinned: in his sight whatever its state, until he unpins or acknowledges it.
+  if (pinnedNow(t)) return true;
+  if (t.state === 'pending' || snoozedNow(t, now)) return false;
   if (t.state === 'needs' || t.state === 'answered') return true;
   return cardView(t, shared).unread.length > 0;
 }
@@ -171,7 +191,9 @@ export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<
   let last: string | null = null;
   for (const t of threads) {
     if (!shownToHim(t, shared, now)) continue;
-    let at = t.updatedAt;
+    // A pinned thread in the node's hands (new, working, pending) shows only for the pin: a change
+    // of it (his own message merged in, the node saying it works on it) is no news; its answers are.
+    let at = pinnedNow(t) && QUIET_STATES.has(t.state) ? '' : t.updatedAt;
     // Only a snooze that ran its course: one news ended early was news then, not again at its date.
     const s = t.snoozed;
     if (s && !t.closed && Date.parse(s.until) <= now && s.until > at && !newsSince(t, s.at)) at = s.until;
@@ -191,9 +213,13 @@ export interface ThreadCounts {
   shown: number;
   /** Of those, the ones waiting on him (state needs). */
   needs: number;
-  /** The newest waiting on him, else the newest shown. */
+  /** Of those, the ones he (or the node) pinned. Absent when none. */
+  pinned?: number;
+  /** The newest waiting on him, else the newest pinned, else the newest shown. */
   title?: string;
   id?: string;
+  /** The thread `title` names is pinned (a surface marks it). */
+  titlePinned?: boolean;
 }
 
 /** The counts of one node's Threads. Pure; the web's header and the server's status read the same. */
@@ -201,9 +227,13 @@ export function threadCounts<M extends ViewMessage>(threads: ReadonlyArray<ViewT
   const shared = sharedAnswers(threads);
   const shown = threads.filter((t) => shownToHim(t, shared, now));
   const needs = shown.filter((t) => t.state === 'needs');
+  const pinned = pinnedFirst(shown.filter(pinnedNow));
   const newest = (list: typeof shown) => list.reduce<(typeof shown)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
-  const top = newest(needs) ?? newest(shown);
-  return { shown: shown.length, needs: needs.length, ...(top ? { title: top.title, id: top.id } : {}) };
+  const top = newest(needs) ?? pinned[0] ?? newest(shown);
+  return {
+    shown: shown.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
+    ...(top ? { title: top.title, id: top.id, ...(pinnedNow(top) ? { titlePinned: true } : {}) } : {}),
+  };
 }
 
 /** "1 thread", "3 threads": the words every surface counts them in. */

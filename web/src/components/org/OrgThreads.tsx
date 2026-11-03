@@ -26,6 +26,9 @@
  *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
  *              "you definitely haven't answered ... you don't need to put it in this thread");
  *              they read in the conversation.
+ *   Pinned     the ones he (or the node) pinned lead the list, whatever their state, with a pin mark,
+ *              until he unpins or acknowledges them (2026-11-03, the user: "have a pin thread feature,
+ *              like this thread I need to make it pinned"); unpinned, a thread goes back to its place
  *   Snoozed    the ones he put aside (Snooze on a card, OrgThreadSnooze), each saying when it comes
  *              back; collapsed by default. A thread leaves the list and the tab's dot while snoozed
  *              and comes back on its date, or earlier on news (core/org/thread-view.ts snoozedNow)
@@ -37,7 +40,8 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
-import { cardView, exchangesOf, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
+import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -303,6 +307,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const [open, setOpen] = useState(false);
   const [following, setFollowing] = useState(false);
   const closed = !!t.closed;
+  const pinned = pinnedNow(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // The tasks the summary already shows as pills get no second chip (the renderer resolves them
   // from the task labels, so it is read again when one arrives, with the summary itself).
@@ -320,13 +325,18 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined}>
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
           {closed ? (t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
         </span>
         <span className="org-thread-meta">
+          {pinned && (<>
+            <span className="org-thread-pin" data-testid="org-thread-pinned" title={t.pinned!.by === 'human' ? 'You pinned this thread' : `${name} pinned this thread`}>
+              <ThreadPinIcon size={11} />{t.pinned!.by === 'human' ? 'Pinned' : `Pinned by ${name}`}
+            </span>{' \u00b7 '}
+          </>)}
           {t.opener && <span data-testid="org-thread-from">Opened by {name} · </span>}
           {timeAgo(last?.at ?? t.updatedAt, { now })}
         </span>
@@ -375,6 +385,13 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
               onSnooze={(until) => void state.update(t.id, { snooze: until })}
             />
             {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
+            {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
+            <button
+              type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
+              aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
+              title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
+              onClick={() => void state.update(t.id, { pin: !pinned })}
+            ><ThreadPinIcon size={14} /></button>
           </>)}
         </div>
       )}
@@ -395,7 +412,9 @@ export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: 
     const list = all ?? [];
     return {
       clock: at,
-      open: list.filter((t) => shownToHim(t, shared, at)),
+      // Pinned ones lead, newest pin first; the rest newest change first (as the server sorts
+      // them), so one just unpinned goes back to its place before the server answers.
+      open: pinnedFirst(list.filter((t) => shownToHim(t, shared, at)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))),
       hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownToHim(t, shared, at)),
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };

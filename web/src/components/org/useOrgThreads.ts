@@ -14,14 +14,23 @@ export interface OrgThreadsState {
   split: (threadId: string, messageId: string) => Promise<boolean>;
 }
 
-/** What a close, reopen or snooze looks like before the server answers. */
+/** What a close, reopen, snooze or pin looks like before the server answers. */
 function optimistic(t: OrgThread, patch: OrgThreadPatch): OrgThread {
   const at = new Date().toISOString();
-  if (patch.close) return { ...t, closed: { how: patch.close, at, by: 'human' }, updatedAt: at };
+  if (patch.close) { const { pinned: _p, ...rest } = t; return { ...rest, closed: { how: patch.close, at, by: 'human' }, updatedAt: at }; }
+  // A pin moves no clock: unpinned, the thread is back where it was.
+  if (patch.pin !== undefined) {
+    const { pinned: _p, snoozed: _s, ...rest } = t;
+    // His pin keeps its time while the write is on its way (a re-read must not reorder the pins).
+    if (patch.pin) return { ...rest, pinned: t.pinned?.by === 'human' ? t.pinned : { at, by: 'human' } };
+    return t.snoozed ? { ...rest, snoozed: t.snoozed } : rest;
+  }
   if (patch.reopen) { const { closed: _c, ...rest } = t; return { ...rest, updatedAt: at }; }
   if (patch.snooze !== undefined) {
     const { snoozed: _s, ...rest } = t;
-    return patch.snooze ? { ...rest, snoozed: { until: patch.snooze, at, by: 'human' }, updatedAt: at } : { ...rest, updatedAt: at };
+    // Snoozed: put aside, so no longer pinned.
+    if (patch.snooze) { const { pinned: _p, ...unpinned } = rest; return { ...unpinned, snoozed: { until: patch.snooze, at, by: 'human' }, updatedAt: at }; }
+    return { ...rest, updatedAt: at };
   }
   return t;
 }

@@ -678,3 +678,80 @@ test('Snooze puts a thread aside in its Snoozed section until its time; it comes
   await expect(c2.getByTestId('org-thread-state')).toHaveText('Needs you')
   expect((await stored('th-00000000c002'))?.snoozed).toBeUndefined()
 })
+
+test('Pin keeps a thread at the top whatever its state; the node cannot take his pin off; unpinned it goes back to its place', async ({ page, request }) => {
+  // 2026-11-03, the user: "have a pin thread feature, like this thread I need to make it pinned".
+  const project = `Threads pin ${STAMP} ${test.info().project.name}`
+  await createTask(request, `Pin work ${STAMP}`, project)
+  await createTask(request, `Pin review ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const t0 = Date.now() - 20 * 60_000
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
+  const thread = (n: string, title: string, state: string, min: number) => ({
+    id: `th-00000000d00${n}`, title, titled: true, state, reply: `${title}: the summary`, createdAt: at(0), updatedAt: at(min),
+    messages: [{ id: `tm-00000000d00${n}`, at: at(min - 1), text: `${title}?`, via: 'chat', ...(state === 'answered' ? { answer: { at: at(min), text: `${title}: the answer.` } } : {}) }],
+  })
+  fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
+  fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify({ version: 1, taskId: node, threads: [
+    thread('1', 'Routing design', 'answered', 9), thread('2', 'Phone view', 'answered', 6), thread('3', 'Watch list context', 'working', 3),
+  ] }))
+  const stored = async (id: string) => {
+    const res = await request.get(`/api/v1/tasks/${node}/threads`)
+    return ((await res.json()) as { threads: Array<{ id: string; pinned?: { at: string; by: string }; closed?: unknown }> }).threads.find((t) => t.id === id)
+  }
+
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
+  const detail = page.getByTestId('org-detail')
+  await expect(detail).toHaveAttribute('data-key', rowKey(project))
+  await detail.getByTestId('org-top-threads').click()
+  const open = page.getByTestId('org-thread-list')
+  const ids3 = () => open.locator('[data-testid="org-thread"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-thread-id')))
+  await expect.poll(ids3).toEqual(['th-00000000d001', 'th-00000000d002'])
+  await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^1 in progress/)
+  await expect(open.getByTestId('org-thread-pinned')).toHaveCount(0)
+
+  // Pin the second one: it goes to the top, wears the pin, and the button reads Unpin.
+  const c2 = open.locator('[data-thread-id="th-00000000d002"]')
+  await c2.getByTestId('org-thread-pin').click()
+  await expect.poll(ids3).toEqual(['th-00000000d002', 'th-00000000d001'])
+  await expect(c2.getByTestId('org-thread-pinned')).toHaveText(/^Pinned/)
+  await expect(c2.getByTestId('org-thread-pin')).toHaveAttribute('aria-pressed', 'true')
+  await expect(c2.getByTestId('org-thread-pin')).toHaveAccessibleName('Unpin "Phone view"')
+  await expect.poll(async () => (await stored('th-00000000d002'))?.pinned?.by, { timeout: 15_000 }).toBe('human')
+  await shot(page, 'pinned')
+  // A reload keeps it on top.
+  await page.reload()
+  await expect(page.getByTestId('org-thread-list')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(ids3).toEqual(['th-00000000d002', 'th-00000000d001'])
+
+  // The node may not take his pin off (its session's write).
+  const refused = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000d002`, { data: { pin: false }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  expect(refused.status(), await refused.text()).toBe(409)
+  expect(await refused.text()).toContain('pinned_by_user')
+  // It pins the working one itself: a thread in progress shows, on top, marked as the node's pin.
+  const agentPin = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000d003`, { data: { pin: true }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  expect(agentPin.ok(), await agentPin.text()).toBe(true)
+  const c3 = open.locator('[data-thread-id="th-00000000d003"]')
+  await expect(c3).toBeVisible({ timeout: 15_000 })
+  await expect.poll(ids3).toEqual(['th-00000000d003', 'th-00000000d002', 'th-00000000d001'])
+  await expect(c3.getByTestId('org-thread-pinned')).toHaveText(/^Pinned by /)
+  await expect(page.getByTestId('org-threads-hidden')).toHaveCount(0)
+  // The Org list's row names a pinned thread with the pin.
+  await expect(page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"] .org-channel-pin`)).toBeVisible({ timeout: 20_000 })
+
+  // Unpin his: it goes back to its place under the newer change.
+  await c2.getByTestId('org-thread-pin').click()
+  await expect.poll(ids3).toEqual(['th-00000000d003', 'th-00000000d001', 'th-00000000d002'])
+  await expect(c2.getByTestId('org-thread-pinned')).toHaveCount(0)
+  await expect.poll(async () => (await stored('th-00000000d002'))?.pinned, { timeout: 15_000 }).toBeUndefined()
+  // Acknowledge ends the node's pin with the thread.
+  await c3.getByTestId('org-thread-ack').click()
+  await expect(c3).toHaveCount(0)
+  await expect.poll(async () => { const t = await stored('th-00000000d003'); return !!t?.closed && !t.pinned }, { timeout: 15_000 }).toBe(true)
+  await expect.poll(ids3).toEqual(['th-00000000d001', 'th-00000000d002'])
+})

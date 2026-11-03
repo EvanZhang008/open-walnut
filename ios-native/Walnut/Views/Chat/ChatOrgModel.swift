@@ -42,6 +42,8 @@ enum ChatOrgModel {
         let line: String
         /// The node's own Threads that hold something for the user (nil = none shown).
         var threads: WalnutThreadCounts? = nil
+        /// `line` names a thread he (or the node) pinned: the row wears a pin (web `latestPinned`).
+        var linePinned = false
     }
 
     static let ceoName = "CEO"
@@ -114,7 +116,8 @@ enum ChatOrgModel {
         return Row(
             id: "ceo", kind: .ceo, name: ceoName, contactId: tree.main?.id, project: "",
             state: state, needs: needs, working: tree.counts.running, open: tree.counts.open,
-            ledProjects: [], line: parts.joined(separator: " · "), threads: threads
+            ledProjects: [], line: parts.joined(separator: " · "), threads: threads,
+            linePinned: (threads?.needs ?? 0) > 0 && threads?.titlePinned == true
         )
     }
 
@@ -150,7 +153,8 @@ enum ChatOrgModel {
                 contactId: p.contactId ?? p.lead?.id, project: p.project,
                 state: state, needs: needs, working: counts.running, open: counts.open,
                 ledProjects: under.map(\.project),
-                line: threadsLine ?? line(state: state, open: counts.open), threads: threads
+                line: threadsLine ?? line(state: state, open: counts.open), threads: threads,
+                linePinned: threadsLine != nil && threads?.titlePinned == true
             )
             // The web's `lastAt`: the VP (on its own row) and every task under the row.
             let ids = (p.vp == nil ? [p.lead?.id].compactMap { $0 } : [])
