@@ -220,11 +220,11 @@ describe('scripts/join.sh', () => {
   it('needs a Walnut that reads tickets, and says what to run without one', () => {
     const s = joinScript({ ticket: true })
     expect(s).toContain('net join --help 2>/dev/null | grep -q ticket')
-    expect(s).toContain('exec "$W" net join "$WALNUT_JOIN_TICKET" --steps')
+    expect(s).toContain('"$W" net join "$WALNUT_JOIN_TICKET" --steps </dev/null')
     const r = spawnSync('sh', [path.join(ROOT, 'scripts/join.sh')], { encoding: 'utf8' })
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('Run the command your Mac shows under Settings > Remote Hosts > Add a machine.')
     // The companion's script is unchanged in what it runs.
-    expect(joinScript({ origin: 'https://wn.example', code: 'AAAA-BBBB-CCCC' })).toContain(`exec "$W" net join "$WALNUT_JOIN_ORIGIN" "$WALNUT_JOIN_CODE" --steps`)
+    expect(joinScript({ origin: 'https://wn.example', code: 'AAAA-BBBB-CCCC' })).toContain(`"$W" net join "$WALNUT_JOIN_ORIGIN" "$WALNUT_JOIN_CODE" --steps </dev/null`)
   })
 })

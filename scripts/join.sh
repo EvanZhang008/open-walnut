@@ -136,6 +136,36 @@ walnut_join_preview() {
   rm -rf "$walnut_join_pd"
 }
 
+# An agent's binary that answers --version: the one on PATH, else where its installer puts
+# it (a new machine's shell has ~/.local/bin on PATH only from its next login).
+walnut_join_agent_bin() {
+  for walnut_join_ab in "$(command -v "$1" 2>/dev/null || true)" "$2"; do
+    [ -n "$walnut_join_ab" ] && [ -x "$walnut_join_ab" ] || continue
+    walnut_join_abv=$("$walnut_join_ab" --version </dev/null 2>/dev/null | head -n 1) || continue
+    [ -n "$walnut_join_abv" ] && { printf '%s' "$walnut_join_ab"; return 0; }
+  done
+  return 1
+}
+
+walnut_join_agent_ver() {
+  "$1" --version </dev/null 2>/dev/null | head -n 1 | grep -Eo '[0-9]+[.][0-9]+[.][0-9]+[0-9A-Za-z.-]*' | head -n 1 || true
+}
+
+walnut_join_agents() {
+  walnut_join_found=""
+  if walnut_join_ab=$(walnut_join_agent_bin claude "$HOME/.local/bin/claude"); then
+    walnut_join_found="Claude Code $(walnut_join_agent_ver "$walnut_join_ab")"
+  fi
+  if walnut_join_ab=$(walnut_join_agent_bin codex "$HOME/.local/bin/codex"); then
+    walnut_join_found="${walnut_join_found:+$walnut_join_found, }Codex $(walnut_join_agent_ver "$walnut_join_ab")"
+  fi
+  if [ -n "$walnut_join_found" ]; then
+    printf '\n%s\n' "Coding agents here: $walnut_join_found."
+  else
+    printf '\n%s\n%s\n' "No coding agent is on this machine yet. To add Claude Code, click Install on this machine in your Mac's Remote Hosts, or run here:" "  curl -fsSL https://claude.ai/install.sh | bash"
+  fi
+}
+
 walnut_join_main() {
   case "$(uname -s)" in
     Darwin|Linux) ;;
@@ -170,7 +200,9 @@ walnut_join_main() {
     fi
     printf '  1/3  Walnut ............ installed (%s)\n' "$("$W" --version 2>/dev/null | head -n 1)"
   fi
-  exec "$W" net join "$WALNUT_JOIN_TICKET" --steps
+  # Not exec: the agents line comes after. Its stdin is not the rest of this script.
+  "$W" net join "$WALNUT_JOIN_TICKET" --steps </dev/null || exit $?
+  walnut_join_agents
 }
 
 walnut_join_main

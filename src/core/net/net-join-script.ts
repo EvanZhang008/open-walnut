@@ -2,8 +2,10 @@
  * The script an invite link runs on a new machine (`curl -fsSL <link> | sh`,
  * routes/net-v1.ts): install Walnut if it is not there, then hand over to
  * `walnut net join`, which keeps Walnut running on the machine and joins it
- * (src/commands/net.ts). POSIX sh, so it runs on any macOS or Linux shell; nothing
- * runs until the last line, so a download cut short does nothing.
+ * (src/commands/net.ts), and last say which coding agents are here
+ * (net-join-agents.ts). It installs none: the user picks one. POSIX sh, so it runs
+ * on any macOS or Linux shell; nothing runs until the last line, so a download cut
+ * short does nothing.
  *
  * The code rides in the script itself: it is one use and ends in 10 minutes.
  *
@@ -12,6 +14,7 @@
  * shows passes the ticket to it (`| sh -s -- wn1-...`, core/net/join-ticket.ts).
  */
 import { JOIN_SCRIPT_URL } from './join-ticket.js'
+import { agentsLineScript } from './net-join-agents.js'
 
 const INSTALL_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh'
 
@@ -43,7 +46,7 @@ set -eu
 WALNUT_JOIN_ORIGIN=${shq(input.origin)}
 WALNUT_JOIN_CODE=${shq(input.code)}
 `
-  const join = ticket ? `exec "$W" net join "$WALNUT_JOIN_TICKET" --steps` : `exec "$W" net join "$WALNUT_JOIN_ORIGIN" "$WALNUT_JOIN_CODE" --steps`
+  const join = ticket ? `"$W" net join "$WALNUT_JOIN_TICKET" --steps` : `"$W" net join "$WALNUT_JOIN_ORIGIN" "$WALNUT_JOIN_CODE" --steps`
   return `#!/bin/sh
 ${head}
 walnut_join_fail() { printf '\\n%s\\n' "$1" >&2; exit 1; }
@@ -172,7 +175,7 @@ walnut_join_preview() {
   walnut_join_install "$walnut_join_v" "file://$walnut_join_pd/rel" "$walnut_join_t" || { rm -rf "$walnut_join_pd"; return 1; }
   rm -rf "$walnut_join_pd"
 }
-
+${agentsLineScript()}
 walnut_join_main() {
   case "$(uname -s)" in
     Darwin|Linux) ;;
@@ -207,7 +210,9 @@ walnut_join_main() {
     fi
     printf '  1/3  Walnut ............ installed (%s)\\n' "$("$W" --version 2>/dev/null | head -n 1)"
   fi
-  ${join}
+  # Not exec: the agents line comes after. Its stdin is not the rest of this script.
+  ${join} </dev/null || exit $?
+  walnut_join_agents
 }
 
 walnut_join_main

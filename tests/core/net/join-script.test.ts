@@ -99,7 +99,7 @@ function run(script: string, args: string[] = [], env: Record<string, string> = 
   const r = spawnSync('sh', [file, ...args], {
     encoding: 'utf8',
     env: {
-      HOME: home, PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_JOIN_INSTALL_URL: `file://${path.join(dir, 'install.sh')}`,
+      HOME: home, PATH: guardedPath([noClaude()], '/usr/bin:/bin'), WALNUT_JOIN_INSTALL_URL: `file://${path.join(dir, 'install.sh')}`,
       WALNUT_JOIN_NPM_REGISTRY: `file://${path.join(dir, 'npm')}`, OPEN_WALNUT_TARGET: 'linux-x64', TMPDIR: tmp(), ...env,
     },
   })
@@ -108,6 +108,14 @@ function run(script: string, args: string[] = [], env: Record<string, string> = 
 }
 
 const TICKET = 'wn1-eyJ2IjoxfQ'
+
+/** A `claude` that is no Claude Code, ahead of the test guard's: the closing agents line asks it (join-agents.test.ts). */
+function noClaude(): string {
+  const bin = path.join(dir, 'no-claude-bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexit 127\n', { mode: 0o755 })
+  return bin
+}
 
 /** The script's own TMPDIR: whatever it leaves there is a leftover. */
 function tmp(): string {
@@ -218,7 +226,7 @@ cp "${dir}/old" "$d/walnut"\n`)
       fs.copyFileSync(path.join(dir, 'new'), path.join(npm, 'walnut'))
       fs.chmodSync(path.join(npm, 'walnut'), 0o755)
       const before = fs.readFileSync(path.join(npm, 'walnut'), 'utf8')
-      const r = run(script(), [...args], { PATH: guardedPath([npm], '/usr/bin:/bin') })
+      const r = run(script(), [...args], { PATH: guardedPath([npm, noClaude()], '/usr/bin:/bin') })
       expect(r.status, r.stderr).toBe(0)
       expect(r.stdout).toContain('the release cannot join yet')
       expect(r.stdout).toContain(joined)
@@ -250,7 +258,7 @@ cp "${dir}/old" "$d/walnut"\n`)
       const npm = path.join(dir, 'npm-bin')
       fs.mkdirSync(npm)
       fs.writeFileSync(path.join(npm, 'walnut'), '#!/bin/sh\necho npm walnut\n', { mode: 0o755 })
-      const kept = run(script(), [...args], { PATH: guardedPath([npm], '/usr/bin:/bin') })
+      const kept = run(script(), [...args], { PATH: guardedPath([npm, noClaude()], '/usr/bin:/bin') })
       expect(kept.status, kept.stderr).toBe(0)
       expect(fs.readFileSync(path.join(bin, 'walnut'), 'utf8')).toBe(shim)
       expect(fs.readlinkSync(path.join(home, '.local/share/open-walnut/links/walnut'))).toBe(path.join(home, INSTALLED))

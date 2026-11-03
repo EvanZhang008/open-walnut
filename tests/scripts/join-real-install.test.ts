@@ -69,11 +69,19 @@ function npmWalnut(home: string): { bin: string; file: string; calls: string } {
   return { bin, file, calls }
 }
 
+/** A `claude` that is no Claude Code, ahead of the test guard's refusing one. */
+function noClaudeBin(): string {
+  const bin = path.join(scratch, 'no-claude-bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexit 127\n', { mode: 0o755 })
+  return bin
+}
+
 function join(home: string, extraPath: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     execFile('/bin/sh', [JOIN_SH, TICKET], {
       env: {
-        PATH: guardedPath(extraPath, '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home,
+        PATH: guardedPath([...extraPath, noClaudeBin()], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home,
         OPEN_WALNUT_RELEASE_BASE_URL: server.url,
         OPEN_WALNUT_RELEASES_API: `${server.url}/api.json`,
         WALNUT_JOIN_INSTALL_URL: `file://${INSTALL_SH}`,
