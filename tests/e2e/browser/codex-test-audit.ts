@@ -244,6 +244,10 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
               || pathname === '/api/notifications'
               || pathname === '/api/quiet'
               || pathname === '/api/plugin-status-items'
+              // The model picker's cost lines (SessionCostBlock.tsx): a picker closed
+              // before its answer cancels the read, so the low-priority lane gets its
+              // slot back. A pick that closes the picker at once does that (CI run 41614274036).
+              || /^\/api\/sessions\/[^/]+\/cost(?:\/compare)?$/.test(pathname)
               // Who-am-I, read at every page load: a reload cuts the previous one.
               || pathname === '/api/v1/me'))
           || (failure.method === 'POST' && pathname === '/api/browser-logs')
