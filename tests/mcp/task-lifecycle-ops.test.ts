@@ -39,6 +39,8 @@ describe('task_stop', () => {
       { method: 'GET', path: '/tasks/t-1' },
       { method: 'GET', path: '/me' },
       { method: 'POST', path: '/sessions/s-1/terminate', body: { force: false } },
+      // A start it had queued would start it again: the stop cancels that too (an older server's 404 is ignored).
+      { method: 'DELETE', path: '/tasks/t-1/start-queue' },
     ])
     expect(out).toMatchObject({ taskId: 't-1', sessionId: 's-1', status: 'terminated' })
     expect(String(out.outcome)).toContain('conversation is kept')

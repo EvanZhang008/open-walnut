@@ -213,6 +213,7 @@ async function spawnOnce(): Promise<SpawnOutcome> {
 async function reconnectWithAutofix(wanted: string[]): Promise<{ fixes: FixView[]; roundEnded: boolean }> {
   const dc = await import('../../src/providers/daemon-connection.js')
   const hr = await import('../../src/core/hosts/host-readiness.js')
+  const { agentsAsked } = await import('../../src/core/hosts/host-readiness-store.js')
   process.env.WALNUT_HOST_AUTOFIX = '1'
   dc.disconnectAllDaemons()
   // The old ControlMaster must be gone first: a new one on the same socket path
@@ -221,6 +222,9 @@ async function reconnectWithAutofix(wanted: string[]): Promise<{ fixes: FixView[
     await new Promise((r) => setTimeout(r, 500))
   }
   hr.clearHostReadiness(HOST_KEY)
+  // The person's Install on the coding agent's line (connectHostNow with agents: true): only that
+  // round installs Claude Code (2026-11-03, 4e7210e09); the compiler and dtach are fixed by themselves.
+  agentsAsked.set(HOST_KEY, Date.now())
   const unwire = hr.wireHostReadiness({ onConnected: dc.addOnDaemonHostConnected, isKnownHost: (h) => h === HOST_KEY, emit: () => {} })
   try {
     conn = await dc.getDaemonConnection(HOST_KEY, SSH_TARGET)
@@ -413,7 +417,7 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     expectSpawnNamesNodeAndNativeInstall(outcome, c.hasCapability('preflight-v1'))
   }, 120_000)
 
-  it('f. (opt-in) autofix installs the native claude, and without a prebuilt reports that gcc needs a sudo password', async (ctx) => {
+  it('f. (opt-in) after the person\'s Install, autofix installs the native claude, and without a prebuilt reports that gcc needs a sudo password', async (ctx) => {
     if (!AUTOFIX_STEP) {
       console.warn('[remote-onboarding] SKIPPED f: set WALNUT_REMOTE_ONBOARDING_AUTOFIX=1 to run it (the CI job does)')
       ctx.skip()
