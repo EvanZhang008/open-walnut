@@ -2,7 +2,7 @@
  * The vault's files and in-memory state (store.ts is the API over it, docs/reference/passwords.md).
  *
  * vault.json holds only ciphertext and the parameters needed to open it:
- *   { format, version, id, rev, kdf, aukSalt, wraps: { password, machine? }, items: { <id>: { key, data, updatedAt } } }
+ *   { format, version, id, rev, kdf, aukSalt, wraps: { password, machine?, recovery? }, recoveryFor?, items: { <id>: { key, data, updatedAt } } }
  * machine.json (0600) holds what only this machine keeps: the Secret Key, and the machine key
  * while the person lets agents ask with nobody at the vault. Side files (agent-log.json,
  * policy.json) are sealed with the vault key and resealed when it changes.
@@ -46,7 +46,12 @@ export interface VaultFile {
   kdf: KdfParams
   /** base64 */
   aukSalt: string
-  wraps: { password: Sealed; machine?: Sealed }
+  /** recovery: VK under the recovery key (crypto.ts, "Keys"); absent for a vault set up before recovery codes. */
+  wraps: { password: Sealed; machine?: Sealed; recovery?: Sealed }
+  /** The password wrap the recovery wrap was made beside (store.ts recoveryFor). */
+  recoveryFor?: string
+  /** Set to recoveryFor while the newest recovery kit was not confirmed saved by the person. */
+  recoveryUnsaved?: string
   items: Record<string, StoredItem>
 }
 

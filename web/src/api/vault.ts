@@ -26,7 +26,14 @@ export interface VaultStatus {
   waitMs: number
   /** Nobody else reads the link to the server (https, this machine, Tailscale). */
   privateLink?: boolean
+  /** The vault has a recovery code (one set up before them has none until a new kit is made). */
+  hasRecovery?: boolean
+  /** The newest recovery kit was never confirmed saved. */
+  recoveryUnsaved?: boolean
 }
+
+/** What a recovery kit holds. */
+export interface RecoveryKit { secretKey: string; recoveryCode: string }
 
 export interface SecurityReport { weak: string[]; reused: string[][]; old: string[]; insecureUrl: string[] }
 
@@ -129,13 +136,23 @@ const CLIENT = 'Walnut web'
 export const vaultApi = {
   status: () => call<VaultStatus>('GET', '/vault/status'),
 
-  async setup(password: string, agentsWhileAway: boolean): Promise<{ secretKey: string }> {
+  async setup(password: string): Promise<RecoveryKit> {
     const kdf = newKdf()
-    const r = await call<{ secretKey: string; session: { token: string } }>('POST', '/vault/setup', {
-      ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway, client: CLIENT,
+    const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/setup', {
+      ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway: false, client: CLIENT,
     }, 60_000)
     setSession(r.session.token)
-    return { secretKey: r.secretKey }
+    return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
+  },
+
+  /** A forgotten master password: the recovery code sets a new one and returns the new kit. */
+  async recover(recoveryCode: string, newPassword: string, secretKey?: string): Promise<RecoveryKit> {
+    const kdf = newKdf()
+    const r = await call<RecoveryKit & { session: { token: string } }>('POST', '/vault/recover', {
+      recoveryCode, ...(secretKey ? { secretKey } : {}), ...(await proof(newPassword, kdf, 'newPassword')), ...(kdf ? { kdf } : {}), client: CLIENT,
+    }, 60_000)
+    setSession(r.session.token)
+    return { secretKey: r.secretKey, recoveryCode: r.recoveryCode }
   },
 
   /**
@@ -185,19 +202,23 @@ export const vaultApi = {
   endAgentGrants: () => call<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
   agentLog: () => call<{ entries: AgentLogEntry[] }>('GET', '/vault/agent/log').then((r) => r.entries),
 
-  /** Turning agents-while-away on or off asks for the master password again. */
-  async setAgentsWhileAway(on: boolean, password: string, kdf: KdfParams | undefined): Promise<VaultStatus> {
-    return call<VaultStatus>('POST', '/vault/settings', { agentsWhileAway: on, ...(await proof(password, kdf)) }, 60_000)
+  /** Turning agents-while-away on or off asks for the master password again; off brings a new recovery kit. */
+  async setAgentsWhileAway(on: boolean, password: string, kdf: KdfParams | undefined): Promise<VaultStatus & { recoveryKit?: RecoveryKit }> {
+    return call<VaultStatus & { recoveryKit?: RecoveryKit }>('POST', '/vault/settings', { agentsWhileAway: on, ...(await proof(password, kdf)) }, 60_000)
   },
 
-  /** The Secret Key again, for a new recovery kit. Needs the master password. */
-  async secretKey(password: string, kdf: KdfParams | undefined): Promise<string> {
-    return (await call<{ secretKey: string }>('POST', '/vault/secret-key', { ...(await proof(password, kdf)) }, 60_000)).secretKey
+  /** The person saved the newest kit: Walnut stops asking for one. */
+  confirmRecoveryKit: () => call('POST', '/vault/recovery-kit/confirm'),
+
+  /** A new recovery kit (a new recovery code; the old one stops working). Needs the master password. */
+  async newRecoveryKit(password: string, kdf: KdfParams | undefined): Promise<RecoveryKit> {
+    return call<RecoveryKit>('POST', '/vault/recovery-kit', { ...(await proof(password, kdf)) }, 60_000)
   },
 
-  async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined): Promise<void> {
+  /** A new master password; the vault's recovery code changes with it (the new kit comes back). */
+  async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined): Promise<{ recoveryKit?: RecoveryKit }> {
     const next = newKdf()
-    await call('POST', '/vault/password', {
+    return call<{ recoveryKit?: RecoveryKit }>('POST', '/vault/password', {
       ...(await proof(oldPassword, kdf, 'oldPassword')), ...(await proof(newPassword, next, 'newPassword')), ...(next ? { kdf: next } : {}),
     }, 60_000)
   },

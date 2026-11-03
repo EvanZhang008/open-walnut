@@ -20,6 +20,9 @@ never open the vault yourself: you name an item and say why, and Walnut decides.
 - An item set to **never** is never given: ask the user to do that step themselves.
 - The user can turn agent access off entirely. Every ask, use and refusal is logged where they
   see it (Passwords, Agent Activity).
+- Never ask the user for their master password, Secret Key or recovery code, and never read
+  their recovery kit: nothing an agent does needs them. A user who forgot the master password
+  uses "Forgot master password?" on the Passwords lock screen with the kit's recovery code.
 
 ## Pick the right way
 

@@ -1,8 +1,8 @@
 /**
  * Agent Activity: what agents may use, the grants a task holds now, and every time an agent
  * asked, got an item, or was refused (the sealed agent log, core/vault/agent-log.ts). The
- * switch is the person's: Off, Ask each time (each item's own setting decides), or Without
- * asking (items set to ask are given at once; sensitive ones still ask).
+ * switch is the person's, the same three as in Settings: Ask me first (each item's own setting
+ * decides), Give it without asking (sensitive ones still ask), or Never.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { vaultApi, VaultApiError, isLockedError, type AgentLogEntry, type AgentPolicy, type AgentsSwitch, type VaultItemSummary } from '@/api/vault'
@@ -12,9 +12,9 @@ import { ago } from './passwords-model'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
 
 const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
-  { value: 'off', label: 'Off', help: 'No agent gets any item. Asks are refused.' },
-  { value: 'ask', label: 'Ask each time', help: 'Each item decides: asked on your Mac or phone, given without asking, or never.' },
-  { value: 'allow', label: 'Without asking', help: 'Items set to ask are given at once. Sensitive items still ask for Face ID or Touch ID; items set to never stay never.' },
+  { value: 'ask', label: 'Ask me first', help: 'You approve each use on your Mac or phone (an item can say otherwise in its own settings).' },
+  { value: 'allow', label: 'Give it without asking', help: 'Given at once. Items marked sensitive still ask for Face ID or Touch ID; items set to never stay never.' },
+  { value: 'off', label: 'Never', help: 'No agent gets any password. Asks are refused.' },
 ]
 
 const REASON: Record<string, string> = {
@@ -79,8 +79,8 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
       </div>
 
       <div className="pw-card pw-agents-switch">
-        <div className="pw-f-label pw-card-label">Agents may use passwords</div>
-        <div className="pw-seg pw-seg-col" role="radiogroup" aria-label="Agents may use passwords">
+        <div className="pw-f-label pw-card-label">When an agent asks for a password</div>
+        <div className="pw-seg pw-seg-col" role="radiogroup" aria-label="When an agent asks for a password">
           {SWITCH.map((o) => (
             <button key={o.value} type="button" role="radio" aria-checked={policy?.agents === o.value} className={policy?.agents === o.value ? 'on' : ''}
               disabled={!policy} onClick={() => setSwitch(o.value)} data-testid={`pw-agents-${o.value}`}>

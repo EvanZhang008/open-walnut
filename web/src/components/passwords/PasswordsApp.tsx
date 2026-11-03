@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { onVaultSessionChange, vaultApi, VaultApiError, type VaultStatus } from '@/api/vault'
-import { SetupFlow, UnlockScreen } from './LockScreens'
+import { KitScreen, SetupFlow, UnlockScreen, type KitToShow } from './LockScreens'
 import { VaultBrowser } from './VaultBrowser'
 import '@/styles/passwords.css'
 
@@ -15,6 +15,8 @@ export function PasswordsApp() {
   // Once setup starts it owns the screen until the person confirms the recovery kit:
   // the unlock it makes would otherwise switch to the vault before the Secret Key shows.
   const [settingUp, setSettingUp] = useState(false)
+  // A recovery kit (after setup or a recovery) stays up until confirmed, whatever the unlock changes.
+  const [kit, setKit] = useState<KitToShow | null>(null)
   const refresh = useCallback(async () => {
     try {
       setStatus(await vaultApi.status())
@@ -31,8 +33,9 @@ export function PasswordsApp() {
   const locked = useCallback(() => { vaultApi.forget(); void refresh() }, [refresh])
 
   if (error) return <div className="pw-gate"><div className="pw-gate-card"><h1>Passwords</h1><p className="pw-hint pw-hint-bad" role="alert">{error}</p></div></div>
+  if (kit) return <KitScreen {...kit} onDone={() => { setKit(null); setSettingUp(false); void refresh() }} />
   if (!status) return <div className="pw-gate" aria-busy="true" />
-  if (!status.setUp || settingUp) return <SetupFlow onDone={() => { setSettingUp(false); void refresh() }} />
-  if (!status.unlocked) return <UnlockScreen status={status} onUnlocked={() => void refresh()} />
+  if (!status.setUp || settingUp) return <SetupFlow onKit={setKit} />
+  if (!status.unlocked) return <UnlockScreen status={status} onUnlocked={() => void refresh()} onKit={setKit} />
   return <VaultBrowser status={status} onLocked={locked} />
 }

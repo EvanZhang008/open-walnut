@@ -56,7 +56,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/SideQuestionDrawer.tsx#newOutputMode': 'one new side question being set up',
   'components/sessions/WorkflowProgress.tsx#showScript': 'one workflow\'s script expanded',
   'components/routines/RoutinesView.tsx#showForm': 'the new-routine form, a dialog',
-  'components/passwords/LockScreens.tsx#step': 'the one-time vault setup; its second step shows the Secret Key once and must never come back after a reload',
+  'components/passwords/LockScreens.tsx#mode': 'the lock screen or its forgotten-password form; a reload opens on the lock screen, never on a half-typed recovery',
   'components/routines/TriggerPill.tsx#showPrompt': 'a trigger\'s prompt, a popover',
   'components/routines/TriggerPill.tsx#showHistory': 'a trigger\'s history, a popover',
   'components/inbox/LetterReader.tsx#fileView': 'a file opened from one letter, an overlay',

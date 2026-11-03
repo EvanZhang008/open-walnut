@@ -1,6 +1,6 @@
 /**
- * Settings → Passwords: auto-lock, whether agents may ask while nobody unlocked, a new
- * master password, export, and Lock everywhere. Changing the vault itself needs this
+ * Settings → Passwords: auto-lock, what an agent gets when it asks, a new master password,
+ * the recovery kit, whether agents may ask while nobody unlocked, export, and Lock everywhere. Changing the vault itself needs this
  * window unlocked (the Passwords app); auto-lock is a plain config value.
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -13,8 +13,9 @@ import { SettingsButton } from '../inputs/SettingsButton'
 import { NumberInput } from '../inputs/NumberInput'
 import { SegmentedControl } from '../inputs/SegmentedControl'
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
-import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type VaultStatus } from '@/api/vault'
-import { downloadRecoveryKit } from '@/components/passwords/LockScreens'
+import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type VaultStatus } from '@/api/vault'
+import { downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
+import '@/styles/passwords.css'
 
 interface Props {
   config: Config
@@ -34,6 +35,9 @@ export function PasswordsSection({ config, onSave }: Props) {
   const [newPw2, setNewPw2] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [agents, setAgents] = useState<AgentsSwitch | null>(null)
+  const [newKit, setNewKit] = useState<RecoveryKit | null>(null)
+  // Every new vault key comes with a new recovery code: save the kit and show it until confirmed.
+  const gotKit = (kit: RecoveryKit) => { setNewKit(kit); downloadRecoveryKit(kit) }
 
   const refresh = useCallback(() => {
     vaultApi.status().then((st) => {
@@ -89,12 +93,12 @@ export function PasswordsSection({ config, onSave }: Props) {
       </SettingsGroup>
 
       {status?.setUp && (
-        <SettingsGroup heading="Agents" footer={<>Each item also has its own setting (ask, without asking, never). Every ask, use and refusal is listed in Passwords, Agent Activity.</>}>
+        <SettingsGroup heading="Agents" footer={<>An item can say otherwise in its own settings. Every ask, use and refusal is listed in Passwords, Agent Activity.</>}>
           <SettingsRow
-            label="Agents may use passwords"
-            help={needUnlock ?? (agents === 'off' ? 'No agent gets any item.' : agents === 'allow' ? 'Items set to ask are given at once; sensitive ones still ask for Face ID or Touch ID.' : 'Each item decides: you approve on your Mac or phone, or it is given without asking, or never.')}
-            control={<SegmentedControl<AgentsSwitch> id="pw-agents-switch" aria-label="Agents may use passwords" value={agents ?? 'ask'} disabled={!unlocked || !agents || busy === 'switch'}
-              options={[{ value: 'off', label: 'Off' }, { value: 'ask', label: 'Ask each time' }, { value: 'allow', label: 'Without asking' }]}
+            label="When an agent asks for a password"
+            help={needUnlock ?? (agents === 'off' ? 'No agent gets any password.' : agents === 'allow' ? 'Given at once. Items marked sensitive still ask for Face ID or Touch ID.' : 'You approve each use on your Mac or phone.')}
+            control={<SegmentedControl<AgentsSwitch> id="pw-agents-switch" aria-label="When an agent asks for a password" value={agents ?? 'ask'} disabled={!unlocked || !agents || busy === 'switch'}
+              options={[{ value: 'ask', label: 'Ask me first' }, { value: 'allow', label: 'Give it without asking' }, { value: 'off', label: 'Never' }]}
               onChange={(v) => void run('switch', async () => { setAgents((await vaultApi.setAgentsSwitch(v)).agents) })} />}
           />
         </SettingsGroup>
@@ -109,37 +113,53 @@ export function PasswordsSection({ config, onSave }: Props) {
             label=""
             control={<SettingsButton busy={busy === 'password'} disabled={!unlocked || !oldPw || newPw.length < 10 || newPw !== newPw2}
               onClick={() => void run('password', async () => {
-                await vaultApi.changePassword(oldPw, newPw, status.kdf)
+                const r = await vaultApi.changePassword(oldPw, newPw, status.kdf)
                 setOldPw(''); setNewPw(''); setNewPw2('')
-                return 'Master password changed, and your other windows were locked. Your Secret Key stays the same.'
+                if (r.recoveryKit) gotKit(r.recoveryKit)
+                return `Master password changed, and your other windows were locked.${r.recoveryKit ? ' Your recovery code changed too: save the new kit below, the old one no longer works.' : ''}`
               })}>Change master password</SettingsButton>}
           />
         </SettingsGroup>
       )}
 
+      {newKit && (
+        <SettingsGroup heading="Save your new recovery kit" footer={<>The old recovery code no longer works. Walnut keeps no copy of this one: save it before you leave this page.</>}>
+          <div style={{ padding: '4px 16px 14px' }} data-testid="pw-settings-kit">
+            <RecoveryKitCard kit={newKit} confirmLabel="Done, I saved it" onConfirmed={() => { setNewKit(null); setNote('Recovery kit saved.'); refresh() }} />
+          </div>
+        </SettingsGroup>
+      )}
+
       {status?.setUp && (
-        <SettingsGroup heading="Needs your master password" footer={<>An export holds every password in plain text: keep it only as long as you need it. The recovery kit holds your Secret Key: keep it away from this computer.</>}>
+        <SettingsGroup heading="Recovery and advanced" footer={<>These need your master password. An export holds every password in plain text: keep it only as long as you need it. Keep the recovery kit away from this computer.</>}>
           <SettingsRow label="Master password" htmlFor="pw-confirm" help={needUnlock} control={<input id="pw-confirm" type="password" data-no-draft="secret" autoComplete="current-password" className="settings-input settings-input--short" disabled={!unlocked} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />} />
           <SettingsRow
-            label="Let agents ask while you are away"
-            htmlFor="pw-agents-away"
-            help="Keeps a key on this Mac so a task can use an item you approve on your phone even when no window is unlocked. Any program running as you on this Mac could then read the vault without the master password. Off: agents can ask only while a window has Passwords unlocked."
-            control={<ToggleSwitch id="pw-agents-away" checked={!!status.agentsWhileAway} disabled={!unlocked || !confirmPw || busy === 'agents'}
-              onChange={(v) => void run('agents', async () => {
-                setStatus({ ...(await vaultApi.setAgentsWhileAway(v, confirmPw, status.kdf)), unlocked: true, autoLockMinutes: status.autoLockMinutes, waitMs: 0 })
-                setConfirmPw('')
-                return v ? 'Agents may ask while you are away.' : 'Agents can ask only while Passwords is unlocked. A new vault key was made.'
-              })} />}
-          />
-          <SettingsRow
             label="Recovery kit"
-            help="Your Secret Key again, as the kit you saved at setup."
+            help={!status.hasRecovery
+              ? 'No recovery code yet: if you forget your master password, nothing opens this vault. Make a kit now.'
+              : status.recoveryUnsaved && !newKit
+                ? 'Your recovery code changed and the new kit was never saved: make a new one now.'
+                : 'Makes a new recovery code (and a new vault key). The one in your old kit stops working.'}
             control={<SettingsButton busy={busy === 'kit'} disabled={!unlocked || !confirmPw}
               onClick={() => void run('kit', async () => {
-                downloadRecoveryKit(await vaultApi.secretKey(confirmPw, status.kdf))
+                const kit = await vaultApi.newRecoveryKit(confirmPw, status.kdf)
                 setConfirmPw('')
-                return 'Saved the recovery kit.'
-              })}>Download recovery kit</SettingsButton>}
+                gotKit(kit)
+                return 'Downloaded a new recovery kit. Confirm below once it is saved; the old recovery code no longer works.'
+              })}>Make a new recovery kit</SettingsButton>}
+          />
+          <SettingsRow
+            label="Agents can ask while Passwords is locked"
+            htmlFor="pw-agents-away"
+            help="Off: only while Passwords is open in a window. On: a key stays on this Mac so they can ask any time (you still approve each use), and any program running as you could read the vault."
+            control={<ToggleSwitch id="pw-agents-away" checked={!!status.agentsWhileAway} disabled={!unlocked || !confirmPw || busy === 'agents'}
+              onChange={(v) => void run('agents', async () => {
+                const { recoveryKit, ...next } = await vaultApi.setAgentsWhileAway(v, confirmPw, status.kdf)
+                setStatus({ ...next, unlocked: true, autoLockMinutes: status.autoLockMinutes, waitMs: 0 })
+                setConfirmPw('')
+                if (recoveryKit) gotKit(recoveryKit)
+                return v ? 'Agents can ask while Passwords is locked.' : `Agents can ask only while Passwords is open. A new vault key was made.${recoveryKit ? ' Your recovery code changed with it: save the new kit below, the old one no longer works.' : ''}`
+              })} />}
           />
           <SettingsRow
             label="Export"

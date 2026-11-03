@@ -13,7 +13,12 @@
  *    pwKey is what a client derives and sends, so the master password itself never
  *    crosses the wire;
  *  - the machine key (32 random bytes, kept on this machine only) wraps VK a second
- *    time so the server can serve approved agent requests while the person is away.
+ *    time so the server can serve approved agent requests while the person is away;
+ *  - the recovery key (RK) wraps VK a third time, for a forgotten master password. It
+ *    comes from the recovery code in the recovery kit and the Secret Key together:
+ *      RK = HKDF-SHA256(ikm = codeBytes || secretKeyBytes, salt = vault id, info = RECOVERY_INFO)
+ *    The code's 128 random bits need no slow KDF. A new vault key always comes with a new
+ *    code, so a code read by whoever held an old vault key opens nothing written since.
  *
  * Every wrap and every item is AES-256-GCM with a fresh 12-byte nonce and an
  * additional-data string naming what it is, so a wrapped key cannot be swapped in
@@ -22,6 +27,7 @@
 
 export const PBKDF2_ITERATIONS = 650_000
 export const AUK_INFO = 'walnut-vault-auk-v1'
+export const RECOVERY_INFO = 'walnut-vault-recovery-v1'
 
 export interface Sealed {
   /** base64 nonce */
@@ -122,24 +128,27 @@ export async function sha256Hex(text: string): Promise<string> {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-// ── Secret Key: 128 random bits shown as W1-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX ──
+// ── Secret Key and recovery code: 128 random bits shown as W1-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX ──
+// (the recovery code is the same shape with R1 in front)
 
 const B32 = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no I, O, 0, 1
 
-export function newSecretKey(): string {
-  const bytes = randomBytes(16)
+function newCode(prefix: 'W1' | 'R1'): string {
+  return codeText(prefix, randomBytes(16))
+}
+
+function codeText(prefix: 'W1' | 'R1', bytes: Uint8Array): string {
   // 128 bits as 26 base-32 digits (130 bits of room: the top 2 bits are 0).
   let n = 0n
   for (const b of bytes) n = (n << 8n) | BigInt(b)
   let digits = ''
   for (let i = 0; i < 26; i++) { digits = B32[Number(n & 31n)] + digits; n >>= 5n }
-  return `W1-${digits.slice(0, 6)}-${digits.slice(6, 11)}-${digits.slice(11, 16)}-${digits.slice(16, 21)}-${digits.slice(21)}`
+  return `${prefix}-${digits.slice(0, 6)}-${digits.slice(6, 11)}-${digits.slice(11, 16)}-${digits.slice(16, 21)}-${digits.slice(21)}`
 }
 
-/** The Secret Key's 16 bytes, or null for one that is not well formed. Case and dashes are free. */
-export function parseSecretKey(text: string): Uint8Array | null {
+function parseCode(text: string, prefix: 'W1' | 'R1'): Uint8Array | null {
   const t = text.toUpperCase().replace(/[\s-]/g, '')
-  if (!t.startsWith('W1')) return null
+  if (!t.startsWith(prefix)) return null
   const digits = t.slice(2)
   if (digits.length !== 26) return null
   let n = 0n
@@ -152,4 +161,22 @@ export function parseSecretKey(text: string): Uint8Array | null {
   const out = new Uint8Array(16)
   for (let i = 15; i >= 0; i--) { out[i] = Number(n & 255n); n >>= 8n }
   return out
+}
+
+export const newSecretKey = (): string => newCode('W1')
+/** The Secret Key's 16 bytes, or null for one that is not well formed. Case and dashes are free. */
+export const parseSecretKey = (text: string): Uint8Array | null => parseCode(text, 'W1')
+/** The Secret Key as Walnut writes it (upper case, dashed), however it was typed. */
+export const secretKeyText = (bytes: Uint8Array): string => codeText('W1', bytes)
+export const newRecoveryCode = (): string => newCode('R1')
+export const parseRecoveryCode = (text: string): Uint8Array | null => parseCode(text, 'R1')
+
+/** The recovery code + Secret Key -> RK. */
+export async function deriveRecoveryKey(code: Uint8Array, secretKey: Uint8Array, vaultId: string): Promise<Uint8Array> {
+  const ikm = new Uint8Array(code.length + secretKey.length)
+  ikm.set(code, 0)
+  ikm.set(secretKey, code.length)
+  const base = await subtle().importKey('raw', buf(ikm), 'HKDF', false, ['deriveBits'])
+  const bits = await subtle().deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: buf(enc.encode(vaultId)), info: buf(enc.encode(RECOVERY_INFO)) }, base, 256)
+  return new Uint8Array(bits)
 }

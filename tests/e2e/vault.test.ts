@@ -2,7 +2,7 @@
  * Passwords end to end on a real server (src/web/routes/vault-v1.ts over src/core/vault/):
  * set up, unlock, items and their history, trash, TOTP, import, lock, a restart with and
  * without the machine key, the Secret Key from the recovery kit, a new master password,
- * export, and who may touch the vault at all. Fake data only; the vault lives in the
+ * export, a forgotten master password (the recovery code), and who may touch the vault at all. Fake data only; the vault lives in the
  * test's own data home.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -23,6 +23,7 @@ import { resetSessionsForTest } from '../../src/core/vault/sessions.js'
 let base = ''
 let session = ''
 let secretKey = ''
+let recoveryCode = ''
 const kdf: KdfParams = { name: 'PBKDF2-SHA256', iterations: 600_000, salt: toB64(randomBytes(16)) }
 const MASTER = 'tr0ub4dor & 3 test horses'
 let pwKey = ''
@@ -84,7 +85,9 @@ describe('the vault, start to end', () => {
     const r = await http('POST', '/vault/setup', { passwordKey: pwKey, kdf, agentsWhileAway: true, client: 'test' })
     expect(r.status).toBe(200)
     expect(r.body.secretKey).toMatch(/^W1-/)
+    expect(r.body.recoveryCode).toMatch(/^R1-/)
     secretKey = r.body.secretKey
+    recoveryCode = r.body.recoveryCode
     session = r.body.session.token
     expect((await http('POST', '/vault/setup', { passwordKey: pwKey, kdf })).body.code).toBe('vault_exists')
     const s = await http('GET', '/vault/status')
@@ -187,7 +190,12 @@ describe('the vault, start to end', () => {
     const oldMachineKey = fromB64(JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey)
     expect((await http('POST', '/vault/settings', { agentsWhileAway: false })).body.code).toBe('bad_password_key')
     expect((await http('POST', '/vault/settings', { agentsWhileAway: false, password: 'wrong guess' })).body.code).toBe('wrong_password')
-    expect((await http('POST', '/vault/settings', { agentsWhileAway: false, passwordKey: pwKey })).body.agentsWhileAway).toBe(false)
+    const off = await http('POST', '/vault/settings', { agentsWhileAway: false, passwordKey: pwKey })
+    expect(off.body.agentsWhileAway).toBe(false)
+    // The new vault key comes with a new recovery code, returned once as the new kit.
+    expect(off.body.recoveryKit).toMatchObject({ secretKey })
+    expect(off.body.recoveryKit.recoveryCode).not.toBe(recoveryCode)
+    recoveryCode = off.body.recoveryKit.recoveryCode
     expect(JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey).toBeUndefined()
     // A machine key copied before opens the old vault key, which opens no item key written now.
     const oldKey = await open(oldMachineKey, before.wraps.machine, `walnut-vault:${before.id}:wrap:machine`)
@@ -281,6 +289,8 @@ describe('the vault, start to end', () => {
     expect((await http('POST', '/vault/password', { oldPassword: 'not it at all', newPassword: 'a whole new test phrase' })).body.code).toBe('wrong_password')
     const r = await http('POST', '/vault/password', { oldPassword: MASTER, newPassword: 'a whole new test phrase' })
     expect(r.status).toBe(200)
+    expect(r.body.recoveryKit.recoveryCode).toMatch(/^R1-/)
+    recoveryCode = r.body.recoveryKit.recoveryCode
     expect(r.body.otherWindowsLocked).toBeGreaterThanOrEqual(1)
     expect((await http('GET', '/vault/items', undefined, { 'x-walnut-vault-session': other })).status).toBe(401)
     expect((await http('GET', '/vault/items')).status).toBe(200)
@@ -296,7 +306,9 @@ describe('the vault, start to end', () => {
     expect((await http('POST', '/vault/settings', { agentsWhileAway: true, password: pw })).body.agentsWhileAway).toBe(true)
     const mk1 = JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey
     expect((await http('POST', '/vault/password', { oldPassword: pw, newPassword: 'a third test phrase' })).status).toBe(200)
-    expect((await http('POST', '/vault/password', { oldPassword: 'a third test phrase', newPassword: pw })).status).toBe(200)
+    const back = await http('POST', '/vault/password', { oldPassword: 'a third test phrase', newPassword: pw })
+    expect(back.status).toBe(200)
+    recoveryCode = back.body.recoveryKit.recoveryCode
     const after = JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey
     expect(after).toBeTruthy()
     expect(after).not.toBe(mk1)
@@ -314,6 +326,54 @@ describe('the vault, start to end', () => {
     expect(r.status).toBe(200)
     expect(r.body.text).toContain('second-Pass-2!')
     expect(r.body.fileName).toMatch(/\.csv$/)
+  })
+
+  it('a forgotten master password: the recovery code sets a new one, locks every window and gives a new kit', async () => {
+    const other = (await http('POST', '/vault/unlock', { password: 'a whole new test phrase' })).body.session.token
+    session = ''
+    expect((await http('GET', '/vault/status')).body.hasRecovery).toBe(true)
+    expect((await http('POST', '/vault/recover', { recoveryCode: 'R1-AAAAAA-AAAAA-AAAAA-AAAAA-AAAAA', newPassword: 'recovered test phrase' })).body.code).toBe('wrong_recovery_code')
+    expect((await http('POST', '/vault/recover', { newPassword: 'recovered test phrase' })).body.code).toBe('bad_recovery_code')
+    const r = await http('POST', '/vault/recover', { recoveryCode, newPassword: 'recovered test phrase', client: 'test' })
+    expect(r.status).toBe(200)
+    expect(r.body.secretKey).toBe(secretKey)
+    expect(r.body.recoveryCode).toMatch(/^R1-/)
+    expect(r.body.recoveryCode).not.toBe(recoveryCode)
+    expect((await http('GET', '/vault/items', undefined, { 'x-walnut-vault-session': other })).status).toBe(401)
+    session = r.body.session.token
+    expect((await http('GET', '/vault/items')).body.items.length).toBeGreaterThan(0)
+    expect((await http('POST', '/vault/recover', { recoveryCode, newPassword: 'another test phrase' })).body.code).toBe('wrong_recovery_code')
+    recoveryCode = r.body.recoveryCode
+    session = ''
+    expect((await http('POST', '/vault/unlock', { password: 'a whole new test phrase' })).body.code).toBe('wrong_password')
+    session = (await http('POST', '/vault/unlock', { password: 'recovered test phrase' })).body.session.token
+  })
+
+  it('a new recovery kit needs a window unlocked and the master password, and replaces the code', async () => {
+    const kept = session
+    session = ''
+    expect((await http('POST', '/vault/recovery-kit', { password: 'recovered test phrase' })).status).toBe(401)
+    session = kept
+    expect((await http('POST', '/vault/recovery-kit', { password: 'not it' })).body.code).toBe('wrong_password')
+    const r = await http('POST', '/vault/recovery-kit', { password: 'recovered test phrase' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ secretKey })
+    expect(r.body.recoveryCode).not.toBe(recoveryCode)
+    expect((await http('POST', '/vault/recover', { recoveryCode, newPassword: 'another test phrase' })).body.code).toBe('wrong_recovery_code')
+    recoveryCode = r.body.recoveryCode
+    // Unsaved until the person confirms the kit (the confirm needs a window unlocked).
+    expect((await http('GET', '/vault/status')).body.recoveryUnsaved).toBe(true)
+    expect((await http('POST', '/vault/recovery-kit/confirm', {}, { 'x-walnut-vault-session': 'nope' })).status).toBe(401)
+    expect((await http('POST', '/vault/recovery-kit/confirm')).status).toBe(200)
+    expect((await http('GET', '/vault/status')).body).toMatchObject({ hasRecovery: true, recoveryUnsaved: false })
+  })
+
+  it('counts wrong recovery codes like wrong passwords', async () => {
+    resetSessionsForTest()
+    let last = 0
+    for (let i = 0; i < 6; i++) last = (await http('POST', '/vault/recover', { recoveryCode: 'R1-AAAAAA-AAAAA-AAAAA-AAAAA-AAAAA', newPassword: 'recovered test phrase' })).status
+    expect(last).toBe(429)
+    resetSessionsForTest()
   })
 
   it('slows down a run of wrong passwords', async () => {

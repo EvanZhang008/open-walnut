@@ -44,16 +44,28 @@ server, the web app and the extension run the same code.
   holds the vault key only while some window has Passwords unlocked; when the last one locks
   or goes idle, the key goes.
 
+- **Recovery key**: the vault key's third wrap, for a forgotten master password.
+  `RK = HKDF-SHA256(recovery code || Secret Key, vault id, "walnut-vault-recovery-v1")`, where
+  the recovery code is 128 random bits shown as `R1-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX` in the
+  recovery kit, so no slow KDF is needed. The code is kept nowhere but the kit: every new
+  vault key comes with a new code (below). `recoveryFor` (a hash of the password wrap it was
+  made beside) tells a wrap an older Walnut left under an earlier key: it reads as no recovery
+  code (`hasRecovery: false`, recovery answers `recovery_stale`). A vault set up before
+  recovery codes has none until Settings makes a kit.
+
 A copy of `vault.json` alone (a backup, a stolen disk image without `machine.json`) needs
 both the master password and the Secret Key. A process that reads both files without the
 machine key can still try master passwords offline at PBKDF2's pace, as with any local
 password manager that keeps its Secret Key on the device.
 
-A new master password, and turning the machine key off, make a new vault key and wrap every
-item key again under it (the items' own ciphertext stays), and the sealed side files are
-sealed again. A new master password with the machine key on also makes a new machine key. So
-an old password with an old backup, or a machine key copied earlier, opens nothing written
-since. A new master password also locks every other window.
+A new master password, turning the machine key off, a new recovery kit and a recovery make a
+new vault key and wrap every item key again under it (the items' own ciphertext stays), and the
+sealed side files are sealed again. Each also makes a new machine key when that is on, and a
+new recovery code when the vault has one, returned once as the new kit (Settings saves it and
+shows the code): a code is never carried to a new vault key, since whoever held the old key (a
+copied machine key, an old backup with its password) could read a carried code. So an old
+password with an old backup, a machine key copied earlier, or an old recovery code (with any
+backup) opens nothing written since. A new master password also locks every other window.
 
 Each of these steps writes its files in an order a crash cannot turn against the person: the
 machine key is written before the wrap it opens and removed before the vault key changes, a
@@ -62,8 +74,29 @@ renamed after, and a machine key that does not open the vault (a crash between t
 only means the password opens it. A new vault sets another vault's `machine.json` aside as
 `machine-<vaultId>-<time>.json`, since it holds that vault's Secret Key.
 
-The Secret Key is shown at setup, and again for the master password in Settings → Passwords
-(Download recovery kit).
+## A forgotten master password
+
+Like Apple's recovery key, not a cloud reset: nothing outside the person's own machines can
+open the vault. The recovery kit (shown at setup, an HTML file to print) holds the Secret Key
+and the recovery code. "Forgot master password?" on the lock screen takes the code (and the
+Secret Key when this machine has none) and a new master password (`POST /api/v1/vault/recover`):
+the vault gets a new vault key, a new machine key when that is on, a new recovery code and the
+new password, every window and agent grant ends as with Lock all, and the new kit is shown
+until the person confirms it (the page asks before a reload would lose it). Walnut keeps no
+copy of a code, so every new one is marked unsaved in `vault.json` (`recoveryUnsaved`) until
+the kit's confirm (`POST /api/v1/vault/recovery-kit/confirm`) reaches the server: a lost answer,
+a download the browser dropped or a page left early leaves the mark, and Passwords and Settings
+then ask for a new kit instead of trusting a code nobody saved. Each code works once. A wrong code counts like a wrong password
+under the same brake, and the code crosses only a private link (this machine, https,
+Tailscale). Settings → Passwords → "Make a new recovery kit" (the master password again,
+`POST /api/v1/vault/recovery-kit`) makes a new code and a new vault key; the old code opens
+nothing from then on, not even with a backup of `vault.json` from before.
+Anyone holding the kit can open the vault on the machine that has the Secret Key, so the kit
+says to keep it away from the computer. Security questions were left out on purpose: their
+answers are guessable or public and carry far fewer bits than the vault needs.
+
+An older Walnut that rekeys the vault leaves the recovery wrap under the earlier key; the new
+one reads it as none (above), so the lock screen and Settings ask for a new kit.
 
 ## Unlocking
 
@@ -74,7 +107,8 @@ window. A session ends after `passwords.auto_lock_minutes` unused (default 15), 
 hours whatever happens, or on Lock / Lock all; the one-time code refreshing by itself does
 not count as use. Wrong passwords: five free, then each try waits twice as long as the last
 (30 s up to an hour). Every check of the master password counts (unlock, export, a new
-password, the Secret Key, the machine key switch), and only one runs at a time, so a burst of
+password, the Secret Key, a new recovery kit, the machine key switch) and so does a recovery
+code, and only one runs at a time, so a burst of
 parallel guesses is refused rather than checked. An export asks for the master password again.
 A window that read the KDF before another one changed the master password is told
 `kdf_changed` and reads it again, instead of being charged a wrong password.
@@ -139,9 +173,14 @@ env var) and says why, and Walnut decides:
 
 | | Item set to never | Item set to ask (default) | Item set to without asking |
 | --- | --- | --- | --- |
-| Switch off | refused | refused | refused |
-| Switch ask each time | refused | the person approves | given |
-| Switch without asking | refused | given | given |
+| Never | refused | refused | refused |
+| Ask me first | refused | the person approves | given |
+| Give it without asking | refused | given | given |
+
+The switch is one sentence in Settings → Passwords and in Agent Activity: "When an agent asks
+for a password: Ask me first / Give it without asking / Never" (stored `ask` / `allow` / `off`).
+Setup asks only for the master password; "Agents can ask while Passwords is locked" (the machine
+key) is under Recovery and advanced in Settings.
 
 A **sensitive** item always asks, with Face ID or Touch ID on a device that signs approvals (a
 tap when none is set up yet, and the ask says so). The ask is an approval (`core/approvals/`): a

@@ -249,8 +249,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'passwords', label: 'Passwords', title: 'Passwords', group: 'configure',
     icon: 'key', tint: '#FF9500',
-    description: 'Your password vault: auto-lock, agent access, master password and export.',
-    keywords: ['password', 'vault', 'master password', 'secret key', 'auto-lock', 'export', 'agents', 'autofill'],
+    description: 'Your password vault: auto-lock, agent access, master password, recovery kit and export.',
+    keywords: ['password', 'vault', 'master password', 'secret key', 'recovery', 'forgot', 'auto-lock', 'export', 'agents', 'autofill'],
     render: ({ config, saveSection }) => <PasswordsSection config={config} onSave={saveSection} />,
   },
   {

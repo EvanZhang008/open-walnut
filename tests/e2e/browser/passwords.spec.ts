@@ -4,7 +4,8 @@
  * the kit must be confirmed), add a login with the generator, reveal and copy, change the
  * password (history), the live verification code, search, favorites, trash and restore,
  * import a CSV with its dry run, the security check, lock, a wrong password, unlock, a
- * reload keeping the section and item, and the Settings pane.
+ * reload keeping the section and item, the Settings pane (what an agent gets, a new recovery
+ * kit), and a forgotten master password reset with the recovery code.
  *
  * The fixture server is shared, so the first step sets the vault up when it is not, and
  * otherwise unlocks it (a retry). Fake data only.
@@ -44,6 +45,8 @@ test('set up the vault, or unlock it when a retry finds it set up', async ({ pag
   if (!(await setup.isVisible())) { await unlockIfLocked(page); return }
 
   const create = page.getByRole('button', { name: 'Create vault' })
+  // Setup asks for the master password only: what agents may do lives in Settings.
+  await expect(page.locator('#pw-setup-agents')).toHaveCount(0)
   await page.locator('#pw-setup-1').fill('password1')
   await expect(page.locator('.pw-meter-text')).toHaveText(/weak/i)
   await expect(create).toBeDisabled()
@@ -57,6 +60,7 @@ test('set up the vault, or unlock it when a retry finds it set up', async ({ pag
 
   await expect(page.getByRole('heading', { name: 'Save your recovery kit' })).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('pw-secret-key')).toHaveText(/^W1-[A-Z2-9]{6}(-[A-Z2-9]{5}){4}$/)
+  await expect(page.getByTestId('pw-recovery-code')).toHaveText(/^R1-[A-Z2-9]{6}(-[A-Z2-9]{5}){4}$/)
   const open = page.getByRole('button', { name: 'Open Passwords' })
   await expect(open).toBeDisabled()
   await page.getByLabel(/I saved my recovery kit/).check()
@@ -188,16 +192,26 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await page.getByTestId('settings-nav-passwords').click()
   const section = page.locator('#passwords')
   await expect(section).toContainText(/Unlocked in this window · \d+ items/)
+  // What an agent gets, in one sentence.
+  await expect(section.getByRole('radiogroup', { name: 'When an agent asks for a password' })).toBeVisible()
+  await expect(section.getByText('You approve each use on your Mac or phone.')).toBeVisible()
   const away = section.locator('#pw-agents-away')
   await expect(away).toHaveAttribute('aria-checked', 'false')
   // The protected actions wait for the master password.
+  const makeKit = section.getByRole('button', { name: 'Make a new recovery kit' })
   await expect(away).toBeDisabled()
-  await expect(section.getByRole('button', { name: 'Download recovery kit' })).toBeDisabled()
+  await expect(makeKit).toBeDisabled()
   await section.locator('#pw-confirm').fill(MASTER)
   const download = page.waitForEvent('download')
-  await section.getByRole('button', { name: 'Download recovery kit' }).click()
+  await makeKit.click()
   expect((await download).suggestedFilename()).toMatch(/recovery/i)
+  const card = section.getByTestId('pw-settings-kit')
+  await expect(card.getByTestId('pw-recovery-code')).toHaveText(/^R1-/)
   await expect(section.locator('#pw-confirm')).toHaveValue('')
+  // The kit stays until the person says it is saved.
+  await card.getByLabel(/I saved my recovery kit/).check()
+  await card.getByRole('button', { name: 'Done, I saved it' }).click()
+  await expect(card).toHaveCount(0)
   await section.locator('#pw-confirm').fill('not my master password')
   await away.click()
   await expect(section.getByRole('alert')).toContainText(/wrong master password/i)
@@ -205,7 +219,7 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await section.locator('#pw-confirm').fill(MASTER)
   await away.click()
   await expect(away).toHaveAttribute('aria-checked', 'true')
-  await expect(section).toContainText('Agents may ask while you are away.')
+  await expect(section).toContainText('Agents can ask while Passwords is locked.')
   await section.locator('#pw-confirm').fill(MASTER)
   await away.click()
   await expect(away).toHaveAttribute('aria-checked', 'false')
@@ -214,4 +228,62 @@ test('the Settings pane shows the vault and locks every window', async ({ page }
   await expect(section).toContainText(/Locked · \d+ items/)
   await section.getByRole('button', { name: 'Open Passwords' }).click()
   await expect(page.getByTestId('pw-unlock')).toBeVisible()
+})
+
+test('a forgotten master password: the recovery code sets a new one and gives a new kit', async ({ page }) => {
+  await openPasswords(page)
+  await unlockIfLocked(page)
+  // A fresh kit, so this test knows the code whatever ran before it.
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
+  await page.getByTestId('settings-nav-passwords').click()
+  const section = page.locator('#passwords')
+  await section.locator('#pw-confirm').fill(MASTER)
+  const download = page.waitForEvent('download')
+  await section.getByRole('button', { name: 'Make a new recovery kit' }).click()
+  await download
+  const card = section.getByTestId('pw-settings-kit')
+  const code = (await card.getByTestId('pw-recovery-code').textContent())!.trim()
+  await card.getByLabel(/I saved my recovery kit/).check()
+  await card.getByRole('button', { name: 'Done, I saved it' }).click()
+  await section.getByRole('button', { name: 'Lock all' }).click()
+  await expect(section).toContainText(/Locked · \d+ items/)
+  await section.getByRole('button', { name: 'Open Passwords' }).click()
+
+  const NEW = 'Forgotten Then Found Again 77'
+  const reset = async (withCode: string, pw: string) => {
+    await page.getByRole('button', { name: 'Forgot master password?' }).click()
+    const form = page.getByTestId('pw-recover')
+    await form.getByLabel('Recovery code').fill(withCode)
+    await form.getByLabel('New master password', { exact: true }).fill(pw)
+    await form.getByLabel('Confirm new master password').fill(pw)
+    await form.getByRole('button', { name: 'Set new master password' }).click()
+  }
+  // A wrong code is refused and nothing changes.
+  await reset('R1-AAAAAA-AAAAA-AAAAA-AAAAA-AAAAA', NEW)
+  await expect(page.getByTestId('pw-recover').getByRole('alert')).toContainText(/does not open this vault/)
+  await page.getByRole('button', { name: 'Back to unlock' }).click()
+  await reset(code, NEW)
+  const kit = page.getByTestId('pw-kit')
+  await expect(kit.getByRole('heading', { name: 'Save your new recovery kit' })).toBeVisible({ timeout: 20_000 })
+  const next = (await kit.getByTestId('pw-recovery-code').textContent())!.trim()
+  expect(next).toMatch(/^R1-/)
+  expect(next).not.toBe(code)
+  await kit.getByLabel(/I saved my recovery kit/).check()
+  await kit.getByRole('button', { name: 'Open Passwords' }).click()
+  await expect(page.getByTestId('pw-app')).toBeVisible()
+
+  // The old master password no longer opens it; the new one does.
+  await page.getByTestId('pw-lock').click()
+  await page.getByLabel('Master password').fill(MASTER)
+  await page.getByRole('button', { name: 'Unlock' }).click()
+  await expect(page.getByTestId('pw-unlock').getByRole('alert')).toContainText(/wrong master password/i)
+  // The used code works no more; the new one sets the old password back for a rerun.
+  await reset(code, MASTER)
+  await expect(page.getByTestId('pw-recover').getByRole('alert')).toContainText(/does not open this vault/)
+  await page.getByRole('button', { name: 'Back to unlock' }).click()
+  await reset(next, MASTER)
+  await expect(page.getByTestId('pw-kit')).toBeVisible({ timeout: 20_000 })
+  await page.getByTestId('pw-kit').getByLabel(/I saved my recovery kit/).check()
+  await page.getByTestId('pw-kit').getByRole('button', { name: 'Open Passwords' }).click()
+  await expect(page.getByTestId('pw-app')).toBeVisible()
 })

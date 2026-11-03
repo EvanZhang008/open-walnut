@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { vaultApi, VaultApiError, isLockedError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
 import { usePageView } from '@/utils/view-memory'
 import { useMenuPlacement } from '@/hooks/useMenuPlacement'
@@ -122,6 +123,7 @@ function SecurityView({ items, onOpen }: { items: VaultItemSummary[]; onOpen: (i
 }
 
 export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLocked: () => void }) {
+  const navigate = useNavigate()
   const [items, setItems] = useState<VaultItemSummary[] | null>(null)
   const [section, setSection] = usePageView<PasswordsSection>('passwords', 'section', 'all', isPasswordsSection)
   const [sort, setSort] = usePageView<PasswordsSort>('passwords', 'sort', 'title', isPasswordsSort)
@@ -207,6 +209,14 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
           ))}
         </nav>
         <div className="pw-side-foot">
+          {(status.hasRecovery === false || status.recoveryUnsaved) && (
+            // No working kit in the person's hands: a forgotten master password would lock the vault for good.
+            <div className="pw-side-warn" role="note" data-testid="pw-no-recovery">
+              <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>
+              <span>{status.recoveryUnsaved ? 'Your recovery code changed and the new kit was never saved. Make a new one.' : 'Forget your master password and nothing opens this vault.'}</span>
+              <button type="button" className="pw-btn pw-btn-small" onClick={() => navigate('/settings#passwords')}>Make a recovery kit</button>
+            </div>
+          )}
           <GeneratorToolButton />
           <button type="button" className="pw-side-item" onClick={() => setImportDialogOpen(true)}><span className="pw-side-icon"><ImportIcon /></span><span className="pw-side-label">Import…</span></button>
           <button type="button" className="pw-side-item" onClick={lock} data-testid="pw-lock"><span className="pw-side-icon"><LockIcon size={16} /></span><span className="pw-side-label">Lock</span></button>

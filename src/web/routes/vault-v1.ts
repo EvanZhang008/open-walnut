@@ -2,8 +2,9 @@
  * Passwords (core/vault/, docs/reference/passwords.md): a person's own use of the vault.
  *
  *   GET    /api/v1/vault/status                    → status (+ `unlocked` for this request's session)
- *   POST   /api/v1/vault/setup                     { passwordKey | password, kdf, agentsWhileAway } → { secretKey, session }
+ *   POST   /api/v1/vault/setup                     { passwordKey | password, kdf, agentsWhileAway } → { secretKey, recoveryCode, session }
  *   POST   /api/v1/vault/unlock                    { passwordKey | password, secretKey?, client? } → { session }
+ *   POST   /api/v1/vault/recover                   { recoveryCode, secretKey?, newPasswordKey | newPassword, kdf } → { secretKey, recoveryCode, session }
  *   POST   /api/v1/vault/lock                      { all? } → { ended }
  *   GET    /api/v1/vault/items                     → { items: summaries }       (session)
  *   POST   /api/v1/vault/items                     { item } → { item }          (session)
@@ -14,9 +15,11 @@
  *   GET    /api/v1/vault/items/:id/totp            → { code, period, remaining } (session)
  *   POST   /api/v1/vault/import                    { text, format?, fileName?, dryRun } (session)
  *   GET    /api/v1/vault/report                    → security report            (session)
- *   POST   /api/v1/vault/settings                  { agentsWhileAway, passwordKey | password } (session)
+ *   POST   /api/v1/vault/settings                  { agentsWhileAway, passwordKey | password } → status + recoveryKit? (session)
  *   POST   /api/v1/vault/secret-key                { passwordKey | password } → { secretKey } (session)
- *   POST   /api/v1/vault/password                  { oldPasswordKey, newPasswordKey, kdf } (session)
+ *   POST   /api/v1/vault/recovery-kit              { passwordKey | password } → { secretKey, recoveryCode } (session; a new code)
+ *   POST   /api/v1/vault/recovery-kit/confirm      → { ok } (session; the person saved the newest kit)
+ *   POST   /api/v1/vault/password                  { oldPasswordKey, newPasswordKey, kdf } → { ok, recoveryKit? } (session)
  *   POST   /api/v1/vault/export                    { passwordKey | password, format: csv|json } (session)
  *
  * Who: a person only (no session caller, no CLI automation mark, this machine or a paired
@@ -174,7 +177,7 @@ async function attempt<T>(res: Response, work: () => Promise<T>): Promise<{ valu
     outcome = 'ok'
     return { value }
   } catch (err) {
-    if (err instanceof VaultError && err.code === 'wrong_password') outcome = 'wrong'
+    if (err instanceof VaultError && (err.code === 'wrong_password' || err.code === 'wrong_recovery_code')) outcome = 'wrong'
     throw err
   } finally {
     s.endAttempt(outcome)
@@ -368,12 +371,15 @@ vaultV1Router.post('/vault/settings', async (req, res, next) => {
   await run(res, next, async () => {
     const body = (req.body ?? {}) as { agentsWhileAway?: boolean }
     const st = await store()
+    let kit: Awaited<ReturnType<typeof st.setAgentsWhileAway>>['kit']
     if (typeof body.agentsWhileAway === 'boolean') {
       const status = await st.vaultStatus()
       const r = await attempt(res, async () => st.setAgentsWhileAway(body.agentsWhileAway!, await passwordKeyOf(req, req.body ?? {}, status.kdf)))
       if (!r) return SENT
+      kit = r.value.kit
     }
-    return st.vaultStatus()
+    // A new vault key came with a new recovery code: the person must get the new kit now.
+    return { ...(await st.vaultStatus()), ...(kit ? { recoveryKit: kit } : {}) }
   })
 })
 
@@ -388,11 +394,11 @@ vaultV1Router.post('/vault/password', async (req, res, next) => {
     const r = await attempt(res, async () => {
       const oldPasswordKey = await passwordKeyOf(req, { passwordKey: body.oldPasswordKey, password: body.oldPassword }, status.kdf)
       const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
-      await st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf })
+      return st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf })
     })
     if (!r) return SENT
     const s = await sessions()
-    return { ok: true, otherWindowsLocked: s.endOtherSessions(header(req, s.SESSION_HEADER)) }
+    return { ok: true, otherWindowsLocked: s.endOtherSessions(header(req, s.SESSION_HEADER)), ...(r.value.kit ? { recoveryKit: r.value.kit } : {}) }
   })
 })
 
@@ -407,6 +413,58 @@ vaultV1Router.post('/vault/export', async (req, res, next) => {
     const { exportItems } = await import('../../core/vault/export.js')
     const format = body.format === 'json' ? 'json' : 'csv'
     return { format, fileName: `walnut-passwords-${new Date().toISOString().slice(0, 10)}.${format}`, text: exportItems(await st.allItems(), format) }
+  })
+})
+
+/**
+ * A forgotten master password: the recovery code opens the vault once, under the same brake as
+ * the password, and sets a new one. Every window and every agent grant ends, as with Lock all.
+ */
+vaultV1Router.post('/vault/recover', async (req, res, next) => {
+  if (!gate(req, res)) return
+  await run(res, next, async () => {
+    const st = await store()
+    const body = (req.body ?? {}) as { recoveryCode?: unknown; secretKey?: unknown; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams }
+    const kdf = body.kdf ?? st.defaultKdf()
+    st.checkKdf(kdf)
+    if (typeof body.recoveryCode !== 'string' || !body.recoveryCode.trim()) throw new st.VaultError('recoveryCode (from your recovery kit) is required', 400, 'bad_recovery_code')
+    // The code opens the vault by itself on this machine: it crosses only a link nobody else reads.
+    if (!privateLink(req)) throw new st.VaultError('Open Walnut over https or Tailscale to use a recovery code from this device: plain http would send it readable on the network.', 400, 'insecure_link')
+    const s = await sessions()
+    const minutes = await autoLockMinutes()
+    const r = await attempt(res, async () => {
+      const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
+      const kit = await st.recoverVault({
+        recoveryCode: body.recoveryCode as string, newPasswordKey, kdf,
+        ...(typeof body.secretKey === 'string' && body.secretKey.trim() ? { secretKey: body.secretKey.trim() } : {}),
+      })
+      // Inside the attempt, as unlock does: closeIfNobody must not close the vault before this window holds its session.
+      s.endAllSessions()
+      return { ...kit, session: s.createSession(clientName(req), minutes) }
+    })
+    if (!r) return SENT
+    const { endAllGrants } = await import('../../core/vault/agent.js')
+    const { endAgentAccess } = await import('./vault-agent-v1.js')
+    await endAgentAccess(endAllGrants())
+    return r.value
+  })
+})
+
+vaultV1Router.post('/vault/recovery-kit', async (req, res, next) => {
+  if (!gate(req, res) || !(await needSession(req, res))) return
+  await run(res, next, async () => {
+    const st = await store()
+    const status = await st.vaultStatus()
+    const r = await attempt(res, async () => st.newRecoveryKit(await passwordKeyOf(req, req.body ?? {}, status.kdf)))
+    return r ? r.value : SENT
+  })
+})
+
+vaultV1Router.post('/vault/recovery-kit/confirm', async (req, res, next) => {
+  if (!gate(req, res) || !(await needSession(req, res))) return
+  await run(res, next, async () => {
+    await (await store()).confirmRecoveryKit()
+    return { ok: true }
   })
 })
 
