@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 241,
+  "count": 240,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -216,7 +216,6 @@
     "task-detail-popup.spec.ts :: a busy task reads as one header, a main column of rows and a rail of facts",
     "task-move-to-project.spec.ts :: the row kebab moves a task to another project",
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret",
-    "task-page-gone.spec.ts :: a session row in the pop-out opens the app in that tab, with no crash",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again",
     "task-row-wrap.spec.ts :: crowded rows wrap metadata without squeezing titles or moving actions",
     "task-status-and-wait.spec.ts :: Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it",
@@ -464,7 +463,6 @@
     "task-detail-popup.spec.ts :: a busy task reads as one header, a main column of rows and a rail of facts": "Error: expect(locator).toHaveText(expected) failed",
     "task-move-to-project.spec.ts :: the row kebab moves a task to another project": "Error: expect(locator).toBeVisible() failed",
     "task-multi-select-batch.spec.ts :: selection bar shows Complete and Delete directly, not behind a caret": "Error: expect(locator).toBeVisible() failed",
-    "task-page-gone.spec.ts :: a session row in the pop-out opens the app in that tab, with no crash": "Test timeout of 120000ms exceeded.",
     "task-reopen-on-message.spec.ts :: a completed task returns to in progress when its session is messaged again": "Error: expect(locator).toHaveClass(expected) failed",
     "task-row-wrap.spec.ts :: crowded rows wrap metadata without squeezing titles or moving actions": "Error: no clipped or overflowing metadata at 306px",
     "task-status-and-wait.spec.ts :: Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it": "Error: expect(received).toBeGreaterThan(expected)",

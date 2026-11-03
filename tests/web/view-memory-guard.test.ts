@@ -159,6 +159,7 @@ const PASSING: Record<string, string> = {
   'components/tasks/TaskList.tsx#selectedIds': 'tasks picked for one bulk action',
   'components/tasks/TaskSyncMenuRows.tsx#expanded': 'rows unfolded inside a menu',
   'components/tasks/TeamMenuItems.tsx#expanded': 'rows unfolded inside a menu',
+  'components/tasks/TaskKebabMenu.tsx#memoryOpen': 'the memory and instructions panel opened from the menu, a dialog',
   'components/tasks/TodoPanel.tsx#detailTarget': 'a task\'s full-screen detail, an overlay that never comes back on its own (layout-state-on-disk-guard)',
   'components/tasks/TodoPanel.tsx#newProjectOpen': 'the new-project form, a dialog',
   'components/tasks/TodoPanel.tsx#selectedIds': 'tasks picked for one bulk action',

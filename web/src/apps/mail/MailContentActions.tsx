@@ -18,6 +18,8 @@ import { useNavigate } from 'react-router-dom';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { ContentActionButtons } from '@/components/content/ContentActionButtons';
+import { taskPath } from '@/utils/task-path';
+import { openTaskOnHome } from '@/utils/open-session';
 import { bodyQuoteText } from './mail-quote-text';
 import { mailContentItem } from './mail-content-item';
 import type { MailOpenMessage } from './mail-store';
@@ -57,14 +59,14 @@ function MailTaskPill({ taskId }: { taskId: string }) {
       className="task-link mail-task-pill"
       data-testid="mail-task-pill"
       data-task-id={taskId}
-      href={`/tasks/${taskId}`}
+      href={taskPath(taskId)}
       title={label?.project ? `${label.project} / ${label.title}` : taskId}
       onClick={(event) => {
         // A plain left click navigates inside the SPA; anything with a modifier is the human asking
         // for a new tab, and the href is already right for that.
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
         event.preventDefault();
-        navigate(`/tasks/${taskId}`);
+        openTaskOnHome(taskId, navigate);
       }}
     >
       {label?.title ?? taskId}

@@ -210,8 +210,9 @@ test('a session column header: dot or ring, circle, labels control and kebab sha
 
   // Read: the hollow ring takes the dot's place, on the same line and spacing. The ring
   // marks a task that needs the user, and a clean turn end asks nothing (only a real ask
-  // reaches Needs you), so the user sets Needs you themself (src/core/sessions/person-needs.ts).
-  await api('PATCH', `/api/tasks/${taskId}`, { phase: 'NEED_ACTION' })
+  // reaches Needs you). The task is a worker here (dressAsBusyTask gave it a parent), and a
+  // worker's bare NEED_ACTION reads Waiting on its lead, so its own line names an ask.
+  await api('PUT', `/api/v1/tasks/${taskId}/report`, { state: 'needs', ask: 'Pick the alignment fixture' })
   await panel.getByText('Alignment turn finished', { exact: true }).first().click()
   await expect(header.locator('.session-panel-attention-dot')).toBeVisible({ timeout: 20_000 })
   const read = await expectRowAligned(page, panel, 'column-read')

@@ -12,6 +12,7 @@
  * mailto link). Opening is not an edit, so the popup's editors must write nothing until typed in.
  */
 import { expect, test, type Page } from '@playwright/test'
+import { revealInTasksTable } from './tasks-table-helpers'
 
 const TASK_ID = 'pw-task-store-sync'
 const TITLE = 'Store sync fixture task'
@@ -41,7 +42,9 @@ test('a task clicked on the Tasks page opens on Home, and its menu\'s Details op
   await page.goto('/')
   await page.locator('a[href="/tasks"]').first().click()
   await expect.poll(() => new URL(page.url()).pathname).toBe('/tasks')
+  // The table draws only the rows in view once the shared fixture holds many tasks.
   const title = page.locator('.tp-row-title', { hasText: TITLE }).first()
+  await revealInTasksTable(page, title)
   await expect(title).toBeVisible({ timeout: 20_000 })
   await title.click()
   await expectOnHome(page, TASK_ID)
@@ -49,6 +52,7 @@ test('a task clicked on the Tasks page opens on Home, and its menu\'s Details op
 
   await page.locator('a[href="/tasks"]').first().click()
   const row = page.locator(`.tp-row-title`, { hasText: TITLE }).first().locator('xpath=ancestor::*[@data-task-id][1]')
+  await revealInTasksTable(page, row)
   await row.hover()
   await row.getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()

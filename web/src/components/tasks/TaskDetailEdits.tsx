@@ -89,7 +89,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
       } catch { /* the picker stays as it was */ }
     }, 300);
   };
-  const add = async (depId: string) => {
+  const pickDependency = async (depId: string) => {
     try {
       await addDependency(task.id, depId);
       setPicking(false); setQuery(''); setResults([]);
@@ -124,7 +124,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
             autoFocus
           />
           {results.map((t) => (
-            <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void add(t.id)}>{t.title}</button>
+            <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void pickDependency(t.id)}>{t.title}</button>
           ))}
           <button type="button" className="tdp-link" onClick={() => { setPicking(false); setQuery(''); setResults([]); }}>Cancel</button>
         </div>

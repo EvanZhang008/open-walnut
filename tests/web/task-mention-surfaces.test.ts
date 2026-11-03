@@ -79,7 +79,6 @@ const NOT_CHAT: Record<string, string> = {
   'web/src/components/tasks/AgentSearchPanel.tsx': 'mentions the API in a comment only',
   'web/src/components/tasks/AgentSearchResultRows.tsx': 'mentions the API in a comment only',
   'web/src/components/tasks/ProjectTrackingView.tsx': 'a plugin-provided sanitized tracking page',
-  'web/src/components/tasks/TaskDetailPane.tsx': 'a task note and description (documents, the notes renderer)',
   'web/src/hooks/useStableHtml.ts': 'the stable {__html} helper',
   'web/src/utils/pin-highlights.ts': 'highlight marks over rendered text',
   'web/src/utils/selection-guard.ts': 'selection bookkeeping',
