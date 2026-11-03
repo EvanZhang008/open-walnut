@@ -206,6 +206,7 @@ import {
   GATEWAY_MIN_RELAY_MS,
   relayAttemptMs,
   relayMayResendTo,
+  helloReadOps,
   EXTERNAL_CALLER_SID,
   isDaemonCliKeyword,
   isExternalCallerSid,
@@ -853,6 +854,8 @@ interface WsData {
   missedBeats?: number
   /** The server process behind this socket, from its hello (`run`): a relay goes again only to the run it went to. */
   serverRun?: string
+  /** The ops that server names read-only (its hello's `readOps`): a relay of one may go to it from another run. */
+  readOps?: Set<string>
 }
 
 /** Bridge commands that name a session by `sid` (checked against the link's Walnut). */
@@ -2857,7 +2860,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': {
       // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
-      if (typeof cmd.run === 'string' && cmd.run && ws.data) ws.data.serverRun = cmd.run.slice(0, 80)
+      // ...or to any run of a server that names its op read-only (helloReadOps). A hello
+      // that names no run (a diagnostic probe on the same socket) changes neither.
+      if (typeof cmd.run === 'string' && cmd.run && ws.data) {
+        ws.data.serverRun = cmd.run.slice(0, 80)
+        ws.data.readOps = helloReadOps(cmd.readOps)
+      }
       sendOk(ws, id as number, {
       version: DAEMON_VERSION,
       capabilities: helloCapabilities(),
@@ -5289,7 +5297,13 @@ function wakeGatewayCalls(): void {
 /** Where a relay may go again now: the primary of its Walnut, when relayMayResendTo allows it. */
 function relayResendTarget(call: GatewayRelayCall): ServerWebSocket<WsData> | null {
   const target = gatewayTargetFor(call.home)
-  return target && relayMayResendTo(call, target.data?.serverRun) ? target : null
+  return target && relayMayResendTo(call, target.data?.serverRun, serverReadsOp(target, call)) ? target : null
+}
+
+/** The server behind `ws` names this call's op read-only in its hello: it may run it whatever ran before. */
+function serverReadsOp(ws: ServerWebSocket<WsData>, call: GatewayRelayCall): boolean {
+  const name = call.payload.name
+  return call.capability === 'tools.call' && typeof name === 'string' && !!ws.data?.readOps?.has(name)
 }
 
 /** The socket a relay went out on closed: it goes again at once where it may, else when a server says hello. */

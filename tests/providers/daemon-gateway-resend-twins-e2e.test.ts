@@ -9,7 +9,10 @@
  * full 20 s (hub_timeout), because a reply lost with its socket was never asked
  * for again. Now a call waits for a server within the time its CLI gives it, and a
  * relay whose socket closed (or whose answer did not come in time) goes again, but
- * only to the same server run, which answers a call it sees twice once.
+ * only to the same server run, which answers a call it sees twice once. A read the
+ * server names read-only in its hello (`readOps`) may go to the next run as well:
+ * later that day a `host_list` sent 0.3 s before a deploy stopped the server was
+ * never sent to the next one and ended hub_timeout after 90 s.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths and the
  * daemon is SIGKILLed after each test.
@@ -74,8 +77,8 @@ async function boot(twin: Twin): Promise<number> {
   return port
 }
 
-/** A server's socket: open it and say hello, naming the server run when there is one (an older server names none). */
-async function connect(port: number, run?: string): Promise<{ ws: WebSocket; requests: Array<Record<string, unknown>>; hello: Record<string, unknown> }> {
+/** A server's socket: open it and say hello, naming the server run when there is one (an older server names none) and its read-only ops. */
+async function connect(port: number, run?: string, readOps?: string[]): Promise<{ ws: WebSocket; requests: Array<Record<string, unknown>>; hello: Record<string, unknown> }> {
   const ws = await new Promise<WebSocket>((resolve, reject) => {
     const w = new WebSocket(`ws://127.0.0.1:${port}`)
     w.on('open', () => resolve(w))
@@ -86,7 +89,7 @@ async function connect(port: number, run?: string): Promise<{ ws: WebSocket; req
   ws.on('message', (data: Buffer) => {
     try { const m = JSON.parse(data.toString()) as Record<string, unknown>; if (m.ev === 'gateway-request') requests.push(m) } catch { /* not a frame */ }
   })
-  const reply = await rpc(ws, run ? { cmd: 'hello', run } : { cmd: 'hello' })
+  const reply = await rpc(ws, { cmd: 'hello', ...(run ? { run } : {}), ...(readOps ? { readOps } : {}) })
   expect(reply.ok).toBe(true)
   return { ws, requests, hello: reply }
 }
@@ -110,7 +113,7 @@ function rpc(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 10_000): P
  * newer CLI sends it. With `lingerMs` the socket stays open that long after the first
  * answer, and `lines` counts every answer line the daemon wrote by then.
  */
-function externalCall(waitMs?: number, lingerMs = 0): Promise<{ resp: Record<string, unknown>; ms: number; lines: number }> {
+function externalCall(waitMs?: number, lingerMs = 0, op = 'task_send'): Promise<{ resp: Record<string, unknown>; ms: number; lines: number }> {
   const t0 = Date.now()
   return new Promise((resolve, reject) => {
     const sock = net.connect(path.join(daemonDir, 'agent-gateway.sock'))
@@ -119,7 +122,7 @@ function externalCall(waitMs?: number, lingerMs = 0): Promise<{ resp: Record<str
     const timer = setTimeout(() => { sock.destroy(); reject(new Error('gateway timeout')) }, 60_000)
     const done = () => { sock.destroy(); resolve({ ...first!, lines: buf.split('\n').filter(Boolean).length }) }
     sock.on('connect', () => sock.write(JSON.stringify({
-      v: 1, op: 'tools.call', sid: 'external', args: { name: 'task_send', args: {} }, ...(waitMs ? { waitMs } : {}),
+      v: 1, op: 'tools.call', sid: 'external', args: { name: op, args: {} }, ...(waitMs ? { waitMs } : {}),
     }) + '\n'))
     sock.on('data', (c) => {
       buf += c.toString('utf-8')
@@ -238,6 +241,57 @@ for (const twin of TWINS) {
       expect(resp).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
       expect(ms).toBeLessThan(9_000 + 2_000)
     }, 90_000)
+
+    it('a read the next run names read-only goes to it, and that answer counts', async () => {
+      const port = await boot(twin)
+      const first = await connect(port, 'run-a', ['host_list', 'task_get'])
+      const call = externalCall(20_000, 1_500, 'host_list')
+      expect(await waitFor(() => first.requests.length === 1)).toBe(true)
+      const relayId = first.requests[0].relayId
+      // The deploy stops the server with the call in flight; the next run says hello.
+      first.ws.terminate()
+      await new Promise((r) => setTimeout(r, 300))
+      const restarted = await connect(port, 'run-b', ['host_list', 'task_get'])
+      expect(await waitFor(() => restarted.requests.length === 1)).toBe(true)
+      expect(restarted.requests[0].relayId).toBe(relayId)
+      expect((await answer(restarted.ws, relayId, { hosts: [] })).ok).toBe(true)
+      // The old run's late answer is stale, and the CLI hears one answer.
+      expect(await answer(restarted.ws, relayId, { hosts: ['late'] })).toMatchObject({ ok: true, stale: true })
+      const { resp, lines } = await call
+      expect(resp).toEqual({ ok: true, result: { hosts: [] } })
+      expect(lines).toBe(1)
+    }, 90_000)
+
+    it('a hello that names no run (a diagnostic probe) on the next run\'s socket keeps its list', async () => {
+      const port = await boot(twin)
+      const first = await connect(port, 'run-a', ['host_list'])
+      const call = externalCall(20_000, 0, 'host_list')
+      expect(await waitFor(() => first.requests.length === 1)).toBe(true)
+      const restarted = await connect(port, 'run-b', ['host_list'])
+      expect((await rpc(restarted.ws, { cmd: 'hello' })).ok).toBe(true)
+      first.ws.terminate()
+      expect(await waitFor(() => restarted.requests.length === 1)).toBe(true)
+      expect((await answer(restarted.ws, restarted.requests[0].relayId, { hosts: [] })).ok).toBe(true)
+      expect((await call).resp).toEqual({ ok: true, result: { hosts: [] } })
+    }, 90_000)
+
+    it('only the next run\'s own list counts: a read it does not name, or a call that may change something, never goes there', async () => {
+      for (const [op, nextReads] of [['host_list', undefined], ['task_send', ['host_list', 'task_send_x']]] as const) {
+        const port = await boot(twin)
+        const first = await connect(port, 'run-a', ['host_list'])
+        const call = externalCall(9_000, 0, op)
+        expect(await waitFor(() => first.requests.length === 1), op).toBe(true)
+        first.ws.terminate()
+        const restarted = await connect(port, 'run-b', nextReads ? [...nextReads] : undefined)
+        const { resp } = await call
+        expect(restarted.requests, op).toEqual([])
+        expect(resp, op).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
+        for (const s of sockets.splice(0)) { try { s.close() } catch { /* closed */ } }
+        proc!.kill('SIGKILL')
+        await new Promise<void>((resolve) => proc!.once('exit', () => resolve()))
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    }, 120_000)
 
     it('an older server (no run in its hello) never gets a call twice', async () => {
       const port = await boot(twin)

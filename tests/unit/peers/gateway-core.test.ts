@@ -226,6 +226,8 @@ import {
   gatewayCallPlan,
   relayAttemptMs,
   relayMayResendTo,
+  helloReadOps,
+  HELLO_READ_OPS_MAX,
   GATEWAY_MIN_RELAY_MS,
   GATEWAY_WAIT_MAX_MS,
 } from '../../../src/providers/gateway-core.js';
@@ -258,6 +260,19 @@ describe('a call\'s time budget and resends', () => {
     // A read the host could answer from its copy may go anywhere.
     expect(relayMayResendTo({ run: 'r1', readable: true }, 'r2')).toBe(true);
     expect(relayMayResendTo({ run: undefined, readable: true }, undefined)).toBe(true);
+    // So may one the target server names read-only in its hello, to any run of it.
+    expect(relayMayResendTo({ run: 'r1', readable: false }, 'r2', true)).toBe(true);
+    expect(relayMayResendTo({ run: 'r1', readable: false }, 'r2', false)).toBe(false);
+  });
+
+  it('a hello\'s read-only list: names only, bounded, and anything else is no list', () => {
+    expect(helloReadOps(['host_list', 'task_get'])).toEqual(new Set(['host_list', 'task_get']));
+    for (const none of [undefined, null, 'host_list', {}, [], [42, null], ['has space'], ['x'.repeat(81)]]) {
+      expect(helloReadOps(none)).toBeUndefined();
+    }
+    expect(helloReadOps(['host_list', 7, 'bad name', 'plugin:op'])).toEqual(new Set(['host_list', 'plugin:op']));
+    const many = Array.from({ length: HELLO_READ_OPS_MAX + 50 }, (_, i) => `op_${i}`);
+    expect(helloReadOps(many)?.size).toBe(HELLO_READ_OPS_MAX);
   });
 
   it('an attempt waits the hub timeout, or what is left of the call', () => {

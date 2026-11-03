@@ -111,12 +111,33 @@ export function gatewayCallPlan(waitMs: number | undefined, hubTimeoutMs: number
  * run `targetRun`? A server dedupes a relay it sees twice (by daemon instance and
  * relay id) within its own run only, so a call that may change something goes
  * again only to the run it first went to; one this host could answer from its
- * copy (a read) may go anywhere. An older server names no run: nothing is sent
+ * copy (a read) may go anywhere, and so may one the target server itself names
+ * read-only in its hello (`targetReadsIt`, helloReadOps): running a read again
+ * changes nothing. An older server names no run and no reads: nothing is sent
  * to it twice.
  */
-export function relayMayResendTo(relay: { run?: string; readable: boolean }, targetRun: string | undefined): boolean {
-  if (relay.readable) return true;
+export function relayMayResendTo(relay: { run?: string; readable: boolean }, targetRun: string | undefined, targetReadsIt = false): boolean {
+  if (relay.readable || targetReadsIt) return true;
   return typeof relay.run === 'string' && relay.run.length > 0 && relay.run === targetRun;
+}
+
+/** Most op names one hello may list as read-only (the registry has about 60). */
+export const HELLO_READ_OPS_MAX = 500;
+const READ_OP_NAME = /^[A-Za-z0-9_.:-]{1,80}$/;
+
+/**
+ * The ops a server's hello names read-only (`readOps`, its op registry's
+ * `readonly` tag). 2026-11-03: a `host_list` relayed 0.3 s before a deploy
+ * stopped the server was never sent to the next run, which said hello 11 s
+ * later, and the call ended hub_timeout after 90 s. A relay of an op the target
+ * names here may go to it whatever run it first went to (relayMayResendTo).
+ * Bounded; a list that is not an array of names is no list.
+ */
+export function helloReadOps(raw: unknown): Set<string> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = new Set<string>();
+  for (const name of raw.slice(0, HELLO_READ_OPS_MAX)) if (typeof name === 'string' && READ_OP_NAME.test(name)) out.add(name);
+  return out.size > 0 ? out : undefined;
 }
 
 /** One attempt's wait: the hub timeout, or what is left of the call when that is less. */

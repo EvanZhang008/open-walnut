@@ -4308,7 +4308,12 @@ function dispatchCommand(ws, id, cmd) {
     case 'service.handover': case 'service.update': return daemonCommands.run(function () { return cmdServiceHandover(ws, id, cmd); });
     case 'hello': {
       // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
-      if (typeof cmd.run === 'string' && cmd.run) ws.serverRun = cmd.run.slice(0, 80);
+      // ...or to any run of a server that names its op read-only (helloReadOps). A hello
+      // that names no run (a diagnostic probe on the same socket) changes neither.
+      if (typeof cmd.run === 'string' && cmd.run) {
+        ws.serverRun = cmd.run.slice(0, 80);
+        ws.readOps = helloReadOps(cmd.readOps);
+      }
       sendOk(ws, id, {
       version: DAEMON_VERSION,
       capabilities: daemonCapabilities(),
@@ -4873,9 +4878,16 @@ function gatewayCallPlan(waitMs, hubTimeoutMs, now) {
   if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return { deadline: now + hubTimeoutMs, waits: false };
   return { deadline: now + Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs))), waits: true };
 }
-function relayMayResendTo(relay, targetRun) {
-  if (relay.readable) return true;
+function relayMayResendTo(relay, targetRun, targetReadsIt) {
+  if (relay.readable || targetReadsIt) return true;
   return typeof relay.run === 'string' && relay.run.length > 0 && relay.run === targetRun;
+}
+var HELLO_READ_OPS_MAX = 500;
+function helloReadOps(raw) {
+  if (!Array.isArray(raw)) return undefined;
+  var out = new Set();
+  raw.slice(0, HELLO_READ_OPS_MAX).forEach(function (name) { if (typeof name === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(name)) out.add(name); });
+  return out.size > 0 ? out : undefined;
 }
 function relayAttemptMs(deadline, now, hubTimeoutMs) {
   return Math.max(0, Math.min(hubTimeoutMs, deadline - now));
@@ -6373,7 +6385,12 @@ function wakeGatewayCalls() {
 }
 function relayResendTarget(call) {
   var target = gatewayTargetFor(call.home);
-  return target && relayMayResendTo(call, target.serverRun) ? target : null;
+  return target && relayMayResendTo(call, target.serverRun, serverReadsOp(target, call)) ? target : null;
+}
+// The server behind 'ws' names this call's op read-only in its hello (twin of daemon-standalone.ts).
+function serverReadsOp(ws, call) {
+  var name = call.payload && call.payload.name;
+  return call.capability === 'tools.call' && typeof name === 'string' && !!(ws.readOps && ws.readOps.has(name));
 }
 // The socket a relay went out on closed: it goes again at once where it may, else when a server says hello.
 function gatewayRelaysSocketGone(ws) {

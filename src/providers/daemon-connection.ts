@@ -64,6 +64,7 @@ import {
 import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/session-error-kind.js'
 // Also a leaf (types.js only) — capability lookup, no session-layer cycle.
 import { isAcpEngine } from '../core/agents/engine-registry.js'
+import { getOpOwner, opNames } from '../ops/registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { classifyHostConnectError, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
@@ -116,6 +117,18 @@ const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
  * once (handleGatewayRequest). Another process may have run it already.
  */
 const SERVER_RUN_ID = crypto.randomUUID()
+
+/**
+ * What this server says in a daemon hello: its run, and the core ops its registry
+ * marks read-only, so a relayed read cut off by this server's restart may go to
+ * the next run (gateway-core.ts helloReadOps). A plugin's op says itself whether
+ * it is read-only, so it is not listed; a read-only mount of a remote (a test
+ * server) lists none, since it answers no relay. No list before the registry loads.
+ */
+export function serverHello(readOnlyRemote: boolean): Record<string, unknown> {
+  const readOps = readOnlyRemote ? [] : opNames({ readonly: true }).filter((name) => getOpOwner(name) === 'core')
+  return readOps.length > 0 ? { run: SERVER_RUN_ID, readOps } : { run: SERVER_RUN_ID }
+}
 /** Source deploys before the binary fallback: the first over the shared master,
  *  the rest over fresh connections (deployDaemon). */
 const SOURCE_DEPLOY_ATTEMPTS = 3
@@ -4191,7 +4204,7 @@ export class DaemonConnection {
   private async verifyCapabilities(): Promise<boolean> {
     try {
       const helloAt = Date.now()
-      const res = await this._sendHandshake('hello', { run: SERVER_RUN_ID })
+      const res = await this._sendHandshake('hello', serverHello(this.isReadOnlyRemote))
       this.recordRoundTrip(Date.now() - helloAt)
       if (!res.ok) {
         log.session.warn('DaemonConnection: hello returned !ok', {
@@ -5847,7 +5860,7 @@ export class DaemonConnection {
           reject(new Error('bulk hello timeout'))
         }, 10_000)
         this.pendingCommands.set(id, { resolve, reject, timer, cmd: 'hello', socket: ws })
-        ws.send(JSON.stringify({ id, cmd: 'hello', run: SERVER_RUN_ID }))
+        ws.send(JSON.stringify({ id, cmd: 'hello', ...serverHello(this.isReadOnlyRemote) }))
       })
       hello.then((res) => {
         if (!isCurrent()) { try { ws.terminate() } catch {}; return }
