@@ -23,6 +23,10 @@ interface Mac {
   result?: { exit: number; state: string; xcode?: string; runtime?: string }
   /** The fetch of out.tgz fails this many times first (a dropped answer from a loaded Mac), with this error. */
   fetchFails?: number; fetchError?: string
+  /** The Mac's daemon was replaced after the first read: it no longer holds the job (unknown_job). */
+  jobGone?: boolean
+  /** The job's log file there never gets a result line. */
+  logNoResult?: boolean
 }
 
 /** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call. */
@@ -42,6 +46,12 @@ const mac = (h) => macs.find((m) => m.host === h)
 if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 if (op === 'host_load') out({ hosts: macs.map((m) => ({ host: m.host, known: m.loadPerCpu != null, loadPerCpu: m.loadPerCpu })) })
 if (op === 'host_copy') {
+  if (args.from_host && args.from.endsWith('.log')) {
+    // The job's log file in the task's folder there: the whole run, result line last.
+    const r = mac(args.from_host).result || { exit: 0, state: 'passed' }
+    const body = 'remote-run: simulator X\\napp log noise\\n' + (mac(args.from_host).logNoResult ? '' : '** TEST SUCCEEDED **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: 99, udid: 'U', xcode: '', runtime: '' }) + '\\n')
+    fs.writeFileSync(args.to, body); out({ outcome: 'Copied back.' })
+  }
   if (args.from_host) {
     const m = mac(args.from_host), n = path.join(dir, 'fetch-fails')
     const failed = fs.existsSync(n) ? Number(fs.readFileSync(n, 'utf8')) : 0
@@ -61,6 +71,7 @@ if (op === 'host_exec_read') {
   const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U', xcode: r.xcode || '', runtime: r.runtime || '' }) + '\\n'
   // The run ends while 2 more chunks of its log are still unread.
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
+  if (m.jobGone) { process.stderr.write('walnut: unknown_job: no job ' + args.job_id + ' on this host (finished jobs are kept for an hour; the log file stays)'); process.exit(1) }
   if (args.offset === 24) out({ output: 'app log noise\\n', nextOffset: 38, outputBytes: 38 + tail.length, running: false })
   out({ output: tail, nextOffset: 38 + tail.length, outputBytes: 38 + tail.length, running: false })
 }
@@ -77,7 +88,7 @@ function git(...a: string[]): void {
 function run(args: string[], bin: string) {
   const r = spawnSync('bash', [SCRIPT, ...args], {
     cwd: repo, encoding: 'utf8',
-    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0' },
+    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0', IOS_FLEET_LOG_POLL_SECS: '0' },
   })
   const calls = fs.existsSync(path.join(dir, 'calls.jsonl'))
     ? fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op: string; args: Record<string, unknown> })
@@ -217,6 +228,29 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)).toHaveLength(0)
     // An older remote-run.sh names no versions, and the line is left out.
     expect(r.stderr).not.toContain('ran with')
+  })
+
+  it('a Mac whose daemon was replaced no longer holds the job: the rest is read from the job\'s log file there', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3, jobGone: true }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('mac-mini no longer holds job hx-mac-mini')
+    const logCopy = r.calls.find((c) => c.op === 'host_copy' && String(c.args.from).endsWith('.log'))
+    expect(logCopy?.args).toMatchObject({ from_host: 'mac-mini', from: '~/.local/state/open-walnut/tasks/task-1/host-exec/hx-mac-mini.log' })
+    // The bytes already read are not taken twice; the results still come back.
+    const log = fs.readFileSync(path.join(String(fs.readdirSync(path.join(taskDir, 'ios-fleet')).map((d) => path.join(taskDir, 'ios-fleet', d))[0]), 'run.log'), 'utf8')
+    expect(log.match(/remote-run: simulator X/g)).toHaveLength(1)
+    expect(log).toContain('FLEET_RESULT ')
+    expect(r.calls.some((c) => c.op === 'host_copy' && String(c.args.from).endsWith('/out.tgz'))).toBe(true)
+  })
+
+  it('a job log that never gets a result line ends the wait with the file\'s place there', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3, jobGone: true, logNoResult: true }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('left no result line in its log; it is ~/.local/state/open-walnut/tasks/task-1/host-exec/hx-mac-mini.log there')
+    // It gave up after the log stopped growing, not on the first look.
+    expect(r.calls.filter((c) => c.op === 'host_copy' && String(c.args.from).endsWith('.log')).length).toBeGreaterThan(5)
   })
 
   it('a refusal that is not a dropped answer is not asked again', () => {

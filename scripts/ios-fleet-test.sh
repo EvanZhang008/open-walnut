@@ -106,6 +106,27 @@ copy() { # $1 = JSON args; prints the finished answer
   printf '%s' "$got"
 }
 
+# The rest of a job's log, read from its file on the Mac when the Mac's daemon no longer
+# holds the job: copied back until the result line is in it, while it still grows (a run
+# that outlived its daemon), giving up once it has not grown for 5 minutes.
+job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local log to append to
+  local f="$LOCAL/job.log" size=-1 still=0
+  JOB_LOG_REMOTE="~/.local/state/open-walnut/tasks/$TASK_ID/host-exec/$2.log"
+  while :; do
+    rm -f "$f"
+    copy "$(python3 -c 'import json,sys; print(json.dumps({"from_host": sys.argv[1], "from": sys.argv[2], "to": sys.argv[3]}))' "$1" "$JOB_LOG_REMOTE" "$f")" >/dev/null || return 1
+    if grep -q '^FLEET_RESULT ' "$f"; then
+      tail -c +"$(($3 + 1))" "$f" > "$4.part"
+      if [ "$VERBOSE" = 1 ]; then cat "$4.part"; else grep -E "$KEY_LINES" "$4.part" || true; fi
+      cat "$4.part" >> "$4"; rm -f "$4.part" "$f"
+      return 0
+    fi
+    if [ "$(wc -c < "$f")" -gt "$size" ]; then size=$(wc -c < "$f"); still=0; else still=$((still + 1)); fi
+    [ "$still" -lt 10 ] || return 1
+    sleep "${IOS_FLEET_LOG_POLL_SECS:-30}"
+  done
+}
+
 # The Macs to try, best first: connected, tagged ios, under the load cap.
 candidates() {
   local hosts loads
@@ -177,10 +198,18 @@ while IFS=$'\t' read -r H NOTE; do
   # The terminal gets the lines that matter (a test run prints megabytes of app logs);
   # --verbose prints everything. The whole log is run.log either way.
   while :; do
-    if ! got=$(op host_exec_read "{\"host\":\"$H\",\"job_id\":\"$JOB\",\"offset\":$OFF,\"wait_ms\":15000}"); then
+    if ! got=$(op host_exec_read "{\"host\":\"$H\",\"job_id\":\"$JOB\",\"offset\":$OFF,\"wait_ms\":15000}" 2>"$LOCAL/.read-err"); then
+      if grep -q 'unknown_job' "$LOCAL/.read-err"; then
+        # The Mac no longer holds the job (its daemon was replaced, or the run ended over an
+        # hour ago), but the job's log stays in this task's folder there: read the rest from it.
+        say "$H no longer holds job $JOB; reading the rest of its log file there"
+        job_log_rest "$H" "$JOB" "$OFF" "$LOG" || die "job $JOB on $H left no result line in its log; it is $JOB_LOG_REMOTE there"
+        break
+      fi
+      cat "$LOCAL/.read-err" >&2
       # Walnut or the Mac out of reach for a while: the run goes on there; say how to read it.
       FAILS=$((FAILS + 1))
-      [ "$FAILS" -lt 60 ] || die "lost $H for 5 minutes; job $JOB may still run there: host_exec_read {\"host\":\"$H\",\"job_id\":\"$JOB\"}"
+      [ "$FAILS" -lt 60 ] || die "lost $H for 5 minutes; job $JOB may still run there: host_exec_read {\"host\":\"$H\",\"job_id\":\"$JOB\"}; its log stays there as ~/.local/state/open-walnut/tasks/$TASK_ID/host-exec/$JOB.log"
       sleep 5; continue
     fi
     FAILS=0
