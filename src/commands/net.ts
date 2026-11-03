@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WebSocket } from '#ws'
 import { decodeTicket, TICKET_PREFIX, type JoinTicket } from '../core/net/join-ticket.js'
+import { FETCH_TIMEOUT_MS as NET_FETCH_TIMEOUT_MS } from '../providers/net-binary.js'
 
 const STEP_W = 19
 function step(n: number, label: string, text: string): void {
@@ -54,6 +55,24 @@ async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, time
     })
     ws.on('error', (e: Error) => { clearTimeout(timer); reject(e) })
   })
+}
+
+/**
+ * How long step 3 waits for this machine's network key. A new machine's daemon downloads
+ * walnut-net before it can answer (one file, up to its download limit), and a slow line
+ * takes most of that: 2026-11-03 a PC's first start spent 40 s on it, and the join, which
+ * waited 30 s, stopped with "the daemon did not answer net.identity".
+ */
+export const NET_IDENTITY_WAIT_MS = NET_FETCH_TIMEOUT_MS + 30_000
+
+/** This machine's network key, with a line when it takes a while (the first start downloads walnut-net). */
+export async function netIdentity(opts: { waitMs?: number; slowMs?: number; port?: number } = {}): Promise<Record<string, unknown>> {
+  const slow = setTimeout(() => step(3, 'Join', 'getting the network part ready (the first time only; it can take a minute)'), opts.slowMs ?? 5_000)
+  try {
+    return await daemonRpc('net.identity', {}, opts.waitMs ?? NET_IDENTITY_WAIT_MS, opts.port)
+  } finally {
+    clearTimeout(slow)
+  }
 }
 
 /** The daemon answering here: `service` when it is the login service (it says where it runs from). */
@@ -238,7 +257,7 @@ async function joinWithTicket(t: JoinTicket): Promise<number> {
   try {
     const hello = await daemonRpc('hello')
     if (!(hello.capabilities as string[] | undefined)?.includes('net-join-v1')) { step(3, 'Join', 'this Walnut daemon is too old to join. Run `walnut update`, then this again.'); return 1 }
-    const ident = await daemonRpc('net.identity')
+    const ident = await netIdentity()
     if (ident.ok !== true || typeof ident.endpointId !== 'string') { step(3, 'Join', `no network key: ${errText(ident)}`); return 1 }
     if (ident.endpointId === t.mac) { step(3, 'Join', 'this is the Mac that made the link; run it on the new machine'); return 1 }
     // The daemon lets the Mac in, asks, and on a refusal puts back what this machine had.
@@ -260,7 +279,7 @@ async function joinWithCompanion(base: URL, code: string): Promise<number> {
   try {
     const hello = await daemonRpc('hello')
     if (!(hello.capabilities as string[] | undefined)?.includes('net-v1')) { step(3, 'Join', 'this Walnut daemon is too old to join. Run `walnut update`, then this again.'); return 1 }
-    const ident = await daemonRpc('net.identity')
+    const ident = await netIdentity()
     if (ident.ok !== true || typeof ident.endpointId !== 'string') { step(3, 'Join', `no network key: ${errText(ident)}`); return 1 }
     const res = await fetch(new URL('/api/v1/net/join', base), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

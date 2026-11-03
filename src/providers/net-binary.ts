@@ -28,7 +28,8 @@ export const NET_BIN_SHA256: Readonly<Record<string, string>> = {
   'linux-x64': '89102a932d77fa0c19fff12570a6721f991b69390fd04dda7f6a09160da47359',
 }
 const MAX_BYTES = 64 * 1024 * 1024
-const FETCH_TIMEOUT_MS = 180_000
+/** One download's limit; a join waits longer than this for the network key (commands/net.ts). */
+export const FETCH_TIMEOUT_MS = 180_000
 
 export function netBinTarget(platform: string = process.platform, arch: string = process.arch): string | null {
   if (platform !== 'darwin' && platform !== 'linux') return null
