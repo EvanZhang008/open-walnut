@@ -161,6 +161,7 @@ SOURCES=(
   src/core/peers/envelope-kit.ts
   src/providers/leader-core.ts
   src/providers/walnut-scope-core.ts
+  src/providers/served-walnuts-core.ts
   src/providers/live-settings-core.ts
   src/providers/offline-search-core.ts
   src/providers/offline-board-core.ts

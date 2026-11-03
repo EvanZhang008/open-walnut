@@ -31,7 +31,8 @@ import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
-import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
+import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
 import { testRunnerClaude } from '../core/test-claude-guard.js'
@@ -370,6 +371,11 @@ export class LocalDaemon {
     return true
   }
 
+  /** The last kept shared daemon logged, `<running>><expected>` (daemon-shared.ts). */
+  private _sharedKeptLogged: string | null = null
+  /** When this server last replaced a daemon another Walnut used (the replace breaker, daemon-shared.ts). */
+  private _sharedReplacedAt: number | null = null
+  private _sharedReplacing = false
   /** The re-run of an upgrade deferred while ACP turns were open. */
   private _upgradeRecheck: ReturnType<typeof setTimeout> | null = null
 
@@ -393,9 +399,35 @@ export class LocalDaemon {
     this._upgradeRecheck.unref?.()
   }
 
+  /** Whether to keep another build's daemon that another Walnut shares (daemon-shared.ts). */
+  private keepSharedDaemon(hello: { version?: string; served?: DaemonServes | null }, expected: string): boolean {
+    const now = Date.now()
+    const verdict = sharedDaemonVerdict({
+      ourKey: walnutKeyOf(WALNUT_HOME), runningVersion: hello.version ?? '', running: hello.served ?? null, now,
+      replacedRecently: this._sharedReplacedAt !== null && now - this._sharedReplacedAt < REPLACE_BREAKER_MS,
+    })
+    this._sharedReplacing = !verdict.keep && !!verdict.shared
+    if (!verdict.keep) return false
+    const key = `${hello.version}>${expected}`
+    if (this._sharedKeptLogged !== key) {
+      this._sharedKeptLogged = key
+      log.session.info('local daemon: keeping the running daemon another Walnut uses', {
+        running: hello.version, expected, otherWalnuts: verdict.others.length, why: verdict.why,
+      })
+    }
+    return true
+  }
+
+  /** A replace went through: when the daemon it replaced was shared, the breaker starts. */
+  private noteDaemonReplaced(): void {
+    if (this._sharedReplacing) this._sharedReplacedAt = Date.now()
+    this._sharedReplacing = false
+  }
+
   private async ensureRunningInner(): Promise<number> {
     const binaryPath = this.findDaemonBinary()
     const expectedVersion = this.readBinaryVersion(binaryPath)
+    this._sharedReplacing = false
 
     // 1. Check if daemon is already running
     let existingPort = this.readPortFile()
@@ -420,6 +452,15 @@ export class LocalDaemon {
         }
       }
       if (helloResult.alive) {
+        // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
+        // or each Walnut would put its own build back on every start (daemon-shared.ts).
+        if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion && this.keepSharedDaemon(helloResult, expectedVersion)) {
+          this._port = existingPort
+          this._wsUrl = `ws://localhost:${existingPort}`
+          this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+          this.auditOwnerOnAdopt(this._instanceId)
+          return existingPort
+        }
         if (helloResult.capabilities?.includes('cron-supervision-v1')) {
           if (expectedVersion && helloResult.version !== expectedVersion && this.deferForExecRuns(helloResult, existingPort, expectedVersion)) {
             return existingPort
@@ -431,6 +472,7 @@ export class LocalDaemon {
               this.scheduleUpgradeRecheck()
             } else if (updatedPort !== null) {
               existingPort = updatedPort
+              this.noteDaemonReplaced()
               helloResult = await this.ping(updatedPort)
               if (!helloResult.alive || helloResult.version !== expectedVersion) throw new Error('Updated managed daemon did not answer with the expected version')
             } else {
@@ -495,6 +537,7 @@ export class LocalDaemon {
             runningInstanceId: helloResult.instanceId,
           })
           await this.stopDaemon()
+          this.noteDaemonReplaced()
         } else {
           this._port = existingPort
           this._wsUrl = `ws://localhost:${existingPort}`
@@ -784,6 +827,8 @@ export class LocalDaemon {
 
   private async ping(port: number, timeoutMs = 2000): Promise<{
     alive: boolean; version?: string; capabilities?: string[]; instanceId?: string
+    /** hello `served`: the Walnuts it serves (daemon-shared.ts); absent from an older daemon. */
+    served?: DaemonServes | null
     /** host_exec runs going on in it (exec-runs-hold.ts); absent from a daemon older than that. */
     execRunning?: number
     /** Set when not alive: a timeout means something accepted or is holding the
@@ -795,7 +840,7 @@ export class LocalDaemon {
       // daemon startup jitter. This blocks Walnut server startup, so keep short.
       let ws: WebSocket | null = null
       // An answered hello whose follow-up ask (exec.list) is still out: a timeout keeps it.
-      let hello: { alive: boolean; version?: string; capabilities?: string[]; instanceId?: string } | null = null
+      let hello: { alive: boolean; version?: string; capabilities?: string[]; instanceId?: string; served?: DaemonServes | null } | null = null
       const timeout = setTimeout(() => {
         try { ws?.terminate() } catch { /* already closed */ }
         resolve(hello ?? { alive: false, failure: 'timeout' })
@@ -807,7 +852,7 @@ export class LocalDaemon {
           socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
         socket.on('message', (data) => {
-          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; jobs?: unknown } | null = null
+          let msg: { id?: unknown; ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string; execRunning?: number; jobs?: unknown; served?: { twin?: unknown; walnuts?: unknown } } | null = null
           try { msg = JSON.parse(data.toString()) } catch { /* not JSON: a bad reply */ }
           if (hello && msg && msg.id === 2) {
             clearTimeout(timeout)
@@ -827,6 +872,9 @@ export class LocalDaemon {
             version: msg.version,
             capabilities: msg.capabilities,
             instanceId: msg.instanceId,
+            ...(msg.served && typeof msg.served === 'object'
+              ? { served: parseServes({ version: msg.version ?? '', twin: msg.served.twin, capabilities: msg.capabilities ?? [], walnuts: msg.served.walnuts }) }
+              : {}),
             ...(typeof msg.execRunning === 'number' ? { execRunning: msg.execRunning } : {}),
             ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
           }

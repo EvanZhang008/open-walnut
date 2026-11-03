@@ -96,6 +96,7 @@ const FILES: Record<string, string> = {
   PID_FILE: 'host: this daemon\'s pid',
   PORT_FILE: 'host: this daemon\'s port',
   VERSION_FILE: 'host: this daemon\'s version',
+  SERVES_FILE: 'host: which Walnuts this daemon serves, by key, with its capabilities (served-walnuts-core.ts)',
   INSTANCE_ID_FILE: 'host: this daemon\'s instance id',
   SERVICE_FILE: 'host: whether this daemon runs as a service',
   LOG_FILE: 'host: this daemon\'s log',

@@ -60,6 +60,7 @@ describe('decideNetUpdate', () => {
     ['WALNUT_NET_DAEMON_UPDATE=0', { turnedOff: true }, 'turned-off'],
     ['a try toward the same build inside the cooldown', { lastAttempt: { expected: NEW, at: 1_000_000_000 - 60_000 } }, 'cooldown'],
     ['a host that came back on another build after this server updated it', { contested: true }, 'contested'],
+    ['a daemon another Walnut shares that has every capability this build has (daemon-shared.ts)', { shared: 'another Walnut uses it' }, 'shared'],
     ['a build whose automatic tries all failed', { failedTries: MAX_AUTO_FAILURES }, 'gave-up'],
     ['an unknown system', { target: null }, 'platform-unknown'],
     ['no daemon for the host', { source: { missing: 'this build has no daemon binary for darwin-x64' } }, 'no-binary'],
@@ -70,7 +71,7 @@ describe('decideNetUpdate', () => {
   })
 
   it('a request goes past the host setting, the switch and the cooldown, never past the rest', () => {
-    const asked = { requested: true, autofixOff: 'config', turnedOff: true, contested: true, failedTries: 99, lastAttempt: { expected: NEW, at: 1_000_000_000 - 1 } }
+    const asked = { requested: true, autofixOff: 'config', turnedOff: true, contested: true, shared: 'another Walnut uses it', failedTries: 99, lastAttempt: { expected: NEW, at: 1_000_000_000 - 1 } }
     expect(decideNetUpdate(facts(asked)).go).toBe(true)
     expect(decideNetUpdate(facts({ ...asked, testServer: true }))).toMatchObject({ go: false, skip: 'test-server' })
     expect(decideNetUpdate(facts({ ...asked, follower: true }))).toMatchObject({ go: false, skip: 'follower' })

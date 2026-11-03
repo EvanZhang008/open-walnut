@@ -92,6 +92,7 @@ import { createOfflineHostCore, type HostSlice, type LeaderDelivery, type Offlin
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
+import { createServedWalnuts } from './served-walnuts-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -448,6 +449,16 @@ const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service')
 // actually running — probing the binary then caused an infinite
 // stop/redeploy loop that killed the live daemon every cycle.
 const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version')
+// Which Walnuts this daemon serves, with its capabilities, beside daemon.version: a
+// server keeps a daemon another Walnut still uses when this build brings nothing it
+// lacks (served-walnuts-core.ts, daemon-shared.ts). Mirror daemon-source.ts.
+const SERVES_FILE = path.join(DAEMON_DIR, 'daemon.serves.json')
+const servedWalnuts = createServedWalnuts({
+  fs, file: SERVES_FILE,
+  keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
+  version: DAEMON_VERSION, twin: 'binary', capabilities: () => helloCapabilities(), now: () => Date.now(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
 const AGENT_POLL_INTERVAL_MS = 2000
 const AGENT_REDISCOVER_INTERVAL_MS = 10000
 // Env override exists so tests can exercise heartbeat-driven behavior (the
@@ -2417,6 +2428,12 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     // ping is high-frequency keepalive and stream frames carry bytes: tracing them is log spam
     logMsg('debug', 'cmd_recv', { cmd: cmd.cmd, id, sid, traceId })
   }
+  // The Walnuts this daemon serves (served-walnuts-core.ts): a server socket's per-Walnut push.
+  // A bridge push names no home also from a new server whose hello failed: only a named one counts.
+  if (SERVED_PUSHES.has(cmd.cmd as string) && isServerClient(ws)) {
+    const home = walnutScope.askedHome(cmd) || gatewayClientHomes.get(ws) || ''
+    if (home || cmd.cmd !== 'bridge.configure') servedWalnuts.note(home)
+  }
 
   // Cloud bridge is a PUBLIC relay: restrict it to the phone-proxy command set.
   // A frame outside the allowlist on a bridge socket means the cloud box was
@@ -2469,6 +2486,14 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     return replyError(err)
   }
 }
+
+/** What this daemon's hello advertises: also what its serves file records. */
+function helloCapabilities(): string[] {
+  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])]
+}
+
+/** This Walnut's per-Walnut pushes: an older server sends them naming no home. */
+const SERVED_PUSHES = new Set(['hooks.configure', 'triggers.configure', 'bridge.configure', 'turns.configure', 'workspace.configure'])
 
 function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   switch (cmd.cmd) {
@@ -2800,7 +2825,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
-      capabilities: [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])],
+      capabilities: helloCapabilities(),
+      // The Walnuts this daemon served lately (served-walnuts-core.ts).
+      served: { twin: 'binary', walnuts: servedWalnuts.recent() },
       cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
@@ -3714,6 +3741,7 @@ const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
 function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
   if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws))
   gatewayClientHomes.set(ws, home)
+  if (isServerClient(ws)) servedWalnuts.note(home)
 }
 /**
  * A command that names another Walnut than the one its socket speaks for is refused:
@@ -6709,7 +6737,11 @@ function readTriggerState(home: string, id: string, nowMs: number): TriggerHostS
     }
     return state
   }
-  return emptyHostState(nowMs)
+  // A new trigger of a named Walnut keeps the shared copy from its first check too, so a
+  // downgraded daemon, which reads only the shared dir, remembers what it reported.
+  const fresh = emptyHostState(nowMs)
+  if (home && !heldTrigger('', id) && !sharedByAnother(home, id)) fresh.sharedCopy = true
+  return fresh
 }
 
 function persistTriggerState(home: string, id: string, state: TriggerHostState): void {
@@ -13014,6 +13046,7 @@ if (action === '--start' || SERVICE_MODE) {
   startGatewayListener()
   writeWalnutShim()
   fs.writeFileSync(VERSION_FILE, DAEMON_VERSION)
+  servedWalnuts.write()
   // Instance ID file — lets clients detect PID recycling / daemon swap by
   // comparing the on-disk value against what `hello` returns. Stable for the
   // lifetime of this daemon; removed on graceful cleanup().
@@ -13082,7 +13115,7 @@ if (action === '--start' || SERVICE_MODE) {
       { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ...(SERVICE_MODE ? [{ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID }] : []),
     ]
-    const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE, ...[...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
+    const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), SERVES_FILE, BRIDGE_FILE, ...[...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
     if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored })
   }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : RUNTIME_KEEP_MS)
   runtimeKeepTimer.unref?.()

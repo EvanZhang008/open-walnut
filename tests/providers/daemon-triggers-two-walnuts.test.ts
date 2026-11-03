@@ -320,10 +320,13 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(readJson(sharedStateFile('dg-1')).seq).toBe(next.seq)
       expect(readJson(stateFile(h.HOME_B, 'dg-1')).sharedCopy).toBeUndefined()
       expect(await configure(b, [], h.HOME_B)).toMatchObject({ ok: true })
-      // And a trigger A did not take over has no shared copy.
+      // And a new trigger of A keeps the shared copy from its first check, so a downgraded
+      // daemon (which reads only the shared dir) does not report its items again.
       expect(await configure(a, ['dg-1', 'a-own'], HOME_A)).toMatchObject({ ok: true, count: 2 })
-      await fireOn(a, 'a-own', HOME_A)
-      expect(fs.existsSync(sharedStateFile('a-own'))).toBe(false)
+      const own = await fireOn(a, 'a-own', HOME_A)
+      expect(readJson(stateFile(HOME_A, 'a-own')).sharedCopy).toBe(true)
+      expect(readJson(sharedStateFile('a-own')).seq).toBe(own.seq)
+      expect(readJson(sharedStateFile('a-own')).sharedCopy).toBeUndefined()
       expect(await configure(a, ['dg-1'], HOME_A)).toMatchObject({ ok: true, count: 1 })
     }, 60_000)
 

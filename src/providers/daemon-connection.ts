@@ -95,6 +95,7 @@ import {
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { markLinkFailure } from './link-failure.js'
+import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplicaProgram } from '../core/server-role.js'
@@ -104,6 +105,8 @@ import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 
 /** host.slice goes gzipped (host-slice-gz-v1), compressed off the event loop. */
 const gzipAsync = promisify(gzip)
+/** Splits daemon.version from daemon.serves.json in the upgrade probe's one ssh call. */
+const SERVES_MARK = '__WALNUT_DAEMON_SERVES__'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -533,6 +536,16 @@ export class DaemonConnection {
    */
   private _capabilities: string[] | null = null
   private _daemonStartup = 'on-demand'
+  /** hello `served`: the Walnuts this daemon serves (daemon-shared.ts), null from an older daemon. */
+  private _daemonServes: DaemonServes | null = null
+  /** The key a daemon files this Walnut under (daemon-shared.ts walnutKeyOf). */
+  private readonly ownWalnutKey = walnutKeyOf(WALNUT_HOME)
+  /** The last kept shared daemon logged, `<running>><expected>`, so a reconnect loop logs it once. */
+  private _sharedKeptLogged: string | null = null
+  /** When this server last replaced a daemon another Walnut used (the replace breaker, daemon-shared.ts). */
+  private _sharedReplacedAt: number | null = null
+  /** The last verdict was to replace a shared daemon; a replace that goes through starts the breaker. */
+  private _sharedReplacing = false
   /** The file an OS service runs as this daemon (hello `serviceExecutable`, service mode only). */
   private _serviceExecutable: string | null = null
   private cronMetadataToken: object | null = null
@@ -992,6 +1005,7 @@ export class DaemonConnection {
   get connectionEpoch(): number { return this._connectionEpoch }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
   get daemonVersion(): string | null { return this._daemonVersion }
+  get daemonServes(): DaemonServes | null { return this._daemonServes }
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
   get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
   get lastBridgeCheckedAt(): number | null { return this._lastBridgeCheckedAt }
@@ -3298,6 +3312,34 @@ export class DaemonConnection {
     return null
   }
 
+  /** Whether to keep another build's daemon that another Walnut shares (daemon-shared.ts). */
+  private keepSharedDaemon(running: DaemonServes | null, runningVersion: string, expected: string): boolean {
+    const now = Date.now()
+    const verdict = sharedDaemonVerdict({
+      ourKey: this.ownWalnutKey, runningVersion, running, now,
+      replacedRecently: this._sharedReplacedAt !== null && now - this._sharedReplacedAt < REPLACE_BREAKER_MS,
+    })
+    this._sharedReplacing = !verdict.keep && !!verdict.shared
+    if (!verdict.keep) {
+      if (verdict.missing) log.session.info('DaemonConnection: updating a daemon another Walnut shares, it lacks what this build needs', { host: this.hostKey, running: runningVersion, expected, missing: verdict.missing })
+      return false
+    }
+    const key = `${runningVersion}>${expected}`
+    if (this._sharedKeptLogged !== key) {
+      this._sharedKeptLogged = key
+      log.session.info('DaemonConnection: keeping the running daemon another Walnut uses', {
+        host: this.hostKey, running: runningVersion, expected, otherWalnuts: verdict.others.length, why: verdict.why,
+      })
+    }
+    return true
+  }
+
+  /** A replace went through: when the daemon it replaced was shared, the breaker starts. */
+  private noteDaemonReplaced(): void {
+    if (this._sharedReplacing) this._sharedReplacedAt = Date.now()
+    this._sharedReplacing = false
+  }
+
   /**
    * Decide whether the RUNNING remote daemon is stale and must be replaced.
    * If stale, stop it and return true (caller should redeploy).
@@ -3313,6 +3355,7 @@ export class DaemonConnection {
    * and 30s later found the same stale binary again (infinite kill loop,
    * surfaced as ECONNRESET on every in-flight session).
    */
+
   private async shouldUpgradeDaemon(
     remotePath: string, service?: RemoteServiceTakeover, gate?: () => UpgradeHold,
     liveRuntime?: RemoteRuntime | 'unknown' | null,
@@ -3321,6 +3364,7 @@ export class DaemonConnection {
     // daemon). Version skew between the ephemeral's binary and production's is
     // expected and must not trigger a restart of the shared singleton.
     if (this.isReadOnlyRemote) return false
+    this._sharedReplacing = false
     let expected: string | null = null
     let remoteVersion = ''
     try {
@@ -3328,9 +3372,13 @@ export class DaemonConnection {
       if (!expected) return false
       const takeover = service ?? await this.detectServiceTakeover()
 
-      remoteVersion = (await this.sshExec(
-        `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true`, 5_000,
-      )).trim()
+      // daemon.serves.json in the same call: whether another Walnut shares this daemon.
+      const probe = await this.sshExec(
+        `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true; echo; echo ${SERVES_MARK}; cat ${shq(this._remoteDir + '/' + SERVES_FILE)} 2>/dev/null || true`, 5_000,
+      )
+      const markAt = probe.indexOf(SERVES_MARK)
+      remoteVersion = (markAt === -1 ? probe : probe.slice(0, markAt)).trim()
+      const runningServes = markAt === -1 ? null : parseServes(probe.slice(markAt + SERVES_MARK.length))
 
       if (remoteVersion === expected) this.clearUpgradeRecheck()
 
@@ -3346,13 +3394,17 @@ export class DaemonConnection {
       // gate asks again, each on its own clock.
       this.clearUpgradeRecheck()
 
+      // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
+      // or each server would put its own build back on every connect (daemon-shared.ts).
+      if (remoteVersion && remoteVersion !== expected && this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
+
       if (takeover.managed) {
         if (remoteVersion !== expected) {
           if (this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           if (updated === 'held') return false
-          if (updated) return true
+          if (updated) { this.noteDaemonReplaced(); return true }
           log.session.error(
             'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
             {
@@ -3438,6 +3490,7 @@ export class DaemonConnection {
         throw err
       }
       this._lastUpgradeAttempt = { expected, at: Date.now() }
+      this.noteDaemonReplaced()
       return true
     } catch (error) {
       if (isServiceDecisionError(error)) throw error
@@ -3703,6 +3756,7 @@ export class DaemonConnection {
     this._upgradeDeferred = false
     const expected = this.getExpectedDaemonVersion()
     if (!expected || this.isReadOnlyRemote || this._daemonVersion === expected) return
+    if (this._daemonVersion && this.keepSharedDaemon(this._daemonServes, this._daemonVersion, expected)) return
     log.session.info('DaemonConnection: serving the running daemon; its update runs in the background', {
       host: this.hostKey, running: this._daemonVersion ?? '(unknown)', expected,
     })
@@ -3996,6 +4050,10 @@ export class DaemonConnection {
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
       this._taskDirRoot = typeof res.taskDirRoot === 'string' && res.taskDirRoot.startsWith('/') ? res.taskDirRoot : null
       this._daemonVersion = typeof res.version === 'string' && res.version.length <= 64 ? res.version : null
+      const served = res.served as { twin?: unknown; walnuts?: unknown } | undefined
+      this._daemonServes = served && typeof served === 'object'
+        ? parseServes({ version: this._daemonVersion ?? '', twin: served.twin, capabilities: caps, walnuts: served.walnuts })
+        : null
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const exe = res.serviceExecutable

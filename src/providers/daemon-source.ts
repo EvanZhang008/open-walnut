@@ -53,6 +53,7 @@ import { createOfflineHostCore } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
+import { createServedWalnuts } from './served-walnuts-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -270,6 +271,7 @@ export function getDaemonSource(): string {
     ['__CREATE_JOURNAL_MIGRATION__', createJournalMigration.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_WALNUT_SCOPE__', createWalnutScope.toString()],
+    ['__CREATE_SERVED_WALNUTS__', createServedWalnuts.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
@@ -1657,6 +1659,15 @@ const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version');
 // remote host, and a literal 'dev-source' can never match the binary sidecar
 // version — that mismatch fed an infinite stop/redeploy loop.
 const DAEMON_VERSION = '__DAEMON_VERSION__';
+// Which Walnuts this daemon serves, with its capabilities, beside daemon.version
+// (served-walnuts-core.ts, inlined; daemon-shared.ts). Mirror daemon-standalone.ts.
+const SERVES_FILE = path.join(DAEMON_DIR, 'daemon.serves.json');
+var servedWalnuts = (__CREATE_SERVED_WALNUTS__)({
+  fs: fs, file: SERVES_FILE,
+  keyOf: function (value) { return crypto.createHash('sha1').update(value).digest('hex').slice(0, 16); },
+  version: DAEMON_VERSION, twin: 'source', capabilities: function () { return daemonCapabilities(); }, now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
 const AGENT_POLL_INTERVAL_MS = 2000;
 const AGENT_REDISCOVER_INTERVAL_MS = 10000;
 // Env override exists so tests can exercise heartbeat-driven behavior (the
@@ -3782,6 +3793,12 @@ function handleCommand(ws, msg) {
       traceId: typeof cmd.traceId === 'string' ? cmd.traceId : undefined,
     });
   }
+  // The Walnuts this daemon serves (served-walnuts-core.ts): a server socket's per-Walnut push.
+  // A bridge push names no home also from a new server whose hello failed: only a named one counts.
+  if (SERVED_PUSHES.has(cmd.cmd) && isServerClient(ws)) {
+    var servedHome = walnutScope.askedHome(cmd) || gatewayClientHomes.get(ws) || '';
+    if (servedHome || cmd.cmd !== 'bridge.configure') servedWalnuts.note(servedHome);
+  }
 
   // Cloud bridge is a PUBLIC relay: restrict it to the phone-proxy command set.
   // A frame outside the allowlist on a bridge socket means the cloud box was
@@ -3876,6 +3893,9 @@ function resolveAgentCommand(engine, op) {
   }
   return { ok: true, cmd: nativeCmd };
 }
+
+// This Walnut's per-Walnut pushes: an older server sends them naming no home.
+var SERVED_PUSHES = new Set(['hooks.configure', 'triggers.configure', 'bridge.configure', 'turns.configure', 'workspace.configure']);
 
 function dispatchCommand(ws, id, cmd) {
   switch (cmd.cmd) {
@@ -4222,6 +4242,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
       capabilities: daemonCapabilities(),
+      // The Walnuts this daemon served lately (served-walnuts-core.ts).
+      served: { twin: 'source', walnuts: servedWalnuts.recent() },
       cronSupervision: {
         managed: !!cronRuntime,
         startup: SERVICE_MODE ? 'service' : 'on-demand',
@@ -4839,6 +4861,7 @@ var gatewayClientHomes = new WeakMap();
 function bindGatewayClientHome(ws, home) {
   if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws));
   gatewayClientHomes.set(ws, home);
+  if (isServerClient(ws)) servedWalnuts.note(home);
 }
 // A command that names another Walnut than the one its socket speaks for is refused
 // (walnut-scope-core.ts). An unbound socket may name any. Mirror daemon-standalone.ts.
@@ -8172,7 +8195,11 @@ function readTriggerState(home, id, nowMs) {
     }
     return state;
   }
-  return triggerCheckCore.emptyHostState(nowMs);
+  // A new trigger of a named Walnut keeps the shared copy from its first check too, so a
+  // downgraded daemon, which reads only the shared dir, remembers what it reported.
+  var fresh = triggerCheckCore.emptyHostState(nowMs);
+  if (home && !heldTrigger('', id) && !sharedByAnother(home, id)) fresh.sharedCopy = true;
+  return fresh;
 }
 
 function persistTriggerState(home, id, state) {
@@ -15285,6 +15312,7 @@ async function startDaemon() {
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);
+    servedWalnuts.write();
     // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).
     try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
     // The plugin jobs an earlier daemon ran here (twin of daemon-standalone.ts).
@@ -15343,7 +15371,7 @@ async function startDaemon() {
         { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ];
       if (SERVICE_MODE) files.push({ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID });
-      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE].concat([...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)), touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
+      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), SERVES_FILE, BRIDGE_FILE].concat([...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)), touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
       if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored: restored });
     }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : 3600000 /* RUNTIME_KEEP_MS */);
     runtimeKeepTimer.unref();

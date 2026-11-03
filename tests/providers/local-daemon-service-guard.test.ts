@@ -35,6 +35,8 @@ import {
   localServiceTakeoverMessage,
   type ServiceTakeover,
 } from '../../src/providers/local-daemon.js'
+import { ourDaemonCapabilities } from '../../src/providers/daemon-shared.js'
+import { log } from '../../src/logging/index.js'
 
 // Stub spawn — the guard's whole job is that this never runs. Everything else in
 // node:child_process stays real (constants/logging use it at import time).
@@ -62,6 +64,7 @@ const priv = (d: LocalDaemon) => d as unknown as {
   assertNoServiceTakeover(action: 'spawn' | 'stop'): void
   spawnDaemon(binaryPath: string): Promise<number>
   stopDaemon(): Promise<void>
+  updateManagedDaemon(binaryPath: string, version: string): Promise<number | null | 'busy'>
 }
 
 const realStatSync = fs.lstatSync
@@ -301,6 +304,43 @@ describe('LocalDaemon managed service updates', () => {
     expect(start).not.toHaveBeenCalled()
     expect(await internals.updateManagedDaemon('/fixture/daemon', 'new-version')).toBeNull()
     expect(updateCommand).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('LocalDaemon keeps a daemon another Walnut shares (daemon-shared.ts)', () => {
+  afterEach(() => { vi.restoreAllMocks(); updateCommand.mockReset() })
+  const OTHER = { 'cccccccccccccccc': Date.now() }
+
+  it.each([['managed', ['cron-supervision-v1']], ['unmanaged', []]])('%s: another build with every capability is adopted, nothing stopped or updated', async (_kind, extra) => {
+    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+    const internals = daemon as unknown as { ensureRunningInner(): Promise<number>; ping(port: number): Promise<unknown>; readPortFile(): number; readBinaryVersion(): string; auditOwnerOnAdopt(): void }
+    const caps = [...ourDaemonCapabilities('binary'), ...extra]
+    vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+    vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+    vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'other-version', capabilities: caps, served: { version: 'other-version', twin: 'binary', capabilities: caps, walnuts: OTHER } })
+    vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+    const update = vi.spyOn(priv(daemon), 'updateManagedDaemon')
+    const stop = vi.spyOn(priv(daemon), 'stopDaemon').mockResolvedValue(undefined)
+    const start = vi.spyOn(priv(daemon), 'spawnDaemon').mockResolvedValue(1234)
+    await expect(internals.ensureRunningInner()).resolves.toBe(32100)
+    expect(update).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+    expect(updateCommand).not.toHaveBeenCalled()
+  })
+
+  it('a shared daemon that lacks a capability is still updated', async () => {
+    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+    const internals = daemon as unknown as { ensureRunningInner(): Promise<number>; ping(port: number): Promise<unknown>; readPortFile(): number; readBinaryVersion(): string; auditOwnerOnAdopt(): void }
+    const caps = [...ourDaemonCapabilities('binary').slice(1), 'cron-supervision-v1']
+    vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+    vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+    vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'other-version', capabilities: caps, served: { version: 'other-version', twin: 'binary', capabilities: caps, walnuts: OTHER } })
+    vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+    const update = vi.spyOn(priv(daemon), 'updateManagedDaemon').mockResolvedValue(null)
+    vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    await internals.ensureRunningInner()
+    expect(update).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -55,6 +55,9 @@ must live under one of these top-level categories instead of directly under
 - [A host's daemon after a reboot](reference/daemon-boot-start.md): how Walnut makes a
   remote host's daemon start at boot without root (a systemd user service with linger, or
   the account's crontab), what it does by itself, and what Settings shows.
+- [One daemon, several Walnuts](reference/shared-daemon.md): what each Walnut keeps to
+  itself on a shared host daemon, when a Walnut replaces the daemon with its own build,
+  and what the OS account shares (files by path, the engines' stores).
 - [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
   to run when, the known-failure baseline, and the free CI setup.
 - [ACP seam map](reference/acp-seam-map.md)

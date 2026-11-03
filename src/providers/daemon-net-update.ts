@@ -37,12 +37,14 @@ import { singleFile } from '../lib/single-file.js'
 import { log } from '../logging/index.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
+import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-shared.js'
+import { WALNUT_HOME } from '../constants.js'
 import { createNetUpdateIo, NetUpdateHeldError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
 import type { DaemonLinkKind } from './daemon-update-paths.js'
 
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
-  | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'gave-up' | 'cooldown' | 'platform-unknown' | 'no-binary'
+  | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'platform-unknown' | 'no-binary'
 
 /** Daemon commands the update runs on the host. */
 export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const
@@ -75,6 +77,8 @@ export interface NetUpdateFacts {
   lastAttempt: { expected: string; at: number } | null
   /** This server put `expected` there, and the host came back on another build since. */
   contested?: boolean
+  /** Why the running daemon is kept: another Walnut uses it and this build brings nothing it lacks (daemon-shared.ts). */
+  shared?: string | null
   /** Automatic tries of `expected` that failed. */
   failedTries?: number
   now: number
@@ -111,6 +115,9 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
       : f.autofixOff === 'config-unreadable'
         ? `the config could not be read, so whether the host allows it is unknown; it is updated only on request (host_daemon_update ${f.host})`
         : `automatic host fixes are off (WALNUT_HOST_AUTOFIX), so it is updated only on request (host_daemon_update ${f.host})`)
+  }
+  if (!f.requested && f.shared) {
+    return no('shared', `${f.shared}, so it keeps running; it is updated on request (host_daemon_update ${f.host})`)
   }
   if (!f.requested && f.contested) {
     return no('contested', `something on that machine (its own Walnut) put another build back after this server updated it to ${f.expected}; `
@@ -186,6 +193,8 @@ export interface NetUpdateLink extends NetUpdateConn {
   readonly daemonVersion: string | null
   readonly daemonStartup: string
   readonly serviceExecutable: string | null
+  /** hello `served` (daemon-shared.ts); absent on an older link. */
+  readonly daemonServes?: DaemonServes | null
   hasCapability(cap: string): boolean
 }
 
@@ -218,6 +227,13 @@ export interface NetUpdateState { phase: NetUpdatePhase; host: string; running: 
 
 const MAX_BACKOFF_MS = 6 * 3600_000
 /** Answers that need no word in the log: nothing to do, or not this path's host. */
+/** Why another build's daemon on this link is kept (daemon-shared.ts), or null. */
+function sharedWhy(c: NetUpdateLink, expected: string | null, now: number): string | null {
+  if (!expected || !c.daemonVersion || c.daemonVersion === expected) return null
+  const v = sharedDaemonVerdict({ ourKey: walnutKeyOf(WALNUT_HOME), runningVersion: c.daemonVersion, running: c.daemonServes ?? null, now })
+  return v.keep ? v.why : null
+}
+
 const QUIET_SKIPS: ReadonlySet<NetUpdateSkip> = new Set(['current', 'not-net', 'local', 'test-server', 'follower', 'cooldown', 'no-build-version'])
 
 export class NetDaemonUpdater {
@@ -312,6 +328,7 @@ export class NetDaemonUpdater {
       has: (cap) => c.hasCapability(cap), autofixOff: await (this.d.autofixOff ?? (() => defaultAutofixOff(c.host)))(),
       turnedOff: ['0', 'false', 'off', 'no'].includes((env.WALNUT_NET_DAEMON_UPDATE ?? '').trim().toLowerCase()),
       requested: trigger === 'request', lastAttempt: this.lastAttempt, now: (this.d.now ?? Date.now)(), cooldownMs: this.d.cooldownMs,
+      shared: sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
       contested: !!this.installed && this.installed === this.d.expectedVersion() && c.daemonVersion !== this.installed,
       failedTries: this.failed && this.failed.expected === this.d.expectedVersion() ? this.failed.count : 0,
     }

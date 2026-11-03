@@ -1971,7 +1971,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // Both twins answer hello with the ADVERTISED list (template via the
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
-    expect(standaloneSrc).toMatch(/capabilities:\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1'\]\s*:\s*\[\]\)/)
+    expect(standaloneSrc).toMatch(/capabilities:\s*helloCapabilities\(\)/)
+    expect(standaloneSrc).toMatch(/return\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1'\]\s*:\s*\[\]\)/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
     // getDaemonSource substitutes the ADVERTISED list into that placeholder,
