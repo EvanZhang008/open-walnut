@@ -19,6 +19,7 @@
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
 import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
+import { threadCountLabel, threadLine, type ThreadCounts } from '@open-walnut/thread-view';
 import { readAskForm, type AskForm } from './org-ask-form';
 import {
   NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, checkedLine, needsLineOf, shownState, stateCountLabel, storedUserState,
@@ -102,8 +103,11 @@ export interface ChannelRow {
   counts: OrgCounts;
   state: ChannelState;
   alerts: OrgAlertView[];
-  /** How many tasks here need the user: the alerts; on Main, every row's and its own. */
+  /** How many things here need the user: its threads waiting on him, then the alerts; on Main,
+   *  every row's and its own. */
   needs: number;
+  /** Main's or a VP's own Threads (user_status.threads): shown first, before any task's ask. */
+  threads?: ThreadCounts;
   /** The row's news in its tasks' own words: what needs the user, else the newest status (team-news.ts). */
   latest: string;
   /** When `latest` was written (ms), 0 = unknown. */
@@ -168,6 +172,8 @@ function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Tas
     // live prompt only names how it needs the user. A task with only something to read is a card
     // too, under Needs you (shownState, 2026-11-03).
     if (shownState(userStateOf(task)) !== 'needs') continue;
+    // A node waiting on him through its Threads is counted and drawn as its threads, not a card.
+    if (status?.source === 'thread') continue;
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.
@@ -198,9 +204,15 @@ export function isParkedTask(t: Pick<Task, 'phase' | 'user_status'>): boolean {
   return t.phase === 'WAITING' || !!t.user_status?.snoozed;
 }
 
+/** Main's or a VP's own Threads that hold something for the user (the server's status counts them). */
+export function threadsOf(t: Pick<Task, 'user_status'> | undefined): ThreadCounts | undefined {
+  const c = t?.user_status?.threads;
+  return c && c.shown > 0 ? c : undefined;
+}
+
 /** `parked`: for each of the row's open tasks, whether it is parked (isParkedTask). */
-export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], parked?: readonly boolean[]): ChannelState {
-  if (alerts.length) return 'alert';
+export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], parked?: readonly boolean[], threads?: ThreadCounts): ChannelState {
+  if (alerts.length || (threads?.needs ?? 0) > 0) return 'alert';
   if (counts.running > 0) return 'working';
   if (parked ? parked.length > 0 && parked.every(Boolean) : counts.open > 0 && counts.waiting === counts.open) return 'parked';
   return 'quiet';
@@ -215,7 +227,10 @@ export function alertText(a: OrgAlertView): string {
 
 /** The row's one line: what needs the user (with its ask), else the newest news of its tasks in
  *  their own status words (team-news.ts, the rule a lead's note uses too), with its time. */
-function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[]): { text: string; at: number; task?: string } {
+function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[], threads?: ThreadCounts, node?: Task): { text: string; at: number; task?: string } {
+  // His own requests come first (2026-11-03, the user: "thread is better than need u ... thread
+  // should be the first one in the list"); one that only shows an answer never hides a task's ask.
+  if (threads?.needs || (threads?.shown && !alerts.length)) return { text: threadLine(threads), at: taskTime(node) };
   if (alerts.length) {
     const a = alerts[0]!;
     const task = byId.get(a.taskId);
@@ -237,7 +252,9 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
   const lead = p.lead ? byId.get(p.lead.id) : undefined;
   const contact = p.contactId ? byId.get(p.contactId) : undefined;
   const name = p.project || 'Inbox';
-  const latest = latestOf(nodes, byId, alerts);
+  // A VP's own Threads, on its own project's row (one leading several waits on him once).
+  const threads = lead && !p.vp ? threadsOf(lead) : undefined;
+  const latest = latestOf(nodes, byId, alerts, threads, lead);
   return {
     key: projectRowKey(p.project),
     kind: 'project',
@@ -247,9 +264,10 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     contactTitle: lead ? orgDisplayTitle(lead) : p.lead ? orgDisplayTitle({ title: p.lead.title, org_role: 'lead' }) : contact?.title ?? (p.needsLead ? `${name} ${VP_LABEL}` : name),
     isLead: !!p.lead,
     counts: p.counts,
-    state: channelState(p.counts, alerts, nodes.map((n) => isParkedTask(byId.get(n.id) ?? n))),
+    state: channelState(p.counts, alerts, nodes.map((n) => isParkedTask(byId.get(n.id) ?? n)), threads),
     alerts,
-    needs: alerts.length,
+    needs: (threads?.needs ?? 0) + alerts.length,
+    ...(threads ? { threads } : {}),
     latest: latest.text,
     latestAt: latest.at,
     ...(latest.task ? { latestTask: latest.task } : {}),
@@ -315,9 +333,14 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const mainTask = tree.main ? byId.get(tree.main.id) : undefined;
   const mainAlerts = collectAlerts(tree.main ? [tree.main.id] : [], byId, probe);
   // Tasks, as Main's pills count them: what works, and what needs the user under every lead.
-  const needYou = rows.reduce((n, r) => n + r.needs, 0);
+  // The tasks' asks under every VP (Main's Needs you tab holds these cards); a VP's own threads are
+  // counted as threads on its row, never as a Needs you here.
+  const needYou = rows.reduce((n, r) => n + r.alerts.length, 0);
   const working = tree.counts.running;
+  const mainThreads = threadsOf(mainTask);
   const summary = [`${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
+  // Its own Threads lead the line.
+  if (mainThreads) summary.unshift(threadCountLabel(mainThreads.shown));
   if (working) summary.push(stateCountLabel('working', working));
   // Every row's cards, To read ones included (they are under Needs you).
   if (needYou) summary.push(stateCountLabel('needs', needYou));
@@ -332,10 +355,13 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     isLead: false,
     counts: tree.counts,
     // Main's own state: a prompt it waits on, else whether any lead works.
-    state: mainAlerts.length ? 'alert' : working ? 'working' : 'quiet',
+    state: mainAlerts.length || mainThreads?.needs ? 'alert' : working ? 'working' : 'quiet',
     alerts: mainAlerts,
-    needs: mainAlerts.length + needYou,
-    latest: mainAlerts.length ? alertText(mainAlerts[0]!) : summary.join(' · '),
+    needs: (mainThreads?.needs ?? 0) + mainAlerts.length + needYou,
+    ...(mainThreads ? { threads: mainThreads } : {}),
+    // A thread waiting on him names itself, then the rest of the line (summary[0] is its count).
+    latest: mainThreads?.needs ? [threadLine(mainThreads), ...summary.slice(1)].join(' · ')
+      : mainAlerts.length ? alertText(mainAlerts[0]!) : summary.join(' · '),
     latestAt: taskTime(mainTask),
     lastAt: taskTime(mainTask),
     unread: !!mainTask?.unread,

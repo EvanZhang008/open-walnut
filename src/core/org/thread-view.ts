@@ -181,3 +181,38 @@ export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<
   }
   return last;
 }
+
+/** What a node's Threads hold for him, the one count every surface shows (2026-11-03, the user, on
+ *  a VP's header that read "1 To read · 18 Working" while a thread waited on him: "this here should
+ *  show need action ... also show thread and number"; on the Org list: "thread is better than need
+ *  u ... thread should be the first one in the list"). */
+export interface ThreadCounts {
+  /** Threads his view shows (shownToHim): the Threads tab's count. */
+  shown: number;
+  /** Of those, the ones waiting on him (state needs). */
+  needs: number;
+  /** The newest waiting on him, else the newest shown. */
+  title?: string;
+  id?: string;
+}
+
+/** The counts of one node's Threads. Pure; the web's header and the server's status read the same. */
+export function threadCounts<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { id: string; title: string; state: string; updatedAt: string }>, now: number = Date.now()): ThreadCounts {
+  const shared = sharedAnswers(threads);
+  const shown = threads.filter((t) => shownToHim(t, shared, now));
+  const needs = shown.filter((t) => t.state === 'needs');
+  const newest = (list: typeof shown) => list.reduce<(typeof shown)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
+  const top = newest(needs) ?? newest(shown);
+  return { shown: shown.length, needs: needs.length, ...(top ? { title: top.title, id: top.id } : {}) };
+}
+
+/** "1 thread", "3 threads": the words every surface counts them in. */
+export function threadCountLabel(n: number): string {
+  return `${n} thread${n === 1 ? '' : 's'}`;
+}
+
+/** A row's line about its Threads: how many his view shows (the header's and the tab's number),
+ *  then the newest waiting on him (else the newest shown). */
+export function threadLine(c: ThreadCounts): string {
+  return c.title ? `${threadCountLabel(c.shown)}: ${c.title}` : threadCountLabel(c.shown);
+}

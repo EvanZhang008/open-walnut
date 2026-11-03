@@ -51,6 +51,8 @@ export function statusMark(task: MarkTask): string {
 /** What of a status the Brief is judged by: whether it asks the user and what, or finished. */
 export function briefMark(task: MarkTask): string {
   const state = stateOf(task);
+  // A node's Thread waiting on the user is his own request, no move of the letter (2026-11-03).
+  if (state === 'needs' && task.user_status?.source === 'thread') return 'open';
   return state === 'needs' ? `needs|${clip(task.user_status?.ask)}` : state === 'done' ? 'done' : 'open';
 }
 
@@ -166,7 +168,8 @@ export function briefFreshness(owner: BriefSectionTask & { brief?: TaskBrief }, 
   }
   const asked = new Set(brief.asks ?? []);
   const newAsks = briefAskScope(owner, tasks).filter((t) => {
-    if (named.has(t.id) || briefSectionOf(t) !== 'needs' || t.user_status?.transient) return false;
+    // A VP's Thread waiting on the user is his own request to it: no new ask for the letter's owner.
+    if (named.has(t.id) || briefSectionOf(t) !== 'needs' || t.user_status?.transient || t.user_status?.source === 'thread') return false;
     if (!legacy && brief.asks) return !asked.has(t.id);
     // A letter stored before Walnut kept its asks: an ask set after the letter is new.
     const at = Date.parse(t.user_status?.at ?? t.phase_changed_at ?? '');

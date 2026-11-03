@@ -36,7 +36,7 @@ const SUBSCRIBER = 'status-push';
 export const SETTLE_MS = 90_000;
 const WORDS_MAX = 160;
 
-interface Seen { key: string; label: string; words: string; state: UserState; snoozed?: boolean }
+interface Seen { key: string; label: string; words: string; state: UserState; snoozed?: boolean; thread?: boolean }
 interface Change {
   taskId: string; title: string; from: Seen; to: Seen; at: number;
   /** A re-check turn of a "needs you" runs (sessions/needs-recheck.ts): its Working is not news
@@ -72,7 +72,7 @@ export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Se
   const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
   const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
-  return { key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}) };
+  return { key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}), ...(s?.source === 'thread' ? { thread: true } : {}) };
 }
 
 function hhmm(ms: number): string {
@@ -99,6 +99,9 @@ function note(task: Task, now = Date.now()): void {
   const was = baseline.get(task.id);
   if (!was || now < quietUntil) { baseline.set(task.id, next); return; }
   const open = pending.get(task.id);
+  // A node's Needs you from its Threads is the user's own request to it, already in front of him:
+  // a move into or out of it is no news for the node above (2026-11-03).
+  if ((next.thread || was.thread) && !open) { baseline.set(task.id, next); return; }
   if (next.key === was.key && !open) return;
   const recheckAt = Date.parse(task.needs_recheck?.at ?? '');
   const from = open?.from ?? was;

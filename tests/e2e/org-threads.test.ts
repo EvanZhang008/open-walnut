@@ -272,6 +272,26 @@ describe('Org Threads', () => {
     expect(body.threads.every((x) => !x.closed)).toBe(true)
     expect(body.closed_count).toBeGreaterThan(0)
   })
+
+  it('a thread waiting on him makes the lead itself Needs you, named by the thread; once answered it only counts', async () => {
+    // 2026-11-03, the user, on a VP header that read "1 To read" while a thread waited on him:
+    // "this here should show need action ... all place consistent".
+    const res = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
+      body: JSON.stringify({ title: 'Pick one of three header designs', text: 'Which one?', from: 'node', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself' }),
+    })
+    expect(res.status).toBe(201)
+    const opened = ((await res.json()) as { thread: OrgThread }).thread
+    const { syncUserStatuses } = await import('../../src/core/user-status-sync.js')
+    const statusOf = async () => { await syncUserStatuses(new Set([leadId])); return (await listTasksByIds([leadId]))[0]!.user_status }
+    await expect.poll(statusOf).toMatchObject({ state: 'needs', source: 'thread', ask: expect.stringContaining('Pick one of three header designs'), category: 'decide' })
+    expect((await statusOf())!.threads).toMatchObject({ needs: 1, id: opened.id })
+    // Answered: no longer waiting on him; still shown, so still counted.
+    expect((await patch(opened.id, { state: 'answered', reply: 'Picked design 1 as you said' }, LEAD_SID)).status).toBe(200)
+    await expect.poll(async () => (await statusOf())?.source).not.toBe('thread')
+    expect((await statusOf())!.threads?.needs).toBe(0)
+    expect((await statusOf())!.threads?.shown).toBeGreaterThan(0)
+  })
 })
 
 describe('a question for the user names which of their kinds it is', () => {

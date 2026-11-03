@@ -6,6 +6,10 @@
  * counts Needs you (Org, Board, Brief, task rows, the phone) reads the derived status, so the
  * derivation is the one place to hold it. Guard: the org roles are read from the source, so a new
  * role fails here until it is covered.
+ *
+ * The one exception (2026-11-03, the user, on a VP whose header read "1 To read" while a thread
+ * waited on his pick: "this here should show need action ... all place consistent"): a Thread of his
+ * own waiting on him makes the node itself Needs you, named by that thread, whatever else it does.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -69,5 +73,43 @@ describe('no org node is ever Needs you', () => {
     }
     // An individual task still does.
     expect(phaseForReport({ state: 'needs' }, {}, true)).toBe('NEED_ACTION')
+  })
+})
+
+describe('a Thread waiting on him is the node\'s one Needs you', () => {
+  const threads = { shown: 2, needs: 1, title: 'Pick a header design', id: 'th-1' }
+  const base: Partial<UserStatusInput> = { hasSession: true, phaseChangedAt: at, phase: 'IN_PROGRESS', processStatus: 'idle' }
+
+  it('every org role, whatever it is doing, reads Needs you with the thread as its ask', () => {
+    for (const role of roles()) {
+      for (const facts of [{}, { processStatus: 'running' }, ...Object.values(ASKING)]) {
+        const s = deriveUserStatus({ ...base, ...facts, ...flags(role), threads }, NOW)
+        expect(s, `${role} ${JSON.stringify(facts)}`).toMatchObject({ state: 'needs', source: 'thread', ask: 'Pick a header design', threads, category: 'decide' })
+      }
+    }
+  })
+
+  it('several waiting say how many more', () => {
+    const s = deriveUserStatus({ ...base, isLead: true, threads: { ...threads, needs: 3 } }, NOW)
+    expect(s.ask).toBe('Pick a header design (and 2 more)')
+  })
+
+  it('threads that only show an answer keep the node as it was, carrying the counts', () => {
+    const shown = { shown: 1, needs: 0, title: 'What changed', id: 'th-2' }
+    for (const role of roles()) {
+      const s = deriveUserStatus({ ...base, ...ASKING.letter, ...flags(role), threads: shown }, NOW)
+      expect(s.state).not.toBe('needs')
+      expect(s.threads).toEqual(shown)
+    }
+  })
+
+  it('an individual task never reads threads, and a done node stays done', () => {
+    expect(deriveUserStatus({ ...base, threads }, NOW).source).not.toBe('thread')
+    expect(deriveUserStatus({ ...base, isMain: true, phase: 'COMPLETE', threads }, NOW).state).toBe('done')
+  })
+
+  it('a snoozed node sleeps under Waiting with the thread held back', () => {
+    const s = deriveUserStatus({ ...base, isLead: true, threads, snoozedUntil: '2026-11-06' }, NOW)
+    expect(s.state).toBe('waiting')
   })
 })

@@ -30,6 +30,7 @@
 import { infraStopCause } from './session-error-kind.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
+import type { ThreadCounts } from './org/thread-view.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -236,6 +237,8 @@ export interface UserStatusInput {
   openLetter?: string | null;
   /** An open review letter this task sent (its subject): only names what the user does (category). */
   openReview?: string | null;
+  /** Main or a lead: its Threads, the user's own requests to it (org/thread-view.ts threadCounts). */
+  threads?: ThreadCounts | null;
   /** An unanswered Board choice about this task (its title). */
   openChoice?: string | null;
   /** When that choice was last written on its Board (ISO); null = no time recorded (older Board). */
@@ -316,7 +319,10 @@ export interface UserStatus {
   /** needs: where the ask lives, so a surface can take the user there: a prompt in the
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
-  source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session';
+  source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread';
+  /** Main or a lead: what its Threads hold for the user (shown, waiting on him, the newest's title).
+   *  A thread waiting on him is the node's Needs you (orgNodeNeverNeeds). */
+  threads?: ThreadCounts;
   /** waiting: on whom or what, in words. read: what there is to read. */
   waitingOn?: string;
   now?: string;
@@ -576,7 +582,8 @@ export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseCh
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
   const derived = orgNodeNeverNeeds(derive(input, nowMs), input);
-  const line = lineOf(input, derived);
+  // A thread's ask is the thread; the node's own report words are no line of it.
+  const line = derived.source === 'thread' ? null : lineOf(input, derived);
   if (line) derived.line = line;
   const form = askFormOf(input, derived);
   if (form) derived.askForm = form;
@@ -745,6 +752,8 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
     state: 'waiting', kind: 'time', waitingOn: `Snoozed until ${until}`, until: new Date(startMs).toISOString(),
     now: s.now, next: s.next, at: s.at, stale: s.stale,
     snoozed: { until, ...(ask && ask !== HANDED_BACK_ASK ? { ask } : {}) },
+    // Its Threads still count on the Org page while it sleeps.
+    ...(s.threads ? { threads: s.threads } : {}),
   });
 }
 
@@ -811,10 +820,25 @@ function wakeSource(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: 
  * task he had snoozed, stood in Main's Needs you: "这个都是 individual task is needs you ... We can
  * choose talk to VP"). Main or a lead whose status would ask the user waits instead: on its teams,
  * with its question in its chat, where he talks to it. A decision that belongs to no task goes on a
- * task of its own. Its prompt or failure is in its chat too.
+ * task of its own. Its prompt or failure is in its chat too. The one exception is his own request
+ * to it: a Thread waiting on him (2026-11-03) is Needs you on the node itself, named by the thread.
  */
 function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
-  if (s.state !== 'needs' || !(input.isMain || input.isLead)) return s;
+  if (!(input.isMain || input.isLead)) return s;
+  // Its Threads are his own requests to it: a thread waiting on him is the node's one Needs you,
+  // whatever else it does (2026-11-03, the user, on a VP whose header read "1 To read · 18 Working"
+  // while a thread waited on his pick: "this here should show need action ... all place consistent").
+  const th = input.threads && input.threads.shown > 0 ? input.threads : undefined;
+  if (th && th.needs > 0 && s.state !== 'done') {
+    const more = th.needs > 1 ? ` (and ${th.needs - 1} more)` : '';
+    return { state: 'needs', source: 'thread', ask: `${clean(th.title) || 'A thread waits on you'}${more}`, threads: th };
+  }
+  const out = asOrgNode(s);
+  return th ? { ...out, threads: th } : out;
+}
+
+function asOrgNode(s: UserStatus): UserStatus {
+  if (s.state !== 'needs') return s;
   const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice: _ch, ...rest } = s;
   const said = clean(ask);
   const waitingOn = source === 'prompt' ? `You, in its chat: ${said}`
@@ -1009,7 +1033,7 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
 }
 
 /** The keys of the status every agent task read carries (agentStatusView). */
-export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'threads', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
 
 /**
  * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,

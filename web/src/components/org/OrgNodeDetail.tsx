@@ -40,7 +40,7 @@ import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
 import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
-import { newsAt, sharedAnswers, shownToHim } from '@open-walnut/thread-view';
+import { newsAt, sharedAnswers, threadCountLabel, threadCounts, type ThreadCounts } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
 import { ORG_TASK_TAB_LABELS, isKeptRailTab, orgTaskTabs, ownAskFirst, railTabShown, type KeptRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
@@ -98,8 +98,10 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
 
 /** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
  *  counted from the same lists as the Task view's tabs; each pill opens its tab. Needs you counts
- *  its cards, a result or an answer to look at included (To read has no pill of its own). */
-function CountPills({ row, tabs, onOpen, approvals }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number }) {
+ *  its cards, a result or an answer to look at included (To read has no pill of its own). Its own
+ *  Threads come first, and no "N open" (2026-11-03, the user: "remove xx open not needed also show
+ *  thread and number"). */
+function CountPills({ tabs, onOpen, approvals, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; threads?: ThreadCounts; onThreads?: () => void }) {
   const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{stateCountLabel(tab, n)}
@@ -107,10 +109,21 @@ function CountPills({ row, tabs, onOpen, approvals }: { row: ChannelRow; tabs: O
   );
   return (
     <span className="org-pills" data-testid="org-detail-counts">
+      {!!threads?.shown && (
+        <button
+          type="button"
+          className="org-pill is-button"
+          data-testid="org-pill-threads"
+          data-needs={threads.needs}
+          onClick={onThreads}
+          title={threads.needs ? `${threadCountLabel(threads.needs)} waiting on you${threads.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
+        >
+          <i style={{ background: threads.needs ? TAB_DOT.needs : 'var(--accent, #007AFF)' }} />{threadCountLabel(threads.shown)}
+        </button>
+      )}
       {tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
-      <span className="org-pill">{row.counts.open} open</span>
     </span>
   );
 }
@@ -247,12 +260,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const threadsShown = !railHidden && topView === 'threads';
   useEffect(() => { if (threadsShown && threadsId && threadsNews) markThreadsSeen(threadsId, threadsNews); }, [threadsShown, threadsId, threadsNews]);
   const threadsNew = !threadsShown && !!threadsId && threadsUnread(threadsId, threadsNews);
-  const threadsCount = useMemo(() => {
-    const list = threads.threads;
-    if (!list) return 0;
-    const shared = sharedAnswers(list);
-    return list.filter((t) => shownToHim(t, shared)).length;
-  }, [threads.threads]);
+  // The live list when it is read here, else the node's own status (the count every surface shows).
+  const threadsCounted = useMemo<ThreadCounts | undefined>(() => (threads.threads ? threadCounts(threads.threads) : row.threads), [threads.threads, row.threads]);
+  const threadsCount = threadsCounted?.shown ?? 0;
   const followUp = sessionId ? (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId }) : null;
   /** A task chip on the Board: a node of this page is selected; any other task opens beside it. */
   const openChip = (id: string) => {
@@ -397,7 +407,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         <div className="org-detail-who">
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
-            <CountPills row={row} tabs={tabs} onOpen={openTab} approvals={approvals.length} />
+            <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
             {!!row.led?.length && (
               <span className="org-detail-led org-muted" data-testid="org-detail-led">
                 {/* A VP made only to put projects under leads no work of its own while its home has none. */}

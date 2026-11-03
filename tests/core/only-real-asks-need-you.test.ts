@@ -112,6 +112,8 @@ describe('guard: every Needs you the derive returns is a real ask', () => {
   // Each `state: 'needs'` site in user-status.ts, by what gives its ask.
   const REAL = [
     /source: 'prompt'/, /source: 'letter'/, /source: 'choice'/, /source: 'error'/,
+    // Main's or a lead's Thread waiting on him: his own request (2026-11-03).
+    /source: 'thread'/,
     /ask: clean\(report\.ask\)/, /ask: clean\(report!\.waiting_on\)/, /ask: reported\b/, /ask: MARKED_ASK/,
     /heading: 'Needs you'/,
     // What a session's close left for the user (sessions/owed-to-user.ts).

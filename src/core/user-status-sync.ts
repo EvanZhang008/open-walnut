@@ -27,6 +27,7 @@ import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
+import type { ThreadCounts } from './org/thread-view.js';
 import { snoozedUntil } from './snooze.js';
 
 const SUBSCRIBER = 'user-status-sync';
@@ -87,6 +88,8 @@ export interface StatusFacts {
   tasksById?: ReadonlyMap<string, Task>;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
+  /** Main or a lead -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
+  threads?: Map<string, ThreadCounts>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -109,7 +112,39 @@ const slow: Partial<Record<SlowSource, Map<string, any>>> = {};
 
 function dropSlow(...kinds: SlowSource[]): void {
   for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules', 'checks'] as const)) delete slow[k];
-  if (!kinds.length) boardChoices.clear();
+  // A snooze of a thread runs out on its own clock: every sweep counts the Threads again.
+  if (!kinds.length) { boardChoices.clear(); threadsChanged(); }
+}
+
+/** Per org node: its Threads' counts, read once and dropped when its Threads change. A change
+ *  bumps the node's generation, so a read begun before it is never cached over it. */
+const nodeThreads = new Map<string, ThreadCounts>();
+const threadsGen = new Map<string, number>();
+let threadsGenAll = 0;
+
+function threadsChanged(taskId?: string): void {
+  if (taskId) { nodeThreads.delete(taskId); threadsGen.set(taskId, (threadsGen.get(taskId) ?? 0) + 1); }
+  else { nodeThreads.clear(); threadsGenAll++; }
+}
+
+async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, ThreadCounts>> {
+  const out = new Map<string, ThreadCounts>();
+  const nodes = tasks.filter((t) => (t.org_role === 'main' || t.org_role === 'lead') && t.phase !== 'COMPLETE');
+  if (!nodes.length) return out;
+  const { readThreads } = await import('./org/threads-store.js');
+  const { threadCounts } = await import('./org/thread-view.js');
+  for (const t of nodes) {
+    let hit = nodeThreads.get(t.id);
+    if (!hit) {
+      const gen = `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`;
+      const read = await safely('threads', async () => threadCounts((await readThreads(t.id)).threads), null);
+      // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
+      if (read && gen === `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`) nodeThreads.set(t.id, read);
+      hit = read ?? undefined;
+    }
+    if (hit && hit.shown > 0) out.set(t.id, hit);
+  }
+  return out;
 }
 
 export interface ChoiceFact { title: string; board: string; id: string; at?: string }
@@ -316,7 +351,8 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  return { sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered };
+  const threads = await readNodeThreads(tasks);
+  return { sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
 }
 
 /**
@@ -379,6 +415,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     pendingPermissionTool: prompt,
     openLetter: facts.letters.get(task.id) ?? null,
     openReview: facts.reviews?.get(task.id) ?? null,
+    threads: facts.threads?.get(task.id) ?? null,
     ...choiceInput(task, facts),
     waitingOnTasks: [...new Set(waitingOnTasks)],
     // A trigger on the user's own ask or letter (trigger_create `watches`) is no outside watch:
@@ -611,6 +648,10 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       dropSlow('triggers', 'schedules', 'checks');
       markAll();
       return;
+    // A node's Threads moved: its own status (a thread waiting on the user is its Needs you).
+    case EventNames.ORG_THREADS_CHANGED:
+      if (typeof d.taskId === 'string') { threadsChanged(d.taskId); mark(d.taskId); } else { threadsChanged(); markAll(); }
+      return;
   }
 }
 
@@ -625,6 +666,7 @@ export function startUserStatusSync(): void {
       EventNames.SESSION_ENDED, EventNames.SESSION_STARTED,
       EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, EventNames.BOARD_CHANGED,
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
+      EventNames.ORG_THREADS_CHANGED,
     ],
   });
   // A turn-end report armed, asked or settled changes what the task waits on (user-status.ts).

@@ -292,6 +292,32 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   expect((await threads(request)).find((t) => t.id === opened.id)?.messages.map((m) => m.via)).toEqual(['follow-up'])
 })
 
+test('a thread waiting on him leads the VP\'s row and header, and the header has no "open" pill', async ({ page, request }) => {
+  // 2026-11-03, the user: "this here should show need action ... remove xx open not needed also show
+  // thread and number"; "thread is better than need u ... thread should be the first one in the list".
+  const title = `Pick a header design ${STAMP}`
+  const res = await request.post(`/api/v1/tasks/${ids.lead}/threads/open`, {
+    data: { title, text: 'Which of the three?', from: 'node', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself' },
+    headers: { 'x-walnut-caller-sid': ids.leadSid },
+  })
+  expect(res.status(), await res.text()).toBe(201)
+  await isolateUiPrefs(page)
+  await showInProgress(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  const row = page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`)
+  // The lead's own status names the thread (the server's status sync), and the row reads it first.
+  await expect(row.getByTestId('org-channel-latest')).toHaveText(new RegExp(`^\\d+ threads?: ${title}$`), { timeout: 30_000 })
+  await expect(row).toHaveAttribute('data-state', 'alert')
+  await row.click()
+  const counts = page.getByTestId('org-detail').getByTestId('org-detail-counts')
+  await expect(counts.locator('> *').first()).toHaveAttribute('data-testid', 'org-pill-threads')
+  await expect(counts).not.toContainText(' open')
+  await shot(page, 'threads-first')
+  await counts.getByTestId('org-pill-threads').click()
+  await expect(page.getByTestId('org-detail').getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+})
+
 test('a long thread\'s card is its summary and the answer he has not seen; the conversation opens from the card body', async ({ page, request }) => {
   // Its own per browser: two browser projects in one run share STAMP and would share the node.
   const project = `Threads talk ${STAMP} ${test.info().project.name}`

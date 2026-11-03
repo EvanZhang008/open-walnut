@@ -119,7 +119,8 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
   const detail = page.getByTestId('org-detail')
   await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
-  await expect(detail.getByTestId('org-detail-counts')).toContainText('2 open')
+  // No "N open" pill (2026-11-03, the user: "remove xx open not needed").
+  await expect(detail.getByTestId('org-detail-counts')).not.toContainText(' open')
   // The one user status's words (src/core/user-status.ts), as on the Board: the question needs
   // the user, the task not started waits.
   await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Needs you')
