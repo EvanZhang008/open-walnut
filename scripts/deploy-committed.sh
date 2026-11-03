@@ -156,5 +156,22 @@ if [[ -n "$missing" ]]; then
   fi
 fi
 
+# Built inputs the checkout keeps out of git: copied, so a deploy never fetches them again
+# (2026-11-03: a deploy failed when the SQLite site's name did not resolve). The macOS build
+# links a pinned SQLite; scripts/build-sqlite-dylib.mjs uses the copy only when its stamp
+# matches the pins and rebuilds otherwise. A real copy, never a link (the build writes there),
+# and one that differs from the checkout after copying (a rebuild there mid-copy can pair an
+# old library with a new stamp) is dropped, so the build makes its own as before.
+VENDOR_BUILT=(vendor/sqlite)
+for dir in "${VENDOR_BUILT[@]}"; do
+  if [[ -d "$SERVE_ROOT/$dir" && ! -e "$BUILD/$dir" ]]; then
+    mkdir -p "$(dirname "$BUILD/$dir")"
+    if ! cp -RL "$SERVE_ROOT/$dir" "$BUILD/$dir" || ! diff -rq "$SERVE_ROOT/$dir" "$BUILD/$dir" >/dev/null 2>&1; then
+      echo "Could not copy $dir from the checkout; the build makes its own." >&2
+      rm -rf "$BUILD/$dir"
+    fi
+  fi
+done
+
 cd "$BUILD"
 WALNUT_DEVPROD_SERVE_ROOT="$SERVE_ROOT" bash "$BUILD/scripts/dev-prod.sh"

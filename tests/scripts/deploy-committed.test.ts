@@ -15,6 +15,7 @@ import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard-core.js'
 
 const WRAPPER = path.join(import.meta.dirname, '..', '..', 'scripts', 'deploy-committed.sh')
+const ROOT = path.join(import.meta.dirname, '..', '..')
 const roots: string[] = []
 
 afterEach(() => {
@@ -39,6 +40,8 @@ here="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd -P)"
   echo "web_dep=$(cd web/node_modules && pwd -P)"
   echo "app=$(cat app.txt)"
   echo "dry=\${WALNUT_DEVPROD_DRY_RUN:-}"
+  echo "sqlite=$(cat vendor/sqlite/darwin/stamp.json 2>/dev/null || echo none)"
+  echo "sqlite_link=$([ -L vendor/sqlite ] && echo yes || echo no)"
 } > "$WALNUT_TEST_REPORT"
 `
 
@@ -110,6 +113,49 @@ describe('deploy-committed.sh', () => {
     expect(fs.readFileSync(path.join(f.repo, 'app.txt'), 'utf-8')).toBe('half-written app\n')
     expect(git(f.repo, 'status', '--porcelain')).toBe('M app.txt\n M packages/lib/index.js'.trim())
     expect(git(f.repo, 'worktree', 'list').split('\n')).toHaveLength(1)
+  })
+
+  it('copies the checkout\'s built SQLite into the clone, so a deploy never downloads it again', () => {
+    const f = fixture()
+    fs.mkdirSync(path.join(f.repo, 'vendor', 'sqlite', 'darwin'), { recursive: true })
+    fs.writeFileSync(path.join(f.repo, 'vendor', 'sqlite', 'darwin', 'stamp.json'), '{"version":"pinned"}')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    expect(r.status).toBe(0)
+    expect(r.report!.sqlite).toBe('{"version":"pinned"}')
+    // A copy: the build may rebuild it in the clone without touching the checkout.
+    expect(r.report!.sqlite_link).toBe('no')
+    expect(fs.readFileSync(path.join(f.repo, 'vendor', 'sqlite', 'darwin', 'stamp.json'), 'utf-8')).toBe('{"version":"pinned"}')
+  })
+
+  it('copies the files behind a linked vendor/sqlite, never the link', () => {
+    const f = fixture()
+    const real = path.join(path.dirname(f.repo), 'sqlite-real')
+    fs.mkdirSync(path.join(real, 'darwin'), { recursive: true })
+    fs.writeFileSync(path.join(real, 'darwin', 'stamp.json'), '{"version":"linked"}')
+    fs.mkdirSync(path.join(f.repo, 'vendor'))
+    fs.symlinkSync(real, path.join(f.repo, 'vendor', 'sqlite'))
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    expect(r.status).toBe(0)
+    expect(r.report!.sqlite).toBe('{"version":"linked"}')
+    expect(r.report!.sqlite_link).toBe('no')
+  })
+
+  it('deploys as before when the checkout has no built SQLite', () => {
+    const f = fixture()
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    expect(r.status).toBe(0)
+    expect(r.report!.sqlite).toBe('none')
+  })
+
+  it('copies every built input the repo keeps out of git under vendor/', () => {
+    // A clean clone lacks whatever .gitignore holds back, so each such vendor/ dir must be
+    // copied or every deploy builds (and maybe downloads) it again.
+    const ignored = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf-8').split('\n')
+      .map((l) => l.trim()).filter((l) => /^\/?vendor\//.test(l)).map((l) => l.replace(/^\//, '').replace(/\/$/, ''))
+    expect(ignored.length).toBeGreaterThan(0)
+    const listed = /^VENDOR_BUILT=\(([^)]*)\)/m.exec(fs.readFileSync(WRAPPER, 'utf-8'))
+    expect(listed).not.toBeNull()
+    expect(listed![1].trim().split(/\s+/).sort()).toEqual(ignored.sort())
   })
 
   /**
