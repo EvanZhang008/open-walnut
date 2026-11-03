@@ -102,4 +102,5 @@ export const SESSION_ACTION_PARITY: Readonly<Record<string, ParityEntry>> = {
   'side-questions': { none: 'A person\'s side questions beside a session; an agent asks a task with task_send.' },
   'side-threads': { none: 'A person\'s side threads beside a session; an agent asks a task with task_send.' },
   'slash-commands': { none: 'Read for the composer\'s slash menu.' },
+  'turn-titles': { none: 'The outline asks Walnut to name a long conversation\'s sections in the background; nobody chooses it, and task_history reads the conversation.' },
 }
