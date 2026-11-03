@@ -33,6 +33,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { assertMacBrakes, realCi } from '../../setup/mac-brakes.js'
 
 /** Lease dir, shared by every Playwright run for this user. */
 export const LEASE_DIR = process.env.PW_LEASE_DIR ?? path.join(os.tmpdir(), 'walnut-pw-lease')
@@ -46,9 +47,13 @@ export const LEASE_TTL_MS = 45 * 60_000
  * fixture's own node/vite/daemon processes (~600 MB together).
  */
 export function perRunWorkers(): number {
+  // A Mac run with a brake off (PW_IGNORE_LOAD, PW_NO_GATE, PW_TEST_PORT, CI, more than one
+  // worker) stops here, before the gate; and a Mac runs one browser at a time.
+  assertMacBrakes()
   const explicit = Number(process.env.PW_WORKERS)
   if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit)
   if (process.env.CI) return 4
+  if (process.platform === 'darwin' && !realCi(process.env)) return 1
   const byCores = Math.max(1, Math.floor(os.cpus().length / 2) - 1)
   const byMemory = Math.max(1, Math.floor(os.totalmem() / (1024 ** 3) / 6))
   return Math.min(byCores, byMemory, 4)

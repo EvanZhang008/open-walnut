@@ -29,11 +29,15 @@
  * One-off override on an idle machine only: WALNUT_TEST_WORKERS=2 npm test
  */
 
+import { assertMacBrakes } from './mac-brakes.js'
+
 /** Hard ceiling — no override may exceed this. */
 const ABSOLUTE_MAX = 2
 
 /** Worker processes allowed concurrently, machine-wide. */
 export function maxWorkers(): number {
+  // A Mac run with a brake off (CI, WALNUT_TEST_WORKERS > 1, --maxWorkers > 1) stops here.
+  assertMacBrakes()
   // CI runners are isolated single-purpose machines — no shared-box risk.
   if (process.env.CI) return 4
   const n = Number(process.env.WALNUT_TEST_WORKERS)
