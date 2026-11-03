@@ -211,3 +211,13 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watched-item:hover .org-watched-stop, .org-watched-stop:focus-visible { opacity: 1; }
 .org-watched-stop:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 @media (hover: none) { .org-watched-stop { opacity: 1; } }
+
+/* The Org page's settings panel (OrgSettingsMenu): the org switch, what it stops, the Settings link. */
+.org-settings-menu { width: min(320px, calc(100vw - 16px)); }
+.org-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.org-settings-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; cursor: pointer; }
+.org-settings-stops { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+.org-settings-stops-head { font-weight: 600; }
+.org-settings-stops ul { margin: 0; padding-left: 16px; color: var(--fg-muted); line-height: 1.4; }
+.org-settings-stops-sep { padding-top: 8px; border-top: 1px solid var(--border); }
+.org-settings-all { align-self: flex-start; }

@@ -25,6 +25,7 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/
 import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { holdOrder } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
+import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
@@ -288,7 +289,10 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         <h1 className="org-list-title">
           <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
         </h1>
-        <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
+        <span className="org-list-actions">
+          <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
+          <OrgSettingsMenu />
+        </span>
       </header>
       <input data-no-draft="search"
         className="org-search"

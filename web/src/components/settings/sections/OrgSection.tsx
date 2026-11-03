@@ -8,70 +8,38 @@
  * "walnut probally shoudo't stoop it, it shudo use prompt"); on, it refuses the 4th as well.
  *
  * Saved through the org's own settings route (PUT /api/v1/org/settings), as the org's name is, so
- * every window reads it from one place (useOrgSettings) and the Org page follows at once.
+ * every window reads it from one place (useOrgSettings) and the Org page follows at once. The Org
+ * page shows the same switches in its own settings panel (OrgSettingsMenu, useOrgSwitch.ts).
  */
-import { useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
-import { useOrgSettings } from '../../org/useOrgSettings';
+import {
+  BLOCK_OWN_HELP, BLOCK_OWN_LABEL, ORG_OFF_STILL, ORG_OFF_STOPS, blockOwnFooter, orgSwitchFooter, useOrgSwitch, useOrgToggle,
+} from '../../org/useOrgSwitch';
 
-/** What turning the org off stops, in the words the switch shows. */
-export const ORG_OFF_STOPS = [
-  'Main and the VPs start no session, and Walnut wakes none of them',
-  'Status updates, team notes and Brief refreshes stop going up to them',
-  'Their away letters, scheduled reports and the routines aimed at them do not run',
-  'Agents cannot reach them with org_send',
-] as const;
+export { ORG_OFF_STOPS };
 
 export function OrgSection() {
-  const { settings, save } = useOrgSettings();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>();
-  const [blockBusy, setBlockBusy] = useState(false);
-  const [blockError, setBlockError] = useState<string | undefined>();
-  const on = settings.enabled !== false;
-  const blocks = settings.blockOwnCommands === true;
-  const set = (next: boolean) => {
-    setBusy(true);
-    setError(undefined);
-    save({ enabled: next })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setBusy(false));
-  };
-  const setBlock = (next: boolean) => {
-    setBlockBusy(true);
-    setBlockError(undefined);
-    save({ blockOwnCommands: next })
-      .catch((err) => setBlockError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setBlockBusy(false));
-  };
+  const org = useOrgSwitch();
+  const block = useOrgToggle('blockOwnCommands');
   return (
     <SectionCard id="org" title="Org" showSave={false}>
-      <SettingsGroup
-        footer={on
-          ? 'Main and every VP start by themselves in the background and keep their Brief.'
-          : 'Turning it on again starts Main and the VPs that never started, and they hear their teams again.'}
-      >
-        <SettingsRow label="Org" help="Main and the VPs above your projects, and their updates." htmlFor="org-enabled" error={error}
+      <SettingsGroup footer={orgSwitchFooter(org.on)}>
+        <SettingsRow label="Org" help="Main and the VPs above your projects, and their updates." htmlFor="org-enabled" error={org.error}
           data-testid="org-enabled-row"
-          control={<ToggleSwitch id="org-enabled" checked={on} busy={busy} onChange={set} />} />
+          control={<ToggleSwitch id="org-enabled" checked={org.on} busy={org.busy} onChange={org.set} />} />
       </SettingsGroup>
-      <SettingsGroup
-        heading="Their own commands"
-        footer={blocks
-          ? 'Main and the VPs are reminded at their 3rd command of their own in a turn, and Walnut refuses the 4th. Sessions that start from now on follow this.'
-          : 'Main and the VPs never do the work themselves: at their 3rd command of their own in a turn, Walnut reminds them to hand the rest to their teams. Walnut\'s own ops do not count. A change reaches the sessions that start from now on.'}
-      >
-        <SettingsRow label="Refuse their 4th command" help="Stop Main or a VP at its 4th command of its own in a turn, instead of only reminding it." htmlFor="org-block-own-commands"
-          error={blockError} data-testid="org-block-own-commands-row"
-          control={<ToggleSwitch id="org-block-own-commands" checked={blocks} busy={blockBusy} onChange={setBlock} />} />
+      <SettingsGroup heading="Their own commands" footer={blockOwnFooter(block.on)}>
+        <SettingsRow label={BLOCK_OWN_LABEL} help={BLOCK_OWN_HELP} htmlFor="org-block-own-commands"
+          error={block.error} data-testid="org-block-own-commands-row"
+          control={<ToggleSwitch id="org-block-own-commands" checked={block.on} busy={block.busy} onChange={block.set} />} />
       </SettingsGroup>
-      <SettingsGroup heading={on ? 'Turning it off stops' : 'Off now'} data-testid="org-off-stops">
+      <SettingsGroup heading={org.on ? 'Turning it off stops' : 'Off now'} data-testid="org-off-stops">
         <ul className="settings-row-help org-off-stops">
           {ORG_OFF_STOPS.map((line) => <li key={line}>{line}.</li>)}
         </ul>
-        <p className="settings-row-help">You can still type to Main or a VP in its chat. Tasks, their sessions, the Board and the inbox keep working.</p>
+        <p className="settings-row-help">{ORG_OFF_STILL}</p>
       </SettingsGroup>
     </SectionCard>
   );
