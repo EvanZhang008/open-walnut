@@ -452,6 +452,8 @@ export interface SourceUpdateBody {
   resolved?: string
   restartRequired?: boolean
   error?: string
+  /** The new commit did not load and the source is back on the one that ran. */
+  rolledBack?: { sha: string; to: string; error: string }
 }
 
 const sha7 = (sha?: string): string => (sha ? sha.slice(0, 7) : '')
@@ -469,6 +471,14 @@ export function successFeedback(
   body: LinkedUpdateBody & SourceUpdateBody,
   nameOf: (id: string) => string,
 ): Feedback {
+  if (body.rolledBack) {
+    const names = body.failed?.length ? `${nameList(body.failed.map((f) => f.id), nameOf)} did not load` : 'It did not load'
+    return {
+      kind: 'error',
+      text: `${names} at ${sha7(body.rolledBack.sha)} · went back to ${sha7(body.rolledBack.to)}, which still runs`,
+      ...(body.rolledBack.error ? { detail: body.rolledBack.error } : {}),
+    }
+  }
   if (kind === 'linked' || body.failed?.length || (!body.restartRequired && Array.isArray(body.reloaded))) {
     const at = kind === 'npm' ? (body.resolved ? `v${npmToVersion(body.resolved)}` : '') : sha7(body.sha ?? body.toSha)
     const failedNote = body.failed?.length

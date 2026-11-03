@@ -8,6 +8,7 @@
  *                          after the user has seen the list (two-phase consent)
  * POST   /:slug/update     git pull / npm re-resolve+reinstall; reports restartRequired
  * POST   /:slug/check      is anything newer available (git commits behind / npm version)
+ * PATCH  /:slug            {autoUpdate} turn automatic updates on or off for a git source
  * DELETE /:slug            remove source, delete the installed tree
  *
  * The router is a factory: the server passes a softReload callback that
@@ -24,7 +25,7 @@ import { Router } from 'express';
 import { WALNUT_HOME } from '../../constants.js';
 import { registry } from '../../core/integration-registry.js';
 import {
-  addSource, addNpmSource, updateSource, checkSource, removeSource, listSources,
+  addSource, addNpmSource, checkSource, removeSource, listSources, setSourceAutoUpdate,
   isValidSlug, parseShareSnippet, isValidSourceUrl,
   type PluginSourceView,
 } from '../../core/plugin-sources.js';
@@ -42,15 +43,15 @@ import type { UpdateStatusCache } from '../../core/plugins/update-status-cache.j
 import {
   ROW_CHECK_DEADLINE_MS, ROW_TIMEOUT_REASON, describeGitFailure, fetchEnv, maskCredentials, sourceRowKey, withDeadline,
 } from '../../core/plugins/update-status.js';
-import { clearRestartPending, isRestartPending, markRestartPending } from '../../core/plugins/restart-pending.js';
+import { isRestartPending } from '../../core/plugins/restart-pending.js';
+import { SOURCE_UPDATE_DEADLINE_MS, SOURCE_UPDATE_TIMEOUT_MESSAGE, runSourceUpdate } from '../../core/plugins/source-update-run.js';
 import { createSubsystemLogger } from '../../logging/index.js';
 import { markHandledFailure } from '../middleware/handled-failure.js';
 
 const log = createSubsystemLogger('plugin-sources');
 
-/** An update that outlives this many ms answers 504; git or npm may still finish on its own. */
-export const SOURCE_UPDATE_DEADLINE_MS = 60_000;
-export const SOURCE_UPDATE_TIMEOUT_MESSAGE = 'Update timed out after 60 s. The checkout was not changed unless git finished on its own; check again.';
+/** Re-exported: tests and the runtime router import them from here. */
+export { SOURCE_UPDATE_DEADLINE_MS, SOURCE_UPDATE_TIMEOUT_MESSAGE };
 
 /** A dependency's own dependencies are followed through the catalog, never deeper: past
  *  three hops an "install this one plugin" click stops being something a user agreed to. */
@@ -415,85 +416,60 @@ export function createPluginSourcesRouter(
       return;
     }
     try {
-      const sources = await listSources();
-      const source = sources.find(s => s.slug === slug);
-      if (!source) {
+      const outcome = await runSourceUpdate(slug, {
+        softReload,
+        reloadPlugin: deps.reloadPlugin,
+        reloadPlugins: deps.reloadPlugins,
+        cache: deps.cache,
+        deadlineMs: deps.updateDeadlineMs,
+      }, 'manual');
+      if (outcome.kind === 'not-found') {
         res.status(404).json({ error: 'source not found' });
         return;
       }
-      // Ids loaded from this source BEFORE the pull — if the pull changed their
-      // code, the in-memory version is now stale and only a restart refreshes it.
-      const loadedBefore = source.plugins.filter(p => p.id && registry.has(p.id)).map(p => p.id);
-      const rowKey = sourceRowKey(slug);
-      const cache = deps.cache;
-      cache?.setBusy(rowKey, true);
-      const TIMED_OUT = Symbol('timeout');
-      let result: Awaited<ReturnType<typeof updateSource>>;
-      try {
-        const outcome = await withDeadline<typeof result | typeof TIMED_OUT>(updateSource(slug), deps.updateDeadlineMs ?? SOURCE_UPDATE_DEADLINE_MS, () => TIMED_OUT);
-        if (outcome === TIMED_OUT) {
-          // The row reports this itself; no incident card for a slow remote (N3-1).
-          markHandledFailure(res).status(504).json({ error: SOURCE_UPDATE_TIMEOUT_MESSAGE });
-          return;
-        }
-        result = outcome;
-      } finally {
-        cache?.setBusy(rowKey, false);
-      }
-      if (result.error) {
-        // One scrubbed sentence for the row (no path, no host, no `fatal:`), the cause for
-        // the client's copy, and the raw masked text for the Details disclosure.
-        const raw = maskCredentials(result.error);
-        const { cause, sentence } = describeGitFailure(raw);
-        // Expected and already reported on the row: honest 502, but no red card (N3-1).
-        markHandledFailure(res).status(502).json({ ...result, error: sentence, cause, detail: raw, restartRequired: false });
+      if (outcome.kind === 'timeout') {
+        // The row reports this itself; no incident card for a slow remote (N3-1).
+        markHandledFailure(res).status(504).json({ error: SOURCE_UPDATE_TIMEOUT_MESSAGE });
         return;
       }
-      // The row is current at what landed: a git sha, an npm `name@version`, or (a pull
-      // that found nothing new) whatever the source already recorded.
-      const row = cache?.recordUpdated(rowKey, result.toSha ?? result.resolved ?? source.lastSha ?? source.resolved ?? '');
-      if (result.updated) {
-        try {
-          await softReload();
-        } catch (err) {
-          log.warn('soft reload after update failed', { error: String(err) });
-        }
+      if (outcome.kind === 'refused') {
+        res.status(409).json({ error: 'The source has changes of its own.', code: outcome.reason, restartRequired: false });
+        return;
       }
-      const reloaded: string[] = [];
-      const failed: Array<{ id: string; error: string }> = [];
-      const targets = loadedBefore.filter((id): id is string => !!id && registry.has(id) && (result.updated || isRestartPending(id)));
-      const skipped: string[] = [];
-      if (deps.reloadPlugins && targets.length) {
-        markRestartPending(targets);
-        try {
-          const operation = deps.reloadPlugins(targets).then(outcome => {
-            for (const id of [...outcome.reloaded, ...outcome.skipped]) clearRestartPending(id);
-            return outcome;
-          });
-          const outcome = await withDeadline(operation, SOURCE_UPDATE_DEADLINE_MS, () => { throw new Error('Plugin reload is still running; its status will update when it finishes'); });
-          reloaded.push(...outcome.reloaded);
-          skipped.push(...outcome.skipped);
-        } catch (error) {
-          failed.push(...targets.map(id => ({ id, error: error instanceof Error ? error.message : String(error) })));
-        }
-      } else if (deps.reloadPlugin) {
-        for (const id of targets) {
-          if (!registry.has(id)) { skipped.push(id); continue; }
-          markRestartPending([id]);
-          try {
-            const record = await deps.reloadPlugin(id);
-            if (record?.state !== 'active') throw new Error(`Plugin "${id}" is ${record?.state ?? 'unknown'}`);
-            clearRestartPending(id);
-            reloaded.push(id);
-          } catch (error) {
-            failed.push({ id, error: error instanceof Error ? error.message : String(error) });
-          }
-        }
-      } else if (result.updated) markRestartPending(targets);
-      const restartRequired = targets.some(id => isRestartPending(id));
-      res.json({ ...result, restartRequired, reloaded, skipped, failed, ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}) });
+      if (outcome.kind === 'error') {
+        // Expected and already reported on the row: honest 502, but no red card (N3-1).
+        markHandledFailure(res).status(502).json({ ...outcome.result, error: outcome.sentence, cause: outcome.cause, detail: outcome.raw, restartRequired: false });
+        return;
+      }
+      const { result, row, reloaded, skipped, failed, restartRequired, rolledBack, rollbackError } = outcome;
+      res.json({
+        ...result, restartRequired, reloaded, skipped, failed,
+        ...(rolledBack ? { rolledBack } : {}), ...(rollbackError ? { rollbackError } : {}),
+        ...(row ? { state: row.state, checkedAt: row.checkedAt } : {}),
+      });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // Automatic updates on or off for one git source: `{ autoUpdate: boolean }`.
+  router.patch('/:slug', async (req, res) => {
+    const { slug } = req.params;
+    if (!isValidSlug(slug)) {
+      res.status(400).json({ error: 'invalid slug' });
+      return;
+    }
+    const on = (req.body as { autoUpdate?: unknown } | undefined)?.autoUpdate;
+    if (typeof on !== 'boolean') {
+      res.status(400).json({ error: 'autoUpdate must be true or false' });
+      return;
+    }
+    try {
+      const view = await setSourceAutoUpdate(slug, on);
+      res.json({ ...view, plugins: withStatuses(view) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(/not found/.test(message) ? 404 : 400).json({ error: message });
     }
   });
 

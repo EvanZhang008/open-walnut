@@ -20,9 +20,14 @@
  * sources exist.
  *
  * Trust model: adding a source is the consent step — plugins run in-process
- * with full privileges. No auto-pull and no auto-resolve: updates are explicit
- * user actions so remote code changes are always visible and attributable (git
- * SHA / resolved name@version + integrity shown in the UI).
+ * with full privileges. A git source then keeps itself current: the primary
+ * fast-forwards a clean clone that is behind on its own clock
+ * (`plugins/source-auto-update.ts`), unless the source says `auto_update: false`.
+ * Every change stays visible and attributable: the store names the commit and
+ * when it landed (`auto.lastUpdate`), a new version that fails to load is reset
+ * to the one that ran (`auto.rolledBack`), and a clone with changes or commits
+ * of its own is never touched (`auto.skipped`). npm sources are not re-resolved
+ * on their own: a tag only moves when the user asks.
  */
 
 import fs from 'node:fs';
@@ -50,6 +55,8 @@ export interface GitPluginSourceConfig {
   url: string;
   ref?: string;
   enabled?: boolean;
+  /** `false` turns automatic updates off for this source (someone changing it in place). Absent = on. */
+  auto_update?: boolean;
 }
 
 export interface NpmPluginSourceConfig {
@@ -91,6 +98,18 @@ export interface PluginSourceState {
    * row and the update-status row for a plugin that is still loaded from memory).
    */
   lastKnownPlugins?: KnownStorePlugin[];
+  /** git: what automatic updates did here, for the store's "Updated to" line. */
+  auto?: SourceAutoState;
+}
+
+/** What the store says about a git source's updates. Older Walnut ignores the whole field. */
+export interface SourceAutoState {
+  /** The last update that landed and stayed, automatic or by hand. */
+  lastUpdate?: { from?: string; to: string; at: string; by: 'auto' | 'manual' };
+  /** A version that did not load, reset to the one that ran. Never tried again automatically. */
+  rolledBack?: { sha: string; to: string; at: string; error: string; by: 'auto' | 'manual' };
+  /** The last automatic round left this clone alone, and why. Cleared once a round finds it clean. */
+  skipped?: { reason: 'dirty' | 'diverged'; at: string; behind?: number; ahead?: number };
 }
 
 /** The two facts a source remembers about a plugin it carried: enough to name it. */
@@ -135,6 +154,10 @@ export interface PluginSourceView {
   plugins: DiscoveredStorePlugin[];
   /** Only while `cloned` is false: what the source carried before its files went away. */
   lastKnownPlugins?: KnownStorePlugin[];
+  /** git: whether the primary keeps this source current by itself (config `auto_update`, default on). */
+  autoUpdate?: boolean;
+  /** git: what automatic updates did here (see SourceAutoState). */
+  auto?: SourceAutoState;
   /** Paste-able snippet for teammates ("Copy share snippet" button). git only —
    *  absent when the URL embeds credentials, since those must never be shared. */
   shareSnippet?: string;
@@ -595,6 +618,8 @@ export interface UpdateResult {
   resolved?: string;
   integrity?: string;
   error?: string;
+  /** git, with `requireClean`: the clone has changes or commits of its own, so nothing was pulled. */
+  refused?: 'dirty' | 'diverged';
 }
 
 /**
@@ -670,7 +695,7 @@ async function findSourceBySlug(slug: string): Promise<PluginSourceConfig | unde
   return matches[0];
 }
 
-export async function updateSource(slug: string): Promise<UpdateResult> {
+export async function updateSource(slug: string, opts: { requireClean?: boolean } = {}): Promise<UpdateResult> {
   if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
   return withSourceLock(slug, async () => {
     const source = await findSourceBySlug(slug);
@@ -699,6 +724,16 @@ export async function updateSource(slug: string): Promise<UpdateResult> {
       }
 
       fromSha = await currentSha(dir);
+      if (opts.requireClean) {
+        // Checked again under the lock the pull holds: an edit made since the caller looked
+        // must not ride along a pull it never agreed to.
+        const [status, ahead] = await Promise.all([
+          runSourceGit(['status', '--porcelain', '--untracked-files=normal'], dir),
+          runSourceGit(['rev-list', '--count', '@{upstream}..HEAD'], dir),
+        ]);
+        if (status.trim()) return { updated: false, fromSha, toSha: fromSha, refused: 'dirty' };
+        if ((parseInt(ahead, 10) || 0) > 0) return { updated: false, fromSha, toSha: fromSha, refused: 'diverged' };
+      }
       await runSourceGit(['pull', '--ff-only'], dir, source.url);
       const toSha = await currentSha(dir);
       await updateState((state) => {
@@ -790,6 +825,86 @@ export async function checkSource(slug: string, opts: SourceGitOptions = {}): Pr
   });
 }
 
+/** What a git source's clone holds of its own, read without the network (the last fetch is the upstream). */
+export interface SourceLocalFacts {
+  /** Tracked edits or untracked files that are not ignored. */
+  dirty: boolean;
+  behind: number;
+  ahead: number;
+  head: string;
+  upstream: string;
+}
+
+export async function readSourceLocal(slug: string): Promise<SourceLocalFacts> {
+  if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
+  return withSourceLock(slug, async () => {
+    const dir = cloneDirFor(slug);
+    await assertGitCheckout(dir);
+    const [status, counts, head, upstream] = await Promise.all([
+      runSourceGit(['status', '--porcelain', '--untracked-files=normal'], dir),
+      runSourceGit(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], dir),
+      runSourceGit(['rev-parse', 'HEAD'], dir),
+      runSourceGit(['rev-parse', '@{upstream}'], dir),
+    ]);
+    const [ahead, behind] = counts.trim().split(/\s+/).map((n) => parseInt(n, 10) || 0);
+    return { dirty: status.trim().length > 0, behind: behind ?? 0, ahead: ahead ?? 0, head: head.trim(), upstream: upstream.trim() };
+  });
+}
+
+/**
+ * Put a git source back on the commit that ran before an update whose new code did not
+ * load. Only while the clone is still exactly the update's commit: anything else moved it
+ * since, and a reset would throw that away.
+ */
+export async function rollbackSource(slug: string, toSha: string, badSha: string): Promise<void> {
+  if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
+  if (!/^[0-9a-f]{40}$/i.test(toSha) || !/^[0-9a-f]{40}$/i.test(badSha)) throw new Error('Invalid commit.');
+  return withSourceLock(slug, async () => {
+    const dir = cloneDirFor(slug);
+    const head = (await currentSha(dir)).trim();
+    if (head !== badSha) throw new Error(`The source moved to ${head.slice(0, 7)} since the update; it was left there.`);
+    // --keep, never --hard: a change of the user's in a file the reset would rewrite makes
+    // it refuse, so a rollback can fail but never throws their work away.
+    await runSourceGit(['reset', '--keep', toSha], dir);
+    await updateState((state) => {
+      const row = state[slug];
+      if (row) row.lastSha = toSha;
+    });
+    log.info('plugin source rolled back', { slug, fromSha: badSha, toSha });
+  });
+}
+
+/** Write what automatic updates did for a source into its runtime state (sources.json). */
+export async function recordSourceAuto(slug: string, mutate: (auto: SourceAutoState) => void): Promise<void> {
+  if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
+  await updateState((state) => {
+    const row = state[slug];
+    if (!row) return;
+    const auto: SourceAutoState = { ...(row.auto ?? {}) };
+    mutate(auto);
+    if (Object.keys(auto).length > 0) row.auto = auto;
+    else delete row.auto;
+  });
+}
+
+/** Turn automatic updates on or off for a git source. On is the default, so it removes the key. */
+export async function setSourceAutoUpdate(slug: string, on: boolean): Promise<PluginSourceView> {
+  if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
+  const next = await mutateConfiguredSources((current) => {
+    const index = current.findIndex((item) => slugForSource(item) === slug);
+    if (index < 0) throw new Error(`Plugin source "${slug}" was not found.`);
+    const item = current[index];
+    if (isNpmSourceConfig(item)) throw new Error('An npm source is updated only when you ask.');
+    const { auto_update: _previous, ...rest } = item;
+    const copy = [...current];
+    copy[index] = on ? rest : { ...rest, auto_update: false };
+    return copy;
+  });
+  const source = next.find((item) => slugForSource(item) === slug)!;
+  log.info('plugin source automatic updates set', { slug, on });
+  return buildView(slug, source, (await readState())[slug]);
+}
+
 export async function removeSource(slug: string): Promise<void> {
   if (!isValidSlug(slug)) throw new Error('Invalid source slug.');
   return withSourceLock(slug, async () => {
@@ -857,6 +972,8 @@ async function buildView(
     lastError: state?.lastError,
     plugins,
     ...remembered,
+    autoUpdate: source.auto_update !== false,
+    ...(state?.auto ? { auto: state.auto } : {}),
     ...(hasCredentials ? {} : {
       shareSnippet: buildShareSnippet(source.url, source.ref),
       installLink: buildInstallLink(source.ref ? { kind: 'git', url: source.url, ref: source.ref } : { kind: 'git', url: source.url }),

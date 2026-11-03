@@ -11,6 +11,20 @@
 
 const pending = new Set<string>()
 
+/**
+ * A plugin's code can only change with a process restart (a native addon, a link out of
+ * its folder): a reload refuses before touching it. Not a version that failed to load, so
+ * an update keeps the new files and the plugin waits for the restart (source-update-run.ts).
+ */
+export class PluginRestartRequiredError extends Error {
+  readonly code = 'restart_required'
+}
+
+export function isRestartRequiredError(error: unknown): boolean {
+  return error instanceof PluginRestartRequiredError
+    || (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'restart_required')
+}
+
 /** The lifecycle state the registry reports for a marked plugin; `storeStatusFor` maps it to `pending-restart`. */
 export const RESTART_PENDING_STATE = 'stale-after-update'
 

@@ -12,6 +12,10 @@ const sourceMocks = vi.hoisted(() => ({
   checkSource: vi.fn(),
   removeSource: vi.fn(),
   listSources: vi.fn(),
+  setSourceAutoUpdate: vi.fn(),
+  rollbackSource: vi.fn(),
+  readSourceLocal: vi.fn(),
+  recordSourceAuto: vi.fn(),
 }))
 
 vi.mock('../../../src/core/plugin-sources.js', async (importOriginal) => ({
@@ -58,6 +62,9 @@ beforeEach(() => {
   sourceMocks.removeSource.mockResolvedValue(undefined)
   sourceMocks.checkSource.mockResolvedValue({ behind: 0, updateAvailable: false })
   sourceMocks.updateSource.mockResolvedValue({ updated: false })
+  sourceMocks.recordSourceAuto.mockResolvedValue(undefined)
+  sourceMocks.rollbackSource.mockResolvedValue(undefined)
+  sourceMocks.readSourceLocal.mockResolvedValue({ dirty: false, behind: 1, ahead: 0, head: 'a'.repeat(40), upstream: 'b'.repeat(40) })
 })
 
 describe('Plugin sources route boundaries', () => {
@@ -675,5 +682,41 @@ describe('Plugin source check/update and the update-status cache', () => {
     expect(response.headers['x-walnut-handled-failure']).toBe('1')
     expect(cache.entry(sourceRowKey('acme-plugins'))).toBeUndefined()
     expect(softReload).not.toHaveBeenCalled()
+  })
+})
+
+describe('automatic updates switch and rollback (source-auto-update)', () => {
+  it('PATCH sets the switch and answers the source', async () => {
+    sourceMocks.setSourceAutoUpdate.mockResolvedValue(source('demo', { autoUpdate: false }))
+    const response = await request(app()).patch('/api/plugin-sources/demo').send({ autoUpdate: false }).expect(200)
+    expect(sourceMocks.setSourceAutoUpdate).toHaveBeenCalledWith('demo', false)
+    expect(response.body).toMatchObject({ slug: 'demo', autoUpdate: false })
+  })
+
+  it('PATCH refuses a body that is not a boolean, and an unknown source', async () => {
+    await request(app()).patch('/api/plugin-sources/demo').send({ autoUpdate: 'yes' }).expect(400)
+    expect(sourceMocks.setSourceAutoUpdate).not.toHaveBeenCalled()
+    sourceMocks.setSourceAutoUpdate.mockRejectedValue(new Error('Plugin source "nope" was not found.'))
+    await request(app()).patch('/api/plugin-sources/nope').send({ autoUpdate: true }).expect(404)
+  })
+
+  it('an Update press whose new code does not load goes back to the commit that ran', async () => {
+    const registry = (await import('../../../src/core/integration-registry.js')).registry as { has: ReturnType<typeof vi.fn> }
+    registry.has.mockImplementation((id: string) => id === 'demo-plugin')
+    const fromSha = 'a'.repeat(40)
+    const toSha = 'b'.repeat(40)
+    sourceMocks.listSources.mockResolvedValue([source('demo', { plugins: [{ id: 'demo-plugin', name: 'Demo', dir: '/x', version: '1.0.0' }] })])
+    sourceMocks.updateSource.mockResolvedValue({ updated: true, fromSha, toSha })
+    const reloadPlugins = vi.fn(async () => { throw new Error('Plugin update failed; previous versions restored: boom') })
+    const response = await request(app({ reloadPlugins })).post('/api/plugin-sources/demo/update').expect(200)
+    expect(sourceMocks.rollbackSource).toHaveBeenCalledWith('demo', fromSha, toSha)
+    expect(response.body).toMatchObject({
+      updated: true,
+      restartRequired: false,
+      rolledBack: { sha: toSha, to: fromSha },
+      failed: [{ id: 'demo-plugin' }],
+    })
+    expect(sourceMocks.recordSourceAuto).toHaveBeenCalled()
+    registry.has.mockImplementation(() => false)
   })
 })

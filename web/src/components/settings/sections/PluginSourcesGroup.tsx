@@ -20,6 +20,7 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { formatAbsoluteTime } from './addons-format';
+import type { SourceAutoState } from '../plugin-auto-update-view';
 import { plainText, resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
 import { sourceRowKey } from '../plugin-update-types';
 
@@ -56,6 +57,10 @@ export interface PluginSource {
   shareSnippet?: string;
   /** `open-walnut://install-plugin?…`: one click on a Mac with the app, and pastes anywhere a snippet does. */
   installLink?: string;
+  /** git: the primary keeps it current by itself (absent from an older server). */
+  autoUpdate?: boolean;
+  /** git: what automatic updates did (plugin-auto-update-view.ts). */
+  auto?: SourceAutoState;
 }
 
 type Tone = 'neutral' | 'warning' | 'success';

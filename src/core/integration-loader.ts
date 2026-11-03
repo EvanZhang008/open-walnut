@@ -24,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
+import { PluginRestartRequiredError } from './plugins/restart-pending.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { bundleEsm } from '../lib/transpile.js';
 import { parseManifestJobs } from './plugin-jobs/manifest.js';
@@ -410,7 +411,7 @@ export function reloadLoadedPlugins(
     for (const id of ids) {
       const source = sources.get(id)!;
       const unsafe = generations(registry).get(id)?.module.reloadUnsafeReason;
-      if (unsafe) throw new Error(unsafe);
+      if (unsafe) throw new PluginRestartRequiredError(unsafe);
       const entry = await readPluginEntry(await fsp.realpath(source.dir), source.isBuiltin);
       if (!entry || entry.manifest.id !== id) throw new Error(`Plugin "${id}" manifest is invalid or changed identity`);
       candidates.set(id, entry.manifest);
@@ -521,7 +522,7 @@ export function reloadLoadedPlugin(
     const previous = manager.get(pluginId)?.state === 'active' ? lastKnown : undefined;
     let prepared: LoadedPluginGeneration | undefined;
     if (lastKnown?.module.reloadUnsafeReason) {
-      if (previous) throw new Error(lastKnown.module.reloadUnsafeReason);
+      if (previous) throw new PluginRestartRequiredError(lastKnown.module.reloadUnsafeReason);
       manifest = lastKnown.manifest;
       preflightReload(manifest, pluginConfig, gate, source.isBuiltin);
       prepared = { ...lastKnown, config: pluginConfig };

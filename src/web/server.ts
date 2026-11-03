@@ -575,6 +575,7 @@ const pushRetrySchedules = new Map<string, SyncRetrySchedule>()
 const createRetrySchedules = new Map<string, SyncRetrySchedule>()
 // Set during startup; invoked by the plugin-sources router after add/update.
 let pluginSoftReload: () => Promise<void> = async () => {}
+let pluginAutoUpdateHandle: import('../core/plugins/source-auto-update.js').SourceAutoUpdater | null = null
 let pluginMutationTail: Promise<unknown> = Promise.resolve()
 
 function runPluginMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -2237,6 +2238,23 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     sourceDir: (slug) => path.join(PLUGIN_STORES_DIR, slug),
     installedIds: () => getPluginLifecycleRecords(registry).filter((record) => !record.builtin).map((record) => record.id),
   }))
+  // Store plugins keep themselves current: the leader pulls a clean git source that is
+  // behind on its own clock, through the same run as the Update button (reload, rollback).
+  pluginAutoUpdateHandle?.stop()
+  pluginAutoUpdateHandle = null
+  {
+    const { autoUpdateEnv, createSourceAutoUpdater } = await import('../core/plugins/source-auto-update.js')
+    const knobs = autoUpdateEnv()
+    if (knobs.enabled && bootPolicy('plugin-sync-polling')) {
+      const { runSourceUpdate } = await import('../core/plugins/source-update-run.js')
+      pluginAutoUpdateHandle = createSourceAutoUpdater({
+        cache: pluginUpdateCache,
+        sourceDir: (slug) => path.join(PLUGIN_STORES_DIR, slug),
+        update: (slug) => runSourceUpdate(slug, { softReload: () => pluginSoftReload(), reloadPlugin, reloadPlugins, cache: pluginUpdateCache }, 'auto'),
+      })
+      pluginAutoUpdateHandle.start(knobs)
+    }
+  }
   // MCP servers plugins registered (src/core/mcp-servers/): Settings, `walnut mcp`, the mcp_* ops.
   {
     const { createMcpServersRouter } = await import('./routes/mcp-servers.js')
@@ -6931,6 +6949,8 @@ export async function stopServer(): Promise<void> {
     autoRecoverHandle.stop()
     autoRecoverHandle = null
   }
+  pluginAutoUpdateHandle?.stop()
+  pluginAutoUpdateHandle = null
   if (claudeSettingsWatcherStop) {
     claudeSettingsWatcherStop()
     claudeSettingsWatcherStop = null

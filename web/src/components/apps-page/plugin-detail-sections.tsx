@@ -21,6 +21,8 @@ import { RESTART_PENDING_STATE } from '@/components/settings/plugin-update-types
 import { firstSentence, providerFallbackState } from '@/components/settings/sections/plugin-row-view'
 import { formatAbsoluteTime } from '@/components/settings/sections/addons-format'
 import { homeDirFor, type PluginStore } from './usePluginStore'
+import { AutoUpdateRows } from './AutoUpdateRows'
+import { supportsAutoUpdate } from '@/components/settings/plugin-auto-update-view'
 import { isLinkedRow, isRunning, isUpdatableRow, originKind, sourceFacts, updateNote, type PlainNote, type RegistryRow } from './plugin-store-model'
 
 function CopyFact({ value, label }: { value: string; label: string }) {
@@ -149,6 +151,9 @@ export function VersionSection({ store, row }: { store: PluginStore; row: Regist
         </div>
       )}
       {note && <Note note={note} testId={`plugin-update-note-${row.id}`} />}
+      {source && sourceKind === 'git' && !isLinkedRow(row) && supportsAutoUpdate(source) && (
+        <AutoUpdateRows store={store} slug={source.slug} source={source} rowId={row.id} />
+      )}
     </SettingsGroup>
   )
 }

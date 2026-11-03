@@ -1353,7 +1353,7 @@ export interface Config {
    *  the resolved version, integrity and errors are runtime state in
    *  plugin-stores/sources.json. */
   plugin_sources?: Array<
-    | { url: string; ref?: string; enabled?: boolean }
+    | { url: string; ref?: string; enabled?: boolean; auto_update?: boolean }
     | { type: 'npm'; spec: string; enabled?: boolean }
   >;
   favorites?: {

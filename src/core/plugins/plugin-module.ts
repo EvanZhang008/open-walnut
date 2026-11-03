@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { PluginManifest } from '../integration-types.js'
 import { moduleHasJobs } from '../plugin-jobs/manifest.js'
+import { PluginRestartRequiredError } from './restart-pending.js'
 import {
   createPluginGeneration,
   disposePluginGeneration,
@@ -89,7 +90,7 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
     const reason = probe.native.length
       ? `native addon ${path.basename(probe.native[0])} is loaded in place and cannot be replaced in a running process`
       : `link ${probe.external[0]} leaves the plugin directory and runtime code can reach it, so this load cannot be copied into a replaceable generation`
-    if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
+    if (options.replacement) throw new PluginRestartRequiredError(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
     return { mod: await evaluate(options, entry, false), reloadUnsafeReason: reason }
   }
   await pruneOrphanGenerations(manifest.id, cacheRoot)
@@ -97,7 +98,7 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
   try {
     if (generation.unsafeReason) {
       await disposePluginGeneration(generation)
-      if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${generation.unsafeReason}`)
+      if (options.replacement) throw new PluginRestartRequiredError(`Plugin "${manifest.id}" requires a process restart: ${generation.unsafeReason}`)
       return { mod: await evaluate(options, entry, false), reloadUnsafeReason: generation.unsafeReason }
     }
     let mod: Record<string, any>
@@ -110,7 +111,7 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
       if (!missing) throw error
       await disposePluginGeneration(generation)
       const reason = `runtime code imports ${missing}, a devDependency that links out of the plugin directory; list it under dependencies`
-      if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
+      if (options.replacement) throw new PluginRestartRequiredError(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
       return { mod: await evaluate(options, entry, false), reloadUnsafeReason: reason }
     }
     return {
