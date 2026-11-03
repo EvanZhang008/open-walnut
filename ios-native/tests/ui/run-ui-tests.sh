@@ -238,7 +238,14 @@ if [ -n "$ALLOW_SPRINGBOARD" ] || [ -n "$ROW_ID" ] || [ -n "$ROW_QUERY" ] \
   || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ] \
   || ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
   say "injecting runner environment into the .xctestrun directly"
-  python3 - "$XCTESTRUN" "$SERVER" "$TOKEN" "$ALLOW_SPRINGBOARD" "$ROW_ID" "$ROW_QUERY" <<'PY' || die "xctestrun injection failed"
+  # A python whose plistlib loads. A Homebrew python can be built against a newer
+  # libexpat than the system's, and then pyexpat does not load (2026-11-03 on a fleet
+  # Mac: "Symbol not found: _XML_SetAllocTrackerActivationThreshold"); Xcode's python,
+  # which this run needs anyway, always has it.
+  PLIST_PY=""
+  for py in python3 /usr/bin/python3; do "$py" -c 'import plistlib' >/dev/null 2>&1 && { PLIST_PY=$py; break; }; done
+  [ -n "$PLIST_PY" ] || die "no python3 here can load plistlib (tried python3 and /usr/bin/python3)"
+  "$PLIST_PY" - "$XCTESTRUN" "$SERVER" "$TOKEN" "$ALLOW_SPRINGBOARD" "$ROW_ID" "$ROW_QUERY" <<'PY' || die "xctestrun injection failed"
 import os, plistlib, sys
 path, server, token, allow_springboard, row_id, row_query = sys.argv[1:7]
 with open(path, 'rb') as f: doc = plistlib.load(f)
