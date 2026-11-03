@@ -75,6 +75,8 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     BRIDGE_SESSION_COMMANDS: new Set(literals(sources[kind], 'BRIDGE_SESSION_COMMANDS')),
     FOLLOWER_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'FOLLOWER_ALLOWED_COMMANDS')),
     LANE_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'LANE_ALLOWED_COMMANDS')),
+    // The per-Walnut pushes handleCommand notes (served-walnuts-core.ts); session.permission is none.
+    SERVED_PUSHES: new Set(literals(sources[kind], 'SERVED_PUSHES')),
     followerReads: { settle: vi.fn(() => null) },
     followerScope: vi.fn(() => false),
     // The Walnut the session belongs to ('' = none recorded).
