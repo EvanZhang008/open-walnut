@@ -6276,15 +6276,34 @@ function gatewayTargetFor(home, say) {
   return target;
 }
 
+// A walnut run outside any session is the Walnut's whose copy this host holds,
+// when it holds just one (twin of daemon-standalone.ts gatewayOwnerHome).
+function gatewayOwnerHome(callerSid) {
+  if (callerSid === EXTERNAL_CALLER_SID) {
+    var homes = offlineHost.homes();
+    return homes.length === 1 ? homes[0] : undefined;
+  }
+  return offlineHost.ownerOf(callerSid);
+}
+
 function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   if (!plan) plan = gatewayCallPlan(undefined, GATEWAY_HUB_TIMEOUT_MS, Date.now());
   var deadline = plan.deadline;
-  var home = offlineHost.ownerOf(callerSid);
+  var home = gatewayOwnerHome(callerSid);
   var target = gatewayTargetFor(home, { callerSid: callerSid, op: payload.name });
   // No server now and nothing sent: a call that may wait does, while it has time.
   var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, plan); }, respond); };
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
-  if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+  // A call from outside any session is answered here only when it reads; its other
+  // calls go to the companion while it leads (twin of daemon-standalone.ts).
+  var external = callerSid === EXTERNAL_CALLER_SID;
+  if (external && home && !target && !readable) {
+    if (forwardToBackup(home, capability, callerSid, payload, respond)) return;
+    if (waitHere()) return;
+    logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
+    return respond(gatewayError('hub_unreachable', 'no primary server connected'));
+  }
+  if (home && (!target || (offlineHost.pendingHandover(home) && (!external || readable))) && offlineHost.hasHome(home)) {
     // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
     if (!target && capability === 'tools.call' && payload.name === 'search') {
       var here = function () { offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); }); };
@@ -6314,7 +6333,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   }
   // A message between two of this Walnut's sessions on this host is delivered
   // here even while the server answers (twin of daemon-standalone.ts).
-  if (home && offlineHost.hasHome(home)) {
+  if (home && !external && offlineHost.hasHome(home)) {
     var primary = target;
     offlineHost.handleLocal(home, callerSid, capability, payload).then(function (r) {
       if (r) {

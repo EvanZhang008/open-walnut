@@ -43,6 +43,8 @@ const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const B = 'bbbbbbbb-2222-4222-8222-222222222222'
 /** A second session on oldbox, for the stop (A and B keep running for the handback). */
 const C = 'cccccccc-3333-4333-8333-333333333333'
+/** The sid an env-less `walnut` (a terminal, a script) sends (gateway-core.ts EXTERNAL_CALLER_SID). */
+const EXTERNAL = 'external'
 const TASK_A = 'mleadaaa-0001'
 const TASK_B = 'mworkbbb-0002'
 /** The takeover window, and the daemon's keepalive beat (a silent primary socket is closed after 8). */
@@ -416,6 +418,10 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     const r = await gatewayCall(devbox, A, 'task_send', { to: TASK_B, text: 'status?' })
     expect(r).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
     expect(inboxOf(oldbox, B).filter((m) => m.includes('status?'))).toHaveLength(0)
+    // A walnut run outside any session (sid 'external') goes to the Mac on both twins, never answered here.
+    for (const d of [devbox, oldbox]) {
+      expect(await gatewayCall(d, EXTERNAL, 'task_get', { id: TASK_A })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
+    }
   }, 60_000)
 
   it('a link-only cut (heartbeat lost, hosts still hear the Mac) takes nothing over', async () => {
@@ -465,6 +471,28 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(edit).toMatchObject({ ok: true, result: { queued: true, version: 2 } })
     const far = await gatewayCall(devbox, A, 'note_read', { path: 'plans/release.md' })
     expect(far).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
+  }, 60_000)
+
+  // 2026-11-03: a walnut run outside any session (a terminal, a script) named no
+  // session, so no home: while the companion led, every such call answered
+  // hub_unreachable. A daemon holding one Walnut's copy now counts it as that Walnut's.
+  it('a call from outside any session reads from the host\'s copy and goes to the companion for the rest', async () => {
+    for (const d of [devbox, oldbox]) {
+      const read = await gatewayCall(d, EXTERNAL, 'task_get', { id: TASK_A })
+      expect(read, `${d.twin}: ${JSON.stringify(read)}`).toMatchObject({ ok: true, result: { offline: true, task: { id: TASK_A } } })
+      const far = await gatewayCall(d, EXTERNAL, 'note_read', { path: 'plans/release.md' })
+      expect(far, `${d.twin}: ${JSON.stringify(far)}`).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
+    }
+    // A message from the user's terminal reaches the session through the companion,
+    // asking no reply (nobody could take it), as on the server.
+    const sent = await gatewayCall(devbox, EXTERNAL, 'task_send', { to: TASK_B, text: 'From a terminal while the Mac sleeps' })
+    expect(sent, JSON.stringify(sent)).toMatchObject({ ok: true, result: { viaLeader: true, targetSessionId: B } })
+    await waitFor(() => inboxOf(oldbox, B).some((m) => m.includes('From a terminal while the Mac sleeps')), 10_000, 'B receives the terminal message')
+    // Nothing of it was kept on the host for the Mac to replay: a journaled write names a session.
+    expect(sent.ok && sent.result.requestId).toBeFalsy()
+    for (const d of [devbox, oldbox]) {
+      expect(daemonLog(d, /gateway: answered offline/).filter((r) => r.callerSid === EXTERNAL && r.op !== 'task_get')).toEqual([])
+    }
   }, 60_000)
 
   it('while it leads, the companion changes a live session\'s model or effort on its host, and the host keeps it for the Mac', async () => {
@@ -550,13 +578,15 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     expect(claims.map((c) => [c.host, c.epoch, c.why]).sort()).toEqual([['devbox', 3, 'leader-lost'], ['oldbox', 3, 'leader-lost']])
     // It drained before it claimed: the journal of each host, in order.
     const drained = (host: string) => primaryEvents().filter((e) => e.ev === 'drained' && e.host === host).flatMap((e) => e.records as OfflineRecord[])
-    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit', 'settings', 'delivery', 'stop'])
+    expect(drained('oldbox').map((r) => (r.kind === 'op' ? `op:${r.op}` : r.kind))).toEqual(['row', 'delivery', 'row', 'op:board_edit', 'delivery', 'settings', 'delivery', 'stop'])
     expect(drained('oldbox')[0]).toMatchObject({ row: { id: requestId, fromSessionId: A, toSessionId: B, fromHost: 'devbox', status: 'pending' } })
     expect(drained('oldbox')[2]).toMatchObject({ row: { id: requestId, status: 'replied' } })
-    expect(drained('oldbox')[4]).toMatchObject({ kind: 'settings', sid: B, cliModel: 'sonnet[1m]' })
+    // The terminal's message, delivered by the companion, from no session.
+    expect(drained('oldbox')[4]).toMatchObject({ kind: 'delivery', toSessionId: B, fromSessionId: EXTERNAL })
+    expect(drained('oldbox')[5]).toMatchObject({ kind: 'settings', sid: B, cliModel: 'sonnet[1m]' })
     // The prompt answer leaves nothing for the Mac; the stop is the companion's, by its id.
-    expect(drained('oldbox')[5]).toMatchObject({ kind: 'delivery', toSessionId: B })
-    expect(drained('oldbox')[6]).toMatchObject({ kind: 'stop', sid: C, stopRequestId: 'dddddddd-4444-4444-8444-444444444444', requestedAt: '2026-10-10T10:00:00.000Z' })
+    expect(drained('oldbox')[6]).toMatchObject({ kind: 'delivery', toSessionId: B })
+    expect(drained('oldbox')[7]).toMatchObject({ kind: 'stop', sid: C, stopRequestId: 'dddddddd-4444-4444-8444-444444444444', requestedAt: '2026-10-10T10:00:00.000Z' })
     expect(drained('devbox')).toEqual([
       expect.objectContaining({ kind: 'delivery', fromSessionId: B, toSessionId: A, requestId, reply: true }),
       expect.objectContaining({ kind: 'settings', sid: A, effort: 'low' }),

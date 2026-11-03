@@ -104,6 +104,12 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     const text = typeof args.text === 'string' ? args.text.trim() : ''
     if (!to) return { ok: false, code: 'bad_request', message: '`to` is required (or pass in_reply_to)' }
     if (!text) return { ok: false, code: 'bad_request', message: 'text must be a non-empty string' }
+    // A walnut run outside any session (a terminal, a script) owes no request, as on
+    // the server (session-send-core.ts): nobody could take its reply.
+    const outside = !callerSid || callerSid === 'external'
+    if (outside && args.expect_reply === true) {
+      return { ok: false, code: 'bad_request', message: 'expect_reply needs a session caller — a reply can only be routed back to a tracked session' }
+    }
     const all = await deps.sessions()
     let candidates = all.filter((s) => s.id === to || (to.length >= 8 && s.id.startsWith(to)))
     let targetTitle: string | undefined
@@ -136,7 +142,7 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
       to: target.id,
       text,
       ...(typeof args.title === 'string' ? { title: args.title } : {}),
-      ...(typeof args.expect_reply === 'boolean' ? { expect_reply: args.expect_reply } : {}),
+      ...(outside ? { expect_reply: false } : typeof args.expect_reply === 'boolean' ? { expect_reply: args.expect_reply } : {}),
       ...(args.force === true ? { force: true } : {}),
       ...(typeof args.reason === 'string' ? { reason: args.reason } : {}),
       ...(typeof args.reply_timeout === 'number' ? { reply_timeout: args.reply_timeout } : {}),

@@ -795,6 +795,21 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     expect(Date.now() - started).toBeLessThan(3_000)
   }, 60_000)
 
+  // 2026-11-03: a walnut run outside any session (the user's terminal, a script)
+  // names no session (sid 'external'), so the daemon knew no Walnut for it and every
+  // such call answered hub_unreachable while the Mac slept. A daemon holding one
+  // Walnut's copy counts it as that Walnut's: reads from the copy, the rest from the companion.
+  it('while the Mac sleeps, a walnut call from outside any session reads the host\'s copy and writes through the companion', async () => {
+    for (const d of [devbox, oldbox]) {
+      const note = await gatewayCall(d, 'external', 'note_read', { path: 'Projects/Standup' })
+      expect(note, `${d.twin}: ${JSON.stringify(note).slice(0, 400)}`).toMatchObject({ ok: true, result: { path: 'Projects/Standup', offline: true } })
+      const task = await gatewayCall(d, 'external', 'task_get', { id: primary.ids.worker })
+      expect(task, `${d.twin}: ${JSON.stringify(task).slice(0, 400)}`).toMatchObject({ ok: true, result: { task: { id: primary.ids.worker } } })
+    }
+    const far = await gatewayCall(devbox, 'external', 'task_update', { id: primary.ids.far, title: 'Far task: release notes from a terminal' })
+    expect(far, JSON.stringify(far).slice(0, 400)).toMatchObject({ ok: true, result: { viaLeader: true } })
+  }, 120_000)
+
   it('the Mac wakes: it takes back what the hosts did, takes the lead back, and the companion lets go', async () => {
     // The daemon first, so the server finds it answering.
     for (const o of [...macProcs()].reverse()) expect(await procs!.resume(o), `SIGCONT ${o.label}: ${procs!.refused.join('; ')}`).toBe(true)
@@ -837,8 +852,8 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     await waitFor(async () => {
       const r = await api(primary, `/api/v1/tasks/${primary.ids.far}`)
       const t = r.json.task ?? r.json
-      return String(t.description ?? '').includes('Drafted while the Mac slept.') ? t : null
-    }, 120_000, 'the far task change on the Mac')
+      return String(t.description ?? '').includes('Drafted while the Mac slept.') && t.title === 'Far task: release notes from a terminal' ? t : null
+    }, 120_000, 'the far task changes (a session\'s and a terminal\'s) on the Mac')
     // And the companion's copy of that task is the Mac's row again, its own write delivered.
     await waitFor(() => {
       try {

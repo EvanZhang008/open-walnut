@@ -4971,6 +4971,15 @@ async function startHostAsk(home: string, p: HostStartPlan, cmd: Record<string, 
 
 /** The Walnut a session belongs to: the home whose copy lists it. */
 function gatewayOwnerHome(callerSid: string): string | undefined {
+  // A walnut run outside any session (a terminal, a script, a cron line) names no
+  // session; on a daemon that holds one Walnut's copy it is that Walnut's, so while
+  // the Mac is away its reads come from the copy and the rest goes to the companion
+  // (2026-11-03: such calls answered hub_unreachable while the companion led).
+  // With two Walnuts on the host nothing says which, so none. Twin of daemon-source.ts.
+  if (callerSid === EXTERNAL_CALLER_SID) {
+    const homes = offlineHost.homes()
+    return homes.length === 1 ? homes[0] : undefined
+  }
   return offlineHost.ownerOf(callerSid)
 }
 
@@ -5180,9 +5189,20 @@ function sendGatewayRequest(
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
   const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+  // A call from outside any session is answered here only when it reads: a write
+  // this host journals names a session for the Mac to replay, and this has none.
+  // Its other calls go to the companion while it leads.
+  const external = callerSid === EXTERNAL_CALLER_SID
+  if (external && home && !target && !readable) {
+    if (forwardToBackup(home, capability, callerSid, payload, respond)) return
+    if (waitHere()) return
+    logMsg('info', 'gateway: no server connected', { capability, callerSid })
+    return respond(gatewayError('hub_unreachable', 'no primary server connected'))
+  }
   // Answer here while the Walnut is away, and while its server is still taking
-  // the handover: an id it has not imported yet must never reach it.
-  if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+  // the handover: an id it has not imported yet must never reach it. An outside
+  // caller's write still goes to that server, which drains this host first.
+  if (home && (!target || (offlineHost.pendingHandover(home) && (!external || readable))) && offlineHost.hasHome(home)) {
     // A search goes to the companion first while it leads: its copy holds every
     // task, this host's only its own. Answered here when the companion cannot.
     if (!target && capability === 'tools.call' && payload.name === 'search') {
@@ -5215,7 +5235,7 @@ function sendGatewayRequest(
   // A message between two of this Walnut's sessions on this host is delivered
   // here even while the server answers: the server would only send it back to
   // this daemon. What this host cannot take for sure goes to the server as before.
-  if (home && offlineHost.hasHome(home)) {
+  if (home && !external && offlineHost.hasHome(home)) {
     const primary = target
     void offlineHost.handleLocal(home, callerSid, capability, payload).then((r) => {
       if (r) {

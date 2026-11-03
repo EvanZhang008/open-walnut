@@ -62,6 +62,16 @@ describe('backup gateway', () => {
     expect(h.answer()!.result.outcome).toContain('"Fix the build" on oldbox')
   })
 
+  it('a send from outside any session (a terminal) asks no reply, as on the server', async () => {
+    const h = harness()
+    await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'from a terminal' } }, { callerSid: 'external', caller: { title: '', host: 'devbox' } }))
+    expect(h.delivers[0]).toMatchObject({ delivery: { kind: 'peer', text: 'from a terminal', expect_reply: false, from: { sid: 'external' } } })
+    await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'answer me', expect_reply: true } }, { callerSid: 'external' }))
+    expect(h.delivers).toHaveLength(1)
+    expect(h.answer()).toMatchObject({ relayId: 7, errorCode: 'bad_request' })
+    expect(JSON.stringify(h.answer())).toContain('expect_reply needs a session caller')
+  })
+
   it('carries a force and its reason to the target host, which decides on a COMPLETE task', async () => {
     const h = harness()
     await h.gw.handle('devbox', h.frame({ name: 'task_send', args: { to: 'mtaskbbb', text: 'again', force: true, reason: 'its fix regressed' } }))
