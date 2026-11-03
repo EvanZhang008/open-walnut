@@ -44,6 +44,7 @@ enum UITestLaunch {
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
     /// reference before the app comes up.
     static func app(_ arguments: [String] = []) -> XCUIApplication {
+        FailureEvidence.install()
         let app = XCUIApplication()
         // An explicit pairing wins. Prepending unconditionally would leave two values
         // for one key in the argument domain and make the winner an ordering detail.
@@ -78,5 +79,39 @@ enum UITestLaunch {
     /// because an app you can construct is an app you can launch unpinned.
     static func terminate() {
         XCUIApplication().terminate()
+    }
+}
+
+/// On a test's first failure, attach what the screen showed and the app's element tree, so a
+/// failure on a CI runner can tell "the test could not tap or read it" from "the app dropped
+/// it" (ios-native/tests/ui-failure-evidence.py keeps both). XCTest records a screen video
+/// but no screenshot at the failure. Installed by every launch through `UITestLaunch`.
+final class FailureEvidence: NSObject, XCTestObservation {
+    private static let shared: FailureEvidence = {
+        let observer = FailureEvidence()
+        XCTestObservationCenter.shared.addTestObserver(observer)
+        return observer
+    }()
+    private var captured = false
+
+    static func install() { _ = shared }
+
+    func testCaseWillStart(_ testCase: XCTestCase) { captured = false }
+
+    func testCase(_ testCase: XCTestCase, didRecord issue: XCTIssue) {
+        // Once per test: the captures below query the app, and a failed query records an
+        // issue of its own.
+        guard !captured else { return }
+        captured = true
+        let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screen.name = "failure-screen"
+        screen.lifetime = .keepAlways
+        testCase.add(screen)
+        let app = XCUIApplication()
+        guard app.state == .runningForeground else { return }
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "failure-hierarchy"
+        tree.lifetime = .keepAlways
+        testCase.add(tree)
     }
 }

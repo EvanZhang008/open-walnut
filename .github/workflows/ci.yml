@@ -887,24 +887,51 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
             -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
+      # Its own limit, under the job's 60: a job that runs out of time is cancelled, and a
+      # cancelled job runs no failure() step, so a hang would keep no evidence. A step that
+      # runs out fails, and the steps below still run (the leg took about 36 minutes; this
+      # limit plus the evidence step's stays 5 minutes under the job's).
       - name: UI tests (WalnutUITests, offline pairing)
         if: matrix.layer == 'ui'
+        timeout-minutes: 50
         shell: bash
         run: |
           WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
+            WALNUT_UITEST_RESULT_BUNDLE="$RUNNER_TEMP/ios-ui.xcresult" \
             bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
-      # The failures go into the log, never the result bundle as an artifact: a public
-      # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
-      # the runner's environment) failed the leak audit on 2026-10-31.
-      # Each failed test is also an annotation (::error), which the public API serves with no
+      # The result bundle stays on the runner, never an artifact: a public repo's artifacts
+      # are anyone's to download, and the 130 MB bundle (build logs, the runner's
+      # environment) failed the leak audit on 2026-10-31.
+      # Each failed test is an annotation (::error), which the public API serves with no
       # login (check-runs/<job>/annotations), so the failure can be read without the job log.
       - name: The failed tests
-        if: failure() && matrix.layer == 'unit'
+        if: failure()
         shell: bash
         run: |
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-unit.xcresult" --compact \
-            | python3 ios-native/tests/failed-tests.py \
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-${{ matrix.layer }}.xcresult" --compact \
+            | python3 ios-native/tests/failed-tests.py "${{ matrix.layer }}" \
             || echo "no readable result bundle"
+      # What a failed UI test saw, screened, is the one artifact: its screenshots, the text
+      # it attached (the UI hierarchy) and its step log (the taps XCTest made), PNG/JPEG and
+      # plain text only, secrets dropped, paths and hosts redacted, 25 MB at most
+      # (ios-native/tests/ui-failure-evidence.py). The leak audit scans it like any artifact.
+      - name: The failure evidence (UI leg)
+        id: evidence
+        if: failure() && matrix.layer == 'ui'
+        # seconds normally; bounded so the upload step after it still runs in the job's time
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          python3 ios-native/tests/ui-failure-evidence.py \
+            --bundle "$RUNNER_TEMP/ios-ui.xcresult" --out "$RUNNER_TEMP/ios-ui-evidence"
+      - name: Upload the failure evidence
+        if: failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-failure-evidence-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-ui-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ── The single required check ───────────────────────────────────────────────
   #

@@ -12,8 +12,8 @@ import { parse as parseYaml } from 'yaml'
 
 const ROOT = path.resolve(__dirname, '../..')
 const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
-type Step = { name?: string; run?: string; if?: string; uses?: string; env?: Record<string, string> }
-const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
+type Step = { name?: string; id?: string; run?: string; if?: string; uses?: string; env?: Record<string, string>; with?: Record<string, string | number>; 'timeout-minutes'?: number }
+const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; 'timeout-minutes'?: number; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
 const job = doc.jobs.ios!
 
 /** What a skip list names, `-skip-testing:<Target>/<Class>[/<method>]` each. */
@@ -80,6 +80,34 @@ describe('the iOS job in ci.yml', () => {
     const summary = { result: 'Failed', totalTestCount: 2, failedTests: 1, testFailures: [{ testIdentifierString: 'FooTests/testBar(a:b)', failureText: 'x, 100%\ny' }] }
     const out = execFileSync('python3', [path.join(ROOT, 'ios-native/tests/failed-tests.py')], { input: JSON.stringify(summary), encoding: 'utf8' })
     expect(out.split('\n')).toContain('::error title=iOS unit FooTests/testBar(a%3Ab)::x, 100%25%0Ay')
+    const ui = execFileSync('python3', [path.join(ROOT, 'ios-native/tests/failed-tests.py'), 'ui'], { input: JSON.stringify(summary), encoding: 'utf8' })
+    expect(ui.split('\n')).toContain('::error title=iOS ui FooTests/testBar(a%3Ab)::x, 100%25%0Ay')
+  })
+
+  it('names the failed tests of both legs, each from its own result bundle', () => {
+    const step = job.steps.find((s) => s.name === 'The failed tests')!
+    expect(step.if).toBe('failure()')
+    expect(step.run).toContain('--path "$RUNNER_TEMP/ios-${{ matrix.layer }}.xcresult"')
+    expect(step.run).toContain('failed-tests.py "${{ matrix.layer }}"')
+    const unit = job.steps.find((s) => s.if === "matrix.layer == 'unit'" && s.run?.includes('xcodebuild test'))!
+    expect(unit.run).toContain('-resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult"')
+    const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'")!
+    expect(ui.run).toContain('WALNUT_UITEST_RESULT_BUNDLE="$RUNNER_TEMP/ios-ui.xcresult"')
+  })
+
+  it('lets a hung UI leg fail its step, not the job, so the evidence steps still run', () => {
+    // A job past its timeout-minutes is cancelled, and a cancelled job runs no failure() step.
+    const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'" && s.run?.includes('run-ui-tests.sh'))!
+    const stepLimit = ui['timeout-minutes']!
+    expect(stepLimit).toBeGreaterThanOrEqual(45) // the leg has run about 36 minutes
+    // The evidence step has its own limit too (its screen is linear, seconds on a 2 MB text),
+    // and both together stay 5 minutes under the job's, for the boot and the upload.
+    const ev = job.steps.find((s) => s.id === 'evidence')!
+    const evLimit = ev['timeout-minutes']!
+    expect(evLimit).toBeGreaterThan(0)
+    expect(evLimit).toBeLessThanOrEqual(5)
+    expect(stepLimit + evLimit).toBeLessThanOrEqual(job['timeout-minutes']! - 5)
+    expect(job.steps.indexOf(ev)).toBeGreaterThan(job.steps.indexOf(ui))
   })
 
   it('runs WalnutTests with xcodebuild and WalnutUITests through run-ui-tests.sh', () => {
@@ -133,10 +161,29 @@ describe('the iOS job in ci.yml', () => {
     expect(ui.run).toMatch(/run-ui-tests\.sh -only-testing:WalnutUITests \$IOS_CI_SKIP_UI/)
   })
 
-  it('uploads no artifact: the failures go into the log', () => {
+  it('never uploads a result bundle: only the screened evidence of a failed UI test', () => {
     // The 130 MB result bundle it uploaded on failure failed the leak audit (2026-10-31).
-    expect(job.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact'))).toEqual([])
-    expect(job.steps.find((s) => s.name === 'The failed tests')?.run).toContain('xcresulttool get test-results summary')
+    const uploads = Object.values(doc.jobs).flatMap((j) => j.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact')))
+    for (const u of uploads) expect(String(u.with?.path ?? ''), 'a result bundle is never an artifact').not.toMatch(/xcresult|\/dd\b|DerivedData/i)
+    const own = job.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact'))
+    expect(own).toHaveLength(1)
+    const up = own[0]!
+    expect(up.with?.path).toBe('${{ runner.temp }}/ios-ui-evidence')
+    expect(up.with?.['if-no-files-found']).toBe('ignore')
+    expect(Number(up.with?.['retention-days'])).toBeLessThanOrEqual(7)
+    expect(String(up.with?.name)).toContain('${{ github.run_attempt }}')
+    expect(up.if).toBe("failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0")
+    // The evidence comes out of the bundle through the screening script, into its own directory.
+    const ev = job.steps.find((s) => s.id === 'evidence')!
+    expect(ev.if).toBe("failure() && matrix.layer == 'ui'")
+    expect(ev.run).toContain('python3 ios-native/tests/ui-failure-evidence.py')
+    expect(ev.run).toContain('--bundle "$RUNNER_TEMP/ios-ui.xcresult" --out "$RUNNER_TEMP/ios-ui-evidence"')
+    expect(job.steps.indexOf(ev)).toBeLessThan(job.steps.indexOf(up))
+    // No step copies the bundle (or anything of it) into the evidence directory but the script.
+    for (const s of job.steps) if (s !== ev) expect(s.run ?? '').not.toContain('ios-ui-evidence')
+    // Step continue-on-error would turn a failed test step into a success, and failure() false.
+    for (const s of job.steps) expect(s, `${s.name}: no step-level continue-on-error`).not.toHaveProperty('continue-on-error')
+    expect(fs.existsSync(path.join(ROOT, 'ios-native/tests/ui-failure-evidence.py'))).toBe(true)
   })
 
   it('picks a simulator the image has, never a fixed device name', () => {

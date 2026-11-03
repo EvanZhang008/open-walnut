@@ -24,6 +24,9 @@ const VETTED: Record<string, string> = {
   'field-logs-${{ matrix.os }}': 'the field update logs',
   'archive-logs-${{ matrix.target }}': 'the archive build logs',
   'browser-report-${{ matrix.shard }}': 'the Playwright JSON report the browser baseline reads',
+  // Never the result bundle: ios-native/tests/ui-failure-evidence.py copies out only PNG/JPEG
+  // and screened plain text of the failed tests, 25 MB at most (tests/scripts/ci-ios.test.ts).
+  'ios-ui-failure-evidence-attempt-${{ github.run_attempt }}': 'a failed iOS UI test\'s screenshots, element tree and step log, screened',
 }
 
 describe('the artifacts ci.yml uploads', () => {
