@@ -3910,7 +3910,9 @@ function handleCommand(ws, msg) {
       + (err instanceof Error ? err.message : String(err)));
   };
   try {
-    const out = daemonCommands.admit(function () { return dispatchCommand(ws, id, cmd); });
+    // An answer to a relay is not new work: taken while the daemon pauses or drains (twin of daemon-standalone.ts).
+    const work = function () { return dispatchCommand(ws, id, cmd); };
+    const out = cmd.cmd === 'gateway-result' ? work() : daemonCommands.admit(work);
     if (out && typeof out.then === 'function') out.catch(replyError);
     return;
   } catch (err) {
@@ -6389,6 +6391,23 @@ function releaseGatewayWaiters() {
     waiting[i].respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again', { stopping: true }));
   }
 }
+// The daemon stops with relays still at the server: a read is 'stopping' (sent again to the
+// next daemon), anything else may have run: hub_timeout, never sent again (twin of
+// daemon-standalone.ts releaseGatewayRelays).
+function releaseGatewayRelays() {
+  if (gatewayRelayPending.size === 0) return;
+  // The mark fresh again: a long drain must not age it past what a read waits for.
+  noteRestarting();
+  Array.from(gatewayRelayPending).forEach(function (pair) {
+    var relayId = pair[0], entry = pair[1];
+    gatewayRelayPending.delete(relayId);
+    clearTimeout(entry.timer);
+    var read = !!entry.call && (entry.call.readable || !!entry.call.readOnly);
+    entry.respond(read
+      ? gatewayError('hub_unreachable', 'the daemon is restarting; this read was not answered, try again', { stopping: true })
+      : gatewayError('hub_timeout', 'the daemon restarted while the Walnut server had this call: it may have run, so check before running it again'));
+  });
+}
 function wakeGatewayCalls() {
   var waiting = Array.from(gatewayWaiting);
   for (var i = 0; i < waiting.length; i++) {
@@ -6444,6 +6463,7 @@ function sendRelayAttempt(relayId, target) {
   }
   call.sentOn = target;
   call.attempts += 1;
+  call.readOnly = serverReadsOp(target, call);
   entry.timer = setTimeout(function () { relayAttemptEnded(relayId); }, relayAttemptMs(call.deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS));
   logMsg('info', call.attempts === 1 ? 'gateway: relaying to primary server' : 'gateway: relaying to primary server again', { relayId: relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts });
   // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
@@ -15725,6 +15745,8 @@ async function startDaemon() {
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
       const failed = drained.find(function (result) { return result.status === 'rejected'; });
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });
+      // Answers that came while it drained went out; the rest are told now.
+      releaseGatewayRelays();
       persistRegistry();
       cleanup();
       try { httpServer.close(); } catch {}

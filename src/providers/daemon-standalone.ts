@@ -2511,7 +2511,10 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
       + (err instanceof Error ? err.message : String(err)))
   }
   try {
-    const out = daemonCommands.admit(() => dispatchCommand(ws, id as number, cmd)) as unknown
+    // An answer to a relay is not new work: it is taken while the daemon pauses or drains,
+    // so a call the server finished in those seconds gets its result (releaseGatewayRelays).
+    const work = () => dispatchCommand(ws, id as number, cmd)
+    const out = (cmd.cmd === 'gateway-result' ? work() : daemonCommands.admit(work)) as unknown
     if (out && typeof (out as Promise<unknown>).then === 'function') {
       (out as Promise<unknown>).catch(replyError)
     }
@@ -3782,6 +3785,8 @@ type GatewayRelayCall = {
   sentOn: ServerWebSocket<WsData> | null
   run?: string
   attempts: number
+  /** The server it last went to names its op read-only (serverReadsOp): it may be sent again after a stop. */
+  readOnly?: boolean
 }
 const gatewayRelayPending = new Map<number, {
   respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined
@@ -5300,6 +5305,29 @@ function releaseGatewayWaiters(): void {
   }
 }
 
+/**
+ * The daemon stops with relays still at the server (their answers did not come while it
+ * drained): each caller is told now rather than cut off with no word. A read (this host's
+ * copy answers it, or the server named it read-only) is `stopping`, so a CLI that finds
+ * the restart mark sends it again to the next daemon. Anything else may have run there:
+ * `hub_timeout`, the answer that did not come back, so every client says "do not run it
+ * again" (and names a host_exec job to read) and none sends it another way.
+ * Keep in sync with daemon-source.ts.
+ */
+function releaseGatewayRelays(): void {
+  if (gatewayRelayPending.size === 0) return
+  // The mark fresh again: a long drain must not age it past what a read waits for.
+  noteRestarting()
+  for (const [relayId, entry] of [...gatewayRelayPending]) {
+    gatewayRelayPending.delete(relayId)
+    clearTimeout(entry.timer)
+    const read = !!entry.call && (entry.call.readable || !!entry.call.readOnly)
+    entry.respond(read
+      ? gatewayError('hub_unreachable', 'the daemon is restarting; this read was not answered, try again', { stopping: true })
+      : gatewayError('hub_timeout', 'the daemon restarted while the Walnut server had this call: it may have run, so check before running it again'))
+  }
+}
+
 /** A server may take calls now: the waiting ones go, and relays whose socket closed go again. */
 function wakeGatewayCalls(): void {
   for (const w of [...gatewayWaiting]) {
@@ -5366,6 +5394,7 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
   }
   call.sentOn = target
   call.attempts += 1
+  call.readOnly = serverReadsOp(target, call)
   entry.timer = setTimeout(() => relayAttemptEnded(relayId), relayAttemptMs(call.deadline, Date.now(), gatewayHubTimeoutMs()))
   logMsg('info', call.attempts === 1 ? 'gateway: relaying to primary server' : 'gateway: relaying to primary server again', {
     relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts, to: wsId(target),
@@ -13462,6 +13491,8 @@ if (action === '--start' || SERVICE_MODE) {
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
       const failed = drained.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })
+      // Answers that came while it drained went out; the rest are told now.
+      releaseGatewayRelays()
       persistRegistry()
       cleanup()
       server.stop(true)

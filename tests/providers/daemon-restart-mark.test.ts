@@ -205,6 +205,12 @@ describe('one rule in every reader: the TS CLI, the JS twin CLI and both user sh
       // 15 s before stopDaemon: the mark goes down with the pause, and comes off when it resumes.
       expect(twin).toMatch(/const pause = daemonCommands\.pause\([^\n]*\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
       expect(twin.match(/pause\.resume\(\);?\s*\n?\s*clearRestartMark\(\)/g)?.length).toBe(2)
+      // Relays the server still has are answered after the drain (its answers still come), before the exit.
+      expect(twin).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n\s+persistRegistry\(\)/)
+      // ...with the mark fresh again when there is one to answer, and only then (a handover has none).
+      expect(twin).toMatch(/function releaseGatewayRelays\(\)[^{]*\{\n\s+if \(gatewayRelayPending\.size === 0\) return;?\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
+      // A relay's answer is taken while it drains, never refused as new work.
+      expect(twin).toMatch(/cmd\.cmd === 'gateway-result' \? work\(\) : daemonCommands\.admit\(work\)/)
     }
   })
 })

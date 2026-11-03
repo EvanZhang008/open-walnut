@@ -524,7 +524,7 @@ function noListener(err: unknown): boolean {
   return code === 'ENOENT' || code === 'ECONNREFUSED'
 }
 
-/** A stopping daemon's answer (it took nothing of the call). */
+/** A stopping daemon's answer: it ran nothing of the call, or only a read the server may run again. */
 export function stoppingAnswer(resp: GatewayResponse): boolean {
   return !resp.ok && resp.error.code === 'hub_unreachable'
     && (resp.error.detail as { stopping?: unknown } | null | undefined)?.stopping === true
@@ -542,7 +542,8 @@ export interface RideRestartDeps {
  * requestOverSocket that rides a restart of this host's daemon. While a fresh
  * restart mark sits beside the socket, a call nothing listens for yet, or one the
  * stopping daemon turned away, waits for the next daemon and goes again: nothing
- * was sent either time, so this is safe for every op. Says so once on stderr.
+ * was sent, or only a read the server may run twice (a call that may have changed
+ * something comes back hub_timeout instead), so this is safe. Says so once on stderr.
  * Without a mark, or past RESTART_RIDE_MAX_MS, it answers as requestOverSocket does.
  */
 export async function requestRidingRestart(

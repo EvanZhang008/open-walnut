@@ -550,7 +550,9 @@ describe.each([
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
     const hostFix = { cancel: vi.fn(() => false) }
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(),
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
+      releaseGatewayRelays: () => { order.push('relays') },
+      noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(() => cron.promise) },
       netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') },
@@ -567,10 +569,12 @@ describe.each([
     else cron.resolve()
     await Promise.resolve()
     await Promise.resolve()
-    expect(order).toEqual([])
+    // The mark goes down first; nothing else until the drain ends.
+    expect(order).toEqual(['mark'])
     work.resolve()
     expect(await exited.promise).toBe(cronFails || updating ? 1 : 0)
-    expect(order).toEqual(['persist', 'cleanup', 'server', 'release', `exit:${cronFails || updating ? 1 : 0}`])
+    // Relays the server still has are answered once the drain is done (answers still came during it).
+    expect(order).toEqual(['mark', 'relays', 'persist', 'cleanup', 'server', 'release', `exit:${cronFails || updating ? 1 : 0}`])
     expect(exit).toHaveBeenCalledTimes(1)
     expect(hostFix.cancel).toHaveBeenCalledTimes(1)
   })
@@ -583,7 +587,7 @@ describe.each([
     const logMsg = vi.fn()
     const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(),
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
