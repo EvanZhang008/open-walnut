@@ -9,7 +9,12 @@ import { socketAddr } from '../../providers/net-config-core.js'
 import { joinedOf, netDoc, netRows, type HostRows } from './net-rows.js'
 import type { NetMember } from './net-mac.js'
 
-export interface Where { addrs?: string[]; relay?: string }
+/**
+ * `self`: the addresses the machine itself reported at its last sighting (its own network
+ * interfaces), replaced each time, never merged: the found ~/.ssh/config row for the same
+ * machine is matched by them (core/hosts/joined-twins.ts), and a network it has left must not.
+ */
+export interface Where { addrs?: string[]; relay?: string; self?: string[] }
 
 const MAX_ADDRS = 8
 
@@ -28,7 +33,8 @@ export function whereOf(net: unknown): Record<string, Where> {
     const o = v as Record<string, unknown>
     const addrs = Array.isArray(o.addrs) ? (o.addrs.filter(socketAddr) as string[]).slice(0, MAX_ADDRS) : []
     const relay = relayOk(o.relay) ? o.relay : undefined
-    if (addrs.length || relay) out[id] = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}) }
+    const self = Array.isArray(o.self) ? (o.self.filter(socketAddr) as string[]).slice(0, MAX_ADDRS) : []
+    if (addrs.length || relay || self.length) out[id] = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(self.length ? { self } : {}) }
   }
   return out
 }
@@ -70,7 +76,7 @@ export function relayToKeep(home: string | null | undefined, ours: string[], was
  * removed, checked in the same config write, so a Remove is never undone (Remove drops the
  * row before it forgets the machine). True when it changed.
  */
-export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?: string | null; ours?: string[] }): Promise<boolean> {
+export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?: string | null; ours?: string[]; self?: string[] }): Promise<boolean> {
   const { modifyConfigDoc } = await import('../config-store.js')
   return modifyConfigDoc((doc) => {
     const net = netDoc(doc)
@@ -82,7 +88,8 @@ export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?
     const addrs = mergeAddrs(seen.addrs, was.addrs)
     const keep = 'home' in seen ? relayToKeep(seen.home, seen.ours ?? [], was.relay) : was.relay
     const relay = relayOk(keep) ? keep : undefined
-    const next: Where = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}) }
+    const self = seen.self ? [...new Set(seen.self.filter(socketAddr))].slice(0, MAX_ADDRS) : was.self ?? []
+    const next: Where = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(self.length ? { self } : {}) }
     if (JSON.stringify(next) === JSON.stringify(was)) return { write: false, result: false }
     net.where = { ...all, [endpoint]: next }
     doc.net = net

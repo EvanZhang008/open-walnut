@@ -30,6 +30,8 @@ export interface NetOverview {
   syncedAt: number | null;
   error: string | null;
   machines: NetMachine[];
+  /** Rows found in ~/.ssh/config that are one of `machines` (found alias to machine): listed once. Absent from an older server. */
+  twins?: Record<string, string>;
 }
 
 export interface NetInvite {

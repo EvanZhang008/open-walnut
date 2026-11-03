@@ -15,6 +15,7 @@
 import { Router, type Response } from 'express'
 import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
 import { inviteStatus, makeInvite } from '../../core/net/net-invites.js'
+import { joinedTwins } from '../../core/hosts/joined-twins.js'
 
 export const hostsNetRouter = Router()
 
@@ -56,7 +57,8 @@ hostsNetRouter.get('/', async (_req, res) => {
       import('../../core/config-manager.js'), within(STATUS_DEADLINE_MS, peerLinks()).catch(() => new Map()),
       within(STATUS_DEADLINE_MS, relayNow()).catch(() => ({ companion: state.companion, relay: state.relay })),
     ])
-    const hosts = (await getConfig()).hosts ?? {}
+    const config = await getConfig()
+    const hosts = config.hosts ?? {}
     const machines = Object.entries(hosts)
       .filter(([, h]) => h.transport === 'net' && typeof h.endpoint === 'string')
       .map(([name, h]) => {
@@ -73,6 +75,8 @@ hostsNetRouter.get('/', async (_req, res) => {
     res.json({
       enabled: state.enabled, macId: state.macId, companion: now.companion, relay: now.relay, relays: state.relays,
       syncedAt: state.syncedAt, error: state.error, machines,
+      // Rows found in ~/.ssh/config that are one of these machines: the list shows them once.
+      twins: Object.fromEntries(joinedTwins(hosts, config.net).map((t) => [t.alias, t.joined])),
     })
   } catch (err) {
     sendError(res, err)

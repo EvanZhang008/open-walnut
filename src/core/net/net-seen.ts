@@ -21,7 +21,7 @@ export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoi
     const at = directAddr(mine.node?.peers?.find((p) => p.id === endpoint)?.link)
     // Its relay is kept only when it is one of this Mac's own (net-where.ts relayToKeep).
     const home = typeof st.node?.homeRelay === 'string' ? st.node.homeRelay : null
-    if (await noteWhere(endpoint, { addrs: mergeAddrs(at ? [at] : [], own), home, ours })) log.session.info('net: noted where a machine is', { host: name, at, home })
+    if (await noteWhere(endpoint, { addrs: mergeAddrs(at ? [at] : [], own), home, ours, self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
   } catch (err) { log.session.debug('net: could not read where a machine is', { host: name, error: (err as Error).message }) }
 }
 

@@ -18,6 +18,7 @@ import { HostServersGroup } from './HostServersGroup';
 import { HostExecGrantsGroup } from './HostExecGrantsGroup';
 import { SecretsGroup } from './SecretsGroup';
 import { HostFleetGroup } from './HostFleetGroup';
+import { useJoinedTwins } from './useJoinedTwins';
 import { HostNetworkGroup } from './HostNetworkGroup';
 import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
@@ -134,6 +135,8 @@ interface Props {
 export function RemoteHostsSection({ config, onSave }: Props) {
   // Hydrated on the first render so the auto-save fingerprint matches its baseline at mount.
   const [hosts, setHosts] = useState<HostEntry[]>(() => hostsFromConfig(config));
+  // A found row that is a joined machine shows once, as that machine (it is still saved).
+  const twins = useJoinedTwins(config.hosts);
   const [expanded, setExpanded] = useState<number | null>(null);
   // Per-host concurrency caps (config.session_limits). Keyed by the same aliases
   // as the hosts above (plus "local"), so they belong on this card.
@@ -320,10 +323,11 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       <DiagnosticsFallback copy={hostCopy} testId="remote-hosts-diagnostics-fallback" />
       <HostFleetGroup />
       <SettingsGroup heading="Hosts">
-        {hosts.length === 0 && (
+        {hosts.every((h) => twins[h.alias]) && (
           <SettingsRow label="No remote hosts yet." control={addButton} />
         )}
         {hosts.map((host, idx) => {
+          if (twins[host.alias]) return null;
           const open = expanded === idx;
           const sub = hostSub(host, idx);
           const alias = hostAlias(host);
