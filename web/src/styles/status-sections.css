@@ -40,6 +40,14 @@
 .status-card-body > .todo-pinned-title { line-height: 18px; }
 .status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: 11px; line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
 .status-card-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The project name is a link (RowProjectName): a click filters the panel to it. It reads as
+   the label it was until the pointer is on it, and only it underlines, not the row. */
+.status-card-meta button.row-project-link {
+  display: inline; height: auto; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; color: inherit; font: inherit; line-height: inherit; text-align: left; white-space: nowrap; cursor: pointer;
+}
+.status-card-meta button.row-project-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; background: none; }
+.status-card-meta button.row-project-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .status-card-meta-fill { flex: 1; }
 /* Why a Waiting row waits: on the meta line (Flat) or after the title (a project's fold). */
 .status-card-meta:has(.status-card-reason) .status-card-project { min-width: min(7ch, 30%); }
@@ -70,6 +78,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    R3-04): a 15 px button is no target, so a tap opens the row, whose detail has the links. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html .app-shell-navigation .todo-panel .status-card-meta .task-team-pill { min-width: 0; pointer-events: none; font-size: 11px; }
+  html .app-shell-navigation .todo-panel .status-card-meta .row-project-link { pointer-events: none; }
 }
 .status-section-more {
   align-self: flex-start; margin: 2px 0 0 22px; padding: 2px 6px; border: 0; border-radius: 6px;

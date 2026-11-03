@@ -24,6 +24,7 @@ import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { AwaySyncMark } from './AwaySyncMark';
 import { PhoneRowExtras } from './PhoneRowExtras';
+import { RowProjectName } from './RowProjectName';
 import { isPhoneLayout, phonePhaseAttrs } from './phone-row-behavior';
 import { formatWaitUntil } from './TaskStatusControl';
 import { formatStartDateDisplay } from '../common/DatePicker';
@@ -107,6 +108,8 @@ export interface SectionRowHandlers {
   onStartSession?: (task: Task) => void;
   onMoveToProject?: (taskId: string, project: string) => void;
   onDelete?: (id: string) => void;
+  /** A click on a row's project name: show every task of that project (project-jump.ts). */
+  onFilterProject?: (project: string) => void;
   /** Fetch rows not loaded yet (the completed archive), asked by "Show more". */
   onLoadMore?: () => void;
 }
@@ -158,7 +161,6 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   ) : reasonText ? (
     <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
   ) : null;
-  const projectName = task.project || 'Inbox';
   // The same rename as every task row: double-click the title (useInlineTitleEdit).
   const title = (
     <span
@@ -236,7 +238,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         // then (a Waiting row) what it waits on.
         <span className="status-card-body">
           <span className="status-card-meta">
-            <span className="status-card-project">{projectName}</span>
+            <RowProjectName project={task.project || ''} className="status-card-project" onFilter={handlers.onFilterProject} />
             {pills}
             {reasonBelow ? null : reason}
             {wake}

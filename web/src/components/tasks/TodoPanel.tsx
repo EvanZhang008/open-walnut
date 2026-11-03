@@ -128,6 +128,8 @@ import { projectFoldKey, usePanelDesign } from './panel-design';
 import {
   LS_STATUS_SECTIONS_KEY, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, readSectionOpen, writeSectionOpen, type StatusSectionKey,
 } from './status-sections';
+import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
+import { usePageView } from '@/utils/view-memory';
 import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
 import { TodoFilterEmpty, FilterOverrideReasons, isJustCreated } from './TodoFilterEmpty';
 import { staleDonePinIds } from './pin-search-fold';
@@ -2409,7 +2411,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // state with zero visible effect until the query is cleared.
   const isSearchModeRef = useRef(false);
   const toggleSection = useCallback((id: string) => {
-    if (isSearchModeRef.current) return;
+    if (isSearchModeRef.current || jumpLiveRef.current) return;
     setCollapsedSections((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -2501,6 +2503,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // a search narrows the view WITHOUT touching the persisted tab, so clearing the
   // query drops back to wherever the user was before searching.
   const [searchSection, setSearchSection] = useState<TodoSection | null>(null);
+  // A click on a row's project name (project-jump.ts): the Project filter takes that project and
+  // the view shows all of it, every status section open, without writing the saved tab or folds,
+  // so clearing the Project chip puts the view back as it was. Kept like a view, with the filter.
+  const [projectJump, setProjectJump] = usePageView<ProjectJump | null>('home', 'projectJump', null, isProjectJump);
+  const jumpLive = projectJumpHolds(projectJump, filterState.projects);
+  const jumpLiveRef = useRef(jumpLive);
+  jumpLiveRef.current = jumpLive;
+  useEffect(() => {
+    if (projectJump && !jumpLive) setProjectJump(null);
+  }, [projectJump, jumpLive, setProjectJump]);
+  const filterStateRef = useRef(filterState);
+  filterStateRef.current = filterState;
+  const applyFilters = homeFilters.apply;
+  const jumpToProject = useCallback((project: string) => {
+    log.info('todo-panel', 'project jump', { project });
+    const state = filterStateRef.current;
+    setProjectJump((prev) => startProjectJump(project, projectJumpHolds(prev, state.projects) ? prev : null));
+    applyFilters({ ...state, projects: [project] }, 'board');
+  }, [applyFilters, setProjectJump]);
   // Mirror in a ref: the focus/locate effect reads the current section but must NOT
   // list it as a dependency (a tab switch would re-run the whole locate pass).
   // Holds the EFFECTIVE section (assigned after search-view resolution below).
@@ -2508,12 +2529,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const handleSectionChange = useCallback((section: TodoSection) => {
     if (isTierSection(section)) noteTierUsed();
     if (isSearchModeRef.current) { setSearchSection(section); return; }
+    // A tab picked inside a project jump stays the jump's: the saved tab is what clearing returns to.
+    if (jumpLiveRef.current) { setProjectJump((prev) => (prev ? { ...prev, section } : prev)); return; }
     // startTransition: switching into a big section (Tasks/All = thousands of
     // mounted rows) is a multi-second render. Time-slice it so the click never
     // freezes the page — typing/scrolling stay responsive while rows mount.
     startTransition(() => setActiveSection(section));
     persistSection(section);
-  }, [noteTierUsed]);
+  }, [noteTierUsed, setProjectJump]);
   // Self-heal a stale custom-tier tab: if the active tab is a deleted tier's id
   // (registry loaded, id absent), fall back to Focus instead of an empty panel.
   // MUST wait for customTiersLoaded: the registry starts as [] while the fetch is
@@ -2528,7 +2551,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       !!s && s.startsWith('ct_') && !customTiersLive.some((t) => t.id === s);
     if (isDeleted(activeSection)) { setActiveSection('focus'); persistSection('focus'); }
     if (isDeleted(searchSection)) setSearchSection('focus');
-  }, [activeSection, searchSection, customTiersLive, customTiersLoaded]);
+    if (isDeleted(projectJump?.section ?? null)) setProjectJump((prev) => (prev ? { ...prev, section: null } : prev));
+  }, [activeSection, searchSection, projectJump?.section, setProjectJump, customTiersLive, customTiersLoaded]);
   // The pinned tiers' project runs, folded per (tier, project).
   const [runFolds, setRunFolds] = useState<ReadonlySet<string>>(() => readFolds(LS_RUN_FOLDS_KEY, LS_LEGACY_RUN_FOLDS_KEY));
   // Every tier key; allTierKeys is computed further down, and splitting an every-tier
@@ -2638,7 +2662,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // `searchSection` override; the persisted tab is untouched, so clearing the query
   // restores the pre-search view.
   isSearchModeRef.current = isSearchMode;
-  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : activeSection;
+  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : jumpLive ? projectJumpSection(projectJump) : activeSection;
   // The home Filter has no Pinned dimension (spec 3.2), so the view is the section.
   const effectiveSection: TodoSection = rawSection;
 
@@ -2666,14 +2690,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  folded region would read as "search found nothing"). The persisted collapse
    *  state is untouched; clearing the query folds things back. */
   const isFolded = useCallback(
-    (id: string) => isStacked && !isSearchMode && collapsedSections.has(id),
-    [isStacked, isSearchMode, collapsedSections],
+    (id: string) => isStacked && !isSearchMode && !jumpLive && collapsedSections.has(id),
+    [isStacked, isSearchMode, jumpLive, collapsedSections],
   );
   /** Chevron direction — must track the CONTENT (isFolded), not the raw collapsed
    *  set, or a search's force-expand would show open regions with "collapsed" arrows. */
   const chevronCollapsed = useCallback(
-    (id: string) => !isSearchMode && collapsedSections.has(id),
-    [isSearchMode, collapsedSections],
+    (id: string) => !isSearchMode && !jumpLive && collapsedSections.has(id),
+    [isSearchMode, jumpLive, collapsedSections],
   );
 
   // Track previous focusedTaskId to detect new focus (not re-renders)
@@ -4779,9 +4803,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
+  // Inside a project jump the sections fold on the jump's own state, never the saved one.
+  const shownSectionOpen = jumpLive ? projectJump.open : sectionOpen;
   const toggleStatusSection = useCallback((key: StatusSectionKey) => {
+    if (jumpLiveRef.current) {
+      setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: !prev.open[key] } } : prev));
+      return;
+    }
     setSectionOpenTo(key, !sectionOpenRef.current[key]);
-  }, [setSectionOpenTo]);
+  }, [setSectionOpenTo, setProjectJump]);
+  /** Open one section for a locate: the jump's own state while a jump is on, else the saved one. */
+  const shownSectionOpenRef = useRef(shownSectionOpen);
+  shownSectionOpenRef.current = shownSectionOpen;
+  const openStatusSection = useCallback((key: StatusSectionKey) => {
+    if (shownSectionOpenRef.current[key]) return;
+    if (jumpLiveRef.current) setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: true } } : prev));
+    else setSectionOpenTo(key, true);
+  }, [setSectionOpenTo, setProjectJump]);
   /** The section each task was drawn in last render: one completed or parked from a
    *  section stays there through its exit grace instead of popping into the list. */
   const lastPlaceRef = useRef<Map<string, StateSectionKey>>(new Map());
@@ -6945,7 +6983,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onStartSession,
     onMoveToProject: onMoveTask ? handleMoveToProject : undefined,
     onDelete,
-  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete]);
+    onFilterProject: jumpToProject,
+  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
@@ -7518,7 +7557,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useEffect(() => {
     // Only for a locate: a page-load restore never opens (and saves) a section the user folded.
     const asked = focusLocateRef.current?.id === overrideId && focusLocateRef.current?.locate;
-    if (overrideSection && overrideId && asked && !sectionOpenRef.current[overrideSection]) setSectionOpenTo(overrideSection, true);
+    if (overrideSection && overrideId && asked) openStatusSection(overrideSection);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per task shown, not on every open toggle
   }, [overrideId, overrideSection]);
   // Flat draws every section itself, Working too; elsewhere the list is Working.
@@ -7545,7 +7584,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // so would clear the override that draws it (a held locate runs this again, see locate-hold.ts).
       const key = t.id === overrideId ? undefined : place.get(t.id);
       if (key) {
-        if (locate && !sectionOpenRef.current[key]) setSectionOpenTo(key, true);
+        if (locate) openStatusSection(key);
         return true;
       }
       // By project: a waiting or completed task sits in its project's fold.
@@ -7838,7 +7877,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
       {flatSections && filterOverrideNode}
       {!isSearchMode && !phoneFirstLoad && (
-        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
+        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
       )}
       {!flatSections && (
       <NavigationSections storageKey="walnut-todo-navigation-order">
@@ -8521,7 +8560,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </NavigationSections>
       )}
       {sectionsBottom.length > 0 && !phoneFirstLoad && (
-        <StatusSectionGroup keys={sectionsBottom} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
+        <StatusSectionGroup keys={sectionsBottom} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
       )}
       {/* Flat draws no list, so its empty states are here. */}
       {flatSections && loading && (
