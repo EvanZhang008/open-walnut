@@ -268,6 +268,33 @@ describe('runtime.mjs helpers', () => {
     expect(fs.readlinkSync(path.join(dir, 'tar'))).toBe(path.join(a, 'tar'))
   })
 
+  it('a system PATH without Node is made again in the same dir, a dangling system link included', () => {
+    // macOS 26 ships /usr/sbin/weakpass_edit as a link to a file that is not there; the live
+    // rehearsal makes this dir once per scenario, and the second time threw EEXIST.
+    const a = path.join(tmp, 'sys-dangling')
+    touch(path.join(a, 'ls'))
+    fs.symlinkSync(path.join(tmp, 'no-such-tool'), path.join(a, 'weakpass_edit'))
+    const out = path.join(tmp, 'sysbin-again')
+    systemPathWithoutNode(out, [a])
+    expect(() => systemPathWithoutNode(out, [a])).not.toThrow()
+    expect(fs.readdirSync(out).sort()).toEqual(['ls', 'weakpass_edit'])
+  })
+
+  it('no script or source checks a link with existsSync before making one (it follows the link)', () => {
+    const offenders: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p); continue }
+        if (!/\.(m?[jt]s|tsx)$/.test(e.name)) continue
+        const text = fs.readFileSync(p, 'utf8')
+        for (const m of text.matchAll(/existsSync\([^;\n]*\)[^;\n]*symlinkSync\(/g)) offenders.push(`${path.relative(ROOT, p)}: ${m[0]}`)
+      }
+    }
+    for (const d of ['scripts', 'src']) walk(path.join(ROOT, d))
+    expect(offenders).toEqual([])
+  })
+
   it('serves a release layout: versions, latest/download, nothing outside it', async () => {
     const root = path.join(tmp, 'rel')
     touch(path.join(root, 'v0.7.0/SHA256SUMS'), 'sums')

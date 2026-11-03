@@ -58,6 +58,10 @@ export function archiveVersion(file) {
  * A directory of links to every system tool except Node's, so "no Node on PATH"
  * holds on a runner whose /usr/bin has one. The first directory wins a name.
  */
+function lexists(p) {
+  try { fs.lstatSync(p); return true } catch { return false }
+}
+
 export function systemPathWithoutNode(dir, sources = SYSTEM_DIRS) {
   fs.mkdirSync(dir, { recursive: true })
   for (const src of sources) {
@@ -66,7 +70,10 @@ export function systemPathWithoutNode(dir, sources = SYSTEM_DIRS) {
     for (const name of names) {
       if (NODE_TOOLS.has(name)) continue
       const link = path.join(dir, name)
-      if (!fs.existsSync(link)) fs.symlinkSync(path.join(src, name), link)
+      // lstat, not existsSync: existsSync follows the link, so a link already made to a tool
+      // that is itself a dangling link (macOS 26's /usr/sbin/weakpass_edit) reads as missing,
+      // and making it again throws EEXIST on the second call into the same dir.
+      if (!lexists(link)) fs.symlinkSync(path.join(src, name), link)
     }
   }
   return dir
