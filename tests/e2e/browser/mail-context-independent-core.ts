@@ -508,7 +508,9 @@ export function registerIndependentWrites(engine: 'chromium' | 'webkit'): void {
       const url = page.url()
       console.log(`[${tag}] V-C32 taskId=${id} items=${JSON.stringify(items)} url=${url.replace(/^https?:\/\/[^/]+/, '')}`)
       expect(items, 'Open task beside the two content actions').toEqual(expect.arrayContaining(['Talk to CEO', 'New task', 'Open task']))
-      expect(url).toContain(`/tasks/${id}`)
+      // A task opens on Home (6b0d0b5cb: no task page any more), named by ?task=<id>.
+      expect(new URL(url).pathname).toBe('/')
+      expect(new URL(url).searchParams.get('task')).toBe(id)
     })
 
     test('V-C42 C43: both themes, and an 820px window', async ({ page }) => {

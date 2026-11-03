@@ -1,42 +1,30 @@
 import { test, expect } from '@playwright/test';
-import { createCandidate, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { expectContentActionsOnly, expectNewTaskOnlyDrafts, failedLegacyStart, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
-test('a late old search result cannot replace the new exact query', async ({ page, request }) => {
-  const token = `Timing search ${Date.now()}`;
-  const old = await createCandidate(request, `${token} old`); const next = await createCandidate(request, `${token} next`);
-  const sent = await sendItems(request, [mailItem('timing-search')]);
-  await home(page); const row = itemRow(await openLetter(page, sent.subject), 'timing-search');
-  let release!: () => void; let arrived!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; }); const arrival = new Promise<void>(resolve => { arrived = resolve; });
-  await page.route(`**/human-inbox/${sent.id}/items/timing-search/tasks?*`, async route => {
-    if (new URL(route.request().url()).searchParams.get('query') !== old.id) return route.continue();
-    const response = await route.fetch(); arrived(); await gate;
-    await route.fulfill({ response }).catch(() => {});
-  });
-  try {
-    await row.getByRole('button', { name: /^Find task for/ }).click();
-    const dialog = page.getByRole('dialog', { name: 'Choose a task', exact: true });
-    await dialog.getByLabel('Search tasks', { exact: true }).fill(old.id); await arrival;
-    await dialog.getByLabel('Search tasks', { exact: true }).fill(next.id);
-    await expect(dialog.locator('.hii-candidate')).toHaveCount(1);
-    await expect(dialog.locator('.hii-candidate')).toContainText(next.title);
-    release();
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect(dialog.locator('.hii-candidate')).toContainText(next.title);
-    await expect(dialog.locator('.hii-candidate')).not.toContainText(old.title);
-    await expect(dialog.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    expect((await receipt(request, sent.id, 'timing-search')).receipts).toHaveLength(0);
-  } finally { release(); }
+// The task search a late result could race is gone with every email item's task intents
+// (2026-11-02, 5a28ae6c9): the item searches nothing, and New task makes nothing.
+test('an email item runs no task search: Talk to CEO and New task instead, and New task makes nothing', async ({ page, request }) => {
+  const item = mailItem('timing-search');
+  const sent = await sendItems(request, [item]);
+  const searches: string[] = [];
+  page.on('request', req => { if (/\/items\/[^/]+\/tasks\b/.test(new URL(req.url()).pathname)) searches.push(req.url()); });
+  await home(page); const row = itemRow(await openLetter(page, sent.subject), item.id);
+  await expectContentActionsOnly(row, item.subject);
+  await expectNewTaskOnlyDrafts(page, request, row, item.subject, sent.id, item.id);
+  expect(searches).toEqual([]);
 });
 
-test('lost create response reconciles a single task and pending Close does not cancel work', async ({ page, request }) => {
-  test.setTimeout(60_000);
-  const sent = await sendItems(request, [mailItem('timing-create')]);
-  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, 'timing-create');
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
-  await row.getByLabel('Work goal', { exact: true }).fill('Review this exact timing source.');
+// A create's own response can only be lost for a letter stored before 2026-11-02 (5a28ae6c9); its
+// web Retry runs the same execute path, so that is where a lost response is reconciled.
+test('lost retry response reconciles a single task and pending Close does not cancel work', async ({ page, request }) => {
+  test.setTimeout(90_000);
+  const item = mailItem('timing-create');
+  const sent = await sendLegacyItems(request, [item]);
+  const { failed, repair } = await failedLegacyStart(request, sent.id, item.id, 'Review this exact timing source.');
+  await repair();
+  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, item.id);
+  await row.getByRole('button', { name: /^Retry start for/ }).click();
   await expect(row.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
   let release!: () => void; let arrived!: () => void; let writes = 0;
   const gate = new Promise<void>(resolve => { release = resolve; }); const arrival = new Promise<void>(resolve => { arrived = resolve; });
@@ -50,14 +38,15 @@ test('lost create response reconciles a single task and pending Close does not c
     await expect(row.locator('.hii-confirm')).toHaveCount(0);
     await arrival; release();
     await expect(row.locator('.hii-receipts')).toContainText('Started', { timeout: 25_000 });
+    expect(writes).toBe(1);
     const saved = await receipt(request, sent.id, 'timing-create');
-    expect(saved.receipts).toHaveLength(1); expect(writes).toBe(1);
-    const taskId = saved.receipts[0].taskId;
-    const sourceCopy = { ...mailItem('timing-copy'), source: mailItem('timing-create').source };
+    const taskIds = new Set(saved.receipts.filter((r: { taskId?: string }) => r.taskId).map((r: { taskId: string }) => r.taskId));
+    expect([...taskIds]).toEqual([failed.taskId]);
+    const sourceCopy = { ...mailItem('timing-copy'), source: item.source };
     const other = await sendItems(request, [sourceCopy]);
     const copy = await receipt(request, other.id, 'timing-copy');
-    expect(copy.receipts[0].taskId).toBe(taskId);
+    expect(copy.receipts.at(-1).taskId).toBe(failed.taskId);
     const list = await (await request.get('/api/v1/tasks')).json();
-    expect(list.tasks.filter((task: { id: string }) => task.id === taskId)).toHaveLength(1);
+    expect(list.tasks.filter((task: { id: string }) => task.id === failed.taskId)).toHaveLength(1);
   } finally { release(); }
 });

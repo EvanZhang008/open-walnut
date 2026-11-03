@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { EVIDENCE, home, itemRow, mailItem, openLetter, sendItems } from './inbox-items-helpers';
+import { EVIDENCE, expectContentActionsOnly, home, itemRow, mailItem, openLetter, sendItems } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
 for (const count of [15, 30]) {
@@ -27,15 +27,18 @@ for (const count of [15, 30]) {
     await view.evaluate(el => { (el as HTMLElement).style.width = '320px'; });
     expect(await view.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     await page.screenshot({ path: `${EVIDENCE}/web-${info.project.name}-dense-${count}-320.png`, scale: 'css' });
+    // Every item names its actions with its own subject: Mark read and the two content actions
+    // (Talk to CEO, New task) since 2026-11-02 (5a28ae6c9), never a task intent.
     const first = itemRow(view, 'dense-0'); await first.scrollIntoViewIfNeeded();
-    await first.getByRole('button', { name: /^Create and start task for/ }).click();
-    await first.getByLabel('Work goal', { exact: true }).fill('Review only this exact email');
-    await expect(first.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
-    await first.locator('.hii-operation-details summary').click();
-    await first.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded();
+    for (const [row, subject] of [[first, items[0].subject], [tail, items[count - 1].subject]] as const) {
+      await expect(row.getByRole('button', { name: `Mark read for ${subject.replace(/\s+/g, ' ').trim()}`, exact: true })).toBeVisible();
+      await expectContentActionsOnly(row, subject);
+    }
+    await first.locator('.hii-source-details summary').click();
+    await first.getByRole('button', { name: /^Copy source for Long subject/ }).scrollIntoViewIfNeeded();
     expect(await view.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-    await page.screenshot({ path: `${EVIDENCE}/web-${info.project.name}-confirm-${count}-320.png`, scale: 'css' });
-    await first.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.screenshot({ path: `${EVIDENCE}/web-${info.project.name}-details-${count}-320.png`, scale: 'css' });
+    await first.locator('.hii-source-details summary').click();
     await page.setViewportSize({ width: 1280, height: 800 });
     // A built SPA keeps its reader across this breakpoint; dev mode may remount it.
     const wideView = await view.isVisible() ? view : await openLetter(page, sent.subject);

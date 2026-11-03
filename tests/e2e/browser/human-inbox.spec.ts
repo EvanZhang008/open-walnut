@@ -171,9 +171,17 @@ async function shot(page: Page, name: string): Promise<void> {
  * none of its 216 tests were judged (2026-11-01, two CI runs).
  */
 async function expectBodyHolds(frame: FrameLocator, marker: string, timeout: number): Promise<void> {
+  // Only the last few text nodes are read, never body.textContent: every poll of the whole text
+  // copied a 31MB string in the frame while it was still being parsed, and on a CI runner the
+  // document then reached 22 to 25 of its 32 million characters in the 60 s (2026-11-03).
   await expect.poll(() => frame.locator('body').evaluate((body, m) => {
-    const text = body.textContent ?? ''
-    return text.includes(m) ? 'holds it' : `${text.length} chars, ending ${JSON.stringify(text.slice(-80))}`
+    const walk = body.ownerDocument.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+    const tail: string[] = []
+    let node = walk.lastChild()
+    for (let n = 0; node && n < 6; n++, node = walk.previousNode()) tail.unshift((node.nodeValue ?? '').slice(-400))
+    const text = tail.join('')
+    return text.includes(m) ? 'holds it'
+      : `${body.childElementCount} elements, ${body.ownerDocument.readyState}, ending ${JSON.stringify(text.slice(-80))}`
   }, marker), { timeout, message: `the reader's body holds ${marker}` }).toBe('holds it')
 }
 
@@ -866,7 +874,8 @@ test('a 30MB letter (past every inline limit) is staged, read, and plays', async
   expect(await inner.locator('audio').getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
   // The marker sits after 30MB of prose: it can only render if nothing anywhere
   // in the chain truncated the document.
-  await expectBodyHolds(inner, tail, 60_000)
+  // A 2-core CI runner parses 32 million characters far slower than a desk machine.
+  await expectBodyHolds(inner, tail, 120_000)
   await shot(page, 'e2e-11-staged-30mb-letter')
 
   const { document: readerDoc, lane } = await readerDocument(request, frame)

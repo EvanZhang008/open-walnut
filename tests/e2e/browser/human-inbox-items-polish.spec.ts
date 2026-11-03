@@ -1,18 +1,17 @@
 import { test, expect } from '@playwright/test';
-import { createCandidate, EVIDENCE, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { EVIDENCE, expectContentActionsOnly, expectNewTaskOnlyDrafts, home, itemRow, mailItem, markUnreadElsewhere, openLetter, openMarkReadAgain, receipt, runLegacyCreate, sendItems, sendLegacyItems, settledCreate } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
+// A task an email item started comes only from a letter stored before 2026-11-02 (5a28ae6c9), run by
+// an older client; the web still shows that task's current status.
 test('narrow task details expose current observation and use the full item width', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 390, height: 844 });
-  const sent = await sendItems(request, [mailItem('polish-current')]);
+  const sent = await sendLegacyItems(request, [mailItem('polish-current')]);
+  await runLegacyCreate(request, sent.id, 'polish-current', { goal: 'Review the exact source and preserve this confirmed work goal.' });
+  expect((await settledCreate(request, sent.id, 'polish-current')).status).toBe('success');
   await home(page); const row = itemRow(await openLetter(page, sent.subject), 'polish-current');
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
-  await row.getByLabel('Work goal', { exact: true }).fill('Review the exact source and preserve this confirmed work goal.');
-  await expect(row.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
-  await row.getByRole('button', { name: 'Confirm and start', exact: true }).click();
   await expect(row.locator('.hii-receipts')).toContainText('Started', { timeout: 25_000 });
-  await row.locator('.hii-confirm').getByRole('button', { name: 'Close', exact: true }).click();
   const started = await receipt(request, sent.id, 'polish-current');
   const finished = await request.post(`/api/v1/tasks/${started.receipts[0].taskId}/complete`, { data: {} });
   expect(finished.ok()).toBe(true);
@@ -66,7 +65,10 @@ test('pending read separates the current observation and missing mail dates stay
     await page.screenshot({ path: `${EVIDENCE}/${info.project.name}-polish-pending.png`, scale: 'css' });
   } finally { release(); }
   await expect(row.locator('.hii-receipts')).toContainText('Marked read');
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
+  // The confirmation an item still opens (Mark read again; the create form is gone since 5a28ae6c9).
+  await markUnreadElsewhere(request, item);
+  await row.getByRole('button', { name: /^Check status for/ }).click();
+  await row.getByRole('button', { name: /^Mark read again for/ }).click();
   await expect(row.locator('.hii-source')).toContainText('Date unavailable');
   await expect(row.locator('.hii-confirm-source')).toContainText('Date unavailable');
   await expect(row.locator('.hii-confirm-source')).not.toContainText('Time unavailable');
@@ -78,9 +80,9 @@ test('touch disclosures are full hit targets including operation details', async
   try {
     const page = await context.newPage(); const sent = await sendItems(request, [mailItem('polish-touch')]);
     await home(page); const row = itemRow(await openLetter(page, sent.subject), 'polish-touch');
-    await row.getByRole('button', { name: /^Create and start task for/ }).click();
-    await row.getByLabel('Work goal', { exact: true }).fill('Review the saved source.');
-    await expect(row.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
+    // Mark read again: the confirmation (with its operation details) an item still opens.
+    await openMarkReadAgain(request, row, mailItem('polish-touch'));
+    await expect(row.locator('.hii-operation-details summary')).toBeVisible();
     for (const selector of ['.hii-source-details', '.hii-receipt-details', '.hii-operation-details']) {
       const summary = row.locator(`${selector} summary`);
       expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -95,23 +97,16 @@ test('touch disclosures are full hit targets including operation details', async
   } finally { await context.close(); }
 });
 
-test('complete task results do not ask for refinement and empty results have one recovery hint', async ({ page, request }) => {
-  const title = `Polish candidates ${Date.now()}`;
-  await createCandidate(request, title); await createCandidate(request, title);
-  const sent = await sendItems(request, [mailItem('polish-count')]);
-  await home(page); const row = itemRow(await openLetter(page, sent.subject), 'polish-count');
-  await row.getByRole('button', { name: /^Find task for/ }).click();
-  const dialog = page.getByRole('dialog', { name: 'Choose a task', exact: true });
-  await dialog.getByLabel('Search tasks', { exact: true }).fill(title);
-  await expect(dialog.locator('.hii-candidate')).toHaveCount(2);
-  await expect(dialog).toContainText('Showing 2 of 2.');
-  await expect(dialog).not.toContainText('Refine your search.');
-  await dialog.getByLabel('Search tasks', { exact: true }).fill(`${title} missing`);
-  await expect(dialog).toContainText('No matching tasks');
-  await expect(dialog).toContainText('Try another search');
-  await expect(dialog).not.toContainText('Showing 0 of 0');
-  await expect(dialog).not.toContainText('Refine your search.');
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+// The task search these counts belonged to is gone with every email item's task intents
+// (2026-11-02, 5a28ae6c9): no results to refine, two content actions, and New task makes nothing.
+test('an email item offers no task search results: Talk to CEO and New task instead, and New task makes nothing', async ({ page, request }) => {
+  const item = mailItem('polish-count');
+  const sent = await sendItems(request, [item]);
+  await home(page); const row = itemRow(await openLetter(page, sent.subject), item.id);
+  await expectContentActionsOnly(row, item.subject);
+  await expect(page.getByRole('dialog', { name: 'Choose a task', exact: true })).toHaveCount(0);
+  await expect(row).not.toContainText('Refine your search.');
+  await expectNewTaskOnlyDrafts(page, request, row, item.subject, sent.id, item.id);
 });
 
 test('Mail navigation uses only the stored source and provides an honest unavailable fallback', async ({ page, request }) => {

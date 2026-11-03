@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createCandidate, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { expectContentActionsOnly, failedLegacyStart, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems } from './inbox-items-helpers';
 
 test('a second reader recovers a lost aliased mail response without another provider operation', async ({ page, context, request }) => {
   const first = mailItem('alias-first', 'delay-');
@@ -25,26 +25,20 @@ test('a second reader recovers a lost aliased mail response without another prov
   } finally { await peer.close(); }
 });
 
-test('a new letter retries the same task using its own action ID after the launch is repaired', async ({ page, request }) => {
+// Both letters are stored the way a Walnut before 2026-11-02 (5a28ae6c9) stored them: a new letter
+// carries no task intent, so only an existing user's later letter about the same email can retry.
+test('a later stored letter retries the same task using its own action ID after the launch is repaired', async ({ page, request }) => {
   test.setTimeout(90_000);
-  const project = `Retry ${Date.now()}`;
-  await createCandidate(request, 'Seed retry project', project);
-  expect((await request.put(`/api/v1/projects/${encodeURIComponent(project)}/metadata`, { data: { default_cwd: '/missing/fixture-reviewed-retry' } })).ok()).toBe(true);
   const original = mailItem('cross-original');
-  const first = await sendItems(request, [original]);
+  const first = await sendLegacyItems(request, [original]);
+  const { failed, repair } = await failedLegacyStart(request, first.id, original.id, 'Review the approved update once');
   await home(page); let view = await openLetter(page, first.subject);
   const oldRow = itemRow(view, original.id);
-  await oldRow.getByRole('button', { name: /^Create and start task for/ }).click();
-  await oldRow.getByRole('group', { name: 'Project', exact: true }).getByRole('button', { name: project, exact: true }).click();
-  await oldRow.getByLabel('Work goal', { exact: true }).fill('Review the approved update once');
-  await expect(oldRow.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
-  await oldRow.getByRole('button', { name: 'Confirm and start', exact: true }).click();
   await expect(oldRow.locator('.hii-receipts')).toContainText('Could not start', { timeout: 25_000 });
-  const failed = (await receipt(request, first.id, original.id)).receipts.find((r: any) => r.intent === 'create_task');
   await view.getByRole('button', { name: 'Close letter', exact: true }).click();
-  expect((await request.put(`/api/v1/projects/${encodeURIComponent(project)}/metadata`, { data: { default_cwd: null } })).ok()).toBe(true);
+  await repair();
   const current = { ...mailItem('cross-current'), source: original.source };
-  const second = await sendItems(request, [current]);
+  const second = await sendLegacyItems(request, [current]);
   const center = page.locator('.notification-panel');
   await center.locator('.hib-row').filter({ hasText: second.subject }).locator('.hib-subject').click();
   view = page.locator('.hib-reader .hib-view'); const row = itemRow(view, current.id);
@@ -74,6 +68,6 @@ test('two AI questions remain independent and never turn into mail or task opera
   await row.getByRole('button', { name: /^Ask AI: Compare for/ }).click();
   await expect.poll(async () => (await receipt(request, sent.id, item.id)).receipts.filter((r: any) => r.intent === 'reply_ai' && r.status === 'success').length).toBe(2);
   await expect(row.getByRole('button', { name: /^Mark read for/ })).toBeEnabled();
-  await expect(row.getByRole('button', { name: /^Create and start task for/ })).toBeEnabled();
+  await expectContentActionsOnly(row, item.subject);
   expect(operations).toBe(0);
 });

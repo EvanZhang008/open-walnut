@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createCandidate, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { expectContentActionsOnly, expectNewTaskOnlyDrafts, home, itemRow, mailItem, openLetter, openMarkReadAgain, receipt, sendItems } from './inbox-items-helpers';
 import { cssColorToRgba } from './css-color';
 const SHOTS = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions/fixer-r1/shots';
 test.describe.configure({ mode: 'serial' });
@@ -30,58 +30,41 @@ test('compact initial rows hide empty task status and toggle only truncated summ
   await expect(first.getByRole('button', { name: /^Show more/ })).toHaveCount(0);
 });
 
-test('return from attachment preserves exact selection, query, list position and work goal', async ({ page, request }) => {
-  const token = `Return candidates ${Date.now()}`;
-  const candidates = [];
-  for (let n = 0; n < 9; n++) candidates.push(await createCandidate(request, token, 'Review', `Work goal ${n}`));
-  const sent = await sendItems(request, [mailItem('fix-return')]);
+// Attaching an email to a task is gone with every email item's task intents (2026-11-02,
+// 5a28ae6c9): there is no chooser to return to. New task opens a draft and makes nothing.
+test('an email item offers no attachment: Talk to CEO and New task instead, and New task makes nothing', async ({ page, request }) => {
+  const item = mailItem('fix-return');
+  const sent = await sendItems(request, [item]);
   await page.setViewportSize({ width: 900, height: 700 });
-  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, 'fix-return');
-  await row.getByRole('button', { name: /^Find task for/ }).click();
-  const dialog = page.getByRole('dialog', { name: 'Choose a task', exact: true });
-  await dialog.getByLabel('Search tasks', { exact: true }).fill(token);
-  await expect(dialog.locator('.hii-candidate')).toHaveCount(9);
-  const selected = dialog.locator('.hii-candidate').filter({ hasText: candidates[8].id });
-  await selected.locator('.hii-candidate-pick').click();
-  const top = await dialog.locator('.hii-selector-list').evaluate(el => { el.scrollTop = 180; return el.scrollTop; });
-  expect(top).toBeGreaterThan(0);
-  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(row.getByRole('button', { name: 'Confirm attachment', exact: true })).toBeDisabled();
-  await row.getByLabel('Work goal', { exact: true }).fill('Keep the human work goal.');
-  await row.getByRole('button', { name: 'Choose another task', exact: true }).click();
-  await expect(dialog.getByLabel('Search tasks', { exact: true })).toHaveValue(token);
-  await expect(selected.locator('.hii-candidate-pick')).toHaveAttribute('aria-pressed', 'true');
-  expect(await dialog.locator('.hii-selector-list').evaluate(el => el.scrollTop)).toBe(top);
-  await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(row.getByLabel('Work goal', { exact: true })).toHaveValue('Keep the human work goal.');
-  expect((await receipt(request, sent.id, 'fix-return')).receipts).toHaveLength(0);
+  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, item.id);
+  await expectContentActionsOnly(row, item.subject);
+  await expect(row.getByRole('button', { name: 'Confirm attachment', exact: true })).toHaveCount(0);
+  await expectNewTaskOnlyDrafts(page, request, row, item.subject, sent.id, item.id);
 });
 
-test('narrow confirmation keeps readable identity with the goal and folds technical source', async ({ page, request }, info) => {
+// The create form is gone (5a28ae6c9); Mark read again is the confirmation a new letter's item still opens.
+test('narrow confirmation keeps readable identity and folds technical source', async ({ page, request }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const item = mailItem('fix-confirm'); item.source.message = `fixture-${'long-source-'.repeat(30)}`;
   const sent = await sendItems(request, [item]);
   await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, item.id);
   await view.evaluate(el => { (el as HTMLElement).style.width = '320px'; });
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
-  const form = row.locator('.hii-confirm');
-  await form.getByLabel('Work goal', { exact: true }).fill('Review the saved email.');
-  await expect(form.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
+  const form = await openMarkReadAgain(request, row, item);
   await expect(form.locator('.hii-confirm-source')).toContainText('Fixture sender');
   await expect(form.locator('.hii-confirm-source')).not.toContainText(item.source.message);
   await expect(form.locator('.hii-operation-details')).not.toHaveAttribute('open', '');
   await expect(form.locator('.hii-operation-details pre')).toContainText(item.source.message);
   const identity = await form.locator('.hii-confirm-source').boundingBox();
-  const goal = await form.getByLabel('Work goal', { exact: true }).boundingBox();
   const footer = await form.locator('.hii-confirm-footer').boundingBox();
-  expect(goal!.y + goal!.height - identity!.y).toBeLessThan(440);
   expect(footer!.y + footer!.height - identity!.y).toBeLessThan(640);
+  expect(await view.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   await form.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-identity-confirm.png`, scale: 'css' });
   await form.locator('.hii-operation-details summary').click();
   await expect(form.locator('.hii-operation-details pre')).toBeVisible();
+  const before = (await receipt(request, sent.id, item.id)).receipts;
   await form.getByRole('button', { name: 'Cancel', exact: true }).click();
-  expect((await receipt(request, sent.id, item.id)).receipts).toHaveLength(0);
+  expect((await receipt(request, sent.id, item.id)).receipts).toEqual(before);
 });
 
 test('local failures use the error token and unsupported API has one inline warning', async ({ page, request }, info) => {
@@ -104,20 +87,20 @@ test('local failures use the error token and unsupported API has one inline warn
 
 test('submitted work offers Close instead of Cancel and closing does not undo the receipt', async ({ page, request }) => {
   test.setTimeout(60_000);
-  const sent = await sendItems(request, [mailItem('fix-submitted')]);
-  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, 'fix-submitted');
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
-  await row.getByLabel('Work goal', { exact: true }).fill('Report this approved fixture goal.');
-  await expect(row.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
-  await row.getByRole('button', { name: 'Confirm and start', exact: true }).click();
-  await expect(row.locator('.hii-receipts')).toContainText('Started', { timeout: 25_000 });
-  await expect(row.locator('.hii-confirm').getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
-  const close = row.locator('.hii-confirm').getByRole('button', { name: 'Close', exact: true });
+  const item = mailItem('fix-submitted');
+  const sent = await sendItems(request, [item]);
+  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, item.id);
+  const form = await openMarkReadAgain(request, row, item);
+  const count = (await receipt(request, sent.id, item.id)).receipts.length;
+  await form.getByRole('button', { name: 'Confirm mark read', exact: true }).click();
+  await expect.poll(async () => (await receipt(request, sent.id, item.id)).receipts.length, { timeout: 25_000 }).toBe(count + 1);
+  await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+  const close = form.getByRole('button', { name: 'Close', exact: true });
   await expect(close).toHaveAttribute('title', 'Close this view. Submitted work continues.');
-  const before = await receipt(request, sent.id, 'fix-submitted');
+  const before = await receipt(request, sent.id, item.id);
   await close.click();
   await expect(row.locator('.hii-confirm')).toHaveCount(0);
-  expect((await receipt(request, sent.id, 'fix-submitted')).receipts).toEqual(before.receipts);
+  expect((await receipt(request, sent.id, item.id)).receipts).toEqual(before.receipts);
 });
 
 // The panel is opaque, or glass with a real blur (overlay-glass.css, 2026-10-26: the

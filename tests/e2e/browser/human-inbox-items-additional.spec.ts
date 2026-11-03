@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 const EVIDENCE = process.env.PW_RESULT_DIR ?? '/tmp/inbox-item-actions/fixer-r1';
-import { home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { expectContentActionsOnly, expectNewTaskOnlyDrafts, home, itemRow, mailItem, openLetter, receipt, sendItems, watchTaskMutations } from './inbox-items-helpers';
 test.describe.configure({ mode: 'serial' });
 
 test('new reply items appear once in both clients without changing the original receipt', async ({ page, browser, request }) => {
@@ -49,23 +49,14 @@ test('clicking malicious sandbox controls sends no host or provider mutation', a
   await expect(view.locator('.hii-actions button')).toHaveCount(3);
 });
 
-test('canceling a prepared create form has no task or execute mutation', async ({ page, request }) => {
-  const sent = await sendItems(request, [mailItem('cancel-zero')]);
-  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, 'cancel-zero');
-  const before = await (await request.get('/api/v1/tasks')).json();
-  const mutations: string[] = [];
-  page.on('request', req => { if (req.method() !== 'GET' && /\/tasks|\/execute/.test(new URL(req.url()).pathname)) mutations.push(req.url()); });
-  await row.getByRole('button', { name: /^Create and start task for/ }).click();
-  await row.getByLabel('Work goal', { exact: true }).fill('Only prepare this goal.');
-  await expect(row.getByRole('button', { name: 'Confirm and start', exact: true })).toBeEnabled();
-  await row.getByRole('button', { name: 'Cancel', exact: true }).click();
-  expect(mutations).toEqual([]);
-  expect((await receipt(request, sent.id, 'cancel-zero')).receipts).toHaveLength(0);
-  const after = await (await request.get('/api/v1/tasks')).json();
-  // No task came of the form. Not the whole list unchanged: other workers' specs make tasks on
-  // the shared fixture meanwhile (2026-11-02, CI).
-  const known = new Set((before.tasks as Array<{ id: string }>).map(t => t.id));
-  const made = (after.tasks as Array<{ id: string; title?: string; description?: string }>).filter(t => !known.has(t.id));
-  expect(made.filter(t => /Only prepare this goal|cancel-zero/.test(`${t.title ?? ''} ${t.description ?? ''}`))).toEqual([]);
-  await fs.writeFile(`${EVIDENCE}/${test.info().project.name}-cancel.json`, JSON.stringify({ beforeCount: before.tasks.length, afterCount: after.tasks.length, mutations }, null, 2));
+// There is no create form on an email item since 2026-11-02 (5a28ae6c9): New task opens the normal
+// draft on Home, and nothing is made until the person sends it.
+test('an email item has no create form: New task opens a draft with no task or execute mutation', async ({ page, request }) => {
+  const item = mailItem('cancel-zero');
+  const sent = await sendItems(request, [item]);
+  await home(page); const view = await openLetter(page, sent.subject); const row = itemRow(view, item.id);
+  await expectContentActionsOnly(row, item.subject);
+  const mutations = watchTaskMutations(page);
+  await expectNewTaskOnlyDrafts(page, request, row, item.subject, sent.id, item.id);
+  await fs.writeFile(`${EVIDENCE}/${test.info().project.name}-cancel.json`, JSON.stringify({ mutations }, null, 2));
 });
