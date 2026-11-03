@@ -3275,10 +3275,6 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._active = true;
-    // Settings already read and naming no model: the catalog comes back as the
-    // CLI sent it (the Default-row rewrite is model-default-spawn.test.ts).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (session as any)._configuredModel = null;
     return { session, writes };
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3499,8 +3495,9 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     bus.subscribe('main-ai', (e) => { if (e.name === EventNames.SESSION_MODEL_CATALOG) events.push(e); });
 
     await fetchWithReply(session, writes, CLI_MODELS);
-    // Dynamic import + write chain: polled, a fixed 50 ms lost the race on a loaded machine.
-    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 5000 });
+    await new Promise((r) => setTimeout(r, 50)); // dynamic import + write chain
+
+    expect(events).toHaveLength(1);
     const data = events[0]!.data as { sessionId: string; host?: string; models: unknown[]; fetchedAt: string };
     expect(data.sessionId).toBe('sid-cat-push');
     expect(data.host).toBeUndefined(); // local session → no host field
@@ -3509,8 +3506,6 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
 
     // Host store written under the local key, cwd recorded.
     const { getHostModelCatalog, _resetHostModelCatalogCache } = await import('../../src/core/host-model-catalog.js');
-    const { _flushHostModelCatalogWrites } = await import('../../src/core/host-model-catalog.js');
-    await _flushHostModelCatalogWrites();
     _resetHostModelCatalogCache(); // force a disk read — proves persistence, not just memory
     const stored = await getHostModelCatalog(null);
     expect(stored?.models).toHaveLength(3);
