@@ -19,6 +19,7 @@
  * ALLOWED with a reason. Otherwise the test fails and prints the location.
  */
 import { describe, expect, it } from 'vitest'
+import ts from 'typescript'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -149,14 +150,41 @@ export function scanForMacOnlyAssumptions(
 const MAC_ONLY_TOOL_SPAWN = /(execFileSync|spawnSync|execSync|execFile|spawn)\(\s*[`"'](plutil|codesign|xcrun|security|hdiutil|spctl|swiftc|launchctl|osascript|sw_vers|ditto|iconutil|lipo|defaults|sips|xattr)[`"' ]/
 const TEST_GUARD_MARKERS = ['process.platform', 'os.platform', 'isMac', 'skipIf', 'runIf', 'darwin', 'Darwin']
 
+/**
+ * Whether the code at `offset` runs only under a platform condition, however far above it
+ * that condition is: inside an `it/describe/test.runIf|skipIf(<cond>)(...)` block or the
+ * branch of an `if (<cond>)`, where <cond> names a guard marker (2026-11-03: a darwin-only
+ * test's cleanup sat 22 lines under its `it.runIf`, past the 15-line window, and failed CI).
+ */
+function insidePlatformBlock(sf: ts.SourceFile, offset: number): boolean {
+  const names = (node: ts.Node) => TEST_GUARD_MARKERS.some((g) => node.getText(sf).includes(g))
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found || offset < node.getStart(sf) || offset >= node.getEnd()) return
+    if (ts.isCallExpression(node) && ts.isCallExpression(node.expression)
+      && /\.(runIf|skipIf)$/.test(node.expression.expression.getText(sf)) && node.expression.arguments.some(names)) found = true
+    if (ts.isIfStatement(node) && names(node.expression)
+      && offset >= node.thenStatement.getStart(sf) && offset < node.thenStatement.getEnd()) found = true
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
+}
+
 export function scanTestForMacOnlySpawns(file: string, content: string): Violation[] {
   const lines = content.split('\n')
   const out: Violation[] = []
+  let sf: ts.SourceFile | null = null
+  let at = 0
   lines.forEach((line, i) => {
+    const lineStart = at
+    at += line.length + 1
     const m = MAC_ONLY_TOOL_SPAWN.exec(line)
     if (!m || isComment(line)) return
     const window = lines.slice(Math.max(0, i - 15), i + 1).join('\n')
     if (TEST_GUARD_MARKERS.some((g) => window.includes(g))) return
+    sf ??= ts.createSourceFile(file, content, ts.ScriptTarget.ES2022, true)
+    if (insidePlatformBlock(sf, lineStart + m.index)) return
     out.push({ file, line: i + 1, needle: m[2], text: line.trim() })
   })
   return out
@@ -282,6 +310,12 @@ describe('cross-platform ratchet', () => {
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `it('x', () => {\n  ${call}\n})`)).toHaveLength(1)
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `if (process.platform === 'darwin') {\n  ${call}\n}`)).toEqual([])
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `describe.skipIf(!isMac)('x', () => {\n  ${call}\n})`)).toEqual([])
+    // A guard far above the call still covers the block it opens, and only that block.
+    const pad = Array.from({ length: 30 }, (_, n) => `  const v${n} = ${n}`).join('\n')
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `it.runIf(process.platform === 'darwin')('x', () => {\n${pad}\n  ${call}\n})`)).toEqual([])
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `if (process.platform === 'darwin') {\n${pad}\n  ${call}\n}`)).toEqual([])
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `it.runIf(process.platform === 'darwin')('x', () => {})\n${pad}\nit('y', () => {\n${pad}\n  ${call}\n})`)).toHaveLength(1)
+    expect(scanTestForMacOnlySpawns('tests/x.test.ts', `if (process.platform === 'darwin') {\n${pad}\n} else {\n${pad}\n  ${call}\n}`)).toHaveLength(1)
   })
 
   it('no test hands `git grep -E` a GNU-only escape (macOS git has no \\b, \\s, \\w or \\d)', () => {
