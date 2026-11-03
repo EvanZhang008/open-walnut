@@ -34,17 +34,30 @@ export function orgEnabledOf(config: Pick<Config, 'org'> | null | undefined): bo
   return config?.org?.enabled !== false;
 }
 
+/**
+ * Settings → Org, "Refuse their 4th command": Walnut refuses Main's or a VP's 4th command of its own
+ * in a turn (providers/org-work-guard-hook.ts). Off unless the user turned it on: by default the 3rd
+ * only brings a reminder (2026-11-03, the user: "walnut probally shoudo't stoop it, it shudo use
+ * prompt and in correct time to avoid forget").
+ */
+export function orgBlocksOwnCommandsOf(config: Pick<Config, 'org'> | null | undefined): boolean {
+  return config?.org?.block_own_commands === true;
+}
+
 /** org-autostart.ts ORG_START_SOURCE (named here so this file imports nothing of the org). */
 const ORG_START_SOURCE_NAME = 'org-autostart';
 
 let cached: boolean | undefined;
+let blocksCached = false;
 let reading: Promise<boolean> | null = null;
 let watching = false;
 
 async function readNow(): Promise<boolean> {
   try {
     const { getConfig } = await import('../config-manager.js');
-    set(orgEnabledOf(await getConfig()));
+    const config = await getConfig();
+    blocksCached = orgBlocksOwnCommandsOf(config);
+    set(orgEnabledOf(config));
   } catch (err) {
     // A config that cannot be read keeps the last value, else on: the org is the default.
     log.task.warn('org switch: config not read', { error: err instanceof Error ? err.message : String(err) });
@@ -66,6 +79,19 @@ export function orgEnabledCached(): boolean {
   watch();
   if (cached === undefined) void isOrgEnabled();
   return cached !== false;
+}
+
+/** The block switch as last read, for a session's spawn (sync); unknown reads as off. A spawn bakes
+ *  its hooks into the CLI's settings, so a change reaches the next process a session starts. */
+export function orgBlocksOwnCommandsCached(): boolean {
+  watch();
+  if (cached === undefined) void isOrgEnabled();
+  return blocksCached;
+}
+
+/** The settings write sets the block switch at once too. */
+export function noteOrgBlocksOwnCommands(on: boolean): void {
+  blocksCached = on;
 }
 
 /** The settings write sets it at once, before its config change is announced. */
@@ -132,7 +158,8 @@ export function isOrgNode(task: { org_role?: string } | null | undefined): boole
 }
 
 /** For tests: forget the cached value. */
-export function _resetOrgEnabledForTesting(value?: boolean): void {
+export function _resetOrgEnabledForTesting(value?: boolean, blocks = false): void {
   cached = value;
+  blocksCached = blocks;
   reading = null;
 }

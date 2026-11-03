@@ -35,6 +35,7 @@ import { replyLanguageLines } from './reply-language-lines.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
+import { orgHandOnHint } from '../org/core-instructions.js';
 
 export { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection };
 
@@ -68,6 +69,8 @@ export interface HintContentInput {
   thread?: ThreadHintState | null;
   /** Main's or a lead's Threads that need its decision now (org/thread-capture.ts threadsTidyOf). */
   threadsTidy?: ThreadsTidyState | null;
+  /** The role of the session's task, as the audience rules see it (hint-send.ts hintTargetOf). */
+  role?: MessageHintRole;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -78,7 +81,7 @@ interface HintSpec {
   description: string;
   /** Triggers this hint can use at all (a request-only hint has no schedule). */
   allowed: readonly MessageHintTrigger[];
-  defaults: Required<Pick<MessageHintSettings, 'enabled' | 'triggers' | 'placement'>> & { every_turns?: number };
+  defaults: Required<Pick<MessageHintSettings, 'enabled' | 'triggers' | 'placement'>> & { every_turns?: number; audience?: MessageHintSettings['audience'] };
   /** What it says now; null = nothing to say to this session. */
   identity(input: HintContentInput): string | null;
   /** Its text for this send, given why it is due; null = say nothing this time. */
@@ -242,6 +245,18 @@ const BUILT_IN: readonly HintSpec[] = [
     identity: (i) => (i.threadsTidy ? i.threadsTidy.key : null),
     render: (i) => (i.threadsTidy ? { text: threadsTidyText(i.threadsTidy) } : null),
   },
+  {
+    kind: 'hand-on',
+    label: 'Hand the work on',
+    description: 'Main and the leads: never do the work yourself, at most 3 commands of your own in a turn, then hand the rest to the team. At session start, after a compaction and every 3 messages; inside a turn, the 3rd command of its own brings the same reminder with its result.',
+    allowed: SCHEDULED,
+    // 2026-11-03, the user: "walnut probally shoudo't stoop it, it shudo use prompt and in correct time
+    // to avoid forget, some instruction eaach compation or at start some ever xround". The reminder at
+    // the 3rd command inside a turn is the org work hook's (providers/org-work-guard-hook.ts).
+    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'every_n_turns'], every_turns: 3, placement: 'after', audience: { roles: ['main', 'lead'] } },
+    identity: (i) => (i.role === 'main' || i.role === 'lead' ? orgHandOnHint(i.role) : null),
+    render: (i) => (i.role === 'main' || i.role === 'lead' ? { text: orgHandOnHint(i.role) } : null),
+  },
 ];
 
 /** What a node hears while the user is away from its chat (org/user-away.ts). */
@@ -344,7 +359,7 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
       triggers: [...new Set(triggers)],
       ...(every !== undefined ? { everyTurns: every } : {}),
       placement: o?.placement === 'before' || o?.placement === 'after' ? o.placement : spec.defaults.placement,
-      audience: audienceOf(o?.audience),
+      audience: audienceOf(o?.audience ?? spec.defaults.audience),
       allowedTriggers: [...spec.allowed],
       ...(builtIn ? {} : { text: typeof o?.text === 'string' ? o.text.trim() : undefined }),
       overridden: !!o,
@@ -381,7 +396,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy' || h.kind === 'hand-on'));
 }
 
 export class HintSettingsError extends Error {

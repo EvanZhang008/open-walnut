@@ -129,7 +129,8 @@ describe('user and agent settings', () => {
     const main = run({ claudeSessionId: 'm', output_mode: 'markdown' }, config, 1, { target: { sessionId: 'm', role: 'main' } });
     const worker = run({ claudeSessionId: 'w', output_mode: 'markdown' }, config, 1, { target: { sessionId: 'w', role: 'worker' } });
     const sx = run({ claudeSessionId: 'sX', output_mode: 'markdown' }, config, 1, { target: { sessionId: 'sX' } });
-    expect(main).toEqual([['tone']]);
+    // Main also hears its own built-in, hand-on (tests/core/hints/hand-on-hint.test.ts).
+    expect(main.map((kinds) => kinds.filter((k) => k !== 'hand-on'))).toEqual([['tone']]);
     expect(worker).toEqual([[]]);
     expect(sx).toEqual([['other']]);
   });
@@ -141,7 +142,8 @@ describe('user and agent settings', () => {
     const plan = (role: 'main' | 'lead' | 'worker', rec: Rec, sentBy?: 'person' | 'agent') => {
       const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role }, record: rec, config, ...(sentBy ? { sentBy } : {}) });
       rec.hintState = advanceHintState(rec.hintState, rec, p.told, { now: Date.now(), ...(sentBy ? { sentBy } : {}) });
-      return p.carried.map((h) => h.kind);
+      // hand-on is Main's and a lead's own schedule (tests/core/hints/hand-on-hint.test.ts).
+      return p.carried.map((h) => h.kind).filter((k) => k !== 'hand-on');
     };
     for (const role of ['main', 'lead'] as const) {
       const rec: Rec = { claudeSessionId: `org-${role}`, output_mode: 'markdown' };
@@ -162,7 +164,7 @@ describe('user and agent settings', () => {
     const lead: Rec = { claudeSessionId: 'l-2', output_mode: 'markdown' };
     planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' });
     lead.hintState = { sends: 1, told: { 'reply-language': { send: 1, hash: 'Talk to the user in Chinese.', at: '2026-11-01T00:00:00Z' } } };
-    expect(planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' }).carried).toEqual([]);
+    expect(planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' }).carried.filter((h) => h.kind !== 'hand-on')).toEqual([]);
     expect(hostReplyTail({ ...lead }, config, { org_role: 'lead' } as never)).toContain('Walnut (reply-language)');
     // A worker's host tail carries it too (2026-11-02).
     expect(hostReplyTail({ ...lead }, config, { parent_task_id: 'p' } as never)).toContain('Walnut (reply-language)');

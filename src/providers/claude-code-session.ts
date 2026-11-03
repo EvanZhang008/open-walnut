@@ -90,6 +90,7 @@ import { processActionsRefused, refuseProcessAction } from '../core/sessions/rep
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
+import { orgBlocksOwnCommandsCached } from '../core/org/org-enabled.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
@@ -2729,8 +2730,10 @@ export class ClaudeCodeSession {
     if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv }
     const slimOverrides = slim ? slimChildSettingsArg() : undefined
     if (slimOverrides) Object.assign(sessionSettings, JSON.parse(slimOverrides) as Record<string, unknown>)
-    // Main's or a VP's session (read from its own prompt) is held to its first rule by hooks too.
-    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole: orgRoleOfPrompt([profile?.systemPrompt ?? '', ...appendParts].join('\n\n')) })
+    // Main's or a VP's session (read from its own prompt) is reminded of its first rule by hooks too,
+    // and refused past it when the user turned that on (Settings → Org).
+    const orgRole = slim ? undefined : orgRoleOfPrompt([profile?.systemPrompt ?? '', ...appendParts].join('\n\n'))
+    const settingsHooks = slim ? undefined : sessionSettingsHooks(process.env, { orgRole, orgBlock: orgRole ? orgBlocksOwnCommandsCached() : false })
     if (settingsHooks) sessionSettings.hooks = settingsHooks
     if (Object.keys(sessionSettings).length > 0) {
       args.push('--settings', JSON.stringify(sessionSettings))

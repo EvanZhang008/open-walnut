@@ -55,7 +55,7 @@ describe('message hints through a real server', () => {
     const r = await json('GET', '/hints')
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
-    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads', 'threads-tidy'])
+    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'])
     // Whose words: every built-in reads as Walnut's, Reply language names the setting it sends.
     expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)
     expect(r.body.hints.find((h: { kind: string }) => h.kind === 'reply-language').user_setting).toMatchObject({ label: 'Reply language', anchor: 'session-reply-language' })

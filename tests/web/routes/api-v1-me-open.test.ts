@@ -29,6 +29,7 @@ import { addTask, completeTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { RICH_OUTPUT_MODE_ON_INSTRUCTION } from '../../../src/core/sessions/output-mode.js'
 import { renderHintBlock } from '../../../src/core/hints/hint-format.js'
+import { orgHandOnHint } from '../../../src/core/org/core-instructions.js'
 import { createSessionRequest, settleReplied } from '../../../src/core/session-requests.js'
 import { executeOp } from '../../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
@@ -199,6 +200,23 @@ describe('open_items op', () => {
     expect(record?.output_mode_injected).toBe('rich')
     expect(record?.hintState?.told['rich-output']).toMatchObject({ hash: 'rich', byHookAt: expect.any(String) })
     expect(record?.outputModeHookAt).toEqual(expect.any(String))
+  })
+
+  it('a VP after a compaction: the hook restates its rule (hand-on); a worker\'s does not', async () => {
+    // 2026-11-03, the user: "some instruction eaach compation or at start". hints/hint-registry.ts hand-on.
+    const lead = (await addTask({ title: 'Acme VP', project: 'Acme', source: 'local', org_role: 'lead' } as never)).task
+    const leadSid = '22222222-3333-4444-5555-aaaaaaaaaa01'
+    await createSessionRecord(leadSid, lead.id, 'Acme', '/repo/acme', { title: 'Acme VP' })
+    const worker = await seedSession('Acme worker', lead.id)
+    const apiBase = `http://localhost:${port}`
+    const hook = async (sid: string) => {
+      const r = await executeOp('open_items', { hook: 'compact' }, { apiBase, callerSid: sid, origin: LOCAL_ORIGIN })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      return ((r as { result: any }).result.hookSpecificOutput?.additionalContext ?? '') as string
+    }
+    expect(await hook(leadSid)).toContain(renderHintBlock('hand-on', orgHandOnHint('lead')))
+    expect((await getSessionByClaudeId(leadSid))?.hintState?.told['hand-on']).toMatchObject({ byHookAt: expect.any(String) })
+    expect(await hook(worker.sid)).not.toContain('hand-on')
   })
 
   it('called directly: the lists plus an outcome', async () => {

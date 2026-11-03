@@ -713,5 +713,23 @@ describe('/api/v1/org', () => {
       await api('PUT', '/org/settings', { name: '', founderTitle: '' })
       expect((await getConfig()).org).toBeUndefined()
     })
+
+    it('the "refuse their 4th command" switch is off by default; on, the next org session\'s hooks refuse', async () => {
+      // 2026-11-03, the user: "walnut probally shoudo't stoop it": Walnut reminds by default.
+      const { orgBlocksOwnCommandsCached } = await import('../../src/core/org/org-enabled.js')
+      const { sessionSettingsHooks } = await import('../../src/providers/session-settings-hooks.js')
+      const { getConfig } = await import('../../src/core/config-manager.js')
+      const refuses = () => JSON.stringify(sessionSettingsHooks({}, { orgRole: 'lead', orgBlock: orgBlocksOwnCommandsCached() })).includes('Walnut refused this call: you are')
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ blockOwnCommands: false })
+      expect(refuses()).toBe(false)
+      expect((await api('PUT', '/org/settings', { blockOwnCommands: 'yes' })).status).toBe(400)
+      expect((await api('PUT', '/org/settings', { blockOwnCommands: true })).json).toMatchObject({ blockOwnCommands: true, enabled: true })
+      expect((await getConfig()).org).toEqual({ block_own_commands: true })
+      expect(refuses()).toBe(true)
+      // Off again: nothing is written (off is the default).
+      expect((await api('PUT', '/org/settings', { blockOwnCommands: false })).json).toMatchObject({ blockOwnCommands: false })
+      expect((await getConfig()).org).toBeUndefined()
+      expect(refuses()).toBe(false)
+    })
   })
 })

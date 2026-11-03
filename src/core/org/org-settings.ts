@@ -5,6 +5,7 @@
  * the CEO with a person's icon.
  *
  * `enabled`: the switch that turns the whole org off (org-enabled.ts), on unless set to false.
+ * `blockOwnCommands` (`block_own_commands`): refuse Main's or a VP's 4th command of its own in a turn, off unless set.
  *
  * Kept in config.yaml under `org` (`name`, `founder_title`, `enabled`), so every client of this Walnut,
  * the Mac app and a companion's copy included, reads the same names, and a hand edit of the
@@ -15,7 +16,7 @@ import { getConfig } from '../config-manager.js';
 import { modifyConfigDoc } from '../config-store.js';
 import type { Config } from '../types.js';
 import { DEFAULT_ORG_INSTRUCTIONS } from './core-instructions.js';
-import { noteOrgEnabled, orgEnabledOf } from './org-enabled.js';
+import { noteOrgBlocksOwnCommands, noteOrgEnabled, orgBlocksOwnCommandsOf, orgEnabledOf } from './org-enabled.js';
 
 export const ORG_NAME_DEFAULT = 'Org';
 export const FOUNDER_TITLE_DEFAULT = 'Founder';
@@ -27,6 +28,9 @@ export interface OrgSettings {
   founderTitle: string;
   /** The org runs (Main and the VPs start and hear their teams). Absent in an older server's answer: on. */
   enabled: boolean;
+  /** Walnut refuses Main's or a VP's 4th command of its own in a turn (org-enabled.ts
+   *  orgBlocksOwnCommandsOf). Off by default: the 3rd brings a reminder. Absent in an older answer: off. */
+  blockOwnCommands: boolean;
   /** Walnut's default core instructions for the CEO and a VP (core-instructions.ts), read-only:
    *  what an editor shows while the user has set none of their own. */
   defaultInstructions: { main: string; lead: string };
@@ -41,6 +45,7 @@ export function orgSettingsOf(config: Pick<Config, 'org'>): OrgSettings {
     name: clean(config.org?.name) || ORG_NAME_DEFAULT,
     founderTitle: clean(config.org?.founder_title) || FOUNDER_TITLE_DEFAULT,
     enabled: orgEnabledOf(config),
+    blockOwnCommands: orgBlocksOwnCommandsOf(config),
     defaultInstructions: { ...DEFAULT_ORG_INSTRUCTIONS },
   };
 }
@@ -51,7 +56,7 @@ export async function getOrgSettings(): Promise<OrgSettings> {
 
 /** Set either name (a blank one goes back to the default) or the switch. Returns the settings as shown
  *  now. Merged under the config write lock, so renaming the org and the role at once keeps both. */
-export async function setOrgSettings(patch: { name?: unknown; founderTitle?: unknown; enabled?: unknown }): Promise<OrgSettings> {
+export async function setOrgSettings(patch: { name?: unknown; founderTitle?: unknown; enabled?: unknown; blockOwnCommands?: unknown }): Promise<OrgSettings> {
   const out = await modifyConfigDoc((doc) => {
     const before = doc.org && typeof doc.org === 'object' && !Array.isArray(doc.org) ? (doc.org as NonNullable<Config['org']>) : {};
     const next: NonNullable<Config['org']> = { ...before };
@@ -67,9 +72,14 @@ export async function setOrgSettings(patch: { name?: unknown; founderTitle?: unk
     if (typeof patch.enabled === 'boolean') {
       if (patch.enabled) delete next.enabled; else next.enabled = false;
     }
+    // Only on is written: off is the default.
+    if (typeof patch.blockOwnCommands === 'boolean') {
+      if (patch.blockOwnCommands) next.block_own_commands = true; else delete next.block_own_commands;
+    }
     if (Object.keys(next).length) doc.org = next; else delete doc.org;
     return { write: true, result: orgSettingsOf({ org: next }) };
   });
+  noteOrgBlocksOwnCommands(out.blockOwnCommands);
   noteOrgEnabled(out.enabled);
   return out;
 }

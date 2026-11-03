@@ -1338,8 +1338,10 @@ export interface Config {
    *  (default "Org") and the user's role at the top of the org chart (default "Founder"). */
   /** The org above the work (src/core/org/org-settings.ts): its name, the user's role on the chart,
    *  and `enabled`: `false` turns the whole org off (no Main or VP session started, none of the
-   *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it. */
-  org?: { name?: string; founder_title?: string; enabled?: boolean };
+   *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it.
+   *  `block_own_commands`: `true` makes Walnut refuse Main's or a VP's 4th command of its own in a
+   *  turn (providers/org-work-guard-hook.ts); absent = off, and the 3rd only brings a reminder. */
+  org?: { name?: string; founder_title?: string; enabled?: boolean; block_own_commands?: boolean };
   /** Passwords (core/vault/). `auto_lock_minutes`: a window's unlock ends after this long
    *  unused (default 15, at most 720). */
   passwords?: { auto_lock_minutes?: number };

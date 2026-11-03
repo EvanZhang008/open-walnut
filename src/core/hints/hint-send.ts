@@ -133,6 +133,7 @@ export function planHints(input: {
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
       ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
+      ...(input.target.role ? { role: input.target.role } : {}),
     };
     const identity = hint.identity(content);
     if (identity === null) continue;

@@ -6,15 +6,24 @@
  * Why a hook and not only the prompt (2026-11-03, the user: "U never never nver do it urslef unless it
  * is under 3 command run ... this si the most improt rule, for a VP or CEO"): after a compaction a
  * VP's start was refused for a full slot and it ran the investigation itself with host_exec. The rule
- * was in its prompt and restated after the compaction; nothing stopped it. A prompt line is advice;
- * this is what still holds.
+ * was in its prompt and restated after the compaction; nothing reminded it at the moment it drifted.
+ *
+ * It reminds; it refuses only when the user asked for that (the same day, the user: "I think walnut
+ * probally shoudo't stoop it, it shudo use prompt and in correct time to avoid forget"). At the
+ * ORG_SELF_COMMAND_LIMIT-th command of a turn the hook adds one line of context to that call
+ * (`additionalContext`, which Claude Code hands the model with the tool's result): this is your 3rd
+ * command, hand the rest on. Once per turn. Settings → Org "Refuse their 4th command"
+ * (config `org.block_own_commands`, org-enabled.ts) turns the old refusal back on: past the limit the
+ * call is refused with a `deny` that says how to hand the work on. The rule itself rides the prompt
+ * (core instructions) and the `hand-on` message hint (core/hints/hint-registry.ts) at session start,
+ * after a compaction and every few messages.
  *
  * Only an org node's session gets these (sessionSettingsHooks with its role, decided from the
  * session's own prompt by core/org/org-prompt-role.ts). A PreToolUse hook on every tool counts the
  * session's own work in this turn: one slot per call, taken with `mkdir` (atomic, so parallel calls
- * of one turn never share a number) under `${TMPDIR:-/tmp}/walnut-org-work-<uid>/<session id>/`. Past the
- * limit the call is refused with a `deny` that says how to hand the work on. A Stop hook (and a
- * SessionStart at a process's start) clears the slots, so every turn starts at none.
+ * of one turn never share a number) under `${TMPDIR:-/tmp}/walnut-org-work-<uid>/<session id>/`; the call
+ * that takes the last slot gets the reminder. A Stop hook (and a SessionStart at a process's start)
+ * clears the slots, so every turn starts at none.
  *
  * What counts: a command (a Bash command with anything but Walnut ops in it, Monitor), host_exec /
  * host_mcp_call / host_http however they are called (`walnut tools call host_exec` too), reading, searching or editing files outside the task's own
@@ -28,10 +37,11 @@
  * well, not against one that hides work.
  *
  * POSIX sh + awk, like the other Bash hooks (pattern-kill-guard-hook.ts). WALNUT_ORG_WORK_GUARD=0 on
- * the server turns it off.
+ * the server turns the reminder and the refusal off. The switch is read when a process starts (its
+ * hooks are in its `--settings`), so a change reaches the next process a session starts.
  */
 import { TMP_PATH_AWK, shQuoteAwk } from './tmp-path-awk.js'
-import { ORG_SELF_COMMAND_LIMIT, type CoreInstructionRole } from '../core/org/core-instructions.js'
+import { ORG_SELF_COMMAND_LIMIT, orgHandOn, ordinal, type CoreInstructionRole } from '../core/org/core-instructions.js'
 
 /** Reads the hook's JSON; prints "count <sid>" for a call that counts, "free <sid>" for one that does not. */
 const DECIDE_AWK = TMP_PATH_AWK + String.raw`
@@ -143,12 +153,18 @@ END {
 }
 `
 
+/** The words at the limit-th command of a turn, per role (English: the model reads it). Short: it
+ *  rides a tool result in the middle of the work. */
+export function orgWorkReminder(role: CoreInstructionRole, block = false): string {
+  return `Walnut: this is your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command of your own in this turn. `
+    + `Hand the rest to your team now: ${orgHandOn(role)}, with what you saw so far (Walnut's own ops do not count`
+    + `${block ? '; Walnut refuses your next command' : ''}).`
+}
+
 /** The words of a refusal, per role (English: the model reads it). */
 export function orgWorkRefusal(role: CoreInstructionRole): string {
   const who = role === 'main' ? 'Main, the user\'s main agent' : 'a VP (the lead of a project)'
-  const handOn = role === 'main'
-    ? 'task_send to the task that owns it, task_create for new work, or org_send to the VP of its project'
-    : 'task_send to the team that owns it, or task_create for new work'
+  const handOn = orgHandOn(role)
   return `Walnut refused this call: you are ${who}, and you already ran ${ORG_SELF_COMMAND_LIMIT} commands of your own in this turn. `
     + `You never do the work yourself past a quick look. Hand it on now: ${handOn}, with what you saw so far in the hand-over. `
     + 'A full slot is no reason to run it here: the start is queued and Walnut starts it when a slot frees. '
@@ -160,23 +176,29 @@ export function orgWorkRefusal(role: CoreInstructionRole): string {
 // Per user: a shared /tmp dir another user made first would turn the guard off for this one.
 const SLOTS = '"${TMPDIR:-/tmp}/walnut-org-work-$(id -u)/$sid"'
 
-/** The PreToolUse command for one role. */
-export function orgWorkGuardCommand(role: CoreInstructionRole): string {
+const shQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
+
+/** The PreToolUse command for one role: a reminder at the limit-th command, and with `block` a
+ *  refusal past it. */
+export function orgWorkGuardCommand(role: CoreInstructionRole, block = false): string {
   const program = shQuoteAwk(DECIDE_AWK.replace(/^[ \t]*#.*\n/gm, ''))
+  const remind = `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\\n' ${shQuote(orgWorkReminder(role, block))}`
   return [
     'in=$(cat 2>/dev/null)',
     `v=$(printf '%s' "$in" | awk -v HOME="$HOME" -v TD="\${WALNUT_TASK_DIR%/}" ${program} 2>/dev/null)`,
     'case $v in "count "*) sid=${v#count } ;; *) exit 0 ;; esac',
     `mkdir -p ${SLOTS} 2>/dev/null || exit 0`,
     // One slot per call: mkdir is atomic, so parallel calls of a turn each get their own number.
-    // Only the allowed slots are tried, so a refusal past them costs no more forks under load.
-    `i=1; while [ $i -le ${ORG_SELF_COMMAND_LIMIT} ]; do mkdir ${SLOTS}/$i 2>/dev/null && exit 0; i=$((i+1)); done`,
-    `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\\n' '${orgWorkRefusal(role).replace(/'/g, `'\\''`)}'`,
+    // Only the allowed slots are tried, so a call past them costs no more forks under load. The call
+    // that takes the last one is reminded; past them nothing more is said, unless the user asked
+    // Walnut to refuse.
+    `i=1; while [ $i -le ${ORG_SELF_COMMAND_LIMIT} ]; do if mkdir ${SLOTS}/$i 2>/dev/null; then [ $i -eq ${ORG_SELF_COMMAND_LIMIT} ] && ${remind}; exit 0; fi; i=$((i+1)); done`,
+    ...(block ? [`printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\\n' ${shQuote(orgWorkRefusal(role))}`] : []),
     'exit 0',
   ].join('\n')
 }
 
-/** Stop and UserPromptSubmit: a new turn starts at no commands. Prints nothing, so it never blocks. */
+/** Stop and a process's SessionStart: a new turn starts at no commands. Prints nothing, so it never blocks. */
 export const ORG_WORK_RESET_COMMAND = [
   'in=$(cat 2>/dev/null)',
   `sid=$(printf '%s' "$in" | awk ${shQuoteAwk(TMP_PATH_AWK.replace(/^[ \t]*#.*\n/gm, '') + String.raw`
@@ -189,11 +211,12 @@ END { sid = jstr(in_, "session_id"); gsub(/[^A-Za-z0-9_-]/, "", sid); print sid 
 
 const HOOK_TIMEOUT_SECS = 10
 
-export function orgWorkGuardHooks(role: CoreInstructionRole | undefined, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
+/** `block`: the user's Settings → Org switch (org-enabled.ts orgBlocksOwnCommandsCached), off by default. */
+export function orgWorkGuardHooks(role: CoreInstructionRole | undefined, env: NodeJS.ProcessEnv = process.env, opts: { block?: boolean } = {}): Record<string, unknown> | null {
   if (!role || env.WALNUT_ORG_WORK_GUARD === '0') return null
   const reset = { type: 'command', command: ORG_WORK_RESET_COMMAND, timeout: HOOK_TIMEOUT_SECS }
   return {
-    PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: orgWorkGuardCommand(role), timeout: HOOK_TIMEOUT_SECS }] }],
+    PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: orgWorkGuardCommand(role, opts.block === true), timeout: HOOK_TIMEOUT_SECS }] }],
     // A turn's end, and a process's start (a slot left by one that died mid-turn). Never
     // UserPromptSubmit: Claude Code runs it for every message queued into a running turn too
     // (2026-11-03 on prod: a Walnut notice taken in after the VP's first command reset its count),

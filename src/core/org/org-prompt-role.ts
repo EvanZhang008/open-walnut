@@ -1,6 +1,6 @@
 /**
  * The org role a session runs as, read from the prompt Walnut gave it (sessions/session-context.ts
- * orgRoleLine). The spawn reads it to give Main's and a VP's session the hooks that hold them to their
+ * orgRoleLine). The spawn reads it to give Main's and a VP's session the hooks that remind them of their
  * first rule (providers/org-work-guard-hook.ts). From the prompt, not the task: a spawn is synchronous
  * and has only its arguments, and a resume replays the prompt the session was spawned with, which is
  * the role it was told it has. Walnut writes this prompt, so its words are Walnut's own format.

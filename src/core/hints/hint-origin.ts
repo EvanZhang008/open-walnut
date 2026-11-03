@@ -14,7 +14,7 @@
 import { REPLY_LANGUAGE_LINES } from './reply-language-lines.js';
 
 /** Every hint kind the registry defines (hint-registry.ts BUILT_IN), in its order. */
-export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads', 'threads-tidy'] as const;
+export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on'] as const;
 
 /** Walnut text that rides a message outside the registry (no switch in Settings). */
 export const WALNUT_ONLY_KINDS = ['session-context', 'engine-switch', 'images'] as const;

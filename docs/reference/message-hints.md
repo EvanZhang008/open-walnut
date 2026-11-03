@@ -163,6 +163,14 @@ answered), with the same rules, so the node takes what he knows off the card (`t
 summary latest first, and closes what he reacted to as finished (2026-11-01, the user: "you should proactively clean the thread ...
 make sure this is a Walnut feature, not just your memory").
 
+`hand-on` (Main and the leads, by its default audience; at session start, after a compaction and
+every 3 messages): never do the work yourself, at most 3 commands of your own in a turn, then hand the
+rest to the team (`src/core/org/core-instructions.ts` `orgHandOnHint`; 2026-11-03, the user: "it shudo
+use prompt and in correct time to avoid forget"). Its other half runs inside the turn: the org work hook
+(`src/providers/org-work-guard-hook.ts`) adds the same reminder to the result of the node's 3rd command
+of its own in a turn, once per turn, and refuses the 4th only when Settings → Org "Refuse their 4th
+command" is on (`org.block_own_commands`, off by default).
+
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint
 with `after_compaction` right away and records it, so the rest of an interrupted
 turn holds it; the boundary the server reads later counts those as told.

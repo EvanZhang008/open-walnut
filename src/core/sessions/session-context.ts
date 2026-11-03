@@ -101,7 +101,7 @@ import { taskDirForHost } from './task-dir-place.js'
 import { isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
-import { defaultOrgInstructions, orgSelfWorkRule, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
+import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
 
@@ -146,7 +146,7 @@ export const MAIN_DELEGATES_LINE =
   + 'the work and to write a clear hand-over, then stop. Every investigation, check, evaluation, research or '
   + 'implementation (reading code, reading logs, measuring, finding a cause) goes to a subtask: the task that '
   + 'already owns that work (task_send), else a new subtask (task_create); never do it yourself. Look yourself only '
-  + `with at most ${ORG_SELF_COMMAND_LIMIT} commands in a turn (your core instructions say so first, and Walnut holds you to it).\n\n`
+  + `with at most ${ORG_SELF_COMMAND_LIMIT} commands in a turn (your core instructions say so first, and Walnut reminds you at the ${ordinal(ORG_SELF_COMMAND_LIMIT)}).\n\n`
 
 /**
  * 2g. Main keeps track (2026-10-25, the user: "main agent should also keep a

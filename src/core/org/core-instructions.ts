@@ -20,20 +20,45 @@ export type CoreInstructionRole = 'main' | 'lead';
  * The commands Main or a VP may run itself in one turn, only to look (2026-11-03, the user: "U never
  * never nver do it urslef unless it is under 3 command run ... this si the most improt rule, for a VP or
  * CEO"; a VP whose start was refused for a full slot ran the investigation itself instead). The first
- * line of both defaults, and what src/providers/org-work-guard-hook.ts counts: past this many in a
- * turn, the call is refused and the agent is told to hand the work on.
+ * line of both defaults, and what src/providers/org-work-guard-hook.ts counts: at this many in a turn
+ * the agent is reminded to hand the work on, and refused past it only when the user turned that on
+ * (Settings → Org, config `org.block_own_commands`).
  */
 export const ORG_SELF_COMMAND_LIMIT = 3;
 
+/** 1st, 2nd, 3rd, 4th ... (English: the model reads it). */
+export function ordinal(n: number): string {
+  const t = n % 100;
+  const suffix = t >= 11 && t <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
+  return `${n}${suffix}`;
+}
+
 /** The rule as one line, the first of both defaults (also said when the user's own words replace them). */
-export function orgSelfWorkRule(role: CoreInstructionRole): string {
-  const handOn = role === 'main'
+/** How Main or a VP hands work on, in the words every reminder of the rule uses. */
+export function orgHandOn(role: CoreInstructionRole): string {
+  return role === 'main'
     ? 'task_send to the task that owns it, task_create for new work, or org_send to the VP of its project'
     : 'task_send to the team that owns it, or task_create for new work';
+}
+
+/**
+ * The rule as the `hand-on` message hint says it (core/hints/hint-registry.ts): at a session's start,
+ * after a compaction and every few messages, so it is in front of the node when it would forget
+ * (2026-11-03, the user: "it shudo use prompt and in correct time to avoid forget, some instruction
+ * eaach compation or at start some ever xround"). Short: it rides a message.
+ */
+export function orgHandOnHint(role: CoreInstructionRole): string {
+  const who = role === 'main' ? 'Main' : 'a VP';
+  return `you are ${who}: never do the work yourself. Run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, only to look, `
+    + `then hand the rest on: ${orgHandOn(role)} (Walnut's own ops do not count; host_exec does).`;
+}
+
+export function orgSelfWorkRule(role: CoreInstructionRole): string {
+  const handOn = orgHandOn(role);
   return `Never do the work yourself: run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, and only to look. `
     + `Past that, hand it to your team: ${handOn}, with what you saw so far in the hand-over. A full slot is no reason to do it `
-    + 'yourself: the start is queued and Walnut starts it when a slot frees. Walnut refuses your next command once you are past '
-    + `${ORG_SELF_COMMAND_LIMIT} (Walnut's own ops do not count; host_exec does).`;
+    + `yourself: the start is queued and Walnut starts it when a slot frees. Walnut reminds you at your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command `
+    + '(Walnut\'s own ops do not count; host_exec does).';
 }
 
 export const DEFAULT_ORG_INSTRUCTIONS: Readonly<Record<CoreInstructionRole, string>> = {

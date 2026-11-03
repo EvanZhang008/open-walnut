@@ -53,6 +53,8 @@ export interface OrgSettings {
   name: string;
   founderTitle: string;
   enabled?: boolean;
+  /** Walnut refuses Main's or a VP's 4th command of its own in a turn. Off by default (absent: off). */
+  blockOwnCommands?: boolean;
 }
 
 /** Start Main's or a VP's first session in the background (src/core/org/org-autostart.ts). `auto`:

@@ -9,7 +9,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { coalesceRefresh } from '@/utils/coalesce-refresh';
 
-export const ORG_DEFAULTS: OrgSettings = { name: 'Org', founderTitle: 'Founder', enabled: true };
+export const ORG_DEFAULTS: OrgSettings = { name: 'Org', founderTitle: 'Founder', enabled: true, blockOwnCommands: false };
 
 let known: OrgSettings | null = null;
 const listeners = new Set<(s: OrgSettings) => void>();
