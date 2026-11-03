@@ -23,9 +23,12 @@ import { execFile } from 'node:child_process'
 import { log } from '../../logging/index.js'
 import { createHostRuntime, type HostPreflightResult, type HostRuntimeDeps } from '../../providers/host-runtime-core.js'
 import { createHostFix, type HostFixAction } from '../../providers/host-fix-core.js'
+import { createClaudeInstall } from '../../providers/claude-install-core.js'
+import { createClaudeDownload } from '../../providers/claude-download-core.js'
+import { createDtachBuild } from '../../providers/dtach-build-core.js'
 import { createClaudeCheck, sha256Hex } from '../../providers/claude-check-core.js'
 import {
-  describeFixOutcome, fixActionFor, fixingText, sendHostFix, withFixState,
+  describeFixOutcome, fixActionFor, fixingText, hostFixWaitMs, sendHostFix, withFixState,
   type FixOutcome, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
 import { applyClaudeFloor, parsePreflight, readinessProblems, type ReadinessProblem } from './host-readiness-problems.js'
@@ -122,11 +125,12 @@ export function createLocalClaudeIo(parts: LocalMachineParts): LocalClaudeIo {
       if (conn?.hasCapability('hostfix-v1')) return sendHostFix(conn, action, params)
       const { env, exec, runtime } = await inProcessRuntime(parts)
       const fixer = createHostFix({
-        fs, execFile: exec, env, runtime,
+        fs, execFile: exec, env, runtime, claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
         os: { platform: () => process.platform, tmpdir: () => os.tmpdir(), uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1) },
         log: (level, msg, data) => { if (level === 'warn') log.session.warn(msg, data); else log.session.info(msg, data) },
       })
-      return { result: await fixer.run(action, params) }
+      // In this process nothing gives up early: the fix gets the daemon's whole allowance.
+      return { result: await fixer.run(action, { ...params, waitMs: hostFixWaitMs(action) }) }
     },
   }
 }
@@ -248,7 +252,8 @@ export function startLocalClaudeFix(kind: string): LocalFixStart {
   if (!action) return { ok: false, error: 'no-fix' }
   if (fixing) return { ok: false, error: 'busy' }
   const started: HostFixing = { action, startedAt: io.now(), text: fixingText(action) }
-  const params = action === 'update-claude' && stored.floor ? { minClaudeVersion: stored.floor.minVersion } : {}
+  // The install takes the floor too: a kept download of an older release is then not resumed.
+  const params = stored.floor ? { minClaudeVersion: stored.floor.minVersion } : {}
   fixing = started
   log.session.info('local claude fix started', { action, problem: kind })
   notify()

@@ -21,6 +21,7 @@ import {
   type PreflightConnection,
 } from '../../src/core/hosts/host-readiness.js'
 import { applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
+import { withFixState } from '../../src/core/hosts/host-autofix.js'
 import { claudeCliFloorFor, claudeVersionAtLeast } from '../../src/core/hosts/claude-version-floor.js'
 import { compilerInstallCommands } from '../../src/core/hosts/compiler-install.js'
 
@@ -54,6 +55,30 @@ describe('parsePreflight + readinessProblems', () => {
       { kind: 'claude_needs_node', message: expect.stringContaining('npm build'), commands: [INSTALL] },
       { kind: 'compiler_missing', message: expect.stringContaining('will not survive a disconnect'), commands: compilerInstallCommands({}) },
     ])
+  })
+
+  it('a PC whose sessions run in WSL: the line names that Linux, and each command runs from PowerShell into it', () => {
+    // 2026-11-03: home-pc said "not installed on home-pc" with a bash line; on Windows that reads as PowerShell.
+    const p = parsePreflight({ claude: { found: false }, compiler: { found: false }, dtach: { found: false }, packageManager: 'apt-get', platform: 'linux', wsl: 'Ubuntu' })!
+    expect(p.wsl).toBe('Ubuntu')
+    expect(readinessProblems(p, { hostLabel: 'home-pc' })).toEqual([
+      { kind: 'claude_missing', message: "Claude Code is not installed on home-pc's Ubuntu (WSL).", commands: ['wsl -d Ubuntu -- bash -lc "curl -fsSL https://claude.ai/install.sh | bash"'] },
+      { kind: 'compiler_missing', message: "No C compiler on home-pc's Ubuntu (WSL), so its terminals will not survive a disconnect.", commands: ['wsl -d Ubuntu -- bash -lc "sudo apt-get update && sudo apt-get install -y gcc libc6-dev"'] },
+    ])
+    // A distribution it cannot name: the default one, said as Linux.
+    const unnamed = parsePreflight({ claude: { found: false }, compiler: { found: true, name: 'cc' }, dtach: { found: true }, wsl: 'WSL' })!
+    expect(readinessProblems(unnamed, { hostLabel: 'home-pc' })[0]).toEqual({
+      kind: 'claude_missing', message: "Claude Code is not installed on home-pc's Linux (WSL).", commands: ['wsl -- bash -lc "curl -fsSL https://claude.ai/install.sh | bash"'],
+    })
+    // This computer's own banner is never re-worded.
+    expect(readinessProblems(unnamed, { local: true })[0]!.commands).toEqual([INSTALL])
+    // Signing in runs from this Mac over ssh: never wrapped in wsl.
+    const signedOut = parsePreflight({ claude: { found: true, kind: 'native', version: '2.1.312', auth: 'not-logged-in' }, compiler: { found: true, name: 'cc' }, dtach: { found: true }, platform: 'linux', wsl: 'Ubuntu' })!
+    expect(readinessProblems(signedOut, { hostLabel: 'home-pc', sshTarget: 'home-pc' }).map((x) => x.commands)).toEqual([['ssh -t home-pc claude']])
+    // A failed fix's own command runs in WSL too.
+    expect(withFixState(readinessProblems(unnamed, { hostLabel: 'home-pc' }), unnamed, undefined, [
+      { action: 'install-claude-native', ok: false, finishedAt: 1, text: 'x', command: 'curl -fsSL https://claude.ai/install.sh | bash' },
+    ])[0]!.commands).toEqual(['wsl -- bash -lc "curl -fsSL https://claude.ai/install.sh | bash"'])
   })
 
   it('claude missing', () => {
@@ -284,6 +309,21 @@ describe('claude_outdated and claude_not_logged_in', () => {
     const plain = fakeConn(READY)
     await refreshHostReadiness('marina', { getConnection: () => plain.conn, hostContext: async () => ({ label: 'marina', sshTarget: 'marina', floor: null }) })
     expect(plain.send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number))
+  })
+
+  it('a PC on a daemon older than its own wsl field: the probed WSL kernel still puts the line and command in WSL', async () => {
+    const missing = { ok: true, claude: { found: false }, compiler: { found: true, name: 'cc' }, dtach: { found: true }, platform: 'linux' }
+    const ctx = async () => ({ label: 'home-pc', sshTarget: 'home-pc', floor: null, wsl: 'WSL' })
+    const old = await refreshHostReadiness('pc', { getConnection: () => fakeConn(missing).conn, hostContext: ctx, autofix: false })
+    expect(old?.problems).toEqual([{ kind: 'claude_missing', message: "Claude Code is not installed on home-pc's Linux (WSL).", commands: ['wsl -- bash -lc "curl -fsSL https://claude.ai/install.sh | bash"'] }])
+    // The daemon's own word wins over the probe.
+    clearHostReadiness()
+    const named = await refreshHostReadiness('pc', { getConnection: () => fakeConn({ ...missing, wsl: 'Ubuntu' }).conn, hostContext: ctx, autofix: false })
+    expect(named?.problems[0]!.commands).toEqual(['wsl -d Ubuntu -- bash -lc "curl -fsSL https://claude.ai/install.sh | bash"'])
+    // A Mac's answer is never wrapped, whatever the context says.
+    clearHostReadiness()
+    const mac = await refreshHostReadiness('pc', { getConnection: () => fakeConn({ ...missing, platform: 'darwin' }).conn, hostContext: ctx, autofix: false })
+    expect(mac?.problems[0]!.commands).toEqual(['curl -fsSL https://claude.ai/install.sh | bash'])
   })
 
   it('sshTargetText is what the user types after ssh', () => {

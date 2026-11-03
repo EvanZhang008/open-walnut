@@ -27,7 +27,7 @@ import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
 
 /** A plain Linux PATH for a fake host (fakeHost runs nothing for real). */
-const usrBinEnv = () => ({ HOME, PATH: '/usr/bin' })
+const usrBinEnv = (extra: Record<string, string> = {}) => ({ HOME, PATH: '/usr/bin', ...extra })
 
 // C5: the spawn gate's sentences are the readiness builders' words for "this host".
 const NEEDS_NODE = claudeNeedsNodeMessage({ hostLabel: 'this host' })
@@ -156,7 +156,7 @@ describe('computeDaemonPath: login-shell capture', () => {
   })
 
   it('falls back to rc sourcing (inherited env) when $SHELL is missing', () => {
-    const { rt, syncCalls } = withSyncExec({ HOME, PATH: '/usr/bin' }, () => '/from/rc/bin:/usr/local/bin:/usr/bin:/bin\n')
+    const { rt, syncCalls } = withSyncExec(usrBinEnv(), () => '/from/rc/bin:/usr/local/bin:/usr/bin:/bin\n')
     const out = rt.computeDaemonPath()
     expect(out.source).toBe('rc')
     expect(syncCalls[0].args).toEqual(['-c', `source ${JSON.stringify(`${HOME}/.zshrc`)} 2>/dev/null; echo "$PATH"`])
@@ -379,6 +379,19 @@ describe('preflight', () => {
     // With a compiler there is nothing to install: no field.
     const ready = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv())
     expect((await createHostRuntime(ready.deps).preflight()).packageManager).toBeUndefined()
+  })
+
+  it('Linux inside Windows says so, by its distribution or by the kernel; other Linux does not', async () => {
+    const kernel = 'Linux version 5.15.153.1-microsoft-standard-WSL2 (root@1c602f52c2e4) (gcc (GCC) 11.2.0) #1 SMP'
+    const named = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv({ WSL_DISTRO_NAME: 'Ubuntu' }))
+    expect((await createHostRuntime({ ...named.deps, platform: 'linux' }).preflight()).wsl).toBe('Ubuntu')
+    // A service started inside WSL may have no WSL_DISTRO_NAME.
+    const service = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/proc/version': { content: kernel } }, () => ({ code: 0 }), usrBinEnv())
+    expect((await createHostRuntime({ ...service.deps, platform: 'linux' }).preflight()).wsl).toBe('WSL')
+    const plain = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/proc/version': { content: 'Linux version 6.8.0-45-generic (buildd@lcy02) #45-Ubuntu SMP' } }, () => ({ code: 0 }), usrBinEnv())
+    expect((await createHostRuntime({ ...plain.deps, platform: 'linux' }).preflight()).wsl).toBeUndefined()
+    // A Mac never reads /proc.
+    expect((await createHostRuntime({ ...named.deps, platform: 'darwin' }).preflight()).wsl).toBeUndefined()
   })
 
   it('claude missing entirely', async () => {

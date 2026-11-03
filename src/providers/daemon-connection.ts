@@ -42,6 +42,8 @@ import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
+import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
+import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
@@ -530,6 +532,8 @@ export class DaemonConnection {
    */
   private _capabilities: string[] | null = null
   private _daemonStartup = 'on-demand'
+  /** The file an OS service runs as this daemon (hello `serviceExecutable`, service mode only). */
+  private _serviceExecutable: string | null = null
   private cronMetadataToken: object | null = null
   /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
   private _lastBridgeConnected: boolean | null = null
@@ -776,7 +780,7 @@ export class DaemonConnection {
   private get ssh(): SshTarget {
     // Every ssh spawn reads its target here: a machine on the host network has no SSH,
     // and its name must never be handed to ssh (it may resolve to some other machine).
-    if (this.sshTarget?.via === 'net') throw new Error(`${this.hostKey} is reached over the host network, not SSH`)
+    if (this.isNetHost) throw new Error(`${this.hostKey} is reached over the host network, not SSH`)
     if (!this.sshTarget) {
       throw new Error(
         `DaemonConnection(${this.hostKey}): SSH path taken but sshTarget is null. ` +
@@ -840,17 +844,46 @@ export class DaemonConnection {
    * above the socket (commands, streams, file reads, git, changes) is the same.
    */
   private get isCloudTunnel(): boolean {
-    return this.hostKey === CLOUD_BOX_HOST_ALIAS
+    return this.linkKind === 'cloud-tunnel'
   }
 
   /**
    * A machine on the host network (`transport: net`, core/hosts/link.ts): this Mac's own
    * daemon runs walnut-net, which gives a 127.0.0.1 forward to that machine's daemon,
-   * direct or through the user's relay (providers/net-core.ts). No SSH and no deploy:
-   * its daemon is a service there and updates itself.
+   * direct or through the user's relay (providers/net-core.ts). No SSH and no deploy at
+   * connect: its daemon is a service there, and nothing there updates it, so a daemon of
+   * another build is updated over this link (daemon-net-update.ts, `netUpdater`).
    */
   private get isNetHost(): boolean {
-    return this.sshTarget?.via === 'net'
+    return this.linkKind === 'net'
+  }
+
+  /** How this connection reaches its daemon; the one place that decides it (daemon-update-paths.ts). */
+  get linkKind(): DaemonLinkKind {
+    return daemonLinkKind({ hostKey: this.hostKey, via: this.sshTarget?.via, dialledDirect: this._dialledDirect }, CLOUD_BOX_HOST_ALIAS)
+  }
+
+  private _netUpdaterInstance: NetDaemonUpdater | null = null
+  /** The update of a host network machine's daemon over this link; null for every other kind. */
+  private get netUpdater(): NetDaemonUpdater | null {
+    if (!this.isNetHost) return null
+    this._netUpdaterInstance ??= new NetDaemonUpdater({
+      conn: this,
+      kind: () => this.linkKind,
+      testServer: () => this.isReadOnlyRemote || IS_EPHEMERAL,
+      expectedVersion: () => this.getExpectedDaemonVersion(),
+      hold: () => {
+        const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
+        return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
+      },
+      cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
+    })
+    return this._netUpdaterInstance
+  }
+
+  /** Update this host's daemon to this build now (host_daemon_update); null when this kind of host updates another way. */
+  requestDaemonUpdate(): Promise<NetUpdateState> | null {
+    return this.netUpdater?.request() ?? null
   }
 
   /** No SSH to this host at all: the cloud box, or a machine on the host network. */
@@ -912,6 +945,7 @@ export class DaemonConnection {
    *  connect paths attempt it, so false = the daemon answered no hello. */
   get capabilitiesKnown(): boolean { return this._capabilities !== null }
   get daemonStartup(): string { return this._daemonStartup }
+  get serviceExecutable(): string | null { return this._serviceExecutable }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
   get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
   /** Probe the host's boot start now, and set it up when due (the Overview's Set up button). */
@@ -1033,6 +1067,7 @@ export class DaemonConnection {
     this._connected = value
     if (changed) this._connectionEpoch++
     if (changed && value) this._bootStart?.schedule()
+    if (changed && value) this.netUpdater?.schedule()
     if (value) {
       if (changed) this.endHandover()
       this._disconnectedSince = null
@@ -1749,7 +1784,8 @@ export class DaemonConnection {
         return
       }
 
-      // A machine on the host network: no SSH, no deploy (its daemon is a service there).
+      // A machine on the host network: no SSH, no deploy (its daemon is a service there,
+      // updated over this link once it is up: setConnected → netUpdater).
       if (this.isNetHost) {
         await this.dialNetHost()
         this.setConnected(true)
@@ -2357,6 +2393,9 @@ export class DaemonConnection {
   }
 
   private async handleGatewayRequest(event: DaemonEvent): Promise<void> {
+    // The host's gateway gives up on this relay at its hub timeout, counted from about now
+    // (src/lib/answer-by.ts): the op's work measures its holds against that, not its own start.
+    const receivedAt = Date.now()
     const relayId = (event as unknown as { relayId?: unknown }).relayId
     const capability = (event as unknown as { capability?: unknown }).capability
     const callerSid = (event as unknown as { callerSid?: unknown }).callerSid
@@ -2386,12 +2425,14 @@ export class DaemonConnection {
     let reply: Record<string, unknown>
     try {
       const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
-      const outcome = await handleGatewayCapability(
+      const [{ withAnswerBy }, { gatewayHubTimeoutMs }] = await Promise.all([import('../lib/answer-by.js'), import('./gateway-core.js')])
+      const outcome = await withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => handleGatewayCapability(
         capability,
         callerSid,
         typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : undefined,
         this.hostKey,
-      )
+      // Fresh: this relay's own deadline, never one of a call still running in whose context the link was made.
+      ), { fresh: true })
       if (outcome.ok) {
         log.session.info('DaemonConnection: gateway relay handled', { host: this.hostKey, relayId, capability, callerSid })
         reply = { relayId, result: outcome.result }
@@ -2703,6 +2744,7 @@ export class DaemonConnection {
   disconnect(opts: { keepSshMaster?: boolean } = {}): void {
     this._destroyed = true
     this._bootStartKeeper?.stop()
+    this._netUpdaterInstance?.stop()
     this.setConnected(false)
     this._connecting = false
 
@@ -3917,6 +3959,8 @@ export class DaemonConnection {
       this._daemonVersion = typeof res.version === 'string' && res.version.length <= 64 ? res.version : null
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
+      const exe = res.serviceExecutable
+      this._serviceExecutable = typeof exe === 'string' && exe.startsWith('/') && exe.length < 1024 && !/[\u0000-\u001f]/.test(exe) ? exe : null
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {

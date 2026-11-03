@@ -254,6 +254,9 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         return
       }
     }
+    // A host_exec run's id chosen here, so an answer that never comes back still leaves one to read.
+    const { awayLines, callerRunId, dropRunId, lostRunLines, refusedRunId } = await import('../providers/host-exec-run-id.js')
+    let runId = callerRunId(name, parsed)
     // A message from a session goes through its host daemon first, on the Mac as
     // on any host: a message between two sessions on one host is that host's to
     // deliver, and the daemon hands everything else to the server itself. Only
@@ -277,7 +280,13 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     // Outside every session and with no terminal, the call is a script's, never the user's.
     const { cliAutomationSender } = await import('../lib/cli-sender.js')
     const sender = cliAutomationSender()
-    const r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+    // A server older than the run id refused it before anything ran: the same call without it.
+    if (!r.ok && runId && refusedRunId(name, r.message)) {
+      dropRunId(name, parsed)
+      runId = null
+      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
+    }
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
       const code = await callThroughHostDaemon(name, parsed)
@@ -286,6 +295,14 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     if (!r.ok) {
       if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
       console.error(r.message)
+      // No answer at all (a timeout, a dropped connection): the run may have started all the same.
+      // A server that refused the connection never saw the call: nothing ran.
+      if (runId && r.result === undefined && /^Walnut request (timed out|failed)/.test(r.message)) {
+        console.error(lostRunLines(name, parsed, runId).join('\n'))
+      } else if (r.unreachable) {
+        const lines = awayLines(name, parsed)
+        if (lines.length) console.error(lines.join('\n'))
+      }
       process.exitCode = 1
       return
     }

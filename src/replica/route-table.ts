@@ -86,8 +86,13 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'POST', pattern: '/api/v1/hosts/:host/boot-start', away: 'needs-leader', why: 'fleet_needs_mac' },
   // A command on another host runs through the Mac's links, under grants the Mac keeps.
   { method: 'POST', pattern: '/api/v1/hosts/:host/exec', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'GET', pattern: '/api/v1/hosts/:host/exec', away: 'needs-leader', why: 'host_exec_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/:host/exec/:jobId', away: 'needs-leader', why: 'host_exec_needs_mac' },
   { method: 'POST', pattern: '/api/v1/hosts/:host/exec/:jobId/stop', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'POST', pattern: '/api/v1/hosts/:host/daemon-update', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  // A file between two hosts goes through the Mac's links, under the same grants.
+  { method: 'POST', pattern: '/api/v1/host-copy', away: 'needs-leader', why: 'host_copy_needs_mac' },
+  { method: 'GET', pattern: '/api/v1/host-copy/:copyId', away: 'needs-leader', why: 'host_copy_needs_mac' },
   { method: 'GET', pattern: '/api/v1/host-exec/grants', away: 'needs-leader', why: 'host_exec_needs_mac' },
   { method: 'POST', pattern: '/api/v1/host-exec/grants', away: 'needs-leader', why: 'host_exec_needs_mac' },
   { method: 'DELETE', pattern: '/api/v1/host-exec/grants/:id', away: 'needs-leader', why: 'host_exec_needs_mac' },

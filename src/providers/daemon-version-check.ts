@@ -123,8 +123,13 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/task-dir-core.ts',
   'src/lib/task-dir.ts',
   // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
-  // shipped as the host-exec-core.cjs sidecar.
+  // shipped as the host-exec-core.cjs sidecar, with the macOS dialog guards it imports.
   'src/providers/host-exec-core.ts',
+  'src/providers/host-exec-line.ts',
+  'src/providers/host-exec-guards.ts',
+  'src/providers/host-exec-watch.ts',
+  // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.
+  'src/providers/host-exec-run-id.ts',
   // The host network (net.*): bundled into the binary AND shipped as net-core.cjs,
   // with the connector download it imports.
   'src/providers/net-core.ts',
@@ -203,6 +208,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-runtime-core.ts',
   // host.fix (install claude / gcc, build dtach): same import-or-inline rule.
   'src/providers/host-fix-core.ts',
+  // Its Claude Code installer (resumable download) and dtach build: same rule.
+  'src/providers/claude-install-core.ts',
+  'src/providers/claude-download-core.ts',
+  'src/providers/dtach-build-core.ts',
   // The Claude Code sign-in and version check of host.preflight: same rule.
   'src/providers/claude-check-core.ts',
   // fs.ls with its per-entry and whole-listing budgets: same rule.

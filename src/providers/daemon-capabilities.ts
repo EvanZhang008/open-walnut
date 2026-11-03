@@ -487,6 +487,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // server checks the user's grant first (src/core/hosts/host-exec.ts); not bridge-
   // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs).
   'host-exec-v1',
+  // 'host-exec-v2' — the same commands, run the way a session's Bash tool runs them:
+  // the login shell sets up PATH and the environment, then bash (sh on a host with
+  // none) runs the line, so zsh's builtins and `=` words never read it; the child
+  // gets WALNUT_TASK_DIR (the caller task's directory here, made with its marker,
+  // `home` naming its owner); every reply names `shell`, `loginShell` and `taskDir`.
+  // Without it the server wraps the line itself (src/core/hosts/host-exec-legacy.ts).
+  // Sidecar-gated in the source twin (host-exec-core.cjs `version` 2).
+  'host-exec-v2',
   // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
   // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
   // writes its config (members with `accept: true` may open streams to this daemon;

@@ -9,12 +9,12 @@ import { describe, expect, it } from 'vitest'
 import '../../../src/ops/index.js'
 import { listOps } from '../../../src/ops/registry.js'
 
-const DIALS_A_HOST = /^\/hosts\/:host\/(exec|mcp|http)/
+const DIALS_A_HOST = /^\/hosts\/:host\/(exec|mcp|http)|^\/host-copy/
 
 describe('ops that reach another host', () => {
   it('each waits past the route\'s own answer', () => {
     const ops = listOps().filter((op) => op.bind && DIALS_A_HOST.test(op.bind.path))
-    expect(ops.map((op) => op.name)).toEqual(expect.arrayContaining(['host_exec', 'host_mcp_list', 'host_mcp_tools', 'host_mcp_call', 'host_mcp_result', 'host_http']))
+    expect(ops.map((op) => op.name)).toEqual(expect.arrayContaining(['host_exec', 'host_mcp_list', 'host_mcp_tools', 'host_mcp_call', 'host_mcp_result', 'host_http', 'host_copy', 'host_copy_result']))
     const short = ops.filter((op) => (op.timeoutMs ?? 10_000) < 30_000).map((op) => `${op.name} (${op.timeoutMs ?? 'default 10000'} ms)`)
     expect(short).toEqual([])
   })

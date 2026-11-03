@@ -77,6 +77,9 @@ import { createOpenItemsText } from '../core/sessions/open-items-text.js'
 import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
+import { createClaudeInstall } from './claude-install-core.js'
+import { createClaudeDownload } from './claude-download-core.js'
+import { createDtachBuild } from './dtach-build-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
@@ -222,7 +225,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -294,6 +297,9 @@ export function getDaemonSource(): string {
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
     ['__CREATE_HOST_FIX__', createHostFix.toString()],
+    ['__CREATE_CLAUDE_INSTALL__', createClaudeInstall.toString()],
+    ['__CREATE_CLAUDE_DOWNLOAD__', createClaudeDownload.toString()],
+    ['__CREATE_DTACH_BUILD__', createDtachBuild.toString()],
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
@@ -800,9 +806,23 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     // host.fix smoke: the package-manager table and the sudo refusal reader ride
     // this text, so a reconstructed copy must still build apk's argv and read
     // "a password is required" as a password refusal, not a package failure.
+    // The Claude installer rides its own text: it must still read a manifest entry.
+    // Its download half (manifests, sha256, the resumed curl) rides a text of its own.
+    const createInstall = reconstructed['__CREATE_CLAUDE_INSTALL__'] as typeof createClaudeInstall | undefined
+    const createDownload = reconstructed['__CREATE_CLAUDE_DOWNLOAD__'] as typeof createClaudeDownload | undefined
+    const createDtach = reconstructed['__CREATE_DTACH_BUILD__'] as typeof createDtachBuild | undefined
+    if (createInstall || createDownload) {
+      const ci = (createInstall || createClaudeInstall)({
+        env: {}, os: { platform: () => 'linux', tmpdir: () => '/tmp' }, runtime: { resolveOnPath: () => null },
+        run: async () => ({ code: -1, stdout: '', stderr: '', timedOut: false }), transcript: () => {}, now: () => 0, sleep: async () => {},
+        atLeast: () => true, installUrl: 'https://example.invalid/install.sh', installLine: 'install', download: createDownload || createClaudeDownload,
+      })
+      const entry = ci.manifestEntry(JSON.stringify({ platforms: { 'linux-x64': { checksum: 'a'.repeat(64), size: 7 } } }), 'linux-x64')
+      if (!entry || entry.size !== 7 || entry.checksum !== 'a'.repeat(64)) throw new Error('claude installer misread a manifest')
+    }
     const createFix = reconstructed['__CREATE_HOST_FIX__'] as typeof createHostFix | undefined
     if (createFix) {
-      const fx = createFix({ env: {}, os: { platform: () => 'linux', tmpdir: () => '/tmp', uid: () => 1000 }, runtime: { resolveOnPath: () => null, probeClaude: async () => ({ found: false }) } })
+      const fx = createFix({ env: {}, os: { platform: () => 'linux', tmpdir: () => '/tmp', uid: () => 1000 }, runtime: { resolveOnPath: () => null, probeClaude: async () => ({ found: false }) }, claudeInstall: createInstall || createClaudeInstall, claudeDownload: createDownload || createClaudeDownload, dtachBuild: createDtach || createDtachBuild })
       if (fx.packageArgs('apk').join(' ') !== 'add gcc musl-dev') throw new Error('host fix built the wrong apk argv')
       if (fx.classifySudo({ code: 1, stdout: '', stderr: 'sudo: a password is required\n' }) !== 'password') throw new Error('host fix misread a sudo password refusal')
       if (fx.running !== null) throw new Error('host fix started busy')
@@ -1037,6 +1057,44 @@ function runWnMinimal(argv, stdinText) {
   // the file instead. Twin of GATEWAY_INLINE_ARGS_MAX_BYTES in tool-args-source.ts.
   var GATEWAY_INLINE_ARGS_MAX_BYTES = 1024 * 1024;
   var wnSpilledArgsFile;
+  // Mirror of host-exec-run-id.ts: a host_exec or host_copy run's id is chosen here, so an
+  // answer lost on the way back (hub_timeout) still leaves an id to read the run by.
+  var wnRunOps = { host_exec: { field: 'job_id', prefix: 'hx-' }, host_copy: { field: 'copy_id', prefix: 'hc-' } };
+  var wnRunId = null;
+  var wnShellWord = function (t) { return "'" + t.replace(/'/g, "'\\\\''") + "'"; };
+  var wnLostRun = function () {
+    if (!wnRunId) return;
+    if (wnRunId.op === 'host_copy') {
+      errOut('walnut: host_copy may have started as copy ' + wnRunId.id + ': do not start it again. Read it first:');
+      errOut('  walnut tools call host_copy_result ' + wnShellWord(JSON.stringify({ copy_id: wnRunId.id, wait_ms: 10000 })));
+      errOut('walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call host_copy again)');
+      return;
+    }
+    var readArgs = JSON.stringify({ host: wnRunId.host, job_id: wnRunId.id, wait_ms: 10000 });
+    errOut('walnut: host_exec may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:');
+    errOut('  walnut tools call host_exec_read ' + wnShellWord(readArgs));
+    errOut('walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)");
+  };
+  // A server older than the run id refuses it as an unknown argument, before anything ran.
+  var wnRefusedRunId = function (msg) {
+    if (!wnRunId || typeof msg !== 'string') return false;
+    return msg.indexOf('Invalid arguments for ' + wnRunId.op + ':') !== -1 && new RegExp('Unrecognized keys?: [^;]*"' + wnRunId.field + '"').test(msg);
+  };
+  // The call never left (hub_unreachable: it never reached the server; or this daemon's socket
+  // refused the connection, local true), so nothing ran; a job started before still runs.
+  var wnAway = function (local) {
+    var call = args && args.args;
+    if (!call || typeof args.name !== 'string') return;
+    var host = String(call.host || 'that host');
+    var missed = local ? "this host's Walnut daemon" : 'the Walnut server';
+    var short = local ? "this host's daemon" : 'the server';
+    if (args.name === 'host_copy') errOut('walnut: host_copy did not reach ' + missed + ', so nothing was copied; call it again once ' + short + ' answers.');
+    else if (args.name === 'host_exec') errOut('walnut: host_exec did not reach ' + missed + ', so nothing ran on ' + host + '; call it again once ' + short + ' answers.');
+    else if (args.name === 'host_exec_read' || args.name === 'host_exec_stop' || args.name === 'host_exec_list') {
+      errOut('walnut: a job host_exec already started on ' + host + " keeps running meanwhile, and its log stays in your task's directory there"
+        + (typeof call.job_id === 'string' ? ' (host-exec/' + call.job_id + '.log)' : '') + '; read it once ' + short + ' answers.');
+    }
+  };
   var wnSlot = wnCallSlot(argv);
   var wnSrc = wnSlot ? wnArgsSource(wnSlot.raw) : null;
   if (stdinText === undefined && wnSrc && wnSrc.kind === 'stdin') {
@@ -1150,6 +1208,12 @@ function runWnMinimal(argv, stdinText) {
           if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
           var wnCut = process.env.WALNUT_TEXT_CHECK === '0' || src.kind !== 'inline' ? null : wnStrippedText(parsedCall.args, '', 0);
           if (wnCut) { errOut('walnut: ' + wnStrippedMessage(wnCut)); return exitWn(2); }
+          var wnRunOp = Object.prototype.hasOwnProperty.call(wnRunOps, rest[0]) ? wnRunOps[rest[0]] : null;
+          if (wnRunOp) {
+            var wnGiven = parsedCall.args[wnRunOp.field];
+            if (!(typeof wnGiven === 'string' && wnGiven)) parsedCall.args[wnRunOp.field] = wnRunOp.prefix + crypto.randomUUID();
+            wnRunId = { op: rest[0], field: wnRunOp.field, host: String(parsedCall.args.host), id: parsedCall.args[wnRunOp.field] };
+          }
           args = { name: rest[0], args: parsedCall.args };
         }
       }
@@ -1267,19 +1331,22 @@ function runWnMinimal(argv, stdinText) {
     waitTick();
     return;
   }
+  var wnConnect = function () {
   var sock = net.connect(sockPath);
   var buf = '';
   var finished = false;
+  // Whether the request was written: a socket that fails before that never carried the call.
+  var sent = false;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
-    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within 30s'); exitWn(5); });
+    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within 30s'); wnLostRun(); exitWn(5); });
   }, 30000);
-  sock.on('connect', function () { sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
+  sock.on('connect', function () { sent = true; sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
-    finish(function () { errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); exitWn(6); });
+    finish(function () { errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
   });
   sock.on('close', function () {
-    finish(function () { errOut('walnut: agent socket closed without a response'); exitWn(6); });
+    finish(function () { errOut('walnut: agent socket closed without a response'); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
   });
   // One decoder for the whole reply, so a character split across chunks decodes whole.
   sock.setEncoding('utf-8');
@@ -1291,11 +1358,24 @@ function runWnMinimal(argv, stdinText) {
     finish(function () {
       var resp;
       try { resp = JSON.parse(line); } catch (e) { errOut('walnut: malformed response from agent socket'); return exitWn(1); }
-      if (json) { out(JSON.stringify(resp)); return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code)); }
+      // A server older than the run id refused it before anything ran: the same call without it.
+      if (!resp.ok && wnRunId && args && args.args && wnRefusedRunId(resp.error && resp.error.message)) {
+        delete args.args[wnRunId.field];
+        wnRunId = null;
+        return wnConnect();
+      }
+      if (json) {
+        out(JSON.stringify(resp));
+        // The run's id goes to stderr, so stdout stays one JSON document.
+        if (!resp.ok && resp.error && resp.error.code === 'hub_timeout') wnLostRun();
+        return exitWn(resp.ok ? 0 : exitFor(resp.error && resp.error.code));
+      }
       if (!resp.ok) {
         var err = resp.error || {};
         if (op === 'tools.call' && err.detail !== undefined) out(JSON.stringify(err.detail, null, 2));
         errOut('walnut: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
+        if (err.code === 'hub_timeout') wnLostRun();
+        if (err.code === 'hub_unreachable') wnAway();
         return exitWn(exitFor(err.code));
       }
       if (op === 'tools.list') {
@@ -1344,6 +1424,8 @@ function runWnMinimal(argv, stdinText) {
       return exitWn(0);
     });
   });
+  };
+  wnConnect();
 }
 
 // ── PATH setup ──
@@ -1370,10 +1452,13 @@ process.env.PATH = bootPath.path;
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts,
 // injected as text). Keep in sync with daemon-standalone.ts.
 const hostFix = (__CREATE_HOST_FIX__)({
-  fs: fs, execFile: execFile, env: process.env, runtime: hostRuntime,
+  fs: fs, execFile: execFile, env: process.env, runtime: hostRuntime, claudeInstall: (__CREATE_CLAUDE_INSTALL__),
+  claudeDownload: (__CREATE_CLAUDE_DOWNLOAD__), dtachBuild: (__CREATE_DTACH_BUILD__),
   os: { platform: function () { return process.platform; }, tmpdir: function () { return os.tmpdir(); }, uid: function () { return typeof process.getuid === 'function' ? process.getuid() : -1; } },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
+// The accepted host.fix command whose fix runs (see cmdServiceHandover).
+let hostFixWork;
 
 // ── Constants ──
 // DAEMON_DIR default is /tmp/open-walnut; tests override via env var.
@@ -3863,13 +3948,18 @@ function dispatchCommand(ws, id, cmd) {
     // 'hostfix-v1': run ONE named fix, never a free-form command, one at a time.
     // Not bridge-reachable. Tracked like start/send (run), so a handover waits
     // for it and a shutdown drains it. Keep in sync with daemon-standalone.ts.
-    case 'host.fix':
-      return daemonCommands.run(function () {
+    case 'host.fix': {
+      // The fix that will run (none runs yet): a handover may skip waiting for it.
+      const starts = !hostFix.running;
+      const work = daemonCommands.run(function () {
         return hostFix.run(cmd.action, cmd).then(
           function (r) { sendOk(ws, id, { result: r }); },
           function (err) { sendError(ws, id, 'host.fix failed: ' + err.message); },
         );
       });
+      if (starts) hostFixWork = work;
+      return work;
+    }
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
@@ -4127,7 +4217,10 @@ async function cmdServiceHandover(ws, id, cmd) {
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform');
   // Pause before the first await so the handover RPC does not count itself in the wait set.
-  const pause = daemonCommands.pause();
+  // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
+  // after a committed handover stops it (stopDaemon), its download kept for the next
+  // Install, and a handover that fails leaves it running. A gcc install is waited for.
+  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined);
   let recovery;
   let timer;
   try {
@@ -12351,6 +12444,7 @@ function daemonCapabilities() {
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
+  if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
   if (netSupervisor) caps.push('net-v1');
   if (netSupervisor && typeof netSupervisor.join === 'function') caps.push('net-join-v1');
   if (hostMcp) caps.push('host-mcp-v1');
@@ -14649,6 +14743,9 @@ async function startDaemon() {
   const stopDaemon = function () {
     if (shutdown) return;
     shutdown = (async function () {
+      // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
+      // waits for it. Its download stays and the next Install resumes it.
+      try { hostFix.cancel(); } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }); }
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
       const failed = drained.find(function (result) { return result.status === 'rejected'; });
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });

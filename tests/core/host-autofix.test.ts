@@ -34,7 +34,7 @@ import {
 } from '../../src/core/hosts/host-readiness.js'
 import { autofixDisabledReason, describeFixOutcome, fixActionFor, isTransportError, nextFixAction, withFixState } from '../../src/core/hosts/host-autofix.js'
 import type { HostFixAction } from '../../src/core/hosts/host-autofix.js'
-import { FIX_RETRY_AFTER_MS, reloadHostFixMemoryForTest } from '../../src/core/hosts/host-fix-memory.js'
+import { FIX_RETRY_AFTER_MS, recentFailedFixes, reloadHostFixMemoryForTest } from '../../src/core/hosts/host-fix-memory.js'
 import { AGENTS_ASK_MS, agentsAsked, attempted } from '../../src/core/hosts/host-readiness-store.js'
 
 interface HostState {
@@ -118,9 +118,11 @@ describe('the autofix round', () => {
       'preflight', 'fix:build-dtach',
       'preflight',
     ])
-    // build-dtach carries the vendored source; the others carry only their name.
-    expect(h.params.map((p) => Object.keys(p).sort())).toEqual([['action'], ['action'], ['action', 'sources']])
+    // build-dtach carries the vendored source, the install the model's floor, and every
+    // fix how long this server waits for it (the daemon caps the fix there).
+    expect(h.params.map((p) => Object.keys(p).sort())).toEqual([['action', 'minClaudeVersion', 'waitMs'], ['action', 'waitMs'], ['action', 'sources', 'waitMs']])
     expect(h.params[2]!.sources).toBe(SOURCES)
+    expect(h.params.map((p) => p.waitMs)).toEqual([2_700_000, 300_000, 120_000])
     const r = getHostReadiness('devbox')!
     expect(r.problems).toEqual([])
     expect(r.fixing).toBeUndefined()
@@ -239,6 +241,28 @@ describe('the autofix round', () => {
     expect(fixes()).toHaveLength(4)
   })
 
+  it('a fix a daemon restart stopped is no attempt either: nothing is kept, and the next round runs it again', async () => {
+    const restart = async () => { await reloadHostFixMemoryForTest(); clearHostReadiness(undefined, { keepFixMemory: true }) }
+    let n = 0
+    const h = fakeHost({ compiler: { found: true }, dtach: { found: true } }, {
+      'install-claude-native': (st) => {
+        if (++n === 1) return { action: 'install-claude-native', ok: false, error: 'cancelled', log: 'stopped: the session daemon is shutting down', durationMs: 1 }
+        st.claude = NATIVE
+        return { action: 'install-claude-native', ok: true, log: '', durationMs: 1 }
+      },
+    })
+    const fixes = () => h.sent.filter((x) => x.startsWith('fix:'))
+    await refreshAndSettle('devbox', h.conn)
+    expect(getHostReadiness('devbox')!.fixes.map((f) => [f.error, f.text])).toEqual([
+      ['cancelled', 'Could not install Claude Code automatically (it was stopped because the session daemon restarted; Install again resumes the download)'],
+    ])
+    expect(await recentFailedFixes('devbox')).toEqual([])
+    await restart()
+    await refreshAndSettle('devbox', h.conn)
+    expect(fixes()).toEqual(['fix:install-claude-native', 'fix:install-claude-native'])
+    expect(getHostReadiness('devbox')!.problems).toEqual([])
+  })
+
   it('a dropped connection is no attempt: the next connect tries again', async () => {
     let calls = 0
     const h = fakeHost({ compiler: { found: true }, dtach: { found: true } }, {
@@ -325,6 +349,8 @@ describe('the autofix round', () => {
   })
 
   it('the off switch: WALNUT_HOST_AUTOFIX=0 (read live) or hosts.<alias>.autofix: false', async () => {
+    // Nobody clicked: the switch's own effect (a click on a host that is off: below).
+    ask.every = false
     const byEnv = fakeHost({})
     await refreshAndSettle('devbox', byEnv.conn, autofix({}, { WALNUT_HOST_AUTOFIX: '0' }))
     const byConfig = fakeHost({})
@@ -343,11 +369,13 @@ describe('the autofix round', () => {
     }
     expect(live.sent).toEqual(['preflight'])
     // Turned back on, the same host gets its fixes (the off round tried nothing).
+    ask.every = true
     await refreshAndSettle('acme', live.conn, autofix())
     expect(live.sent.filter((s) => s.startsWith('fix:'))).toHaveLength(3)
   })
 
   it('never fixes a healthy host, an old daemon without hostfix-v1, or a Mac compiler', async () => {
+    ask.every = false
     const healthy = fakeHost({ claude: NATIVE, compiler: { found: true, name: 'cc' }, dtach: { found: false } })
     const settings = vi.fn(async () => ({}))
     await refreshAndSettle('devbox', healthy.conn, { ...autofix(), hostSettings: settings })
@@ -475,10 +503,18 @@ describe('a claude older than the model needs', () => {
     await refreshHostReadiness('devbox', { getConnection: () => h.conn, autofix: autofix(), hostContext: floorCtx })
     await hostAutofixRound('devbox')
     expect(h.sent).toEqual(['preflight', 'fix:update-claude', 'preflight'])
-    expect(h.params[0]).toEqual({ action: 'update-claude', minClaudeVersion: '2.1.280' })
+    expect(h.params[0]).toEqual({ action: 'update-claude', minClaudeVersion: '2.1.280', waitMs: 2_700_000 })
     const r = getHostReadiness('devbox')!
     expect(r.problems).toEqual([])
     expect(r.fixes.map((f) => [f.action, f.ok, f.text])).toEqual([['update-claude', true, 'Updated Claude Code to 2.1.280']])
+  })
+
+  it('an install on a host with no claude carries the floor too, so a kept older download is not resumed', async () => {
+    const h = fakeHost({ claude: { found: false }, compiler: { found: true, name: 'gcc' }, dtach: { found: true } })
+    await refreshHostReadiness('devbox', { getConnection: () => h.conn, autofix: autofix(), hostContext: floorCtx })
+    await hostAutofixRound('devbox')
+    expect(h.sent).toEqual(['preflight', 'fix:install-claude-native', 'preflight'])
+    expect(h.params[0]).toEqual({ action: 'install-claude-native', minClaudeVersion: '2.1.280', waitMs: 2_700_000 })
   })
 
   it('while it runs the outdated line reads "Updating Claude Code"; a refusal keeps the line with its reason', async () => {
@@ -632,6 +668,60 @@ describe('the coding agent waits for a person', () => {
     agentsAsked.set('devbox', Date.now())
     await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
     expect(installs).toBe(2)
+  })
+
+  it('a host whose automatic fixes are off (autofix: false) installs on the click, and only that', async () => {
+    // 2026-11-03: the user clicked Install on such a host; the click was dropped without a word.
+    const h = fakeHost(BARE)
+    await refreshAndSettle('home', h.conn, autofix({ autofix: false }))
+    expect(h.sent).toEqual(['preflight'])
+    agentsAsked.set('home', Date.now())
+    resetHostAutofixAttempts('home')
+    await refreshAndSettle('home', h.conn, autofix({ autofix: false }), { force: true })
+    // The compiler and dtach stay as they are: nobody asked for those, and the host said no.
+    expect(h.sent.filter((x) => x.startsWith('fix:'))).toEqual(['fix:install-claude-native'])
+    expect(getHostReadiness('home')!.problems.map((p) => p.kind)).toEqual(['compiler_missing'])
+  })
+
+  it('a click that cannot start says why on the line: fixes off on this Mac, or a daemon too old for fixes', async () => {
+    const off = fakeHost({ ...BARE, compiler: { found: true }, dtach: { found: true } })
+    agentsAsked.set('devbox', Date.now())
+    await refreshAndSettle('devbox', off.conn, autofix({}, { WALNUT_HOST_AUTOFIX: '0' }))
+    expect(off.sent).toEqual(['preflight'])
+    expect(getHostReadiness('devbox')!.problems[0]).toMatchObject({
+      kind: 'claude_missing', fix: { state: 'failed', text: 'Could not install Claude Code automatically (host fixes are turned off on this Mac with WALNUT_HOST_AUTOFIX)' },
+    })
+    const old = fakeHost({ ...BARE, compiler: { found: true }, dtach: { found: true } }, {}, ['preflight-v1'])
+    agentsAsked.set('marina', Date.now())
+    await refreshAndSettle('marina', old.conn)
+    expect(old.sent).toEqual(['preflight'])
+    expect(getHostReadiness('marina')!.problems[0]!.fix).toMatchObject({ state: 'failed', text: 'Could not install Claude Code automatically (the session daemon there is too old for this fix)' })
+    // Said once per click: the next connect adds nothing.
+    await refreshAndSettle('marina', old.conn, autofix(), { force: true })
+    expect(getHostReadiness('marina')!.fixes).toHaveLength(1)
+  })
+
+  it('a click while another fix runs joins that round', async () => {
+    let finish: (v: Record<string, unknown>) => void = () => {}
+    const h = fakeHost({ ...BARE, dtach: { found: true }, compiler: { found: false } }, {
+      'install-compiler': (st) => new Promise((resolve) => { finish = (v) => { st.compiler = { found: true, name: 'gcc' }; resolve(v) } }),
+    })
+    // dtach is here, so the compiler alone is no fix: make it needed.
+    h.state.dtach = { found: false }
+    const r = refreshAndSettle('devbox', h.conn)
+    await vi.waitFor(() => expect(h.sent).toContain('fix:install-compiler'))
+    agentsAsked.set('devbox', Date.now())
+    finish({ action: 'install-compiler', ok: true, packageManager: 'apt-get', log: '', durationMs: 5 })
+    await r
+    expect(h.sent.filter((x) => x.startsWith('fix:'))).toEqual(['fix:install-compiler', 'fix:install-claude-native', 'fix:build-dtach'])
+    expect(agentsAsked.has('devbox')).toBe(false)
+  })
+
+  it('a fix the daemon gave up on says how long it gave it', () => {
+    expect(describeFixOutcome('install-claude-native', { result: { ok: false, error: 'timeout', durationMs: 2_700_000 } }, 5).text)
+      .toBe('Could not install Claude Code automatically (it took longer than 45 minutes)')
+    expect(describeFixOutcome('install-claude-native', { result: { ok: false, error: 'timeout', durationMs: 300_400 } }, 5).text)
+      .toBe('Could not install Claude Code automatically (it took longer than 5 minutes)')
   })
 
   it('a click that found nothing to do expires: ten minutes on, it installs nothing', async () => {

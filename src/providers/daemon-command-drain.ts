@@ -21,12 +21,13 @@ export function createDaemonCommandDrain() {
   return {
     get closed() { return closed || paused },
     get stopping() { return closed },
-    pause() {
+    /** `except`: accepted work the pause need not wait for (the shutdown after it stops that work). */
+    pause(except?: unknown) {
       check()
       if ([...admitted].some((work) => !pending.has(work))) throw new Error('Daemon has active operations; retry after they finish')
       paused = true
       return {
-        drained: Promise.allSettled([...pending]).then(() => {}),
+        drained: Promise.allSettled([...pending].filter((work) => work !== except)).then(() => {}),
         resume: () => { paused = false },
       }
     },

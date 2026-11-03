@@ -17,7 +17,7 @@
 
 import { log } from '../../logging/index.js'
 import {
-  autofixDisabledReason, countsAsAttempt, nextFixAction, runHostAutofix,
+  autofixDisabledReason, countsAsAttempt, describeFixOutcome, isAgentFix, nextFixAction, runHostAutofix,
   type DtachProvisionOutcome, type HostFixAction, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
 import {
@@ -67,6 +67,23 @@ export interface HostContext {
   floor: ClaudeCliFloor | null
   /** config.hosts[].shell_setup: the preflight runs it first, as a session spawn does. */
   shellSetup?: string
+  /**
+   * The host's Linux runs inside Windows, from its probed kernel release, for a daemon
+   * whose preflight predates its own `wsl` field (a joined PC updates its daemon itself,
+   * so the Mac cannot bring it the new one): its lines and commands still name WSL.
+   */
+  wsl?: string
+}
+
+/** 'WSL' when the host's probed kernel is WSL's (5.15.x-microsoft-standard-WSL2), else undefined. */
+export async function probedWsl(host: string): Promise<string | undefined> {
+  try {
+    const { readHostProfile } = await import('./host-profile.js')
+    const os = (await readHostProfile(host)).probed?.os
+    return os?.platform === 'linux' && /microsoft/i.test(os.release ?? '') ? 'WSL' : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** `ssh` arguments as the user would type them: `[-p port] [user@]hostname`. */
@@ -85,7 +102,8 @@ async function defaultHostContext(host: string): Promise<HostContext> {
     const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown; shell_setup?: unknown } : undefined
     const label = typeof def?.label === 'string' && def.label ? def.label : host
     const shellSetup = typeof def?.shell_setup === 'string' && def.shell_setup.trim() ? def.shell_setup : undefined
-    return { label, sshTarget: sshTargetText(def, host), floor, ...(shellSetup ? { shellSetup } : {}) }
+    const wsl = await probedWsl(host)
+    return { label, sshTarget: sshTargetText(def, host), floor, ...(shellSetup ? { shellSetup } : {}), ...(wsl ? { wsl } : {}) }
   } catch {
     return { label: host, sshTarget: host, floor }
   }
@@ -152,21 +170,26 @@ function defaultOnFixed(host: string, action: HostFixAction): void {
  * re-check) never waits for an install.
  */
 function maybeStartAutofix(host: string, conn: PreflightConnection, answer: HostReadiness, opts: AutofixOptions, now: () => number, findPrebuilt?: PrebuiltLookup, context?: RefreshContext): void {
-  if (answer.problems.length === 0 || !conn.hasCapability('hostfix-v1') || rounds.has(host)) return
+  // A round running reads the ask at each step (`agents` below): a click during it joins it.
+  if (answer.problems.length === 0 || rounds.has(host)) return
+  if (!conn.hasCapability('hostfix-v1')) {
+    // The person clicked Install and nothing can run it here: the line says so, never a silent no-op.
+    refuseAsked(host, answer, 'unknown-action', now())
+    return
+  }
   let tried = attempted.get(host)
   // First round on this host in this server: what failed under an earlier one is read first.
   const fresh = !tried
   if (!tried) { tried = new Set(); attempted.set(host, tried) }
   const prebuiltDtach = () => prebuiltFor.get(host) === true
-  // The ask's own clock (the click's Date.now), not the round's injectable one.
-  const agents = agentsAskedNow(host)
-  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach(), agents })) return
+  // The ask's own clock (the click's Date.now), not the round's injectable one. It is used up
+  // when its fix starts (onStart), so a later connect installs nothing by itself.
+  const agents = () => agentsAskedNow(host)
+  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach(), agents: agents() })) return
   const triedNow = tried
-  // The ask is for this round only: a later connect installs nothing by itself.
-  agentsAsked.delete(host)
   const round = (async () => {
     if (fresh) await recallFailedFixes(host, triedNow, now())
-    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach(), agents })) return
+    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach(), agents: agents() })) return
     let def: { autofix?: unknown } | undefined
     try {
       def = await (opts.hostSettings ?? defaultHostSettings)(host)
@@ -177,16 +200,25 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
       return
     }
     const off = autofixDisabledReason(opts.env ?? process.env, def)
-    if (off) {
-      log.session.info('host autofix off', { host, reason: off, problems: answer.problems.map((p) => p.kind) })
+    // `hosts.<alias>.autofix: false` turns off the fixes nobody asked for; a person's Install
+    // or Update still runs there, alone (2026-11-03: the user clicked Install on such a host
+    // and nothing happened). The env switch turns off every fix on this Mac.
+    const agentsOnly = off === 'config'
+    if (off === 'env' || (agentsOnly && !agents())) {
+      log.session.info('host autofix off', { host, reason: off, problems: answer.problems.map((p) => p.kind), asked: agents() })
+      if (off === 'env') refuseAsked(host, answer, 'fixes-off', now())
       return
     }
+    // The floor rides the install too, and a host with no claude has none in its answer.
+    const floor = answer.claude.minVersion
+      ?? (await (context ?? defaultHostContext)(host).catch(() => null))?.floor?.minVersion
     await runHostAutofix(answer, {
       conn,
       tried: triedNow,
       agents,
+      agentsOnly,
       now,
-      ...(answer.claude.minVersion ? { minClaudeVersion: answer.claude.minVersion } : {}),
+      ...(floor ? { minClaudeVersion: floor } : {}),
       preflight: () => refreshHostReadiness(host, { getConnection: () => conn, now, force: true, autofix: false, findPrebuilt, hostContext: context }),
       prebuiltDtach,
       provisionDtach: () => (opts.provisionDtach ?? defaultProvisionDtach)(host),
@@ -198,6 +230,7 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
       dtachSources: opts.dtachSources ?? defaultDtachSources,
       onStart: (fixing) => {
         log.session.info('host fix started', { host, action: fixing.action })
+        if (isAgentFix(fixing.action)) agentsAsked.delete(host)
         setFixState(host, (st) => { st.fixing = fixing })
       },
       onAttempt: (record) => { void rememberFixOutcome(host, record) },
@@ -241,6 +274,21 @@ async function recallFailedFixes(host: string, tried: Set<HostFixAction>, now: n
     for (const r of fresh) if (!have.has(`${r.action}@${r.finishedAt}`)) st.fixes.push(r)
     st.fixes.sort((a, b) => a.finishedAt - b.finishedAt)
   })
+}
+
+/**
+ * A person asked for the coding agent's fix and it cannot start: record why on the line
+ * (`error` is a REASONS code in host-autofix.ts), once per ask. Nothing when nobody asked
+ * or the line has no such fix.
+ */
+function refuseAsked(host: string, answer: HostReadiness, error: string, at: number): void {
+  if (!agentsAskedNow(host)) return
+  const action = nextFixAction(answer, new Set(), { agents: true, agentsOnly: true })
+  agentsAsked.delete(host)
+  if (!action) return
+  const record = describeFixOutcome(action, { result: { ok: false, error } }, at)
+  log.session.warn('host fix not started', { host, action, error })
+  setFixState(host, (st) => { st.fixes.push(record) })
 }
 
 /** Test seam: the autofix round running on a host, if any. */
@@ -292,7 +340,9 @@ export function refreshHostReadiness(
       const params: Record<string, unknown> = ctx.floor ? { minClaudeVersion: ctx.floor.minVersion } : {}
       if (ctx.shellSetup) params.shellSetup = ctx.shellSetup
       const reply = await conn.send('host.preflight', params, PREFLIGHT_TIMEOUT_MS)
-      const raw = reply.ok ? parsePreflight(reply) : null
+      const answered = reply.ok ? parsePreflight(reply) : null
+      // The daemon's own word wins; the probed kernel only fills in for an older daemon.
+      const raw = answered && !answered.wsl && ctx.wsl && answered.platform === 'linux' ? { ...answered, wsl: ctx.wsl } : answered
       const parsed = raw ? applyClaudeFloor(raw, ctx.floor) : null
       if (!parsed) {
         log.session.warn('host preflight returned no usable answer', { host, error: reply.error })

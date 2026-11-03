@@ -81,6 +81,9 @@ import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
+import { createClaudeInstall } from './claude-install-core.js'
+import { createClaudeDownload } from './claude-download-core.js'
+import { createDtachBuild } from './dtach-build-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
@@ -642,10 +645,12 @@ process.env.PATH = bootPath.path
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
 // Keep in sync with daemon-source.ts.
 const hostFix = createHostFix({
-  fs, execFile, env: process.env, runtime: hostRuntime,
+  fs, execFile, env: process.env, runtime: hostRuntime, claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
   os: { platform: () => process.platform, tmpdir: () => os.tmpdir(), uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1) },
   log: (level, msg, data) => logMsg(level, msg, data),
 })
+/** The accepted host.fix command whose fix runs (see cmdServiceHandover). */
+let hostFixWork: Promise<unknown> | undefined
 
 // ── Types ──
 // L2: per-session background-task state. `resourceVersion` = byte offset of the latest
@@ -2481,7 +2486,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'exec.run': return replyTransfer(ws, id as number, 'exec.run', () => hostExec.run(cmd), false)
     case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
     case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
-    case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(), false)
+    case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(cmd), false)
     // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
     // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
     // server checked the user's grant. Keep in sync with daemon-source.ts.
@@ -2528,10 +2533,16 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // start/send (run, not just admit): a handover pause then waits for it, and
     // a shutdown drains it, instead of cutting a package install mid-dpkg.
     // Keep in sync with daemon-source.ts.
-    case 'host.fix': return daemonCommands.run(() => hostFix.run(cmd.action, cmd).then(
-      (r) => sendOk(ws, id as number, { result: r }),
-      (err) => sendError(ws, id as number, 'host.fix failed: ' + (err as Error).message),
-    ))
+    case 'host.fix': {
+      // The fix that will run (none runs yet): a handover may skip waiting for it.
+      const starts = !hostFix.running
+      const work = daemonCommands.run(() => hostFix.run(cmd.action, cmd).then(
+        (r) => sendOk(ws, id as number, { result: r }),
+        (err) => sendError(ws, id as number, 'host.fix failed: ' + (err as Error).message),
+      ))
+      if (starts) hostFixWork = work
+      return work
+    }
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
@@ -2774,7 +2785,10 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
   // Pause before the first await so the handover RPC does not count itself in the wait set.
-  const pause = daemonCommands.pause()
+  // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown
+  // after a committed handover stops it (stopDaemon), its download kept for the next
+  // Install, and a handover that fails leaves it running. A gcc install is waited for.
+  const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined)
   let recovery: ReturnType<NonNullable<typeof cronRuntime>['pause']> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -12399,6 +12413,9 @@ if (action === '--start' || SERVICE_MODE) {
   let shutdown: Promise<void> | null = null
   const stopDaemon = () => {
     shutdown ??= (async () => {
+      // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
+      // waits for it. Its download stays and the next Install resumes it.
+      try { hostFix.cancel() } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }) }
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
       const failed = drained.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })

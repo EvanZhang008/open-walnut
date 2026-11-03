@@ -41,6 +41,9 @@ export interface FixtureHostSpec {
   claude?: FixtureClaude
   /** Extra alternative commands per readiness kind (shown after the builder's own). */
   extraCommands?: Record<string, string[]>
+  /** What the host's preflight reports it runs on (default linux); `wsl`: Linux inside Windows. */
+  platform?: 'linux' | 'darwin'
+  wsl?: string
   enabled?: boolean
 }
 
@@ -267,7 +270,11 @@ function fixturePreflight(host: string, opts: { withShellSetup?: boolean } = {})
         ...(c.error ? { error: c.error } : {}),
       }
     : { found: false }
-  return { claude, compiler: { found: true, name: 'gcc' }, dtach: { found: true, path: '/usr/bin/dtach' }, platform: 'linux', arch: 'x64' }
+  const platform = h.spec.platform ?? 'linux'
+  return {
+    claude, compiler: { found: true, name: 'gcc' }, dtach: { found: true, path: '/usr/bin/dtach' }, platform, arch: platform === 'darwin' ? 'arm64' : 'x64',
+    ...(h.spec.wsl && platform === 'linux' ? { wsl: h.spec.wsl } : {}),
+  }
 }
 
 /** A Claude Code that passes the current floor (what a finished update or a sign-in reports). */

@@ -162,4 +162,22 @@ describe.each(TWINS)('$name', (twin) => {
     expect(audit.find((e) => e.jobId === 'hx-twin-one' && e.event === 'start')).toMatchObject({ task: taskId, host: 'devbox', command: 'echo out; echo err >&2; exit 3' })
     expect(audit.find((e) => e.jobId === 'hx-twin-one' && e.event === 'end')).toMatchObject({ exitCode: 3 })
   }, 90_000)
+
+  it('host-exec-v2: the line in bash with WALNUT_TASK_DIR, a taken id refused, the jobs listed by task', async () => {
+    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-v2`)
+    await boot(twin, dir)
+    expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-v2')
+    const taskId = 'task-hx-v2'
+    const taskDir = path.join(dir, 'state', 'tasks', taskId)
+    const r = await rpc({ cmd: 'exec.run', jobId: 'hx-v2-one', taskId, home: '/data/walnut-home', command: 'echo ===; [ -n "$BASH_VERSION" ] && echo bash; printf %s "$WALNUT_TASK_DIR"' })
+    expect(r).toMatchObject({ ok: true, exitCode: 0, output: `===\nbash\n${taskDir}`, shell: 'bash', loginShell: 'sh', taskDir, taskId, blocked: null })
+    expect(r.logFile).toBe(path.join(taskDir, 'host-exec', 'hx-v2-one.log'))
+    expect(JSON.parse(fs.readFileSync(path.join(taskDir, '.walnut-task.json'), 'utf8'))).toMatchObject({ taskId, home: '/data/walnut-home' })
+    // The caller chose the id: a second run under it is refused, whoever asks.
+    expect(await rpc({ cmd: 'exec.run', jobId: 'hx-v2-one', taskId, command: 'echo again' })).toMatchObject({ ok: false, code: 'job_exists' })
+    expect(await rpc({ cmd: 'exec.run', jobId: 'hx-v2-other', taskId: 'task-hx-other', command: 'true' })).toMatchObject({ ok: true, exitCode: 0 })
+    const mine = await rpc({ cmd: 'exec.list', taskId })
+    expect(mine.jobs).toMatchObject([{ jobId: 'hx-v2-one', taskId, running: false, exitCode: 0, command: expect.stringContaining('echo ===') }])
+    expect(((await rpc({ cmd: 'exec.list' })).jobs as Array<{ jobId: string }>).map((j) => j.jobId).sort()).toEqual(['hx-v2-one', 'hx-v2-other'])
+  }, 60_000)
 })

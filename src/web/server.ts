@@ -153,6 +153,7 @@ import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
 import { hostsFleetV1Router } from './routes/hosts-fleet-v1.js'
 import { hostExecV1Router } from './routes/host-exec-v1.js'
+import { hostCopyV1Router } from './routes/host-copy-v1.js'
 import { secretsV1Router } from './routes/secrets-v1.js'
 import { approvalsV1Router } from './routes/approvals-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
@@ -2531,6 +2532,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', taskMoveV1Router)
   app.use('/api/v1', hostsFleetV1Router)
   app.use('/api/v1', hostExecV1Router)
+  app.use('/api/v1', hostCopyV1Router)
   app.use('/api/v1', secretsV1Router)
   app.use('/api/v1', approvalsV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/

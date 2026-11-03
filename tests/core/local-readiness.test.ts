@@ -108,6 +108,8 @@ describe('local Claude Code readiness', () => {
     expect(startLocalClaudeFix('claude_missing').ok).toBe(true)
     await settle()
     expect(m.fixed.map(([a]) => a)).toEqual(['install-claude-native', 'install-claude-native'])
+    // The install carries the model's floor too: a kept older download is then not resumed.
+    expect(m.fixed[0]![1]).toEqual({ minClaudeVersion: '2.1.280' })
   })
 
   it('refuses what it cannot or must not do: sign-in, an unmanaged install, an unknown problem, nothing checked yet', async () => {

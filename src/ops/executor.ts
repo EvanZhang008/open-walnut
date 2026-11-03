@@ -20,6 +20,7 @@ import { z } from 'zod'
 import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER } from '../lib/cli-sender.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
+import { answerByHeader } from '../lib/answer-by.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
@@ -139,6 +140,8 @@ async function rawRequest(
         ...(!prov.sid && prov.sender ? { [CALLER_KIND_HEADER]: 'automation', [SENDER_LABEL_HEADER]: prov.sender } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
         ...testRunHeader(),
+        // A relayed call's deadline (src/lib/answer-by.ts), so a route that holds an answer lets go in time.
+        ...answerByHeader(),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
         [ORIGIN_HEADER]: prov.origin,
       },

@@ -1970,6 +1970,15 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   for a session on another host) waits for it to end. Only the task that started a job
   reads or stops it (`404 unknown_job` otherwise).
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
+- `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
+  daemon on a machine that joined over the host network to this server's build, now:
+  `{ host, phase: "running" | "updated" | "skipped" | "failed" | "postponed" | "held",
+  running, expected, message, skip? }`, answered once it is decided or started (ask again for
+  how it went). Walnut does this by itself after a deploy, except on a host whose config says
+  `autofix: false`, which is updated only this way. A session needs the same grant as
+  `host_exec`; without a session id only the person at this computer may ask
+  (`403 human_only`). `409 updates_itself` for a host Walnut reaches over SSH, this Mac and
+  the cloud box, `503 host_offline`.
 - `GET /api/v1/host-exec/grants` (`?all=1` adds revoked) → `{ grants: [{ id, taskId,
   taskTitle, host, grantedAt, via: "letter" | "settings", revokedAt?, runs, lastRunAt?,
   lastCommand? }] }`. `POST /api/v1/host-exec/grants { task_id, host }` and
@@ -2020,6 +2029,51 @@ host, and its letter says so. The server's config and env values never leave the
   redirects followed, default 30000 ms, at most 300000, about 12 s for a session on another
   host). At most 256 KB of the body; text as `body`, anything else as `bodyBase64`; Set-Cookie
   values and credential-looking lines hidden. `504 timeout`, `502 request_failed`.
+
+### One file between two hosts (additive, 2026-11): `/host-copy`
+
+A task's session copies ONE file from one host to another (ops `host_copy`,
+`host_copy_result`). The bytes go through this server in chunks: `fs.readRange` on the
+sender, `fs.writePart` on the receiver (`fs-write-part-v1`), size and sha256 checked
+before the file is renamed into place, so a failure leaves the target as it was. What is at
+each path is read with one-byte `fs.readRange` probes, never a listing. Same caller rule as
+`host_exec`; each side that is not the host the caller's session record names needs the
+task's grant there (the same grant and letter; a record that names no host has no grant-free
+side). The grants are checked again every 5 s during the copy and before its last part, so a
+revoke stops it.
+
+- `POST /api/v1/host-copy { from, to, from_host?, to_host?, copy_id?, allow_prompts? }` → `{ copyId,
+  running: false, from_host, to_host, from, to, bytes, sha256, ms, chunks, retries,
+  replaced }`. Each host defaults to the caller's own; `from` and `to` are absolute or
+  `~/...` with no `..`; a `to` ending in `/`, or naming a folder, gets the source's name.
+  The file lands as a plain file (the receiver's umask; the executable bit is not kept).
+  `copy_id` (`hc-` and 4 to 64 of `[A-Za-z0-9_-]`) is the caller's pick (the `walnut` CLI
+  sends one, as it does `job_id` for `host_exec`): the same id again from the same task
+  answers that copy, before or after it ended, never a second one. The call waits up to
+  60 s for the copy, less for a session on another host (about 10 s) and never past the
+  caller's own deadline (`x-walnut-answer-by`, the way `host_exec` holds), then answers
+  `{ running: true, copyId, bytes, sent }`; the same call again while it runs joins that
+  copy. Refusals: `400 same_host | bad_request | is_directory | not_a_file`, `403
+  protected_path` (credentials such as `~/.ssh`, `~/.aws`, `secrets`, or Walnut's own data
+  and runtime, on either side, the final path included; a task directory is allowed), `409
+  may_prompt` (on a Mac, a place macOS guards: Desktop, Documents, Downloads, Pictures,
+  Movies, Music, Mail, Messages, other apps' containers, a Photos library, `/Volumes`; touching
+  it shows a permission dialog on that Mac's screen; `prompt` names it, and `allow_prompts:
+  true` lets the copy go there once the user agreed), `404
+  unknown_host | source_missing`, `409 target_is_directory | target_not_dir | target_unknown
+  | target_busy | copy_id_taken | source_changed | daemon_upgrade`, `413 too_large` (over
+  2 GiB, before a byte moves), `429 busy` (2 copies at once per task, 4 on the server),
+  `502 checksum_mismatch | size_mismatch | read_failed | write_failed | copy_failed`, `503
+  host_offline`, `504 prompt_timeout` (with `allow_prompts`, a host that gave no answer about a
+  guarded place: most likely waiting at that dialog), `504 copy_deadline` (1 hour), `403 exec_grant_revoked` (the grant was
+  revoked during the copy), and host_exec's grant refusals. `target_busy`: another copy
+  writes that file on that host right now. A refusal after the copy started carries its
+  `copyId`. A failed copy removes the receiver's partial `<to>.walnut-part` when the
+  receiver allows it (`fs-mutate-v1`, and its grant was not the one revoked); otherwise the
+  refusal names it in `partialLeft` and its message says how to delete it.
+- `GET /api/v1/host-copy/:copyId?wait_ms=` → that copy's answer (or its refusal), waiting
+  up to `wait_ms` (default and at most 60000, and the same caller limits as above). Kept
+  30 minutes after it ends; only the task that started it reads it (`404 unknown_copy`).
 
 ### Secrets copied to hosts (additive, 2026-10): `/secrets`
 

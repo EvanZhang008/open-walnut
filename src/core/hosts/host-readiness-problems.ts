@@ -38,6 +38,8 @@ export interface ProblemContext {
   local?: boolean
   /** The remote host's display name. */
   hostLabel?: string
+  /** The host runs Linux inside Windows (preflight `wsl`): sentences and commands name that Linux. */
+  wsl?: string
   /** What follows `ssh` to reach the host, as the user types it ("-p 2222 dev@devbox"). */
   sshTarget?: string
   /** The model the version floor comes from ("Opus 5.5"). */
@@ -84,6 +86,7 @@ export function parsePreflight(raw: unknown): HostPreflightResult | null {
     dtach: dt.found === true ? { found: true, ...(str(dt.path) ? { path: str(dt.path) } : {}) } : { found: false },
     ...(str(r.platform) ? { platform: str(r.platform)!.slice(0, 32) } : {}),
     ...(str(r.arch) ? { arch: str(r.arch)!.slice(0, 32) } : {}),
+    ...(str(r.wsl) ? { wsl: str(r.wsl)!.slice(0, 64) } : {}),
     ...(asPackageManager(r.packageManager) ? { packageManager: asPackageManager(r.packageManager) } : {}),
   }
 }
@@ -105,7 +108,19 @@ export function applyClaudeFloor(p: HostPreflightResult, floor: ClaudeCliFloor |
 export function hostWhere(ctx: ProblemContext): string {
   if (ctx.local) return 'this computer'
   const bare = ctx.sshTarget?.trim().split(/\s+/).pop()?.replace(/^[^@]*@/, '')
-  return ctx.hostLabel?.trim() || bare || 'the remote host'
+  const name = ctx.hostLabel?.trim() || bare || 'the remote host'
+  // 2026-11-03: a PC's line said "not installed on home-pc" with a bash command, and on
+  // Windows that reads as "run it in PowerShell". Its sessions run in WSL's Linux.
+  return ctx.wsl ? `${name}'s ${ctx.wsl === 'WSL' ? 'Linux' : ctx.wsl} (WSL)` : name
+}
+
+/**
+ * A command for a WSL host, as the person runs it on that PC: from PowerShell or a Command
+ * Prompt, into the Linux its sessions use. Left as it is when it cannot ride double quotes.
+ */
+export function wslCommand(command: string, wsl: string): string {
+  if (/["$`%]/.test(command)) return command
+  return `wsl ${wsl === 'WSL' ? '' : `-d ${/^[\w.-]+$/.test(wsl) ? wsl : `"${wsl}"`} `}-- bash -lc "${command}"`
 }
 
 /** The claude_missing sentence. The daemon's spawn gate words its refusal with this exact builder. */
@@ -155,6 +170,12 @@ function signInProblem(ctx: ProblemContext): ReadinessProblem {
 
 /** One line per thing the user must fix. Nothing when the host is fine. */
 export function readinessProblems(p: HostPreflightResult, ctx: ProblemContext = {}): ReadinessProblem[] {
+  if (p.wsl && !ctx.local && !ctx.wsl) {
+    // A command that runs on this Mac (`ssh -t <host> claude` to sign in) reaches the host itself.
+    return readinessProblems(p, { ...ctx, wsl: p.wsl }).map((problem) => ({
+      ...problem, commands: problem.commands.map((c) => (c.startsWith('ssh ') ? c : wslCommand(c, p.wsl!))),
+    }))
+  }
   const install = HOST_RUNTIME_MESSAGES.install
   const out: ReadinessProblem[] = []
   // The probe could not tell (the login shell or shell_setup ran out of time):

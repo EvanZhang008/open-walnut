@@ -14,7 +14,10 @@ import { log } from '@/utils/log';
 export const RETRY_FAILED_TEXT = 'Could not retry right now.';
 export const CHECK_FAILED_TEXT = 'Check failed';
 export const RECEIPT_MS = 5_000;
-const CHECK_CAP_MS = 20_000, CONNECT_CAP_MS = 6 * 60_000, FIX_NO_START_MS = 30_000;
+const CHECK_CAP_MS = 20_000, CONNECT_CAP_MS = 6 * 60_000, FIX_NO_START_MS = 30_000, NOT_STARTED_RECEIPT_MS = 15_000;
+/** Install / Update clicked and no fix started and no reason came back (an older server): said, never silent. */
+export const fixNotStartedText = (verb: 'update' | 'install'): string =>
+  `${verb === 'update' ? 'Update' : 'Install'} did not start. Run the command below on that machine, or Check again.`;
 
 export type HostActionPending = 'retry' | 'check' | 'fix' | null;
 export type HostActionFailed = 'retry' | 'check' | null;
@@ -86,8 +89,15 @@ function holdFix(e: Entry, s: HostStatus | undefined): void {
   if (!fs) return;
   const fixFailed = !!s?.readiness?.problems?.some((p) => p.fix?.state === 'failed');
   if (fixFailed || (e.sawServerFix && checkedAtOf(s) > fs.at)) { e.sawServerFix = false; patch(e, { fixStart: null }); return; }
-  // Update was clicked but the server never started a fix: do not spin forever.
-  if (!e.sawServerFix) e.timers.fix = setTimeout(() => patch(e, { fixStart: null }), FIX_NO_START_MS);
+  // Update was clicked but the server never started a fix: do not spin forever, and say so.
+  if (!e.sawServerFix) {
+    e.timers.fix = setTimeout(() => {
+      const verb = e.snap.fixStart?.verb ?? 'install';
+      clearTimeout(e.timers.receipt);
+      patch(e, { fixStart: null, receipt: fixNotStartedText(verb) });
+      e.timers.receipt = setTimeout(() => patch(e, { receipt: null }), NOT_STARTED_RECEIPT_MS);
+    }, FIX_NO_START_MS);
+  }
 }
 
 /** Settle an open attempt on a frame after the request, and move the fix hold. Idempotent. */

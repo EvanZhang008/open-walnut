@@ -267,6 +267,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   usage_needs_mac: 'Usage and budgets are counted on your Mac.',
   fleet_needs_mac: 'The hosts overview is read through your Mac.',
   host_exec_needs_mac: 'Commands on another host run through your Mac, which keeps your grants.',
+  host_copy_needs_mac: 'Copies between hosts run through your Mac, which keeps your grants.',
   secrets_need_mac: 'Your secrets are kept on your Mac.',
   needs_mac: 'Only your Mac can do this.',
   // A session's reads (away-session-reads.ts).

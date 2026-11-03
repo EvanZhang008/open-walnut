@@ -26,6 +26,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayOp, GatewayResponse } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES } from './tool-args-source.js'
 import { walnutMcpInstructions } from '../mcp/instructions.js'
+import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -139,8 +140,12 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   const callTool = async (params: Record<string, unknown>) => {
     const name = typeof params.name === 'string' ? params.name : ''
     if (!name) return toolError('tools/call needs a tool name')
-    const args = params.arguments ?? {}
-    if (typeof args !== 'object' || args === null || Array.isArray(args)) return toolError('arguments must be an object')
+    const given = params.arguments ?? {}
+    if (typeof given !== 'object' || given === null || Array.isArray(given)) return toolError('arguments must be an object')
+    // A run's id chosen here (host_exec), so an answer lost on the way back still leaves one to read.
+    const args = { ...given } as Record<string, unknown>
+    let runId = callerRunId(name, args)
+    const lost = (lines: string) => (runId ? [lines, ...lostRunLines(name, args, runId)].join('\n') : lines)
     // A payload the gateway line cannot carry goes as a file the hub pulls, as the CLI's does.
     const raw = JSON.stringify(args)
     let spilled: string | undefined
@@ -150,11 +155,23 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       fs.writeFileSync(spilled, raw, { encoding: 'utf-8', mode: 0o600 })
     }
     try {
-      const resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled } : { name, args })
+      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled } : { name, args })
+      // A server older than the run id refused it before anything ran: the same call without it.
+      if (!resp.ok && runId && !spilled && refusedRunId(name, resp.error.message)) {
+        dropRunId(name, args)
+        runId = null
+        resp = await deps.request('tools.call', { name, args })
+      }
       if (resp.ok) return { content: [{ type: 'text', text: text(resp.result) }] }
-      return toolError(deps.formatError(resp.error).join('\n'), resp.error.detail)
+      const message = deps.formatError(resp.error).join('\n')
+      if (resp.error.code === 'hub_timeout') return toolError(lost(message), resp.error.detail)
+      const away = resp.error.code === 'hub_unreachable' ? awayLines(name, args) : []
+      return toolError([message, ...away].join('\n'), resp.error.detail)
     } catch (err) {
-      return toolError(`walnut: no answer from the Walnut daemon: ${err instanceof Error ? err.message : String(err)}`)
+      const message = `walnut: no answer from the Walnut daemon: ${err instanceof Error ? err.message : String(err)}`
+      // Refused before a byte left: nothing ran. A socket that broke after the request went: it may have.
+      if (neverSent(err)) return toolError([message, ...awayLines(name, args, "this host's Walnut daemon")].join('\n'))
+      return toolError(lost(message))
     } finally {
       if (spilled) { try { fs.unlinkSync(spilled) } catch { /* already gone */ } }
     }

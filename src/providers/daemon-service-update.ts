@@ -10,6 +10,13 @@ import type { DaemonServiceScope } from './daemon-service-manager.js'
 export interface RemoteDaemonUpdateIo {
   run(command: string, timeoutMs?: number): Promise<string>
   chunk(data: Buffer, directory: string, index: number): Promise<boolean>
+  /**
+   * Run the final `walnut daemon update` line and answer what it printed (its JSON).
+   * Absent: `run` in the foreground, as over SSH. A link that runs commands through the
+   * very daemon the update replaces (the host network, daemon-net-update-io.ts) starts it
+   * detached from that daemon, which exits during the handover.
+   */
+  serviceUpdate?(update: { command: string; directory: string | null; executable: string }): Promise<string>
 }
 
 const VERSION = /^walnut-daemon-[a-zA-Z0-9]+$/
@@ -32,25 +39,44 @@ export const DAEMON_VERSION_ARGS = '__daemon --version'
 export interface ServiceDaemonSource {
   binary: string | null
   existing?: string
+  /**
+   * This build's daemon already gzipped, sent as it is (no copy here, no unpacking on
+   * this side): a compiled Mac's walnut file for the host's target (host-file.ts), for a
+   * host it has no SSH to (daemon-net-update.ts). The host checks it like an upload of
+   * `binary`: its sha256, then its `__daemon --version`.
+   */
+  gz?: Buffer
+}
+
+const CHUNK_BYTES = 262_144
+
+function* slices(gz: Buffer): Generator<Buffer> {
+  for (let at = 0; at < gz.length; at += CHUNK_BYTES) yield gz.subarray(at, at + CHUNK_BYTES)
 }
 
 /**
- * Put this build's daemon binary on the host in a private temp dir, checked
- * byte for byte and by its own `--version`. The service command then copies it
- * into the install root's versions, so the dir is removed afterwards.
+ * Put this build's daemon binary (or its gz) on the host in a private temp dir,
+ * checked byte for byte and by its own `--version`. The service command then copies
+ * it into the install root's versions, so the dir is removed afterwards.
  */
-async function stageRemoteDaemonBinary(binary: string, expectedVersion: string, io: RemoteDaemonUpdateIo): Promise<{ executable: string; directory: string }> {
-  const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-service-update-'))
+async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffer }, expectedVersion: string, io: RemoteDaemonUpdateIo): Promise<{ executable: string; directory: string }> {
+  const temporary = 'binary' in payload ? await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-service-update-')) : null
   try {
-    const compressed = path.join(temporary, 'daemon.gz')
-    await pipeline(fs.createReadStream(binary), createGzip(), fs.createWriteStream(compressed, { mode: 0o600, flags: 'wx' }))
+    let chunks: AsyncIterable<unknown> | Iterable<Buffer>
+    if ('binary' in payload) {
+      const compressed = path.join(temporary!, 'daemon.gz')
+      await pipeline(fs.createReadStream(payload.binary), createGzip(), fs.createWriteStream(compressed, { mode: 0o600, flags: 'wx' }))
+      chunks = fs.createReadStream(compressed, { highWaterMark: CHUNK_BYTES })
+    } else {
+      chunks = slices(payload.gz)
+    }
     const directory = (await io.run('umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX')).trim()
     if (!STAGING.test(directory)) throw new Error('Invalid daemon update staging directory')
     try {
       const hash = createHash('sha256')
       const files: string[] = []
       let index = 0
-      for await (const data of fs.createReadStream(compressed, { highWaterMark: 262_144 })) {
+      for await (const data of chunks) {
         const chunk = data as Buffer
         hash.update(chunk)
         let sent = false
@@ -67,8 +93,11 @@ async function stageRemoteDaemonBinary(binary: string, expectedVersion: string, 
       const payload = `${directory}/daemon.gz`
       const executable = `${directory}/daemon`
       const checksum = hash.digest('hex')
+      // A Mac has no sha256sum (a host that joined over the host network may be one): shasum then.
+      const line = `printf '%s  %s\\n' '${checksum}' '${payload}'`
+      const verify = `{ if command -v sha256sum >/dev/null 2>&1; then ${line} | sha256sum -c - >/dev/null; else ${line} | shasum -a 256 -c - >/dev/null; fi; }`
       const version = await io.run(
-        `cat ${files.join(' ')} > ${payload} && printf '%s  %s\\n' '${checksum}' '${payload}' | sha256sum -c - >/dev/null && gzip -dc ${payload} > ${executable} && rm -f ${payload} ${directory}/chunk_* && chmod 700 ${executable} && ${executable} ${DAEMON_VERSION_ARGS}`,
+        `cat ${files.join(' ')} > ${payload} && ${verify} && gzip -dc ${payload} > ${executable} && rm -f ${payload} ${directory}/chunk_* && chmod 700 ${executable} && ${executable} ${DAEMON_VERSION_ARGS}`,
         30_000,
       )
       if (version.trim().split('\n').pop()?.trim() !== expectedVersion) throw new Error('Uploaded daemon version differs; the installed service was not changed')
@@ -78,7 +107,7 @@ async function stageRemoteDaemonBinary(binary: string, expectedVersion: string, 
       throw error
     }
   } finally {
-    await fsp.rm(temporary, { recursive: true, force: true })
+    if (temporary) await fsp.rm(temporary, { recursive: true, force: true })
   }
 }
 
@@ -94,8 +123,9 @@ async function serviceExecutable(
     const said = await io.run(`${source.existing} ${DAEMON_VERSION_ARGS} 2>/dev/null || true`, 30_000).catch(() => '')
     if (said.trim().split('\n').pop()?.trim() === expectedVersion) return { executable: source.existing, directory: null }
   }
-  if (!source.binary) throw new Error(`the daemon file on the host is not this build (${expectedVersion}), and this Walnut has no other copy to send`)
-  return stageRemoteDaemonBinary(source.binary, expectedVersion, io)
+  if (source.binary) return stageRemoteDaemonBinary({ binary: source.binary }, expectedVersion, io)
+  if (source.gz?.length) return stageRemoteDaemonBinary({ gz: source.gz }, expectedVersion, io)
+  throw new Error(`the daemon file on the host is not this build (${expectedVersion}), and this Walnut has no other copy to send`)
 }
 
 /** The new daemon did not get onto the host: the installed service and the running daemon are untouched. */
@@ -123,7 +153,8 @@ export async function updateRemoteDaemonService(
   })
   try {
     if (opts.onStaged && !opts.onStaged()) return 'held'
-    const output = await io.run(`${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`, 600_000)
+    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`
+    const output = io.serviceUpdate ? await io.serviceUpdate({ command, directory, executable }) : await io.run(command, 600_000)
     const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }
     if (result.ok !== true) throw new Error(`Managed daemon update failed: ${result.failure?.message ?? output}; ${result.failure?.rollback ?? ''}`)
     return 'applied'

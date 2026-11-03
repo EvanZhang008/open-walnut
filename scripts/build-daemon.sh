@@ -94,6 +94,10 @@ SOURCES=(
   src/providers/task-dir-core.ts
   src/lib/task-dir.ts
   src/providers/host-exec-core.ts
+  src/providers/host-exec-line.ts
+  src/providers/host-exec-guards.ts
+  src/providers/host-exec-watch.ts
+  src/providers/host-exec-run-id.ts
   src/providers/net-core.ts
   src/providers/net-binary.ts
   src/providers/net-config-core.ts
@@ -143,6 +147,9 @@ SOURCES=(
   src/providers/daemon-service-handover.ts
   src/providers/host-runtime-core.ts
   src/providers/host-fix-core.ts
+  src/providers/claude-install-core.ts
+  src/providers/claude-download-core.ts
+  src/providers/dtach-build-core.ts
   src/providers/claude-check-core.ts
   src/providers/fs-ls-core.ts
   src/providers/turn-snapshot-core.ts

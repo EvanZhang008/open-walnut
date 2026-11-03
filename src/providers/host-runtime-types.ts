@@ -85,6 +85,10 @@ export interface HostPreflightResult {
    *  absent from older daemons. */
   platform?: string
   arch?: string
+  /** Linux inside Windows (WSL): its distribution's name ('Ubuntu'), else 'WSL'. A command the
+   *  user runs for this host runs in that Linux, not in PowerShell. Absent elsewhere and from
+   *  older daemons. */
+  wsl?: string
 }
 
 export type EnsureClaudeResult =

@@ -5,6 +5,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { createHostFix } from '../../src/providers/host-fix-core.js'
+import { createClaudeInstall } from '../../src/providers/claude-install-core.js'
+import { createClaudeDownload } from '../../src/providers/claude-download-core.js'
+import { createDtachBuild } from '../../src/providers/dtach-build-core.js'
+import type { ClaudeProbe } from '../../src/providers/host-runtime-core.js'
 import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 import {
   applyTurnRetry, clearTurnRetryStreak, decideTurnRetry, newTurnRetryState, parseTurnErrorLine,
@@ -29,6 +34,26 @@ function extract(source: string, name: string): string {
   visit(parsed)
   if (!found) throw new Error(`Missing ${name}`)
   return found.getText(parsed)
+}
+
+/**
+ * A real host.fix whose first claude probe hangs until it is cancelled: an
+ * install-claude-native in flight that only cancel() ends (no process runs).
+ * `native()` makes the next fix find Claude Code installed.
+ */
+function claudeFixInFlight() {
+  let installed = false
+  const hung = new Promise<ClaudeProbe>(() => {})
+  const fix = createHostFix({
+    env: { HOME: '/fixture-home' }, os: { platform: () => 'linux', tmpdir: () => '/tmp', uid: () => 1000 },
+    runtime: {
+      resolveOnPath: () => null,
+      probeClaude: (command) => (installed ? Promise.resolve({ found: true, kind: 'native', path: command }) : hung),
+    },
+    execFile: (_file, _args, _opts, cb) => { queueMicrotask(() => cb(null, '2.1.317 (Claude Code)\n', '')); return { stdin: { end: () => {} } } },
+    claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
+  })
+  return { fix, native: () => { installed = true } }
 }
 
 function compile<T>(source: string, environment: Record<string, unknown>): T {
@@ -238,19 +263,27 @@ describe.each([
     await closing
   })
 
-  function handoverFixture(fault?: 'persist' | 'prepare' | 'published' | 'reply', updating = false, cronDrain = Promise.resolve()) {
+  /**
+   * The twin's handover, compiled with its real dispatcher, so a host.fix sent
+   * through it (`fixFrame`) is tracked exactly as the daemon tracks it. The shutdown
+   * a handover requests is stopDaemon: it cancels the fix, then drains.
+   */
+  function handoverFixture(fault?: 'persist' | 'prepare' | 'published' | 'reply', updating = false, cronDrain = Promise.resolve(), hostFix: { cancel: () => boolean; cancellable?: boolean } = { cancel: () => false }) {
     const daemonCommands = createDrain()
     const order: string[] = []
+    const fixReplies: unknown[] = []
     let closing: Promise<void> | undefined
     const prepare = vi.fn(async () => {
       order.push('prepare')
       if (fault === 'prepare') throw new Error('snapshot refused')
       if (fault === 'published') throw Object.assign(new Error('snapshot sync failed'), { code: 'handover-published' })
     })
-    const result = compile<{ handle: (ws: unknown, id: number, cmd: unknown) => Promise<void>; prepared: () => boolean }>(
-      `let handoverPrepared = false; let serviceUpdateRequested = false; ${extract(source, 'cmdServiceHandover')}; return { handle: cmdServiceHandover, prepared: () => handoverPrepared };`, {
+    const result = compile<{ handle: (ws: unknown, id: number, cmd: unknown) => Promise<void>; prepared: () => boolean; dispatch: (ws: unknown, id: number, cmd: unknown) => unknown }>(
+      `let handoverPrepared = false; let serviceUpdateRequested = false; let hostFixWork; ${extract(source, 'cmdServiceHandover')};
+      ${extract(source, 'dispatchCommand')}
+      return { handle: cmdServiceHandover, prepared: () => handoverPrepared, dispatch: dispatchCommand };`, {
         daemonCommands, SERVICE_MODE: updating, DAEMON_INSTANCE_ID: 'old-instance', HOME_DIR: '/fixture', REGISTRY_FILE: '/fixture/sessions.json',
-        setTimeout, clearTimeout,
+        setTimeout, clearTimeout, hostFix, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), resolveAgentCommand,
         cronRuntime: {
           pause: () => ({ drained: cronDrain, resume: () => { order.push('cronResume') } }),
           close: async () => { order.push('cronClose'); await cronDrain },
@@ -269,13 +302,18 @@ describe.each([
           expect(data).toEqual({ updateStarted: true, instanceId: 'old-instance' })
           order.push('failedUpdateReply')
         },
-        sendOk: () => { order.push('reply'); if (fault === 'reply') throw new Error('socket closed') },
+        sendOk: (_ws: unknown, id: number, data: unknown) => {
+          if (id !== 1) { fixReplies.push(data); return }
+          order.push('reply'); if (fault === 'reply') throw new Error('socket closed')
+        },
         waitForHandoverReceipt: async () => { order.push('receipt') },
-        requestDaemonShutdown: () => { order.push('shutdown'); closing = daemonCommands.close() },
+        requestDaemonShutdown: () => { order.push('shutdown'); hostFix.cancel(); closing = daemonCommands.close() },
       },
     )
     return {
-      ...result, daemonCommands, order, prepare, closing: () => closing,
+      ...result, daemonCommands, order, prepare, fixReplies, closing: () => closing,
+      // As handleCommand sends every frame: admit(dispatchCommand).
+      fixFrame: (action: string) => daemonCommands.admit(() => result.dispatch({}, 7, { cmd: 'host.fix', action })) as Promise<unknown>,
       request: () => daemonCommands.admit(() => daemonCommands.run(() => result.handle({}, 1, {
         cmd: updating ? 'service.update' : 'service.handover', stateDir: '/fixture/service', instanceId: 'old-instance',
       }))),
@@ -294,6 +332,75 @@ describe.each([
     await fixture.closing()
     expect(fixture.order).toEqual(['persist', 'prepare', 'reply', 'receipt', 'shutdown'])
     expect(fixture.prepared()).toBe(true)
+  })
+
+  it('does not wait for a Claude Code install in flight: the shutdown after the handover stops it', async () => {
+    const claude = claudeFixInFlight()
+    const fixture = handoverFixture(undefined, false, Promise.resolve(), claude.fix)
+    const install = fixture.fixFrame('install-claude-native')
+    // A second ask while it runs answers busy and is not the one the handover skips.
+    await fixture.fixFrame('update-claude')
+    await fixture.request()
+    // Nothing stopped it before the handover was committed (prepared, answered).
+    expect(fixture.order).toEqual(['persist', 'prepare', 'reply', 'receipt', 'shutdown'])
+    await install
+    await fixture.closing()
+    expect(fixture.fixReplies).toEqual([
+      { result: expect.objectContaining({ action: 'update-claude', error: 'busy' }) },
+      { result: expect.objectContaining({ action: 'install-claude-native', ok: false, error: 'cancelled' }) },
+    ])
+  })
+
+  it('a handover that fails leaves the Claude Code install running, and admission reopens', async () => {
+    const claude = claudeFixInFlight()
+    const fixture = handoverFixture('prepare', false, Promise.resolve(), claude.fix)
+    const install = fixture.fixFrame('install-claude-native')
+    await expect(fixture.request()).rejects.toThrow('refused')
+    expect(claude.fix.running).toBe('install-claude-native')
+    expect(fixture.daemonCommands.admit(() => 'accepted')).toBe('accepted')
+    // It runs on to its own end; a cancel (the next real shutdown) is what ends it here.
+    claude.fix.cancel()
+    await install
+    expect(fixture.fixReplies).toEqual([{ result: expect.objectContaining({ error: 'cancelled' }) }])
+    claude.native()
+    const again = await fixture.daemonCommands.admit(() => fixture.daemonCommands.run(() => claude.fix.run('install-claude-native')))
+    expect(again).toMatchObject({ ok: true, skipped: true, claude: { version: '2.1.317' } })
+  })
+
+  it('a gcc install in flight is still waited for: the handover is refused, the install never signalled', async () => {
+    vi.useFakeTimers()
+    try {
+      const kill = vi.fn()
+      let finishInstall: (() => void) | undefined
+      const fix = createHostFix({
+        env: { HOME: '/fixture-home' }, os: { platform: () => 'linux', tmpdir: () => '/tmp', uid: () => 0 },
+        runtime: { resolveOnPath: () => null, probeClaude: async () => ({ found: false }) },
+        // dnf is found at once, and its install answers only when the test lets it: a
+        // package manager mid-transaction, inside its own 5-minute limit.
+        execFile: (file, _args, _opts, cb) => {
+          if (file === '/bin/sh') queueMicrotask(() => cb(null, '/usr/bin/dnf\n', ''))
+          else finishInstall = () => cb(null, '', '')
+          return { pid: 4321, stdin: { end: () => {} } }
+        },
+        kill, claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
+      })
+      const fixture = handoverFixture(undefined, false, Promise.resolve(), fix)
+      const install = fixture.fixFrame('install-compiler')
+      expect(fix.running).toBe('install-compiler')
+      await vi.waitFor(() => expect(finishInstall).toBeDefined())
+      let failure: unknown
+      const handover = fixture.request().catch((error) => { failure = error })
+      await vi.advanceTimersByTimeAsync(15_000)
+      await handover
+      expect(String(failure)).toContain('timed out')
+      expect(kill).not.toHaveBeenCalled()
+      expect(fix.running).toBe('install-compiler')
+      expect(fixture.order).toEqual([])
+      finishInstall!()
+      await install
+      expect(fixture.fixReplies).toEqual([{ result: expect.objectContaining({ action: 'install-compiler', error: 'verify-failed' }) }])
+      expect(kill).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
   })
 
   it.each(['persist', 'prepare'] as const)('reopens admission after a %s refusal without shutting down', async (fault) => {
@@ -403,8 +510,9 @@ describe.each([
     const exited = deferred<number>()
     const order: string[] = []
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
+    const hostFix = { cancel: vi.fn(() => false) }
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands,
+      daemonCommands, hostFix,
       cronRuntime: { close: vi.fn(() => cron.promise) },
       netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') },
@@ -426,6 +534,32 @@ describe.each([
     expect(await exited.promise).toBe(cronFails || updating ? 1 : 0)
     expect(order).toEqual(['persist', 'cleanup', 'server', 'release', `exit:${cronFails || updating ? 1 : 0}`])
     expect(exit).toHaveBeenCalledTimes(1)
+    expect(hostFix.cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])('shutdown stops a Claude Code install in flight at once, even when cancel throws (%s)', async (throws) => {
+    const daemonCommands = createDrain()
+    const claude = claudeFixInFlight()
+    const install = daemonCommands.admit(() => daemonCommands.run(() => claude.fix.run('install-claude-native')))
+    const exited = deferred<number>()
+    const logMsg = vi.fn()
+    const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
+    const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
+      daemonCommands, hostFix,
+      cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
+      persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
+      daemonInstanceLock: { release: async () => {} },
+      process: { exit: (code: number) => exited.resolve(code) }, serviceUpdateRequested: false, logMsg,
+    })
+    stop()
+    if (throws) {
+      // The drain still runs: it waits for the fix, which nothing stopped, so end it here.
+      await Promise.resolve()
+      expect(logMsg).toHaveBeenCalledWith('warn', 'host fix cancel failed', expect.objectContaining({ error: expect.stringContaining('cancel exploded') }))
+      claude.fix.cancel()
+    }
+    expect(await exited.promise).toBe(0)
+    expect(await install).toMatchObject({ error: 'cancelled' })
   })
 
   it('stops every watcher before publishing the final registry without reaping live CLI processes', () => {

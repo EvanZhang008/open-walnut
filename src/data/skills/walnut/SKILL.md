@@ -287,14 +287,18 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `host_profile_get` | What Walnut knows about a host (read) | host (string): Host alias ("__local__" = the primary machine) |
 | `host_list` | Every host Walnut runs work on, and how each is doing (read) | days? (integer): History window in days (default 30, one bucket a day) |
 | `host_get` | One host's card and history (read) | host (string): Host alias ("__local__" = the primary machine); days? (integer): History window in days (default 30); bucket? (integer): Bucket size in minutes (default 1440, or 60 for one day) |
-| `host_exec` | Run a command on another host (write, primary-only) | host (string): Host alias ("__local__" = the Mac) or a selector like "@ios"; command? (string): A shell line, run by the user's login shell on that host; argv? (array<string>): Instead of command: the program and its arguments, passed with no shell parsing; cwd? (string): Working directory on that host (absolute or ~/...; default the user's home); timeout_ms? (integer): Deadline in ms (default 120000; at most 600000, or 7200000 with background); background? (boolean): Start it and return a job_id at once; read it with host_exec_read |
+| `host_exec` | Run a command on another host (write, primary-only) | host (string): Host alias ("__local__" = the Mac) or a selector like "@ios"; command? (string): A shell line, run by bash on that host after the user's login shell set up the environment; argv? (array<string>): Instead of command: the program and its arguments, passed with no shell parsing; cwd? (string): Working directory on that host (absolute or ~/...; default the user's home); timeout_ms? (integer): Deadline in ms (default 120000; at most 600000, or 7200000 with background); background? (boolean): Start it and return a job_id at once; read it with host_exec_read; allow_prompts? (boolean): The user agreed this command may show a dialog on that host's screen (a 409 may_prompt asked for it); job_id? (string): The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one |
 | `host_exec_read` | Read a command's output on another host (read, primary-only) | host (string): The host the job runs on; job_id (string): The jobId host_exec returned; offset? (integer): Byte offset into the log (default: the tail); wait_ms? (integer): Wait up to this long for the job to end |
 | `host_exec_stop` | Stop a command on another host (write, primary-only) | host (string): The host the job runs on; job_id (string): The jobId host_exec returned |
+| `host_exec_list` | List this task's commands on another host (read, primary-only) | host (string): The host the jobs run on |
 | `host_mcp_list` | List the MCP servers on another host (read, primary-only) | host (string): Host alias ("__local__" = the Mac) or a selector like "@ios"; cwd? (string): A project folder on that host, to include its own servers |
 | `host_mcp_tools` | List one MCP server's tools on another host (read, primary-only) | host (string): The host the server is on; server (string): The server name host_mcp_list gave; cwd? (string): The project folder the server belongs to (and runs in) |
 | `host_mcp_call` | Call an MCP tool on another host (write, primary-only) | host (string): The host the server is on; server (string): The server name host_mcp_list gave; tool (string): The tool name host_mcp_tools gave; arguments? (object): The tool's arguments, as its inputSchema says; cwd? (string): The project folder the server belongs to (and runs in); timeout_ms? (integer): Deadline in ms (default 60000, at most 600000) |
 | `host_mcp_result` | Read an MCP call's answer on another host (read, primary-only) | host (string): The host the call runs on; call_id (string): The callId the call returned; wait_ms? (integer): Wait up to this long for the answer |
 | `host_http` | Make a web request from another host (write, primary-only) | host (string): Host alias ("__local__" = the Mac) or a selector like "@ios"; url (string): The full address as that host sees it, e.g. http://localhost:3000/api/health; method? (string): GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS; headers? (object): Request headers; body? (string): A text body (POST, PUT, PATCH); body_base64? (string): Instead of body: the bytes, base64; timeout_ms? (integer): Deadline in ms (default 30000) |
+| `host_copy` | Copy a file between hosts (write, primary-only) | from (string): The file on the sending host: an absolute path or ~/...; to (string): Where it goes on the receiving host: an absolute path or ~/...; ending in "/" (or a folder) keeps the file's name; from_host? (string): The sending host: an alias ("__local__" = the Mac) or a selector like "@ios" (default: your own host); to_host? (string): The receiving host: an alias ("__local__" = the Mac) or a selector like "@ios" (default: your own host); copy_id? (string): The id this copy gets (hc-...; the walnut CLI picks one). The same id again from this task answers that copy, never a second one; allow_prompts? (boolean): The user agreed this copy may show a permission dialog on a Mac's screen (a 409 may_prompt asked for it) |
+| `host_copy_result` | Wait for a file copy between hosts (read, primary-only) | copy_id (string): The copyId host_copy returned; wait_ms? (integer): Wait up to this long for the copy to end |
+| `host_daemon_update` | Update a host's Walnut daemon now (write, primary-only) | host (string): Host alias (host_list names them) |
 | `secret_list` | The secrets the user shared with hosts (read, primary-only) | host? (string): Only the secrets shared with this host |
 | `approval_request` | Ask a person to approve a step (write, primary-only) | what (string): What is to be approved, one line (shown as the title); detail? (string): The detail the person reads before answering (a diff summary, the command, the target); mode? (tap\|biometric): tap (default): a plain Approve; biometric: Face ID / Touch ID on a device that signs; timeout_ms? (integer): Unanswered after this long = expired (default 10 minutes); cwd? (string): The asking process's working directory, shown to the person; command? (string): A short name for the asking script or command, shown to the person |
 | `approval_wait` | Wait for an approval's answer (write, primary-only) | id (string): The approval id; token (string): The waitToken approval_request returned; wait_ms? (integer): How long to hold for an answer (default 12000) |
@@ -669,6 +673,31 @@ answer into the same thread:
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ```
 
+## Commands on another host
+
+`host_exec` runs one command on another host Walnut knows (`host_list`), as the
+user, on that machine. On a Mac that is the user's own session, often with them
+at the screen:
+
+- The line runs in bash after the user's login shell set up PATH, so zsh rules
+  (`log` as a builtin, `echo ===`) never apply. `$WALNUT_TASK_DIR` there is your
+  task's directory on that host; the job logs are in its `host-exec/`.
+- Some reads put a dialog on the user's screen, and the command then waits for
+  someone to answer it: a keychain read (`security find-generic-password`,
+  `security show-keychain-info`), `osascript ... with administrator privileges`,
+  and any read of a place macOS guards: Desktop, Documents, Downloads, Pictures,
+  Movies, Music, Mail, Messages, iCloud Drive, app containers, `/Volumes`. A walk
+  (`du`, `find`, `grep -r`, `ls -R`, `tar c`) over `~`, `~/Library` or
+  `~/Library/Caches` passes through them too: measure a folder by its own path
+  (`du -sh ~/proj`), never by a parent. Walnut refuses these with `409 may_prompt`;
+  pass `allow_prompts: true` only after the user agreed. A run Walnut finds idle
+  at such a dialog is stopped and comes back with `blocked`.
+- From a session on another host a call waits about 12 seconds; a run still going
+  comes back `running: true` with its `job_id`. Read it with `host_exec_read`, never
+  run it again. When no answer came back at all (`hub_timeout`), the CLI prints the
+  job id it chose and the read to run; `host_exec_list` lists your task's jobs on
+  that host.
+
 ## Where your work lives
 
 Your task has its own directory on the host your session runs on, in
@@ -690,6 +719,20 @@ OS temp dir do not: they are emptied at every boot and swept between boots.
   with the task directory named in the refusal. A draft, plan, note or evidence
   file you write into a temp directory with the Write tool is kept, with a note
   after the write that tells you to move it.
+
+**Files on another host.** `host_exec` runs a step on another host; `host_copy`
+moves one file between hosts, under the same grant (the first use on a host asks
+the user by letter). Each side defaults to your own host. To test the iOS app from
+a Linux box: tar the sources into your task directory, `host_copy` them to `@ios`
+(`to` ending in `/` keeps the name), build there with `host_exec` on the host the
+answer named, tar the results there, and `host_copy` them back with `from_host` set
+and `to` your own `$WALNUT_TASK_DIR/` written out. A folder is refused (tar it
+first), a file over 2 GB too, and a big copy answers `running` with a `copyId`
+that `host_copy_result` waits on; never start it again. The file lands as a plain
+file (chmod it there if it must run), and credentials or Walnut's own data are
+never copied. On a Mac, Desktop, Documents, Downloads, Mail, /Volumes and the
+other places macOS guards are refused (`409 may_prompt`): a copy there puts a
+permission dialog on that Mac's screen, so ask the user before `allow_prompts`.
 
 ## Safety
 

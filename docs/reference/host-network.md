@@ -226,6 +226,35 @@ keeps each one as a host row; a list file it cannot read is an error, never an e
 so the Mac never takes that for every machine removed. An entry in the list that this
 version does not know (a newer version wrote it) is kept as it is by every write.
 
+## Keeping a machine's daemon on the Mac's build
+
+Nothing on a joined machine updates its daemon, and the Mac has no SSH to it, so the Mac
+does it over the link itself (`src/providers/daemon-net-update.ts`): about 20 seconds after
+the machine connects with a daemon of another build, when that daemon is a user or cron
+service of Walnut's (`walnut daemon status` there), the Mac reads the machine's target with
+the same probe the SSH path uses (`src/core/host-server/host-target.ts`) and takes this build's
+daemon for it: the prebuilt `dist/daemon-binaries/daemon-<target>` when there is one, else, on
+the compiled Mac (which ships no daemon binaries), the machine's walnut file of this build
+(`src/core/host-server/host-file.ts`, as the SSH path's daemon deploy does). It writes the gz
+there in chunks (`fs.writePart`, each checked by sha256), checks the whole file and that its
+`__daemon --version` is this build's daemon (else nothing on the machine changes), and starts
+`walnut daemon update --scope <scope>` from a script detached from the daemon, which exits
+during the handover. The script asks again while the old daemon answers "has active
+operations" (30 times, 10 s apart; after that refusal the old service config is back), and
+stops before its next try once a later update started there, so a server of an older build
+never puts its build back over a newer one. The Mac reads the answer once the machine is
+back on the new build. Sessions keep running, as with any service update. Only the leader
+does it (never a follower or a test server), never while a session or file write is in
+flight (a short one met after the upload is waited out), once per build per 10 minutes, then
+later and later after a failure, and after 4 failed tries of a build only on request or with
+the next build. When the machine comes back on another build after the Mac updated it, its
+own Walnut keeps the daemon on its build (that Walnut updates the same service whenever it
+reconnects), so the Mac stops updating it by itself for that build rather than swap the
+two back and forth; it says so once in the log. A machine whose config says `autofix: false`
+is updated only on request (`host_daemon_update <host>`, which a task's session may call
+under its `host_exec` grant); the hold is logged once per build. Which way every kind of
+host gets updated is in `src/providers/daemon-update-paths.ts`.
+
 ## Removing a machine
 
 Settings > the machine > Remove. The Mac notes the removal in `net.removing` (a restart
@@ -280,5 +309,6 @@ firewall does not, machines still connect, through the relay on 443.
 | `WALNUT_NET_ALLOW_HTTP_RELAY=1` | Let walnut-net use a plain-HTTP relay (tests) |
 | `WALNUT_NET_ALLOW_HTTP_JOIN=1` | Let `walnut net join` talk to a plain-HTTP companion (tests) |
 | `WALNUT_JOIN_DAEMON_DIR` | `walnut net join` uses the daemon in this dir and installs no service (tests) |
+| `WALNUT_NET_DAEMON_UPDATE=0` | The Mac never updates a joined machine's daemon by itself (`host_daemon_update` still does) |
 | `WALNUT_NET_ACTIVE=1` / `0` | Run the network on a test or throwaway server (off there by default: its copied config would put a test key in the Mac's place), or never |
 | `WALNUT_NET_RELAYS`, `WALNUT_NET_RELAY_TOKEN_FILE`, `WALNUT_NET_RELAY_ROOT_FILE` | The companion's relay settings (written by `net-relay.sh`) |

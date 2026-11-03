@@ -3,30 +3,38 @@
  * 'hostfix-v1'). After a preflight (host-runtime-core.ts) finds something
  * missing, the server names ONE action and the daemon runs it host-side:
  *
- *   install-claude-native  the official native installer, verified by running
- *                          ~/.local/bin/claude --version afterwards
+ *   install-claude-native  the native installer's own steps, resumable, else the
+ *                          official install.sh (claude-install-core.ts);
+ *                          verified by running ~/.local/bin/claude --version
  *   update-claude          `claude update` on a claude the native installer put
  *                          there (never an npm, Homebrew or wrapper install),
  *                          the installer when the updater itself fails
  *   install-compiler       gcc plus the C library headers through the host's
  *                          package manager, under `sudo -n` (never a prompt)
  *   build-dtach            compile the vendored dtach into ~/.local/bin/walnut-dtach
+ *                          (dtach-build-core.ts)
  *
  * The daemon never runs anything the server did not name: an action is a fixed
  * argv built here, and the only data the server sends is the dtach source text
  * (so the 48KB of base64 lives once, in src/web/terminal/dtach-sources.ts, and
  * neither twin grows). Every action is idempotent (it reports `skipped` when the
  * thing is already there) and one fix runs at a time per daemon (`busy`).
+ * `cancel()` stops the one in flight at once, for a daemon that is stopping.
  *
  * How each twin gets it: daemon-standalone.ts imports it; daemon-source.ts
  * inlines `createHostFix.toString()` through the `__CREATE_HOST_FIX__`
- * placeholder, exactly like createHostRuntime. So the factory body references
- * NOTHING at module scope (the type import below is erased), and constructing
- * it has no side effects.
+ * placeholder, exactly like createHostRuntime, and passes the step factories in
+ * the same way (`deps.claudeInstall`, `deps.claudeDownload`, `deps.dtachBuild`,
+ * each through its own placeholder). So the factory body references
+ * NOTHING at module scope (the type imports below are erased), and
+ * constructing it has no side effects.
  */
 
 import type fsType from 'node:fs'
 import type { ClaudeProbe } from './host-runtime-core.js'
+import type { createClaudeInstall } from './claude-install-core.js'
+import type { createClaudeDownload } from './claude-download-core.js'
+import type { createDtachBuild } from './dtach-build-core.js'
 
 export type HostFixAction = 'install-claude-native' | 'update-claude' | 'install-compiler' | 'build-dtach'
 
@@ -58,7 +66,8 @@ type ExecCallback = (err: (Error & { code?: unknown; killed?: boolean; signal?: 
 
 export interface HostFixDeps {
   execFile?: (file: string, args: string[], opts: Record<string, unknown>, cb: ExecCallback) => unknown
-  fs?: Pick<typeof fsType, 'mkdtempSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'unlinkSync' | 'rmdirSync' | 'realpathSync'>
+  /** Both twins and the in-process fallback pass the whole node fs. */
+  fs?: Pick<typeof fsType, 'mkdtempSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'unlinkSync' | 'rmdirSync' | 'realpathSync' | 'statSync' | 'readdirSync' | 'chmodSync'>
   /** Live reference (process.env). */
   env: Record<string, string | undefined>
   os: { platform: () => string; tmpdir: () => string; uid: () => number }
@@ -71,6 +80,12 @@ export interface HostFixDeps {
   now?: () => number
   /** process.kill; a negative pid is a whole process group. Test seam. */
   kill?: (pid: number, signal: string) => void
+  /** The pause between download attempts (setTimeout by default). Test seam. */
+  sleep?: (ms: number) => Promise<void>
+  /** The factories of the steps that live in their own files: the twins import or inline them like this one. */
+  claudeInstall: typeof createClaudeInstall
+  claudeDownload: typeof createClaudeDownload
+  dtachBuild: typeof createDtachBuild
 }
 
 /** Self-contained factory: see the file comment before adding any reference outside it. */
@@ -78,13 +93,20 @@ export function createHostFix(deps: HostFixDeps) {
   var INSTALL_URL = 'https://claude.ai/install.sh'
   var INSTALL_LINE = 'curl -fsSL ' + INSTALL_URL + ' | bash'
   var ACTIONS = ['install-claude-native', 'update-claude', 'install-compiler', 'build-dtach']
-  var ACTION_MS: Record<string, number> = { 'install-claude-native': 300000, 'update-claude': 300000, 'install-compiler': 300000, 'build-dtach': 120000 }
+  // 45 minutes for Claude Code: ~330MB takes 44 at 125KB/s (2026-11-03). A cut-off
+  // download is kept and the next Install goes on from there (claude-install-core.ts).
+  // The asking server's `waitMs` caps each one (fix() below).
+  var ACTION_MS: Record<string, number> = { 'install-claude-native': 2700000, 'update-claude': 2700000, 'install-compiler': 300000, 'build-dtach': 120000 }
+  var OLD_SERVER_WAIT_MS = 300000
   var LOG_TAIL = 4096
   var PACKAGE_MANAGERS = ['dnf', 'yum', 'apt-get', 'apk', 'zypper']
-  var DTACH_C = ['attach.c', 'main.c', 'master.c']
-  var DTACH_FILES = DTACH_C.concat(['dtach.h', 'config.h'])
-  var MAX_SOURCE_B64 = 512 * 1024
   var running: string | null = null
+  // cancel(): nothing more starts; `active` stops each child running, `wakers` end each wait.
+  // Never install-compiler: a package manager killed mid-transaction breaks the host.
+  var CANCELLABLE = ['install-claude-native', 'update-claude', 'build-dtach']
+  var cancelled = false
+  var active: Array<() => void> = []
+  var wakers: Array<() => void> = []
 
   type Run = { code: number; stdout: string; stderr: string; timedOut: boolean }
   type Result = Omit<HostFixResult, 'action' | 'durationMs' | 'log'> & { log?: string }
@@ -95,13 +117,11 @@ export function createHostFix(deps: HostFixDeps) {
   function tail(s: string): string { return s.length > LOG_TAIL ? s.slice(s.length - LOG_TAIL) : s }
 
   /**
-   * execFile with a deadline of our own. Every child starts its own process
-   * group (detached), and on the deadline the WHOLE group gets SIGTERM, then
-   * SIGKILL 5s later: sudo relays the TERM to the package manager, which then
-   * releases the dpkg/rpm lock, and an installer's own children (curl, a
-   * download) die with it instead of surviving the fix. The promise answers
-   * even when nothing calls back (a setuid child the kill cannot reach).
-   * Nothing here reads a prompt, so stdin is closed at once.
+   * execFile with a deadline of our own. Every child starts its own process group
+   * (detached); on the deadline, or at once on cancel(), the WHOLE group gets SIGTERM,
+   * then SIGKILL 5s later: sudo relays the TERM so the package manager releases the
+   * dpkg/rpm lock, and an installer's children (curl) die with it. The promise answers
+   * even when nothing calls back (a setuid child the kill cannot reach). stdin is closed.
    */
   function run(file: string, args: string[], opts: { timeoutMs: number; env?: Record<string, string>; cwd?: string }): Promise<Run> {
     return new Promise(function (resolve) {
@@ -113,22 +133,29 @@ export function createHostFix(deps: HostFixDeps) {
         if (done) return
         done = true
         for (var t = 0; t < timers.length; t++) clearTimeout(timers[t])
+        var at = active.indexOf(stop)
+        if (at >= 0) active.splice(at, 1)
         resolve(r)
       }
       var killGroup = function (signal: string) {
         var pid = child && child.pid
-        if (!pid) return
+        // Never 1 or below: -1 is every process this user may signal.
+        if (!pid || pid <= 1) return
         var kill = deps.kill || function (p: number, sig: string) { process.kill(p, sig as NodeJS.Signals) }
         try { kill(-pid, signal) } catch { try { kill(pid, signal) } catch { /* gone */ } }
       }
-      timers.push(setTimeout(function () {
+      var stop = function () {
+        if (done || timedOut) return
         timedOut = true
         killGroup('SIGTERM')
         timers.push(setTimeout(function () {
           killGroup('SIGKILL')
           timers.push(setTimeout(function () { finish({ code: -1, stdout: '', stderr: 'timed out', timedOut: true }) }, 1000))
         }, 5000))
-      }, Math.max(1, opts.timeoutMs)))
+      }
+      if (cancelled) return finish({ code: -1, stdout: '', stderr: 'cancelled', timedOut: true })
+      active.push(stop)
+      timers.push(setTimeout(stop, Math.max(1, opts.timeoutMs)))
       if (!deps.execFile) return finish({ code: -1, stdout: '', stderr: 'exec unavailable', timedOut: false })
       var env: Record<string, string | undefined> = Object.assign({}, deps.env, opts.env || {})
       try {
@@ -149,6 +176,38 @@ export function createHostFix(deps: HostFixDeps) {
     })
   }
 
+  /** `work`, or `onCancel` at once when the fix is cancelled first. */
+  function orCancel<T>(work: Promise<T>, onCancel: T): Promise<T> {
+    if (cancelled) return Promise.resolve(onCancel)
+    return new Promise(function (resolve, reject) {
+      var wake = function () { resolve(onCancel) }
+      var drop = function () { var at = wakers.indexOf(wake); if (at >= 0) wakers.splice(at, 1) }
+      wakers.push(wake)
+      work.then(function (v) { drop(); resolve(v) }, function (e) { drop(); reject(e) })
+    })
+  }
+
+  /** The pause between download attempts; it ends at once on cancel(). */
+  function sleep(ms: number): Promise<void> {
+    if (cancelled || ms <= 0) return Promise.resolve()
+    if (deps.sleep) return orCancel(deps.sleep(ms), undefined)
+    var timer: ReturnType<typeof setTimeout> | undefined
+    return orCancel(new Promise<void>(function (resolve) { timer = setTimeout(resolve, ms) }), undefined).then(function () { clearTimeout(timer) })
+  }
+
+  /** The host runtime's claude probe (its own child, its own timeout); not found once cancelled. */
+  function probe(command: string, deadline: number): Promise<ClaudeProbe & { nodeDir?: string }> {
+    return cancelled ? Promise.resolve({ found: false }) : orCancel(deps.runtime.probeClaude(command, pathStr(), deadline), { found: false })
+  }
+
+  /** Stop the fix in flight now (the daemon is stopping). False when none runs, or it may not be cut. */
+  function cancel(): boolean {
+    if (!running || CANCELLABLE.indexOf(running) < 0) return false
+    cancelled = true
+    active.slice().concat(wakers.splice(0, wakers.length)).forEach(function (stop) { stop() })
+    return true
+  }
+
   function transcript(logs: string[], argv: string[], r: Run): void {
     logs.push('$ ' + argv.join(' ') + '\n' + r.stdout + (r.stderr ? '\n' + r.stderr : '') + (r.code !== 0 ? '\n[exit ' + r.code + (r.timedOut ? ', timed out' : '') + ']' : ''))
   }
@@ -166,12 +225,6 @@ export function createHostFix(deps: HostFixDeps) {
       if (p) return p
     }
     return null
-  }
-
-  function removeDir(dir: string, names: string[]): void {
-    if (!deps.fs) return
-    for (var i = 0; i < names.length; i++) { try { deps.fs.unlinkSync(dir + '/' + names[i]) } catch { /* not written */ } }
-    try { deps.fs.rmdirSync(dir) } catch { /* not empty or gone */ }
   }
 
   // ── install-compiler ──
@@ -264,6 +317,11 @@ export function createHostFix(deps: HostFixDeps) {
 
   // ── install-claude-native ──
 
+  // install() answers null when Claude Code got installed, else why not. Every process
+  // it starts goes through run(), so cancel() and the deadline reach it.
+  var installer = deps.claudeInstall({ fs: deps.fs, env: deps.env, os: deps.os, runtime: deps.runtime, log: deps.log,
+    run: run, transcript: transcript, now: now, sleep: sleep, atLeast: atLeast, installUrl: INSTALL_URL, installLine: INSTALL_LINE, download: deps.claudeDownload })
+
   async function claudeVersion(bin: string, nodeDir: string | undefined, deadline: number, logs: string[]): Promise<string | null> {
     var r = await run(bin, ['--version'], { timeoutMs: Math.max(1, Math.min(20000, deadline - now())), env: nodeDir ? { PATH: nodeDir + ':' + pathStr() } : undefined })
     transcript(logs, [bin, '--version'], r)
@@ -273,15 +331,15 @@ export function createHostFix(deps: HostFixDeps) {
 
   /** ok when the claude a session would start is the native one at `bin`. */
   async function reportClaude(bin: string, deadline: number, logs: string[], skipped: boolean): Promise<Result> {
-    var probe = await deps.runtime.probeClaude(bin, pathStr(), deadline)
-    if (!probe.found) return { ok: false, error: 'verify-failed', manualCommand: INSTALL_LINE }
-    var version = await claudeVersion(bin, probe.nodeDir, deadline, logs)
+    var found = await probe(bin, deadline)
+    if (!found.found) return { ok: false, error: 'verify-failed', manualCommand: INSTALL_LINE }
+    var version = await claudeVersion(bin, found.nodeDir, deadline, logs)
     if (!version) return { ok: false, error: 'verify-failed', manualCommand: INSTALL_LINE }
-    var claude = { path: bin, kind: probe.kind || 'unknown', version: version }
+    var claude = { path: bin, kind: found.kind || 'unknown', version: version }
     // The spawn gate resolves `claude` on PATH: another one earlier there still wins.
     var first = deps.runtime.resolveOnPath('claude', pathStr())
     if (first && !samePath(first, bin)) {
-      var other = await deps.runtime.probeClaude(first, pathStr(), deadline)
+      var other = await probe(first, deadline)
       if (other.kind !== 'native') return { ok: false, error: 'shadowed', shadowedBy: first, claude: claude }
     }
     return skipped ? { ok: true, skipped: true, claude: claude } : { ok: true, claude: claude }
@@ -306,43 +364,16 @@ export function createHostFix(deps: HostFixDeps) {
     return m ? (Number(m[1]) & 1) === 0 : null
   }
 
-  async function installClaudeNative(deadline: number, logs: string[]): Promise<Result> {
+  async function installClaudeNative(params: Record<string, unknown>, deadline: number, logs: string[]): Promise<Result> {
+    var need = typeof params.minClaudeVersion === 'string' ? params.minClaudeVersion : ''
     var bin = home() + '/.local/bin/claude'
-    var current = await deps.runtime.probeClaude('claude', pathStr(), deadline)
+    var current = await probe('claude', deadline)
     if (current.found && current.kind === 'native' && current.path) return reportClaude(current.path, deadline, logs, true)
-    var local = await deps.runtime.probeClaude(bin, pathStr(), deadline)
+    var local = await probe(bin, deadline)
     if (local.found && local.kind === 'native') return reportClaude(bin, deadline, logs, true)
     if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: INSTALL_LINE }
-    var failed = await runInstaller(deadline, logs)
+    var failed = await installer.install(deadline, logs, need)
     return failed || reportClaude(bin, deadline, logs, false)
-  }
-
-  /** The official installer, downloaded then run. Null when it succeeded, else why not. */
-  async function runInstaller(deadline: number, logs: string[]): Promise<Result | null> {
-    var curl = deps.runtime.resolveOnPath('curl', pathStr())
-    var wget = curl ? null : deps.runtime.resolveOnPath('wget', pathStr())
-    if (!curl && !wget) return { ok: false, error: 'no-downloader', manualCommand: INSTALL_LINE }
-    var bash = deps.runtime.resolveOnPath('bash', pathStr())
-    if (!bash) return { ok: false, error: 'no-bash', manualCommand: INSTALL_LINE }
-    if (!deps.fs) return { ok: false, error: 'internal', log: 'fs unavailable' }
-    var dir = deps.fs.mkdtempSync(deps.os.tmpdir().replace(/\/$/, '') + '/walnut-claude-install-')
-    var script = dir + '/install.sh'
-    try {
-      // Download, then run: the same installer as `curl ... | bash`, but a failed
-      // download reads as a download failure instead of an empty bash run.
-      var dlArgs = curl ? ['-fsSL', '-o', script, INSTALL_URL] : ['-q', '-O', script, INSTALL_URL]
-      var dl = await run((curl || wget) as string, dlArgs, { timeoutMs: Math.max(1, Math.min(120000, deadline - now())) })
-      transcript(logs, [(curl || wget) as string].concat(dlArgs), dl)
-      if (dl.timedOut) return { ok: false, error: 'timeout', manualCommand: INSTALL_LINE }
-      if (dl.code !== 0) return { ok: false, error: 'download-failed', manualCommand: INSTALL_LINE }
-      var inst = await run(bash, [script], { timeoutMs: Math.max(1, deadline - now()), env: { HOME: home() }, cwd: home() })
-      transcript(logs, [bash, script], inst)
-      if (inst.timedOut) return { ok: false, error: 'timeout', manualCommand: INSTALL_LINE }
-      if (inst.code !== 0) return { ok: false, error: 'installer-failed', manualCommand: INSTALL_LINE }
-    } finally {
-      removeDir(dir, ['install.sh'])
-    }
-    return null
   }
 
   // ── update-claude ──
@@ -374,13 +405,13 @@ export function createHostFix(deps: HostFixDeps) {
    * put it there: an npm build is the planner's install-claude-native, and a
    * Homebrew install or a wrapper script is never touched.
    * `claude update` answers without a prompt (it defers any consent to the next
-   * interactive session); when it fails, the installer runs instead, unless
+   * interactive session); when it fails or runs out of time, the installer runs instead, unless
    * updates were turned off with DISABLE_UPDATES. `minClaudeVersion` is what
    * the server needs: an update that stops short of it is 'still-outdated'.
    */
   async function updateClaude(params: Record<string, unknown>, deadline: number, logs: string[]): Promise<Result> {
     var need = typeof params.minClaudeVersion === 'string' ? params.minClaudeVersion : ''
-    var current = await deps.runtime.probeClaude('claude', pathStr(), deadline)
+    var current = await probe('claude', deadline)
     if (!current.found || !current.path) return { ok: false, error: 'verify-failed', manualCommand: INSTALL_LINE }
     var bin = current.path
     if (current.kind !== 'native' || !isNativeInstall(bin)) return { ok: false, error: 'unmanaged-install', log: 'not a native-installer claude: ' + bin }
@@ -390,10 +421,11 @@ export function createHostFix(deps: HostFixDeps) {
     if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: 'claude update' }
     var up = await run(bin, ['update'], { timeoutMs: Math.max(1, Math.min(180000, deadline - now())) })
     transcript(logs, [bin, 'update'], up)
-    if (up.timedOut) return { ok: false, error: 'timeout', manualCommand: 'claude update' }
     if (/DISABLE_UPDATES|updates are disabled/i.test(up.stdout + up.stderr)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
-    if (up.code !== 0) {
-      var failed = await runInstaller(deadline, logs)
+    // An updater out of its 3 minutes is most often a slow line (it downloads the
+    // whole binary itself, with no resume): the resumable installer takes over.
+    if (up.code !== 0 || up.timedOut) {
+      var failed = await installer.install(deadline, logs, need)
       if (failed) return failed
     }
     var report = await reportClaude(deps.runtime.resolveOnPath('claude', pathStr()) || bin, deadline, logs, false)
@@ -405,67 +437,9 @@ export function createHostFix(deps: HostFixDeps) {
     return report
   }
 
-  // ── build-dtach ──
+  // ── build-dtach (dtach-build-core.ts, on run() like every step) ──
 
-  /**
-   * The usage banner, not just the word: a spawn error names the walnut-dtach
-   * file too. Same check as DTACH_BANNER in src/web/terminal/dtach-probe-script.ts.
-   */
-  async function isDtach(p: string, deadline: number): Promise<boolean> {
-    var r = await run(p, ['--help'], { timeoutMs: Math.max(1, Math.min(5000, deadline - now())) })
-    return (r.stdout + r.stderr).toLowerCase().indexOf('dtach - version') >= 0
-  }
-
-  /** Exactly the vendored file set, each value plain base64 of a sane size. */
-  function validSources(raw: unknown): Record<string, string> | null {
-    if (!raw || typeof raw !== 'object') return null
-    var src = raw as Record<string, unknown>
-    var keys = Object.keys(src)
-    if (keys.length !== DTACH_FILES.length) return null
-    for (var i = 0; i < DTACH_FILES.length; i++) {
-      var v = src[DTACH_FILES[i]]
-      if (typeof v !== 'string' || !v || v.length > MAX_SOURCE_B64 || !/^[A-Za-z0-9+/=\s]+$/.test(v)) return null
-    }
-    return src as Record<string, string>
-  }
-
-  async function buildDtach(params: Record<string, unknown>, deadline: number, logs: string[]): Promise<Result> {
-    var bin = home() + '/.local/bin/walnut-dtach'
-    if (await isDtach(bin, deadline)) return { ok: true, skipped: true, path: bin }
-    var sources = validSources(params.sources)
-    if (!sources) return { ok: false, error: 'bad-sources' }
-    var cc = findCompiler()
-    if (!cc) return { ok: false, error: 'no-compiler' }
-    // A Mac's /usr/bin/cc exists even without the Command Line Tools, and running
-    // it then opens an install dialog on that Mac's screen. `xcode-select -p` asks
-    // quietly whether they are there.
-    if (deps.os.platform() === 'darwin') {
-      var clt = await run('/usr/bin/xcode-select', ['-p'], { timeoutMs: Math.max(1, Math.min(5000, deadline - now())) })
-      if (clt.code !== 0) return { ok: false, error: 'darwin-needs-command-line-tools', manualCommand: 'xcode-select --install' }
-    }
-    if (!deps.fs) return { ok: false, error: 'internal', log: 'fs unavailable' }
-    var dir = deps.fs.mkdtempSync(deps.os.tmpdir().replace(/\/$/, '') + '/walnut-dtach-build-')
-    // Built next to its final path, then renamed: a half-written binary never
-    // sits where the terminal probe would trust it, and no EXDEV across mounts.
-    var partial = bin + '.' + now() + '.partial'
-    try {
-      for (var i = 0; i < DTACH_FILES.length; i++) {
-        deps.fs.writeFileSync(dir + '/' + DTACH_FILES[i], Buffer.from(sources[DTACH_FILES[i]], 'base64'))
-      }
-      deps.fs.mkdirSync(home() + '/.local/bin', { recursive: true })
-      var args = ['-O2', '-I.', '-o', partial].concat(DTACH_C, ['-lutil'])
-      var r = await run(cc, args, { timeoutMs: Math.max(1, deadline - now()), cwd: dir })
-      transcript(logs, [cc].concat(args), r)
-      if (r.timedOut) return { ok: false, error: 'timeout' }
-      if (r.code !== 0) return { ok: false, error: 'build-failed' }
-      if (!(await isDtach(partial, deadline))) return { ok: false, error: 'verify-failed' }
-      deps.fs.renameSync(partial, bin)
-      return { ok: true, path: bin }
-    } finally {
-      try { deps.fs.unlinkSync(partial) } catch { /* renamed or never built */ }
-      removeDir(dir, DTACH_FILES)
-    }
-  }
+  var dtach = deps.dtachBuild({ fs: deps.fs, env: deps.env, os: deps.os, run: run, transcript: transcript, now: now, findCompiler: findCompiler })
 
   /** host.fix: run ONE named action. Never throws; a refusal is a result. */
   async function fix(action: unknown, params?: Record<string, unknown>): Promise<HostFixResult> {
@@ -474,19 +448,26 @@ export function createHostFix(deps: HostFixDeps) {
     if (ACTIONS.indexOf(name) < 0) return { action: name, ok: false, error: 'unknown-action', log: '', durationMs: 0 }
     if (running) return { action: name, ok: false, error: 'busy', log: 'another fix is running: ' + running, durationMs: 0 }
     running = name
+    cancelled = false
+    wakers.length = 0
     var logs: string[] = []
-    var deadline = started + ACTION_MS[name]
+    // Never past what the asking server waits for: one that names no wait (older than
+    // 'waitMs') gives up at 330s, and a fix still running then would answer it busy.
+    var wait = params && typeof params.waitMs === 'number' && params.waitMs > 0 ? params.waitMs : OLD_SERVER_WAIT_MS
+    var deadline = started + Math.min(ACTION_MS[name], wait)
     var r: Result
     try {
-      r = name === 'install-claude-native' ? await installClaudeNative(deadline, logs)
+      r = name === 'install-claude-native' ? await installClaudeNative(params || {}, deadline, logs)
         : name === 'update-claude' ? await updateClaude(params || {}, deadline, logs)
           : name === 'install-compiler' ? await installCompiler(deadline, logs)
-            : await buildDtach(params || {}, deadline, logs)
+            : await dtach.buildDtach(params || {}, deadline, logs)
     } catch (e) {
       r = { ok: false, error: 'internal', log: String((e as Error).message || e) }
     } finally {
       running = null
     }
+    // What was downloaded stays where the next attempt resumes it.
+    if (cancelled && !r.ok) r = Object.assign({}, r, { error: 'cancelled', log: (r.log ? r.log + '\n' : '') + 'stopped: the session daemon is shutting down' })
     if (r.log) logs.push(r.log)
     var out: HostFixResult = Object.assign({}, r, { action: name, log: tail(logs.join('\n')), durationMs: now() - started })
     if (deps.log) {
@@ -500,6 +481,9 @@ export function createHostFix(deps: HostFixDeps) {
   return {
     run: fix,
     get running(): string | null { return running },
+    /** The fix running now is one cancel() stops (a daemon handover need not wait for it). */
+    get cancellable(): boolean { return !!running && CANCELLABLE.indexOf(running) >= 0 },
+    cancel: cancel,
     packageArgs: packageArgs,
     classifySudo: classifySudo,
     installLine: INSTALL_LINE,

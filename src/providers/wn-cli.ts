@@ -33,6 +33,7 @@ import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
 } from './mcp-cli-args.js'
@@ -658,6 +659,11 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // it from this host in bounded chunks (see GATEWAY_INLINE_ARGS_MAX_BYTES).
   let argsFile: string | undefined
   let spilledArgsFile: string | undefined
+  let runId: string | null = null
+  // The run may have started even though no answer came: say under which id, and how to read it.
+  const lostRun = () => {
+    if (runId && parsed.kind === 'tools.call') process.stderr.write(lostRunLines(parsed.name, callArgs, runId).join('\n') + '\n')
+  }
   if (parsed.kind === 'tools.call') {
     const source = classifyArgsSource(parsed.rawJson, process.stdin.isTTY === true)
     if (source.kind === 'usage-error') {
@@ -714,6 +720,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         return 2
       }
       callArgs = args.args
+      // A run's id chosen here, so an answer lost on the way back still leaves one to read.
+      runId = callerRunId(parsed.name, callArgs)
       // A "$14.99" the shell already turned into ".99" on the command line: refused, nothing sent.
       const cut = process.env.WALNUT_TEXT_CHECK === '0' || source.kind !== 'inline' ? null : strippedShellText(callArgs)
       if (cut) {
@@ -750,13 +758,26 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   let resp: GatewayResponse
   try {
     resp = await requestOverSocket(socketPath, { v: 1, op, sid, args })
+    // A server older than the run id refused it before anything ran: the same call without it.
+    if (!resp.ok && runId && parsed.kind === 'tools.call' && refusedRunId(parsed.name, resp.error.message)) {
+      dropRunId(parsed.name, callArgs)
+      runId = null
+      resp = await requestOverSocket(socketPath, { v: 1, op, sid, args })
+    }
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
       process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
+      lostRun()
       return 5
     }
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`walnut: Walnut daemon socket unreachable at ${socketPath}: ${msg}\n`)
+    // Refused before a byte left: nothing ran. A socket that broke after the request went: it may have.
+    if (!neverSent(err)) lostRun()
+    else if (parsed.kind === 'tools.call') {
+      const lines = awayLines(parsed.name, callArgs, "this host's Walnut daemon")
+      if (lines.length) process.stderr.write(lines.join('\n') + '\n')
+    }
     return 6
   } finally {
     // Only OUR spill is removed. A path the user passed with @ is theirs, and
@@ -774,6 +795,11 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       await writeStdout(JSON.stringify(resp.error.detail, null, 2) + '\n')
     }
     process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
+    if (resp.error.code === 'hub_timeout') lostRun()
+    if (resp.error.code === 'hub_unreachable' && parsed.kind === 'tools.call') {
+      const lines = awayLines(parsed.name, callArgs)
+      if (lines.length) process.stderr.write(lines.join('\n') + '\n')
+    }
     return errorToExitCode(resp.error.code)
   }
 

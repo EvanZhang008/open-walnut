@@ -1,7 +1,7 @@
 /**
  * The host side of `host_exec` (src/core/hosts/host-exec.ts): run one command
- * on THIS host for a task on another host, under the user's login shell, and
- * hand back its exit code and output (the user, 2026-10-31: "use the Mac's
+ * on THIS host for a task on another host, with the user's login environment,
+ * and hand back its exit code and output (the user, 2026-10-31: "use the Mac's
  * login", so a task on a Linux box runs `gh` or `xcodebuild` here and no token
  * ever leaves this machine).
  *
@@ -13,16 +13,29 @@
  * KB at most) rides the reply; every run is one start and one end line in
  * `<state dir>/host-exec-audit.jsonl`.
  *
- * `argv` runs a program with no shell parsing at all: each argument is quoted
- * for the login shell, which only finds the program on the user's PATH (`exec`).
+ * Which shell, and the line from `command` or `argv`: host-exec-line.ts (host-exec-v2: the login
+ * shell, then bash). The child gets WALNUT_TASK_DIR, the caller task's directory here
+ * (src/lib/task-dir.ts), where its logs are kept too. Every reply names the shell, the login
+ * shell and the task directory.
+ *
+ * On a Mac (host-exec-guards.ts, host-exec-watch.ts): a command that reads a place macOS guards is
+ * refused unless the caller passes `allowPrompts` (the user agreed), and a run that
+ * sits idle at a password or permission dialog is stopped and answers `blocked`.
  *
  * Bundled into the binary daemon and shipped as the host-exec-core.cjs sidecar
- * for the source twin; 'host-exec-v1' is advertised only where it loads. It
- * never signals a process itself: the twin hands in `killGroup`.
+ * for the source twin; 'host-exec-v1' is advertised only where it loads, and
+ * 'host-exec-v2' where it carries this shell and WALNUT_TASK_DIR (`version`).
+ * It never signals a process itself: the twin hands in `killGroup`.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
+import { ensureTaskDir } from './task-dir-core.js'
+import { permissionMessage, permissionRisk } from './host-exec-guards.js'
+import { IDLE_WINDOW_MS, createPromptWatcher, macPromptProbe, type PromptBlock, type PromptProbe } from './host-exec-watch.js'
+import { bad, commandLine, findBash, lineSpan, shellPlan, type ExecError } from './host-exec-line.js'
+
+export { BASH_CANDIDATES, LINE_ENV, commandLine, findBash, lineSpan, shellPlan, shellQuote, type ExecError } from './host-exec-line.js'
 
 export const FOREGROUND_MAX_MS = 10 * 60_000
 export const BACKGROUND_MAX_MS = 2 * 60 * 60_000
@@ -33,10 +46,8 @@ const KILL_GRACE_MS = 3_000
 const EXIT_DRAIN_MS = 2_000
 const KEEP_FINISHED_MS = 60 * 60_000
 const MAX_JOBS = 200
-const COMMAND_MAX_CHARS = 64 * 1024
-const ARGV_MAX = 256
-const ARG_MAX_CHARS = 8 * 1024
-const JOB_ID_RE = /^hx-[A-Za-z0-9_-]{4,64}$/
+/** A job's id: the caller may choose it (`hx-<uuid>`), so a call whose answer was lost can still read the run. */
+export const JOB_ID_RE = /^hx-[A-Za-z0-9_-]{4,64}$/
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export interface HostExecDeps {
@@ -45,6 +56,8 @@ export interface HostExecDeps {
   killGroup: (pid: number, signal: NodeJS.Signals) => void
   /** The user's login shell (`$SHELL` when it runs), else bash, else sh. */
   shell: string
+  /** The bash that runs the line; null for none (sh runs it). Found on this host when not given. */
+  bash?: string | null
   home: string
   /** Where task directories live on this host (task-dir-core taskDirRoot), null when unknown. */
   taskDirRoot: string | null
@@ -52,6 +65,12 @@ export interface HostExecDeps {
   stateDir: string
   env: NodeJS.ProcessEnv
   now?: () => number
+  /** This host's system (process.platform); the macOS guards apply on 'darwin'. */
+  platform?: string
+  /** How a darwin run is checked for a dialog it waits on; null turns the check off (default: macPromptProbe). */
+  promptProbe?: PromptProbe | null
+  /** How often that check runs (IDLE_WINDOW_MS). */
+  promptCheckMs?: number
 }
 
 export interface RunRequest {
@@ -63,6 +82,10 @@ export interface RunRequest {
   timeoutMs?: unknown
   background?: unknown
   maxOutputBytes?: unknown
+  /** The asking Walnut's data home: the owner a new task directory's marker names (task-dir-core.ts). */
+  home?: unknown
+  /** The user agreed this command may show a dialog on this host's screen: no macOS guard, no idle check. */
+  allowPrompts?: unknown
   /** Who asked, for the audit line only: the caller's task and host. */
   caller?: { task?: unknown; host?: unknown }
 }
@@ -80,6 +103,16 @@ export interface JobView {
   logFile: string
   /** Bytes the command wrote in all. */
   outputBytes: number
+  /** What ran the line ("bash", "sh"), after the login shell (`loginShell`, "zsh") set up the environment. */
+  shell: string
+  loginShell: string
+  /** The caller task's directory on this host, the child's WALNUT_TASK_DIR; null when this host has none for it. */
+  taskDir: string | null
+  /** The task that started it, and the head of its line (a task lists its own jobs). */
+  taskId: string | null
+  command: string
+  /** Stopped because it sat at a dialog on this host's screen (host-exec-watch.ts), else null. */
+  blocked: PromptBlock | null
 }
 
 export interface RunReply extends JobView {
@@ -88,7 +121,6 @@ export interface RunReply extends JobView {
   truncated: boolean
 }
 
-export type ExecError = { ok: false; code: 'bad_request' | 'cwd_missing' | 'spawn_failed' | 'unknown_job'; error: string }
 
 interface Job {
   id: string
@@ -103,6 +135,12 @@ interface Job {
   logFile: string
   /** The task that started it: only that task reads or stops it. */
   taskId: string | null
+  shell: string
+  loginShell: string
+  taskDir: string | null
+  command: string
+  blocked: PromptBlock | null
+  unwatch: (() => void) | null
   bytes: number
   tail: Buffer[]
   tailBytes: number
@@ -111,67 +149,22 @@ interface Job {
   timer: ReturnType<typeof setTimeout> | null
 }
 
-/**
- * The whole lines of a window into a job's output: a window that starts inside a line
- * drops that partial line, and one that may end inside a line (the job still writes,
- * or more follows) stops at the last newline. The server hides credential-looking
- * lines one line at a time, so a token cut in two at a window's edge would pass as
- * two harmless halves. A window with no newline at all is kept whole.
- */
-export function lineSpan(buf: Buffer, startsMid: boolean, mayEndMid: boolean): { start: number; end: number } {
-  let start = 0
-  if (startsMid) {
-    const nl = buf.indexOf(0x0a)
-    if (nl !== -1 && nl + 1 < buf.length) start = nl + 1
-    else if (nl === -1) while (start < buf.length && start < 4 && (buf[start] & 0xc0) === 0x80) start++
-  }
-  let end = buf.length
-  if (mayEndMid && end > start && buf[end - 1] !== 0x0a) {
-    const nl = buf.lastIndexOf(0x0a)
-    if (nl >= start) end = nl + 1
-    else {
-      // One long line with no newline yet: at least never end inside a character.
-      let i = end - 1
-      while (i > start && end - i < 4 && (buf[i] & 0xc0) === 0x80) i--
-      const lead = buf[i]
-      const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1
-      if (end - i < need) end = i
-    }
-  }
-  return { start, end }
-}
-
-/** Quote one argument for a POSIX shell. */
-export function shellQuote(arg: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
-}
-
-function bad(error: string, code: ExecError['code'] = 'bad_request'): ExecError {
-  return { ok: false, code, error }
-}
-
-/** The shell line a request runs, or an error. */
-export function commandLine(req: Pick<RunRequest, 'command' | 'argv'>): string | ExecError {
-  const hasCommand = typeof req.command === 'string' && req.command.trim() !== ''
-  const hasArgv = Array.isArray(req.argv) && req.argv.length > 0
-  if (hasCommand === hasArgv) return bad('give exactly one of command (a shell line) or argv (a program and its arguments)')
-  if (hasCommand) {
-    const c = req.command as string
-    if (c.length > COMMAND_MAX_CHARS || c.includes('\0')) return bad(`command must be under ${COMMAND_MAX_CHARS} characters, with no NUL`)
-    return c
-  }
-  const argv = req.argv as unknown[]
-  if (argv.length > ARGV_MAX || !argv.every((a) => typeof a === 'string' && a.length <= ARG_MAX_CHARS && !a.includes('\0'))) {
-    return bad(`argv must be at most ${ARGV_MAX} strings of at most ${ARG_MAX_CHARS} characters, with no NUL`)
-  }
-  if (!(argv[0] as string)) return bad('argv[0] (the program) is empty')
-  return 'exec ' + (argv as string[]).map(shellQuote).join(' ')
-}
+/** Bumped when exec.run changes what a server may rely on: 2 = bash after the login shell, WALNUT_TASK_DIR. */
+export const HOST_EXEC_VERSION = 2
 
 export function createHostExec(deps: HostExecDeps) {
   const now = deps.now ?? Date.now
   const jobs = new Map<string, Job>()
   let seq = 0
+  let bash: string | null | undefined = deps.bash
+  const bashPath = (): string | null => {
+    if (bash === undefined) bash = findBash(deps.env.PATH)
+    return bash
+  }
+  const mac = (deps.platform ?? process.platform) === 'darwin'
+  // One watcher for every job here: one `ps` and at most one log read per look, whatever the number of jobs.
+  const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now) : null) : deps.promptProbe
+  const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
 
   function audit(line: Record<string, unknown>): void {
     try {
@@ -204,15 +197,17 @@ export function createHostExec(deps: HostExecDeps) {
     }
   }
 
-  function logDir(taskId: unknown): string {
-    if (deps.taskDirRoot && typeof taskId === 'string' && TASK_ID_RE.test(taskId)) return path.join(deps.taskDirRoot, taskId, 'host-exec')
-    return path.join(deps.stateDir, 'host-exec')
+  /** The caller task's directory here, made (with its marker) on first use; null without a root or a usable id. */
+  function taskDirOf(taskId: unknown, home: unknown): string | null {
+    if (!deps.taskDirRoot || typeof taskId !== 'string' || !TASK_ID_RE.test(taskId)) return null
+    return ensureTaskDir(deps.taskDirRoot, taskId, home, new Date(now()))
   }
 
   function view(j: Job): JobView {
     return {
       jobId: j.id, running: j.endedAt === null, exitCode: j.exitCode, signal: j.signal, timedOut: j.timedOut, killed: j.killed,
       startedAt: j.startedAt, ms: (j.endedAt ?? now()) - j.startedAt, cwd: j.cwd, logFile: j.logFile, outputBytes: j.bytes,
+      shell: j.shell, loginShell: j.loginShell, taskDir: j.taskDir, taskId: j.taskId, command: j.command, blocked: j.blocked,
     }
   }
 
@@ -223,10 +218,10 @@ export function createHostExec(deps: HostExecDeps) {
     return { output: cut.subarray(start, end).toString('utf8'), truncated: j.bytes > end - start }
   }
 
-  function stop(j: Job, why: 'timeout' | 'asked'): void {
+  function stop(j: Job, why: 'timeout' | 'asked' | 'blocked'): void {
     if (j.endedAt !== null || j.pid === null) return
     if (why === 'timeout') j.timedOut = true
-    else j.killed = true
+    else if (why === 'asked') j.killed = true
     const pid = j.pid
     try { deps.killGroup(pid, 'SIGTERM') } catch { /* already gone */ }
     const hard = setTimeout(() => { if (j.endedAt === null) { try { deps.killGroup(pid, 'SIGKILL') } catch { /* gone */ } } }, KILL_GRACE_MS)
@@ -240,15 +235,24 @@ export function createHostExec(deps: HostExecDeps) {
     if (typeof line !== 'string') return line
     const cwd = resolveCwd(req.cwd)
     if (typeof cwd !== 'string') return cwd
+    const allowPrompts = req.allowPrompts === true
+    const taskDir = taskDirOf(req.taskId, req.home)
+    // A place macOS guards shows a dialog on this Mac's screen, and the command waits on it.
+    if (mac && !allowPrompts) {
+      const risk = permissionRisk(line, cwd, deps.home, taskDir ? { WALNUT_TASK_DIR: taskDir } : {})
+      if (risk) return bad(permissionMessage(risk, 'this Mac'), 'may_prompt')
+    }
     const background = req.background === true
     const cap = background ? BACKGROUND_MAX_MS : FOREGROUND_MAX_MS
     const asked = typeof req.timeoutMs === 'number' && Number.isFinite(req.timeoutMs) && req.timeoutMs > 0 ? req.timeoutMs : (background ? cap : DEFAULT_TIMEOUT_MS)
     const timeoutMs = Math.min(asked, cap)
     const tailMax = typeof req.maxOutputBytes === 'number' && req.maxOutputBytes > 0 ? Math.min(req.maxOutputBytes, OUTPUT_MAX_BYTES) : OUTPUT_MAX_BYTES
     const id = typeof req.jobId === 'string' && JOB_ID_RE.test(req.jobId) ? req.jobId : `hx-${now().toString(36)}-${(++seq).toString(36)}`
-    if (jobs.has(id)) return bad(`job ${id} already exists`)
+    if (jobs.has(id)) return bad(`job ${id} already exists`, 'job_exists')
 
-    const dir = logDir(req.taskId)
+    // Unset, `$WALNUT_TASK_DIR/x` would be `/x`: refuse rather than run it there.
+    if (!taskDir && /\bWALNUT_TASK_DIR\b/.test(line)) return bad('this host has no task directory for this task, so WALNUT_TASK_DIR is unset here; nothing ran', 'task_dir_unset')
+    const dir = taskDir ? path.join(taskDir, 'host-exec') : path.join(deps.stateDir, 'host-exec')
     const logFile = path.join(dir, `${id}.log`)
     let fd: number
     try {
@@ -258,19 +262,23 @@ export function createHostExec(deps: HostExecDeps) {
       return bad(`could not open the log ${logFile}: ${(err as Error).message}`, 'spawn_failed')
     }
 
+    const login = deps.shell || '/bin/sh'
+    const plan = shellPlan(login, bashPath(), line)
     const job: Job = {
       id, pid: null, startedAt: now(), endedAt: null, exitCode: null, signal: null, timedOut: false, killed: false,
       cwd, logFile, taskId: typeof req.taskId === 'string' ? req.taskId : null, bytes: 0, tail: [], tailBytes: 0, tailMax, waiters: [], timer: null,
+      shell: plan.shell, loginShell: plan.loginShell, taskDir, command: line.slice(0, 200), blocked: null, unwatch: null,
     }
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
-    audit({ event: 'start', jobId: id, ...who, cwd, command: line.slice(0, 2000), background, timeoutMs })
+    audit({ event: 'start', jobId: id, ...who, cwd, command: line.slice(0, 2000), background, timeoutMs, shell: plan.shell })
 
     let child: ChildProcess
     try {
-      child = deps.spawn(deps.shell || '/bin/sh', ['-l', '-c', line], {
+      // The env never carries the daemon's own WALNUT_* (the twins strip them); these two are the run's.
+      child = deps.spawn(login, plan.args, {
         cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...deps.env, WALNUT_HOST_EXEC_JOB: id },
+        env: { ...deps.env, ...plan.env, WALNUT_HOST_EXEC_JOB: id, ...(taskDir ? { WALNUT_TASK_DIR: taskDir } : {}) },
       })
     } catch (err) {
       try { fs.closeSync(fd) } catch { /* closed */ }
@@ -297,11 +305,12 @@ export function createHostExec(deps: HostExecDeps) {
         if (done) return
         done = true
         if (job.timer) clearTimeout(job.timer)
+        job.unwatch?.()
         job.endedAt = now()
         job.exitCode = code
         job.signal = signal
         try { fs.closeSync(fd) } catch { /* closed */ }
-        audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(error ? { error } : {}) })
+        audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(error ? { error } : {}) })
         for (const w of job.waiters.splice(0)) w()
         resolve()
       }
@@ -325,6 +334,15 @@ export function createHostExec(deps: HostExecDeps) {
     })
     job.timer = setTimeout(() => stop(job, 'timeout'), timeoutMs)
     job.timer.unref?.()
+    // A run that sits at a dialog nobody here asked for is stopped, and says so.
+    if (watcher && !allowPrompts && job.pid !== null && job.endedAt === null) {
+      job.unwatch = watcher.watch({ pgid: job.pid, startedAt: job.startedAt }, (blocked) => {
+        if (job.endedAt !== null) return
+        job.blocked = blocked
+        audit({ event: 'blocked', jobId: id, ...who, ...blocked })
+        stop(job, 'blocked')
+      })
+    }
 
     if (!background) await finished
     return { ...view(job), ...tailText(job) }
@@ -387,9 +405,11 @@ export function createHostExec(deps: HostExecDeps) {
     return view(j)
   }
 
-  function list(): JobView[] {
+  /** Every job here, or one task's (`taskId`), newest first. */
+  function list(req: { taskId?: unknown } = {}): JobView[] {
     prune()
-    return [...jobs.values()].map(view)
+    const task = typeof req.taskId === 'string' && req.taskId ? req.taskId : null
+    return [...jobs.values()].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
   }
 
   /** Running jobs (the server's per-host cap reads the host's own count after a restart). */
@@ -410,10 +430,11 @@ export function createHostExec(deps: HostExecDeps) {
   }
 
   return {
+    version: HOST_EXEC_VERSION,
     run: (req: RunRequest) => thrown<RunReply>(run(req)),
     read: (req: Parameters<typeof read>[0]) => thrown(read(req)),
     kill: (req: { jobId?: unknown; taskId?: unknown }) => thrown<JobView>(stopJob(req)),
-    list: async () => ({ jobs: list() }),
+    list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
     running,
   }
 }

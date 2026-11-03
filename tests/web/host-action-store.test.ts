@@ -44,6 +44,17 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('host action store', () => {
+  it('an Install no fix answers within 30s says so on the line instead of quietly going back', async () => {
+    connect.mockResolvedValue(failed(clock))
+    await store.runHostAction('devbox', 'fix', 'install')
+    expect(store.getHostActionSnapshot('devbox').fixStart).not.toBeNull()
+    vi.advanceTimersByTime(30_000)
+    expect(store.getHostActionSnapshot('devbox')).toMatchObject({ fixStart: null, receipt: store.fixNotStartedText('install') })
+    expect(store.fixNotStartedText('install')).toBe('Install did not start. Run the command below on that machine, or Check again.')
+    vi.advanceTimersByTime(15_000)
+    expect(store.getHostActionSnapshot('devbox').receipt).toBeNull()
+  })
+
   it('only Install / Update asks the server for the coding agent (Walnut never installs one by itself)', async () => {
     connect.mockResolvedValue(failed(clock))
     await store.runHostAction('devbox', 'retry')

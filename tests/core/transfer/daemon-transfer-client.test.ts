@@ -210,6 +210,52 @@ describe('relayFile', () => {
     expect(a.sent).toEqual([])
     expect(old.sent).toEqual([])
   })
+
+  it('a signal stops it before its next chunk, with the signal\'s reason, and is never retried', async () => {
+    const a = fakeHost({ file: body })
+    const b = fakeHost({})
+    useHosts({ a, b })
+    const stop = new AbortController()
+    const why = new Error('stopped by the caller')
+    const run = relayFile('a', '/src', 'b', path.join(tmp, 'r10', 'x'), {
+      size: body.length, chunkBytes, onProgress: (p) => { if (p.sent === 2 * chunkBytes) stop.abort(why) }, signal: stop.signal,
+    })
+    await expect(run).rejects.toBe(why)
+    expect(a.sent.filter((s) => s.cmd === 'fs.readRange')).toHaveLength(2)
+    expect(fs.existsSync(path.join(tmp, 'r10', 'x'))).toBe(false)
+    // A bare abort() sets the platform's AbortError as the reason, and that is what it throws.
+    const bare = new AbortController()
+    bare.abort()
+    await expect(relayFile('a', '/src', 'b', path.join(tmp, 'r10', 'y'), { size: body.length, signal: bare.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    // A reason that is not an Error stops it as `aborted`, before a byte is read.
+    const reads = a.sent.length
+    const plain = new AbortController()
+    plain.abort('why')
+    const err = await relayFile('a', '/src', 'b', path.join(tmp, 'r10', 'z'), { size: body.length, signal: plain.signal }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TransferCommandError)
+    expect(err).toMatchObject({ code: 'aborted', command: 'relay' })
+    expect(a.sent.length).toBe(reads)
+  })
+
+  it('the last part may get its own timeout; every other part, and every caller that names none, keeps the usual one', async () => {
+    const a = fakeHost({ file: body })
+    const b = fakeHost({})
+    const waits: Array<{ final: boolean; timeoutMs?: number }> = []
+    const send = b.conn.send.bind(b.conn)
+    b.conn.send = (cmd, params, timeoutMs) => {
+      if (cmd === 'fs.writePart') waits.push({ final: params.final === true, timeoutMs })
+      return send(cmd, params, timeoutMs)
+    }
+    useHosts({ a, b })
+    await relayFile('a', '/src', 'b', path.join(tmp, 'r11', 'x'), { size: body.length, chunkBytes, finalPartTimeoutMs: 123_000 })
+    expect(waits.map((w) => w.timeoutMs)).toEqual([60_000, 60_000, 60_000, 60_000, 60_000, 123_000])
+    expect(waits.at(-1)!.final).toBe(true)
+    expect(b.sent.every((s) => !('timeoutMs' in s.params))).toBe(true)
+    waits.length = 0
+    await relayFile('a', '/src', 'b', path.join(tmp, 'r11', 'y'), { size: body.length, chunkBytes })
+    expect(waits.map((w) => w.timeoutMs)).toEqual(Array(6).fill(60_000))
+  })
 })
 
 describe('the other helpers', () => {

@@ -498,6 +498,11 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     }
     if (deps.platform) out.platform = deps.platform
     if (deps.arch) out.arch = deps.arch
+    if (deps.platform === 'linux') {
+      // A service started inside WSL may lack WSL_DISTRO_NAME; the kernel names itself either way.
+      var wsl = deps.env.WSL_DISTRO_NAME || (/microsoft/i.test(readHead('/proc/version')) ? 'WSL' : '')
+      if (wsl) out.wsl = String(wsl).slice(0, 64)
+    }
     return out
   }
 

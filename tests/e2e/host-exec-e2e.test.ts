@@ -10,6 +10,13 @@
  * one before this rule is settled for the user. Each host's hard stop refuses every task.
  * Also: no session, the caller's own host, an unknown host, a session trying to grant or
  * revoke, the per-task cap.
+ * And (2026-11-03, from a session on a user's Mac): the found ~/.ssh/config row of a joined
+ * machine runs on the joined row and every answer says so; a command that can show a password
+ * dialog on a Mac, or read a place macOS guards, is refused without allow_prompts, and a run the
+ * host stopped at a dialog says so; the line runs in bash with WALNUT_TASK_DIR set, on a current
+ * daemon and, shaped by the server, on an older one (zsh as its login shell); a run the caller
+ * named (job_id) is read after its answer was lost and never runs twice; a relayed call answers
+ * inside its deadline; a read from an offset is not "truncated"; host_exec_list lists a task's jobs.
  *
  * Real: the server, the inbox and its answer route, the grants file, the op
  * executor, and the host side (host-exec-core.ts with a real /bin/sh). Fake:
@@ -34,11 +41,16 @@ import * as daemonConnections from '../../src/providers/daemon-connection.js'
 import { createHostExec } from '../../src/providers/host-exec-core.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
-import { resetHostExecForTest } from '../../src/core/hosts/host-exec.js'
+import { ANSWER_RETURN_MS, resetHostExecForTest } from '../../src/core/hosts/host-exec.js'
 import { onLetterAnswered, recordAsk, settleOwnHostAsks } from '../../src/core/hosts/exec-grants.js'
 import { isOwnHost } from '../../src/core/hosts/host-exec.js'
 import { answerLetter, getLetter, sendLetter, settleLetter } from '../../src/core/human-inbox/store.js'
 import * as sendCore from '../../src/core/sessions/session-send-core.js'
+import { commandLine } from '../../src/providers/host-exec-core.js'
+import { updateHostProfile } from '../../src/core/hosts/host-profile.js'
+import { getConfig } from '../../src/core/config-manager.js'
+import { spawn as spawnChild } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
 let server: HttpServer
 let port: number
@@ -48,16 +60,23 @@ const OTHER_SID = 'host-exec-e2e-other'
 const OWN_SID = 'host-exec-e2e-own'
 const OLD_SID = 'host-exec-e2e-old-ask'
 let taskId = ''
+let oldShellRun: (line: string) => Promise<Record<string, unknown>> = async () => ({})
 let otherTaskId = ''
 let ownTaskId = ''
 let oldTaskId = ''
 const told: Array<{ taskId?: string; text: string }> = []
-const sent: Array<{ cmd: string; params: Record<string, unknown> }> = []
+const sent: Array<{ cmd: string; params: Record<string, unknown>; host?: string }> = []
+/** Hosts whose exec.list fails, as a host that went away does. */
+const awayHosts = new Set<string>()
+/** The jobs the older daemon below ran (it lists them with no task). */
+const oldJobs: Array<{ host: string; jobId: string; at: number }> = []
+/** The login shell of the older daemon below: zsh, as on a Mac, where this machine has it. */
+const OLD_LOGIN_SHELL = ['/bin/zsh', '/usr/bin/zsh'].find((f) => existsSync(f)) ?? '/bin/sh'
 
-async function api(method: string, p: string, body?: unknown, sid?: string): Promise<{ status: number; body: any }> {
+async function api(method: string, p: string, body?: unknown, sid?: string, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
   const r = await fetch(`http://127.0.0.1:${port}${p}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   const text = await r.text()
@@ -88,29 +107,85 @@ beforeAll(async () => {
     spawn: (await import('node:child_process')).spawn,
     killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
     shell: '/bin/sh', home: path.join(hostRoot, 'home'), taskDirRoot: path.join(hostRoot, 'tasks'),
-    stateDir: path.join(hostRoot, 'state'), env: { PATH: guardedPath([], '/usr/bin:/bin') },
+    // HOME too: with none, the login shell reads the real account's ~/.profile.
+    stateDir: path.join(hostRoot, 'state'), env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: path.join(hostRoot, 'home') },
+    // Never the real ps and log, even where this suite runs on a Mac.
+    promptProbe: null,
   })
-  const macbox = {
-    connected: true, hostKey: 'macbox', connect: async () => {},
-    hasCapability: (c: string) => c === 'host-exec-v1',
+  // A current daemon (host-exec-v2) in front of a real host core.
+  const currentHost = (hostKey: string, hostCore = core) => ({
+    connected: true, hostKey, connect: async () => {}, taskDirRoot: path.join(hostRoot, 'tasks'),
+    hasCapability: (c: string) => c === 'host-exec-v1' || c === 'host-exec-v2' || c === 'task-dir-v1',
     send: async (cmd: string, params: Record<string, unknown> = {}) => {
-      sent.push({ cmd, params })
+      sent.push({ cmd, params, host: hostKey })
       if (String(params.command ?? '').includes('LOSE_THE_HOST')) throw new Error('socket closed')
+      if (cmd === 'exec.list' && awayHosts.has(hostKey)) throw new Error('socket closed')
       try {
         const op = cmd.slice('exec.'.length) as 'run' | 'read' | 'kill' | 'list'
-        return { ok: true, ...(await (core[op] as (p: unknown) => Promise<Record<string, unknown>>)(params)) }
+        return { ok: true, ...(await (hostCore[op] as (p: unknown) => Promise<Record<string, unknown>>)(params)) }
       } catch (err) {
         return { ok: false, error: `${cmd} failed: ${(err as Error).message}`, code: (err as { code?: string }).code }
       }
     },
+  })
+  const macbox = currentHost('macbox')
+  // A daemon older than host-exec-v2: the line in its login shell as it is, no WALNUT_TASK_DIR
+  // (host-exec-core.ts before v2), and the task directory it makes for a task's logs.
+  const olderHost = (hostKey: string, taskDirRoot: string | null) => ({
+    connected: true, hostKey, connect: async () => {}, taskDirRoot,
+    hasCapability: (c: string) => c === 'host-exec-v1' || (c === 'task-dir-v1' && taskDirRoot !== null),
+    send: async (cmd: string, params: Record<string, unknown> = {}) => {
+      sent.push({ cmd, params, host: hostKey })
+      if (cmd === 'taskdir.ensure') return { ok: true, path: path.join(taskDirRoot!, String(params.taskId)) }
+      // Its list names no task and no command; it holds another Walnut's job too.
+      if (cmd === 'exec.list') {
+        const mine = oldJobs.filter((j) => j.host === hostKey).map((j) => ({ jobId: j.jobId, running: false, exitCode: 0, signal: null, timedOut: false, killed: false, startedAt: j.at, ms: 1, cwd: '/h', logFile: `/h/${j.jobId}.log`, outputBytes: 1 }))
+        return { ok: true, jobs: [...mine, { jobId: 'hx-another-walnut-0001', running: true, exitCode: null, startedAt: Date.now(), ms: 5, cwd: '/h', logFile: '/h/x.log', outputBytes: 0 }] }
+      }
+      if (cmd !== 'exec.run') return { ok: false, error: `${cmd} failed: not in this fake`, code: 'unknown_job' }
+      const line = commandLine(params)
+      if (typeof line !== 'string') return { ok: false, error: `exec.run failed: ${line.error}`, code: line.code }
+      if (taskDirRoot) await fs.mkdir(path.join(taskDirRoot, String(params.taskId), 'host-exec'), { recursive: true })
+      oldJobs.push({ host: hostKey, jobId: String(params.jobId), at: Date.now() })
+      return { ok: true, ...(await oldRun(line)) }
+    },
+  })
+  async function oldRun(line: string): Promise<Record<string, unknown>> {
+    const home = path.join(hostRoot, 'home')
+    const env = { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, ZDOTDIR: home }
+    return new Promise((resolve) => {
+      const c = spawnChild(OLD_LOGIN_SHELL, ['-l', '-c', line], { cwd: home, env })
+      let out = ''
+      c.stdout.on('data', (d) => { out += d })
+      c.stderr.on('data', (d) => { out += d })
+      c.on('close', (code) => resolve({ running: false, exitCode: code, signal: null, timedOut: false, ms: 1, cwd: home, output: out, truncated: false, outputBytes: out.length }))
+    })
   }
+  oldShellRun = oldRun
   // The callers' own hosts answer nothing (the server reads a session's cost there on its own).
-  // strangerbox is not in Settings (a host the user removed, or never added).
+  // strangerbox is not in Settings (a host the user removed, or never added); neither is a found
+  // twin's own row ever reached (its joined row is).
   const devbox = { connected: true, hostKey: 'devbox', connect: async () => {}, hasCapability: () => false, send: async () => ({ ok: false, error: 'unknown command' }) }
+  // A Mac whose prompt watch finds every idle job at a SecurityAgent dialog (no ps, no log).
+  const tccHome = path.join(hostRoot, 'tcc-home')
+  await fs.mkdir(tccHome, { recursive: true })
+  const tccCore = createHostExec({
+    spawn: (await import('node:child_process')).spawn,
+    killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+    shell: '/bin/sh', home: tccHome, taskDirRoot: path.join(hostRoot, 'tasks'), stateDir: path.join(hostRoot, 'tcc-state'),
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: tccHome },
+    platform: 'darwin', promptCheckMs: 200,
+    // Each watched group holds an idle `security` (a keychain call) while SecurityAgent is up.
+    promptProbe: { snapshot: async (pgids) => ({ processes: pgids.map((pgid) => ({ pid: 99_999, pgid, cpuMs: 0, comm: '/usr/bin/security' })), securityAgentStartedAt: Date.now() }), tccPrompts: async () => [] },
+  })
+  const fakes: Record<string, unknown> = {
+    macbox, devbox, strangerbox: devbox, 'Studio-MacBook': currentHost('Studio-MacBook'), 'studio-mac': devbox,
+    oldmac: olderHost('oldmac', path.join(hostRoot, 'old-tasks')), 'oldmac-nodir': olderHost('oldmac-nodir', null),
+    tccmac: currentHost('tccmac', tccCore),
+  }
   const real = daemonConnections.getDaemonConnection
   vi.spyOn(daemonConnections, 'getDaemonConnection').mockImplementation(async (key, target) =>
-    key === 'macbox' ? macbox as unknown as daemonConnections.DaemonConnection
-      : key === 'devbox' || key === 'strangerbox' ? devbox as unknown as daemonConnections.DaemonConnection : real(key, target))
+    Object.hasOwn(fakes, key) ? fakes[key] as daemonConnections.DaemonConnection : real(key, target))
   // What a session is told; never a real delivery into a CLI.
   vi.spyOn(sendCore, 'deliverToSession').mockImplementation((async (_record: unknown, opts: { taskId?: string; enqueueText: string }) => {
     told.push({ taskId: opts.taskId, text: opts.enqueueText })
@@ -120,7 +195,17 @@ beforeAll(async () => {
   const addr = server.address()
   if (!addr || typeof addr === 'string') throw new Error('no port')
   port = addr.port
-  await updateConfig({ hosts: { devbox: { hostname: 'devbox.example' }, macbox: { hostname: 'macbox.example', label: 'Mac box' } } })
+  await updateConfig({
+    hosts: {
+      devbox: { hostname: 'devbox.example' }, macbox: { hostname: 'macbox.example', label: 'Mac box' },
+      // One machine twice: found in ~/.ssh/config, and joined over the host network.
+      'studio-mac': { hostname: 'Studio-MacBook.local', user: 'sam', discovered: true },
+      'Studio-MacBook': { hostname: 'Studio-MacBook.walnut-net.invalid', label: 'Studio-MacBook', transport: 'net', endpoint: 'a'.repeat(64) },
+      oldmac: { hostname: 'oldmac.example' }, 'oldmac-nodir': { hostname: 'oldmac-nodir.example' },
+      tccmac: { hostname: 'tccmac.example' },
+    } as never,
+    net: { enabled: true },
+  } as never)
   const created = await api('POST', '/api/v1/tasks', { title: 'Run the iOS tests' })
   taskId = created.body.task?.id ?? created.body.id
   await createSessionRecord(SID, taskId, '', '/home/me/repo', { host: 'strangerbox', title: 'iOS tests', initialProcessStatus: 'stopped' } as never)
@@ -224,7 +309,7 @@ describe('host_exec', () => {
     await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants[0].runs ?? 0) >= 3, 'the run count')
   }, 60_000)
 
-  it('a run still going after 15 s comes back running; host_exec_read waits for it; only its task reads it', async () => {
+  it('a run still going after about 12 s comes back running; host_exec_read waits for it; only its task reads it', async () => {
     const t0 = Date.now()
     const slow = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 17; echo done', timeout_ms: 60_000 }, SID)
     expect(Date.now() - t0).toBeLessThan(17_000)
@@ -404,6 +489,94 @@ describe('host_exec', () => {
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, d.sid)).toMatchObject({ status: 403, body: { code: 'exec_grant_denied' } })
   }, 30_000)
 
+  it('a found ~/.ssh/config twin of a joined machine runs on the joined row, and every answer says so', async () => {
+    const twinNote = expect.stringContaining('studio-mac is the same machine as Studio-MacBook')
+    const ran = await api('POST', '/api/v1/hosts/studio-mac/exec', { command: 'echo twin' }, OWN_SID)
+    expect(ran).toMatchObject({ status: 200, body: { host: 'Studio-MacBook', exitCode: 0, output: 'twin\n', note: twinNote } })
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.host).toBe('Studio-MacBook')
+    // Its grant is the joined machine's: one machine, one grant.
+    expect(((await api('GET', '/api/v1/host-exec/grants')).body.grants as any[]).some((g) => g.taskId === ownTaskId && g.host === 'Studio-MacBook')).toBe(true)
+    // Reading and stopping a job by the found alias reach the same job.
+    const bg = await api('POST', '/api/v1/hosts/studio-mac/exec', { command: 'sleep 30', background: true }, OWN_SID)
+    expect(bg).toMatchObject({ status: 200, body: { running: true, note: twinNote } })
+    expect(await api('POST', `/api/v1/hosts/studio-mac/exec/${bg.body.jobId}/stop`, undefined, OWN_SID)).toMatchObject({ status: 200, body: { stopping: true, note: twinNote } })
+    expect(await api('GET', `/api/v1/hosts/studio-mac/exec/${bg.body.jobId}?wait_ms=10000`, undefined, OWN_SID)).toMatchObject({ status: 200, body: { running: false, note: twinNote } })
+    // A refusal says it too, and so does a sibling op on the same alias (no MCP on that daemon).
+    expect(await api('POST', '/api/v1/hosts/studio-mac/exec', { command: 'security show-keychain-info' }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'may_prompt', note: twinNote } })
+    expect(await api('GET', '/api/v1/hosts/studio-mac/mcp', undefined, OWN_SID)).toMatchObject({ status: 409, body: { code: 'daemon_upgrade', error: expect.stringContaining('Studio-MacBook'), note: twinNote } })
+    // The op an agent calls reads it in its outcome.
+    const viaOp = await executeOp('host_exec', { host: 'studio-mac', command: 'echo op' },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp).toMatchObject({ ok: true, result: { host: 'Studio-MacBook', output: 'op\n' } })
+    expect(String(viaOp.result.outcome)).toContain('studio-mac is the same machine as Studio-MacBook')
+    // Any other host is itself, with no note.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).body.note).toBeUndefined()
+  }, 30_000)
+
+  it('a command that can show a password dialog on a Mac runs only with allow_prompts', async () => {
+    const runs = () => sent.filter((m) => m.cmd === 'exec.run').length
+    const before = runs()
+    // macbox: a system Walnut has not seen yet counts as a Mac.
+    for (const command of ['security find-generic-password -s svc -w', 'X=$(/usr/bin/security show-keychain-info)', 'sudo security unlock-keychain']) {
+      const r = await api('POST', '/api/v1/hosts/macbox/exec', { command }, OWN_SID)
+      expect(r).toMatchObject({ status: 409, body: { code: 'may_prompt', error: expect.stringContaining("password dialog on Mac box's screen") } })
+      expect(r.body.error).toContain('allow_prompts')
+    }
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['/usr/bin/security', 'dump-keychain'] }, OWN_SID)).body.code).toBe('may_prompt')
+    expect(runs()).toBe(before)
+    // An unrelated word is not a run.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo --security-group describe-security-groups' }, OWN_SID)).status).toBe(200)
+    // The user agreed: it runs (this test host has no `security`, so it exits 127).
+    const agreed = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'security find-generic-password -s svc', allow_prompts: true }, OWN_SID)
+    expect(agreed).toMatchObject({ status: 200, body: { exitCode: 127 } })
+    // The op takes the flag too.
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'security show-keychain-info', allow_prompts: true },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp).toMatchObject({ ok: true, result: { exitCode: 127 } })
+    // A host Walnut knows is Linux shows no such dialog; one it knows is a Mac does.
+    const facts = (platform: string) => ({ os: { platform, release: '1' }, arch: 'arm64', cpus: 8, memBytes: 1, home: '/h', proxyEnv: {}, cloud: null, internet: null, tools: {}, uptimeSec: 1, probedAt: new Date().toISOString() })
+    await updateHostProfile('macbox', (p) => { p.probed = facts('linux') as never })
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'security find-generic-password -s svc' }, OWN_SID)).status).toBe(200)
+    await updateHostProfile('macbox', (p) => { p.probed = facts('darwin') as never })
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'security find-generic-password -s svc' }, OWN_SID)).body.code).toBe('may_prompt')
+  }, 30_000)
+
+  it('the line runs in bash with WALNUT_TASK_DIR set to the task\'s directory on that host', async () => {
+    const taskDir = path.join(hostRoot, 'tasks', ownTaskId)
+    const r = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo ===; echo hi > "$WALNUT_TASK_DIR/x.txt"; cat "$WALNUT_TASK_DIR/x.txt"; echo "$WALNUT_TASK_DIR"' }, OWN_SID)
+    expect(r).toMatchObject({ status: 200, body: { exitCode: 0, output: `===\nhi\n${taskDir}\n`, shell: 'bash', loginShell: 'sh', taskDir } })
+    expect(await fs.readFile(path.join(taskDir, 'x.txt'), 'utf8')).toBe('hi\n')
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params).toMatchObject({ home: WALNUT_HOME })
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'true' },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(String(viaOp.result.outcome)).toMatch(/^Exit 0 on macbox in .* \(bash\) after/)
+  }, 30_000)
+
+  it('an older daemon gets the line shaped by the server: bash after its login shell, WALNUT_TASK_DIR set', async () => {
+    const line = 'echo ===; printf "%s\\n" "$WALNUT_TASK_DIR"; [ -n "$BASH_VERSION" ] && echo bash'
+    // What that daemon does with the line as it is, in zsh where this machine has it.
+    if (OLD_LOGIN_SHELL.endsWith('zsh')) expect(String((await oldShellRun(line)).output)).toContain('== not found')
+    const taskDir = path.join(hostRoot, 'old-tasks', ownTaskId)
+    const r = await api('POST', '/api/v1/hosts/oldmac/exec', { command: line }, OWN_SID)
+    expect(r).toMatchObject({ status: 200, body: { exitCode: 0, output: `===\n${taskDir}\nbash\n`, shell: 'bash', taskDir } })
+    const run = sent.filter((m) => m.cmd === 'exec.run').at(-1)!
+    expect(run).toMatchObject({ host: 'oldmac', params: { argv: ['/bin/sh', '-c', expect.any(String), 'sh', line, taskDir] } })
+    expect(run.params.command).toBeUndefined()
+    // Its directory gets its marker, naming this Walnut.
+    expect(sent.find((m) => m.host === 'oldmac' && m.cmd === 'taskdir.ensure')?.params).toEqual({ taskId: ownTaskId, home: WALNUT_HOME })
+    // argv goes the same way.
+    const argv = await api('POST', '/api/v1/hosts/oldmac/exec', { argv: ['printf', '%s|', '===', 'a b'] }, OWN_SID)
+    expect(argv).toMatchObject({ status: 200, body: { exitCode: 0, output: '===|a b|' } })
+    // With no task directory there, a line that reads it is refused rather than writing to /.
+    const before = sent.filter((m) => m.cmd === 'exec.run').length
+    expect(await api('POST', '/api/v1/hosts/oldmac-nodir/exec', { command: 'echo hi > "$WALNUT_TASK_DIR/x.txt"' }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'task_dir_unset' } })
+    expect(sent.filter((m) => m.cmd === 'exec.run').length).toBe(before)
+    // A line too long for that daemon's argv runs as it is, and the answer says no shell was chosen.
+    const long = await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(9000)} >/dev/null; echo long` }, OWN_SID)
+    expect(long).toMatchObject({ status: 200, body: { output: 'long\n', shell: null, taskDir: null } })
+    expect(await api('POST', '/api/v1/hosts/oldmac/exec', { command: `echo ${'x'.repeat(9000)} > "$WALNUT_TASK_DIR/x"` }, OWN_SID)).toMatchObject({ status: 409, body: { code: 'task_dir_unset', taskDir } })
+  }, 30_000)
+
   it('the hard stop survives an older Walnut rewriting the grants file', async () => {
     expect((await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true })).status).toBe(200)
     const file = path.join(WALNUT_HOME, 'host-exec-grants.json')
@@ -414,5 +587,165 @@ describe('host_exec', () => {
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
     expect((await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })).status).toBe(200)
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
+  }, 30_000)
+
+  const asOwn = () => ({ apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: OWN_SID })
+  const execRuns = () => sent.filter((m) => m.cmd === 'exec.run')
+  const probed = (platform: string, home: string) => ({ os: { platform, release: '1' }, arch: 'arm64', cpus: 8, memBytes: 1, home, proxyEnv: {}, cloud: null, internet: null, tools: {}, uptimeSec: 1, probedAt: new Date().toISOString() })
+
+  it('a run the caller named is read after its answer was lost, and the same name never runs twice', async () => {
+    const jobId = 'hx-e2e-lost-answer-0001'
+    // The caller stops waiting (its gateway gave up at 20 s): the answer never reaches it.
+    const gone = new AbortController()
+    const call = fetch(`http://127.0.0.1:${port}/api/v1/hosts/macbox/exec`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': OWN_SID },
+      body: JSON.stringify({ command: 'sleep 1; echo lost-and-found', job_id: jobId }), signal: gone.signal,
+    }).catch((err: Error) => err)
+    await until(async () => execRuns().some((m) => m.params.jobId === jobId), 'the run on the host')
+    gone.abort()
+    expect(await call).toBeInstanceOf(Error)
+    // The caller still has the id it chose: the run reads by it.
+    const read = await api('GET', `/api/v1/hosts/macbox/exec/${jobId}?wait_ms=10000`, undefined, OWN_SID)
+    expect(read).toMatchObject({ status: 200, body: { jobId, running: false, exitCode: 0, output: 'lost-and-found\n' } })
+    // The same id again (a retry after the lost answer): that run, never a second one.
+    const again = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo second', job_id: jobId }, OWN_SID)
+    expect(again).toMatchObject({ status: 200, body: { jobId, sameJob: true, output: 'lost-and-found\n' } })
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'echo second', job_id: jobId }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp).toMatchObject({ ok: true, result: { sameJob: true, output: 'lost-and-found\n' } })
+    expect(String(viaOp.result.outcome)).toContain('it did not run again')
+    // Another task may not take it; a malformed id is refused before anything runs.
+    const other = await taskOnDevbox('Takes another task\'s id')
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', job_id: jobId }, other.sid)).toMatchObject({ status: 409, body: { code: 'job_id_taken' } })
+    const before = execRuns().length
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', job_id: 'job one' }, OWN_SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect(execRuns().length).toBe(before)
+    // A host that no longer holds the job (an older host here, which reads none): it never runs again.
+    const goneId = 'hx-e2e-forgotten-0001'
+    expect(await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'echo first', job_id: goneId }, OWN_SID)).toMatchObject({ status: 200, body: { output: 'first\n' } })
+    const gone2 = await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'echo first', job_id: goneId }, OWN_SID)
+    expect(gone2).toMatchObject({ status: 409, body: { code: 'job_gone', jobId: goneId } })
+    expect(gone2.body.error).toContain('Leave job_id out')
+    expect(execRuns().filter((m) => m.params.jobId === goneId)).toHaveLength(1)
+    // While it still runs, the same id from the same task waits on that run too.
+    const live = 'hx-e2e-same-live-0001'
+    const first = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 0.8; echo once', background: true, job_id: live }, OWN_SID)
+    expect(first).toMatchObject({ status: 200, body: { running: true, jobId: live } })
+    const second = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 0.8; echo once', job_id: live }, OWN_SID)
+    expect(second).toMatchObject({ status: 200, body: { jobId: live, sameJob: true, running: false, output: 'once\n' } })
+    expect(execRuns().filter((m) => m.params.jobId === live)).toHaveLength(1)
+  }, 30_000)
+
+  it('a relayed call answers inside its caller\'s deadline, and starts nothing it could not answer for', async () => {
+    // A relay that reached this server just now; its host's gateway gives up 14 s from here.
+    const t0 = Date.now()
+    const held = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 20; echo late', timeout_ms: 60_000 }, OWN_SID, { 'x-walnut-answer-by': String(t0 + 14_000) })
+    const took = Date.now() - t0
+    expect(held).toMatchObject({ status: 200, body: { running: true, jobId: expect.stringMatching(/^hx-/) } })
+    // The hold ends ANSWER_RETURN_MS before that deadline, leaving the answer time to get back.
+    expect(took).toBeGreaterThan(14_000 - ANSWER_RETURN_MS - 1_500)
+    expect(took).toBeLessThan(14_000 - ANSWER_RETURN_MS + 1_500)
+    // A read holds by the same deadline, whatever wait_ms asked.
+    const t1 = Date.now()
+    const read = await api('GET', `/api/v1/hosts/macbox/exec/${held.body.jobId}?wait_ms=60000`, undefined, OWN_SID, { 'x-walnut-answer-by': String(t1 + 12_000) })
+    expect(read).toMatchObject({ status: 200, body: { running: true } })
+    expect(Date.now() - t1).toBeLessThan(12_000 - ANSWER_RETURN_MS + 1_500)
+    expect((await api('POST', `/api/v1/hosts/macbox/exec/${held.body.jobId}/stop`, undefined, OWN_SID)).status).toBe(200)
+    // Too little left to answer: nothing starts, and it says so at once.
+    const before = execRuns().length
+    const t2 = Date.now()
+    const late = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo never' }, OWN_SID, { 'x-walnut-answer-by': String(t2 + 11_000) })
+    expect(late).toMatchObject({ status: 503, body: { code: 'host_offline' } })
+    expect(late.body.error).toContain('nothing ran')
+    expect(Date.now() - t2).toBeLessThan(3_000)
+    expect(execRuns().length).toBe(before)
+  }, 60_000)
+
+  it('a read from an offset says truncated only when the start is missing, and more when the rest is', async () => {
+    const big = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'yes walnut-output-line | head -c 300000' }, OWN_SID)
+    expect(big).toMatchObject({ status: 200, body: { exitCode: 0, truncated: true, outputBytes: 300_000 } })
+    const jobId = big.body.jobId as string
+    const head = await api('GET', `/api/v1/hosts/macbox/exec/${jobId}?offset=0`, undefined, OWN_SID)
+    expect(head.body).toMatchObject({ offset: 0, truncated: false, more: true })
+    expect(head.body.nextOffset).toBeLessThan(300_000)
+    const rest = await api('GET', `/api/v1/hosts/macbox/exec/${jobId}?offset=${head.body.nextOffset}`, undefined, OWN_SID)
+    expect(rest.body).toMatchObject({ truncated: false, nextOffset: 300_000 })
+    expect(rest.body.more).toBeUndefined()
+    expect(String(head.body.output).length + String(rest.body.output).length).toBe(300_000)
+    // At the very end (2026-11-03: this said truncated, and sent the reader back to offset 0).
+    const end = await executeOp('host_exec_read', { host: 'macbox', job_id: jobId, offset: 300_000 }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(end.result).toMatchObject({ output: '', truncated: false, offset: 300_000, nextOffset: 300_000 })
+    expect(String(end.result.outcome)).not.toContain('offset 0')
+    const page = await executeOp('host_exec_read', { host: 'macbox', job_id: jobId, offset: 0 }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(String(page.result.outcome)).toContain(`More output follows: host_exec_read with offset ${String(head.body.nextOffset)}.`)
+    // With no offset it is the tail, and the start is missing.
+    const tail = await executeOp('host_exec_read', { host: 'macbox', job_id: jobId }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(tail.result).toMatchObject({ truncated: true })
+    expect(String(tail.result.outcome)).toContain('(host_exec_read with offset 0)')
+  }, 30_000)
+
+  it('host_exec_list lists a task\'s own jobs on a host, from an older host too, and what Walnut started when the host is away', async () => {
+    const t = await taskOnDevbox('Lists its own jobs')
+    const asT = { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: t.sid }
+    const done = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo listed' }, t.sid)
+    await new Promise((r) => setTimeout(r, 5))
+    const bg = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, t.sid)
+    const listed = await executeOp('host_exec_list', { host: 'macbox' }, asT) as { ok: boolean; result: { jobs: any[]; outcome: string } }
+    expect(listed.ok).toBe(true)
+    expect(listed.result.jobs.map((j) => j.jobId)).toEqual([bg.body.jobId, done.body.jobId])
+    expect(listed.result.jobs[0]).toMatchObject({ state: 'running', running: true, command: 'sleep 30', exitCode: null })
+    expect(listed.result.jobs[1]).toMatchObject({ state: 'exited', running: false, command: 'echo listed', exitCode: 0, logFile: expect.stringContaining(`${t.task}/host-exec/`) })
+    expect(Date.parse(listed.result.jobs[1].startedAt)).toBeGreaterThan(0)
+    expect(listed.result.outcome).toMatch(/^2 job\(s\) of this task on macbox, 1 running\./)
+    // Another task's list has none of them; a task with no grant there lists nothing.
+    const own = await api('GET', '/api/v1/hosts/macbox/exec', undefined, OWN_SID)
+    expect(own.status).toBe(200)
+    expect(own.body.jobs.length).toBeGreaterThan(0)
+    // (This fake's macbox and Studio-MacBook share one host core, so either host's runs count.)
+    const ownRuns = new Set(execRuns().filter((m) => m.params.taskId === ownTaskId).map((m) => m.params.jobId))
+    for (const j of own.body.jobs) expect(ownRuns.has(j.jobId)).toBe(true)
+    expect((await api('GET', '/api/v1/hosts/macbox/exec', undefined, OTHER_SID)).status).toBe(403)
+    // The host away: the runs Walnut started there, their state unknown.
+    awayHosts.add('macbox')
+    const away = await executeOp('host_exec_list', { host: 'macbox' }, asT) as { ok: boolean; result: Record<string, any> }
+    awayHosts.delete('macbox')
+    expect(away.result).toMatchObject({ hostAway: expect.any(String), jobs: [{ jobId: bg.body.jobId, state: 'unknown', running: null }, { jobId: done.body.jobId, state: 'unknown' }] })
+    expect(String(away.result.outcome)).toContain('The host did not answer')
+    expect((await api('POST', `/api/v1/hosts/macbox/exec/${bg.body.jobId}/stop`, undefined, t.sid)).status).toBe(200)
+    // An older host names no task: only this task's runs Walnut started there are listed.
+    const old = await api('GET', '/api/v1/hosts/oldmac/exec', undefined, OWN_SID)
+    const oldRuns = execRuns().filter((m) => m.host === 'oldmac' && m.params.taskId === ownTaskId).map((m) => String(m.params.jobId))
+    expect(oldRuns.length).toBeGreaterThan(0)
+    expect(old.body.jobs.map((j: any) => j.jobId).sort()).toEqual([...oldRuns].sort())
+    expect(old.body.jobs.every((j: any) => j.state === 'exited' && typeof j.command === 'string')).toBe(true)
+    expect(old.body.jobs.some((j: any) => j.jobId === 'hx-another-walnut-0001')).toBe(false)
+  }, 30_000)
+
+  it('on a Mac, a read of a place macOS guards is refused without allow_prompts, and a run stopped at a dialog says so', async () => {
+    const home = path.join(hostRoot, 'home')
+    await updateHostProfile('macbox', (p) => { p.probed = probed('darwin', home) as never })
+    const before = execRuns().length
+    const walk = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'du -sh ~' }, OWN_SID)
+    expect(walk).toMatchObject({ status: 409, body: { code: 'may_prompt', error: expect.stringContaining("permission dialog on Mac box's screen") } })
+    expect(walk.body.error).toContain('allow_prompts')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'cat ~/Documents/plan.txt' }, OWN_SID)).body.code).toBe('may_prompt')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'du -sh .', cwd: '~' }, OWN_SID)).body.code).toBe('may_prompt')
+    expect(execRuns().length).toBe(before)
+    // Its own folder runs; so does the walk once the user agreed, and the host is told so.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'du -sh ~/work >/dev/null; echo ok' }, OWN_SID)).body).toMatchObject({ output: 'ok\n' })
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'du -sh . >/dev/null; echo ok', cwd: '~/work' }, OWN_SID)).body).toMatchObject({ output: 'ok\n' })
+    expect(execRuns().at(-1)!.params.allowPrompts).toBeUndefined()
+    const agreed = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'du -sh ~ >/dev/null; echo ok', allow_prompts: true }, OWN_SID)
+    expect(agreed).toMatchObject({ status: 200, body: { output: 'ok\n' } })
+    expect(execRuns().at(-1)!.params).toMatchObject({ allowPrompts: true })
+    // A host whose system Walnut has not seen refuses a guarded read itself, in its own words.
+    const self = await api('POST', '/api/v1/hosts/tccmac/exec', { command: 'du -sh ~' }, OWN_SID)
+    expect(self).toMatchObject({ status: 409, body: { code: 'may_prompt', error: expect.stringContaining('this Mac') } })
+    // A run the host found idle at a dialog: stopped, and the answer says which dialog.
+    const blocked = await executeOp('host_exec', { host: 'tccmac', command: 'echo waiting; sleep 30' }, asOwn()) as { ok: boolean; result: Record<string, unknown> }
+    expect(blocked).toMatchObject({ ok: true, result: { running: false, blocked: { reason: 'password_prompt', service: 'SecurityAgent' }, output: 'waiting\n' } })
+    expect(String(blocked.result.outcome)).toMatch(/^Stopped on tccmac .* it was waiting on a dialog\. It sat idle at a password dialog/)
+    expect(String(blocked.result.outcome)).toContain('allow_prompts:true')
+    const listed = await api('GET', '/api/v1/hosts/tccmac/exec', undefined, OWN_SID)
+    expect(listed.body.jobs[0]).toMatchObject({ jobId: blocked.result.jobId, state: 'blocked', blocked: { reason: 'password_prompt' } })
   }, 30_000)
 })

@@ -181,16 +181,19 @@ export interface WritePartOptions {
   path: string; offset: number; data: Buffer | string; final?: boolean; size?: number; sha256?: string
   /** A private stage part ('transfer-private-v1'): the attempt's 32-hex token. */
   attempt?: string
+  /** How long to wait for this part's answer (default 60 s); never sent. */
+  timeoutMs?: number
 }
 
 /** One chunk of a file onto `host` (data as bytes, or as base64 text already). */
 export function writePart(host: string, opts: WritePartOptions): Promise<WritePartReply> {
-  const { attempt, ...rest } = opts
+  const { attempt, timeoutMs, ...rest } = opts
   const data = typeof opts.data === 'string' ? opts.data : opts.data.toString('base64')
+  const wait = timeoutMs ?? PART_RPC_MS
   if (attempt !== undefined) {
-    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, PART_RPC_MS)
+    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, wait)
   }
-  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, PART_RPC_MS)
+  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, wait)
 }
 
 export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
@@ -210,6 +213,16 @@ export function uploadPart(host: string, opts: UploadPartOptions): Promise<Write
 /** Refuses unless `host` can hold a private stage; nothing is read or sent. */
 export async function assertPrivateStage(host: string): Promise<void> {
   await connectionFor(host, PRIVATE_STAGE_CAPABILITY)
+}
+
+/**
+ * One daemon command on `host`, its reply as it came (an `ok:false` refusal
+ * included), for a caller that reads the refusal itself (host-copy-paths.ts reads
+ * ENOENT / ENOTFILE / ENOTDIR from fs.readRange). Offline and a missing capability throw as above.
+ */
+export async function hostCommand(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs = READ_RPC_MS): Promise<Record<string, unknown>> {
+  const conn = await connectionFor(host, capability)
+  return conn.send(command, params, timeoutMs)
 }
 
 /**
@@ -290,6 +303,13 @@ export interface RelayOptions {
   privateAttempt?: string
   /** Called with the bytes the receiver acknowledged, in file order, each byte once. */
   onBytes?: (bytes: Buffer) => void
+  /**
+   * Stops the relay before its next chunk. It throws the signal's reason when that is an
+   * Error (a bare abort() sets an AbortError, which is one), else a TransferCommandError `aborted`.
+   */
+  signal?: AbortSignal
+  /** How long the final part may take (the receiver hashes and syncs the whole file then); default 60 s. */
+  finalPartTimeoutMs?: number
 }
 
 export interface RelayResult { bytes: number; sha256: string; chunks: number; retries: number; path?: string }
@@ -339,6 +359,11 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   let failures = 0
   let lastError: unknown = null
   for (;;) {
+    // Outside the try: a stop is final, never a chunk to retry.
+    if (opts.signal?.aborted) {
+      const reason: unknown = opts.signal.reason
+      throw reason instanceof Error ? reason : new TransferCommandError('the relay was stopped', fromHost, 'relay', 'aborted')
+    }
     try {
       let bytes = Buffer.alloc(0)
       // An empty file is read once too, so a source that is not empty after all is caught.
@@ -360,6 +385,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       const reply = await writePart(toHost, {
         path: toPath, offset, data: bytes, ...(final ? { final: true, size: total, sha256 } : {}),
         ...(opts.privateAttempt !== undefined ? { attempt: opts.privateAttempt } : {}),
+        ...(final && opts.finalPartTimeoutMs !== undefined ? { timeoutMs: opts.finalPartTimeoutMs } : {}),
       })
       chunks++
       failures = 0
