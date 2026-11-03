@@ -17,7 +17,8 @@ export interface ServerPillView {
   /** Stable per release and step, so a × on one step does not hide the next (snooze identity). */
   identity: string;
   /** The `data-status` the notice carries (tests and logs read it). */
-  stage: 'available' | 'updating' | 'ready' | 'restarting' | 'failed';
+  /** `installed`: on disk, but this server cannot restart itself (a restart of Walnut runs it). */
+  stage: 'available' | 'updating' | 'ready' | 'installed' | 'restarting' | 'failed';
   heading: string;
   action: ServerPillAction;
   /** The button's words; for a step with no action, the collapsed rail's status word. */
@@ -63,7 +64,7 @@ export function serverPillView(s: UpdateStatus | null): ServerPillView | null {
         versionTitle, busy: true, working: true };
     case 'installed':
     case 'waiting':
-      return ready(version, id('ready'));
+      return live.canInstall ? ready(version, id('ready')) : installedOnly(version, id('installed'));
     case 'failed':
       return { identity: id('failed'), stage: 'failed', heading: `Walnut ${shown} did not install`, action: 'install',
         label: 'Try again', short: 'Retry', tooltip: live.error ? `Install of ${version} failed: ${live.error}` : `Install of ${version} failed. Click to try again.`,
@@ -74,7 +75,9 @@ export function serverPillView(s: UpdateStatus | null): ServerPillView | null {
       break;
   }
   // A version the startup path installed after this server started: a restart runs it.
-  if (s.installed && s.installed !== s.current) return ready(s.installed, `server:${s.installed}:ready`);
+  if (s.installed && s.installed !== s.current) {
+    return live.canInstall ? ready(s.installed, `server:${s.installed}:ready`) : installedOnly(s.installed, `server:${s.installed}:installed`);
+  }
   if (!s.available || !s.latest) return null;
   if (!live.canInstall) {
     return { identity: id('available'), stage: 'available', heading: `Walnut ${shown} available`, action: 'how',
@@ -93,6 +96,19 @@ function ready(version: string, identity: string): ServerPillView {
   return { identity, stage: 'ready', heading: `Walnut ${displayVersion(version)} is ready`, action: 'restart', label: 'Restart', short: 'Restart',
     tooltip: RESTART_TOOLTIP, versionTitle: `Walnut ${version}`, busy: false, working: false };
 }
+
+/**
+ * Installed, but this server has no way to restart itself (not supervised, no restart
+ * handler): POST /restart would only answer 409 no_restart, so there is no button that
+ * can only fail; the words say what runs it.
+ */
+function installedOnly(version: string, identity: string): ServerPillView {
+  return { identity, stage: 'installed', heading: `Walnut ${displayVersion(version)} is installed`, action: null,
+    label: 'Restart Walnut to use it', short: 'Ready', tooltip: INSTALLED_TOOLTIP,
+    versionTitle: `Walnut ${version}. ${INSTALLED_TOOLTIP}`, busy: false, working: false };
+}
+
+export const INSTALLED_TOOLTIP = 'Installed. Quit Walnut and start it again to use it; this copy cannot restart itself';
 
 function updating(version: string, identity: string): ServerPillView {
   return { identity, stage: 'updating', heading: `Updating Walnut to ${displayVersion(version)}…`, action: null, label: 'Updating…', short: WORKING_SHORT,

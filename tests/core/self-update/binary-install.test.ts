@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   extractTarEntry, installFileVersion, markRunning, pidAlive, processesRunFrom, pruneVersions, registryBaseFor, rollBack, swapLink, takeLock, undoRollBack, versionInUse, versionsRunning,
 } from '../../../src/core/self-update/binary-install.js'
-import { processStart } from '../../../src/core/self-update/install-lock.js'
+import { lockHolder, processStart } from '../../../src/core/self-update/install-lock.js'
 import { BINARY_MARKER, type BinaryInstall } from '../../../src/core/self-update/install-kind.js'
 
 const TARGET = 'darwin-arm64'
@@ -285,7 +285,7 @@ describe('the layout helpers', () => {
     expect(versionInUse(install.root)).toBeNull()
   })
 
-  it('prune keeps what it is told and its own work, and removes only what the layout puts there', () => {
+  it('prune keeps what it is told and its own work, and removes only what the layout puts there', async () => {
     const install = layout('0.7.0')
     for (const v of ['0.6.0', '0.8.0']) {
       fs.mkdirSync(path.join(install.root, 'versions', v))
@@ -294,7 +294,7 @@ describe('the layout helpers', () => {
     // Not a version of this layout (no walnut in it), and a dot directory it never makes.
     for (const v of ['notes', '.cache', '.download-0.9.0-aaaa', '.download-0.9.0-bbbb']) fs.mkdirSync(path.join(install.root, 'versions', v))
     const own = path.join(install.root, 'versions', '.download-0.9.0-bbbb')
-    const removed = pruneVersions(install.root, ['0.8.0', '0.7.0'], { running: [], ownWork: own })
+    const removed = await pruneVersions(install.root, ['0.8.0', '0.7.0'], { running: [], ownWork: own })
     // Under the update lock, another update's work directory is a leftover.
     expect(removed.sort()).toEqual([path.join('versions', '.download-0.9.0-aaaa'), path.join('versions', '0.6.0')])
     expect(listVersions(install.root)).toEqual(['.cache', '.download-0.9.0-bbbb', '0.7.0', '0.8.0', 'notes'])
@@ -312,16 +312,16 @@ describe('the layout helpers', () => {
     try {
       await new Promise((r) => setTimeout(r, 200))
       expect(await processesRunFrom(app)).toBe(true)
-      expect(pruneVersions(install.root, ['0.7.0'], { running: [], appInUse: true })).toEqual([])
+      expect(await pruneVersions(install.root, ['0.7.0'], { running: [], appInUse: true })).toEqual([])
       // ps not asked (the default): kept too.
-      expect(pruneVersions(install.root, ['0.7.0'], { running: [] })).toEqual([])
+      expect(await pruneVersions(install.root, ['0.7.0'], { running: [] })).toEqual([])
     } finally {
       child.kill()
     }
-    expect(pruneVersions(install.root, ['0.7.0'], { running: [], appInUse: false })).toEqual(['app'])
+    expect(await pruneVersions(install.root, ['0.7.0'], { running: [], appInUse: false })).toEqual(['app'])
   })
 
-  it('a running marker counts while its process lives; a dead one is removed and keeps nothing', () => {
+  it('a running marker counts while its process lives; a dead one is removed and keeps nothing', async () => {
     const install = layout('0.7.0')
     for (const v of ['0.6.0', '0.5.0']) {
       fs.mkdirSync(path.join(install.root, 'versions', v))
@@ -333,7 +333,7 @@ describe('the layout helpers', () => {
     fs.writeFileSync(path.join(install.root, 'running', 'notes'), '0.5.0\n')
     expect(versionsRunning(install.root)).toEqual(['0.6.0'])
     expect(fs.existsSync(path.join(install.root, 'running', String(dead)))).toBe(false)
-    expect(pruneVersions(install.root, ['0.7.0'])).toEqual([path.join('versions', '0.5.0')])
+    expect(await pruneVersions(install.root, ['0.7.0'])).toEqual([path.join('versions', '0.5.0')])
     expect(listVersions(install.root)).toEqual(['0.6.0', '0.7.0'])
     unmark()
     expect(versionsRunning(install.root)).toEqual([])
@@ -342,6 +342,23 @@ describe('the layout helpers', () => {
     // Never a probe of every process (-1) or this group (0).
     expect(pidAlive(-1)).toBe(false)
     expect(pidAlive(0)).toBe(false)
+  })
+
+  it('lockHolder names a live holder, reads 0 while the owner is written, null when free or its holder is gone', async () => {
+    const root = fs.mkdtempSync(path.join(scratch, 'holder-'))
+    expect(await lockHolder(root)).toBeNull()
+    const release = await takeLock(root)
+    expect(await lockHolder(root)).toBe(process.pid)
+    // Busy is an error a caller can tell from a failure: it waits instead.
+    await expect(takeLock(root)).rejects.toMatchObject({ code: 'update_busy' })
+    release()
+    expect(await lockHolder(root)).toBeNull()
+    fs.mkdirSync(path.join(root, '.update.lock'))
+    expect(await lockHolder(root)).toBe(0)
+    fs.writeFileSync(path.join(root, '.update.lock', 'owner'), `${deadPid()} 1a2b3c\n`)
+    expect(await lockHolder(root)).toBeNull()
+    // Reads only: the stale lock is left for the next taker.
+    expect(fs.existsSync(path.join(root, '.update.lock'))).toBe(true)
   })
 
   it('the lock is released only by the update holding it, and names its owner and when it started', async () => {

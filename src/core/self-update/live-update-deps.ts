@@ -22,11 +22,13 @@ import {
   readUnverified, sequenceArgv, startDetachedInstall, writeUnverified,
 } from './background-install.js'
 import { installFileVersion, registryBaseFor, versionInUse } from './binary-install.js'
+import { lockHolder } from './install-lock.js'
 import { badDirFor, clearBad, heldBack } from './held-versions.js'
 import { managerArgv } from './install-kind.js'
 import { canSelfInstallLive } from './live-eligible.js'
 import type { LiveUpdateDeps } from './live-update.js'
 import { relaunchVersion } from './startup-relaunch.js'
+import { countInProcessTurns } from './idle-gate.js'
 import { getUpdateChecker, type UpdateStatus } from './update-check.js'
 import { isNewer } from './version-compare.js'
 
@@ -52,10 +54,27 @@ async function installNpm(status: UpdateStatus, version: string): Promise<{ from
   return { from: status.current }
 }
 
+/** When this process started: an in-process turn recorded before it is a dead server's. */
+const PROCESS_STARTED_MS = Date.now() - process.uptime() * 1000
+
 async function countRunningTurns(): Promise<number> {
-  const { getActiveSessionsByHost } = await import('../session-tracker.js')
+  const { getActiveSessionsByHost, listNonTerminalSessions } = await import('../session-tracker.js')
   const byHost = await getActiveSessionsByHost()
-  return Object.values(byHost).reduce((n, list) => n + list.length, 0)
+  const cli = Object.values(byHost).reduce((n, list) => n + list.length, 0)
+  // Embedded and SDK turns run inside this server (no daemon keeps them): a restart cuts them.
+  return cli + countInProcessTurns(await listNonTerminalSessions(), PROCESS_STARTED_MS)
+}
+
+/** Someone else installing: an earlier start's npm, or a live holder of the file's update lock. */
+async function installBusy(): Promise<string | null> {
+  const job = await installRunning(RECORD())
+  if (job) return `the install of ${job.version} an earlier start began still runs (pid ${job.pid})`
+  const status = getUpdateChecker().status()
+  const root = status.install.kind === 'binary' ? status.install.binary?.root : null
+  if (!root) return null
+  // The supervisor's startup download that outlived its budget holds this lock, as install.sh does.
+  const pid = await lockHolder(root)
+  return pid === null ? null : `an update of ${root} is running${pid ? ` (pid ${pid})` : ''}`
 }
 
 export function realLiveUpdateDeps(onChange: () => void): LiveUpdateDeps {
@@ -67,10 +86,8 @@ export function realLiveUpdateDeps(onChange: () => void): LiveUpdateDeps {
     env,
     canSelfInstall: (status) => canSelfInstallLive(status, env),
     held: (status) => (status.latest ? heldBack(status.install, status.latest, badDirFor(status.install, WALNUT_HOME)) : null),
-    busy: async () => {
-      const job = await installRunning(RECORD())
-      return job ? `the install of ${job.version} an earlier start began still runs (pid ${job.pid})` : null
-    },
+    busy: installBusy,
+    unverified: () => readUnverified(UNVERIFIED()),
     install: async (status, version, asked) => {
       const binary = status.install.kind === 'binary' ? status.install.binary : null
       let done: { from: string | null }
@@ -102,6 +119,7 @@ export function realLiveUpdateDeps(onChange: () => void): LiveUpdateDeps {
       return (await installRunning(RECORD())) ? null : pending.version
     },
     turnsRunning: countRunningTurns,
+    checkNow: () => getUpdateChecker().checkNow(),
     onChange,
     log: (level, msg, meta) => log.web[level](msg, meta ?? {}),
   }

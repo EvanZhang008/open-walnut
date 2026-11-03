@@ -260,13 +260,19 @@ export interface PruneOptions {
 }
 
 /**
+ * Remove a directory tree without holding the event loop: a live install runs
+ * inside a serving server, and the old Node archive is thousands of files.
+ */
+const rmTree = (dir: string): Promise<void> => fs.promises.rm(dir, { recursive: true, force: true })
+
+/**
  * Remove every version but `keep` and the ones a running Walnut sits in, and
  * leftovers of an update that stopped half way. Runs under the update lock, so
  * a `.download-*` directory that is not this update's own is a leftover. Only
  * what this layout puts there goes: a version directory holding a `walnut`
  * file, and the Node archive while nothing runs from it.
  */
-export function pruneVersions(root: string, keep: Array<string | null>, opts: PruneOptions = {}): string[] {
+export async function pruneVersions(root: string, keep: Array<string | null>, opts: PruneOptions = {}): Promise<string[]> {
   const kept = [...keep, ...(opts.running ?? versionsRunning(root))]
   const removed: string[] = []
   const versions = path.join(root, 'versions')
@@ -277,13 +283,13 @@ export function pruneVersions(root: string, keep: Array<string | null>, opts: Pr
     if (name.startsWith('.')) {
       if (!name.startsWith('.download-') || full === opts.ownWork) continue
     } else if (kept.includes(name) || !fs.existsSync(path.join(full, 'walnut'))) continue
-    fs.rmSync(full, { recursive: true, force: true })
+    await rmTree(full)
     removed.push(path.join('versions', name))
   }
   // The self-contained archive install.sh used to put here, once it is neither and nothing runs from it.
   const app = path.join(root, 'app')
   if (!kept.includes('app') && opts.appInUse === false && fs.existsSync(path.join(app, 'bin', 'walnut'))) {
-    fs.rmSync(app, { recursive: true, force: true })
+    await rmTree(app)
     removed.push('app')
   }
   return removed
@@ -350,10 +356,10 @@ export async function installFileVersion(opts: InstallFileOptions): Promise<Inst
     const bytes = await downloadVerified(dist.tarball, tgz, dist.integrity, fetchImpl, signal)
     const tar = path.join(work, 'package.tar')
     await pipeline(fs.createReadStream(tgz), zlib.createGunzip(), fs.createWriteStream(tar), { signal })
-    fs.rmSync(tgz)
+    await fs.promises.rm(tgz)
     const staged = path.join(work, 'walnut')
     await extractTarEntry(tar, PACKAGE_FILE, staged)
-    fs.rmSync(tar)
+    await fs.promises.rm(tar)
     fs.chmodSync(staged, 0o755)
     const printed = await versionOfFile(staged, VERSION_TIMEOUT_MS, signal)
     if (printed.split(/\s/)[0] !== version) throw new Error(`the downloaded Walnut does not run here (it printed: ${printed.slice(0, 200) || 'nothing'})`)
@@ -365,24 +371,24 @@ export async function installFileVersion(opts: InstallFileOptions): Promise<Inst
     // A directory of this version that is not in use is a leftover; the new copy replaces it.
     // One a server runs from is kept as it is (the same version, already checked when it went in).
     const keepDir = from === version || (running.includes(version) && fs.existsSync(path.join(dir, 'walnut')))
-    if (!keepDir) fs.rmSync(dir, { recursive: true, force: true })
+    if (!keepDir) await rmTree(dir)
     const placed = !fs.existsSync(dir)
     if (placed) fs.renameSync(work, dir)
     try {
       swapLink(install.root, version)
     } catch (err) {
       // A newer version installed and not linked reads as one the user moved back from (held-versions.ts).
-      if (placed) fs.rmSync(dir, { recursive: true, force: true })
+      if (placed) await rmTree(dir)
       throw err
     }
     // The same version again replaced nothing: whatever was kept before stays.
     clearBad(path.join(install.root, 'bad'), version)
     const appInUse = fs.existsSync(path.join(install.root, 'app')) ? await processesRunFrom(path.join(install.root, 'app')) : false
-    const removed = from === version ? [] : pruneVersions(install.root, [version, from], { running, ownWork: work, appInUse })
+    const removed = from === version ? [] : await pruneVersions(install.root, [version, from], { running, ownWork: work, appInUse })
     log(`Installed Open Walnut ${version} (${Math.round(bytes / 1048576)} MB download).`)
     return { from, to: version, file: path.join(dir, 'walnut'), removed }
   } finally {
-    fs.rmSync(work, { recursive: true, force: true })
+    await rmTree(work).catch(() => {})
     release()
   }
 }

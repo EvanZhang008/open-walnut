@@ -29,6 +29,31 @@ export async function runSupervisor(baseEnv: Record<string, string | undefined>,
   return superviseWalnut(readConfigAuto, { baseEnv, ...o })
 }
 
+/** What a `walnut web` does after its startup update. */
+export type BootRole =
+  | { kind: 'loop'; firstCode: number } // its new version asked for a restart: loop as its supervisor
+  | { kind: 'exit'; code: number } // the new version it started ended: end with its code
+  | { kind: 'supervise' } // an install that updates while it serves: run the server as a child
+  | { kind: 'serve' }
+
+/**
+ * The boot decision (web.ts). `qualifies` (live-eligible.ts supervisesFromStart) is
+ * asked only for a start nobody supervises; a supervised one always serves, so a
+ * chain never nests more than one supervisor; an error in it serves too.
+ */
+export async function bootRole(o: {
+  outcome: { kind: 'reexeced'; exitCode: number } | { kind: 'continue' }
+  supervised: boolean
+  qualifies: () => Promise<boolean>
+  restartCode: number
+}): Promise<BootRole> {
+  if (o.outcome.kind === 'reexeced') {
+    return o.outcome.exitCode === o.restartCode ? { kind: 'loop', firstCode: o.outcome.exitCode } : { kind: 'exit', code: o.outcome.exitCode }
+  }
+  if (o.supervised) return { kind: 'serve' }
+  return (await o.qualifies().catch(() => false)) ? { kind: 'supervise' } : { kind: 'serve' }
+}
+
 export interface LiveRestartOptions {
   supervised: boolean
   /** The signal shutdown's bail (web.ts SHUTDOWN_BAIL_MS): the restart's teardown gets the same. */

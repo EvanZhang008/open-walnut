@@ -18,7 +18,7 @@
 
 import os from 'node:os'
 import type { StartupUpdateOutcome } from './startup-update.js'
-import { APPLIED_ENV, RESTART_EXIT_CODE, RESTART_SUPERVISED_ENV, type ReexecResult } from './startup-relaunch.js'
+import { APPLIED_ENV, READY_FILE_ENV, RESTART_EXIT_CODE, RESTART_SUPERVISED_ENV, type ReexecResult } from './startup-relaunch.js'
 
 export { RESTART_EXIT_CODE, RESTART_SUPERVISED_ENV }
 
@@ -127,6 +127,18 @@ export async function superviseFromStart(deps: SuperviseDeps, readyAlso?: string
 }
 
 /**
+ * The env every child of the supervisor starts with: the boot env, marked
+ * supervised, without this process's own update marker or a parent's ready file
+ * (the supervisor writes that one itself once its child listens).
+ */
+export function supervisedChildEnv(baseEnv: Record<string, string | undefined>): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...baseEnv, [RESTART_SUPERVISED_ENV]: '1' }
+  delete env[APPLIED_ENV]
+  delete env[READY_FILE_ENV]
+  return env
+}
+
+/**
  * The loop as web.ts runs it. `baseEnv`: the env this `walnut web` started with
  * (web.ts keeps a copy), minus the restart marker of an earlier start, plus the
  * supervision marker. `fromStart`: start the first child here (superviseFromStart),
@@ -138,15 +150,13 @@ export async function superviseWalnut(
 ): Promise<number> {
   const signals = recordSignals()
   const { runStartupUpdate } = await import('./startup-update-run.js')
-  const { reexecSelf, relaunchVersion, READY_FILE_ENV } = await import('./startup-relaunch.js')
+  const { reexecSelf, relaunchVersion } = await import('./startup-relaunch.js')
   const { detectInstall } = await import('./install-kind.js')
   const { parseVersion } = await import('./version-compare.js')
   const { readUnverified } = await import('./background-install.js')
   const { WALNUT_HOME } = await import('../../constants.js')
   const path = await import('node:path')
-  const env: Record<string, string | undefined> = { ...o.baseEnv, [RESTART_SUPERVISED_ENV]: '1' }
-  delete env[APPLIED_ENV]
-  delete env[READY_FILE_ENV]
+  const env = supervisedChildEnv(o.baseEnv)
   const deps: SuperviseDeps = {
     update: async () => {
       const printed = await relaunchVersion(detectInstall()).catch(() => null)

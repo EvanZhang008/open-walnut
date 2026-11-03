@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import type { LiveUpdate, UpdateStatus } from '@/api/update';
 import {
-  RESTART_TOOLTIP, WORKING_SHORT, displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion,
+  INSTALLED_TOOLTIP, RESTART_TOOLTIP, WORKING_SHORT, displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion,
 } from '@/components/common/server-update-pill';
 
 const NPM = { kind: 'npm' as const, sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm' as const, updateCommand: 'npm install -g open-walnut@latest' };
@@ -80,9 +80,29 @@ describe('serverPillView', () => {
     expect(v.tooltip).toContain('EACCES');
   });
 
-  it('a version the startup path installed after this server started reads as ready', () => {
+  it('a version the startup path installed after this server started reads as ready when the server can restart itself', () => {
     const v = serverPillView(status({ installed: '0.9.0', live: live({ state: 'off', updatesAuto: false }) }))!;
     expect(v).toMatchObject({ stage: 'ready', heading: 'Walnut 0.9.0 is ready', action: 'restart' });
+  });
+
+  it('installed on a server that cannot restart itself (canInstall false): "is installed", no Restart button that can only fail', () => {
+    const cases = [
+      // A startup install that outlived its budget, on a server with no restart handler.
+      status({ installed: '0.9.0', live: live({ state: 'off', canInstall: false, updatesAuto: true }) }),
+      // A live state that says installed or waiting, with no way to restart.
+      status({ live: live({ state: 'installed', version: '0.9.0', canInstall: false }) }),
+      status({ live: live({ state: 'waiting', version: '0.9.0', canInstall: false }) }),
+    ];
+    for (const st of cases) {
+      const v = serverPillView(st)!;
+      expect(v).toMatchObject({ stage: 'installed', heading: 'Walnut 0.9.0 is installed', action: null, busy: false, working: false, tooltip: INSTALLED_TOOLTIP });
+      expect(v.tooltip).not.toBe(RESTART_TOOLTIP);
+      expect(v.tooltip).toContain('Quit Walnut and start it again');
+      expect(v.versionTitle).toContain('Walnut 0.9.0');
+      expect(v.identity).toBe('server:0.9.0:installed');
+    }
+    const nightly = serverPillView(status({ live: live({ state: 'installed', version: '0.6.25-nightly.20261103.9', canInstall: false }) }))!;
+    expect(nightly.heading).toBe('Walnut 0.6.25 nightly is installed');
   });
 
   it('each step of one release has its own snooze identity; the same step of a newer release does too', () => {

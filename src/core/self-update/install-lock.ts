@@ -113,6 +113,27 @@ async function takeOver(lock: string, d: Required<LockDeps>): Promise<boolean> {
   }
 }
 
+/** The lock is held by an update that is alive: callers wait for it rather than call it a failure. */
+export class LockBusyError extends Error {
+  readonly code = 'update_busy'
+  constructor(root: string) { super(`another update of ${root} is running`) }
+}
+
+/**
+ * The pid of the live update holding `<root>/.update.lock` (0 while its owner line
+ * is being written), or null when nobody holds it or its holder is gone. Reads only.
+ */
+export async function lockHolder(root: string, deps: LockDeps = {}): Promise<number | null> {
+  const d: Required<LockDeps> = { now: deps.now ?? Date.now, alive: deps.alive ?? pidAlive, started: deps.started ?? processStart }
+  const lock = path.join(root, '.update.lock')
+  const st = statOf(lock)
+  if (!st) return null
+  const text = readText(path.join(lock, 'owner'))
+  if (await ownerGone(text, d.now() - st.mtimeMs, d)) return null
+  const pid = Number(text?.trim().split(/\s+/)[0])
+  return Number.isInteger(pid) && pid > 1 ? pid : 0
+}
+
 /**
  * Take `<root>/.update.lock`, or throw `another update of <root> is running`.
  * Resolves to the release, which removes the lock only while it is still this one.
@@ -121,7 +142,7 @@ export async function takeLock(root: string, deps: LockDeps = {}): Promise<() =>
   const d: Required<LockDeps> = { now: deps.now ?? Date.now, alive: deps.alive ?? pidAlive, started: deps.started ?? processStart }
   const lock = path.join(root, '.update.lock')
   const ownerFile = path.join(lock, 'owner')
-  const busy = () => new Error(`another update of ${root} is running`)
+  const busy = () => new LockBusyError(root)
   const token = `${process.pid} ${crypto.randomBytes(6).toString('hex')} ${await d.started(process.pid)}`.trim()
   for (let attempt = 0; ; attempt++) {
     try {

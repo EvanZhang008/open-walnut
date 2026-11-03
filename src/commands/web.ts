@@ -32,6 +32,18 @@ export function forgetInheritedSessionIdentity(env: NodeJS.ProcessEnv = process.
   delete env.WALNUT_TASK_DIR
 }
 
+/**
+ * The env this command started with, for the server a restart into an update starts
+ * (web-restart.ts): the server takes some requests out of its own env at boot. Never
+ * the session identity, nor the Mac app's orphan request (it names that app's child).
+ */
+export function bootEnvOf(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env }
+  forgetInheritedSessionIdentity(out)
+  delete out.OPEN_WALNUT_EXIT_ON_ORPHAN
+  return out
+}
+
 export async function runWeb(options: {
   port?: string
   dev?: boolean
@@ -39,12 +51,8 @@ export async function runWeb(options: {
   _ephemeralChild?: boolean
   replica?: boolean
 }): Promise<void> {
-  // The env this command started with, for the server a restart into an update starts
-  // (web-restart.ts): the server takes some requests out of its own env at boot. Never
-  // the session identity, nor the Mac app's orphan request (it names that app's child).
-  const bootEnv: NodeJS.ProcessEnv = { ...process.env }
-  forgetInheritedSessionIdentity(bootEnv)
-  delete bootEnv.OPEN_WALNUT_EXIT_ON_ORPHAN
+  // Taken before the boot below edits process.env.
+  const bootEnv = bootEnvOf(process.env)
   // Before anything that may take a while: the app may die during an update check.
   const orphanParent = takeExitOnOrphanRequest()
   forgetInheritedSessionIdentity()
@@ -78,24 +86,25 @@ export async function runWeb(options: {
   // that it listened, so its exit is no failure to start (startup-update.ts).
   const { READY_FILE_ENV, RESTART_EXIT_CODE } = await import('../core/self-update/startup-update.js')
   const { runStartupUpdate } = await import('../core/self-update/startup-update-run.js')
-  const { readConfigAuto, runSupervisor } = await import('./web-restart.js')
+  const { bootRole, readConfigAuto, runSupervisor } = await import('./web-restart.js')
   const readyFile = process.env[READY_FILE_ENV]
   delete process.env[READY_FILE_ENV]
+  let role: Awaited<ReturnType<typeof bootRole>>
   {
     // A thin parent may loop later, after a live install replaced this version's files.
     await preloadRestartLoop()
     const outcome = await runStartupUpdate(readConfigAuto, { readyAlso: readyFile })
-    if (outcome.kind === 'reexeced') {
-      // The new version asked for a restart into a later update: this parent loops.
-      process.exitCode = outcome.exitCode === RESTART_EXIT_CODE
-        ? await runSupervisor(bootEnv, { firstCode: outcome.exitCode })
-        : outcome.exitCode
-      return
-    }
     if (outcome.kind === 'stopped') {
       // Stopped while it installed (it cleaned up): the shell's code for that signal.
       process.exit(128 + (os.constants.signals[outcome.signal] ?? 0))
     }
+    role = await bootRole({
+      outcome, supervised, restartCode: RESTART_EXIT_CODE,
+      qualifies: async () => (await import('../core/self-update/live-eligible.js')).supervisesFromStart(process.env),
+    })
+    // The new version asked for a restart into a later update: this parent loops.
+    if (role.kind === 'loop') { process.exitCode = await runSupervisor(bootEnv, { firstCode: role.firstCode }); return }
+    if (role.kind === 'exit') { process.exitCode = role.code; return }
   }
 
   // The compiled file in install.sh's layout marks the version it runs from, so no
@@ -114,12 +123,9 @@ export async function runWeb(options: {
   // exit 75: this process never boots a server (no background work, no heap of its
   // own), forwards signals and ends with the child's code. A parent above it that
   // waits for its ready file (an older thin parent) hears when the child listens.
-  if (!supervised) {
-    const { supervisesFromStart } = await import('../core/self-update/live-eligible.js')
-    if (await supervisesFromStart(process.env).catch(() => false)) {
-      process.exitCode = await runSupervisor(bootEnv, { readyAlso: readyFile })
-      return
-    }
+  if (role.kind === 'supervise') {
+    process.exitCode = await runSupervisor(bootEnv, { readyAlso: readyFile })
+    return
   }
 
   // Sanity check: dist/daemon-binaries/*.version must match current daemon source.

@@ -627,13 +627,23 @@ server) installs a newer release after the check that finds it, with `updates.au
 the release not held back. It uses the startup update's machinery (the file's swap under the
 root's update lock; npm detached with the release fetched ahead, its record and log as above,
 then the relaunch must print the new version) and writes `update-unverified.json`, so the
-restarted server's first start is watched and gone back from when it fails.
+restarted server's first start is watched and gone back from when it fails. Turning
+`updates.auto` on in Settings acts at once (a release already known installs now; with none
+known the registry is asked), not at the next check.
+
+When someone else is installing (an earlier start's npm, or a live holder of the file's update
+lock: the supervisor's startup download that outlived its 60 s budget, install.sh), the server
+does not start a second install: it shows `downloading`, looks again every minute, and takes
+that install's version as installed once it is in (or installs itself when it did not land).
+It never replaces a first-start record of the same version another install wrote, and a
+failure clears only a record this install wrote, so that version's first start stays watched.
 
 Then it restarts when the **idle gate** (`src/core/self-update/idle-gate.ts`) opens, asked every
 minute, and only while `updates.auto` is still on: no person activity for 10 minutes (`WALNUT_UPDATE_IDLE_MS`; activity is the end of any
 time heartbeat window from the web page or the phone, and any message a person sends into a
-session), and no session turn running, unless the install has waited 6 hours (sessions live in
-the daemon and survive a restart). The windows hear every check and state change as WS
+session), and no session turn running, unless the install has waited 6 hours (CLI sessions live in
+the daemon and survive a restart; embedded and SDK turns run in the server and are counted
+too, since a restart cuts them). The windows hear every check and state change as WS
 `system:update` (the same body as `GET /api/system/update`, whose `live` block holds `state`
 `off | idle | downloading | installed | waiting | restarting | failed`, `version`, `error`,
 `canInstall`, `held`, `updatesAuto` and `idle`). `POST /api/system/update/install` installs

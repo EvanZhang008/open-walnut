@@ -93,3 +93,20 @@ export function judgeIdle(i: IdleInputs): IdleVerdict {
     waitingSince: i.waitingSinceMs === null ? null : new Date(i.waitingSinceMs).toISOString(),
   }
 }
+
+/**
+ * Turns running inside this server process (embedded and SDK sessions): no daemon
+ * keeps them, so a restart cuts them. A record marked running from before this
+ * process started belongs to a server that is gone, and never holds the gate.
+ */
+export function countInProcessTurns(
+  records: ReadonlyArray<{ provider?: string; process_status?: string; archived?: boolean; lastActiveAt?: string }>,
+  sinceMs: number,
+): number {
+  return records.filter((s) => {
+    if (s.archived || s.process_status !== 'running') return false
+    if (s.provider !== 'embedded' && s.provider !== 'sdk') return false
+    const at = s.lastActiveAt ? Date.parse(s.lastActiveAt) : NaN
+    return Number.isFinite(at) && at >= sinceMs
+  }).length
+}

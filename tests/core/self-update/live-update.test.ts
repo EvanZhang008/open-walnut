@@ -9,99 +9,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-live-update'))
 
-import { LiveUpdater, setRestartHandler, type LiveUpdateDeps } from '../../../src/core/self-update/live-update.js'
+import { setRestartHandler } from '../../../src/core/self-update/live-update.js'
 import { IDLE_MS, MAX_TURN_WAIT_MS, noteUserActivity, resetUserActivityForTest } from '../../../src/core/self-update/idle-gate.js'
-import type { UpdateStatus } from '../../../src/core/self-update/update-check.js'
-
-const STATUS: UpdateStatus = {
-  enabled: true,
-  install: { kind: 'binary', sourceDir: null, packageRoot: null, manager: null, updateCommand: 'walnut update', binary: { root: '/opt/w', target: 'linux-x64', version: '0.5.1' } },
-  current: '0.5.1', channel: 'stable', latest: '0.6.0', tags: { latest: '0.6.0', nightly: null }, available: true,
-  checkedAt: '2026-11-03T10:00:00.000Z', error: null, checking: false, packageUrl: 'https://www.npmjs.com/package/open-walnut',
-}
-
-/** A clock and a timer queue the test advances by hand. */
-function fakeTime(start = 1_800_000_000_000) {
-  let now = start
-  let seq = 0
-  const timers = new Map<number, { at: number; fn: () => void }>()
-  return {
-    now: () => now,
-    setTimer: (fn: () => void, ms: number) => { const id = ++seq; timers.set(id, { at: now + ms, fn }); return id },
-    clearTimer: (h: unknown) => { timers.delete(h as number) },
-    pending: () => timers.size,
-    /** Move the clock and run every timer that came due, in order, letting promises settle between them. */
-    async advance(ms: number) {
-      const until = now + ms
-      for (;;) {
-        const due = [...timers.entries()].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0]
-        if (!due) break
-        timers.delete(due[0])
-        now = Math.max(now, due[1].at)
-        due[1].fn()
-        await flush()
-      }
-      now = until
-      await flush()
-    },
-  }
-}
-
-const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
-
-interface Harness {
-  updater: LiveUpdater
-  t: ReturnType<typeof fakeTime>
-  calls: { install: string[]; asked: boolean[]; unverified: unknown[]; noted: string[]; changes: number; restarts: number }
-  deps: LiveUpdateDeps
-  status: { value: UpdateStatus }
-  set: (patch: Partial<Ctl>) => void
-}
-
-interface Ctl {
-  auto: boolean | undefined
-  can: boolean
-  held: string | null
-  busy: string | null
-  turns: number
-  installed: string | null
-  fail: string | null
-  /** Resolves the install by hand when set. */
-  gate: Promise<void> | null
-}
-
-function harness(over: Partial<LiveUpdateDeps> = {}, ctl0: Partial<Ctl> = {}): Harness {
-  const t = fakeTime()
-  const ctl: Ctl = { auto: undefined, can: true, held: null, busy: null, turns: 0, installed: null, fail: null, gate: null, ...ctl0 }
-  const status = { value: STATUS }
-  const calls = { install: [] as string[], asked: [] as boolean[], unverified: [] as unknown[], noted: [] as string[], changes: 0, restarts: 0 }
-  const deps: LiveUpdateDeps = {
-    now: t.now, setTimer: t.setTimer, clearTimer: t.clearTimer,
-    status: () => status.value,
-    configAuto: async () => ctl.auto,
-    env: {},
-    canSelfInstall: () => ctl.can,
-    held: () => ctl.held,
-    busy: async () => ctl.busy,
-    install: async (_s, version, asked) => {
-      calls.install.push(version); calls.asked.push(asked)
-      if (ctl.gate) await ctl.gate
-      if (ctl.fail) throw new Error(ctl.fail)
-      return { from: '0.5.1' }
-    },
-    markUnverified: (p) => { calls.unverified.push(p) },
-    noteInstalled: (v) => { calls.noted.push(v) },
-    installedLater: () => ctl.installed,
-    turnsRunning: async () => ctl.turns,
-    onChange: () => { calls.changes++ },
-    log: () => {},
-    ...over,
-  }
-  const updater = new LiveUpdater(deps)
-  return { updater, t, calls, deps, status, set: (p) => Object.assign(ctl, p) }
-}
-
-const state = async (h: Harness) => (await h.updater.snapshot()).state
+import { flush, harness, state, STATUS } from './live-update-harness.js'
 
 beforeEach(() => { resetUserActivityForTest(); setRestartHandler(null) })
 afterEach(() => { setRestartHandler(null) })
@@ -141,11 +51,18 @@ describe('live update: off and idle', () => {
     expect(s).toMatchObject({ state: 'idle', held: '0.6.0 did not start here before' })
   })
 
-  it('an install another start began is left alone (no second npm into one prefix)', async () => {
+  it('an install another start began is waited for (no second install into one place), then taken as installed', async () => {
     const h = harness({}, { busy: 'the install of 0.6.0 still runs' })
     await h.updater.onChecked(STATUS)
     expect(h.calls.install).toEqual([])
-    expect(await state(h)).toBe('idle')
+    expect(await h.updater.snapshot()).toMatchObject({ state: 'downloading', version: '0.6.0', error: null })
+    await h.t.advance(60_000)
+    expect(await state(h)).toBe('downloading')
+    h.set({ busy: null, installed: '0.6.0' })
+    await h.t.advance(60_000)
+    expect(await h.updater.snapshot()).toMatchObject({ state: 'installed', version: '0.6.0' })
+    expect(h.calls.install).toEqual([])
+    expect(h.calls.noted).toEqual(['0.6.0'])
   })
 
   it('a version the startup update installed after its budget is installed already', async () => {
@@ -190,14 +107,23 @@ describe('live update: install', () => {
     expect(h.calls.install).toEqual(['0.6.0', '0.6.0'])
   })
 
-  it('failed stays failed while another install runs; idle once nothing is newer', async () => {
+  it('after a failure, another install running is waited for; when it did not land, this one installs', async () => {
     const h = harness({}, { fail: 'boom' })
     await h.updater.onChecked(STATUS)
     await flush()
-    h.set({ busy: 'still runs' })
+    h.set({ busy: 'still runs', fail: null })
     await h.updater.onChecked(STATUS)
-    expect(await h.updater.snapshot()).toMatchObject({ state: 'failed', error: 'boom' })
+    expect(await h.updater.snapshot()).toMatchObject({ state: 'downloading', error: null })
     h.set({ busy: null })
+    await h.t.advance(60_000)
+    expect(await h.updater.snapshot()).toMatchObject({ state: 'installed', error: null })
+    expect(h.calls.install).toEqual(['0.6.0', '0.6.0'])
+  })
+
+  it('idle once nothing is newer', async () => {
+    const h = harness({}, { fail: 'boom' })
+    await h.updater.onChecked(STATUS)
+    await flush()
     await h.updater.onChecked({ ...STATUS, available: false })
     expect(await h.updater.snapshot()).toMatchObject({ state: 'idle', error: null })
   })
@@ -363,9 +289,14 @@ describe('live update: the review cases', () => {
     h.set({ busy: 'the install of 0.6.0 an earlier start began still runs (pid 42)' })
     expect(h.updater.installNow()).toEqual({ ok: true })
     await flush()
-    expect(await h.updater.snapshot()).toMatchObject({ state: 'failed', error: 'the install of 0.6.0 an earlier start began still runs (pid 42)' })
+    expect(await h.updater.snapshot()).toMatchObject({ state: 'downloading', error: null })
     expect(h.calls.install).toEqual([])
     expect(h.calls.unverified).toEqual([])
+    // It lands: the person asked, so the restart follows at once.
+    h.set({ busy: null, installed: '0.6.0' })
+    await h.t.advance(60_000)
+    expect(await state(h)).toBe('restarting')
+    expect(h.calls.install).toEqual([])
   })
 
   it('updates.auto turned off while the install waits: the gate never restarts it, the person still can', async () => {

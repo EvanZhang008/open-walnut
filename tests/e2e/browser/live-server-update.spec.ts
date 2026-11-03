@@ -214,6 +214,24 @@ test('a nightly reads "0.6.25 nightly" untruncated in the open rail; the collaps
   await shoot(page, '5-nightly-restarting-rail')
 })
 
+test('installed on a server that cannot restart itself: "is installed", no Restart button, the tooltip says a restart of Walnut runs it', async ({ page }) => {
+  const r = await routeUpdate(page, status({ installed: '0.9.0' }, { state: 'installed', version: '0.9.0', canInstall: false }))
+  await loadApp(page)
+  await expect(pill(page)).toHaveAttribute('data-status', 'installed', { timeout: 20_000 })
+  if (await page.locator('.sidebar.collapsed').count()) {
+    // The collapsed rail: a status word, no button.
+    expect(await pill(page).locator('.stale-build-pill-action.is-status').evaluate((el) => getComputedStyle(el, '::after').content)).toBe('"Ready"')
+    await page.locator('.sidebar-collapse-btn').click()
+    await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
+  }
+  await expect(heading(page)).toHaveText('Walnut 0.9.0 is installed')
+  await expect(heading(page)).toHaveAttribute('title', /Quit Walnut and start it again/)
+  await expect(action(page)).toHaveCount(0)
+  await expectWhole(page)
+  await shoot(page, '6-installed-no-restart')
+  expect(r.restarts()).toBe(0)
+})
+
 test('a copy that cannot update itself: "How to update" opens the command with Copy; Done closes it', async ({ page, browserName }) => {
   await routeUpdate(page, status({}, { state: 'off', canInstall: false, updatesAuto: true }))
   await loadApp(page)

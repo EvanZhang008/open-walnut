@@ -3,7 +3,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  IDLE_MS, MAX_TURN_WAIT_MS, idleMsFrom, judgeIdle, lastUserActivity, latestSampleEnd, noteUserActivity, resetUserActivityForTest,
+  IDLE_MS, MAX_TURN_WAIT_MS, countInProcessTurns, idleMsFrom, judgeIdle, lastUserActivity, latestSampleEnd, noteUserActivity, resetUserActivityForTest,
 } from '../../../src/core/self-update/idle-gate.js'
 
 const T0 = 1_800_000_000_000
@@ -60,5 +60,21 @@ describe('judgeIdle', () => {
     expect(idleMsFrom({ WALNUT_UPDATE_IDLE_MS: '0' })).toBe(IDLE_MS)
     expect(idleMsFrom({ WALNUT_UPDATE_IDLE_MS: 'soon' })).toBe(IDLE_MS)
     expect(judgeIdle({ ...base, lastActivity: T0 - 5000, idleMs: 5000 }).ready).toBe(true)
+  })
+})
+
+describe('turns inside the server process', () => {
+  it('counts running embedded and SDK turns of this process; a CLI turn, a stopped one and a dead server\'s record do not', () => {
+    const at = (ms: number) => new Date(ms).toISOString()
+    const rows = [
+      { provider: 'embedded', process_status: 'running', lastActiveAt: at(T0 + 1000) },
+      { provider: 'sdk', process_status: 'running', lastActiveAt: at(T0 + 5) },
+      { provider: 'claude-code', process_status: 'running', lastActiveAt: at(T0 + 1000) }, // the daemon's, counted elsewhere
+      { provider: 'embedded', process_status: 'idle', lastActiveAt: at(T0 + 1000) },
+      { provider: 'embedded', process_status: 'running', lastActiveAt: at(T0 - 1) }, // before this process started
+      { provider: 'embedded', process_status: 'running', archived: true, lastActiveAt: at(T0 + 1000) },
+      { provider: 'embedded', process_status: 'running' },
+    ]
+    expect(countInProcessTurns(rows, T0)).toBe(2)
   })
 })
