@@ -289,7 +289,7 @@ describe.each([
           close: async () => { order.push('cronClose'); await cronDrain },
         },
         process: { platform: 'linux', pid: 4242 }, os: { userInfo: () => ({ uid: 501 }) },
-        readStartTime: () => 'start', readRegistry: () => ({}), daemonHooks: null,
+        readStartTime: () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
         acp: { workers: new Map() }, sttRelayPending: new Map(), launchRelayPending: new Map(),
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(),
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },

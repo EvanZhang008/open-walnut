@@ -261,6 +261,12 @@ export interface TriggerHostState {
   lastFireAtMs?: number;
   /** A clock routine's place in its schedule (trigger-clock-core.ts). */
   clock?: ClockHostState;
+  /**
+   * A named Walnut took this trigger over from the set an older daemon left, so it
+   * also keeps the shared copy an older daemon reads current (a downgrade then
+   * goes on from here, not from the upgrade).
+   */
+  sharedCopy?: true;
 }
 
 export type CheckDecision =
@@ -426,6 +432,7 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     ...(typeof r.lastRunAtMs === 'number' ? { lastRunAtMs: r.lastRunAtMs } : {}),
     ...(typeof r.lastFireAtMs === 'number' ? { lastFireAtMs: r.lastFireAtMs } : {}),
     ...(coerceClock(r.clock) ? { clock: coerceClock(r.clock) } : {}),
+    ...(r.sharedCopy === true ? { sharedCopy: true as const } : {}),
   };
 }
 

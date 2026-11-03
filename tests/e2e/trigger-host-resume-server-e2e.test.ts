@@ -32,6 +32,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { getDirectDaemonConnection, pushHostSliceToAllHosts } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 
@@ -188,7 +189,7 @@ beforeAll(async () => {
   jobId = routine.json.job.id
   // Armed on devbox, with the host delivery spec.
   await waitFor(() => {
-    try { return JSON.parse(fs.readFileSync(path.join(dir, 'triggers.json'), 'utf8')).triggers.some((t: any) => t.id === jobId && t.deliver?.taskId === taskId) } catch { return false }
+    try { return JSON.parse(fs.readFileSync(path.join(walnutScopeDir(dir, WALNUT_HOME), 'triggers.json'), 'utf8')).triggers.some((t: any) => t.id === jobId && t.deliver?.taskId === taskId) } catch { return false }
   }, 20_000, 'the trigger armed with deliver')
 
   // The idle reaper stops it: the CLI goes, the record says why.
@@ -216,7 +217,7 @@ describe('a trigger fire while the Mac is away reaches a stopped session, and th
     await stopServer()
     server = null
     fs.writeFileSync(itemsFile, JSON.stringify({ fire: true, items: [{ id: 'rc-1', text: 'Please rename the flag.' }] }) + '\n')
-    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId })).ok).toBe(true)
+    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId, home: WALNUT_HOME })).ok).toBe(true)
     await waitFor(() => spawns().length === 2, 30_000, 'the host resume')
     const resumed = spawns()[1]
     expect(resumed[resumed.indexOf('--resume') + 1]).toBe(SID)

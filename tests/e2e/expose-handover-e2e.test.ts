@@ -223,6 +223,8 @@ const host: HostServerHost = {
   async runRemoteScript(script) {
     if (script.includes(' -v 2>&1')) return 'v24.3.0'
     if (script === 'printf %s "$HOME"') return '/home/someone'
+    // This Walnut's own server dirs on the host (walnutDirsScript): nothing to make on a stand-in.
+    if (script.endsWith('&& echo dirs')) return 'dirs'
     if (script.includes('require("net")')) return script.split(' ').filter((w) => /^\d{5}$/.test(w)).map((p) => `${p}:free`).join('\n')
     throw new Error('unexpected script: ' + script.slice(0, 80))
   },

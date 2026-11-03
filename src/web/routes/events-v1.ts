@@ -35,7 +35,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { attachSse, emitSse, sseConnCount } from '../sse-channels.js'
 import { CHAT_TURN_FRAME_KIND, handleBridgeChatTurnFrame } from './chat-turn-relay.js'
@@ -151,7 +151,8 @@ export async function forwardMobileEventToBridge(kind: string, data: unknown): P
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = getConnectedDaemonConnection('__local__')
   if (!conn || !conn.hasCapability('mobile-event')) return false
-  await conn.send('mobile-event', { kind, data })
+  // `home`: this Walnut's own bridge link on a daemon several Walnuts share.
+  await conn.send('mobile-event', { kind, data, home: WALNUT_HOME })
   return true
 }
 

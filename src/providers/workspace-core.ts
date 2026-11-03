@@ -12,6 +12,8 @@
  *    daemon runs with NO shell, a JSON request on stdin, a JSON reply on stdout
  *    (docs/reference/workspace-providers.md). A provider may ship one adapter
  *    script with the push; it is materialized under the daemon's state dir.
+ *    Each Walnut on the daemon (the push's `home`) has its own allowlist and its
+ *    own adapter dir; a push with no home is the unnamed one, kept as before.
  *
  * Safety rules every operation shares:
  *  - home, `/`, system folders and mount roots are never a repository, a
@@ -74,6 +76,11 @@ export interface WorkspaceCoreDeps {
   env: Record<string, string | undefined>
   /** Where provider adapter scripts are materialized (the daemon's state dir). */
   stateDir: string
+  /**
+   * The state dir of one Walnut's allowlist (walnutScope.dirFor(stateDir, home)).
+   * '' is the unnamed scope and keeps `stateDir` itself.
+   */
+  scopeDir?: (home: string) => string
   /** Override for the git worktrees folder (tests; config). Default `~/.open-walnut-worktrees`. */
   worktreesRoot?: string
   now?: () => number
@@ -206,13 +213,37 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
   var REDIRECT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
     'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX']
 
-  var config: WorkspaceConfig | null = null
-  var scriptPaths = new Map<string, string>()
+  /**
+   * One allowlist per Walnut home: two Walnuts on one daemon each push their own,
+   * and a single copy made them replace each other on every command (providers_stale
+   * both ways). '' is a server older than the split, kept as before.
+   */
+  var configs = new Map<string, WorkspaceConfig>()
+  /** Each spec's adapter path and its Walnut (a spec belongs to one Walnut's push). */
+  var scriptPaths = new WeakMap<WorkspaceProviderSpec, string>()
+  var specHomes = new WeakMap<WorkspaceProviderSpec, string>()
+  /** Jobs by home + id: one Walnut never reads another's job. */
   var jobs = new Map<string, WorkspaceJob>()
   /** provider|target keys a running job owns: a second create of the same place waits its turn. */
   var busy = new Set<string>()
 
   // ── small helpers ──
+
+  function askedHome(cmd: Record<string, unknown>): string {
+    var h = cmd.home
+    return typeof h === 'string' && h.length > 0 && h.length <= 1024 ? h : ''
+  }
+  function jobKey(h: string, id: string): string {
+    return h + '\u0000' + id
+  }
+  function scopeBase(h: string): string {
+    if (!h) return deps.stateDir
+    if (deps.scopeDir) return deps.scopeDir(h)
+    // Tests without the twin's walnutScope: a small stable key, still one dir per home.
+    var x = 2166136261
+    for (var i = 0; i < h.length; i++) x = Math.imul(x ^ h.charCodeAt(i), 16777619) >>> 0
+    return P.join(deps.stateDir, 'walnuts', x.toString(16))
+  }
 
   function fail(error: string, code?: string, extra?: Record<string, unknown>): WorkspaceReply {
     return Object.assign({ ok: false as const, error: error }, code ? { code: code } : {}, extra || {})
@@ -431,10 +462,10 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
 
   function pruneJobs() {
     var t = now()
-    jobs.forEach((j, id) => { if (j.state !== 'running' && j.endedAt && t - j.endedAt > JOB_TTL_MS) jobs.delete(id) })
+    jobs.forEach((j, key) => { if (j.state !== 'running' && j.endedAt && t - j.endedAt > JOB_TTL_MS) jobs.delete(key) })
     if (jobs.size > MAX_JOBS) {
-      var done = Array.from(jobs.values()).filter((j) => j.state !== 'running').sort((a, b) => (a.endedAt || 0) - (b.endedAt || 0))
-      for (var i = 0; i < done.length && jobs.size > MAX_JOBS; i++) jobs.delete(done[i].id)
+      var done = Array.from(jobs.entries()).filter((e) => e[1].state !== 'running').sort((a, b) => (a[1].endedAt || 0) - (b[1].endedAt || 0))
+      for (var i = 0; i < done.length && jobs.size > MAX_JOBS; i++) jobs.delete(done[i][0])
     }
   }
   function runningCount(): number {
@@ -442,15 +473,15 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     jobs.forEach((j) => { if (j.state === 'running') n++ })
     return n
   }
-  function startJob(id: string, kind: 'create' | 'remove', provider: string, busyKey: string,
+  function startJob(h: string, id: string, kind: 'create' | 'remove', provider: string, busyKey: string,
     work: (job: WorkspaceJob) => Promise<Record<string, unknown>>): WorkspaceReply {
     pruneJobs()
-    var existing = jobs.get(id)
+    var existing = jobs.get(jobKey(h, id))
     if (existing) return { ok: true, jobId: id, state: existing.state, existing: true }
     if (busy.has(busyKey)) return fail('another workspace operation is running for this place', 'busy')
     if (runningCount() >= MAX_RUNNING) return fail('too many workspace operations are running on this host', 'busy')
     var job: WorkspaceJob = { id: id, kind: kind, provider: provider, state: 'running', startedAt: now() }
-    jobs.set(id, job)
+    jobs.set(jobKey(h, id), job)
     busy.add(busyKey)
     logMsg('info', 'workspace job started', { jobId: id, kind: kind, provider: provider })
     Promise.resolve().then(() => work(job)).then((result) => {
@@ -513,7 +544,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
 
   /** Write a provider's adapter into the state dir (atomically) and answer its path. */
   async function writeAdapter(spec: WorkspaceProviderSpec): Promise<string> {
-    var dir = P.join(deps.stateDir, 'workspace-providers')
+    var dir = P.join(scopeBase(specHomes.get(spec) || ''), 'workspace-providers')
     var ext = P.extname(spec.script!.name).replace(/[^A-Za-z0-9.]/g, '').slice(0, 8)
     var file = P.join(dir, spec.id + ext)
     await fsp.mkdir(dir, { recursive: true, mode: 0o700 })
@@ -524,35 +555,39 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     return file
   }
 
-  async function configure(raw: unknown): Promise<WorkspaceReply> {
+  async function configure(raw: unknown, h?: string): Promise<WorkspaceReply> {
+    var scope = h || ''
     var c = raw as Record<string, unknown> | null
     if (!c || c.version !== 1 || typeof c.hash !== 'string' || !Array.isArray(c.providers) || c.providers.length > 32) {
       return fail('workspace.configure: invalid config')
     }
-    if (config && config.hash === c.hash) return { ok: true, applied: true, changed: false, hash: c.hash }
+    var current = configs.get(scope)
+    if (current && current.hash === c.hash) return { ok: true, applied: true, changed: false, hash: c.hash }
     var specs: WorkspaceProviderSpec[] = []
     for (var i = 0; i < c.providers.length; i++) {
       var v = validateSpec(c.providers[i])
       if (typeof v === 'string') return fail('workspace.configure: ' + v)
+      specHomes.set(v, scope)
       specs.push(v)
     }
-    var paths = new Map<string, string>()
     for (var k = 0; k < specs.length; k++) {
       if (!specs[k].script) continue
       try {
-        paths.set(specs[k].id, await writeAdapter(specs[k]))
+        scriptPaths.set(specs[k], await writeAdapter(specs[k]))
       } catch (err) {
         return fail('workspace.configure: could not write the ' + specs[k].id + ' adapter: ' + errText(err))
       }
     }
-    config = { version: 1, hash: c.hash, providers: specs }
-    scriptPaths = paths
-    logMsg('info', 'workspace providers configured', { hash: c.hash, providers: specs.map((s) => s.id) })
+    configs.set(scope, { version: 1, hash: c.hash, providers: specs })
+    logMsg('info', 'workspace providers configured', {
+      hash: c.hash, providers: specs.map((s) => s.id), walnut: scope ? P.basename(scopeBase(scope)) : 'unnamed',
+    })
     return { ok: true, applied: true, changed: true, hash: c.hash }
   }
 
   /** A plugin provider by id, or a stale-allowlist answer the server re-pushes on. */
-  function pluginSpec(id: unknown, hash: unknown): WorkspaceProviderSpec | WorkspaceReply {
+  function pluginSpec(id: unknown, hash: unknown, h: string): WorkspaceProviderSpec | WorkspaceReply {
+    var config = configs.get(h)
     if (!config || typeof hash !== 'string' || hash !== config.hash) {
       return fail('workspace providers are not configured on this host yet', 'providers_stale')
     }
@@ -599,13 +634,13 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
   async function runProvider(spec: WorkspaceProviderSpec, op: string, args: Record<string, unknown>,
     onProgress?: (line: string) => void, timeoutOverrideMs?: number): Promise<Record<string, unknown>> {
     if (spec.operations && spec.operations.indexOf(op) < 0) throw coded(spec.displayName + ' does not implement ' + op, 'unsupported')
-    var script = scriptPaths.get(spec.id)
+    var script = scriptPaths.get(spec)
     // A daemon's state dir may sit under /tmp, which a janitor sweeps while the
     // allowlist stays hash-skipped: write the adapter again from memory when it is gone.
     if (spec.script && (!script || !(await exists(script)))) {
       try {
         script = await writeAdapter(spec)
-        scriptPaths.set(spec.id, script)
+        scriptPaths.set(spec, script)
       } catch (err) {
         throw coded(spec.displayName + ': could not write its adapter: ' + errText(err), 'bad_provider')
       }
@@ -1153,10 +1188,11 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
 
   // ── detect ──
 
-  async function detect(args: Record<string, unknown>): Promise<WorkspaceReply> {
+  async function detect(args: Record<string, unknown>, h: string): Promise<WorkspaceReply> {
     if (!isAbsPathString(args.anchor)) return fail('workspace.detect: anchor must be an absolute path', 'bad_args')
     var anchor = P.resolve(expandHome(String(args.anchor)))
     var candidates: Record<string, unknown>[] = [await gitDetect(anchor)]
+    var config = configs.get(h)
     var specs = config && typeof args.providersHash === 'string' && args.providersHash === config.hash ? config.providers : null
     if (!specs && args.providersHash !== undefined && args.providersHash !== null) {
       return fail('workspace providers are not configured on this host yet', 'providers_stale')
@@ -1189,20 +1225,25 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
 
   // ── the command surface ──
 
-  async function handle(name: string, cmd: Record<string, unknown>): Promise<WorkspaceReply> {
+  /**
+   * `h` is the Walnut the command speaks for (the twin resolved it against the
+   * socket); absent, the command's own `home`, '' when it names none.
+   */
+  async function handle(name: string, cmd: Record<string, unknown>, h?: string): Promise<WorkspaceReply> {
+    var scope = typeof h === 'string' ? h : askedHome(cmd)
     try {
-      if (name === 'workspace.configure') return await configure(cmd.config)
-      if (name === 'workspace.detect') return await detect(cmd)
+      if (name === 'workspace.configure') return await configure(cmd.config, scope)
+      if (name === 'workspace.detect') return await detect(cmd, scope)
       if (name === 'workspace.job') {
         pruneJobs()
-        var j = typeof cmd.jobId === 'string' ? jobs.get(cmd.jobId) : undefined
+        var j = typeof cmd.jobId === 'string' ? jobs.get(jobKey(scope, cmd.jobId)) : undefined
         return { ok: true, job: j ? Object.assign({}, j) : null }
       }
       var provider = cmd.provider
       if (typeof provider !== 'string' || !provider) return fail(name + ': provider is required', 'bad_args')
       var spec: WorkspaceProviderSpec | null = null
       if (provider !== GIT_ID) {
-        var found = pluginSpec(provider, cmd.providersHash)
+        var found = pluginSpec(provider, cmd.providersHash, scope)
         if (isReply(found)) return found
         spec = found
       }
@@ -1215,7 +1256,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
         var anchor = P.resolve(expandHome(String(cmd.anchor)))
         var key = provider + '|' + anchor + '|' + slugify(cmd.name)
         var s = spec
-        return startJob(cmd.jobId, 'create', provider, key, (job) => (s ? pluginCreate(s, cmd, job) : gitCreate(cmd, job)))
+        return startJob(scope, cmd.jobId, 'create', provider, key, (job) => (s ? pluginCreate(s, cmd, job) : gitCreate(cmd, job)))
       }
       if (!isAbsPathString(cmd.root)) return fail(name + ': root must be an absolute path', 'bad_args')
       if (name === 'workspace.status') return { ok: true, probe: await probe(cmd, spec) }
@@ -1227,7 +1268,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       if (name === 'workspace.remove') {
         if (typeof cmd.jobId !== 'string' || !/^[A-Za-z0-9_-]{6,80}$/.test(cmd.jobId)) return fail('workspace.remove: jobId is required', 'bad_args')
         var s2 = spec
-        return startJob(cmd.jobId, 'remove', provider, provider + '|' + P.resolve(String(cmd.root)), (job) => removeWork(cmd, job, s2))
+        return startJob(scope, cmd.jobId, 'remove', provider, provider + '|' + P.resolve(String(cmd.root)), (job) => removeWork(cmd, job, s2))
       }
       return fail('unknown workspace command: ' + name, 'bad_args')
     } catch (err) {
@@ -1238,7 +1279,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
   return {
     handle: handle,
     configure: configure,
-    providersHash: () => (config ? config.hash : null),
+    providersHash: (h?: string) => { var c = configs.get(h || ''); return c ? c.hash : null },
     // Exposed for tests and the deploy-time smoke.
     forbiddenReason: forbiddenReason,
     checkForbidden: checkForbidden,

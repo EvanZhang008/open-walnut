@@ -52,6 +52,7 @@ import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createOfflineHostCore } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
+import { createWalnutScope } from './walnut-scope-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -268,6 +269,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_JOURNAL__', createOfflineJournal.toString()],
     ['__CREATE_JOURNAL_MIGRATION__', createJournalMigration.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
+    ['__CREATE_WALNUT_SCOPE__', createWalnutScope.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
@@ -1538,6 +1540,12 @@ let journaledSids = null;
 // a sid decides; a first line without a home names no Walnut. Keep in sync with
 // daemon-standalone.ts (full rationale there).
 const journaledHomes = new Map();
+// Which Walnut a pushed setting belongs to, and where its copy is kept
+// (walnut-scope-core.ts, inlined). Mirror daemon-standalone.ts.
+var walnutScope = (__CREATE_WALNUT_SCOPE__)({
+  path: path,
+  keyOf: function (value) { return crypto.createHash('sha1').update(value).digest('hex').slice(0, 16); },
+});
 // A crashed writer can leave a torn last line with no newline; the first append
 // then starts a fresh line instead of gluing its record onto the torn one.
 let journalTornTail = false;
@@ -2092,7 +2100,7 @@ function broadcastSessionState(sid, state, extra) {
   }
   const payload = Object.assign({ sid, state }, extra || {});
   for (const client of wsClients) {
-    if (followerHears(client, sid)) { try { client.send(JSON.stringify(Object.assign({ ev: 'session_state' }, payload))); } catch {} }
+    if (followerHears(client, sid) && bridgeHearsSession(client, sid)) { try { client.send(JSON.stringify(Object.assign({ ev: 'session_state' }, payload))); } catch {} }
   }
 }
 
@@ -3325,11 +3333,13 @@ function ledAway(client) {
   var home = gatewayClientHomes.get(client);
   return home ? leaderBook.backupLead(home) !== null : leaderBook.anyBackupLead();
 }
-function pickTrustedClient() {
+// home: the Walnut whose bridge link the relay came in on ('' keeps the old pick).
+function pickTrustedClient(home) {
   var now = Date.now();
   var fresh = null, suspect = null, quietAt = null, quiet = 0;
   for (const client of wsClients) {
     if (!isServerClient(client)) continue;
+    if (!servesBridgeHome(client, home || '')) continue;
     var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
     var silentMs = now - at;
     if (silentMs > TRUSTED_CLIENT_QUIET_MS) {
@@ -3342,6 +3352,13 @@ function pickTrustedClient() {
     }
   }
   return { client: fresh || suspect, quiet: quiet, quietForMs: quietAt === null ? null : now - quietAt };
+}
+// A relay answered from a server of another Walnut than the link it came in on:
+// refused, and the relay stays for its own server. See the standalone twin.
+function answersForOtherWalnut(ws, home) {
+  if (!home) return false;
+  var bound = gatewayClientHomes.get(ws);
+  return bound !== undefined && bound !== home;
 }
 // The error a relay answers when no trusted client can take it: the caller's
 // contract text ("<cmd>: no primary server connected", which companions key on
@@ -3625,6 +3642,9 @@ function decodeFrame(buf) {
 
 // ── Session management commands ──
 
+// Bridge commands that name a session by sid (checked against the link's Walnut).
+var BRIDGE_SESSION_COMMANDS = new Set(['status', 'appendUserMarker', 'send', 'attach', 'read-history', 'bridgeResume', 'markers.find', 'session.permission']);
+
 // Commands the cloud bridge is allowed to invoke — MUST match the standalone
 // twin's BRIDGE_ALLOWED_COMMANDS. Anything else from a bridge socket is a
 // compromised-cloud-box escalation attempt (fs.write/start/bridge.configure/…)
@@ -3769,6 +3789,12 @@ function handleCommand(ws, msg) {
   if (ws.origin === 'bridge' && !BRIDGE_ALLOWED_COMMANDS.has(cmd.cmd)) {
     logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id });
     return sendError(ws, id, 'command not permitted over bridge: ' + cmd.cmd);
+  }
+  // A named bridge link reaches only its own Walnut's sessions (or one whose
+  // Walnut is not recorded). Mirror daemon-standalone.ts.
+  if (ws.origin === 'bridge' && BRIDGE_SESSION_COMMANDS.has(cmd.cmd)
+    && typeof cmd.sid === 'string' && !bridgeHearsSession(ws, cmd.sid)) {
+    return sendError(ws, id, cmd.cmd + ': a session of another Walnut', { errorKind: 'not_owner' });
   }
   // A follower (the host server) reads; the leader alone writes this host's state.
   if (ws.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd)) {
@@ -3925,6 +3951,10 @@ function dispatchCommand(ws, id, cmd) {
     // follower-reachable, and no reply carries a value. Mirrors daemon-standalone.ts.
     case 'secrets.list': case 'secrets.put': case 'secrets.remove': case 'secrets.sync': {
       if (!secretStore) return sendError(ws, id, cmd.cmd + ' unsupported: secrets-core sidecar not loaded');
+      // A write names its Walnut (the owner a sync prunes by); never another's on a bound socket.
+      if (cmd.cmd !== 'secrets.list' && walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) {
+        return sendError(ws, id, cmd.cmd + ': this socket speaks for another Walnut', { code: 'not_owner' });
+      }
       const sop = cmd.cmd.slice(8);
       return replyTransfer(ws, id, cmd.cmd, function () { return Promise.resolve().then(function () { return secretStore[sop](cmd); }); }, false);
     }
@@ -4115,14 +4145,15 @@ function dispatchCommand(ws, id, cmd) {
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
     case 'feature.request': {
-      if (!isServerClient(ws) || bridgeConfig?.hostAlias !== '__local__' || !bridgeConfig.home
-        || gatewayClientHomes.get(ws) !== bridgeConfig.home) return sendError(ws, id, 'Feature request refused')
-      const home = bridgeConfig.home
-      return featureRelay.request(featureSocket(ws), id, bridgeAdapter ? featureSocket(bridgeAdapter) : null, cmd.frame,
-        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeConfig?.home === home)
+      // Over the link of the asking server's own Walnut only.
+      const home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined
+      const link = home ? bridgeLinkFor(home) : null
+      if (!home || !link || link.config?.hostAlias !== '__local__' || link.config.home !== home) return sendError(ws, id, 'Feature request refused')
+      return featureRelay.request(featureSocket(ws), id, link.adapter ? featureSocket(link.adapter) : null, cmd.frame,
+        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeLinkFor(home) === link && link.config?.home === home)
     }
     case 'feature.result': {
-      if (ws !== bridgeAdapter) return sendError(ws, id, 'Feature result refused')
+      if (!bridgeLinkOf(ws)) return sendError(ws, id, 'Feature result refused')
       const accepted = featureRelay.result(featureSocket(ws), cmd.requestId, cmd.result)
       return sendOk(ws, id, { accepted })
     }
@@ -4182,10 +4213,11 @@ function dispatchCommand(ws, id, cmd) {
     case 'ping':
       // From the replica, a ping answers one of our bridge-ping markers: it
       // confirms every byte written before that marker (bridge-uplink-core.ts).
-      if (ws && ws.origin === 'bridge' && ws === bridgeAdapter && bridgeUplink) bridgeUplink.ack(cmd.ackSeq);
+      var pingLink = bridgeLinkOf(ws);
+      if (pingLink && pingLink.uplink) pingLink.uplink.ack(cmd.ackSeq);
       return sendOk(ws, id, { pong: true });
     case 'bridge.peer': return cmdBridgePeer(ws, id, cmd);
-    case 'bridge.status': return cmdBridgeStatus(ws, id);
+    case 'bridge.status': return cmdBridgeStatus(ws, id, cmd);
     case 'service.handover': case 'service.update': return daemonCommands.run(function () { return cmdServiceHandover(ws, id, cmd); });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -4243,7 +4275,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     persistRegistry(true);
     if (!updating) await cronRuntimeCore.prepareDaemonServiceHandover({
       ...location, home: HOME_DIR, platform: process.platform,
-      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: daemonHooks,
+      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
     });
   } catch (error) {
     if (updating) {
@@ -4281,6 +4313,18 @@ async function waitForHandoverReceipt(ws) {
 // daemon spawned or adopted it), else its resume record. The mode is the one
 // that record has now: setMode keeps both current. home: the Walnut that asked
 // for its latest spawn, as either one recorded it. Twin of daemon-standalone.ts.
+/**
+ * The Walnut a session belongs to (its data dir): what its start named, else the
+ * spawn journal's or the resume record's. '' when none is recorded (a server older
+ * than owner-home-v1). Per-Walnut settings (hooks, turn snapshots) are looked up by it.
+ * Mirror daemon-standalone.ts.
+ */
+function sessionHomeOf(sid) {
+  var s = sessions.get(sid);
+  if (s && s.spawnInfo && s.spawnInfo.home) return s.spawnInfo.home;
+  var rec = journaledHome(sid) ? null : hostResume.recall(sid);
+  return journaledHome(sid) || (rec && rec.home) || offlineHost.ownerOf(sid) || '';
+}
 function spawnRecordOf(sid) {
   var s = sessions.get(sid);
   var rec = s && s.spawnInfo && s.spawnInfo.home ? null : hostResume.recall(sid);
@@ -4430,7 +4474,8 @@ function cmdSttRelay(ws, id, cmd) {
   if (!audio || !format) {
     return sendError(ws, id, 'stt: missing audio or format');
   }
-  var target = pickTrustedClient().client;
+  var home = bridgeHomeOf(ws);
+  var target = pickTrustedClient(home).client;
   if (!target) {
     return sendError(ws, id, 'stt: no transcription host connected');
   }
@@ -4440,7 +4485,7 @@ function cmdSttRelay(ws, id, cmd) {
     sttRelayPending.delete(relayId);
     sendError(ws, id, 'stt: transcription timed out');
   }, STT_RELAY_TIMEOUT_MS);
-  sttRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  sttRelayPending.set(relayId, { ws: ws, id: id, timer: timer, home: home });
   logMsg('info', 'stt: relaying to transcription host', { relayId: relayId, format: format, audioB64Len: audio.length });
   sendEvent(target, 'stt-request', { relayId: relayId, audio: audio, format: format, language: language });
 }
@@ -4448,6 +4493,7 @@ function cmdSttRelay(ws, id, cmd) {
 function cmdSttResult(ws, id, cmd) {
   var relayId = cmd.relayId, text = cmd.text, durationMs = cmd.durationMs, error = cmd.error;
   var pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined;
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, "stt-result: not this Walnut's relay");
   if (!pending) {
     return sendOk(ws, id, { stale: true });
   }
@@ -4481,7 +4527,8 @@ function cmdLaunchRelay(ws, id, cmd) {
   if (!action) {
     return sendError(ws, id, 'session.launch: missing action');
   }
-  var picked = pickTrustedClient();
+  var home = bridgeHomeOf(ws);
+  var picked = pickTrustedClient(home);
   var target = picked.client;
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.launch: no primary server connected', picked));
@@ -4492,7 +4539,7 @@ function cmdLaunchRelay(ws, id, cmd) {
     launchRelayPending.delete(relayId);
     sendError(ws, id, 'session.launch: primary server timed out');
   }, LAUNCH_RELAY_TIMEOUT_MS);
-  launchRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  launchRelayPending.set(relayId, { ws: ws, id: id, timer: timer, home: home });
   logMsg('info', 'session.launch: relaying to primary server', { relayId: relayId, action: action });
   sendEvent(target, 'launch-request', { relayId: relayId, action: action, params: params || {} });
 }
@@ -4500,6 +4547,7 @@ function cmdLaunchRelay(ws, id, cmd) {
 function cmdLaunchResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind, details = cmd.details;
   var pending = typeof relayId === 'number' ? launchRelayPending.get(relayId) : undefined;
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, "launch-result: not this Walnut's relay");
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true });
@@ -4541,7 +4589,8 @@ function cmdControlRelay(ws, id, cmd) {
   if (!targetSid) {
     return sendError(ws, id, 'session.control: missing sessionId');
   }
-  var picked = pickTrustedClient();
+  var home = bridgeHomeOf(ws);
+  var picked = pickTrustedClient(home);
   var target = picked.client;
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.control: no primary server connected', picked));
@@ -4552,7 +4601,7 @@ function cmdControlRelay(ws, id, cmd) {
     controlRelayPending.delete(relayId);
     sendError(ws, id, 'session.control: primary server timed out');
   }, action === 'server.voice.archive' && params && params.operation === 'transcribe' ? 900000 : CONTROL_RELAY_TIMEOUT_MS);
-  controlRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  controlRelayPending.set(relayId, { ws: ws, id: id, timer: timer, home: home });
   logMsg('info', 'session.control: relaying to primary server', { relayId: relayId, action: action, sid: targetSid });
   sendEvent(target, 'control-request', { relayId: relayId, action: action, sessionId: targetSid, params: params || {} });
 }
@@ -4560,6 +4609,7 @@ function cmdControlRelay(ws, id, cmd) {
 function cmdControlResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind, errorCode = cmd.errorCode;
   var pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined;
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, "control-result: not this Walnut's relay");
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true });
@@ -4622,7 +4672,7 @@ function relayTargetId(client) {
 function rerouteMessageRelays(closed) {
   for (const [relayId, pending] of messageRelayPending) {
     if (pending.target !== closed) continue;
-    var next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient().client : null;
+    var next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient(pending.home).client : null;
     if (next) {
       pending.target = next;
       pending.hops += 1;
@@ -4643,7 +4693,8 @@ function cmdMessageRelay(ws, id, cmd) {
   if (!targetSid || typeof message !== 'string' || message === '' || !messageId) {
     return sendError(ws, id, 'session.message: missing sessionId, message, or messageId');
   }
-  var picked = pickTrustedClient();
+  var home = bridgeHomeOf(ws);
+  var picked = pickTrustedClient(home);
   var target = picked.client;
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.message: no primary server connected', picked));
@@ -4655,7 +4706,7 @@ function cmdMessageRelay(ws, id, cmd) {
     sendError(ws, id, 'session.message: primary server timed out');
   }, MESSAGE_RELAY_TIMEOUT_MS);
   var request = { relayId: relayId, sessionId: targetSid, message: message, messageId: messageId, stopFence: cmd.stopFence == null ? null : cmd.stopFence };
-  messageRelayPending.set(relayId, { ws: ws, id: id, timer: timer, target: target, request: request, hops: 0 });
+  messageRelayPending.set(relayId, { ws: ws, id: id, timer: timer, target: target, request: request, hops: 0, home: home });
   logMsg('info', 'session.message: relaying to primary server', { relayId: relayId, sid: targetSid, messageId: messageId, to: relayTargetId(target) });
   sendEvent(target, 'message-request', request);
 }
@@ -4663,6 +4714,7 @@ function cmdMessageRelay(ws, id, cmd) {
 function cmdMessageResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind;
   var pending = typeof relayId === 'number' ? messageRelayPending.get(relayId) : undefined;
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, "message-result: not this Walnut's relay");
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true });
@@ -4783,6 +4835,14 @@ var gatewayClientHomes = new WeakMap();
 function bindGatewayClientHome(ws, home) {
   if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws));
   gatewayClientHomes.set(ws, home);
+}
+// A command that names another Walnut than the one its socket speaks for is refused
+// (walnut-scope-core.ts). An unbound socket may name any. Mirror daemon-standalone.ts.
+function refuseForeignHome(ws, id, cmd, what) {
+  if (!walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return false;
+  logMsg('warn', 'refused: the command names another Walnut than its socket', { what: what, walnut: walnutScope.label(walnutScope.askedHome(cmd)) });
+  sendError(ws, id, what + ': this socket speaks for another Walnut', { errorKind: 'not_owner' });
+  return true;
 }
 
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts,
@@ -4919,16 +4979,18 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
       if (!triggerCheckCore) return [];
       // Clock routines are not triggers a session lists, pauses or tests here.
       return [...armedTriggers.values()].filter(function (e) { return !!e.def.check; }).map(function (e) {
-        return {
+        var row = {
           def: e.def,
           status: {
             nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
             lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
           },
         };
+        if (e.home) row.home = e.home;
+        return row;
       });
     },
-    test: function (check, triggerId) { return runTriggerTest(check, triggerId); },
+    test: function (check, triggerId, home) { return runTriggerTest(check, triggerId, home || ''); },
     changed: function () { triggerHoldsChanged(); },
     cwdOf: function (sid) { var s = sessions.get(sid); return s ? s.cwd : undefined; },
   },
@@ -5013,7 +5075,9 @@ function primarySocketOpen(home) {
 
 function forwardToBackup(home, capability, callerSid, payload, respond) {
   var lead = leaderBook.backupLead(home);
-  var adapter = bridgeAdapter;
+  // The companion of this Walnut, on its own link.
+  var backupLink = bridgeLinkFor(home);
+  var adapter = backupLink ? backupLink.adapter : null;
   if (!lead || !adapter) return false;
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
@@ -5021,7 +5085,7 @@ function forwardToBackup(home, capability, callerSid, payload, respond) {
     gatewayRelayPending.delete(relayId);
     respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'));
   }, GATEWAY_HUB_TIMEOUT_MS);
-  gatewayRelayPending.set(relayId, { respond: respond, timer: timer, via: 'bridge' });
+  gatewayRelayPending.set(relayId, { respond: respond, timer: timer, via: 'bridge', bridge: adapter });
   logMsg('info', 'gateway: relaying to the backup leader', { relayId: relayId, capability: capability, callerSid: callerSid, epoch: lead.epoch });
   sendEvent(adapter, 'gateway-request', {
     relayId: relayId, capability: capability, callerSid: callerSid, payload: payload,
@@ -5033,6 +5097,7 @@ function forwardToBackup(home, capability, callerSid, payload, respond) {
 
 function cmdLeaderConfigure(ws, id, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only');
+  if (refuseForeignHome(ws, id, cmd, 'leader.configure')) return;
   try {
     var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
     bindGatewayClientHome(ws, rec.home);
@@ -5099,7 +5164,8 @@ function followerView(home) {
   if (!rec) return null;
   var age = leaderBook.primaryAgeMs(home);
   var companion = null;
-  try { if (bridgeConfig && bridgeConfig.enabled && bridgeConfig.url) companion = new URL(bridgeConfig.url.replace(/^ws/, 'http')).origin; } catch (e) { companion = null; }
+  var link = bridgeLinkFor(home);
+  try { if (link && link.config && link.config.enabled && link.config.url) companion = new URL(link.config.url.replace(/^ws/, 'http')).origin; } catch (e) { companion = null; }
   return {
     walnutId: rec.walnutId,
     home: home,
@@ -5113,7 +5179,7 @@ function followerView(home) {
     takeoverMs: LEADER_TAKEOVER_MS,
     // The window this daemon calls the Mac away by (the replica's presence reads it).
     quietMs: LEADER_QUIET_MS,
-    bridge: { connected: bridgeAdapter != null, companion: companion },
+    bridge: { connected: !!(link && link.adapter), companion: companion },
     settings: hostServers.settingsOf(home),
     ...followerJournalView(home),
   };
@@ -5172,11 +5238,13 @@ function primaryClientFor(home) {
 // The primary socket a companion stream goes to (bridge-stream-v1): a server
 // socket that named its Walnut here, the one heard last, never a quiet one. Its
 // bulk channel names none and drops stream frames. Twin of daemon-standalone.ts.
-function primaryForBridge() {
+function primaryForBridge(home) {
   var now = Date.now();
   var best = null, bestAt = -Infinity;
   for (const client of wsClients) {
     if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue;
+    // A named link's companion reaches its own Walnut's primary only.
+    if (!servesBridgeHome(client, home || '')) continue;
     var at = typeof client.lastHeardAt === 'number' ? client.lastHeardAt : now;
     if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue;
     best = client;
@@ -5194,7 +5262,8 @@ function streamTarget(ws, to) {
       return p ? { link: p, meta: { from: 'follower', home: fhome } } : { why: 'the Mac is not linked to this host' };
     }
     if (to === 'companion') {
-      return bridgeAdapter ? { link: bridgeAdapter, meta: { from: 'follower', home: fhome } } : { why: 'the cloud companion is not linked to this host' };
+      var companionLink = bridgeLinkFor(fhome);
+      return companionLink && companionLink.adapter ? { link: companionLink.adapter, meta: { from: 'follower', home: fhome } } : { why: 'the cloud companion is not linked to this host' };
     }
     return { why: 'a follower opens streams to the primary or the companion' };
   }
@@ -5210,7 +5279,7 @@ function streamTarget(ws, to) {
   // leads; a stream whose request is never written is then answered on the companion. Twin of daemon-standalone.ts.
   if (ws.origin === 'bridge') {
     if (to !== 'primary') return { why: 'the companion opens streams to the primary only' };
-    var pc = primaryForBridge();
+    var pc = primaryForBridge(bridgeHomeOf(ws));
     return pc ? { link: pc, meta: { from: 'companion', home: gatewayClientHomes.get(pc) } } : { why: 'no primary server connected' };
   }
   var home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined;
@@ -5337,6 +5406,7 @@ function cmdServerConfigure(ws, id, cmd) {
 function cmdServerStatus(ws, id, cmd) {
   var home = ws.origin === 'follower' ? ws.followerHome : (typeof cmd.home === 'string' ? cmd.home : '');
   if (!home) return sendError(ws, id, 'server.status: missing home');
+  if (ws.origin !== 'follower' && refuseForeignHome(ws, id, cmd, 'server.status')) return;
   sendOk(ws, id, { status: hostServers.status(home) });
 }
 
@@ -5447,11 +5517,18 @@ function cmdJobsLogs(ws, id, cmd) {
 
 function cmdLeaderClaim(ws, id, cmd) {
   if (ws.origin === 'bridge') {
+    // A named link claims only its own Walnut's lead (never fence another companion).
+    var ownHome = bridgeHomeOf(ws);
+    var ownRec = ownHome ? leaderBook.recordOf(ownHome) : null;
+    if (ownHome && ((ownRec ? ownRec.walnutId : undefined) !== cmd.walnutId || (typeof cmd.home === 'string' && cmd.home !== ownHome))) {
+      return sendError(ws, id, "leader.claim: another Walnut's lead", { errorKind: 'not_owner' });
+    }
     var r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch);
     if (!r.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch })); } catch (e) {} return; }
     return sendOk(ws, id, { epoch: r.record.epoch, holder: r.record.holder });
   }
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home');
+  if (refuseForeignHome(ws, id, cmd, 'leader.claim')) return;
   var rec = leaderBook.primaryClaim(cmd.home);
   if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first');
   bindGatewayClientHome(ws, rec.home);
@@ -5459,13 +5536,18 @@ function cmdLeaderClaim(ws, id, cmd) {
 }
 
 function cmdLeaderWitness(ws, id) {
-  sendOk(ws, id, { walnuts: leaderBook.witness(primarySocketOpen), takeoverMs: LEADER_TAKEOVER_MS });
+  // A named bridge link hears only its own Walnut.
+  var own = bridgeHomeOf(ws);
+  var ownRec = own ? leaderBook.recordOf(own) : null;
+  var walnuts = leaderBook.witness(primarySocketOpen).filter(function (w) { return !own || (!!ownRec && w.walnutId === ownRec.walnutId); });
+  sendOk(ws, id, { walnuts: walnuts, takeoverMs: LEADER_TAKEOVER_MS });
 }
 
 async function cmdLeaderDeliver(ws, id, cmd) {
   if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.deliver: the cloud bridge only');
   var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
   if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, "leader.deliver: another Walnut's companion", { errorKind: 'refused' });
   if (!cmd.delivery || typeof cmd.delivery !== 'object') return sendError(ws, id, 'leader.deliver: missing delivery');
   var r = await offlineHost.deliverFromLeader(f.home, cmd.delivery);
   if (r.ok) return sendOk(ws, id, { result: r.result });
@@ -5476,6 +5558,7 @@ async function cmdLeaderSettings(ws, id, cmd) {
   if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.settings: the cloud bridge only');
   var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
   if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, "leader.settings: another Walnut's companion", { errorKind: 'refused' });
   var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.settings: not a session of this Walnut on this host');
   var r = await liveSettings.apply(sid, { model: cmd.model, effort: cmd.effort });
@@ -5494,6 +5577,7 @@ async function cmdLeaderControl(ws, id, cmd) {
   if (ws.origin !== 'bridge') return sendError(ws, id, 'leader.control: the cloud bridge only');
   var f = leaderBook.fence(cmd.walnutId, cmd.epoch);
   if (!f.ok) { try { ws.send(JSON.stringify({ id: id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })); } catch (e) {} return; }
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, "leader.control: another Walnut's companion", { errorKind: 'refused' });
   var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.control: not a session of this Walnut on this host');
   var session = sessions.get(sid);
@@ -5537,6 +5621,8 @@ async function cmdLeaderControl(ws, id, cmd) {
 async function cmdSessionPermission(ws, id, cmd) {
   if (ws.origin !== 'bridge') return sendError(ws, id, 'session.permission: the cloud bridge only', { errorKind: 'refused' });
   if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' });
+  var owner = sessionHomeOf(cmd.sid);
+  if (owner && !bridgeSpeaksFor(ws, owner)) return sendError(ws, id, 'session.permission: not a session of this Walnut', { errorKind: 'refused' });
   var r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission');
   if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind });
   return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
@@ -5893,6 +5979,7 @@ function cmdHostSlice(ws, id, cmd) {
     // A probe (host-slice-probe-v1): the Mac names the copy it would send. Holding it,
     // this daemon binds the socket as if it had come, so a reconnect sends no copy.
     if (cmd.slice === undefined && typeof cmd.home === 'string' && typeof cmd.hash === 'string') {
+      if (refuseForeignHome(ws, id, cmd, 'host.slice')) return;
       var have = offlineHost.holdsSlice(cmd.home, cmd.hash, cmd.asOf);
       if (have) bindGatewayClientHome(ws, cmd.home);
       return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false });
@@ -5901,6 +5988,7 @@ function cmdHostSlice(ws, id, cmd) {
     var slice = typeof cmd.sliceGz === 'string'
       ? JSON.parse(zlib.gunzipSync(Buffer.from(cmd.sliceGz, 'base64')).toString('utf8'))
       : cmd.slice;
+    if (refuseForeignHome(ws, id, { home: slice && slice.home }, 'host.slice')) return;
     var r = offlineHost.configure(slice);
     bindGatewayClientHome(ws, slice.home);
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) });
@@ -5912,6 +6000,7 @@ function cmdHostSlice(ws, id, cmd) {
 // kinds (journal-v2): the v2 kinds the Mac applies; absent, an older Mac's v1 prefix.
 function cmdOfflineDrain(ws, id, cmd) {
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home');
+  if (refuseForeignHome(ws, id, cmd, 'offline.drain')) return;
   var kinds = Array.isArray(cmd.kinds) ? cmd.kinds.filter(function (k) { return typeof k === 'string'; }) : null;
   var out = offlineHost.drain(cmd.home, kinds);
   // A batch whose freeze could not be saved is never handed out (its ack could not be saved either).
@@ -5924,7 +6013,10 @@ function cmdOfflineDrain(ws, id, cmd) {
 function cmdOfflineAck(ws, id, cmd) {
   var seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined;
   if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo');
-  var held = offlineHost.triggerHolds().size;
+  if (refuseForeignHome(ws, id, cmd, 'offline.ack')) return;
+  // Counted for this Walnut alone: another Walnut's hold of the same id must not hide a change.
+  var holdsHere = function () { var m = offlineHost.triggerHoldsByHome().get(cmd.home); return m ? m.size : 0; };
+  var held = holdsHere();
   // now: the Mac's clock as it acks (a host replica's overlay compares on it, overlay.ts).
   var r = offlineHost.ack(cmd.home, seqs ? Object.assign({ seqs: seqs }, typeof cmd.now === 'number' ? { leaderNow: cmd.now } : {}) : cmd.upTo);
   if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' });
@@ -5932,13 +6024,14 @@ function cmdOfflineAck(ws, id, cmd) {
   sendOk(ws, id, r);
   // The server took the trigger changes made here: from now on its set alone
   // decides (a change it refused is undone here too; its push for one it applied follows).
-  if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged();
+  if (held > 0 && holdsHere() !== held) triggerHoldsChanged();
 }
 
 // The host's copy (host-replica-v1): trusted sockets only, like host.slice
 // (twin of daemon-standalone.ts).
 function cmdReplica(ws, id, op, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'replica.' + op + ': trusted clients only');
+  if (refuseForeignHome(ws, id, cmd, 'replica.' + op)) return;
   try {
     var home = cmd.home;
     // confirm/confirmFor (note-journal-v1): the leader's override of the half rule, bound to its manifest.
@@ -5956,6 +6049,7 @@ function cmdReplica(ws, id, op, cmd) {
 // The host's copy of the notes' pictures (attachment-copy-v1): trusted sockets only, like replica.*.
 function cmdAttachments(ws, id, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, String(cmd.cmd) + ': trusted clients only');
+  if (refuseForeignHome(ws, id, cmd, String(cmd.cmd))) return;
   return attachmentCopy.command(cmd.home, cmd.cmd, cmd).then(function (r) {
     if (r.ok === true) return sendOk(ws, id, r);
     // A refusal the leader reads (offset, hash_mismatch, manifest_removes_most_rows) carries its code and sizes.
@@ -6108,7 +6202,7 @@ function relayToPrimary(target, home, capability, callerSid, payload, respond, r
 function cmdGatewayResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorCode = cmd.errorCode, detail = cmd.detail;
   var pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined;
-  if (pending && (ws.origin === 'bridge') !== (pending.via === 'bridge')) {
+  if (pending && ((ws.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId: relayId, fromBridge: ws.origin === 'bridge' });
     return sendError(ws, id, 'gateway-result: not sent to this socket');
   }
@@ -6447,17 +6541,21 @@ function cmdMobileEvent(ws, id, cmd) {
   if (typeof kind !== 'string' || !kind) {
     return sendError(ws, id, 'mobile-event: missing kind');
   }
-  if (!bridgeAdapter || !bridgeUplink) {
+  // The pushing server's own Walnut's link (the home it names, else its socket's).
+  if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, 'mobile-event: this socket speaks for another Walnut');
+  var link = bridgeLinkFor(walnutScope.askedHome(cmd) || gatewayClientHomes.get(ws) || '');
+  var uplink = link && link.adapter ? link.uplink : null;
+  if (!uplink) {
     return sendOk(ws, id, { relayed: false });
   }
   // Truthful ack: queued = paced behind unconfirmed bytes; relayed:false = the
   // uplink refused it (closing, or over its queue cap).
-  var outcome = bridgeUplink.send(JSON.stringify({ ev: 'mobile-event', kind: kind, data: data == null ? null : data }));
+  var outcome = uplink.send(JSON.stringify({ ev: 'mobile-event', kind: kind, data: data == null ? null : data }));
   sendOk(ws, id, {
     relayed: outcome !== 'dropped',
     queued: outcome === 'queued',
-    queuedBytes: bridgeUplink.queuedBytes,
-    connId: bridgeConnId,
+    queuedBytes: uplink.queuedBytes,
+    connId: link.connId,
   });
 }
 
@@ -7598,31 +7696,82 @@ function checkCronFires(sid, session) {
 // outlives its session and fires inside a stranger (2026-08-09 incident).
 // Back-compat: a legacy server sets WALNUT_ENFORCE_SESSION_CRON=1 at spawn →
 // synthesize the built-in rule set; WALNUT_ALLOW_DURABLE_CRON=1 kills all.
-var HOOKS_FILE = path.join(STATE_DIR_OR_RUNTIME, 'hooks.json');
-var daemonHooks = null;
-// undefined = unknown (never read / write in flight), null = provably absent.
-// A cron launch is blocked unless the hooks on disk match what it recorded.
-var persistedHooksHash = undefined;
+// One rules JSON per Walnut (walnut-scope-core.ts): a push that names its home
+// replaces only that Walnut's rules, which apply only to its sessions; one with no
+// home (an older server) is the unnamed copy in hooks.json, applied to every
+// session whose Walnut pushed none. An unmarked hooks.json (an older daemon's one
+// copy for everyone) applies the same way until the first named push drops it.
+// Mirror daemon-standalone.ts.
+var HOOKS_DIR = STATE_DIR_OR_RUNTIME;
+var HOOKS_FILE = path.join(HOOKS_DIR, 'hooks.json');
+// home ('' = unnamed) -> { config, persistedHash, at }. persistedHash: undefined =
+// unknown (never read / write in flight), null = provably absent. A cron launch is
+// blocked unless the hooks on disk match what it recorded.
+var daemonHooksByHome = new Map();
+var hooksInherited = false;
+// For a session no copy covers: null = provably no hooks file, undefined = unknown.
+var hooksNoneOnDisk = undefined;
+function readHooksFile(file) {
+  var loaded = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  // Same shape gate as cmdHooksConfigure: a wrong-version/shape file (e.g.
+  // left by a future daemon) falls through to the env fallback, not silence.
+  return loaded && loaded.version === 1 && Array.isArray(loaded.hooks) ? loaded : null;
+}
 function loadDaemonHooksAtBoot() {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return;
+  walnutScope.scopeDirs(fs, HOOKS_DIR).forEach(function (pair) {
+    try {
+      var loaded = readHooksFile(path.join(pair[1], 'hooks.json'));
+      if (!loaded || typeof loaded.home !== 'string' || walnutScope.keyOf(loaded.home) !== pair[0]) return;
+      daemonHooksByHome.set(loaded.home, { config: loaded, persistedHash: typeof loaded.hash === 'string' ? loaded.hash : undefined, at: 0 });
+      logMsg('info', 'daemon hooks loaded from disk', { walnut: pair[0], hash: loaded.hash, hooks: loaded.hooks.length });
+    } catch (e) { /* unreadable: that Walnut pushes again at connect */ }
+  });
+  var persistedHash = undefined;
+  hooksNoneOnDisk = undefined;
   try {
-    var loaded = JSON.parse(fs.readFileSync(HOOKS_FILE, 'utf-8'));
-    // Same shape gate as cmdHooksConfigure: a wrong-version/shape file (e.g.
-    // left by a future daemon) falls through to the env fallback, not silence.
-    if (loaded && loaded.version === 1 && Array.isArray(loaded.hooks)) {
-      daemonHooks = loaded;
-      persistedHooksHash = typeof loaded.hash === 'string' ? loaded.hash : undefined;
-      logMsg('info', 'daemon hooks loaded from disk', { hash: loaded.hash, hooks: loaded.hooks.length });
+    var loaded = readHooksFile(HOOKS_FILE);
+    if (loaded) {
+      daemonHooksByHome.set('', { config: loaded, persistedHash: typeof loaded.hash === 'string' ? loaded.hash : undefined, at: 0 });
+      hooksInherited = loaded.scoped !== 1;
+      logMsg('info', 'daemon hooks loaded from disk', { walnut: 'unnamed', hash: loaded.hash, hooks: loaded.hooks.length, inherited: hooksInherited });
       return;
     }
   } catch (err) {
-    if (err && err.code === 'ENOENT') persistedHooksHash = null;
+    // No file: a cron restore can tell that no hooks were ever on disk.
+    if (err && err.code === 'ENOENT') persistedHash = null;
   }
+  hooksNoneOnDisk = persistedHash;
   if (process.env.WALNUT_ENFORCE_SESSION_CRON === '1') {
-    persistedHooksHash = undefined;
-    daemonHooks = { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] };
+    daemonHooksByHome.set('', { config: { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] }, persistedHash: undefined, at: 0 });
     logMsg('info', 'daemon hooks synthesized from WALNUT_ENFORCE_SESSION_CRON (legacy server)');
   }
+}
+/** The copy a session runs under: its Walnut's, else the unnamed one. */
+function hooksEntryForSession(sid) {
+  var home = typeof sid === 'string' && sid ? sessionHomeOf(sid) : '';
+  return (home && daemonHooksByHome.get(home)) || daemonHooksByHome.get('');
+}
+function hooksForSession(sid) {
+  var entry = hooksEntryForSession(sid);
+  return entry ? entry.config : null;
+}
+/** The hooks on disk a session's cron restore was recorded under (daemon-cron-runtime.ts). */
+function persistedHooksHashFor(sid) {
+  var entry = hooksEntryForSession(sid);
+  return entry ? entry.persistedHash : hooksNoneOnDisk;
+}
+/**
+ * What a service handover carries: one rules file, read back as an unmarked (so
+ * inherited) copy, which each Walnut's next push replaces. The unnamed copy when
+ * there is one, else the latest push.
+ */
+function handoverHooks() {
+  var unnamed = daemonHooksByHome.get('');
+  if (unnamed) return unnamed.config;
+  var latest = null;
+  daemonHooksByHome.forEach(function (entry) { if (!latest || entry.at > latest.at) latest = entry; });
+  return latest ? latest.config : null;
 }
 function builtinSessionOnlyCronHook() {
   return {
@@ -7669,7 +7818,7 @@ function evalDaemonHookRules(config, point, ctx) {
 }
 function hookActions(point, ctx) {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return [];
-  try { return evalDaemonHookRules(daemonHooks, point, ctx); } catch { return []; }
+  try { return evalDaemonHookRules(hooksForSession(ctx && ctx.sid), point, ctx); } catch { return []; }
 }
 async function cmdHooksConfigure(ws, id, cmd) {
   return sessionStartGate.run('hooks.configure', function () { return configureDaemonHooks(ws, id, cmd); });
@@ -7679,13 +7828,30 @@ async function configureDaemonHooks(ws, id, cmd) {
   if (!next || next.version !== 1 || !Array.isArray(next.hooks) || typeof next.hash !== 'string') {
     return sendError(ws, id, 'hooks.configure: invalid config');
   }
-  var changed = !daemonHooks || next.hash !== daemonHooks.hash;
-  if (SERVICE_MODE && DAEMON_STATE_DIR && cronRuntimeCore && (changed || persistedHooksHash !== next.hash)) {
-    persistedHooksHash = undefined;
-    await cronRuntimeCore.persistCronHooks(DAEMON_STATE_DIR, next);
-    persistedHooksHash = next.hash;
+  var scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'hooks.configure');
+  if (!scope.ok) return sendError(ws, id, scope.error, { errorKind: 'not_owner' });
+  var home = scope.home;
+  var prev = daemonHooksByHome.get(home);
+  // An unnamed push over an inherited copy makes the file this daemon's own (marked).
+  var changed = !prev || next.hash !== prev.config.hash || (!home && hooksInherited);
+  // What goes to disk: the unnamed copy marked as this daemon's own, a named one with its home.
+  var stored = home ? Object.assign({}, next, { home: home, scoped: 1 }) : Object.assign({}, next, { scoped: 1 });
+  var dir = walnutScope.dirFor(HOOKS_DIR, home);
+  var persistedHash = prev ? prev.persistedHash : undefined;
+  if (SERVICE_MODE && DAEMON_STATE_DIR && cronRuntimeCore && (changed || persistedHash !== next.hash)) {
+    persistedHash = undefined;
+    await cronRuntimeCore.persistCronHooks(dir, stored);
+    persistedHash = next.hash;
   }
-  daemonHooks = next;
+  daemonHooksByHome.set(home, { config: next, persistedHash: persistedHash, at: Date.now() });
+  if (!home) hooksInherited = false;
+  // The first push that names its Walnut ends the copy an older daemon left for everyone.
+  if (home && hooksInherited) {
+    hooksInherited = false;
+    daemonHooksByHome.delete('');
+    try { fs.unlinkSync(HOOKS_FILE); } catch (e) {}
+    logMsg('info', "daemon hooks: the copy an older daemon left is replaced by each Walnut's own", { walnut: walnutScope.label(home) });
+  }
   // The kill switch gates EVALUATION (hookActions), not storage — accepting
   // the push keeps the daemon current for when the switch is lifted, but an
   // operator debugging "why is nothing enforced" needs to see the switch.
@@ -7697,10 +7863,12 @@ async function configureDaemonHooks(ws, id, cmd) {
     // connect re-pushes) but must be visible: an unwritable DAEMON_DIR means
     // enforcement silently reverts to zero-hook on the next daemon restart.
     if (!SERVICE_MODE) {
-      try { fs.writeFileSync(HOOKS_FILE, JSON.stringify(next), { mode: 0o600 }); }
-      catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: err.message }); }
+      try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path.join(dir, 'hooks.json'), JSON.stringify(stored), { mode: 0o600 });
+      } catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: err.message }); }
     }
-    logMsg('info', 'daemon hooks configured', { hash: next.hash, hooks: next.hooks.length });
+    logMsg('info', 'daemon hooks configured', { walnut: walnutScope.label(home), hash: next.hash, hooks: next.hooks.length });
   }
   return sendOk(ws, id, { applied: true, changed: changed, hash: next.hash });
 }
@@ -7721,7 +7889,12 @@ async function configureDaemonHooks(ws, id, cmd) {
 // session by this daemon (deliverUnclaimedFires), then replayed with host set.
 // Every pure rule comes from the trigger-check-core.cjs sidecar, so a source
 // deploy without it answers "triggers unsupported".
-var TRIGGERS_FILE = path.join(STATE_DIR_OR_RUNTIME, 'triggers.json');
+// One set per Walnut (walnut-scope-core.ts): a push names its Walnut (home) and
+// replaces only that Walnut's set, its fires go only to that Walnut's sockets, and
+// its files sit under walnuts/<key>/. A push with no home is the unnamed scope, kept
+// in the files and with the fan-out it always had. Mirror daemon-standalone.ts.
+var TRIGGERS_BASE_DIR = STATE_DIR_OR_RUNTIME;
+var TRIGGERS_FILE = path.join(TRIGGERS_BASE_DIR, 'triggers.json');
 // Each trigger's memory (the ids it reported, its script's state, its unacked
 // fires) must outlive a reboot, and the production runtime dir does not: /tmp is
 // emptied at boot (2026-10-06: one reboot made a watch re-report every item it had
@@ -7753,27 +7926,56 @@ var armedTriggers = new Map();
 // delivered here, until the server has recorded it: a run the host delivered is
 // the routine's history, one nobody took is the server's to run. triggers.json
 // keeps them, so a restart goes on replaying. Mirror daemon-standalone.ts.
+// Both maps are keyed by triggerKey(home, id), so two Walnuts may even use one id.
 var drainingTriggers = new Map();
 
+// The map key of a Walnut's trigger: the unnamed scope keeps the plain id it always had.
+function triggerKey(home, id) {
+  return home ? home + '\u0000' + id : id;
+}
+
 // The armed or draining entry of a trigger: what replays, claims, acks and host deliveries act on.
-function heldTrigger(id) {
-  return armedTriggers.get(id) || drainingTriggers.get(id);
+function heldTrigger(home, id) {
+  var key = triggerKey(home, id);
+  return armedTriggers.get(key) || drainingTriggers.get(key);
 }
 
-// Every entry whose fires still go to the server.
-function fireHolders() {
-  return [...armedTriggers.values(), ...drainingTriggers.values()];
+// The entry a Walnut's command is about. The unnamed copy an older daemon left
+// (inherited) still fans its fires out to every server, so any Walnut may claim and
+// ack those, as before; the claim's owner check still guards the delivery.
+function triggerFor(home, id) {
+  var own = heldTrigger(home, id);
+  if (own) return own;
+  var inherited = triggerScopes.get('');
+  return home && inherited && inherited.inherited ? heldTrigger('', id) : undefined;
 }
 
-// Seqs this host is writing into a session right now, by trigger id (claims
+// Every entry whose fires still go to the server (of one Walnut when home is given).
+function fireHolders(home) {
+  var all = [...armedTriggers.values(), ...drainingTriggers.values()];
+  return home === undefined ? all : all.filter(function (e) { return e.home === home; });
+}
+
+// The armed (not draining) entries of one Walnut.
+function armedOf(home) {
+  return [...armedTriggers.values()].filter(function (e) { return e.home === home; });
+}
+
+// Seqs this host is writing into a session right now, by triggerKey (claims
 // answer busy). Keyed by id, not held on the entry: a configure that re-arms the
 // trigger mid-write must not make its fires claimable.
 var hostDeliveriesInFlight = new Map();
-var armedTriggersHash = null;
-// The set as the server last sent it (or triggers.json kept it); what is armed is
-// this set with the holds a session made here while its Walnut was away
-// (offlineHost.triggerHolds). Mirror daemon-standalone.ts.
-var configuredTriggerDefs = [];
+// Per Walnut: { configured, hash, inherited }: the set as its server last sent it
+// (or its triggers.json kept it) and that set's hash; what is armed is this set with
+// the holds a session made here while its Walnut was away (offlineHost.triggerHolds).
+// inherited: the unnamed copy loaded from a file an older daemon wrote (no scoped
+// marker), which the first named push takes over. Mirror daemon-standalone.ts.
+var triggerScopes = new Map();
+function triggerScopeOf(home) {
+  var scope = triggerScopes.get(home);
+  if (!scope) { scope = { configured: [], hash: null }; triggerScopes.set(home, scope); }
+  return scope;
+}
 var triggerTickTimer = null;
 // keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
 var runtimeKeepTimer = null;
@@ -7797,8 +7999,8 @@ function hostDeliveryGraceMs() {
 // restarted daemon has no marks and re-sends every pending fire once, which is
 // exactly what at-least-once wants. armedAtMs: fires left from before this daemon
 // armed the trigger give the server a fresh grace before the host delivers them.
-function newArmedTrigger(def, state, nextRunAtMs, now, keepFires) {
-  var entry = { def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
+function newArmedTrigger(home, def, state, nextRunAtMs, now, keepFires) {
+  var entry = { home: home, def: def, state: state, nextRunAtMs: nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now };
   if (def.clock) armClock(entry, now, nextRunAtMs - now, keepFires === true);
   return entry;
 }
@@ -7822,7 +8024,7 @@ function armClock(entry, now, delayMs, keepFires) {
     entry.state.clock = clock;
     // A new handover: runs nobody took under an older one are not this clock's.
     if (!keepFires) triggerCheckCore.dropStaleClockFires(entry.state, spec.fromMs);
-    persistTriggerState(entry.def.id, entry.state);
+    persistTriggerState(entry.home, entry.def.id, entry.state);
     var armed = {
       id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs,
       handover: !prev ? 'first' : prev.fromMs === spec.fromMs ? 'past-last-run' : 'new',
@@ -7850,7 +8052,7 @@ function runClock(entry, manual) {
   // Arbitrated (a server claims it, else the host takes it) when the host can deliver
   // the run itself: into a session here, or by starting the routine's session here.
   var fire = owed ? null : triggerCheckCore.applyClockFire(entry.state, now, slotMs, !!entry.def.deliver || !!entry.def.start, clock.fromMs);
-  persistTriggerState(entry.def.id, entry.state);
+  persistTriggerState(entry.home, entry.def.id, entry.state);
   var line = { id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs: slotMs, manual: manual, nextRunAtMs: entry.state.clock && entry.state.clock.nextRunAtMs !== undefined ? entry.state.clock.nextRunAtMs : null };
   if (fire) line.seq = fire.seq;
   logMsg('info', 'clock routine run', line);
@@ -7865,10 +8067,10 @@ function clockReportOf(tid, entry) {
   return report;
 }
 
-function clockReports() {
+function clockReports(home) {
   var out = [];
-  for (const [tid, entry] of armedTriggers) {
-    if (entry.def.clock) out.push(clockReportOf(tid, entry));
+  for (const entry of armedOf(home)) {
+    if (entry.def.clock) out.push(clockReportOf(entry.def.id, entry));
   }
   return out;
 }
@@ -7879,7 +8081,7 @@ function releaseClock(tid, entry) {
   var pending = entry.state.pendingFires.length;
   if (pending > 0) {
     entry.nextRunAtMs = Number.POSITIVE_INFINITY;
-    drainingTriggers.set(tid, entry);
+    drainingTriggers.set(triggerKey(entry.home, tid), entry);
   }
   logMsg('info', 'clock routine released', { id: tid, pending: pending });
   var report = clockReportOf(tid, entry);
@@ -7888,8 +8090,8 @@ function releaseClock(tid, entry) {
 }
 
 // A released clock that still has fires to replay: no slot runs.
-function drainingEntry(def, state, now) {
-  return { def: def, state: state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now };
+function drainingEntry(home, def, state, now) {
+  return { home: home, def: def, state: state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now };
 }
 
 // Which trigger a command is about. The trigger id rides triggerId, never id:
@@ -7900,47 +8102,102 @@ function triggerIdOf(cmd) {
   return typeof cmd.triggerId === 'string' ? cmd.triggerId : '';
 }
 
-function triggerStatePath(id) {
-  return path.join(TRIGGER_STATE_DIR, triggerCheckCore.triggerStateFileName(id));
+// Where a Walnut's trigger memory is kept: the unnamed scope keeps the old dir.
+function triggerStateDirOf(home) {
+  return walnutScope.dirFor(TRIGGER_STATE_DIR, home);
 }
 
-function readTriggerState(id, nowMs) {
+function triggerStatePath(home, id) {
+  return path.join(triggerStateDirOf(home), triggerCheckCore.triggerStateFileName(id));
+}
+
+function mtimeOf(file) {
+  try { return fs.statSync(file).mtimeMs; } catch (err) { return undefined; }
+}
+
+// Another named Walnut already keeps the shared copy of this id.
+function sharedByAnother(home, id) {
+  for (const map of [armedTriggers, drainingTriggers]) {
+    for (const e of map.values()) if (e.home && e.home !== home && e.def.id === id && e.state.sharedCopy) return true;
+  }
+  return false;
+}
+
+function readTriggerState(home, id, nowMs) {
+  var own = triggerStatePath(home, id);
+  var mine = null;
   try {
-    return triggerCheckCore.coerceHostState(JSON.parse(fs.readFileSync(triggerStatePath(id), 'utf-8')), nowMs);
+    mine = triggerCheckCore.coerceHostState(JSON.parse(fs.readFileSync(own, 'utf-8')), nowMs);
   } catch (err) {
     if (!err || err.code !== 'ENOENT') return triggerCheckCore.emptyHostState(nowMs);
   }
-  // Not here yet: a daemon from before the move wrote it to the old dir, and the
-  // upgrade itself must not re-fire everything it had reported.
-  for (var i = 0; i < LEGACY_TRIGGER_STATE_DIRS.length; i++) {
-    var dir = LEGACY_TRIGGER_STATE_DIRS[i];
+  // A trigger this Walnut took over keeps the shared copy too, and a downgraded daemon
+  // may have run it there since: the newer of the two is its memory. Only while the
+  // unnamed set does not run that trigger itself. Mirror daemon-standalone.ts.
+  if (mine && mine.sharedCopy && home && !heldTrigger('', id)) {
+    var shared = path.join(TRIGGER_STATE_DIR, triggerCheckCore.triggerStateFileName(id));
+    if ((mtimeOf(shared) || 0) > (mtimeOf(own) || 0) + 1) {
+      try {
+        var picked = triggerCheckCore.coerceHostState(JSON.parse(fs.readFileSync(shared, 'utf-8')), nowMs);
+        picked.sharedCopy = true;
+        persistTriggerState(home, id, picked);
+        logMsg('info', 'trigger state read back from the shared copy', { id: id, scope: walnutScope.label(home) });
+        return picked;
+      } catch (err) { /* unreadable: keep this Walnut's own */ }
+    }
+  }
+  if (mine) return mine;
+  // Not here yet: an older daemon wrote it to the shared dir (a named Walnut's first
+  // push after a reboot left no set to inherit) or to an older dir, and the upgrade
+  // itself must not re-fire everything it had reported. The unnamed scope moves it
+  // from an older dir, as it always did; a named Walnut copies it, keeps the shared
+  // copy current from now on, and leaves it to a Walnut that already does.
+  var from = !home ? LEGACY_TRIGGER_STATE_DIRS
+    : heldTrigger('', id) || sharedByAnother(home, id) ? [] : [TRIGGER_STATE_DIR].concat(LEGACY_TRIGGER_STATE_DIRS);
+  for (var i = 0; i < from.length; i++) {
+    var dir = from[i];
     var legacy = path.join(dir, triggerCheckCore.triggerStateFileName(id));
     var raw;
     try { raw = JSON.parse(fs.readFileSync(legacy, 'utf-8')); } catch (err) { continue; }
     var state = triggerCheckCore.coerceHostState(raw, nowMs);
-    persistTriggerState(id, state);
-    if (fs.existsSync(triggerStatePath(id))) {
+    if (home) state.sharedCopy = true;
+    persistTriggerState(home, id, state);
+    if (!home && fs.existsSync(own)) {
       try { fs.unlinkSync(legacy); } catch {}
-      logMsg('info', 'trigger state moved to its durable dir', { id: id, from: dir, to: TRIGGER_STATE_DIR });
+      logMsg('info', 'trigger state moved to its durable dir', { id: id, from: dir, to: triggerStateDirOf(home) });
     }
     return state;
   }
   return triggerCheckCore.emptyHostState(nowMs);
 }
 
-function persistTriggerState(id, state) {
-  var file = triggerStatePath(id);
+function persistTriggerState(home, id, state) {
+  var file = triggerStatePath(home, id);
   var tmp = file + '.tmp';
   try {
-    fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(triggerStateDirOf(home), { recursive: true, mode: 0o700 });
     fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     fs.renameSync(tmp, file);
   } catch (err) {
     // In-memory state stays authoritative for this daemon's life; a persist
     // failure only costs the dedup set across a restart, so it must be visible
     // rather than fatal.
-    logMsg('warn', 'trigger state persist failed', { id: id, error: err && err.message });
+    logMsg('warn', 'trigger state persist failed', { id: id, scope: walnutScope.label(home), error: err && err.message });
     try { fs.unlinkSync(tmp); } catch {}
+  }
+  // The same memory where an older daemon reads it, for the Walnut that took it over.
+  if (!home || !state.sharedCopy || heldTrigger('', id)) return;
+  var shared = path.join(TRIGGER_STATE_DIR, triggerCheckCore.triggerStateFileName(id));
+  try {
+    fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(shared + '.tmp', JSON.stringify(Object.assign({}, state, { sharedCopy: undefined })), { mode: 0o600 });
+    fs.renameSync(shared + '.tmp', shared);
+    // Same mtime as this Walnut's own, so only an older daemon's later write reads as newer.
+    var at = fs.statSync(file);
+    fs.utimesSync(shared, at.atime, at.mtime);
+  } catch (err) {
+    logMsg('warn', 'trigger shared copy write failed', { id: id, scope: walnutScope.label(home), error: err && err.message });
+    try { fs.unlinkSync(shared + '.tmp'); } catch {}
   }
 }
 
@@ -7949,48 +8206,77 @@ function persistTriggerState(id, state) {
 // empty set) would otherwise destroy the dedup set, the script's cursor and every
 // unacked fire, and the recreated file would restart seq at 0. Age reclaims the
 // directory instead: a file untouched for the seen TTL belongs to a trigger
-// nobody re-armed, and its dedup set has expired anyway.
+// nobody re-armed, and its dedup set has expired anyway. Each Walnut's dir is
+// swept by what that Walnut holds.
 function pruneTriggerStateFiles(nowMs) {
-  var names = null;
-  try { names = fs.readdirSync(TRIGGER_STATE_DIR); } catch (err) { return; }
-  var armedFiles = new Set();
-  for (const tid of armedTriggers.keys()) armedFiles.add(triggerCheckCore.triggerStateFileName(tid));
-  for (const tid of drainingTriggers.keys()) armedFiles.add(triggerCheckCore.triggerStateFileName(tid));
-  for (var i = 0; i < names.length; i++) {
-    var name = names[i];
-    if (name.slice(-5) !== '.json' || armedFiles.has(name)) continue;
-    var file = path.join(TRIGGER_STATE_DIR, name);
-    try {
-      if (nowMs - fs.statSync(file).mtimeMs <= triggerCheckCore.TRIGGER_STATE_TTL_MS) continue;
-      fs.unlinkSync(file);
-      logMsg('info', 'trigger state pruned: unarmed and stale', { file: name });
-    } catch (err) { /* raced a write, or already gone */ }
+  var held = new Map();
+  for (const e of fireHolders()) {
+    var heldDir = triggerStateDirOf(e.home);
+    if (!held.has(heldDir)) held.set(heldDir, new Set());
+    held.get(heldDir).add(triggerCheckCore.triggerStateFileName(e.def.id));
+    // A taken-over trigger's shared copy is held too.
+    if (e.home && e.state.sharedCopy) {
+      if (!held.has(TRIGGER_STATE_DIR)) held.set(TRIGGER_STATE_DIR, new Set());
+      held.get(TRIGGER_STATE_DIR).add(triggerCheckCore.triggerStateFileName(e.def.id));
+    }
+  }
+  var dirs = [TRIGGER_STATE_DIR].concat(walnutScope.scopeDirs(fs, TRIGGER_STATE_DIR).map(function (pair) { return pair[1]; }));
+  for (var d = 0; d < dirs.length; d++) {
+    var names = null;
+    try { names = fs.readdirSync(dirs[d]); } catch (err) { continue; }
+    var armedFiles = held.get(dirs[d]) || new Set();
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      if (name.slice(-5) !== '.json' || armedFiles.has(name)) continue;
+      var file = path.join(dirs[d], name);
+      try {
+        if (nowMs - fs.statSync(file).mtimeMs <= triggerCheckCore.TRIGGER_STATE_TTL_MS) continue;
+        fs.unlinkSync(file);
+        var line = { file: name };
+        if (dirs[d] !== TRIGGER_STATE_DIR) line.dir = dirs[d];
+        logMsg('info', 'trigger state pruned: unarmed and stale', line);
+      } catch (err) { /* raced a write, or already gone */ }
+    }
   }
 }
 
-function persistTriggersFile(defs) {
-  var tmp = TRIGGERS_FILE + '.tmp';
+// A Walnut's triggers.json: the unnamed scope keeps the legacy file.
+function triggersFileOf(home) {
+  return home ? path.join(walnutScope.dirFor(TRIGGERS_BASE_DIR, home), 'triggers.json') : TRIGGERS_FILE;
+}
+
+// Write one Walnut's set. A named file carries its home (the dir name is a hash);
+// the unnamed one carries scoped: 1 (an older server wrote it after the split),
+// unless it is still the inherited copy, which stays unmarked so a restart still
+// hands it to the first named push.
+function persistTriggersFile(home) {
+  var target = triggersFileOf(home);
+  var tmp = target + '.tmp';
+  var scope = triggerScopes.get(home);
   try {
-    var file = { version: 1, triggers: defs };
-    var draining = [...drainingTriggers.values()].map(function (e) { return e.def; });
+    if (home) fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    var file = { version: 1 };
+    if (home) file.home = home;
+    else if (!(scope && scope.inherited)) file.scoped = 1;
+    file.triggers = scope ? scope.configured : [];
+    var draining = fireHolders(home).filter(function (e) { return drainingTriggers.get(triggerKey(home, e.def.id)) === e; }).map(function (e) { return e.def; });
     if (draining.length) file.draining = draining;
     fs.writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 });
-    fs.renameSync(tmp, TRIGGERS_FILE);
+    fs.renameSync(tmp, target);
   } catch (err) {
-    logMsg('warn', 'triggers persist failed (in-memory only)', { error: err && err.message });
+    logMsg('warn', 'triggers persist failed (in-memory only)', { scope: walnutScope.label(home), error: err && err.message });
     try { fs.unlinkSync(tmp); } catch {}
   }
 }
 
-function loadTriggersAtBoot() {
-  if (!triggerCheckCore) return;
-  var raw = null;
-  try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')); } catch (err) { return; }
+// One Walnut's triggers.json read at boot; home is '' for the legacy file. skip:
+// ids another copy of the set runs instead (loadTriggersAtBoot), left out here.
+function loadTriggerScope(home, file, raw, now, skip) {
+  skip = skip || new Set();
   if (!raw || raw.version !== 1 || !Array.isArray(raw.triggers)) {
-    logMsg('warn', 'triggers file ignored: unexpected shape', { file: TRIGGERS_FILE });
+    logMsg('warn', 'triggers file ignored: unexpected shape', { file: file });
     return;
   }
-  var now = Date.now();
   var defs = [];
   for (var i = 0; i < raw.triggers.length; i++) {
     var parsed = triggerCheckCore.validateTriggerDef(raw.triggers[i]);
@@ -7998,36 +8284,104 @@ function loadTriggersAtBoot() {
       logMsg('warn', 'trigger dropped at boot', { error: parsed.error });
       continue;
     }
+    if (skip.has(parsed.def.id)) continue;
     defs.push(parsed.def);
   }
-  configuredTriggerDefs = defs;
+  if (skip.size) logMsg('info', 'triggers held by a newer copy of the set left out', { scope: walnutScope.label(home), ids: [...skip] });
+  var scope = triggerScopeOf(home);
+  scope.configured = defs;
+  if (!home && raw.scoped !== 1) scope.inherited = true;
   // A pause made here while the server was away holds across a restart too.
-  var armedDefs = effectiveTriggerDefs(defs);
+  var armedDefs = effectiveTriggerDefs(home, defs);
   for (var d = 0; d < armedDefs.length; d++) {
-    armedTriggers.set(armedDefs[d].id, newArmedTrigger(armedDefs[d], readTriggerState(armedDefs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
+    armedTriggers.set(triggerKey(home, armedDefs[d].id), newArmedTrigger(home, armedDefs[d], readTriggerState(home, armedDefs[d].id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now));
   }
   // Released clocks with fires still unacked go on replaying them.
   var drainingDefs = Array.isArray(raw.draining) ? raw.draining : [];
   for (var r = 0; r < drainingDefs.length; r++) {
     var held = triggerCheckCore.validateTriggerDef(drainingDefs[r]);
-    if (!held.ok || armedTriggers.has(held.def.id)) continue;
-    var heldState = readTriggerState(held.def.id, now);
-    if (heldState.pendingFires.length > 0) drainingTriggers.set(held.def.id, drainingEntry(held.def, heldState, now));
+    if (!held.ok || skip.has(held.def.id) || armedTriggers.has(triggerKey(home, held.def.id))) continue;
+    var heldState = readTriggerState(home, held.def.id, now);
+    if (heldState.pendingFires.length > 0) drainingTriggers.set(triggerKey(home, held.def.id), drainingEntry(home, held.def, heldState, now));
   }
-  armedTriggersHash = triggerCheckCore.triggersSetHash(defs);
-  try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
-  pruneTriggerStateFiles(now);
-  logMsg('info', 'triggers loaded from disk', { count: defs.length, draining: drainingTriggers.size, hash: armedTriggersHash });
+  scope.hash = triggerCheckCore.triggersSetHash(defs);
+  var line = { scope: walnutScope.label(home), count: defs.length, draining: fireHolders(home).length - armedOf(home).length, hash: scope.hash };
+  if (scope.inherited) line.inherited = true;
+  logMsg('info', 'triggers loaded from disk', line);
 }
 
-// Trigger events go to EVERY trusted client; the bridge never sees one. Fanning
-// out rather than picking the first is what makes a second window (or a server
-// that reconnected while the old socket was still draining) see a fire at all;
-// the server dedups on (id, epoch, seq). Returns whether anyone received it.
-function sendTriggerEvent(ev, fields) {
+// The trigger ids a triggers.json names, armed or draining.
+function triggerIdsIn(raw) {
+  var out = new Set();
+  [raw ? raw.triggers : null, raw ? raw.draining : null].forEach(function (list) {
+    (Array.isArray(list) ? list : []).forEach(function (def) { if (def && typeof def.id === 'string') out.add(def.id); });
+  });
+  return out;
+}
+
+// Every Walnut's set: the legacy file, then each named one.
+function loadTriggersAtBoot() {
+  if (!triggerCheckCore) return;
+  var now = Date.now();
+  var named = [];
+  var dirs = walnutScope.scopeDirs(fs, TRIGGERS_BASE_DIR);
+  for (var i = 0; i < dirs.length; i++) {
+    var file = path.join(dirs[i][1], 'triggers.json');
+    var parsed = null;
+    try { parsed = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch (err) { continue; }
+    var home = parsed ? parsed.home : undefined;
+    if (typeof home !== 'string' || !home || walnutScope.keyOf(home) !== dirs[i][0]) {
+      logMsg('warn', 'triggers file ignored: its home does not match its dir', { file: file });
+      continue;
+    }
+    named.push({ home: home, file: file, raw: parsed, at: mtimeOf(file) || 0, ids: triggerIdsIn(parsed) });
+  }
+  // Known before the unnamed set arms, so it never takes a named Walnut's offline holds.
+  for (var n = 0; n < named.length; n++) triggerScopeOf(named[n].home);
+  var raw = null;
+  var legacy = true;
+  try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')); } catch (err) { legacy = false; }
+  // After a downgrade and an upgrade again, an unmarked set the older daemon wrote and
+  // a named one from before may both hold a trigger: it runs once, from the newer file.
+  var inherited = legacy && !!raw && raw.scoped !== 1;
+  var legacyAt = mtimeOf(TRIGGERS_FILE) || 0;
+  var legacyIds = inherited ? triggerIdsIn(raw) : new Set();
+  var legacySkip = new Set();
+  named.forEach(function (nm) {
+    nm.ids.forEach(function (tid) { if (legacyIds.has(tid) && nm.at >= legacyAt) legacySkip.add(tid); });
+  });
+  if (legacy) loadTriggerScope('', TRIGGERS_FILE, raw, now, legacySkip);
+  for (var m = 0; m < named.length; m++) {
+    var skip = new Set([...named[m].ids].filter(function (tid) { return legacyIds.has(tid) && named[m].at < legacyAt; }));
+    loadTriggerScope(named[m].home, named[m].file, named[m].raw, now, skip);
+  }
+  // Nothing on disk (a fresh daemon): no dir yet either.
+  if (triggerScopes.size === 0) return;
+  try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
+  pruneTriggerStateFiles(now);
+}
+
+// Whether a server socket speaks for home's triggers: the Walnut it configured
+// them for, else the Walnut it bound. The unnamed scope goes, as it always did, to
+// every server socket that did not configure a named set. Mirror daemon-standalone.ts.
+function triggerClientOf(client, home) {
+  var configured = client.triggerScope;
+  if (configured !== undefined) return configured === home;
+  return home ? gatewayClientHomes.get(client) === home : true;
+}
+
+// Trigger events go to EVERY trusted client of the trigger's Walnut; the bridge
+// never sees one. Fanning out rather than picking the first is what makes a second
+// window (or a server that reconnected while the old socket was still draining) see
+// a fire at all; the server dedups on (id, epoch, seq). The inherited unnamed copy
+// fans out to every server, as the one global set always did. Returns whether
+// anyone received it.
+function sendTriggerEvent(home, ev, fields) {
+  var inherited = triggerScopes.get('');
+  var everyone = !home && !!inherited && inherited.inherited === true;
   var delivered = false;
   for (const client of wsClients) {
-    if (isServerClient(client)) {
+    if (isServerClient(client) && (everyone || triggerClientOf(client, home))) {
       sendEvent(client, ev, fields);
       delivered = true;
     }
@@ -8050,7 +8404,7 @@ function triggerCadenceMs(entry) {
 function sendTriggerFire(entry, fire, replay) {
   // A clock reports its next slot while it holds it; a draining one holds none.
   var next = !entry.def.clock ? entry.nextRunAtMs
-    : armedTriggers.get(entry.def.id) === entry && entry.state.clock ? entry.state.clock.nextRunAtMs : undefined;
+    : armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry && entry.state.clock ? entry.state.clock.nextRunAtMs : undefined;
   var payload = {
     id: entry.def.id, epoch: entry.state.epoch, seq: fire.seq, atMs: fire.atMs, items: fire.items,
     durationMs: fire.durationMs,
@@ -8062,7 +8416,7 @@ function sendTriggerFire(entry, fire, replay) {
   if (fire.warnings && fire.warnings.length) payload.warnings = fire.warnings;
   if (fire.clock) payload.clock = fire.clock;
   if (replay) payload.replay = true;
-  var delivered = sendTriggerEvent('trigger.fired', payload);
+  var delivered = sendTriggerEvent(entry.home, 'trigger.fired', payload);
   if (delivered) entry.fireSentAt.set(fire.seq, Date.now());
   return delivered;
 }
@@ -8076,7 +8430,7 @@ async function runTrigger(entry) {
   // discarded then: the server no longer knows this id, so the fire would name a
   // stranger, and the persisted state would be a stale write racing whatever a
   // re-arm has already read from that file.
-  var stillArmed = function () { return armedTriggers.get(entry.def.id) === entry; };
+  var stillArmed = function () { return armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry; };
   try {
     var proc = await triggerCheckCore.runCheckProcess(entry.def.check, triggerCheckCore.buildCheckStdin(entry.state, startedAt), {
       env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
@@ -8091,12 +8445,12 @@ async function runTrigger(entry) {
     if (error) {
       triggerCheckCore.applyCheckError(entry.state, now);
       entry.nextRunAtMs = now + triggerCadenceMs(entry);
-      persistTriggerState(entry.def.id, entry.state);
+      persistTriggerState(entry.home, entry.def.id, entry.state);
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error: error, durationMs: proc.durationMs,
         consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
       });
-      sendTriggerEvent('trigger.checked', {
+      sendTriggerEvent(entry.home, 'trigger.checked', {
         id: entry.def.id, atMs: now, outcome: 'error', error: error, durationMs: proc.durationMs,
         nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
       });
@@ -8111,7 +8465,7 @@ async function runTrigger(entry) {
       arbitrated: !!entry.def.deliver,
     });
     entry.nextRunAtMs = now + triggerCadenceMs(entry);
-    persistTriggerState(entry.def.id, entry.state);
+    persistTriggerState(entry.home, entry.def.id, entry.state);
     logMsg('info', 'trigger run', {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
       seq: fire ? fire.seq : undefined, items: fire ? fire.items.length : undefined,
@@ -8130,7 +8484,7 @@ async function runTrigger(entry) {
     };
     if (decision.kind === 'quiet') { checked.reason = decision.reason; quiet.reason = decision.reason; }
     if (output.warnings && output.warnings.length) checked.warnings = output.warnings;
-    sendTriggerEvent('trigger.checked', checked);
+    sendTriggerEvent(entry.home, 'trigger.checked', checked);
     return quiet;
   } finally {
     entry.running = false;
@@ -8140,12 +8494,15 @@ async function runTrigger(entry) {
 // Re-send fires the server never acked. The configure replay only covers a
 // reconnect; this covers the server that stayed connected but lost the event (a
 // restart mid-frame, a dropped job write), which otherwise waited for the next
-// configure that may never come. Bails out on the first undelivered send: with no
-// trusted client there is nowhere to replay to this tick.
+// configure that may never come. A Walnut's first undelivered send ends its replay
+// this tick: with no client of it there is nowhere to replay to. The other Walnuts'
+// fires go on.
 function replayPendingFires(now) {
   if (!triggerCheckCore) return;
   var interval = triggerReplayMs();
+  var unreached = new Set();
   for (const entry of fireHolders()) {
+    if (unreached.has(entry.home)) continue;
     // Marks for acked (or trimmed) fires would otherwise pile up for the daemon's
     // life; pendingFires is the authority on what is still owed.
     if (entry.fireSentAt.size > entry.state.pendingFires.length) {
@@ -8157,7 +8514,7 @@ function replayPendingFires(now) {
       var fire = entry.state.pendingFires[f];
       var sentAt = entry.fireSentAt.get(fire.seq);
       if (sentAt !== undefined && now - sentAt < interval) continue;
-      if (!sendTriggerFire(entry, fire, true)) return;
+      if (!sendTriggerFire(entry, fire, true)) { unreached.add(entry.home); break; }
     }
   }
 }
@@ -8173,7 +8530,9 @@ function deliverUnclaimedFires(now) {
   for (const entry of fireHolders()) {
     const spec = entry.def.deliver;
     const id = entry.def.id;
-    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(id)) continue;
+    const home = entry.home;
+    const key = triggerKey(home, id);
+    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(key)) continue;
     const due = entry.state.pendingFires.filter(function (f) {
       return triggerCheckCore.fireDueOnHost(f, now, entry.armedAtMs, grace, triggerCheckCore.HOST_DELIVERY_RETRY_MS);
     });
@@ -8187,12 +8546,12 @@ function deliverUnclaimedFires(now) {
         dueAtMs: Math.min.apply(null, due.map(function (f) { return f.clock ? f.clock.slotMs : f.atMs; })), deliveredAtMs: now,
       })
       : triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now });
-    hostDeliveriesInFlight.set(id, new Set(seqs));
+    hostDeliveriesInFlight.set(key, new Set(seqs));
     offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then(function (r) {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
       // re-armed it, released it into the draining set, or disarmed it.
-      var current = heldTrigger(id);
-      var state = current ? current.state : readTriggerState(id, Date.now());
+      var current = heldTrigger(home, id);
+      var state = current ? current.state : readTriggerState(home, id, Date.now());
       if (state.epoch !== epoch) {
         logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id: id, seqs: seqs, delivered: r.ok });
         return;
@@ -8208,7 +8567,7 @@ function deliverUnclaimedFires(now) {
         }
         logMsg('info', 'trigger host delivery skipped', { id: id, seqs: seqs, taskId: spec.taskId, reason: r.reason });
       }
-      persistTriggerState(id, state);
+      persistTriggerState(home, id, state);
       // A server that is connected but slow records it now instead of a minute later.
       if (r.ok && current) {
         for (var f = 0; f < current.state.pendingFires.length; f++) {
@@ -8218,7 +8577,7 @@ function deliverUnclaimedFires(now) {
     }).catch(function (err) {
       logMsg('error', 'trigger host delivery threw', { id: id, seqs: seqs, error: err && err.message });
     }).finally(function () {
-      hostDeliveriesInFlight.delete(id);
+      hostDeliveriesInFlight.delete(key);
     });
   }
 }
@@ -8231,14 +8590,16 @@ function deliverUnclaimedFires(now) {
 // Twin of daemon-standalone.ts.
 function startUnclaimedRun(entry, fire, now) {
   var id = entry.def.id;
+  var home = entry.home;
+  var key = triggerKey(home, id);
   var def = entry.def;
   if (!def.start) return;
   var epoch = entry.state.epoch;
   var seqs = [fire.seq];
-  hostDeliveriesInFlight.set(id, new Set(seqs));
+  hostDeliveriesInFlight.set(key, new Set(seqs));
   clockHostStart.start({ id: id, name: def.name, start: def.start }, fire).then(function (r) {
-    var current = heldTrigger(id);
-    var state = current ? current.state : readTriggerState(id, Date.now());
+    var current = heldTrigger(home, id);
+    var state = current ? current.state : readTriggerState(home, id, Date.now());
     if (state.epoch !== epoch) {
       logMsg('warn', 'routine run outcome dropped: state file started over', { id: id, seqs: seqs, started: r.ok });
       return;
@@ -8252,7 +8613,7 @@ function startUnclaimedRun(entry, fire, now) {
     } else {
       return;
     }
-    persistTriggerState(id, state);
+    persistTriggerState(home, id, state);
     // A server that is connected but slow records it now instead of a minute later.
     if (r.ok && current) {
       for (var f = 0; f < current.state.pendingFires.length; f++) {
@@ -8262,7 +8623,7 @@ function startUnclaimedRun(entry, fire, now) {
   }).catch(function (err) {
     logMsg('error', 'routine run start threw', { id: id, seqs: seqs, error: err && err.message });
   }).finally(function () {
-    hostDeliveriesInFlight.delete(id);
+    hostDeliveriesInFlight.delete(key);
   });
 }
 
@@ -8282,9 +8643,11 @@ function tickTriggers() {
 // The server's set with what a session changed here while its Walnut was away and
 // the server has not taken yet: a trigger paused or deleted here stays off even
 // when a set that still carries it arrives first, and one paused and resumed here
-// runs from the def it had. Mirror daemon-standalone.ts.
-function effectiveTriggerDefs(defs) {
-  var holds = offlineHost.triggerHolds();
+// runs from the def it had. A named Walnut takes only its own holds; the unnamed
+// set takes those of every Walnut that has no set of its own here. Mirror
+// daemon-standalone.ts.
+function effectiveTriggerDefs(home, defs) {
+  var holds = triggerHoldsFor(home);
   if (holds.size === 0) return defs;
   var out = defs.filter(function (def) { var h = holds.get(def.id); return !h || h.on !== false; });
   for (const [tid, hold] of holds) {
@@ -8295,22 +8658,34 @@ function effectiveTriggerDefs(defs) {
   return out;
 }
 
-// Arm exactly defs. Disarming forgets the trigger but KEEPS its state file: a
-// disable-then-enable (or a push that briefly carries an empty set) must not
-// destroy the dedup set, the script's cursor or an unacked fire. Stale files age
-// out instead.
-function armTriggerSet(defs, now) {
+function triggerHoldsFor(home) {
+  var byHome = offlineHost.triggerHoldsByHome();
+  if (home) return byHome.get(home) || new Map();
+  var out = new Map();
+  for (const [h, holds] of byHome) {
+    if (h && triggerScopes.has(h)) continue;
+    for (const [tid, hold] of holds) out.set(tid, hold);
+  }
+  return out;
+}
+
+// Arm exactly defs for one Walnut. Disarming forgets the trigger but KEEPS its
+// state file: a disable-then-enable (or a push that briefly carries an empty set)
+// must not destroy the dedup set, the script's cursor or an unacked fire. Stale
+// files age out instead. Another Walnut's triggers are never touched.
+function armTriggerSet(home, defs, now) {
   var ids = new Set(defs.map(function (def) { return def.id; }));
   var released = [];
   var drainingBefore = drainingTriggers.size;
-  for (const [tid, entry] of [...armedTriggers]) {
-    if (ids.has(tid)) continue;
-    armedTriggers.delete(tid);
-    if (entry.def.clock) released.push(releaseClock(tid, entry));
+  for (const [key, entry] of [...armedTriggers]) {
+    if (entry.home !== home || ids.has(entry.def.id)) continue;
+    armedTriggers.delete(key);
+    if (entry.def.clock) released.push(releaseClock(entry.def.id, entry));
   }
   var drainingChanged = drainingTriggers.size !== drainingBefore;
   for (var d = 0; d < defs.length; d++) {
-    var existing = armedTriggers.get(defs[d].id);
+    var key = triggerKey(home, defs[d].id);
+    var existing = armedTriggers.get(key);
     // A trigger that stays keeps its state file, its cursor and its schedule;
     // only the definition is refreshed. A clock the server started over (a new
     // fromMs) starts from that slot; a def that changed kind is armed anew.
@@ -8320,19 +8695,92 @@ function armTriggerSet(defs, now) {
       continue;
     }
     // Handed back before its fires drained: those fires stay with it.
-    var draining = drainingTriggers.get(defs[d].id);
-    if (draining) { drainingTriggers.delete(defs[d].id); drainingChanged = true; }
-    armedTriggers.set(defs[d].id, newArmedTrigger(defs[d], draining ? draining.state : readTriggerState(defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
+    var draining = drainingTriggers.get(key);
+    if (draining) { drainingTriggers.delete(key); drainingChanged = true; }
+    armedTriggers.set(key, newArmedTrigger(home, defs[d], draining ? draining.state : readTriggerState(home, defs[d].id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
   }
-  if (drainingChanged) persistTriggersFile(configuredTriggerDefs);
+  if (drainingChanged) persistTriggersFile(home);
   return released;
 }
 
-// A session paused, resumed or deleted a trigger here: arm by it now.
+// A session paused, resumed or deleted a trigger here: arm every Walnut's set by it now.
 function triggerHoldsChanged() {
   if (!triggerCheckCore) return;
-  armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now());
-  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, configured: configuredTriggerDefs.length });
+  var now = Date.now();
+  for (const [home, scope] of triggerScopes) armTriggerSet(home, effectiveTriggerDefs(home, scope.configured), now);
+  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, scopes: triggerScopes.size });
+}
+
+// The Walnut a def delivers into or starts a session of, when it names one.
+function triggerOwnerOf(def) {
+  return def.deliver ? def.deliver.home : def.start ? def.start.home : undefined;
+}
+
+// The first named push after a boot that found the inherited unnamed copy takes
+// its triggers as this Walnut's previous copy (their state, schedule and unacked
+// fires carry over). That copy was ONE Walnut's, the one that pushed last: a trigger
+// that names another Walnut waits for that Walnut's push, and when any does, the
+// ones that name none (a clock the server runs) are not this Walnut's either. The
+// copy and its legacy file go once nothing is left in it. Returns the ids taken.
+// Mirror daemon-standalone.ts.
+function takeInheritedTriggers(home) {
+  var inherited = triggerScopes.get('');
+  if (!home || !inherited || !inherited.inherited) return [];
+  var othersNamed = function (def) { var owner = triggerOwnerOf(def); return !!owner && owner !== home; };
+  var anotherWalnut = inherited.configured.some(othersNamed) || fireHolders('').some(function (e) { return othersNamed(e.def); });
+  var ours = function (def) { var owner = triggerOwnerOf(def); return owner ? owner === home : !anotherWalnut; };
+  var taken = [];
+  [armedTriggers, drainingTriggers].forEach(function (map) {
+    for (const entry of [...map.values()]) {
+      if (entry.home !== '' || !ours(entry.def)) continue;
+      var tid = entry.def.id;
+      map.delete(tid);
+      var key = triggerKey(home, tid);
+      // Both copies hold it (a set pushed before a downgrade, and the one the older
+      // daemon kept since): the newer memory wins.
+      if (heldTrigger(home, tid)) {
+        if ((mtimeOf(triggerStatePath('', tid)) || 0) <= (mtimeOf(triggerStatePath(home, tid)) || 0)) continue;
+        armedTriggers.delete(key);
+        drainingTriggers.delete(key);
+      }
+      entry.home = home;
+      entry.state.sharedCopy = true;
+      map.set(key, entry);
+      taken.push(tid);
+    }
+  });
+  inherited.configured = inherited.configured.filter(function (def) { return !ours(def); });
+  inherited.hash = triggerCheckCore.triggersSetHash(inherited.configured);
+  if (inherited.configured.length === 0 && fireHolders('').length === 0) {
+    triggerScopes.delete('');
+    try { fs.unlinkSync(TRIGGERS_FILE); } catch (err) {}
+  } else {
+    persistTriggersFile('');
+  }
+  logMsg('info', 'triggers: inherited set taken over', { scope: walnutScope.label(home), taken: taken.length, left: inherited.configured.length });
+  return taken;
+}
+
+// Write the memory of triggers just taken over into this Walnut's dir. The unnamed
+// copy stays and is kept current with it: a downgraded daemon reads it there.
+function settleTakenTriggers(home, taken) {
+  for (var i = 0; i < taken.length; i++) {
+    var entry = heldTrigger(home, taken[i]);
+    if (entry) persistTriggerState(home, taken[i], entry.state);
+  }
+}
+
+// The Walnut a run, ack, claim or test is about: the home it names, else the one
+// this socket configured triggers for. Null (and refused) when it names a Walnut
+// this socket does not speak for.
+function triggerCommandHome(ws, id, cmd, what) {
+  var scoped = ws.triggerScope;
+  var bound = gatewayClientHomes.get(ws) || scoped || undefined;
+  if (walnutScope.foreign(cmd, bound)) {
+    sendError(ws, id, what + ': this socket speaks for another Walnut');
+    return null;
+  }
+  return walnutScope.askedHome(cmd) || scoped || '';
 }
 
 function cmdTriggersConfigure(ws, id, cmd) {
@@ -8348,22 +8796,43 @@ async function configureTriggers(ws, id, cmd) {
   if (typeof triggerCheckCore.validateTriggerSet !== 'function') {
     return sendError(ws, id, 'triggers.configure: trigger-check-core sidecar too old');
   }
+  var resolved = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure');
+  if (!resolved.ok) return sendError(ws, id, resolved.error);
+  var home = resolved.home;
   // A def this daemon cannot take is refused alone; the rest of the set is armed.
   var set = triggerCheckCore.validateTriggerSet(payload.triggers);
-  var defs = set.defs;
   var refused = set.refused;
+  // A Walnut holds only its own: a def that delivers into or starts a session of
+  // another Walnut is not its to arm.
+  var defs = !home ? set.defs : set.defs.filter(function (def) {
+    var owner = triggerOwnerOf(def);
+    if (!owner || owner === home) return true;
+    refused.push({ id: def.id, error: 'trigger ' + def.id + ': it names another Walnut' });
+    return false;
+  });
   if (refused.length) logMsg('warn', 'triggers refused', { refused: refused });
 
   var now = Date.now();
+  var taken = takeInheritedTriggers(home);
+  var scope = triggerScopeOf(home);
+  // An older server pushing the unnamed set makes the inherited copy its own.
+  var claimed = !home && scope.inherited === true;
+  if (claimed) delete scope.inherited;
   var hash = triggerCheckCore.triggersSetHash(defs);
-  var changed = hash !== armedTriggersHash;
-  configuredTriggerDefs = defs;
-  var released = armTriggerSet(effectiveTriggerDefs(defs), now);
-  if (changed) persistTriggersFile(defs);
-  armedTriggersHash = hash;
+  var changed = hash !== scope.hash;
+  scope.configured = defs;
+  var released = armTriggerSet(home, effectiveTriggerDefs(home, defs), now);
+  scope.hash = hash;
+  if (changed || claimed || taken.length) persistTriggersFile(home);
+  settleTakenTriggers(home, taken);
+  // Fires of this Walnut's set go to this socket from now on.
+  ws.triggerScope = home;
   pruneTriggerStateFiles(now);
-  var clocks = clockReports();
-  logMsg('info', 'triggers configured', { hash: hash, count: defs.length, changed: changed, clocks: clocks.length, released: released.map(function (r) { return r.id; }), draining: drainingTriggers.size });
+  var clocks = clockReports(home);
+  logMsg('info', 'triggers configured', {
+    scope: walnutScope.label(home), hash: hash, count: defs.length, changed: changed, clocks: clocks.length,
+    released: released.map(function (r) { return r.id; }), draining: fireHolders(home).length - armedOf(home).length,
+  });
   var reply = { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released };
   if (refused.length) reply.refused = refused;
   sendOk(ws, id, reply);
@@ -8371,7 +8840,7 @@ async function configureTriggers(ws, id, cmd) {
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
   // dedups on (id, epoch, seq).
-  for (const entry of fireHolders()) {
+  for (const entry of fireHolders(home)) {
     for (var f = 0; f < entry.state.pendingFires.length; f++) {
       sendTriggerFire(entry, entry.state.pendingFires[f], true);
     }
@@ -8381,8 +8850,10 @@ async function configureTriggers(ws, id, cmd) {
 // Run once and answer; NEVER touch stored state (the form's Test button).
 async function cmdTriggersTest(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
+  var home = triggerCommandHome(ws, id, cmd, 'triggers.test');
+  if (home === null) return;
   try {
-    var result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined);
+    var result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home);
     sendOk(ws, id, { result: result });
   } catch (err) {
     sendError(ws, id, err && err.message ? err.message : String(err));
@@ -8390,7 +8861,7 @@ async function cmdTriggersTest(ws, id, cmd) {
 }
 
 // One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal.
-async function runTriggerTest(check, targetId) {
+async function runTriggerTest(check, targetId, home) {
   if (!triggerCheckCore) throw new Error('triggers unsupported: trigger-check-core sidecar not loaded');
   var raw = check;
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
@@ -8404,7 +8875,8 @@ async function runTriggerTest(check, targetId) {
   triggerTestsRunning += 1;
   try {
     var now = Date.now();
-    var entry = targetId ? armedTriggers.get(targetId) : undefined;
+    var held = targetId ? triggerFor(home || '', targetId) : undefined;
+    var entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined;
     var state = entry ? entry.state : triggerCheckCore.emptyHostState(now);
     var proc = await triggerCheckCore.runCheckProcess(spec, triggerCheckCore.buildCheckStdin(state, now), {
       env: {
@@ -8447,8 +8919,11 @@ async function runTriggerTest(check, targetId) {
 // exactly as it does for a clock-driven run.
 function cmdTriggersRun(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
+  var home = triggerCommandHome(ws, id, cmd, 'triggers.run');
+  if (home === null) return;
   var tid = triggerIdOf(cmd);
-  var entry = tid ? armedTriggers.get(tid) : undefined;
+  var held = tid ? triggerFor(home, tid) : undefined;
+  var entry = held && armedTriggers.get(triggerKey(held.home, tid)) === held ? held : undefined;
   if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid);
   if (entry.def.clock) return sendOk(ws, id, { ran: true, started: true, outcome: runClock(entry, true) });
   if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' });
@@ -8469,10 +8944,12 @@ function cmdTriggersClaim(ws, id, cmd) {
   if (!triggerCheckCore || typeof triggerCheckCore.claimFires !== 'function' || typeof triggerCheckCore.buildTriggerMessage !== 'function') {
     return sendError(ws, id, 'unknown command: triggers.claim (trigger-check-core sidecar missing or too old)');
   }
+  var asked = triggerCommandHome(ws, id, cmd, 'triggers.claim');
+  if (asked === null) return;
   var tid = triggerIdOf(cmd);
   var seqs = Array.isArray(cmd.seqs) ? cmd.seqs.filter(function (s) { return typeof s === 'number' && Number.isFinite(s); }) : [];
-  var entry = tid ? heldTrigger(tid) : undefined;
-  var inFlight = hostDeliveriesInFlight.get(tid) || new Set();
+  var entry = tid ? triggerFor(asked, tid) : undefined;
+  var inFlight = hostDeliveriesInFlight.get(triggerKey(entry ? entry.home : asked, tid)) || new Set();
   if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
     return sendOk(ws, id, {
       claimed: [], host: [],
@@ -8480,15 +8957,15 @@ function cmdTriggersClaim(ws, id, cmd) {
       unknown: seqs.filter(function (s) { return !inFlight.has(s); }),
     });
   }
-  var home = gatewayClientHomes.get(ws);
-  var owner = entry.def.deliver ? entry.def.deliver.home : entry.def.start ? entry.def.start.home : undefined;
+  var home = asked || gatewayClientHomes.get(ws);
+  var owner = triggerOwnerOf(entry.def);
   if (owner && home && home !== owner) {
     logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs: seqs });
     return sendOk(ws, id, { claimed: [], unknown: [], host: [], busy: [], foreign: true });
   }
   var marked = markStartedRuns(entry, seqs);
   var claim = triggerCheckCore.claimFires(entry.state, seqs, Date.now(), inFlight);
-  if (claim.changed || marked) persistTriggerState(tid, entry.state);
+  if (claim.changed || marked) persistTriggerState(entry.home, tid, entry.state);
   return sendOk(ws, id, claim.reply);
 }
 
@@ -8514,18 +8991,21 @@ function markStartedRuns(entry, seqs) {
 
 function cmdTriggersAck(ws, id, cmd) {
   if (!triggerCheckCore) return sendError(ws, id, 'triggers unsupported: trigger-check-core sidecar not loaded');
+  var home = triggerCommandHome(ws, id, cmd, 'triggers.ack');
+  if (home === null) return;
   var tid = triggerIdOf(cmd);
   var seq = typeof cmd.seq === 'number' ? cmd.seq : NaN;
-  var entry = tid ? heldTrigger(tid) : undefined;
+  var entry = tid ? triggerFor(home, tid) : undefined;
   if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false });
   var acked = triggerCheckCore.ackFire(entry.state, seq);
   if (acked) {
     entry.fireSentAt.delete(seq);
-    persistTriggerState(tid, entry.state);
+    persistTriggerState(entry.home, tid, entry.state);
     // The last fire of a released clock is recorded: nothing of it is left here.
-    if (drainingTriggers.get(tid) === entry && entry.state.pendingFires.length === 0) {
-      drainingTriggers.delete(tid);
-      persistTriggersFile(configuredTriggerDefs);
+    var key = triggerKey(entry.home, tid);
+    if (drainingTriggers.get(key) === entry && entry.state.pendingFires.length === 0) {
+      drainingTriggers.delete(key);
+      persistTriggersFile(entry.home);
       logMsg('info', 'clock routine drained', { id: tid });
     }
   }
@@ -12191,6 +12671,7 @@ async function pauseBudgetSession(sid) {
 }
 
 async function cmdUsageBudget(ws, id, cmd, configure) {
+  if (refuseForeignHome(ws, id, cmd, configure ? 'usage.budget.configure' : 'usage.budget')) return;
   if (!usageBudget) return sendError(ws, id, 'usage.budget unsupported: sidecar not loaded', { code: 'UNSUPPORTED' });
   const sid = cmd.sid;
   const engine = typeof cmd.engine === 'string' ? cmd.engine : 'claude';
@@ -12470,6 +12951,7 @@ function daemonCapabilities() {
 
 // Task directories: see cmdTaskDirEnsure in daemon-standalone.ts.
 function cmdTaskDirEnsure(ws, id, cmd) {
+  if (refuseForeignHome(ws, id, cmd, 'taskdir.ensure')) return;
   if (!taskDirCore) return sendError(ws, id, 'taskdir.ensure unsupported: task-dir-core sidecar not loaded');
   const dir = ensureTaskDirFor(cmd.taskId, cmd.home);
   if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made');
@@ -12936,6 +13418,9 @@ const turnSnapshots = (__CREATE_TURN_SNAPSHOTS__)({
   env: process.env,
   tmpDir: path.join(DAEMON_DIR, 'turn-snapshots'),
   settingsPath: path.join(DAEMON_DIR, 'turn-snapshots.json'),
+  // Each Walnut's own settings; a session's turn follows its Walnut's (else the unnamed copy).
+  settingsPathFor: function (home) { return path.join(walnutScope.dirFor(DAEMON_DIR, home), 'turn-snapshots.json'); },
+  homeOf: function (sid) { return sessionHomeOf(sid); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   turnActive: function (sid) { const s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
   forceDisabled: process.env.WALNUT_TURN_SNAPSHOTS === '0',
@@ -12956,8 +13441,11 @@ async function cmdTurns(ws, id, cmd) {
   const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : '';
   try {
     switch (cmd.cmd) {
-      case 'turns.configure':
-        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }));
+      case 'turns.configure': {
+        const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'turns.configure');
+        if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' });
+        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }, scope.home));
+      }
       case 'turns.list':
         return sendOk(ws, id, await turnSnapshots.list(sid, cwd));
       case 'turns.diff':
@@ -13112,14 +13600,19 @@ function replyTransfer(ws, id, name, work, tracked) {
 const workspaceCore = (__CREATE_WORKSPACE_CORE__)({
   spawn: spawn, fs: fs, path: path, homedir: function () { return HOME_DIR; }, env: process.env,
   stateDir: STATE_DIR_OR_RUNTIME,
+  // One allowlist per Walnut, its adapters under that Walnut's dir.
+  scopeDir: function (home) { return walnutScope.dirFor(STATE_DIR_OR_RUNTIME, home); },
   randomId: function () { return crypto.randomBytes(6).toString('hex'); },
   killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
 function cmdWorkspace(ws, id, cmd) {
+  // Every workspace command speaks for one Walnut (its allowlist, its jobs); '' = an older server.
+  const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), String(cmd.cmd));
+  if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' });
   const work = function () {
-    return workspaceCore.handle(cmd.cmd, cmd).then(function (r) {
+    return workspaceCore.handle(cmd.cmd, cmd, scope.home).then(function (r) {
       if (r.ok) sendOk(ws, id, r);
       else sendError(ws, id, r.error, r);
     }, function (err) {
@@ -13220,39 +13713,95 @@ function sendEvent(ws, ev, data) {
 
 const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json');
 
-let bridgeConfig = null;
-let bridgeClient = null;
-let bridgeAdapter = null;
-let bridgeRedialTimer = null;
-let bridgePingTimer = null;
-let bridgeDialTimer = null;
-// When the in-flight dial started (null = no dial in flight) — feeds the
-// reconcile decision so an identical-config push can't kill a young dial.
-let bridgeDialStartedAt = null;
-let bridgeBackoffMs = 1000;
-// When the pending redial is due (null = none pending) — lets the Mac's heal
-// push preempt a far-away redial instead of waiting out backoff earned offline.
-let bridgeRedialDueAt = null;
-// When the drop that armed the fast redial window happened (null = none is
-// armed), and whether any established link was lost yet (bridgeRedialStep and
-// armsBridgeFastWindow below).
-let bridgeDroppedAt = null;
-let bridgeHasDropped = false;
-let bridgeGeneration = 0;
-let bridgeLastInbound = 0;
-// Per-connection uplink (pacing + counters) and its identity in the logs; the
-// replica logs the same connId (it rides the hello). Mirror of the standalone.
-let bridgeUplink = null;
-let bridgeConnId = null;
+// One cloud uplink per Walnut, keyed by its home ('' = a server older than the
+// split, which keeps the legacy bridge.json). Each link holds what one global
+// set held before; its adapter carries its home (bridgeHome). scoped: 1 in a
+// file marks one written since the split; an unnamed file without it is the
+// copy an older daemon kept (inherited). Mirror of daemon-standalone.ts.
+const bridgeLinks = new Map();
+// An older server (no home) pushed since boot: another Walnut is here.
+let bridgeUnnamedPushed = false;
 let bridgeConnSeq = 0;
-let bridgeConnOpenedAt = 0;
-let bridgeLastError = null;
 const createBridgeUplink = (__CREATE_BRIDGE_UPLINK__);
-const bridgeDrift = (__CREATE_LOOP_DRIFT_PROBE__)({
-  now: Date.now,
-  setInterval: function(fn, ms) { return setInterval(fn, ms); },
-  clearInterval: function(t) { clearInterval(t); },
-});
+const createBridgeDrift = (__CREATE_LOOP_DRIFT_PROBE__);
+
+function newBridgeLink(home) {
+  return {
+    home: home, config: null, inherited: false, client: null, adapter: null,
+    // The sockets that pushed this link's configure: they serve its relays before
+    // (or without) binding their home.
+    pushers: new WeakSet(),
+    redialTimer: null, pingTimer: null, dialTimer: null,
+    // When the in-flight dial started (null = no dial in flight) — feeds the
+    // reconcile decision so an identical-config push can't kill a young dial.
+    dialStartedAt: null, backoffMs: 1000,
+    // When the pending redial is due (null = none pending) — lets the Mac's heal
+    // push preempt a far-away redial instead of waiting out backoff earned offline.
+    redialDueAt: null,
+    // When the drop that armed the fast redial window happened (null = none is
+    // armed), and whether any established link was lost yet (bridgeRedialStep and
+    // armsBridgeFastWindow below).
+    droppedAt: null, hasDropped: false,
+    generation: 0, lastInbound: 0,
+    // Per-connection uplink (pacing + counters) and its identity in the logs; the
+    // replica logs the same connId (it rides the hello). Mirror of the standalone.
+    uplink: null, connId: null, connOpenedAt: 0, lastError: null,
+    drift: createBridgeDrift({
+      now: Date.now,
+      setInterval: function(fn, ms) { return setInterval(fn, ms); },
+      clearInterval: function(t) { clearInterval(t); },
+    }),
+  };
+}
+
+function bridgeFileFor(home) {
+  return home ? path.join(walnutScope.dirFor(DAEMON_DIR, home), 'bridge.json') : BRIDGE_FILE;
+}
+
+// The link ws is the live adapter of (null for any other socket).
+function bridgeLinkOf(ws) {
+  if (!ws || ws.origin !== 'bridge') return null;
+  var link = bridgeLinks.get(ws.bridgeHome || '');
+  return link && link.adapter === ws ? link : null;
+}
+
+// The link that carries home's traffic: its own, else the unnamed one (an older
+// server's, or a copy an older daemon left) unless it names another Walnut.
+// See the standalone twin.
+function bridgeLinkFor(home) {
+  var own = bridgeLinks.get(home);
+  if (own || !home) return own || null;
+  var legacy = bridgeLinks.get('');
+  return legacy && (!legacy.config || !legacy.config.home || legacy.config.home === home) ? legacy : null;
+}
+
+// Whether trusted client is a server of the Walnut the link of home speaks for:
+// a named link only sockets bound to it; '' the old pick, minus Walnuts with their own link.
+function servesBridgeHome(client, home) {
+  var bound = gatewayClientHomes.get(client);
+  if (home) { var named = bridgeLinks.get(home); return bound === home || (!bound && !!named && named.pushers.has(client)); }
+  return !bound || !bridgeLinks.has(bound);
+}
+
+// Whether bridge socket client may hear about session sid: a named link only of
+// its own Walnut's sessions, or of one whose Walnut is not recorded.
+function bridgeHearsSession(client, sid) {
+  var own = bridgeHomeOf(client);
+  if (!own) return true;
+  var owner = sessionHomeOf(sid);
+  return !owner || owner === own;
+}
+
+// Whether bridge socket ws may act for home: a named link for its own Walnut only.
+function bridgeSpeaksFor(ws, home) {
+  var own = bridgeHomeOf(ws);
+  return !own || own === home;
+}
+
+// The home a bridge socket speaks for ('' = an older server's link, or not a bridge).
+function bridgeHomeOf(ws) {
+  return ws && ws.origin === 'bridge' ? (ws.bridgeHome || '') : '';
+}
 
 const BRIDGE_BACKOFF_MAX_MS = 60000;
 // The fast redial window after a healthy link drops: waits stop doubling at
@@ -13545,14 +14094,97 @@ function abandonBridgeSocket(client) {
   try { if (typeof client.terminate === 'function') client.terminate(); else client.close(); } catch {}
 }
 
-function loadBridgeConfig() {
+function readBridgeFile(file) {
   try {
-    const raw = JSON.parse(fs.readFileSync(BRIDGE_FILE, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
     if (raw && typeof raw.url === 'string' && typeof raw.token === 'string'
-      && typeof raw.hostAlias === 'string') {
-      bridgeConfig = raw;
-    }
+      && typeof raw.hostAlias === 'string') return raw;
   } catch { /* no bridge configured */ }
+  return null;
+}
+
+// Every saved link: the unnamed one in bridge.json, each Walnut's under its scope dir.
+function loadBridgeConfig() {
+  var legacy = readBridgeFile(BRIDGE_FILE);
+  if (legacy) {
+    var link = newBridgeLink('');
+    link.config = legacy;
+    link.inherited = legacy.scoped !== 1;
+    bridgeLinks.set('', link);
+  }
+  for (const [, dir] of walnutScope.scopeDirs(fs, DAEMON_DIR)) {
+    var cfg = readBridgeFile(path.join(dir, 'bridge.json'));
+    // The dir name is a hash: the home inside names the Walnut.
+    if (!cfg || typeof cfg.home !== 'string' || !cfg.home || bridgeFileFor(cfg.home) !== path.join(dir, 'bridge.json')) continue;
+    var named = newBridgeLink(cfg.home);
+    named.config = cfg;
+    bridgeLinks.set(cfg.home, named);
+  }
+}
+
+function startBridges(reason) {
+  for (const link of bridgeLinks.values()) startBridge(link, reason);
+}
+
+function stopBridges() {
+  for (const link of bridgeLinks.values()) stopBridge(link);
+}
+
+// No other Walnut is known here: no older server pushed, no other link, no socket
+// bound to another home, no other Walnut's scope dir under any base.
+function onlyWalnutHere(home) {
+  if (bridgeUnnamedPushed) return false;
+  for (const h of bridgeLinks.keys()) if (h && h !== home) return false;
+  for (const client of wsClients) {
+    var bound = gatewayClientHomes.get(client);
+    if (bound && bound !== home) return false;
+  }
+  // Another Walnut that ever pushed a named setting here left a scope dir under one of these.
+  var key = walnutScope.keyOf(home);
+  for (const base of new Set([DAEMON_DIR, HOOKS_DIR, TRIGGER_STATE_DIR, TRIGGERS_BASE_DIR, STATE_DIR_OR_RUNTIME])) {
+    for (const entry of walnutScope.scopeDirs(fs, base)) if (entry[0] !== key) return false;
+  }
+  return true;
+}
+
+// A named configure meeting the copy an older daemon kept, tried on every named
+// push while it exists. It is this Walnut's when it names this home, has the same
+// companion host (an alias alone never: two Walnuts may name the host alike), or
+// this is the only Walnut the daemon knows. With no
+// link of its own the link moves to this home as it is; with one, the copy is
+// closed. Either way the legacy file goes. Mirror of daemon-standalone.ts.
+function takeOverInheritedBridge(home, cmd, own) {
+  var legacy = bridgeLinks.get('');
+  var cfg = legacy && legacy.config;
+  if (!legacy || !legacy.inherited || !cfg) return null;
+  var mine = false;
+  if (cfg.home) mine = cfg.home === home;
+  else {
+    var sameCompanion = false;
+    if (typeof cmd.url === 'string' && cmd.url) {
+      try { sameCompanion = cmd.url === cfg.url || new URL(cmd.url).host === new URL(cfg.url).host; } catch (e) { sameCompanion = false; }
+    }
+    mine = sameCompanion || onlyWalnutHere(home);
+  }
+  if (!mine) return null;
+  bridgeLinks.delete('');
+  try { fs.unlinkSync(BRIDGE_FILE); } catch {}
+  if (own) {
+    stopBridge(legacy);
+    logMsg('info', 'bridge: closed the link an older daemon kept, its Walnut has its own', { scope: walnutScope.label(home) });
+    return own;
+  }
+  legacy.home = home;
+  legacy.inherited = false;
+  if (legacy.adapter) legacy.adapter.bridgeHome = home;
+  bridgeLinks.set(home, legacy);
+  logMsg('info', 'bridge: a Walnut took over the link an older daemon kept', { scope: walnutScope.label(home) });
+  return legacy;
+}
+
+// What decides a restart: the link's home is its key, so it never counts.
+function bridgeConfigKey(cfg) {
+  return cfg ? JSON.stringify([cfg.enabled, cfg.url, cfg.token, cfg.hostAlias]) : '';
 }
 
 function cmdBridgeConfigure(ws, id, cmd) {
@@ -13560,17 +14192,32 @@ function cmdBridgeConfigure(ws, id, cmd) {
   if (enabled && (typeof url !== 'string' || typeof token !== 'string' || typeof hostAlias !== 'string')) {
     return sendError(ws, id, 'bridge.configure: url, token, hostAlias required when enabled');
   }
+  var scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'bridge.configure');
+  if (!scope.ok) return sendError(ws, id, scope.error);
+  var home = scope.home;
+  if (!home) bridgeUnnamedPushed = true;
+  var link = bridgeLinks.get(home) || null;
+  if (home) link = takeOverInheritedBridge(home, cmd, link) || link;
+  if (!link) { link = newBridgeLink(home); bridgeLinks.set(home, link); }
+  // This socket serves the link's relays until (or without) binding its home.
+  if (home) link.pushers.add(ws);
+  var prev = link.config;
   const next = {
     enabled: !!enabled,
-    url: url != null ? url : (bridgeConfig ? bridgeConfig.url : ''),
-    token: token != null ? token : (bridgeConfig ? bridgeConfig.token : ''),
-    hostAlias: hostAlias != null ? hostAlias : (bridgeConfig ? bridgeConfig.hostAlias : ''),
-    ...(typeof cmd.home === 'string' && cmd.home.length > 0 ? { home: cmd.home } : {}),
+    url: url != null ? url : (prev ? prev.url : ''),
+    token: token != null ? token : (prev ? prev.token : ''),
+    hostAlias: hostAlias != null ? hostAlias : (prev ? prev.hostAlias : ''),
+    ...(home ? { home: home } : {}),
+    scoped: 1,
   };
-  const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig);
-  bridgeConfig = next;
+  const changed = bridgeConfigKey(next) !== bridgeConfigKey(prev);
+  link.config = next;
+  // An older server's own push: its copy now, never one a named Walnut takes over.
+  link.inherited = false;
   try {
-    fs.writeFileSync(BRIDGE_FILE, JSON.stringify(next), { mode: 0o600 });
+    var file = bridgeFileFor(home);
+    if (home) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
   } catch (err) {
     logMsg('error', 'bridge: failed to persist bridge.json', { err: err.message });
   }
@@ -13580,80 +14227,83 @@ function cmdBridgeConfigure(ws, id, cmd) {
   const decision = decideBridgeRestart({
     enabled: next.enabled,
     changed,
-    adapterConnected: bridgeAdapter != null,
-    redialPending: bridgeRedialTimer != null,
-    dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    adapterConnected: link.adapter != null,
+    redialPending: link.redialTimer != null,
+    dialAgeMs: link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null,
     dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
-    redialWaitRemainingMs: bridgeRedialDueAt != null ? bridgeRedialDueAt - Date.now() : null,
+    redialWaitRemainingMs: link.redialDueAt != null ? link.redialDueAt - Date.now() : null,
   });
-  if (decision.restart) startBridge(decision.reason);
+  if (decision.restart) startBridge(link, decision.reason);
   logMsg('info', 'bridge: configured', {
-    enabled: next.enabled, hostAlias: next.hostAlias, changed,
+    enabled: next.enabled, hostAlias: next.hostAlias, changed, scope: walnutScope.label(home),
     restarted: decision.restart ? decision.reason : false,
   });
-  sendOk(ws, id, { applied: true, connected: bridgeAdapter != null });
+  sendOk(ws, id, { applied: true, connected: link.adapter != null });
 }
 
-function stopBridge() {
-  if (bridgeAdapter) logBridgeConnClose({ code: null, reason: 'stopped', wasClean: true });
-  bridgeGeneration++;
-  if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null; }
-  bridgeRedialDueAt = null;
-  if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
-  if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
-  bridgeDialStartedAt = null;
-  if (bridgeAdapter) {
-    featureRelay.disconnect(featureSocket(bridgeAdapter)); wsClients.delete(bridgeAdapter);
-    for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
-    streamRelay.dropLink(bridgeAdapter);
+function stopBridge(link) {
+  if (link.adapter) logBridgeConnClose(link, { code: null, reason: 'stopped', wasClean: true });
+  link.generation++;
+  if (link.redialTimer) { clearTimeout(link.redialTimer); link.redialTimer = null; }
+  link.redialDueAt = null;
+  if (link.pingTimer) { clearInterval(link.pingTimer); link.pingTimer = null; }
+  if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null; }
+  link.dialStartedAt = null;
+  var adapter = link.adapter;
+  if (adapter) {
+    featureRelay.disconnect(featureSocket(adapter)); wsClients.delete(adapter);
+    for (const [, session] of sessions) session.subscribers.delete(adapter);
+    streamRelay.dropLink(adapter);
     for (const [key, sub] of agentSubs) {
-      if (sub.ws === bridgeAdapter) {
+      if (sub.ws === adapter) {
         clearInterval(sub.timer);
         clearInterval(sub.rediscoverTimer);
         agentSubs.delete(key);
       }
     }
   }
-  if (bridgeClient) { try { bridgeClient.close(); } catch {} }
-  bridgeClient = null;
-  bridgeAdapter = null;
+  if (link.client) { try { link.client.close(); } catch {} }
+  link.client = null;
+  link.adapter = null;
 }
 
-function startBridge(reason) {
-  stopBridge();
-  if (!bridgeConfig || !bridgeConfig.enabled) return;
-  bridgeBackoffMs = 1000;
-  logMsg('info', 'bridge: starting', { reason, url: bridgeConfig.url, hostAlias: bridgeConfig.hostAlias });
-  dialBridge(bridgeGeneration);
+function startBridge(link, reason) {
+  stopBridge(link);
+  if (!link.config || !link.config.enabled) return;
+  link.backoffMs = 1000;
+  logMsg('info', 'bridge: starting', { reason, url: link.config.url, hostAlias: link.config.hostAlias, scope: walnutScope.label(link.home) });
+  dialBridge(link, link.generation);
 }
 
-function scheduleBridgeRedial(gen) {
-  if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
+function scheduleBridgeRedial(link, gen) {
+  if (gen !== link.generation || !link.config || !link.config.enabled) return;
   // One pending redial at a time — a dial-timeout teardown and a late onclose
   // from the same dead socket must not stack two timers.
-  if (bridgeRedialTimer) return;
+  if (link.redialTimer) return;
   const step = bridgeRedialStep({
-    backoffMs: bridgeBackoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
-    sinceDropMs: bridgeDroppedAt != null ? Date.now() - bridgeDroppedAt : null,
+    backoffMs: link.backoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
+    sinceDropMs: link.droppedAt != null ? Date.now() - link.droppedAt : null,
     fastWindowMs: BRIDGE_FAST_WINDOW_MS, fastMaxMs: BRIDGE_FAST_REDIAL_MAX_MS,
   });
   const delay = step.delayMs;
-  bridgeBackoffMs = step.nextBackoffMs;
-  bridgeRedialDueAt = Date.now() + delay;
-  bridgeRedialTimer = setTimeout(function() {
-    bridgeRedialTimer = null;
-    bridgeRedialDueAt = null;
-    dialBridge(gen);
+  link.backoffMs = step.nextBackoffMs;
+  link.redialDueAt = Date.now() + delay;
+  link.redialTimer = setTimeout(function() {
+    link.redialTimer = null;
+    link.redialDueAt = null;
+    dialBridge(link, gen);
   }, delay);
 }
 
 // Adapter: presents the outbound client socket with the server-side ws shape
 // (send/readyState/close) so handleCommand + subscriber fan-out work as-is.
-function makeBridgeAdapter(client, uplink) {
+// bridgeHome names the Walnut whose link it is: what arrives on it acts for it.
+function makeBridgeAdapter(client, uplink, home) {
   return {
     // Marks this socket as the PUBLIC cloud relay so handleCommand restricts it
     // to BRIDGE_ALLOWED_COMMANDS (regular SSH clients have no origin property).
     origin: 'bridge',
+    bridgeHome: home,
     get readyState() { return client.readyState; },
     // Every frame is paced by the uplink (bridge-uplink-core.ts).
     send(payload) { uplink.send(payload); },
@@ -13662,52 +14312,57 @@ function makeBridgeAdapter(client, uplink) {
 }
 
 function cmdBridgePeer(ws, id, cmd) {
-  if (ws !== bridgeAdapter || !bridgeUplink) return sendError(ws, id, 'bridge.peer: not the bridge socket');
-  var chunkBytes = bridgeUplink.setChunkBytes(cmd.chunkBytes);
-  logMsg('info', 'bridge: peer reassembles chunks', { connId: bridgeConnId, chunkBytes: chunkBytes });
+  var link = bridgeLinkOf(ws);
+  if (!link || !link.uplink) return sendError(ws, id, 'bridge.peer: not the bridge socket');
+  var chunkBytes = link.uplink.setChunkBytes(cmd.chunkBytes);
+  logMsg('info', 'bridge: peer reassembles chunks', { connId: link.connId, chunkBytes: chunkBytes });
   sendOk(ws, id, { chunkBytes: chunkBytes });
 }
 
-function cmdBridgeStatus(ws, id) {
+// The asking Walnut's link: the home it names, else the one its socket speaks for.
+function cmdBridgeStatus(ws, id, cmd) {
+  if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, 'bridge.status: this socket speaks for another Walnut');
+  var link = bridgeLinkFor(walnutScope.askedHome(cmd) || gatewayClientHomes.get(ws) || '');
+  var up = link && link.adapter != null;
   sendOk(ws, id, {
-    connected: bridgeAdapter != null,
-    connId: bridgeAdapter != null ? bridgeConnId : null,
-    queuedBytes: bridgeUplink ? bridgeUplink.queuedBytes : 0,
-    inFlightBytes: bridgeUplink ? bridgeUplink.inFlightBytes : 0,
+    connected: !!up,
+    connId: up ? link.connId : null,
+    queuedBytes: link && link.uplink ? link.uplink.queuedBytes : 0,
+    inFlightBytes: link && link.uplink ? link.uplink.inFlightBytes : 0,
   });
 }
 
 // One bridge-conn-close line per opened connection (counts and sizes only).
-function logBridgeConnClose(info) {
-  var uplink = bridgeUplink;
-  if (!uplink || !bridgeConnId) return;
+function logBridgeConnClose(link, info) {
+  var uplink = link.uplink;
+  if (!uplink || !link.connId) return;
   var snap = uplink.snapshot();
   var now = Date.now();
   logMsg('info', 'bridge-conn-close', {
-    connId: bridgeConnId,
-    uptimeMs: now - bridgeConnOpenedAt,
+    connId: link.connId,
+    uptimeMs: now - link.connOpenedAt,
     code: info.code,
     reason: String(info.reason || '').slice(0, 120),
     wasClean: info.wasClean,
-    lastError: bridgeLastError,
+    lastError: link.lastError,
     bytesIn: snap.bytesIn, bytesOut: snap.bytesOut,
     framesIn: snap.framesIn, framesOut: snap.framesOut,
     maxOutFrameBytes: snap.maxOutFrameBytes, maxOutFrameKind: snap.maxOutFrameKind,
     bufferedAmountPeak: snap.bufferedAmountPeak, bufferedAmountAtClose: snap.bufferedAmountAtClose,
     lastInboundAgeMs: snap.lastInboundAt ? now - snap.lastInboundAt : null,
     rttMsP50: snap.rttMsP50, rttMsMax: snap.rttMsMax,
-    loopDriftMax60sMs: bridgeDrift.max60s(), loopDriftMax5sMs: bridgeDrift.max5s(),
+    loopDriftMax60sMs: link.drift.max60s(), loopDriftMax5sMs: link.drift.max5s(),
     chunkedFrames: snap.chunkedFrames, ackTimeouts: snap.ackTimeouts,
   });
   uplink.close();
-  bridgeDrift.stop();
-  bridgeUplink = null;
-  bridgeConnId = null;
+  link.drift.stop();
+  link.uplink = null;
+  link.connId = null;
 }
 
-function dialBridge(gen) {
-  if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
-  const cfg = bridgeConfig;
+function dialBridge(link, gen) {
+  if (gen !== link.generation || !link.config || !link.config.enabled) return;
+  const cfg = link.config;
   const WsCtor = getWsClientCtor(cfg.url);
   // Which client dials (the conn-open line names it): Bun's, the ws package's, or createBridgeWsClient.
   const wsClient = WsCtor === globalThis.WebSocket ? 'bun' : WsCtor.name === 'BridgeWsBuiltinClient' ? 'builtin' : 'ws';
@@ -13728,41 +14383,41 @@ function dialBridge(gen) {
     client = new WsCtor(dialUrl);
   } catch (err) {
     logMsg('warn', 'bridge: dial failed', { err: err.message });
-    scheduleBridgeRedial(gen);
+    scheduleBridgeRedial(link, gen);
     return;
   }
-  bridgeClient = client;
-  bridgeDialStartedAt = Date.now();
-  // NOTE: bridgeLastInbound is (re)set in onopen — the silence watchdog only
+  link.client = client;
+  link.dialStartedAt = Date.now();
+  // NOTE: link.lastInbound is (re)set in onopen — the silence watchdog only
   // starts there; the pre-open window is covered by the dial timeout below.
   // Dial timeout: no onopen within the window → tear down + redial. A socket
   // wedged in CONNECTING fires neither onopen nor onclose, so without this
   // timer the bridge would stay down forever with zero log lines.
-  bridgeDialTimer = setTimeout(function() {
-    bridgeDialTimer = null;
-    if (gen !== bridgeGeneration || bridgeAdapter != null) return;
+  link.dialTimer = setTimeout(function() {
+    link.dialTimer = null;
+    if (gen !== link.generation || link.adapter != null) return;
     logMsg('warn', 'bridge: dial timeout — abandoning socket', {
-      dialMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+      dialMs: link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null,
     });
-    bridgeDialStartedAt = null;
-    if (bridgeClient === client) bridgeClient = null;
+    link.dialStartedAt = null;
+    if (link.client === client) link.client = null;
     abandonBridgeSocket(client);
     // Don't rely on close() firing onclose for a wedged socket — schedule
     // directly. scheduleBridgeRedial dedupes if onclose does fire too.
-    scheduleBridgeRedial(gen);
+    scheduleBridgeRedial(link, gen);
   }, BRIDGE_DIAL_TIMEOUT_MS);
 
   const onOpen = function() {
-    if (gen !== bridgeGeneration) { try { client.close(); } catch {} return; }
-    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
-    const dialMs = bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null;
-    bridgeDialStartedAt = null;
-    bridgeBackoffMs = 1000;
-    bridgeLastInbound = Date.now();
-    bridgeConnId = DAEMON_INSTANCE_ID + '.' + (++bridgeConnSeq);
-    bridgeConnOpenedAt = Date.now();
-    bridgeLastError = null;
-    const connId = bridgeConnId;
+    if (gen !== link.generation) { try { client.close(); } catch {} return; }
+    if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null; }
+    const dialMs = link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null;
+    link.dialStartedAt = null;
+    link.backoffMs = 1000;
+    link.lastInbound = Date.now();
+    link.connId = DAEMON_INSTANCE_ID + '.' + (++bridgeConnSeq);
+    link.connOpenedAt = Date.now();
+    link.lastError = null;
+    const connId = link.connId;
     const uplink = createBridgeUplink({
       write: function(frame) { client.send(frame); },
       now: Date.now,
@@ -13770,15 +14425,15 @@ function dialBridge(gen) {
       clearTimer: function(t) { clearTimeout(t); },
       onOverflow: function(queuedBytes) {
         logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId: connId, queuedBytes: queuedBytes });
-        bridgeLastError = 'uplink queue overflow (daemon closed)';
+        link.lastError = 'uplink queue overflow (daemon closed)';
         abandonBridgeSocket(client);
       },
     });
-    bridgeUplink = uplink;
-    const adapter = makeBridgeAdapter(client, uplink);
-    bridgeAdapter = adapter;
+    link.uplink = uplink;
+    const adapter = makeBridgeAdapter(client, uplink, link.home);
+    link.adapter = adapter;
     wsClients.add(adapter);
-    bridgeDrift.start();
+    link.drift.start();
     logMsg('info', 'bridge-conn-open', { connId: connId, dialMs: dialMs, wsClient: wsClient });
     // uplink: 1 tells the replica it may send bridge.peer and echo ackSeq.
     adapter.send(JSON.stringify({
@@ -13792,23 +14447,23 @@ function dialBridge(gen) {
       // What the companion may ask of this daemon ('bridge-stream-v1': its forward on a stream).
       capabilities: BRIDGE_CAPABILITIES,
     }));
-    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias });
+    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, scope: walnutScope.label(link.home) });
     // The silence watchdog: see BRIDGE_SILENT_PINGS.
-    let heardAt = bridgeLastInbound;
+    let heardAt = link.lastInbound;
     let silentChecks = 0;
-    bridgePingTimer = setInterval(function() {
-      if (gen !== bridgeGeneration) return;
-      if (bridgeLastInbound !== heardAt) { heardAt = bridgeLastInbound; silentChecks = 0; return; }
+    link.pingTimer = setInterval(function() {
+      if (gen !== link.generation) return;
+      if (link.lastInbound !== heardAt) { heardAt = link.lastInbound; silentChecks = 0; return; }
       silentChecks++;
       if (silentChecks % BRIDGE_CHECKS_PER_PING !== 0) return;
       if (silentChecks >= BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS) {
         logMsg('warn', 'bridge: inbound silence — tearing down', {
-          silentMs: Date.now() - bridgeLastInbound,
+          silentMs: Date.now() - link.lastInbound,
           // The least silence this watchdog tears down at; the bridge monitor
           // tells a counted watchdog from the old wall-clock one by it.
           limitMs: BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS * Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING),
         });
-        bridgeLastError = 'inbound silence (daemon closed)';
+        link.lastError = 'inbound silence (daemon closed)';
         // Tear down and redial here, as the dial timeout does: Node's WebSocket
         // close handshake has no timeout, so on a link that drops every byte
         // onclose (and the redial hung off it) never came (matrix B7/H7: the
@@ -13824,53 +14479,53 @@ function dialBridge(gen) {
 
   const onMessage = function(data) {
     // Not from a socket this daemon already gave up on (its adapter is gone).
-    if (gen !== bridgeGeneration || !bridgeAdapter || bridgeClient !== client) return;
-    bridgeLastInbound = Date.now();
+    if (gen !== link.generation || !link.adapter || link.client !== client) return;
+    link.lastInbound = Date.now();
     const text = typeof data === 'string' ? data : data.toString();
-    if (bridgeUplink) bridgeUplink.noteInbound(Buffer.byteLength(text, 'utf8'));
-    handleCommand(bridgeAdapter, text);
+    if (link.uplink) link.uplink.noteInbound(Buffer.byteLength(text, 'utf8'));
+    handleCommand(link.adapter, text);
   };
 
   // ws package: (code, reasonBuffer); browser-style: a CloseEvent.
   let closeHandled = false;
   const onClose = function(a, b) {
-    if (gen !== bridgeGeneration || closeHandled) return;
+    if (gen !== link.generation || closeHandled) return;
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
     // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
-    // sets bridgeClient=null there is a window where this guard passes
-    // (bridgeClient===null) and the late close falls through to
-    // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
+    // sets link.client=null there is a window where this guard passes
+    // (link.client===null) and the late close falls through to
+    // scheduleBridgeRedial — only the "if (link.redialTimer) return" dedupe
     // stops a SECOND stacked redial then. Change either side only in tandem.
-    if (bridgeClient !== null && bridgeClient !== client) return;
+    if (link.client !== null && link.client !== client) return;
     closeHandled = true;
-    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
-    bridgeDialStartedAt = null;
-    if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
-    if (bridgeAdapter) {
+    if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null; }
+    link.dialStartedAt = null;
+    if (link.pingTimer) { clearInterval(link.pingTimer); link.pingTimer = null; }
+    if (link.adapter) {
       var closeInfo = typeof a === 'number'
         ? { code: a, reason: b ? String(b) : '', wasClean: null }
         : { code: a && typeof a.code === 'number' ? a.code : null, reason: a && a.reason ? a.reason : '', wasClean: a && typeof a.wasClean === 'boolean' ? a.wasClean : null };
-      logBridgeConnClose(closeInfo);
-      featureRelay.disconnect(featureSocket(bridgeAdapter)); wsClients.delete(bridgeAdapter);
-      for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
-      streamRelay.dropLink(bridgeAdapter);
-      bridgeAdapter = null;
-      bridgeDroppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null;
-      bridgeHasDropped = true;
+      logBridgeConnClose(link, closeInfo);
+      featureRelay.disconnect(featureSocket(link.adapter)); wsClients.delete(link.adapter);
+      for (const [, session] of sessions) session.subscribers.delete(link.adapter);
+      streamRelay.dropLink(link.adapter);
+      link.adapter = null;
+      link.droppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - link.connOpenedAt, firstDrop: !link.hasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null;
+      link.hasDropped = true;
     }
-    bridgeClient = null;
-    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs });
-    scheduleBridgeRedial(gen);
+    link.client = null;
+    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: link.backoffMs });
+    scheduleBridgeRedial(link, gen);
   };
 
   // onclose always follows an error; keep what it said for the close line. A
   // socket already given up on (it can sit in CLOSING for minutes) must not
   // overwrite the cause the next link's close line reports.
   const onError = function(e) {
-    if (gen !== bridgeGeneration || bridgeClient !== client) return;
+    if (gen !== link.generation || link.client !== client) return;
     var m = e && (e.message || (e.error && e.error.message));
-    bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : ((e && e.type) || 'error');
+    link.lastError = typeof m === 'string' && m ? m.slice(0, 200) : ((e && e.type) || 'error');
   };
 
   // Support both the ws-package EventEmitter API and the browser-style
@@ -14156,7 +14811,7 @@ function cleanup() {
   if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer); } catch {} runtimeKeepTimer = null; }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
-  try { stopBridge(); } catch {}
+  try { stopBridges(); } catch {}
 
   // Embedded code-server: leave it for successor adoption on production
   // restarts; reap in isolated/test daemons (no successor). Keep in sync with
@@ -14515,7 +15170,7 @@ async function startDaemon() {
           };
         });
       },
-      hooksHash: function () { return persistedHooksHash; },
+      hooksHash: function (sid) { return persistedHooksHashFor(sid); },
       start: async function (sid, launch, isCurrent) {
         const result = await startSessionProcess(
           { sid: sid, args: launch.args, cwd: launch.cwd, mode: launch.mode, resume: true }, isCurrent,
@@ -14684,14 +15339,14 @@ async function startDaemon() {
         { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ];
       if (SERVICE_MODE) files.push({ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID });
-      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
+      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE].concat([...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)), touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
       if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored: restored });
     }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : 3600000 /* RUNTIME_KEEP_MS */);
     runtimeKeepTimer.unref();
 
     // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.
     loadBridgeConfig();
-    startBridge('startup');
+    startBridges('startup');
 
     // Heartbeat: 30s vitals log. Absence = wedged daemon.
     setInterval(function() {

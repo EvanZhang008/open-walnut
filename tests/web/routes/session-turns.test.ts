@@ -54,6 +54,7 @@ vi.mock('../../../src/providers/daemon-connection.js', () => {
 const { sessionTurnsRouter } = await import('../../../src/web/routes/session-turns.js')
 const { siblingSessions } = await import('../../../src/core/turn-snapshots/service.js')
 const { turnSnapshotSettingsFrom, pushTurnSnapshotSettings, stopTurnSnapshotSettingsSync } = await import('../../../src/core/turn-snapshots/settings-push.js')
+const { WALNUT_HOME } = await import('../../../src/constants.js')
 
 function app() {
   const a = express()
@@ -227,7 +228,8 @@ describe('turn snapshot settings push', () => {
     await pushTurnSnapshotSettings('__local__')
     await pushTurnSnapshotSettings('__local__')
     expect(state.sent.filter((s) => s.cmd === 'turns.configure')).toHaveLength(1)
-    expect(state.sent[0].params).toEqual({ enabled: true, keep: 100 })
+    // The push names this Walnut, so a daemon shared with another keeps each apart.
+    expect(state.sent[0].params).toEqual({ enabled: true, keep: 100, home: WALNUT_HOME })
     stopTurnSnapshotSettingsSync() // clears what was pushed: a reconnect pushes again
     state.bareFirst = true // the pool entry lacks the capability; the capable twin gets it
     await pushTurnSnapshotSettings('__local__')

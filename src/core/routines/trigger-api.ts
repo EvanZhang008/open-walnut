@@ -12,6 +12,7 @@
 
 import { SessionControlError } from '../sessions/session-controls.js';
 import { log } from '../../logging/index.js';
+import { WALNUT_HOME } from '../../constants.js';
 import { isSupersededSession } from '../sessions/engine-switch-marker.js';
 import { isMainAgentTask } from '../org/main-stays-active.js';
 import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
@@ -133,7 +134,7 @@ export async function testRoutineCheck(
     // Mandatory deadline: a route that waits on a daemon must always answer.
     // `triggerId`, never `id`: send() spreads params into {id, cmd, ...params},
     // so an `id` param overwrites the RPC correlation id and the reply is lost.
-    reply = await conn.send('triggers.test', { check, ...(id ? { triggerId: id } : {}) }, 60_000) as Record<string, unknown>;
+    reply = await conn.send('triggers.test', { check, ...(id ? { triggerId: id } : {}), home: WALNUT_HOME }, 60_000) as Record<string, unknown>;
   } catch (err) {
     throw new SessionControlError(
       `daemon on ${host} did not answer the test: ${err instanceof Error ? err.message : String(err)}`,

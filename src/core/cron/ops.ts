@@ -21,6 +21,7 @@ import {
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
 import { armTimer, emit, executeJob, findMissedJobs, locked, replayGuardOf, stopTimer } from './timer.js';
+import { WALNUT_HOME } from '../../constants.js';
 
 export async function start(state: CronServiceState): Promise<void> {
   // Phase 1: Load store, clear stale markers, find missed jobs (under lock)
@@ -259,7 +260,7 @@ async function relayCheckRun(job: CronJob) {
     // `triggerId`, never `id`: send() builds the frame as {id, cmd, ...params},
     // so a param named `id` overwrites the numeric RPC correlation id and the
     // reply is dropped as unmatched (a silent 30s timeout with no log line).
-    const reply = await resolved.conn.send('triggers.run', { triggerId: job.id }, 60_000);
+    const reply = await resolved.conn.send('triggers.run', { triggerId: job.id, home: WALNUT_HOME }, 60_000);
     if (reply.ok !== true) {
       return { status: 'error' as const, error: typeof reply.error === 'string' ? reply.error : `daemon on ${host} refused triggers.run` };
     }

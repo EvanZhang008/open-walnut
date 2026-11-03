@@ -98,6 +98,15 @@ afterEach(() => {
 })
 
 describe('host server supervision', () => {
+  it('makes its cwd before the spawn: a second Walnut on the host has its own data dir, which nothing made yet', () => {
+    const cwd = path.join(dir, 'walnuts', 'w1', 'data')
+    const sup = createHostServerSupervisor(deps())
+    sup.configure('/h', spec({ cwd }))
+    expect(spawned).toHaveLength(1)
+    expect(fs.statSync(cwd).isDirectory()).toBe(true)
+    expect(fs.statSync(cwd).mode & 0o777).toBe(0o700)
+  })
+
   it('refuses a spec it cannot run safely', () => {
     const sup = createHostServerSupervisor(deps())
     expect(() => sup.configure('/h', spec({ command: 'node' }))).toThrow(/command must be an absolute path/)

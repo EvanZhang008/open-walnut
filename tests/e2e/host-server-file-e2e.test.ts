@@ -255,10 +255,13 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     expect(fs.readdirSync(path.join(hostRoot, 'app', id)).sort()).toEqual(['.ready', 'walnut'])
     expect(fs.existsSync(path.join(hostRoot, 'deps'))).toBe(false)
     expect(fs.existsSync(path.join(hostRoot, 'incoming', `${id}.gz`))).toBe(false)
-    // The file's runtime tree is unpacked in the host server's data dir, not this machine's ~/.open-walnut.
-    expect(fs.readdirSync(path.join(hostRoot, 'data', 'local', 'runtime')).some((n) => n.startsWith(`${version}-`))).toBe(true)
+    // The file's runtime tree is unpacked in this Walnut's own host server data dir (another
+    // Walnut on the host has its own), not this machine's ~/.open-walnut.
+    const dataDir = path.join(hostRoot, 'walnuts', WALNUT, 'data')
+    expect(fs.existsSync(path.join(hostRoot, 'data'))).toBe(false)
+    expect(fs.readdirSync(path.join(dataDir, 'local', 'runtime')).some((n) => n.startsWith(`${version}-`))).toBe(true)
     // It is the file this checkout's commit builds, for this machine.
-    const printed = spawnSync(file, ['--version'], { env: { HOME: hostHome, OPEN_WALNUT_HOME: path.join(hostRoot, 'data'), PATH: guardedPath([], '/usr/bin:/bin') }, encoding: 'utf8' }).stdout.trim()
+    const printed = spawnSync(file, ['--version'], { env: { HOME: hostHome, OPEN_WALNUT_HOME: dataDir, PATH: guardedPath([], '/usr/bin:/bin') }, encoding: 'utf8' }).stdout.trim()
     expect(printed.startsWith(`${version} (${commit}`)).toBe(true)
     // The daemon runs it as the file, not under a Node.
     const status = (await link!.cmd({ cmd: 'server.status', home: HOME })).status as Record<string, any>

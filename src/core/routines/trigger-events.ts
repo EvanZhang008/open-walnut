@@ -39,6 +39,7 @@ import type {
   HostDelivery, TriggerCheckedEvent, TriggerClaimReply, TriggerEvent, TriggerFiredEvent,
 } from '../../providers/trigger-check-core.js';
 import { log } from '../../logging/index.js';
+import { WALNUT_HOME } from '../../constants.js';
 import type { CronJob } from '../cron/types.js';
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
@@ -61,7 +62,7 @@ async function ackFire(host: string, id: string, seq: number): Promise<void> {
   try {
     const conn = await findTriggerDaemon(host);
     if (!conn) return;
-    await conn.send('triggers.ack', { triggerId: id, seq }, 15_000);
+    await conn.send('triggers.ack', { triggerId: id, seq, home: WALNUT_HOME }, 15_000);
   } catch (err) {
     log.cron.warn('trigger ack failed', { host, jobId: id, seq, error: err instanceof Error ? err.message : String(err) });
   }
@@ -493,7 +494,7 @@ export async function claimSeqs(
   if (conn.capabilitiesKnown !== false && !conn.hasCapability(TRIGGER_CLAIM_CAPABILITY)) return all({ kind: 'server' });
   let reply: Record<string, unknown>;
   try {
-    reply = await conn.send('triggers.claim', { triggerId: id, ...(epoch ? { epoch } : {}), seqs: [...seqs] }, CLAIM_TIMEOUT_MS);
+    reply = await conn.send('triggers.claim', { triggerId: id, ...(epoch ? { epoch } : {}), seqs: [...seqs], home: WALNUT_HOME }, CLAIM_TIMEOUT_MS);
   } catch (err) {
     return all({ kind: 'wait', reason: `claim got no answer: ${err instanceof Error ? err.message : String(err)}` });
   }

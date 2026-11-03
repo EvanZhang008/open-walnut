@@ -337,6 +337,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // so it is NOT sidecar-gated. Optional: without it the primary pushes nothing
   // and the companion never leads that host.
   'leader-epoch-v1',
+  // 'walnut-scope-v1' (walnut-scope-core.ts): one daemon keeps a separate copy of every
+  // per-Walnut setting for each Walnut that connects (triggers, hooks, the bridge link,
+  // turn snapshots, workspace providers), keyed by the `home` each push names, and sends
+  // each Walnut only its own events and relays. A push with no home (an older server)
+  // keeps the old single copy. Both twins. Informational: a server sends `home` either way.
+  'walnut-scope-v1',
   // 'leader-settings-v1' (live-settings-core.ts): while the companion leads, it
   // changes a live session's model or effort here with `leader.settings`
   // (bridge, current epoch, a session of that Walnut). The daemon writes the

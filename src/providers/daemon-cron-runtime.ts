@@ -51,7 +51,8 @@ export interface CronRuntimeOptions {
   env: NodeJS.ProcessEnv
   gate: DaemonSessionGate
   sessions(): CronRuntimeSession[]
-  hooksHash(): string | null | undefined
+  /** The hash of the hooks on disk that `sid` runs under (its Walnut's); null when provably none, undefined when unknown. */
+  hooksHash(sid: string): string | null | undefined
   start(sid: string, launch: CronLaunchSpec, isCurrent: () => boolean): Promise<{ pid: number; startTime: string | null }>
   changed(record: CronSupervisionRecord): void
   error(error: unknown): void
@@ -80,9 +81,9 @@ export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
       const file = await findCronTranscript(record.sid, record.launch!.cwd, claudeHome, signal)
       return readCronTranscript(file, signal, cliEnvTrue(options.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP))
     },
-    launchBlocker: async (launch) => {
+    launchBlocker: async (launch, _signal, sid) => {
       if (!(await fs.stat(launch.cwd)).isDirectory()) return 'cwd-unavailable'
-      const hooks = options.hooksHash()
+      const hooks = options.hooksHash(sid)
       if (hooks === undefined || launch.hooksHash !== hooks) return 'hooks-unavailable'
       try { buildCronResumeArgs(launch.args, '00000000-0000-4000-8000-000000000000') }
       catch { return 'unsupported-launch-arguments' }
@@ -94,7 +95,7 @@ export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
     ensureRunning: async (sid, launch, isCurrent) => {
       const current = () => !stopped && isCurrent()
       if (!current()) return null
-      if (options.hooksHash() === undefined || options.hooksHash() !== launch.hooksHash) throw new Error('Recovery hook policy changed')
+      if (options.hooksHash(sid) === undefined || options.hooksHash(sid) !== launch.hooksHash) throw new Error('Recovery hook policy changed')
       const result = await options.start(sid, { ...launch, args: buildCronResumeArgs(launch.args, sid) }, current)
       if (!result.startTime) throw new Error('Resumed process identity is unavailable')
       return { bootId, pid: result.pid, startTime: result.startTime }
@@ -113,7 +114,7 @@ export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
       const identity: CronProcessIdentity = { bootId: session.bootId, pid: session.pid, startTime: session.startTime }
       const probe = await probeCronProcess(identity, bootId, options.platform, AbortSignal.timeout(5000))
       if (probe.status === 'unknown' || stopped) continue
-      const hooksHash = options.hooksHash()
+      const hooksHash = options.hooksHash(session.sid)
       if (hooksHash === undefined || (hooksHash === null && existing?.launch?.hooksHash)) continue
       const launch = { cwd: session.cwd, args: session.args, mode: session.mode, cliVersion: version, hooksHash }
       if (!existing) {

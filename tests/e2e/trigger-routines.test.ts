@@ -717,7 +717,7 @@ describe('trigger.fired from the daemon', () => {
     expect(job.state.nextRunAtMs).toBe(nextRunAtMs)
 
     const ack = sends.find((s) => s.cmd === 'triggers.ack')!
-    expect(ack.params).toEqual({ triggerId: firedJobId, seq: 1 })
+    expect(ack.params).toEqual({ triggerId: firedJobId, seq: 1, home: WALNUT_HOME })
     expect(ack.params.id).toBeUndefined()
   })
 
@@ -772,7 +772,7 @@ describe('trigger.fired from the daemon', () => {
       type: 'trigger.fired', id: 'deleted-job', seq: 9, atMs: Date.now(),
       items: [], durationMs: 1, nextRunAtMs: Date.now() + 1_000,
     })
-    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: 'deleted-job', seq: 9 })
+    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: 'deleted-job', seq: 9, home: WALNUT_HOME })
   })
 
   // Two servers on one daemon (a stale test server adopting the production
@@ -802,7 +802,7 @@ describe('trigger.fired from the daemon', () => {
     const job = await jobState(firedJobId)
     expect(job.state.lastFireSeq).toBe(2)
     expect(job.state.lastCheck).toMatchObject({ outcome: 'fired', items: 1 })
-    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: firedJobId, seq: 2 })
+    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: firedJobId, seq: 2, home: WALNUT_HOME })
   })
 
   // The daemon's seq restarts at 0 when its state file is recreated; the epoch
@@ -820,7 +820,7 @@ describe('trigger.fired from the daemon', () => {
     const job = await jobState(firedJobId)
     expect(job.state.lastFireEpoch).toBe('e2e-epoch-b')
     expect(job.state.lastFireSeq).toBe(1)
-    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: firedJobId, seq: 1 })
+    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: firedJobId, seq: 1, home: WALNUT_HOME })
     // And under THAT epoch, seq 1 again is a replay.
     sends.length = 0
     await handleTriggerFired('__local__', {
@@ -997,7 +997,7 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.lastStatus).toBe('ok')
     expect(job.state.fireRetry).toBeUndefined()
     expect(job.state.lastCheck.retryPending).toBeUndefined()
-    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: flakyJobId, seq: 1 })
+    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: flakyJobId, seq: 1, home: WALNUT_HOME })
 
     // ONE fire that took two tries, not two fires: three rows here would read as
     // three separate things happening, which is what the trail exists to prevent.
@@ -1048,7 +1048,7 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.lastFireSeq).toBe(4)
     expect(job.state.lastError).toContain('task is complete')
     expect(job.state.lastCheck.retryPending).toBeUndefined()
-    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: flakyJobId, seq: 4 })
+    expect(sends.find((s) => s.cmd === 'triggers.ack')?.params).toEqual({ triggerId: flakyJobId, seq: 4, home: WALNUT_HOME })
   })
 })
 
@@ -1066,7 +1066,7 @@ describe('run-now on a check job', () => {
     const r = await post(`/api/routines/${id}/run`, {})
     expect(r.status).toBe(200)
     expect(r.json.result).toMatchObject({ status: 'ok', host: '__local__' })
-    expect(sends.find((s) => s.cmd === 'triggers.run')?.params).toEqual({ triggerId: id })
+    expect(sends.find((s) => s.cmd === 'triggers.run')?.params).toEqual({ triggerId: id, home: WALNUT_HOME })
     // Nothing was delivered: the daemon decides whether this run fires.
     await settle()
     expect(envelopesSentToDaemon()).toEqual([])

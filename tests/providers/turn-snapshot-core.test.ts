@@ -262,6 +262,88 @@ describe('turn snapshots: skip rules', () => {
     expect(b.settings()).toEqual({ enabled: false, keep: 7 })
   })
 
+  describe('two Walnuts on one daemon', () => {
+    function scopedCore(tmp: string, homes: Record<string, string>) {
+      return makeCore({
+        settingsPath: path.join(tmp, 'turn-snapshots.json'),
+        settingsPathFor: (h) => path.join(tmp, 'walnuts', path.basename(h), 'turn-snapshots.json'),
+        homeOf: (sid) => homes[sid] ?? '',
+      })
+    }
+    const read = (f: string) => JSON.parse(fs.readFileSync(f, 'utf8'))
+
+    it("each session follows its own Walnut's settings; one Walnut's push never changes the other's", async () => {
+      const tmp = fs.mkdtempSync(path.join(ROOT, 'scoped-'))
+      const A = path.join(tmp, 'wa')
+      const B = path.join(tmp, 'wb')
+      const core = scopedCore(tmp, { sa: A, sb: B, s0: '' })
+      const repo = makeRepo()
+      await core.configure({ enabled: false, keep: 5 }, A)
+      await core.configure({ enabled: true, keep: 2 }, B)
+      write(repo, 'a.txt', 'x\n')
+      expect(await core.snapshot('sa', repo, 'turn')).toMatchObject({ status: 'skipped', reason: 'disabled' })
+      for (let i = 0; i < 4; i++) {
+        write(repo, 'a.txt', 'b' + i + '\n')
+        expect((await core.snapshot('sb', repo, 'turn')).status).toBe('created')
+      }
+      expect(refs(repo, 'sb')).toHaveLength(2)
+      // An unknown-home session (an older server) gets the defaults while no unnamed copy exists.
+      expect((await core.snapshot('s0', repo, 'turn')).status).toBe('created')
+      expect(read(path.join(tmp, 'walnuts', 'wa', 'turn-snapshots.json'))).toEqual({ home: A, enabled: false, keep: 5 })
+      expect(read(path.join(tmp, 'walnuts', 'wb', 'turn-snapshots.json'))).toEqual({ home: B, enabled: true, keep: 2 })
+      expect(fs.existsSync(path.join(tmp, 'turn-snapshots.json'))).toBe(false)
+      // A restart reads each Walnut's own file.
+      const again = scopedCore(tmp, { sa: A, sb: B })
+      await again.ready()
+      expect((await again.list('sa', repo)).enabled).toBe(false)
+      expect((await again.list('sb', repo)).enabled).toBe(true)
+      expect(again.settings(B)).toEqual({ enabled: true, keep: 2 })
+    })
+
+    it('an unnamed push (an older server) is the legacy file, marked, and a Walnut with no push of its own follows it', async () => {
+      const tmp = fs.mkdtempSync(path.join(ROOT, 'scoped-'))
+      const A = path.join(tmp, 'wa')
+      const core = scopedCore(tmp, { sa: A, s0: '' })
+      expect(await core.configure({ enabled: false, keep: 9 })).toMatchObject({ enabled: false, keep: 9, changed: true })
+      expect(read(path.join(tmp, 'turn-snapshots.json'))).toEqual({ scoped: 1, enabled: false, keep: 9 })
+      expect(core.settings()).toEqual({ enabled: false, keep: 9 })
+      expect(core.settings(A)).toEqual({ enabled: false, keep: 9 })
+      // A's own push keeps the unnamed copy: a real older server's stays its own.
+      await core.configure({ enabled: true, keep: 4 }, A)
+      expect(core.settings()).toEqual({ enabled: false, keep: 9 })
+      expect(core.settings(A)).toEqual({ enabled: true, keep: 4 })
+      expect(fs.existsSync(path.join(tmp, 'turn-snapshots.json'))).toBe(true)
+      const repo = makeRepo()
+      write(repo, 'a.txt', 'y\n')
+      expect(await core.snapshot('s0', repo, 'turn')).toMatchObject({ status: 'skipped', reason: 'disabled' })
+      expect((await core.snapshot('sa', repo, 'turn')).status).toBe('created')
+    })
+
+    it("an older daemon's file (no mark) is inherited: followed until the first named push, which takes it over and removes it", async () => {
+      const tmp = fs.mkdtempSync(path.join(ROOT, 'scoped-'))
+      const A = path.join(tmp, 'wa')
+      const B = path.join(tmp, 'wb')
+      fs.writeFileSync(path.join(tmp, 'turn-snapshots.json'), JSON.stringify({ enabled: false, keep: 3 }))
+      const core = scopedCore(tmp, { sa: A, sb: B })
+      await core.ready()
+      expect(core.settings(A)).toEqual({ enabled: false, keep: 3 })
+      // A pushes the same values: nothing changed for A, and the copy is now A's own.
+      expect(await core.configure({ enabled: false, keep: 3 }, A)).toMatchObject({ changed: false })
+      expect(fs.existsSync(path.join(tmp, 'turn-snapshots.json'))).toBe(false)
+      expect(read(path.join(tmp, 'walnuts', 'wa', 'turn-snapshots.json'))).toEqual({ home: A, enabled: false, keep: 3 })
+      // B, which pushed nothing yet, no longer follows A's copy.
+      expect(core.settings(B)).toEqual({ enabled: true, keep: 100 })
+      // An unmarked file an older server rewrites through a newer daemon becomes its own, marked.
+      const tmp2 = fs.mkdtempSync(path.join(ROOT, 'scoped-'))
+      fs.writeFileSync(path.join(tmp2, 'turn-snapshots.json'), JSON.stringify({ enabled: true, keep: 8 }))
+      const core2 = scopedCore(tmp2, {})
+      expect(await core2.configure({ enabled: true, keep: 8 })).toMatchObject({ changed: false })
+      expect(read(path.join(tmp2, 'turn-snapshots.json'))).toEqual({ scoped: 1, enabled: true, keep: 8 })
+      await core2.configure({ enabled: true, keep: 8 }, A)
+      expect(fs.existsSync(path.join(tmp2, 'turn-snapshots.json'))).toBe(true)
+    })
+  })
+
   it('a snapshot that runs out of time is skipped and the repo rests', async () => {
     const repo = makeRepo()
     let t = 1_000_000

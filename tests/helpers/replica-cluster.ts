@@ -528,8 +528,6 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const macBootFile = path.join(base, 'mac-boot.mts')
   const appCli = path.join(d.app, 'dist', 'cli.js')
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
-  // What an install leaves on the host besides the app (core/host-server/install.ts): the server's data, run and log dirs.
-  for (const x of ['data', 'run', 'logs']) fs.mkdirSync(path.join(d.hostRoot, x), { recursive: true, mode: 0o700 })
   writeStubBin(d.bin)
   writeAppDir(d.app, app)
   fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig())
@@ -644,7 +642,13 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     throw err
   }
   const macPort = mac!.port
-  const replicaData = path.join(d.hostRoot, 'data')
+  // The replica's own dirs on the host: this Walnut's, under walnuts/<walnut>/ (install.ts walnutDirs),
+  // made by the host's daemon when it starts the server. One Walnut here, so the one dir there.
+  const walnutDir = (): string => {
+    const w = (() => { try { return fs.readdirSync(path.join(d.hostRoot, 'walnuts'))[0] } catch { return undefined } })()
+    return w ? path.join(d.hostRoot, 'walnuts', w) : d.hostRoot
+  }
+  const replicaDataNow = (): string => path.join(walnutDir(), 'data')
 
   const macCall: ReplicaCluster['mac'] = async (method, p, body) => {
     const r = await request(macPort, method, p, body === undefined ? {} : { body })
@@ -655,9 +659,9 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     const r = await request(replicaPort, method, p, { ...(o.body === undefined ? {} : { body: o.body }), headers: { ...(o.token ? { authorization: `Bearer ${o.token}` } : {}), ...o.headers } })
     return { status: r.status, json: parse(r.text), text: r.text, headers: r.headers }
   }
-  const copyState = (name: string): any => { try { return JSON.parse(fs.readFileSync(path.join(replicaData, 'cache', name), 'utf8')) } catch { return null } }
-  const deviceCopyText = (): string => { try { return fs.readFileSync(path.join(replicaData, 'replica', 'devices.json'), 'utf8') } catch { return '' } }
-  const replicaLog = (): string => { try { return fs.readFileSync(path.join(d.hostRoot, 'logs', 'server.log'), 'utf8').slice(-20_000) } catch { return '' } }
+  const copyState = (name: string): any => { try { return JSON.parse(fs.readFileSync(path.join(walnutDir(), 'data', 'cache', name), 'utf8')) } catch { return null } }
+  const deviceCopyText = (): string => { try { return fs.readFileSync(path.join(walnutDir(), 'data', 'replica', 'devices.json'), 'utf8') } catch { return '' } }
+  const replicaLog = (): string => { try { return fs.readFileSync(path.join(walnutDir(), 'logs', 'server.log'), 'utf8').slice(-20_000) } catch { return '' } }
 
   try {
     // The manager picked the replica's port on the host and keeps it in the Mac's data dir.
@@ -671,9 +675,9 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     await waitFor(() => copyState('task-replica.json') && copyState('replica/sessions.json') && copyState('replica/boards.json'), 180_000, 'the first copy rounds')
     // The note's copy on the host (the daemon's), the letter's on the replica.
     await waitFor(() => treeHolds(path.join(d.hostDaemon, 'host-replica'), MAC_NOTE.text), 180_000, 'the note to reach the host')
-    await waitFor(() => treeHolds(path.join(replicaData, 'human-inbox'), MAC_LETTER.subject), 180_000, 'the letter to reach the replica')
+    await waitFor(() => treeHolds(path.join(replicaDataNow(), 'human-inbox'), MAC_LETTER.subject), 180_000, 'the letter to reach the replica')
     // The WP5 copies: the routines, the config, and the prefs (the favorites and the theme).
-    const holds = (rel: string, ...needles: string[]) => { try { const t = fs.readFileSync(path.join(replicaData, rel), 'utf8'); return needles.every((x) => t.includes(x)) } catch { return false } }
+    const holds = (rel: string, ...needles: string[]) => { try { const t = fs.readFileSync(path.join(replicaDataNow(), rel), 'utf8'); return needles.every((x) => t.includes(x)) } catch { return false } }
     await waitFor(() => holds('cron-jobs.json', MAC_ROUTINE.name), 180_000, 'the routine to reach the replica')
     await waitFor(() => holds(path.join('cache', 'replica', 'config.json'), MAC_USER_NAME, 'devbox.invalid'), 180_000, 'the config copy to reach the replica')
     await waitFor(() => holds(path.join('cache', 'replica', 'prefs.json'), MAC_THEME.key, MAC_FAVORITES.notes[0]!), 180_000, 'the prefs copy to reach the replica')
@@ -700,7 +704,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const offlineOf = (h: http.IncomingHttpHeaders): number | null => (typeof h['x-walnut-offline'] === 'string' ? Number(h['x-walnut-offline']) : null)
 
   return {
-    base, twin: opts.twin, app, macPort, macPid, macDaemonPid, hostDaemonPid: hostDaemon!.pid, replicaPort, replicaData, macData: d.macData,
+    base, twin: opts.twin, app, macPort, macPid, macDaemonPid, hostDaemonPid: hostDaemon!.pid, replicaPort, replicaData: replicaDataNow(), macData: d.macData,
     ids: { ...mac!.ids, macSid: MAC_SID, hostSid: HOST_SID },
     mac: macCall,
     replica: replicaCall,
@@ -736,11 +740,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     deviceCopy: () => { try { return JSON.parse(deviceCopyText()) } catch { return null } },
     stores() {
       let files: string[] = []
-      try { files = fs.readdirSync(replicaData).sort() } catch { /* none yet */ }
+      try { files = fs.readdirSync(replicaDataNow()).sort() } catch { /* none yet */ }
       // The replica's own copy of the task rows (what it answers away): each row's id, title and phase, read only.
       let list: Array<{ id?: string; title?: string; phase?: string }> = []
       try {
-        const db = new Database(path.join(replicaData, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
+        const db = new Database(path.join(replicaDataNow(), 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
         try { list = db.prepare('SELECT id, title, phase FROM tasks').all() as typeof list } finally { db.close() }
       } catch { /* none yet */ }
       return {
@@ -752,7 +756,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
         // The WP5 copies as the replica holds them (read only).
         config: copyState('replica/config.json'),
         prefs: copyState('replica/prefs.json'),
-        routines: (() => { try { return JSON.parse(fs.readFileSync(path.join(replicaData, 'cron-jobs.json'), 'utf8')) } catch { return null } })(),
+        routines: (() => { try { return JSON.parse(fs.readFileSync(path.join(replicaDataNow(), 'cron-jobs.json'), 'utf8')) } catch { return null } })(),
       }
     },
     logs: () => ({ mac: macLog.text.slice(-20_000), replica: replicaLog() }),

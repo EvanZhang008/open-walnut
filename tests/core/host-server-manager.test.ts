@@ -51,6 +51,10 @@ interface FakeHost extends HostServerHost {
   gate?: Promise<void>
   /** Called at every install state poll (the link may drop there). */
   onStatePoll?: () => void
+  /** What the host answers about the shared data dir from before the split (default MINE). */
+  legacyOwner?: 'MINE' | 'OTHER'
+  /** The dir scripts it ran (walnutDirsScript). */
+  dirsMade: string[]
 }
 
 /** The host server's end of a stream: what the Mac posts to it. */
@@ -62,7 +66,7 @@ function fakeHost(): FakeHost {
   const h: FakeHost = {
     hostKey: 'devbox',
     connected: true,
-    calls: [], specs: [], uploads: [], streams: [], lane: [], prunes: [], uploadShas: [],
+    calls: [], specs: [], uploads: [], streams: [], lane: [], prunes: [], uploadShas: [], dirsMade: [],
     installState: 'absent', pollsUntilReady: 2, system: 'os=Linux\narch=x86_64\nlibc=glibc\ntranslated=0\nglibc=2.26\n',
     caps: new Set(['host-server-v1', 'follower-v1', 'stream-relay-v1']),
     daemonState: 'off',
@@ -96,6 +100,8 @@ function fakeHost(): FakeHost {
         if (h.installState === 'failed') return 'FAILED\nthe walnut file does not start on this host (Linux x86_64, glibc 2.26): boom\n__LOG__\nboom'
         return { absent: 'ABSENT', running: 'RUNNING', ready: 'READY' }[h.installState] ?? 'ABSENT'
       }
+      if (script.endsWith('&& echo dirs')) { h.dirsMade.push(script); return 'dirs' }
+      if (script.includes('/data/.walnut-id')) { h.calls.push('legacy-owner'); return h.legacyOwner ?? 'MINE' }
       if (script.includes('echo pruned')) {
         const keep = /KEEP=' ([^']*) '/.exec(script)?.[1]?.split(' ') ?? []
         h.calls.push('prune')
@@ -337,7 +343,7 @@ describe('host server manager', () => {
     expect(fs.statSync(path.join(dir, 'host-servers.json')).mode & 0o777).toBe(0o600)
     expect(Object.keys(ports).sort()).toEqual(['publicPort', 'working'])
     // The program that answered, kept for a build after it that does not.
-    expect(ports.working).toMatchObject({ id: '0.6.7-abc1234', command: file, args: ['host-server'], cwd: '/home/me/.open-walnut-host/data', log: '/home/me/.open-walnut-host/logs/server.log' })
+    expect(ports.working).toMatchObject({ id: '0.6.7-abc1234', command: file, args: ['host-server'], cwd: '/home/me/.open-walnut-host/walnuts/wmac01/data', log: '/home/me/.open-walnut-host/walnuts/wmac01/logs/server.log' })
     // The door host server streams come in by, and a lane of their own to the host.
     expect(held).toEqual(['host-server:devbox'])
     expect(host.lane).toEqual([true])
@@ -345,13 +351,13 @@ describe('host server manager', () => {
     expect(spec).toMatchObject({
       home: HOME, walnutId: 'wmac01', command: file,
       args: ['host-server'],
-      cwd: '/home/me/.open-walnut-host/data', log: '/home/me/.open-walnut-host/logs/server.log',
+      cwd: '/home/me/.open-walnut-host/walnuts/wmac01/data', log: '/home/me/.open-walnut-host/walnuts/wmac01/logs/server.log',
       port: ports.publicPort,
       settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
     })
     expect(spec.env).toEqual({
       // Its own run dir: the host server never writes the host daemon's /tmp/open-walnut (WP3).
-      OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run', WALNUT_HOST_SERVER: '1',
+      OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/walnuts/wmac01/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/walnuts/wmac01/run', WALNUT_HOST_SERVER: '1',
       WALNUT_HOST_SERVER_PORT: String(ports.publicPort),
       WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
       WALNUT_HOST_LABEL: 'Dev box', WALNUT_NO_AUTO_UPDATE: '1',
@@ -717,14 +723,63 @@ describe('host server manager', () => {
     host.reports = false
     await m.connected(host)
     expect(m.view('devbox')).toMatchObject({ phase: 'error' })
-    expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is \/home\/me\/\.open-walnut-host\/logs\/server\.log on the host/)
+    expect(m.view('devbox').message).toMatch(/did not answer within a minute; its log is \/home\/me\/\.open-walnut-host\/walnuts\/wmac01\/logs\/server\.log on the host/)
+  })
+})
+
+describe('host server manager: a host two Walnuts share', () => {
+  const file = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
+  const legacy = { cwd: '/home/me/.open-walnut-host/data', log: '/home/me/.open-walnut-host/logs/server.log' }
+  const seed = () => fs.writeFileSync(path.join(dir, 'host-servers.json'), JSON.stringify({
+    devbox: { publicPort: 45001, working: { id: '0.6.7-abc1234', command: file, args: ['host-server'], env: {}, ...legacy } },
+  }))
+
+  it('a fresh install gets its own data, log and run dirs, named by its walnut id', async () => {
+    const host = fakeHost()
+    await createHostServerManager(deps()).connected(host)
+    expect(host.calls).not.toContain('legacy-owner')
+    expect(host.specs[0]).toMatchObject({ cwd: '/home/me/.open-walnut-host/walnuts/wmac01/data' })
+    expect(host.specs[0]!.env).toMatchObject({ WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/walnuts/wmac01/run' })
+    // Its install checks itself in its own data home, never the shared one.
+    expect(host.script).toContain(`DATA='/home/me/.open-walnut-host/walnuts/wmac01/data'`)
+    expect(host.script).not.toContain('OPEN_WALNUT_HOME="$ROOT/data"')
+  })
+
+  it('a build another Walnut installed there already: this Walnut makes its own dirs before its server starts in them', async () => {
+    const host = fakeHost()
+    host.installState = 'ready'
+    await createHostServerManager(deps()).connected(host)
+    expect(host.uploads).toEqual([])
+    expect(host.dirsMade).toEqual([
+      "mkdir -p '/home/me/.open-walnut-host/walnuts/wmac01/data' '/home/me/.open-walnut-host/walnuts/wmac01/run' '/home/me/.open-walnut-host/walnuts/wmac01/logs' && echo dirs",
+    ])
+    expect(host.specs[0]).toMatchObject({ cwd: '/home/me/.open-walnut-host/walnuts/wmac01/data' })
+  })
+
+  it('a server this Walnut ran in the shared dirs from before the split stays there while they are its own', async () => {
+    seed()
+    const host = fakeHost()
+    host.installState = 'ready'
+    await createHostServerManager(deps()).connected(host)
+    expect(host.calls).toContain('legacy-owner')
+    expect(host.specs[0]).toMatchObject(legacy)
+    expect(host.specs[0]!.env).toMatchObject({ OPEN_WALNUT_HOME: legacy.cwd, WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run' })
+  })
+
+  it('shared dirs another Walnut marked since are not used: this Walnut moves to its own', async () => {
+    seed()
+    const host = fakeHost()
+    host.installState = 'ready'
+    host.legacyOwner = 'OTHER'
+    await createHostServerManager(deps()).connected(host)
+    expect(host.specs[0]).toMatchObject({ cwd: '/home/me/.open-walnut-host/walnuts/wmac01/data', log: '/home/me/.open-walnut-host/walnuts/wmac01/logs/server.log' })
   })
 })
 
 describe('host server manager: which program (WP2)', () => {
   const file = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
   const hostServerEnv = (port: number) => ({
-    OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/run', WALNUT_HOST_SERVER: '1',
+    OPEN_WALNUT_HOME: '/home/me/.open-walnut-host/walnuts/wmac01/data', WALNUT_DAEMON_DIR: '/home/me/.open-walnut-host/walnuts/wmac01/run', WALNUT_HOST_SERVER: '1',
     WALNUT_HOST_SERVER_PORT: String(port), WALNUT_LEADER_HOME: HOME, WALNUT_WALNUT_ID: 'wmac01',
     WALNUT_HOST_LABEL: 'Dev box', WALNUT_NO_AUTO_UPDATE: '1',
   })
@@ -814,8 +869,8 @@ describe('host server manager: which program (WP2)', () => {
     // Its port is asked of the runtime the app dir runs on (no BUN_BE_BUN: it is not the walnut file).
     expect(host.calls).toContain("ports '/opt/js/bin/runtime'")
     const spec = host.specs[0]!
-    expect(spec).toMatchObject({ command: '/opt/js/bin/runtime', args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'], cwd: '/srv/marina-host/data', log: '/srv/marina-host/logs/server.log' })
-    expect(spec.env).toMatchObject({ OPEN_WALNUT_HOME: '/srv/marina-host/data', WALNUT_DAEMON_DIR: '/srv/marina-host/run' })
+    expect(spec).toMatchObject({ command: '/opt/js/bin/runtime', args: ['/work/walnut-tree/dist/cli.js', 'web', '--replica'], cwd: '/srv/marina-host/walnuts/wmac01/data', log: '/srv/marina-host/walnuts/wmac01/logs/server.log' })
+    expect(spec.env).toMatchObject({ OPEN_WALNUT_HOME: '/srv/marina-host/walnuts/wmac01/data', WALNUT_DAEMON_DIR: '/srv/marina-host/walnuts/wmac01/run' })
   })
 
   it('a local app dir needs a bun: the compiled file is refused, never told to be bun for a whole server', async () => {
@@ -840,7 +895,7 @@ describe('host server manager: which program (WP2)', () => {
     await m.connected(host)
     expect(host.uploads.map((u) => u.path)).toEqual(['/srv/marina-host/incoming/0.6.7-abc1234.gz', '/srv/marina-host/incoming/0.6.7-abc1234.install.sh'])
     expect(host.script).toContain('ROOT="/srv/marina-host"')
-    expect(host.specs[0]).toMatchObject({ command: '/srv/marina-host/app/0.6.7-abc1234/walnut', args: ['host-server'], cwd: '/srv/marina-host/data' })
+    expect(host.specs[0]).toMatchObject({ command: '/srv/marina-host/app/0.6.7-abc1234/walnut', args: ['host-server'], cwd: '/srv/marina-host/walnuts/wmac01/data' })
   })
 
   it('a root a shell would expand is refused', async () => {

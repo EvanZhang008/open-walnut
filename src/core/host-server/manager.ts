@@ -58,8 +58,8 @@ import type { HostFileSource } from './host-file.js'
 import { parseHostTarget, targetProbeScript } from './host-target.js'
 import { validBuildId } from '../companion-build/wire.js'
 import {
-  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
-  type InstallState,
+  checkHostRoot, fileInstallScript, freePortsScript, HOST_ROOT, launchScript, legacyDataOwnerScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
+  walnutDirs, walnutDirsScript, type InstallState,
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
 
@@ -443,7 +443,18 @@ export function createHostServerManager(deps: ManagerDeps) {
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
     const root = rootSpec.replace('$HOME', remoteHome)
-    const dirs = { root, rootSpec, dataDir: `${root}/data`, logFile: `${root}/logs/server.log`, runDir: `${root}/run` }
+    // Each Walnut's server keeps its own data, log and run dirs on a host it may share with
+    // another Walnut. One this Walnut already ran in the shared dirs from before the split
+    // stays there (a live data dir is not moved), unless another Walnut marked them since.
+    const walnutId = await deps.walnutId()
+    const legacy = walnutDirs(root, null)
+    const ownsLegacy = readState()[host.hostKey]?.working?.cwd === legacy.dataDir
+      && (await host.runRemoteScript(legacyDataOwnerScript(walnutId, rootSpec), 15_000)).trim() === 'MINE'
+    const dirs = { root, rootSpec, ...(ownsLegacy ? legacy : walnutDirs(root, walnutId)) }
+    // The server's cwd is its data dir: a spawn into a dir no one made fails (ENOENT). A daemon
+    // with walnut-scope-v1 makes it itself before the spawn; this covers an older one.
+    await host.runRemoteScript(walnutDirsScript(dirs), 15_000)
+      .catch((err: Error) => log.session.warn('host server: making this Walnut\'s dirs on the host failed', { host: host.hostKey, error: err.message }))
     if (deps.appDir) {
       // Tests: a local tree stands in for an installed build.
       if (!deps.appDir.startsWith('/')) throw new Error('WALNUT_HOST_SERVER_APP_DIR must be an absolute path')
@@ -481,7 +492,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         showProgress(host.hostKey, sending(pct))
       }
       if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256, onProgress })
-      const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
+      const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, dataDir: dirs.dataDir, ...(deps.hostRoot ? { root: rootSpec } : {}) })
       await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
       await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
       set(host.hostKey, { message: `Installing Walnut ${id} on the host.` })
@@ -747,7 +758,7 @@ export function createHostServerManager(deps: ManagerDeps) {
           updateRecord(hostKey, (r) => { r.working = fresh; delete r.refused; delete r.behindSince })
           if (!deps.appDir) {
             const keep = [...new Set([fresh.id, working?.id, before].filter((k): k is string => !!k && validBuildId(k)))]
-            await host.runRemoteScript(pruneScript(keep, install.rootSpec), 60_000)
+            await host.runRemoteScript(pruneScript(keep, install.rootSpec, await deps.walnutId()), 60_000)
               .catch((err: Error) => log.session.warn('host server: removing older builds on the host failed', { host: hostKey, error: err.message }))
           }
           startPoll(hostKey)

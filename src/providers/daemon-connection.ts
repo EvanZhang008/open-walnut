@@ -1198,7 +1198,10 @@ export class DaemonConnection {
         const cfg = await getBridgeConfigForHost(this.hostKey)
         // Push disabled too — an operator turning the bridge off must reach
         // daemons that already hold a persisted bridge.json.
-        const payload = this.hostKey === '__local__' && this.hasCapability('feature-relay-v1')
+        // `home` names this Walnut's own link on a daemon several Walnuts share
+        // (walnut-scope-v1), on every host. An older daemon got it only locally,
+        // where it binds the feature relay, and keeps exactly that.
+        const payload = this.hasCapability('walnut-scope-v1') || (this.hostKey === '__local__' && this.hasCapability('feature-relay-v1'))
           ? { ...cfg, home: WALNUT_HOME } : cfg
         const reply = await this.send('bridge.configure', payload as unknown as Record<string, unknown>)
         if (reply.ok !== true) {
@@ -1275,7 +1278,8 @@ export class DaemonConnection {
           ])
           const config = compileDaemonHooks(await getConfig())
           if (config.hash === this.lastHooksPushHash) continue
-          const reply = await this.send('hooks.configure', { config: config as unknown as Record<string, unknown> })
+          // `home`: the daemon keeps one rule set per Walnut (walnut-scope-v1); an older one ignores it.
+          const reply = await this.send('hooks.configure', { home: WALNUT_HOME, config: config as unknown as Record<string, unknown> })
           if (reply.ok !== true) {
             log.session.warn('DaemonConnection: daemon hooks push rejected', {
               host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
@@ -1395,8 +1399,10 @@ export class DaemonConnection {
           const compiled = await provider(this.hostKey, { clock, fresh: this.lastTriggersPushHash === null, hostStart })
           if (!compiled) return
           if (compiled.hash === this.lastTriggersPushHash) continue
+          // `home`: the daemon keeps one set per Walnut (walnut-scope-core.ts).
           const reply = await this.send('triggers.configure', {
             config: compiled.payload as unknown as Record<string, unknown>,
+            home: WALNUT_HOME,
           })
           if (reply.ok !== true) {
             log.session.warn('DaemonConnection: triggers push rejected', {

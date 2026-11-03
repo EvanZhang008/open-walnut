@@ -74,6 +74,18 @@ let primaryPort = 0
 let proxy: SilentLinkProxy
 let hostDaemon: { proc: ChildProcess; dir: string; port: number } | null = null
 const hostDirs = { home: '', daemon: '', streams: '', cwd: '' }
+
+/**
+ * The Mac's bridge link as the host's daemon keeps it: one per Walnut, under walnuts/<key>/
+ * (walnut-scope-v1). A push that names the same home turns that link off and on again; one
+ * with no home is an older server's own link and leaves it alone.
+ */
+function savedBridge(): { url: string; token: string; hostAlias: string; home: string } {
+  const dir = path.join(hostDaemon!.dir, 'walnuts')
+  const files = fs.readdirSync(dir).map((k) => path.join(dir, k, 'bridge.json')).filter((f) => fs.existsSync(f))
+  expect(files, 'one Walnut\'s bridge link on the host').toHaveLength(1)
+  return JSON.parse(fs.readFileSync(files[0]!, 'utf-8'))
+}
 /** The Mac's link to the host as its pool holds it; `up` gates its redial. */
 let link: { conn: import('../../src/providers/daemon-connection.js').DaemonConnection; up: boolean } | null = null
 let severedAt = 0
@@ -577,8 +589,8 @@ describe('a remote-host session on the phone while the Mac cannot reach the host
   }, 240_000)
 
   it('the host also drops off the companion: two sends are held in its name, then delivered once each, in order, when the host returns', async () => {
-    const saved = JSON.parse(fs.readFileSync(path.join(hostDaemon!.dir, 'bridge.json'), 'utf-8')) as { url: string; token: string; hostAlias: string }
-    await hostRpc('bridge.configure', { enabled: false })
+    const saved = savedBridge()
+    await hostRpc('bridge.configure', { enabled: false, home: saved.home })
     await waitFor(async () => !(await bridgeHosts()).includes(HOST), 30_000, 'the host off the companion')
     const held = await send(SID_A, 'bridge-down-one', 'qm-mobile-bridgedown1')
     record('bridgeDownSend', held)
@@ -593,7 +605,7 @@ describe('a remote-host session on the phone while the Mac cannot reach the host
     const heldIds = ((queued.json?.messages ?? []) as Array<{ id?: string; status?: string }>)
       .filter((m) => m.status === 'held').map((m) => m.id)
     expect.soft(heldIds, queued.body).toEqual(['qm-mobile-bridgedown1', 'qm-mobile-bridgedown2'])
-    await hostRpc('bridge.configure', { enabled: true, url: saved.url, token: saved.token, hostAlias: saved.hostAlias })
+    await hostRpc('bridge.configure', { enabled: true, url: saved.url, token: saved.token, hostAlias: saved.hostAlias, home: saved.home })
     await waitFor(async () => (await bridgeHosts()).includes(HOST), 60_000, 'the host back on the companion')
     const t0 = Date.now()
     const landed = await waitFor(() => answers(SID_A, 'bridge-down-one') === 1 && answers(SID_A, 'bridge-down-two') === 1, 90_000, 'the held sends delivered').catch(() => false)
@@ -655,8 +667,8 @@ describe('a remote-host session on the phone while the Mac cannot reach the host
     if (quiet > 0) await sleep(quiet)
 
     // The host drops off the companion too, so the send is held there.
-    const saved = JSON.parse(fs.readFileSync(path.join(hostDaemon!.dir, 'bridge.json'), 'utf-8')) as { url: string; token: string; hostAlias: string }
-    await hostRpc('bridge.configure', { enabled: false })
+    const saved = savedBridge()
+    await hostRpc('bridge.configure', { enabled: false, home: saved.home })
     await waitFor(async () => !(await bridgeHosts()).includes(HOST), 30_000, 'the host off the companion')
     const held = await send(SID_A, 'stop-overtaken', 'qm-mobile-stopover01')
     record('stopOvertakenSend', held)
@@ -668,7 +680,7 @@ describe('a remote-host session on the phone while the Mac cannot reach the host
     expect.soft([200, 503], stop.body).toContain(stop.status)
 
     // The host is back on the companion; no Mac is behind it.
-    await hostRpc('bridge.configure', { enabled: true, url: saved.url, token: saved.token, hostAlias: saved.hostAlias })
+    await hostRpc('bridge.configure', { enabled: true, url: saved.url, token: saved.token, hostAlias: saved.hostAlias, home: saved.home })
     await waitFor(async () => (await bridgeHosts()).includes(HOST), 60_000, 'the host back on the companion')
     const told = await waitFor(async () => {
       const s = await phone(`/sessions/${SID_A}/messages/qm-mobile-stopover01`)

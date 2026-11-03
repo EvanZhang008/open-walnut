@@ -751,7 +751,10 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       // The adapter scripts live in a service daemon's state dir, else in the runtime
       // dir (under /tmp, where a cleaner may remove them: the core writes a missing
       // adapter again before each run).
-      expect(src).toMatch(/stateDir: (SERVICE_MODE && DAEMON_STATE_DIR \? DAEMON_STATE_DIR : DAEMON_DIR|STATE_DIR_OR_RUNTIME)/)
+      expect(src).toMatch(/stateDir: (SERVICE_MODE && DAEMON_STATE_DIR \? DAEMON_STATE_DIR : DAEMON_DIR|STATE_DIR_OR_RUNTIME|WORKSPACE_STATE_DIR)/)
+      // One allowlist per Walnut: its adapters under that Walnut's dir, the command's home resolved against the socket.
+      expect(src).toMatch(/scopeDir: .*walnutScope\.dirFor\((STATE_DIR_OR_RUNTIME|WORKSPACE_STATE_DIR), home\)/)
+      expect(src).toMatch(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), (name|String\(cmd\.cmd\))\)/)
       // A job poll answers during a shutdown; new provider runs go through the drain.
       expect(src).toMatch(/=== 'workspace\.job'\) return work\(\)/)
       const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
@@ -2158,7 +2161,7 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       // through decideBridgeRestart (daemon-core.ts is the source of truth;
       // the template mirrors it inline).
       expect(src).toMatch(/decideBridgeRestart\(\{/)
-      expect(src).toMatch(/if \(decision\.restart\) startBridge\(decision\.reason\)/)
+      expect(src).toMatch(/if \(decision\.restart\) startBridge\(link, decision\.reason\)/)
     }
   })
   it('template mirrors decideBridgeRestart from daemon-core verbatim (modulo semicolons)', () => {
@@ -2184,18 +2187,18 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       // The timeout handler must schedule the redial itself (a wedged socket
       // may never fire onclose).
       const idx = src.indexOf('bridge: dial timeout')
-      expect(src.slice(idx, idx + 600)).toMatch(/scheduleBridgeRedial\(gen\)/)
+      expect(src.slice(idx, idx + 600)).toMatch(/scheduleBridgeRedial\(link, gen\)/)
     }
   })
   it('both dedupe pending redial timers (dial-timeout + late onclose must not stack)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/if \(bridgeRedialTimer\) return/)
+      expect(src).toMatch(/if \(link\.redialTimer\) return/)
     }
   })
   it('both carry the generation guard against stale dials', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/bridgeGeneration\+\+/)
-      expect(src).toMatch(/gen !== bridgeGeneration/)
+      expect(src).toMatch(/link\.generation\+\+/)
+      expect(src).toMatch(/gen !== link\.generation/)
     }
   })
   it('both send hello with hostAlias/version/instanceId/sids as the first frame', () => {
@@ -2231,10 +2234,10 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       // The bridge monitor reads this to tell the counted watchdog from the old one.
       expect(branch).toMatch(/limitMs: BRIDGE_CHECKS_PER_PING \* BRIDGE_SILENT_PINGS \* Math\.round\(BRIDGE_PING_INTERVAL_MS \/ BRIDGE_CHECKS_PER_PING\),/)
       // onClose ends in the redial and runs once per socket.
-      expect(src).toMatch(/if \(gen !== bridgeGeneration \|\| closeHandled\) return/)
+      expect(src).toMatch(/if \(gen !== link\.generation \|\| closeHandled\) return/)
       expect(src).toMatch(/closeHandled = true/)
       const body = src.slice(src.indexOf('const onClose = '), src.indexOf('const onClose = ') + 2500)
-      expect(body).toMatch(/scheduleBridgeRedial\(gen\)/)
+      expect(body).toMatch(/scheduleBridgeRedial\(link, gen\)/)
     }
   })
   // The behavior is pinned in daemon-link-liveness-twins-e2e.test.ts; this keeps the twins' text in step.
@@ -2243,7 +2246,7 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       const start = src.indexOf('// The silence watchdog: see BRIDGE_SILENT_PINGS.')
       expect(start).toBeGreaterThan(-1)
       const w = src.slice(start, src.indexOf('Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING))', start) + 70)
-      expect(w).toMatch(/if \(bridgeLastInbound !== heardAt\) \{ heardAt = bridgeLastInbound; silentChecks = 0; return;? \}/)
+      expect(w).toMatch(/if \(link\.lastInbound !== heardAt\) \{ heardAt = link\.lastInbound; silentChecks = 0; return;? \}/)
       expect(w).toMatch(/if \(silentChecks % BRIDGE_CHECKS_PER_PING !== 0\) return/)
       expect(w).toMatch(/if \(silentChecks >= BRIDGE_CHECKS_PER_PING \* BRIDGE_SILENT_PINGS\) \{/)
       expect(w).toMatch(/uplink\.ping\(\)/)
@@ -2254,9 +2257,9 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   // errors must not reach the live link's state or its close line.
   it('both ignore frames and errors from a socket they already gave up on', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/if \(gen !== bridgeGeneration \|\| !bridgeAdapter \|\| bridgeClient !== client\) return/)
+      expect(src).toMatch(/if \(gen !== link\.generation \|\| !link\.adapter \|\| link\.client !== client\) return/)
       const err = src.slice(src.search(/(const onError = function\(e\) \{|client\.onerror = \(e: Event\) => \{)/), src.search(/(const onError = function\(e\) \{|client\.onerror = \(e: Event\) => \{)/) + 200)
-      expect(err).toMatch(/if \(gen !== bridgeGeneration \|\| bridgeClient !== client\) return/)
+      expect(err).toMatch(/if \(gen !== link\.generation \|\| link\.client !== client\) return/)
     }
   })
   for (const fn of ['envTimerMs', 'bridgeRedialStep', 'armsBridgeFastWindow']) {
@@ -2275,10 +2278,10 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       const sched = src.slice(src.indexOf('function scheduleBridgeRedial('), src.indexOf('function scheduleBridgeRedial(') + 1200)
       expect(sched).toMatch(/bridgeRedialStep\(\{/)
-      expect(sched).toMatch(/sinceDropMs: bridgeDroppedAt != null \? Date\.now\(\) - bridgeDroppedAt : null/)
-      expect(sched).toMatch(/bridgeBackoffMs = step\.nextBackoffMs/)
+      expect(sched).toMatch(/sinceDropMs: link\.droppedAt != null \? Date\.now\(\) - link\.droppedAt : null/)
+      expect(sched).toMatch(/link\.backoffMs = step\.nextBackoffMs/)
       // Only where an open adapter is torn down (an established link).
-      expect(src).toMatch(/bridgeAdapter = null;?\s*\n\s*bridgeDroppedAt = armsBridgeFastWindow\(\{ uptimeMs: Date\.now\(\) - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS \}\) \? Date\.now\(\) : null;?\s*\n\s*bridgeHasDropped = true/)
+      expect(src).toMatch(/link\.adapter = null;?\s*\n\s*link\.droppedAt = armsBridgeFastWindow\(\{ uptimeMs: Date\.now\(\) - link\.connOpenedAt, firstDrop: !link\.hasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS \}\) \? Date\.now\(\) : null;?\s*\n\s*link\.hasDropped = true/)
     }
   })
   // Gate P5 (2026-10-03): an SSH forward that died on the far side while sshd
@@ -2407,7 +2410,7 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   })
   it('both route inbound bridge frames through handleCommand (no second dispatch)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/handleCommand\(bridgeAdapter,/)
+      expect(src).toMatch(/handleCommand\(link\.adapter,/)
     }
   })
   it('both put the token on the query string (browser-style clients cannot set headers)', () => {
@@ -2417,8 +2420,8 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
   })
   it('both stop the bridge first in cleanup() and self-heal at startup', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/try \{ stopBridge\(\);? \} catch \{\}/)
-      expect(src).toMatch(/loadBridgeConfig\(\);?\s*\n\s*startBridge\('startup'\)/)
+      expect(src).toMatch(/try \{ stopBridges\(\);? \} catch \{\}/)
+      expect(src).toMatch(/loadBridgeConfig\(\);?\s*\n\s*startBridges\('startup'\)/)
     }
   })
 })
@@ -3153,7 +3156,7 @@ describe('walnut-trigger daemon parity', () => {
       const start = src.indexOf('function readTriggerState(')
       const body = src.slice(start, src.indexOf('\nfunction ', start + 1))
       expect(body).toMatch(/LEGACY_TRIGGER_STATE_DIRS/)
-      expect(body).toMatch(/persistTriggerState\(id, state\)/)
+      expect(body).toMatch(/persistTriggerState\(home, id, state\)/)
       expect(body).toMatch(/'trigger state moved to its durable dir'/)
     }
   })
@@ -3251,7 +3254,7 @@ describe('walnut-trigger daemon parity', () => {
       expect(body).toMatch(/replay/)
       expect(body, 'the replay clock is marked where the fire goes out').toMatch(/fireSentAt\.set\(fire\.seq/)
       expect(
-        src.split("sendTriggerEvent('trigger.fired'").length - 1,
+        src.split("sendTriggerEvent(entry.home, 'trigger.fired'").length - 1,
         'only sendTriggerFire may put a fire on the wire',
       ).toBe(1)
       const runStart = src.indexOf('async function runTrigger(')
@@ -3273,13 +3276,13 @@ describe('walnut-trigger daemon parity', () => {
       const cfgBody = src.slice(cfgStart, src.indexOf('\n}', cfgStart))
       // Arming and disarming live in armTriggerSet, which a change made on the
       // host (offline-triggers-v1) runs too.
-      expect(cfgBody).toMatch(/armTriggerSet\(effectiveTriggerDefs\(defs\), now\)/)
+      expect(cfgBody).toMatch(/armTriggerSet\(home, effectiveTriggerDefs\(home, defs\), now\)/)
       expect(cfgBody, 'a disarmed trigger keeps its state file').not.toMatch(/unlink/)
       expect(cfgBody).toMatch(/pruneTriggerStateFiles\(now\)/)
       const armStart = src.indexOf('function armTriggerSet(')
       expect(armStart).toBeGreaterThan(-1)
       const armBody = src.slice(armStart, src.indexOf('\n}', armStart))
-      expect(armBody).toMatch(/armedTriggers\.delete\(tid\)/)
+      expect(armBody).toMatch(/armedTriggers\.delete\(key\)/)
       expect(armBody, 'a disarmed trigger keeps its state file').not.toMatch(/unlink/)
       const bootStart = src.indexOf('function loadTriggersAtBoot(')
       expect(src.slice(bootStart, src.indexOf('\n}', bootStart))).toMatch(/pruneTriggerStateFiles\(now\)/)
@@ -3306,8 +3309,9 @@ describe('walnut-trigger daemon parity', () => {
       expect(body).toMatch(/pendingFires/)
       expect(body).toMatch(/fireSentAt\.get\(fire\.seq\)/)
       expect(body).toMatch(/sendTriggerFire\(entry, fire, true\)/)
-      // No trusted client: nothing to replay to, so the tick stops trying.
-      expect(body).toMatch(/if \(!sendTriggerFire\(entry, fire, true\)\) return/)
+      // No client of its Walnut: nothing to replay to, so that Walnut's replay stops
+      // this tick; another Walnut's fires go on.
+      expect(body).toMatch(/if \(!sendTriggerFire\(entry, fire, true\)\) \{ unreached\.add\(entry\.home\); break;? \}/)
       const msStart = src.indexOf('function triggerReplayMs(')
       expect(msStart).toBeGreaterThan(-1)
       const msBody = src.slice(msStart, src.indexOf('\n}', msStart))
@@ -3394,7 +3398,7 @@ describe('clock host start daemon parity', () => {
   it('both route a start def\'s due fire to the start, and arbitrate its fires', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/applyClockFire\(entry\.state, now, slotMs, !!entry\.def\.deliver \|\| !!entry\.def\.start, clock\.fromMs\)/)
-      expect(src).toMatch(/if \(\(!spec && !entry\.def\.start\) \|\| hostDeliveriesInFlight\.has\(id\)\) continue/)
+      expect(src).toMatch(/if \(\(!spec && !entry\.def\.start\) \|\| hostDeliveriesInFlight\.has\(key\)\) continue/)
       expect(src).toMatch(/if \(!spec\) \{ startUnclaimedRun\(entry, due\[0\], now\); continue;? \}/)
       expect(src).toMatch(/function startUnclaimedRun\(/)
       expect(src).toMatch(/clockHostStart\.start\(/)
@@ -3409,7 +3413,8 @@ describe('clock host start daemon parity', () => {
       expect(src).toMatch(/function markStartedRuns\(/)
       expect(src).toMatch(/markStartedRuns\(entry, seqs\)[;\s]+(?:const|var) (?:\{ reply, changed \}|claim) = (?:triggerCheckCore\.)?claimFires\(/)
       expect(src).toMatch(/clockHostStart\.startedRun\(/)
-      expect(src).toMatch(/entry\.def\.start\s*(?:\?\.|\? entry\.def\.start\.)home/)
+      expect(src).toMatch(/def\.start\s*(?:\?\.|\? def\.start\.)home/)
+      expect(src).toMatch(/(?:const|var) owner = triggerOwnerOf\(entry\.def\)/)
     }
   })
 

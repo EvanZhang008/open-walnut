@@ -7,10 +7,18 @@
  * compiler, no network.
  *
  *   ~/.open-walnut-host/
- *     app/<id>/walnut            the file for this host (fileInstallScript)
+ *     app/<id>/walnut            the file for this host (fileInstallScript), shared by every Walnut
  *     app/<id>/.ready            written last: an install is all or nothing
- *     data/                      the server's own data dir (the file unpacks its runtime tree here)
+ *     walnuts/<walnut>/data/     one Walnut's server data dir (the file unpacks its runtime tree here)
+ *     walnuts/<walnut>/logs/     its log
+ *     walnuts/<walnut>/run/      its run dir
+ *     walnuts/<walnut>/keep      the builds it runs, which no other Walnut's prune removes
+ *     data/ logs/ run/           the same, for the one Walnut that installed here before the split
  *     incoming/                  uploads, install logs, failure notes
+ *
+ * Two Walnuts may install a server on the same host (2026-11-03: a host shared by
+ * two people's Walnuts): each gets its own data, log and run dirs, named by its
+ * walnut id (walnutDirs), and a prune keeps every build another Walnut lists.
  *
  * The cloud companion still installs the Mac's dist build with its dependencies
  * in the same layout (installScript, run by the box itself: companion-build/box.ts),
@@ -39,6 +47,53 @@ export function checkHostRoot(root: string): string {
   }
   return root.replace(/\/+$/, '')
 }
+/** The dir name of one Walnut's server on a host: the head of its walnut id. */
+export function walnutDirKey(walnutId: string): string {
+  const key = walnutId.slice(0, 16)
+  if (!/^[A-Za-z0-9_-]{1,16}$/.test(key)) throw new Error(`a walnut id names a host dir only in plain characters: ${JSON.stringify(walnutId)}`)
+  return key
+}
+
+export interface WalnutHostDirs { dataDir: string; logFile: string; runDir: string }
+
+/**
+ * Makes one Walnut's dirs on the host (walnutDirs). Asked at every install check: a build
+ * another Walnut installed there already is not installed again, so no install script
+ * makes this Walnut's dirs for it. Prints `dirs`.
+ */
+export function walnutDirsScript(dirs: WalnutHostDirs): string {
+  const all = [dirs.dataDir, dirs.runDir, dirs.logFile.replace(/\/[^/]*$/, '')]
+  for (const d of all) if (!d.startsWith('/')) throw new Error(`not an absolute path: ${JSON.stringify(d)}`)
+  return `mkdir -p ${all.map(shq).join(' ')} && echo dirs`
+}
+
+/**
+ * Where one Walnut's server keeps its data, log and run files under `root`: its own
+ * dirs (`walnut` given), or the shared ones a Walnut used before the split (null).
+ */
+export function walnutDirs(root: string, walnut: string | null): WalnutHostDirs {
+  const base = walnut ? `${root}/walnuts/${walnutDirKey(walnut)}` : root
+  return { dataDir: `${base}/data`, logFile: `${base}/logs/server.log`, runDir: `${base}/run` }
+}
+
+/**
+ * Whether the shared data dir from before the split is this Walnut's: it ran its
+ * server there (the caller knows that from its own record), and no other Walnut
+ * marked the dir since. The first to ask with no mark there marks it. Prints MINE
+ * or OTHER.
+ */
+export function legacyDataOwnerScript(walnutId: string, root: string = HOST_ROOT): string {
+  walnutDirKey(walnutId)
+  return [
+    `ROOT="${checkHostRoot(root)}"`,
+    `W=${shq(walnutId)}`,
+    'F="$ROOT/data/.walnut-id"',
+    'if [ -f "$F" ]; then [ "$(cat "$F" 2>/dev/null)" = "$W" ] && echo MINE || echo OTHER',
+    'elif mkdir -p "$ROOT/data" && printf %s "$W" > "$F"; then echo MINE',
+    'else echo OTHER; fi',
+  ].join('\n')
+}
+
 /** The cloud companion's install of a dist build (companion-build/box.ts). */
 export interface InstallPlan {
   id: string
@@ -146,6 +201,11 @@ export interface FileInstallPlan {
   host: string
   /** The root on the host (default HOST_ROOT). */
   root?: string
+  /**
+   * The installing Walnut's own data dir (walnutDirs), where `--version` unpacks the runtime
+   * tree and `__selftest` runs: never another Walnut's live data dir. Default `$ROOT/data`.
+   */
+  dataDir?: string
 }
 
 const SHA256 = /^[a-f0-9]{64}$/
@@ -190,10 +250,11 @@ export function fileInstallScript(plan: FileInstallPlan): string {
     'SUM=$( (sha256sum "$APP.partial/walnut" 2>/dev/null || shasum -a 256 "$APP.partial/walnut" 2>/dev/null) | awk \'{print $1}\')',
     'if [ -n "$SUM" ] && [ "$SUM" != "$SHA" ]; then fail "the walnut file arrived broken (sha256 $SUM, expected $SHA)"; fi',
     'chmod 755 "$APP.partial/walnut" || fail "cannot make the walnut file executable"',
-    'mkdir -p "$ROOT/data"',
+    `DATA=${plan.dataDir ? shq(plan.dataDir) : '"$ROOT/data"'}`,
+    'mkdir -p "$DATA" || fail "cannot create $DATA"',
     // A file told to be bun (BUN_BE_BUN) would answer as bun. Its stderr is kept apart:
     // a warning there is no reason to refuse a file that answers right.
-    'run() { (unset BUN_BE_BUN; OPEN_WALNUT_HOME="$ROOT/data" "$APP.partial/walnut" "$@"); }',
+    'run() { (unset BUN_BE_BUN; OPEN_WALNUT_HOME="$DATA" "$APP.partial/walnut" "$@"); }',
     'run --version > "$IN/$ID.version" 2> "$IN/$ID.version.err" || fail "the walnut file does not start on this host ($HOSTDESC): $(cat "$IN/$ID.version.err" "$IN/$ID.version" 2>/dev/null | tail -n 3 | tr "\\n" " ")"',
     'FIRST=$(head -n 1 "$IN/$ID.version")',
     want,
@@ -216,13 +277,22 @@ export function fileInstallScript(plan: FileInstallPlan): string {
  * rest after a day); dependency sets of the Node layout no build links to. Run
  * by the Mac once the new server has reported, never by an install.
  */
-export function pruneScript(keep: string[], root: string = HOST_ROOT): string {
+export function pruneScript(keep: string[], root: string = HOST_ROOT, walnutId?: string): string {
   const ids = [...new Set(keep)]
   for (const k of ids) if (!validBuildId(k)) throw new Error(`keep has a bad build id: ${JSON.stringify(k)}`)
   if (ids.length === 0) throw new Error('a prune keeps at least the build that runs')
+  const own = walnutId ? walnutDirKey(walnutId) : null
   return [
     `ROOT="${checkHostRoot(root)}"`,
     `KEEP=${shq(` ${ids.join(' ')} `)}`,
+    // This Walnut's builds, for the other Walnuts' prunes; theirs (listed within 30 days) are kept here.
+    ...(own ? [
+      `mkdir -p "$ROOT/walnuts/${own}" && printf '%s\\n' $KEEP > "$ROOT/walnuts/${own}/keep"`,
+      'for f in "$ROOT"/walnuts/*/keep; do',
+      '  [ -f "$f" ] && [ -z "$(find "$f" -maxdepth 0 -mtime +30 2>/dev/null)" ] || continue',
+      '  for k in $(grep -E "^[A-Za-z0-9._-]+$" "$f" 2>/dev/null); do KEEP="$KEEP$k "; done',
+      'done',
+    ] : []),
     // Kept dirs are the newest: the "newest other" below is then one that is not kept.
     'for k in $KEEP; do [ -d "$ROOT/app/$k" ] && touch "$ROOT/app/$k"; done',
     'n=0; for d in $(ls -1t "$ROOT/app" 2>/dev/null | grep -v "\\.partial$"); do',

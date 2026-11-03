@@ -29,7 +29,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, CLOUD_MODE } from '../constants.js';
+import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, CLOUD_MODE, WALNUT_HOME } from '../constants.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
 import * as ingest from './cloud-ingest.js';
@@ -347,7 +347,8 @@ async function pushViaBridge(
     settleTranscript(kind, payload);
     return 'unchanged';
   }
-  const res = await conn.send('mobile-event', { kind, data: payload });
+  // `home`: this Walnut's own bridge link on a daemon several Walnuts share.
+  const res = await conn.send('mobile-event', { kind, data: payload, home: WALNUT_HOME });
   // An older daemon acks without `relayed`; `relayed: false` means its bridge
   // was down (or the uplink refused the frame), so nothing reached the replica.
   if (res?.relayed === false) {
@@ -373,7 +374,7 @@ async function currentBridgeConnId(): Promise<string | null> {
     const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
     const conn = getConnectedDaemonConnection('__local__');
     if (!conn || !conn.hasCapability('bridge-uplink-v1')) return null;
-    const res = await conn.send('bridge.status', {});
+    const res = await conn.send('bridge.status', { home: WALNUT_HOME });
     return res?.connected === true && typeof res.connId === 'string' ? res.connId : null;
   } catch {
     return null;

@@ -14,7 +14,8 @@ import path from 'node:path'
 import { guardedPath } from '../setup/exec-guard.js'
 import zlib from 'node:zlib'
 import {
-  fileInstallScript, freePortsScript, installScript, launchScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
+  fileInstallScript, freePortsScript, installScript, launchScript, legacyDataOwnerScript, parseFreePorts, parseInstallState, pruneScript, stateScript,
+  walnutDirs,
 } from '../../src/core/host-server/install.js'
 
 let home = ''
@@ -463,6 +464,26 @@ describe('the prune once the new server has reported', () => {
     expect(fs.readdirSync(path.join(hostRoot(), 'incoming')).sort()).toEqual(['b0.install.log', 'b3.failed', 'b3.gz', 'b4.gz'])
   })
 
+  it('two Walnuts on one host: a prune keeps every build another Walnut lists, and an old list stops counting', () => {
+    installed('b1', 300)
+    // Walnut B runs b1 and says so with its own prune.
+    expect(sh(pruneScript(['b1'], undefined, 'walnutbbbbbbbbbb')).out).toContain('pruned')
+    installed('b2', 200)
+    installed('b3', 100)
+    installed('b4', 5)
+    expect(fs.readFileSync(path.join(hostRoot(), 'walnuts', 'walnutbbbbbbbbbb', 'keep'), 'utf8').trim().split('\n')).toEqual(['b1'])
+    // Walnut A runs b4: b1 is not its newest other, but B's, so it stays; b2 goes.
+    expect(sh(pruneScript(['b4'], undefined, 'walnutaaaaaaaaaa')).out).toContain('pruned')
+    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b1', 'b3', 'b4'])
+    // A list nobody refreshed for over 30 days keeps nothing.
+    const t = new Date(Date.now() - 31 * 86_400_000)
+    fs.utimesSync(path.join(hostRoot(), 'walnuts', 'walnutbbbbbbbbbb', 'keep'), t, t)
+    ago(appDir('b1'), 300)
+    installed('b5', 1)
+    expect(sh(pruneScript(['b5'], undefined, 'walnutaaaaaaaaaa')).out).toContain('pruned')
+    expect(fs.readdirSync(path.join(hostRoot(), 'app')).sort()).toEqual(['b4', 'b5'])
+  })
+
   it('refuses a kept id that is not a build id, and a prune that keeps nothing', () => {
     expect(() => pruneScript(['../up'])).toThrow(/keep has a bad build id/)
     expect(() => pruneScript([])).toThrow(/keeps at least/)
@@ -488,5 +509,20 @@ describe('free ports on the host', () => {
     const script = freePortsScript({ command: file, asBun: true }, [47_912])
     expect(script.startsWith(`BUN_BE_BUN=1 '${file}' -e `)).toBe(true)
     expect(parseFreePorts(sh(script).out)).toEqual(new Set([47_912]))
+  })
+})
+
+describe('a host two Walnuts share: whose dirs', () => {
+  it('each Walnut gets its own data, log and run dirs; null is the shared layout from before', () => {
+    expect(walnutDirs('/r', 'abcdef0123456789ffff')).toEqual({ dataDir: '/r/walnuts/abcdef0123456789/data', logFile: '/r/walnuts/abcdef0123456789/logs/server.log', runDir: '/r/walnuts/abcdef0123456789/run' })
+    expect(walnutDirs('/r', null)).toEqual({ dataDir: '/r/data', logFile: '/r/logs/server.log', runDir: '/r/run' })
+    expect(() => walnutDirs('/r', '../x')).toThrow(/plain characters/)
+  })
+
+  it('the shared data dir is marked by the first Walnut that asks; another one reads OTHER', () => {
+    expect(sh(legacyDataOwnerScript('walnutaaaa')).out.trim()).toBe('MINE')
+    expect(fs.readFileSync(path.join(hostRoot(), 'data', '.walnut-id'), 'utf8')).toBe('walnutaaaa')
+    expect(sh(legacyDataOwnerScript('walnutaaaa')).out.trim()).toBe('MINE')
+    expect(sh(legacyDataOwnerScript('walnutbbbb')).out.trim()).toBe('OTHER')
   })
 })

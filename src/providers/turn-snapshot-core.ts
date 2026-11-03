@@ -99,8 +99,15 @@ export interface TurnSnapshotDeps {
   env?: Record<string, string | undefined>
   /** Where temporary index files go (the daemon's own directory). */
   tmpDir?: string
-  /** Persisted settings (`{enabled, keep}`), read once at start. */
+  /** Persisted settings (`{enabled, keep}`) of the unnamed scope, read once at start. */
   settingsPath?: string
+  /**
+   * Where one Walnut's settings are kept (walnutScope.dirFor(...)/turn-snapshots.json).
+   * Without it a named push is kept in memory only.
+   */
+  settingsPathFor?: (home: string) => string
+  /** The Walnut a session belongs to ('' when none is recorded): its settings apply. */
+  homeOf?: (sid: string) => string
   now?: () => number
   randomHex?: () => string
   log?: (level: 'info' | 'warn' | 'error' | 'debug', msg: string, data?: Record<string, unknown>) => void
@@ -258,8 +265,16 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
   var log = deps.log ?? (() => {})
   var randomHex = deps.randomHex ?? (() => Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 10))
 
-  var settings = { enabled: !deps.forceDisabled, keep: DEFAULT_KEEP }
-  var settingsLoaded: Promise<void> | null = null
+  /**
+   * Settings per Walnut home: two Walnuts on one daemon each push their own, and a
+   * session's turn follows its own Walnut's (2026-11-03). '' is the unnamed copy:
+   * an older server's push, or the one copy an older daemon left (no `scoped`
+   * mark: "inherited"), which the first named push takes over and removes.
+   */
+  var DEFAULT_SETTINGS = { enabled: !deps.forceDisabled, keep: DEFAULT_KEEP }
+  var scoped = new Map<string, { enabled: boolean; keep: number }>()
+  var scopeLoads = new Map<string, Promise<void>>()
+  var legacyInherited = false
   /** Recent skips per session, newest last. */
   var skips = new Map<string, TurnSnapshotSkip[]>()
   /** The `v` of the last result line handled per session (a replayed line is ignored). */
@@ -389,36 +404,90 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
 
   // ── settings ──
 
-  async function loadSettings(): Promise<void> {
-    if (!deps.settingsPath || !deps.fs) return
+  function settingsFile(home: string): string | undefined {
+    return home ? (deps.settingsPathFor ? deps.settingsPathFor(home) : undefined) : deps.settingsPath
+  }
+
+  async function loadScope(home: string): Promise<void> {
+    var file = settingsFile(home)
+    if (!file || !deps.fs) return
     try {
-      var raw = await deps.fs.readFile(deps.settingsPath)
-      var parsed = JSON.parse(new TextDecoder().decode(raw)) as { enabled?: unknown; keep?: unknown }
-      if (typeof parsed.enabled === 'boolean') settings.enabled = parsed.enabled && !deps.forceDisabled
-      if (typeof parsed.keep === 'number' && parsed.keep >= 1) settings.keep = Math.min(Math.floor(parsed.keep), 10_000)
+      var raw = await deps.fs.readFile(file)
+      var parsed = JSON.parse(new TextDecoder().decode(raw)) as { enabled?: unknown; keep?: unknown; home?: unknown; scoped?: unknown }
+      // A named file names its home (the dir is a hash of it); another's is ignored.
+      if (home && parsed.home !== home) return
+      var next = { enabled: DEFAULT_SETTINGS.enabled, keep: DEFAULT_SETTINGS.keep }
+      if (typeof parsed.enabled === 'boolean') next.enabled = parsed.enabled && !deps.forceDisabled
+      if (typeof parsed.keep === 'number' && parsed.keep >= 1) next.keep = Math.min(Math.floor(parsed.keep), 10_000)
+      if (!scoped.has(home)) scoped.set(home, next)
+      if (!home && parsed.scoped !== 1) legacyInherited = true
     } catch { /* no file yet: defaults */ }
   }
 
-  function ready(): Promise<void> {
-    if (!settingsLoaded) settingsLoaded = loadSettings()
-    return settingsLoaded
+  function readyFor(home: string): Promise<void> {
+    var load = (h: string) => {
+      var p = scopeLoads.get(h)
+      if (!p) { p = loadScope(h); scopeLoads.set(h, p) }
+      return p
+    }
+    return home ? Promise.all([load(''), load(home)]).then(() => undefined) : load('')
   }
 
-  async function configure(input: { enabled?: unknown; keep?: unknown }): Promise<{ enabled: boolean; keep: number; changed: boolean }> {
-    await ready()
-    var before = settings.enabled + ':' + settings.keep
-    if (typeof input.enabled === 'boolean') settings.enabled = input.enabled && !deps.forceDisabled
-    if (typeof input.keep === 'number' && input.keep >= 1) settings.keep = Math.min(Math.floor(input.keep), 10_000)
-    var changed = before !== settings.enabled + ':' + settings.keep
-    if (changed && deps.settingsPath && deps.fs) {
-      try {
-        await deps.fs.mkdir(deps.path ? deps.path.dirname(deps.settingsPath) : '.', { recursive: true })
-        await deps.fs.writeFile(deps.settingsPath, JSON.stringify({ enabled: settings.enabled, keep: settings.keep }))
-      } catch (e) {
-        log('warn', 'turn snapshots: settings not persisted', { error: (e as Error).message })
+  function ready(): Promise<void> {
+    return readyFor('')
+  }
+
+  function homeOfSid(sid: string): string {
+    try { return (deps.homeOf && deps.homeOf(sid)) || '' } catch { return '' }
+  }
+
+  /** A Walnut's own settings, else the unnamed copy, else the defaults. */
+  function settingsOf(home: string): { enabled: boolean; keep: number } {
+    return (home && scoped.get(home)) || scoped.get('') || DEFAULT_SETTINGS
+  }
+
+  function settingsForSid(sid: string): { enabled: boolean; keep: number } {
+    return settingsOf(homeOfSid(sid))
+  }
+
+  async function writeScope(home: string, value: { enabled: boolean; keep: number }): Promise<void> {
+    var file = settingsFile(home)
+    if (!file || !deps.fs) return
+    try {
+      await deps.fs.mkdir(deps.path ? deps.path.dirname(file) : '.', { recursive: true })
+      // The unnamed copy carries `scoped: 1`: a real older server's, never inherited again.
+      var body = home ? { home: home, enabled: value.enabled, keep: value.keep } : { scoped: 1, enabled: value.enabled, keep: value.keep }
+      await deps.fs.writeFile(file, JSON.stringify(body))
+    } catch (e) {
+      log('warn', 'turn snapshots: settings not persisted', { error: (e as Error).message })
+    }
+  }
+
+  async function configure(input: { enabled?: unknown; keep?: unknown }, home?: string): Promise<{ enabled: boolean; keep: number; changed: boolean }> {
+    var h = home || ''
+    await readyFor(h)
+    var own = scoped.get(h)
+    var base = own || settingsOf(h)
+    var next = { enabled: base.enabled, keep: base.keep }
+    if (typeof input.enabled === 'boolean') next.enabled = input.enabled && !deps.forceDisabled
+    if (typeof input.keep === 'number' && input.keep >= 1) next.keep = Math.min(Math.floor(input.keep), 10_000)
+    var changed = base.enabled + ':' + base.keep !== next.enabled + ':' + next.keep
+    var takeOver = !!h && legacyInherited
+    scoped.set(h, next)
+    // Written when it changed, when a Walnut has no file of its own yet, or to mark
+    // an inherited unnamed file as an older server's own.
+    if (changed || (h && !own) || (!h && legacyInherited)) await writeScope(h, next)
+    if (!h) legacyInherited = false
+    if (takeOver) {
+      // The one copy an older daemon kept was most likely this Walnut's: it is now
+      // this Walnut's own, and the unnamed copy goes.
+      legacyInherited = false
+      scoped.delete('')
+      if (deps.settingsPath && deps.fs) {
+        try { await deps.fs.unlink(deps.settingsPath) } catch { /* already gone */ }
       }
     }
-    return { enabled: settings.enabled, keep: settings.keep, changed: changed }
+    return { enabled: next.enabled, keep: next.keep, changed: changed }
   }
 
   // ── the concurrency gates ──
@@ -800,7 +869,7 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
   /** Delete the oldest refs past the retention. Never gc. */
   async function prune(root: string, sid: string, deadline: number): Promise<void> {
     var refs = await listRefs(root, sid, deadline)
-    var extra = refs.length - settings.keep
+    var extra = refs.length - settingsForSid(sid).keep
     if (extra <= 0) return
     var lines = ''
     for (var i = 0; i < extra; i++) lines += 'delete ' + REF_PREFIX + sid + '/' + refs[i].n + '\n'
@@ -895,12 +964,12 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
    * skip is recorded on the session. Never rejects.
    */
   async function snapshot(sid: string, cwd: string, kind: TurnSnapshotKind, opts?: { onlyIfNone?: boolean }): Promise<TurnSnapshotOutcome> {
-    await ready()
+    await readyFor(homeOfSid(sid))
     var started = now()
     var repoRoot: string | null = null
     inFlight.set(sid, (inFlight.get(sid) || 0) + 1)
     try {
-      if (!settings.enabled) return { status: 'skipped', reason: 'disabled' }
+      if (!settingsForSid(sid).enabled) return { status: 'skipped', reason: 'disabled' }
       if (!validSid(sid)) return { status: 'skipped', reason: 'bad-session-id' }
       if (!cwd) return { status: 'skipped', reason: 'no-cwd' }
       // The repo lookup is cheap and never counts as the repo being slow; the
@@ -947,8 +1016,8 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
     if (!validSid(sid) || !cwd || baselineChecked.has(sid)) return
     baselineChecked.add(sid)
     remember(baselineChecked as unknown as Map<string, unknown>, sid)
-    void ready().then(() => {
-      if (!settings.enabled) return
+    void readyFor(homeOfSid(sid)).then(() => {
+      if (!settingsForSid(sid).enabled) return
       return snapshot(sid, cwd, 'start', { onlyIfNone: true })
     }).catch(() => {})
   }
@@ -976,9 +1045,9 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
   // ── list ──
 
   async function list(sid: string, cwd: string): Promise<TurnSnapshotListResult> {
-    await ready()
+    await readyFor(homeOfSid(sid))
     var base: TurnSnapshotListResult = {
-      enabled: settings.enabled, repoRoot: null, snapshots: [],
+      enabled: settingsForSid(sid).enabled, repoRoot: null, snapshots: [],
       skipped: (skips.get(sid) || []).slice(), lastTurnEndAt: lastTurnEnd.get(sid) ?? null,
     }
     if (!validSid(sid) || !cwd) return base
@@ -1090,7 +1159,7 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
    * answers the plan and writes nothing (no ref, no file).
    */
   async function restore(input: { sid: string; cwd: string; n: number; paths?: string[]; dryRun?: boolean }): Promise<TurnSnapshotRestoreResult> {
-    await ready()
+    await readyFor(homeOfSid(input.sid))
     var sid = input.sid
     if (!validSid(sid)) throw err('bad-request', 'bad session id')
     if (!input.cwd) throw err('bad-request', 'no working directory')
@@ -1299,8 +1368,10 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
     return repo ? repo.root : null
   }
 
-  function getSettings(): { enabled: boolean; keep: number } {
-    return { enabled: settings.enabled, keep: settings.keep }
+  /** The settings a session of `home` follows ('' = the unnamed copy). */
+  function getSettings(home?: string): { enabled: boolean; keep: number } {
+    var v = settingsOf(home || '')
+    return { enabled: v.enabled, keep: v.keep }
   }
 
   return {

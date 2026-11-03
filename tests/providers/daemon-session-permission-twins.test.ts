@@ -41,7 +41,7 @@ function pending(input: Record<string, unknown> = { command: 'read fixture.txt' 
   return { reqId, request: { subtype: 'can_use_tool', tool_name: tool, input } }
 }
 
-function buildTwin(kind: Twin, initial: Pending | null = pending()) {
+function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') {
   const replies: Reply[] = []
   const sessions = new Map<string, { pendingCtrl: Pending | null }>([[SID, { pendingCtrl: initial }]])
   let available = true
@@ -72,21 +72,25 @@ function buildTwin(kind: Twin, initial: Pending | null = pending()) {
     safeSend: (ws: { send: (line: string) => void }, line: string) => ws.send(line),
     daemonCommands: { admit: (fn: () => unknown) => fn(), run },
     BRIDGE_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'BRIDGE_ALLOWED_COMMANDS')),
+    BRIDGE_SESSION_COMMANDS: new Set(literals(sources[kind], 'BRIDGE_SESSION_COMMANDS')),
     FOLLOWER_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'FOLLOWER_ALLOWED_COMMANDS')),
     LANE_ALLOWED_COMMANDS: new Set(literals(sources[kind], 'LANE_ALLOWED_COMMANDS')),
     followerReads: { settle: vi.fn(() => null) },
     followerScope: vi.fn(() => false),
+    // The Walnut the session belongs to ('' = none recorded).
+    sessionHomeOf: () => owner,
   }
-  const code = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError']
+  const code = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession']
     .map((name) => functionText(sources[kind], name)).join('\n')
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const context = vm.createContext(injected, { codeGeneration: { strings: false, wasm: false } })
   const handle = vm.runInContext(js + '\nhandleCommand', context) as (ws: unknown, line: string) => void
   let nextId = 1
-  const call = async (body: Command, origin: string | null = 'bridge'): Promise<Reply> => {
+  const call = async (body: Command, origin: string | null = 'bridge', bridgeHome = ''): Promise<Reply> => {
     const id = nextId++
-    const socket = { send: (line: string) => replies.push(JSON.parse(line) as Reply), ...(origin ? { origin } : {}) }
-    const ws = kind === 'standalone' ? { ...socket, data: origin ? { origin } : {} } : socket
+    const tag = origin ? { origin, ...(bridgeHome ? { bridgeHome } : {}) } : {}
+    const socket = { send: (line: string) => replies.push(JSON.parse(line) as Reply), ...tag }
+    const ws = kind === 'standalone' ? { ...socket, data: tag } : socket
     const at = work.length
     handle(ws, JSON.stringify({ id, cmd: 'session.permission', sid: SID, requestId: REQUEST, allow: true, ...body }))
     await Promise.all(work.slice(at))
@@ -101,6 +105,16 @@ function buildTwin(kind: Twin, initial: Pending | null = pending()) {
 
 for (const kind of ['standalone', 'source'] as const) {
   describe(`${kind} twin: bridge permission answer`, () => {
+    it('a named bridge link answers only its own Walnut\'s sessions', async () => {
+      const mine = buildTwin(kind, pending(), '/fixture/walnut-a')
+      expect(await mine.call({}, 'bridge', '/fixture/walnut-b')).toMatchObject({ ok: false, errorKind: 'not_owner' })
+      expect(mine.writes).not.toHaveBeenCalled()
+      expect(await mine.call({}, 'bridge', '/fixture/walnut-a')).toMatchObject({ ok: true, status: 'resolved' })
+      // An older server's unnamed link keeps answering as before.
+      const old = buildTwin(kind, pending(), '/fixture/walnut-a')
+      expect(await old.call({})).toMatchObject({ ok: true, status: 'resolved' })
+    })
+
     it('allows exactly the current daemon-owned tool input and clears the prompt', async () => {
       const input = { command: 'read fixture.txt', timeout: 2500 }
       const h = buildTwin(kind, pending(input))

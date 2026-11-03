@@ -319,9 +319,11 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
     expect(await caller.reply(id)).toMatchObject({ result: { success: true } })
   }, 90_000)
 
-  it.each(['leader.configure', 'leader.claim', 'host.slice'])('drops an in-flight read when %s changes its home, even if it returns', async (command) => {
+  // A socket speaks for one Walnut: a bind to another home is refused (walnut-scope-core.ts),
+  // so an in-flight read is never handed to a socket that now speaks for someone else.
+  it.each(['leader.configure', 'leader.claim', 'host.slice'])('refuses a %s that would move the socket to another Walnut; its read goes on', async (command) => {
     const { caller, bridge, port } = await rig(twin)
-    const home = path.join(root, 'data'), other = path.join(root, 'other-data')
+    const other = path.join(root, 'other-data')
     if (command === 'leader.claim') {
       const registration = await connect(port)
       expect(await registration.rpc({ cmd: 'leader.configure', home: other,
@@ -333,25 +335,28 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
       ? { cmd: command, slice: { v: 1, home: other, hash: 'fixture-slice', asOf: Date.now(), host: '__local__',
         sessions: [], tasks: [], requests: [] } }
       : { cmd: command, home: other, walnutId: 'fixture-other', backup: false }
-    expect(await caller.rpc(binding)).toMatchObject({ ok: true })
-    expect(await caller.rpc({ cmd: 'leader.claim', home })).toMatchObject({ ok: true })
-    await result(bridge, request, { success: true, payload: 'stale-private-result' }, false)
-    expect(await caller.rpc({ cmd: 'ping' })).toMatchObject({ ok: true })
-    expect(caller.replies(id)).toEqual([])
-    const next = caller.send({ cmd: 'feature.request', frame: 'after-rebind' })
+    expect(await caller.rpc(binding)).toMatchObject({ ok: false, errorKind: 'not_owner' })
+    await result(bridge, request, { success: true, payload: 'still-mine' })
+    expect(await caller.reply(id)).toMatchObject({ result: { payload: 'still-mine' } })
+    const next = caller.send({ cmd: 'feature.request', frame: 'after-refusal' })
     await result(bridge, await bridge.request(1), { success: true, payload: 'fresh' })
     expect(await caller.reply(next)).toMatchObject({ result: { payload: 'fresh' } })
   }, 90_000)
 
   it('an older bridge configuration with no owner remains usable but cannot serve features', async () => {
-    const { caller, bridge, cloud } = await rig(twin)
+    const cloud = await companion()
+    const { caller } = await boot(twin, cloud.port)
+    expect(await caller.rpc({ cmd: 'leader.configure', home: path.join(root, 'data'), walnutId: 'fixture-primary', backup: false }))
+      .toMatchObject({ ok: true })
+    // A server older than the per-Walnut split names no home: its link is the unnamed one,
+    // which belongs to no Walnut, so it carries no feature reads.
     expect(await caller.rpc({ cmd: 'bridge.configure', enabled: true,
       url: `ws://127.0.0.1:${cloud.port}/bridge`, token: 'fixture-only', hostAlias: '__local__' }))
       .toMatchObject({ ok: true })
+    const bridge = await cloud.peer()
     expect(await caller.rpc({ cmd: 'feature.request', frame: null }))
       .toMatchObject({ ok: false, error: 'Feature request refused' })
-    const replacement = await cloud.peer(1)
-    expect(await replacement.rpc({ cmd: 'ping' })).toMatchObject({ ok: true })
+    expect(await bridge.rpc({ cmd: 'ping' })).toMatchObject({ ok: true })
     expect(bridge.requests()).toEqual([])
   }, 90_000)
 

@@ -14,7 +14,8 @@ export interface CronObserverDeps {
   cliVersion(launch: CronLaunchSpec, signal: AbortSignal): Promise<string>
   config(signal: AbortSignal): Promise<CronRestoreConfig>
   transcript(record: CronSupervisionRecord, signal: AbortSignal): Promise<CronTranscriptLine[]>
-  launchBlocker(launch: CronLaunchSpec, signal: AbortSignal): Promise<string | null>
+  /** `sid`: whose launch it is (the hooks a session runs under are its Walnut's). */
+  launchBlocker(launch: CronLaunchSpec, signal: AbortSignal, sid: string): Promise<string | null>
   clock?: () => number
   timeoutMs?: number
 }
@@ -64,7 +65,7 @@ export function createCronObserver(deps: CronObserverDeps) {
       const facts = collectCronRestoreFacts(lines, config, (deps.clock ?? Date.now)(), cliOneShotTime)
       observation = { ...observation, cron: facts.status }
       if (probe.status === 'dead' && facts.status === 'active') {
-        const blockedReason = await bounded(deps.launchBlocker(record.launch, signal))
+        const blockedReason = await bounded(deps.launchBlocker(record.launch, signal, record.sid))
         signal.throwIfAborted()
         if (blockedReason) return { ...observation, blockedReason }
       }

@@ -238,7 +238,7 @@ describe('leader protocol: both twins', () => {
       // Every pick of "the" server skips followers: relays, gateway calls, triggers, cron notes.
       expect(fnBody(src, 'pickTrustedClient')).toMatch(/if \(!isServerClient\(client\)\) continue/)
       expect(fnBody(src, 'sendGatewayRequest')).toMatch(/if \(!isServerClient\(client\) \|\| isQuietTrustedClient\(client\)\) continue/)
-      expect(fnBody(src, 'sendTriggerEvent')).toMatch(/if \(isServerClient\(client\)\) \{/)
+      expect(fnBody(src, 'sendTriggerEvent')).toMatch(/if \(isServerClient\(client\) && \(everyone \|\| triggerClientOf\(client, home\)\)\) \{/)
       expect(src).toMatch(/if \(isServerClient\(client\)\) sendEvent\(client, 'cron-metadata'/)
       // Only the socket the leader's configure tagged may say what server runs here.
       expect(fnBody(src, 'cmdServerConfigure')).toMatch(/gatewayClientHomes\.get\(ws\) !== home\) return sendError/)
@@ -258,7 +258,7 @@ describe('leader protocol: both twins', () => {
       const target = fnBody(src, 'streamTarget')
       const bridgeBranch = target.slice(target.search(/origin === 'bridge'\) \{/))
       expect(bridgeBranch).toMatch(/if \(to !== 'primary'\) return \{ why: 'the companion opens streams to the primary only' \}/)
-      expect(bridgeBranch).toMatch(/primaryForBridge\(\)/)
+      expect(bridgeBranch).toMatch(/primaryForBridge\(bridgeHomeOf\(ws\)\)/)
       expect(bridgeBranch).toMatch(/from: 'companion'/)
       // The server socket that named its Walnut (never its bulk channel), heard last, never a quiet one.
       const pick = fnBody(src, 'primaryForBridge')
@@ -271,7 +271,7 @@ describe('leader protocol: both twins', () => {
       expect(fnBody(src, 'primaryClientFor')).toMatch(/!isServerClient\(client\) \|\| gatewayClientHomes\.get\(client\) !== home/)
       expect(src).toMatch(/streamRelay\.dropLink\(ws\)/)
       // The bridge's streams end with it (the standalone twin drops it through handleDisconnect).
-      expect(src).toMatch(/streamRelay\.dropLink\(bridgeAdapter\)|try \{ handleDisconnect\(bridgeAdapter\) \}/)
+      expect(src).toMatch(/streamRelay\.dropLink\(adapter\)|try \{ handleDisconnect\(link\.adapter\) \}/)
     })
 
     it(`${name}: a lane carries the leader's streams and nothing else`, () => {
@@ -476,7 +476,9 @@ describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () 
       expect(src).toMatch(/journalOwner: [^\n]*journaledHome\(sid\)/)
       expect(src).toMatch(/replica: hostReplica,/)
       // The one broadcast every client hears names a session: a follower hears its own Walnut's only.
-      expect(src).toMatch(/if \(followerHears\(client, (payload\.)?sid\)\) (\{ try \{ client\.send|sendEvent\(client, 'session_state')/)
+      // ...and a named bridge link its own Walnut's only (bridgeHearsSession).
+      expect(src).toMatch(/if \(followerHears\(client, (payload\.)?sid\) && bridgeHearsSession\(client, (payload\.)?sid\)\) (\{ try \{ client\.send|sendEvent\(client, 'session_state')/)
+      expect(fnBody(src, 'bridgeHearsSession')).toMatch(/const owner = sessionHomeOf\(sid\)|var owner = sessionHomeOf\(sid\)/)
       expect(fnBody(src, 'followerHears')).toMatch(/origin !== 'follower' \|\| followerReads\.ownRows\(followerHomeOf\(client\), \[\{ sid(: sid)? \}\]\)\.length === 1/)
       // WP6 fix round: a whole-repository answer is cut on its way out; a refusal is no 'command error'.
       expect(fnBody(src, 'followerScope')).toMatch(/if \(d\.scope\) followerReads\.hold\(ws, id, d\.scope\)/)

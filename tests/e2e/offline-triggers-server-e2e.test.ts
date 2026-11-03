@@ -33,6 +33,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { getDirectDaemonConnection, pushHostSliceToAllHosts } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
@@ -110,7 +111,7 @@ function gateway(name: string, args: Record<string, unknown> = {}): Promise<Gate
 }
 
 const armedOnDisk = (): string[] => {
-  try { return JSON.parse(fs.readFileSync(path.join(dir, 'triggers.json'), 'utf8')).triggers.map((t: { id: string }) => t.id) } catch { return [] }
+  try { return JSON.parse(fs.readFileSync(path.join(walnutScopeDir(dir, WALNUT_HOME), 'triggers.json'), 'utf8')).triggers.map((t: { id: string }) => t.id) } catch { return [] }
 }
 
 async function bootServer(): Promise<void> {
@@ -192,7 +193,7 @@ describe('a trigger paused on its host while the Mac is away', () => {
     const paused = await gateway('trigger_pause', { id: jobId })
     expect(paused.ok, JSON.stringify(paused)).toBe(true)
     expect(paused.ok && paused.result).toMatchObject({ state: 'paused', changed: true, offline: true })
-    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId })).ok).toBe(false)
+    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId, home: WALNUT_HOME })).ok).toBe(false)
   }, 60_000)
 
   it('the server comes back: the pause is replayed, the routine reads paused, and nothing re-arms it', async () => {
@@ -203,7 +204,7 @@ describe('a trigger paused on its host while the Mac is away', () => {
     }, 45_000, 'the routine paused on the server')
     expect(job.state.pausedAtMs).toEqual(expect.any(Number))
     await waitFor(() => !armedOnDisk().includes(jobId), 20_000, 'the pushed set without the trigger')
-    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId })).ok).toBe(false)
+    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId, home: WALNUT_HOME })).ok).toBe(false)
     const drained = await daemonCmd({ cmd: 'offline.drain', home: WALNUT_HOME })
     expect(drained.records).toEqual([])
   }, 120_000)
@@ -213,6 +214,6 @@ describe('a trigger paused on its host while the Mac is away', () => {
     expect(resumed.ok, JSON.stringify(resumed)).toBe(true)
     expect(resumed.ok && resumed.result.offline).toBeUndefined()
     await waitFor(() => armedOnDisk().includes(jobId), 20_000, 'the trigger armed again')
-    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId })).ok).toBe(true)
+    expect((await daemonCmd({ cmd: 'triggers.run', triggerId: jobId, home: WALNUT_HOME })).ok).toBe(true)
   }, 60_000)
 })

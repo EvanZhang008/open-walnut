@@ -408,6 +408,39 @@ describe('plugin providers', () => {
     expect(await makeCore().handle('workspace.detect', { anchor: ROOT, providersHash: hash })).toMatchObject({ ok: false, code: 'providers_stale' })
   })
 
+  it('keeps one allowlist and adapter dir per Walnut home; a push with no home is the legacy one', async () => {
+    const state = inTemp(path.join(ROOT, 'state-scoped'))
+    const core = makeCore({ stateDir: state, scopeDir: (h) => path.join(state, 'walnuts', path.basename(h)) })
+    const A = path.join(ROOT, 'wa')
+    const B = path.join(ROOT, 'wb')
+    const cfg = (hash: string, name: string) => ({ version: 1, hash, providers: [spec({ displayName: name })] })
+    expect(await core.handle('workspace.configure', { home: A, config: cfg('ha', 'A') })).toMatchObject({ ok: true, changed: true })
+    expect(await core.handle('workspace.configure', { home: B, config: cfg('hb', 'B') })).toMatchObject({ ok: true, changed: true })
+    expect(await core.handle('workspace.configure', { config: cfg('h0', 'unnamed') })).toMatchObject({ ok: true, changed: true })
+    expect(await core.handle('workspace.configure', { home: A, config: cfg('ha', 'A') })).toMatchObject({ ok: true, changed: false })
+    expect(core.providersHash(A)).toBe('ha')
+    expect(core.providersHash(B)).toBe('hb')
+    expect(core.providersHash()).toBe('h0')
+    expect(fs.existsSync(path.join(state, 'walnuts', 'wa', 'workspace-providers', 'fake-multirepo.mjs'))).toBe(true)
+    expect(fs.existsSync(path.join(state, 'walnuts', 'wb', 'workspace-providers', 'fake-multirepo.mjs'))).toBe(true)
+    expect(fs.existsSync(path.join(state, 'workspace-providers', 'fake-multirepo.mjs'))).toBe(true)
+    // The resolved home the twin passes wins over the command's own.
+    expect(await core.handle('workspace.detect', { home: B, anchor: ROOT, providersHash: 'hb' }, A)).toMatchObject({ ok: false, code: 'providers_stale' })
+    // A provider runs from its own Walnut's adapter, written again there when swept.
+    fs.rmSync(path.join(state, 'walnuts', 'wb'), { recursive: true, force: true })
+    const listed = await core.handle('workspace.repos', { home: B, provider: 'fake-multirepo', providersHash: 'hb', root: path.join(ROOT, 'repos') })
+    expect(listed.ok, JSON.stringify(listed)).toBe(true)
+    expect(fs.existsSync(path.join(state, 'walnuts', 'wb', 'workspace-providers', 'fake-multirepo.mjs'))).toBe(true)
+    expect(fs.existsSync(path.join(state, 'walnuts', 'wa', 'workspace-providers', 'fake-multirepo.mjs'))).toBe(true)
+    // A job belongs to the Walnut that started it.
+    const repo = makeRepo()
+    const jobId = jid()
+    expect(await core.handle('workspace.create', { home: B, provider: 'git-worktree', jobId, anchor: repo, name: 'scoped-b' })).toMatchObject({ ok: true })
+    expect((await core.handle('workspace.job', { home: A, jobId })).job).toBeNull()
+    expect((await core.handle('workspace.job', { jobId })).job).toBeNull()
+    expect(await waitJob({ handle: (n: string, c: Record<string, unknown>) => core.handle(n, { ...c, home: B }) } as unknown as Core, jobId)).toMatchObject({ state: 'done' })
+  })
+
   it('configure is hash-skipped and refuses a bad argv', async () => {
     const { core, hash } = await configured()
     expect(await core.handle('workspace.configure', { config: { version: 1, hash, providers: [spec()] } })).toMatchObject({ ok: true, changed: false })

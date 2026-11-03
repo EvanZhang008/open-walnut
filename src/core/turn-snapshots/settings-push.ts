@@ -6,11 +6,14 @@
  * a connect, and the next connect or config change tries again.
  *
  * A test server (ephemeral) never reconfigures a shared remote daemon.
+ *
+ * The push names this Walnut (`home`): a daemon shared with another Walnut keeps
+ * one copy per Walnut and applies each to that Walnut's sessions.
  */
 
 import { bus } from '../event-bus.js'
 import { log } from '../../logging/index.js'
-import { IS_EPHEMERAL } from '../../constants.js'
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import type { Config } from '../types.js'
 import { TURN_SNAPSHOT_CAPABILITY } from './service.js'
 
@@ -56,7 +59,7 @@ export async function pushTurnSnapshotSettings(hostKey: string): Promise<void> {
     const settings = turnSnapshotSettingsFrom(await getConfig())
     const key = JSON.stringify(settings)
     if (lastPushed.get(hostKey) === key) return
-    const reply = await conn.send('turns.configure', { ...settings }, PUSH_TIMEOUT_MS)
+    const reply = await conn.send('turns.configure', { ...settings, home: WALNUT_HOME }, PUSH_TIMEOUT_MS)
     if (reply.ok !== true) {
       log.session.warn('turn snapshot settings push rejected', { host: hostKey, error: reply.error })
       return

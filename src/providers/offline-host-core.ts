@@ -267,10 +267,13 @@ export interface OfflineTriggerStatus {
  * Walnut is away (the checks run here anyway: docs/plan/walnut-trigger.md).
  */
 export interface OfflineTriggerTable {
-  /** The triggers this daemon runs now. */
-  armed(): Array<{ def: OfflineTrigger; status: OfflineTriggerStatus }>
+  /**
+   * The triggers this daemon runs now. `home`: the Walnut whose set holds it; absent
+   * for a set that named none (an older server), whose `deliver.home` says whose it is.
+   */
+  armed(): Array<{ home?: string; def: OfflineTrigger; status: OfflineTriggerStatus }>
   /** Run a check once and read or write no state (`triggers.test`); rejects with the daemon's refusal. */
-  test(check: { run: string; cwd?: string; timeoutSeconds?: number }, triggerId?: string): Promise<Record<string, unknown>>
+  test(check: { run: string; cwd?: string; timeoutSeconds?: number }, triggerId?: string, home?: string): Promise<Record<string, unknown>>
   /** A pause, resume or delete was made here: arm and disarm by `triggerHolds()` now. */
   changed(): void
   /** A session's working directory, for a test that names none. */
@@ -1961,20 +1964,41 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   // ── triggers: the checks this host runs (walnut-trigger) ──
 
-  /** The last pause, resume or delete made here per trigger id, until the server takes it. */
-  function triggerHolds(): Map<string, TriggerHold> {
-    const out = new Map<string, TriggerHold>()
+  /**
+   * The last pause, resume or delete made here per Walnut and trigger id, until the
+   * server takes it. Per Walnut: two Walnuts on one host each hold their own.
+   */
+  function triggerHoldsByHome(): Map<string, Map<string, TriggerHold>> {
+    const out = new Map<string, Map<string, TriggerHold>>()
     for (const home of journal.homes()) {
+      const holds = new Map<string, TriggerHold>()
       for (const r of recordsOf(home)) {
         if (r.kind !== 'op' || TRIGGER_WRITE_OPS.indexOf(r.op) === -1) continue
         const id = typeof r.args.id === 'string' ? r.args.id : ''
         if (!id) continue
-        const prev = out.get(id)
+        const prev = holds.get(id)
         const def = r.trigger ?? prev?.def
-        out.set(id, { home, on: r.op === 'trigger_resume', ...(r.op === 'trigger_delete' ? { deleted: true } : {}), ...(def ? { def } : {}) })
+        holds.set(id, { home, on: r.op === 'trigger_resume', ...(r.op === 'trigger_delete' ? { deleted: true } : {}), ...(def ? { def } : {}) })
       }
+      if (holds.size) out.set(home, holds)
     }
     return out
+  }
+
+  /** Every Walnut's holds by trigger id, for a count. */
+  function triggerHolds(): Map<string, TriggerHold> {
+    const out = new Map<string, TriggerHold>()
+    for (const holds of triggerHoldsByHome().values()) for (const [id, hold] of holds) out.set(id, hold)
+    return out
+  }
+
+  function holdsOf(home: string): Map<string, TriggerHold> {
+    return triggerHoldsByHome().get(home) ?? new Map<string, TriggerHold>()
+  }
+
+  /** Whose an armed trigger is: the set it came in, else (an older server's set) the Walnut it delivers to. */
+  function armedHome(t: { home?: string; def: OfflineTrigger }): string | undefined {
+    return t.home || t.def.deliver?.home
   }
 
   function everyLabel(ms: number): string {
@@ -1990,9 +2014,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   /** A trigger of this Walnut on this host: armed now, or switched off here. */
   function triggerOf(home: string, id: string): { def: OfflineTrigger; status?: OfflineTriggerStatus; hold?: TriggerHold } | undefined {
-    const hold = triggerHolds().get(id)
-    if (hold && hold.home !== home) return undefined
-    const armed = deps.triggers?.armed().find((t) => t.def.id === id && t.def.deliver?.home === home)
+    const hold = holdsOf(home).get(id)
+    const armed = deps.triggers?.armed().find((t) => t.def.id === id && armedHome(t) === home)
     if (armed) return { def: armed.def, status: armed.status, ...(hold ? { hold } : {}) }
     if (hold?.def) return { def: hold.def, hold }
     return undefined
@@ -2001,7 +2024,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function opTriggerList(home: string): GatewayResult {
     const table = deps.triggers!
     const host = slices.get(home)?.host ?? ''
-    const holds = triggerHolds()
+    const holds = holdsOf(home)
     const row = (def: OfflineTrigger, state: 'armed' | 'paused', status?: OfflineTriggerStatus) => ({
       id: def.id, name: def.name, every: everyLabel(def.everyMs), host, enabled: state === 'armed', state,
       run: def.check.run, ...(def.check.cwd ? { cwd: def.check.cwd } : {}),
@@ -2013,7 +2036,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       ...(holds.get(def.id) ? { changedHere: holds.get(def.id)!.on ? 'resumed' : 'paused' } : {}),
     })
     const triggers: Array<Record<string, unknown>> = table.armed()
-      .filter((t) => t.def.deliver?.home === home)
+      .filter((t) => armedHome(t) === home)
       .map((t) => row(t.def, 'armed', t.status))
     for (const [id, hold] of holds) {
       if (hold.home !== home || hold.on || hold.deleted || !hold.def || triggers.some((t) => t.id === id)) continue
@@ -2038,7 +2061,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const id = typeof args.id === 'string' && args.id && triggerOf(home, args.id) ? args.id : undefined
     let result: Record<string, unknown>
     try {
-      result = await deps.triggers!.test({ run, ...(cwd ? { cwd } : {}), ...(typeof args.timeoutSeconds === 'number' ? { timeoutSeconds: args.timeoutSeconds } : {}) }, id)
+      result = await deps.triggers!.test({ run, ...(cwd ? { cwd } : {}), ...(typeof args.timeoutSeconds === 'number' ? { timeoutSeconds: args.timeoutSeconds } : {}) }, id, home)
     } catch (err) {
       const message = (err as Error).message.replace(/^triggers\.test: /, '')
       return fail(/too many/.test(message) ? 'busy' : 'bad_request', message)
@@ -2723,7 +2746,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
-    triggerHolds, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+    triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }
 }
 

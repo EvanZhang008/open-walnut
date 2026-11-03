@@ -236,3 +236,68 @@ describe('what the host says it answers', () => {
     expect((oldList.ok ? (oldList.result.ops as Array<{ name: string }>) : []).map((o) => o.name)).not.toContain('trigger_list')
   })
 })
+
+// One daemon, two Walnuts (walnut-scope-core.ts): the daemon keeps one trigger set
+// per Walnut, so its table says whose each armed trigger is, and two Walnuts may
+// even hold the same id.
+describe('two Walnuts on one host', () => {
+  function twoWalnuts() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offline-triggers-2w-'))
+    dirs.push(dir)
+    const status: OfflineTriggerStatus = { nextRunAtMs: NOW + 60_000, consecutiveErrors: 0, pendingFires: 0, running: false }
+    const plain = (id: string): OfflineTrigger => ({ ...trig(id), deliver: undefined })
+    const rows = [
+      // A named set's trigger that delivers nowhere is still its Walnut's.
+      { home: HOME, def: plain('job-mine') },
+      { home: OTHER, def: plain('job-mine') },
+      { home: OTHER, def: plain('job-theirs') },
+      // An older server's set (no home): its deliver spec says whose it is.
+      { def: trig('job-legacy') },
+    ]
+    const tests: Array<{ id?: string; home?: string }> = []
+    const host = createOfflineHost({
+      fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
+      keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
+      kit: createEnvelopeKit(), log: () => {},
+      isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
+      deliver: async () => ({ ok: true }),
+      triggers: {
+        armed: () => rows.map((r) => ({ ...r, status })),
+        test: async (_check, id, home) => { tests.push({ id, home }); return { ok: true, parsed: { fire: false }, wouldFire: false } },
+        changed: () => {},
+      },
+    })
+    for (const home of [HOME, OTHER]) {
+      host.configure({
+        v: 1, home, hash: `h-${home}`, asOf: NOW - 120_000, host: 'devbox',
+        sessions: [{ sid: home === HOME ? SID : 'ffffffff-2222-4222-8222-222222222222', taskId: TASK, title: 'Watcher' }],
+        tasks: [{ id: TASK, title: 'Watch the PR', phase: 'WAITING', project: 'Ops' }],
+        requests: [],
+      })
+    }
+    const callAs = (home: string, name: string, args: Record<string, unknown> = {}) =>
+      host.handle(home, home === HOME ? SID : 'ffffffff-2222-4222-8222-222222222222', 'tools.call', { name, args })
+    return { host, tests, callAs }
+  }
+
+  it('each Walnut lists only its own triggers, the same id included', async () => {
+    const { callAs } = twoWalnuts()
+    expect(result(await callAs(HOME, 'trigger_list')).triggers.map((t: { id: string }) => t.id)).toEqual(['job-mine', 'job-legacy'])
+    expect(result(await callAs(OTHER, 'trigger_list')).triggers.map((t: { id: string }) => t.id)).toEqual(['job-mine', 'job-theirs'])
+  })
+
+  it('a pause in one Walnut is that Walnut\'s hold alone, and a test names its Walnut', async () => {
+    const { host, tests, callAs } = twoWalnuts()
+    result(await callAs(OTHER, 'trigger_pause', { id: 'job-mine' }))
+    const byHome = host.triggerHoldsByHome()
+    expect(byHome.get(OTHER)?.get('job-mine')).toMatchObject({ home: OTHER, on: false })
+    expect(byHome.get(HOME), 'the other Walnut\'s trigger of the same id is not held').toBeUndefined()
+    const mine = result(await callAs(HOME, 'trigger_list')).triggers.find((t: { id: string }) => t.id === 'job-mine')
+    expect(mine.changedHere).toBeUndefined()
+    result(await callAs(HOME, 'trigger_test', { run: 'true', id: 'job-mine' }))
+    expect(tests).toEqual([{ id: 'job-mine', home: HOME }])
+    // A trigger of the other Walnut is a stranger here: tested as no trigger.
+    result(await callAs(HOME, 'trigger_test', { run: 'true', id: 'job-theirs' }))
+    expect(tests[1]).toEqual({ id: undefined, home: HOME })
+  })
+})

@@ -116,7 +116,7 @@ describe.each(TWINS)('the iOS app against a host replica with the Mac asleep (%s
     expect(reqId).toMatch(/^[0-9a-f]{8}$/)
     const logged = await waitFor(() => {
       let text = ''
-      try { text = fs.readFileSync(path.join(c.base, 'hr', 'logs', 'server.log'), 'utf8') } catch { return null }
+      try { text = fs.readFileSync(path.join(c.replicaData, '..', 'logs', 'server.log'), 'utf8') } catch { return null }
       return text.split('\n').find((l) => l.includes(`PATCH /api/v1/tasks/${c.ids.board} `) && l.includes(`"reqId":"${reqId}"`)) ?? null
     }, 10_000, 'the away edit in the replica\'s request log', 100)
     expect(logged).toMatch(/ 200 \(\d+ms\)/)

@@ -7,10 +7,14 @@
  * needs it on each connection, and only when its hash changed (the daemon skips
  * an equal hash too). A daemon that restarted answers `providers_stale`; the
  * client then pushes again and retries once.
+ *
+ * Every command names this Walnut (`home`): a daemon shared with another Walnut
+ * keeps one allowlist and one job list per Walnut, so neither replaces the other's.
  */
 
 import { workspaceProviderCatalog, GIT_WORKTREE_ID } from './registry.js'
 import { log } from '../../logging/index.js'
+import { WALNUT_HOME } from '../../constants.js'
 
 export const WORKSPACE_CAPABILITY = 'workspace-v1'
 const DIAL_MS = 20_000
@@ -77,7 +81,7 @@ const pushed = new WeakMap<object, string>()
 async function push(conn: WorkspaceConn, host: string): Promise<string> {
   const { config } = await workspaceProviderCatalog()
   if (pushed.get(conn) === config.hash) return config.hash
-  const res = await conn.send('workspace.configure', { config }, CONFIGURE_MS)
+  const res = await conn.send('workspace.configure', { config, home: WALNUT_HOME }, CONFIGURE_MS)
   if (!res.ok) {
     throw new WorkspaceError(`${hostLabel(host)} refused the workspace providers: ${String(res.error ?? 'unknown error')}`, 502, 'configure-failed')
   }
@@ -100,7 +104,7 @@ export async function workspaceRpc(host: string, cmd: string, params: Record<str
   const call = async (): Promise<Record<string, unknown>> => {
     const hash = needsPlugins ? await push(conn, host) : undefined
     try {
-      return await conn.send(cmd, { ...params, ...(hash ? { providersHash: hash } : {}) }, timeoutMs)
+      return await conn.send(cmd, { ...params, home: WALNUT_HOME, ...(hash ? { providersHash: hash } : {}) }, timeoutMs)
     } catch (err) {
       throw new WorkspaceError(`${hostLabel(host)} did not answer ${cmd} (${err instanceof Error ? err.message : String(err)}).`, 504, 'host-timeout')
     }

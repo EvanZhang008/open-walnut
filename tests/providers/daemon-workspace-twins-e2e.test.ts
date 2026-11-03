@@ -14,6 +14,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
@@ -196,6 +197,67 @@ describe('task workspaces in both daemon twins', () => {
       const homeJob = await job('job-home')
       expect(homeJob).toMatchObject({ state: 'failed', code: 'forbidden_path' })
       expect(String(homeJob.error)).toMatch(/the home folder/)
+    }, 120_000)
+  }
+
+  // Two Walnuts on one daemon (walnut-scope-core.ts): each keeps its own allowlist,
+  // adapter dir and jobs, so neither push replaces the other's, and a push with no
+  // home keeps the legacy place.
+  for (const twin of TWINS) {
+    it(`${twin.name}: two Walnuts keep their own allowlists, adapters and jobs; an unnamed push stays as before`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-')))
+      const home = path.join(root, 'home')
+      const daemonDir = path.join(root, 'daemon')
+      const repo = path.join(root, 'repos', 'app')
+      fs.mkdirSync(home, { recursive: true })
+      fs.mkdirSync(repo, { recursive: true })
+      git(['init', '-q'], repo, home)
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
+      git(['add', '.'], repo, home)
+      git(['commit', '-qm', 'init'], repo, home)
+      await boot(twin, home, daemonDir)
+
+      const A = path.join(root, 'walnut-a')
+      const B = path.join(root, 'walnut-b')
+      const keyOf = (h: string) => crypto.createHash('sha1').update(h).digest('hex').slice(0, 16)
+      const spec = (tag: string) => ({
+        id: 'fake-multirepo', displayName: 'Fake ' + tag, priority: 50, markers: ['fake-workspace.json'],
+        command: [process.execPath, '{script}'], script: { name: 'provider.mjs', content: '// ' + tag + '\n' + fs.readFileSync(PROVIDER, 'utf8') },
+      })
+      const cfg = (hash: string, tag: string) => ({ version: 1, hash, providers: [spec(tag)] })
+      expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: true })
+      expect(await rpc({ cmd: 'workspace.configure', home: B, config: cfg('hB', 'b') })).toMatchObject({ ok: true, changed: true })
+      expect(await rpc({ cmd: 'workspace.configure', config: cfg('h0', 'unnamed') })).toMatchObject({ ok: true, changed: true })
+      // B's push did not replace A's: A's same hash is still a no-op.
+      expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: false })
+
+      // Each Walnut's adapter in its own dir; the unnamed one where it always was.
+      const adapterOf = (dir: string) => fs.readFileSync(path.join(dir, 'workspace-providers', 'fake-multirepo.mjs'), 'utf8').split('\n')[0]
+      expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(A)))).toBe('// a')
+      expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(B)))).toBe('// b')
+      expect(adapterOf(daemonDir)).toBe('// unnamed')
+
+      // A command answers against its own Walnut's hash only.
+      const crossed = await rpc({ cmd: 'workspace.create', home: A, provider: 'fake-multirepo', providersHash: 'hB', jobId: 'job-x-1', anchor: repo, name: 'x' })
+      expect(crossed).toMatchObject({ ok: false, code: 'providers_stale' })
+      expect(await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'hA', jobId: 'job-x-2', anchor: repo, name: 'x' }))
+        .toMatchObject({ ok: false, code: 'providers_stale' })
+      const detB = await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hB' })
+      expect((detB.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake b' })
+      expect(await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hA' })).toMatchObject({ ok: false, code: 'providers_stale' })
+      const det0 = await rpc({ cmd: 'workspace.detect', anchor: repo, providersHash: 'h0' })
+      expect((det0.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake unnamed' })
+
+      // A job belongs to the Walnut that started it.
+      expect(await rpc({ cmd: 'workspace.create', home: A, provider: 'git-worktree', jobId: 'job-a-1', anchor: repo, name: 'Walnut A' })).toMatchObject({ ok: true })
+      expect((await rpc({ cmd: 'workspace.job', home: B, jobId: 'job-a-1' })).job).toBeNull()
+      expect((await rpc({ cmd: 'workspace.job', jobId: 'job-a-1' })).job).toBeNull()
+      for (let i = 0; i < 400; i++) {
+        const j = (await rpc({ cmd: 'workspace.job', home: A, jobId: 'job-a-1' })).job as Record<string, unknown> | null
+        expect(j).toBeTruthy()
+        if (j!.state !== 'running') { expect(j!.state, JSON.stringify(j)).toBe('done'); break }
+        await new Promise((res) => setTimeout(res, 100))
+      }
     }, 120_000)
   }
 

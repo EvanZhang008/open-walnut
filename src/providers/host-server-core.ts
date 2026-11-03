@@ -370,6 +370,9 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     }
     let child: ChildLike
     try {
+      // Its cwd is its data dir, which a server of another Walnut on this host never made for
+      // it (core/host-server/install.ts walnutDirs): a spawn into a missing dir fails (ENOENT).
+      fs.mkdirSync(e.spec.cwd, { recursive: true, mode: 0o700 })
       const run = runOf(e)
       child = deps.spawn(e.spec.command, run.args, {
         cwd: e.spec.cwd, env: { ...deps.baseEnv(), ...run.env, WALNUT_FOLLOWER_TOKEN: e.token }, detached: true, stdio: ['ignore', fd, fd],

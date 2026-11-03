@@ -162,4 +162,30 @@ describe.each(TWINS)('$name', (twin) => {
     expect(await rpc({ cmd: 'secrets.remove', name: 'github-read' })).toMatchObject({ ok: true, removed: true })
     expect(((await rpc({ cmd: 'secrets.list' })).secrets as unknown[])).toEqual([])
   }, 90_000)
+
+  it("one Walnut's sync never removes another Walnut's secrets; an unnamed sync prunes only unowned ones", async () => {
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-scoped')
+    await boot(twin, dir)
+    const secrets = path.join(dir, 'state', 'open-walnut', 'secrets')
+    const A = path.join(dir, 'walnut-a')
+    const B = path.join(dir, 'walnut-b')
+    expect(await rpc({ cmd: 'secrets.put', home: A, name: 'a-token', version: 1, value: 'value-a' })).toMatchObject({ ok: true })
+    expect(await rpc({ cmd: 'secrets.put', home: A, name: 'a-old', version: 1, value: 'value-a2' })).toMatchObject({ ok: true })
+    expect(await rpc({ cmd: 'secrets.put', home: B, name: 'b-token', version: 1, value: 'value-b' })).toMatchObject({ ok: true })
+    expect(await rpc({ cmd: 'secrets.put', name: 'legacy-token', version: 1, value: 'value-0' })).toMatchObject({ ok: true })
+    const index = JSON.parse(fs.readFileSync(path.join(secrets, '.index.json'), 'utf8'))
+    expect(index.secrets['a-token'].home).toBe(A)
+    expect(index.secrets['legacy-token'].home).toBeUndefined()
+    // The owner never rides the list another Walnut reads.
+    expect(JSON.stringify(await rpc({ cmd: 'secrets.list' }))).not.toContain(A)
+
+    // B keeps nothing: only B's own secret goes.
+    expect(await rpc({ cmd: 'secrets.sync', home: B, keep: [] })).toMatchObject({ ok: true, removed: ['b-token'] })
+    // A keeps a-token: a-old goes, B's and the unowned one were never A's.
+    expect(await rpc({ cmd: 'secrets.sync', home: A, keep: ['a-token'] })).toMatchObject({ ok: true, removed: ['a-old'] })
+    // An older server's sync (no home) prunes what an older server wrote, nothing named.
+    expect(await rpc({ cmd: 'secrets.sync', keep: [] })).toMatchObject({ ok: true, removed: ['legacy-token'] })
+    expect(((await rpc({ cmd: 'secrets.list' })).secrets as Array<{ name: string }>).map((e) => e.name)).toEqual(['a-token'])
+    expect(fs.readFileSync(path.join(secrets, 'a-token'), 'utf8')).toBe('value-a')
+  }, 90_000)
 })

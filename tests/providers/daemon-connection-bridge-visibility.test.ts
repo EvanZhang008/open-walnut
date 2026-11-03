@@ -184,15 +184,20 @@ describe('DaemonConnection bridge visibility', () => {
     expect(conn.lastBridgeConnected).toBeNull()
   })
 
+  // A daemon with walnut-scope-v1 keeps one link per Walnut, so every host is
+  // told which Walnut pushes; an older one hears it only where it binds the feature relay.
   it.each([
-    { host: '__local__', featureRelay: true, hasHome: true },
-    { host: '__local__', featureRelay: false, hasHome: false },
-    { host: 'fixture-remote', featureRelay: true, hasHome: false },
-  ])('binds the bridge owner only on a capable local daemon: $host/$featureRelay', async ({ host, featureRelay, hasHome }) => {
+    { host: '__local__', featureRelay: true, walnutScope: false, hasHome: true },
+    { host: '__local__', featureRelay: false, walnutScope: false, hasHome: false },
+    { host: 'fixture-remote', featureRelay: true, walnutScope: false, hasHome: false },
+    { host: 'fixture-remote', featureRelay: false, walnutScope: true, hasHome: true },
+    { host: '__local__', featureRelay: false, walnutScope: true, hasHome: true },
+  ])('names this Walnut on the bridge push: $host/$featureRelay/$walnutScope', async ({ host, featureRelay, walnutScope, hasHome }) => {
     bridgeConfigMock.payload = { enabled: false }
     conn = new DaemonConnection(host, null)
     const hasCapability = conn.hasCapability.bind(conn)
-    vi.spyOn(conn, 'hasCapability').mockImplementation((name) => name === 'feature-relay-v1' ? featureRelay : hasCapability(name))
+    vi.spyOn(conn, 'hasCapability').mockImplementation((name) =>
+      name === 'feature-relay-v1' ? featureRelay : name === 'walnut-scope-v1' ? walnutScope : hasCapability(name))
     await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
     await waitFor(() => daemon.getCommandHistory().some((c) => c.cmd === 'bridge.configure'))
     const command = daemon.getCommandHistory().find((c) => c.cmd === 'bridge.configure')!

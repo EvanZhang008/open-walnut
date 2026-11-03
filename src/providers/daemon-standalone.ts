@@ -91,6 +91,7 @@ import { createClaudeCheck } from './claude-check-core.js'
 import { createOfflineHostCore, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
+import { createWalnutScope } from './walnut-scope-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -337,6 +338,12 @@ let journaledSids: Set<string> | null = null
 // daemon on the host appended a later line that does. Later spawns of a
 // journaled sid append nothing.
 const journaledHomes = new Map<string, string>()
+// Which Walnut a pushed setting belongs to, and where its copy is kept
+// (walnut-scope-core.ts). Mirror daemon-source.ts.
+const walnutScope = createWalnutScope({
+  path,
+  keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
+})
 // A crashed writer can leave a torn last line with no newline; the first append
 // then starts a fresh line instead of gluing its record onto the torn one.
 let journalTornTail = false
@@ -798,6 +805,10 @@ interface WsData {
   followerHome?: string
   /** A lane's Walnut, set by stream.lane. */
   laneHome?: string
+  /** The Walnut this socket configured triggers for ('' = a push that named none); its fires go here. */
+  triggerScope?: string
+  /** A bridge link's Walnut ('' = an older server's link), set when it opens. */
+  bridgeHome?: string
   /** When this socket last sent anything (a frame, a ping, a pong). See heardFrom. */
   lastHeardAt?: number
   /** When this socket was last told the companion leads its Walnut (see heardFrom). */
@@ -805,6 +816,9 @@ interface WsData {
   /** Keepalive beats in a row this trusted socket stayed silent (0 once heard again). */
   missedBeats?: number
 }
+
+/** Bridge commands that name a session by `sid` (checked against the link's Walnut). */
+const BRIDGE_SESSION_COMMANDS = new Set(['status', 'appendUserMarker', 'send', 'attach', 'read-history', 'bridgeResume', 'markers.find', 'session.permission'])
 
 /**
  * Commands the cloud bridge is allowed to invoke. This MUST stay a subset of
@@ -1412,7 +1426,11 @@ function ledAway(client: ServerWebSocket<WsData>): boolean {
   const home = gatewayClientHomes.get(client)
   return home ? leaderBook.backupLead(home) !== null : leaderBook.anyBackupLead()
 }
-function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: number; quietForMs: number | null } {
+/**
+ * `home` is the Walnut whose bridge link the relay came in on: a named link's
+ * relay goes only to that Walnut's server (servesBridgeHome); '' keeps the old pick.
+ */
+function pickTrustedClient(home = ''): { client: ServerWebSocket<WsData> | null; quiet: number; quietForMs: number | null } {
   const now = Date.now()
   let fresh: ServerWebSocket<WsData> | null = null
   let suspect: ServerWebSocket<WsData> | null = null
@@ -1420,6 +1438,7 @@ function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: n
   let quiet = 0
   for (const client of wsClients) {
     if (!isServerClient(client)) continue
+    if (!servesBridgeHome(client, home)) continue
     const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
     const silentMs = now - at
     if (silentMs > TRUSTED_CLIENT_QUIET_MS) {
@@ -1432,6 +1451,16 @@ function pickTrustedClient(): { client: ServerWebSocket<WsData> | null; quiet: n
     }
   }
   return { client: fresh ?? suspect, quiet, quietForMs: quietAt === null ? null : now - quietAt }
+}
+/**
+ * A relay answered from a server of another Walnut than the link it came in on
+ * (`home`): refused, and the relay stays for its own server to answer. '' = the
+ * link of an older server, which any trusted client may answer as before.
+ */
+function answersForOtherWalnut(ws: ServerWebSocket<WsData>, home: string): boolean {
+  if (!home) return false
+  const bound = gatewayClientHomes.get(ws)
+  return bound !== undefined && bound !== home
 }
 /** The error a relay answers when no trusted client can take it: the caller's
  *  contract text ("<cmd>: no primary server connected", which companions key on
@@ -2207,7 +2236,7 @@ const core = createDaemonCore<SessionData>({
       hostResume.remember(payload.sid, { args: session.args, cwd: session.cwd, mode: session.mode, home: session.spawnInfo?.home, task: session.spawnInfo?.task })
     }
     for (const client of wsClients) {
-      if (followerHears(client, payload.sid)) sendEvent(client, 'session_state', payload)
+      if (followerHears(client, payload.sid) && bridgeHearsSession(client, payload.sid)) sendEvent(client, 'session_state', payload)
     }
   },
   broadcastExitToWatchersFn: (session, code, stderrTail) => {
@@ -2396,6 +2425,12 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     logMsg('warn', 'bridge: rejected non-allowlisted command', { cmd: cmd.cmd, id })
     return sendError(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd)
   }
+  // A named bridge link reaches only its own Walnut's sessions (or one whose Walnut
+  // is not recorded, as before). Mirror daemon-source.ts.
+  if (ws.data?.origin === 'bridge' && BRIDGE_SESSION_COMMANDS.has(cmd.cmd as string)
+    && typeof cmd.sid === 'string' && !bridgeHearsSession(ws, cmd.sid)) {
+    return sendError(ws, id as number, `${cmd.cmd}: a session of another Walnut`, { errorKind: 'not_owner' })
+  }
   // A follower (the host server) reads; the leader alone writes this host's state.
   if (ws.data?.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id })
@@ -2509,9 +2544,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
     // writes or lists them, and no reply ever carries a value. Keep in sync with daemon-source.ts.
     case 'secrets.list': return replyTransfer(ws, id as number, 'secrets.list', async () => secretStore.list(), false)
-    case 'secrets.put': return replyTransfer(ws, id as number, 'secrets.put', async () => secretStore.put(cmd), false)
-    case 'secrets.remove': return replyTransfer(ws, id as number, 'secrets.remove', async () => secretStore.remove(cmd), false)
-    case 'secrets.sync': return replyTransfer(ws, id as number, 'secrets.sync', async () => secretStore.sync(cmd), false)
+    // A write names its Walnut (the owner a sync prunes by); never another's on a bound socket.
+    case 'secrets.put': case 'secrets.remove': case 'secrets.sync': {
+      if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, `${cmd.cmd}: this socket speaks for another Walnut`, { code: 'not_owner' })
+      const op = cmd.cmd === 'secrets.put' ? secretStore.put : cmd.cmd === 'secrets.remove' ? secretStore.remove : secretStore.sync
+      return replyTransfer(ws, id as number, String(cmd.cmd), async () => op(cmd), false)
+    }
     case 'fs.grep': return cmdFsGrep(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
@@ -2646,14 +2684,15 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
     case 'feature.request': {
-      if (!isServerClient(ws) || bridgeConfig?.hostAlias !== '__local__' || !bridgeConfig.home
-        || gatewayClientHomes.get(ws) !== bridgeConfig.home) return sendError(ws, id, 'Feature request refused')
-      const home = bridgeConfig.home
-      return featureRelay.request(featureSocket(ws), id, bridgeAdapter ? featureSocket(bridgeAdapter) : null, cmd.frame,
-        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeConfig?.home === home)
+      // Over the link of the asking server's own Walnut only.
+      const home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined
+      const link = home ? bridgeLinkFor(home) : null
+      if (!home || !link || link.config?.hostAlias !== '__local__' || link.config.home !== home) return sendError(ws, id, 'Feature request refused')
+      return featureRelay.request(featureSocket(ws), id, link.adapter ? featureSocket(link.adapter) : null, cmd.frame,
+        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeLinkFor(home) === link && link.config?.home === home)
     }
     case 'feature.result': {
-      if (ws !== bridgeAdapter) return sendError(ws, id, 'Feature result refused')
+      if (!bridgeLinkOf(ws)) return sendError(ws, id, 'Feature result refused')
       const accepted = featureRelay.result(featureSocket(ws), cmd.requestId, cmd.result)
       return sendOk(ws, id, { accepted })
     }
@@ -2754,10 +2793,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'ping':
       // From the replica, a ping answers one of our bridge-ping markers: it
       // confirms every byte written before that marker (bridge-uplink-core.ts).
-      if (ws.data?.origin === 'bridge' && ws === bridgeAdapter) bridgeUplink?.ack(cmd.ackSeq)
+      if (ws.data?.origin === 'bridge') bridgeLinkOf(ws)?.uplink?.ack(cmd.ackSeq)
       return sendOk(ws, id as number, { pong: true })
     case 'bridge.peer': return cmdBridgePeer(ws, id as number, cmd)
-    case 'bridge.status': return cmdBridgeStatus(ws, id as number)
+    case 'bridge.status': return cmdBridgeStatus(ws, id as number, cmd)
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -2811,7 +2850,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     persistRegistry(true)
     if (!updating) await prepareDaemonServiceHandover({
       ...location, home: HOME_DIR, platform: process.platform,
-      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: daemonHooks,
+      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
     })
   } catch (error) {
     if (updating) {
@@ -3089,6 +3128,7 @@ async function pauseBudgetSession(sid: string): Promise<void> {
 }
 
 async function cmdUsageBudget(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, configure: boolean) {
+  if (refuseForeignHome(ws, id, cmd, configure ? 'usage.budget.configure' : 'usage.budget')) return
   const sid = cmd.sid
   const engine = typeof cmd.engine === 'string' ? cmd.engine : 'claude'
   const known = (s: string) => sessions.has(s) || journaledIds().has(s)
@@ -3131,6 +3171,15 @@ function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string
   const rec = s && s.spawnInfo?.home ? null : hostResume.recall(sid)
   if (s && s.args && s.args.length > 0 && s.cwd) return { args: s.args, cwd: s.cwd, mode: s.mode || 'default', home: s.spawnInfo?.home || rec?.home }
   return rec ? { args: rec.args, cwd: rec.cwd, mode: rec.mode || 'default', home: rec.home } : null
+}
+
+/**
+ * The Walnut a session belongs to (its data dir): what its start named, else the
+ * spawn journal's or the resume record's. '' when none is recorded (a server older
+ * than owner-home-v1). Per-Walnut settings (hooks, turn snapshots) are looked up by it.
+ */
+function sessionHomeOf(sid: string): string {
+  return sessions.get(sid)?.spawnInfo?.home || journaledHome(sid) || hostResume.recall(sid)?.home || offlineHost.ownerOf(sid) || ''
 }
 
 // ── Host resume for a trigger fire (trigger-host-resume-v1) ──
@@ -3284,6 +3333,8 @@ const STT_RELAY_TIMEOUT_MS = 90_000
 let sttRelayCounter = 0
 const sttRelayPending = new Map<number, {
   ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+  /** The Walnut whose bridge link asked ('' = an older server's link). */
+  home: string
 }>()
 
 function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3294,7 +3345,8 @@ function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  const target = pickTrustedClient().client
+  const home = bridgeHomeOf(ws)
+  const target = pickTrustedClient(home).client
   if (!target) {
     return sendError(ws, id, 'stt: no transcription host connected')
   }
@@ -3303,7 +3355,7 @@ function cmdSttRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
     sttRelayPending.delete(relayId)
     sendError(ws, id, 'stt: transcription timed out')
   }, STT_RELAY_TIMEOUT_MS)
-  sttRelayPending.set(relayId, { ws, id, timer })
+  sttRelayPending.set(relayId, { ws, id, timer, home })
   logMsg('info', 'stt: relaying to transcription host', { relayId, format, audioB64Len: audio.length })
   sendEvent(target, 'stt-request', { relayId, audio, format, language })
 }
@@ -3313,6 +3365,7 @@ function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
     relayId?: number; text?: string; durationMs?: number; error?: string
   }
   const pending = typeof relayId === 'number' ? sttRelayPending.get(relayId) : undefined
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, 'stt-result: not this Walnut\'s relay')
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true })
@@ -3342,6 +3395,8 @@ const LAUNCH_RELAY_TIMEOUT_MS = 45_000
 let launchRelayCounter = 0
 const launchRelayPending = new Map<number, {
   ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+  /** The Walnut whose bridge link asked ('' = an older server's link). */
+  home: string
 }>()
 
 function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3352,7 +3407,8 @@ function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  const picked = pickTrustedClient()
+  const home = bridgeHomeOf(ws)
+  const picked = pickTrustedClient(home)
   const target = picked.client
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.launch: no primary server connected', picked))
@@ -3362,7 +3418,7 @@ function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     launchRelayPending.delete(relayId)
     sendError(ws, id, 'session.launch: primary server timed out')
   }, LAUNCH_RELAY_TIMEOUT_MS)
-  launchRelayPending.set(relayId, { ws, id, timer })
+  launchRelayPending.set(relayId, { ws, id, timer, home })
   logMsg('info', 'session.launch: relaying to primary server', { relayId, action })
   sendEvent(target, 'launch-request', { relayId, action, params: params ?? {} })
 }
@@ -3372,6 +3428,7 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string; details?: unknown
   }
   const pending = typeof relayId === 'number' ? launchRelayPending.get(relayId) : undefined
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, 'launch-result: not this Walnut\'s relay')
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true })
@@ -3405,6 +3462,8 @@ const CONTROL_RELAY_TIMEOUT_MS = 45_000
 let controlRelayCounter = 0
 const controlRelayPending = new Map<number, {
   ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+  /** The Walnut whose bridge link asked ('' = an older server's link). */
+  home: string
 }>()
 
 function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3421,7 +3480,8 @@ function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  const picked = pickTrustedClient()
+  const home = bridgeHomeOf(ws)
+  const picked = pickTrustedClient(home)
   const target = picked.client
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.control: no primary server connected', picked))
@@ -3431,7 +3491,7 @@ function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     controlRelayPending.delete(relayId)
     sendError(ws, id, 'session.control: primary server timed out')
   }, action === 'server.voice.archive' && params?.operation === 'transcribe' ? 900_000 : CONTROL_RELAY_TIMEOUT_MS)
-  controlRelayPending.set(relayId, { ws, id, timer })
+  controlRelayPending.set(relayId, { ws, id, timer, home })
   logMsg('info', 'session.control: relaying to primary server', { relayId, action, sid: targetSid })
   sendEvent(target, 'control-request', { relayId, action, sessionId: targetSid, params: params ?? {} })
 }
@@ -3441,6 +3501,7 @@ function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string; errorCode?: string
   }
   const pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, 'control-result: not this Walnut\'s relay')
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true })
@@ -3477,6 +3538,8 @@ const messageRelayPending = new Map<number, {
   ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
   /** The trusted client it was handed to, the request as sent, and how often it moved. */
   target: ServerWebSocket<WsData>; request: Record<string, unknown>; hops: number
+  /** The Walnut whose bridge link asked ('' = an older server's link); a reroute keeps to it. */
+  home: string
 }>()
 /** How many times one relay may move to another client after its target closed. */
 const MESSAGE_RELAY_MAX_HOPS = 4
@@ -3498,7 +3561,7 @@ const MESSAGE_RELAY_TARGET_LOST = 'session.message: primary server timed out (it
 function rerouteMessageRelays(closed: ServerWebSocket<WsData>): void {
   for (const [relayId, pending] of messageRelayPending) {
     if (pending.target !== closed) continue
-    const next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient().client : null
+    const next = pending.hops < MESSAGE_RELAY_MAX_HOPS ? pickTrustedClient(pending.home).client : null
     if (next) {
       pending.target = next
       pending.hops += 1
@@ -3524,7 +3587,8 @@ function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // Pick any trusted client (never the bridge adapter — that would bounce the
   // request straight back to the cloud). Normally there is exactly one: the
   // walnut server's DaemonConnection.
-  const picked = pickTrustedClient()
+  const home = bridgeHomeOf(ws)
+  const picked = pickTrustedClient(home)
   const target = picked.client
   if (!target) {
     return sendError(ws, id, noPrimaryError('session.message: no primary server connected', picked))
@@ -3535,7 +3599,7 @@ function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     sendError(ws, id, 'session.message: primary server timed out')
   }, MESSAGE_RELAY_TIMEOUT_MS)
   const request = { relayId, sessionId: targetSid, message, messageId, stopFence: cmd.stopFence ?? null }
-  messageRelayPending.set(relayId, { ws, id, timer, target, request, hops: 0 })
+  messageRelayPending.set(relayId, { ws, id, timer, target, request, hops: 0, home })
   logMsg('info', 'session.message: relaying to primary server', { relayId, sid: targetSid, messageId, to: wsId(target) })
   sendEvent(target, 'message-request', request)
 }
@@ -3545,6 +3609,7 @@ function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
   }
   const pending = typeof relayId === 'number' ? messageRelayPending.get(relayId) : undefined
+  if (pending && answersForOtherWalnut(ws, pending.home)) return sendError(ws, id, 'message-result: not this Walnut\'s relay')
   if (!pending) {
     // Late result after timeout — ack and drop.
     return sendOk(ws, id, { stale: true })
@@ -3581,17 +3646,22 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   if (typeof kind !== 'string' || !kind) {
     return sendError(ws, id, 'mobile-event: missing kind')
   }
-  if (!bridgeAdapter || !bridgeUplink) {
+  // The pushing server's own Walnut's link: the home it names, else the one its
+  // socket speaks for ('' = an older server's link). Never another Walnut's companion.
+  if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, 'mobile-event: this socket speaks for another Walnut')
+  const link = bridgeLinkFor(walnutScope.askedHome(cmd) || (gatewayClientHomes.get(ws) ?? ''))
+  const uplink = link?.adapter ? link.uplink : null
+  if (!link || !uplink) {
     return sendOk(ws, id, { relayed: false })
   }
   // Truthful ack: `queued` means paced behind unconfirmed bytes, `relayed:
   // false` means the uplink refused it (closing or over its queue cap).
-  const outcome = bridgeUplink.send(JSON.stringify({ ev: 'mobile-event', kind, data: data ?? null }))
+  const outcome = uplink.send(JSON.stringify({ ev: 'mobile-event', kind, data: data ?? null }))
   sendOk(ws, id, {
     relayed: outcome !== 'dropped',
     queued: outcome === 'queued',
-    queuedBytes: bridgeUplink.queuedBytes,
-    connId: bridgeConnId,
+    queuedBytes: uplink.queuedBytes,
+    connId: link.connId,
   })
 }
 
@@ -3621,6 +3691,8 @@ const gatewayRelayPending = new Map<number, {
   respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout>
   /** Sent to the cloud bridge (the companion leads): only the bridge may answer it. */
   via?: 'bridge'
+  /** The link it went out on: another Walnut's link may not answer it. */
+  bridge?: ServerWebSocket<WsData>
 }>()
 
 function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse {
@@ -3638,6 +3710,18 @@ const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
 function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
   if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws))
   gatewayClientHomes.set(ws, home)
+}
+/**
+ * A command that names another Walnut than the one its socket speaks for is refused:
+ * one Walnut's server never reads, writes or acks another's copy, journal or lead on a
+ * shared host (walnut-scope-core.ts). An unbound socket (the bulk channel, an older
+ * server before it binds) may name any. Mirror daemon-source.ts.
+ */
+function refuseForeignHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, what: string): boolean {
+  if (!walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return false
+  logMsg('warn', 'refused: the command names another Walnut than its socket', { what, walnut: walnutScope.label(walnutScope.askedHome(cmd)) })
+  sendError(ws, id, `${what}: this socket speaks for another Walnut`, { errorKind: 'not_owner' })
+  return true
 }
 
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts),
@@ -3783,13 +3867,14 @@ const offlineHost = createOfflineHostCore({
   triggers: {
     // Clock routines are not triggers a session lists, pauses or tests here.
     armed: () => [...armedTriggers.values()].filter((e) => !!e.def.check).map((e) => ({
+      ...(e.home ? { home: e.home } : {}),
       def: e.def as unknown as OfflineTrigger,
       status: {
         nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
         lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
       },
     })),
-    test: async (check, triggerId) => (await runTriggerTest(check, triggerId)) as unknown as Record<string, unknown>,
+    test: async (check, triggerId, home) => (await runTriggerTest(check, triggerId, home ?? '')) as unknown as Record<string, unknown>,
     changed: () => triggerHoldsChanged(),
     cwdOf: (sid) => sessions.get(sid)?.cwd,
   },
@@ -3893,14 +3978,15 @@ function forwardToBackup(
   respond: (resp: GatewayResponse) => void,
 ): boolean {
   const lead = leaderBook.backupLead(home)
-  const adapter = bridgeAdapter
+  // The companion of this Walnut, on its own link.
+  const adapter = bridgeLinkFor(home)?.adapter ?? null
   if (!lead || !adapter) return false
   const relayId = ++gatewayRelayCounter
   const timer = setTimeout(() => {
     gatewayRelayPending.delete(relayId)
     respond(gatewayError('hub_timeout', 'the cloud companion, which leads while the Walnut server is away, did not answer in time'))
   }, gatewayHubTimeoutMs())
-  gatewayRelayPending.set(relayId, { respond, timer, via: 'bridge' })
+  gatewayRelayPending.set(relayId, { respond, timer, via: 'bridge', bridge: adapter })
   logMsg('info', 'gateway: relaying to the backup leader', { relayId, capability, callerSid, epoch: lead.epoch })
   sendEvent(adapter, 'gateway-request', {
     relayId, capability, callerSid, payload,
@@ -3912,6 +3998,7 @@ function forwardToBackup(
 
 function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only')
+  if (refuseForeignHome(ws, id, cmd, 'leader.configure')) return
   try {
     const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true, drains: cmd.drains })
     bindGatewayClientHome(ws, rec.home)
@@ -3981,7 +4068,8 @@ function followerView(home: string): Record<string, unknown> | null {
   if (!rec) return null
   const age = leaderBook.primaryAgeMs(home)
   let companion: string | null = null
-  try { if (bridgeConfig?.enabled && bridgeConfig.url) companion = new URL(bridgeConfig.url.replace(/^ws/, 'http')).origin } catch { companion = null }
+  const link = bridgeLinkFor(home)
+  try { if (link?.config?.enabled && link.config.url) companion = new URL(link.config.url.replace(/^ws/, 'http')).origin } catch { companion = null }
   return {
     walnutId: rec.walnutId,
     home,
@@ -3996,7 +4084,7 @@ function followerView(home: string): Record<string, unknown> | null {
     takeoverMs: LEADER_TAKEOVER_MS,
     // The window this daemon calls the Mac away by (the replica's presence reads it).
     quietMs: LEADER_QUIET_MS,
-    bridge: { connected: bridgeAdapter != null, companion },
+    bridge: { connected: link?.adapter != null, companion },
     settings: hostServers.settingsOf(home),
     ...followerJournalView(home),
   }
@@ -4061,12 +4149,14 @@ function primaryClientFor(home: string): ServerWebSocket<WsData> | null {
  * last, never a quiet one. Its bulk channel names none and drops stream frames.
  * Keep in sync with daemon-source.ts.
  */
-function primaryForBridge(): ServerWebSocket<WsData> | null {
+function primaryForBridge(home = ''): ServerWebSocket<WsData> | null {
   const now = Date.now()
   let best: ServerWebSocket<WsData> | null = null
   let bestAt = -Infinity
   for (const client of wsClients) {
     if (!isServerClient(client) || !gatewayClientHomes.has(client)) continue
+    // A named link's companion reaches its own Walnut's primary only.
+    if (!servesBridgeHome(client, home)) continue
     const at = typeof client.data?.lastHeardAt === 'number' ? client.data.lastHeardAt : now
     if (now - at > TRUSTED_CLIENT_QUIET_MS || at <= bestAt) continue
     best = client
@@ -4085,7 +4175,8 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
       return link ? { link, meta: { from: 'follower', home } } : { why: 'the Mac is not linked to this host' }
     }
     if (to === 'companion') {
-      return bridgeAdapter ? { link: bridgeAdapter, meta: { from: 'follower', home } } : { why: 'the cloud companion is not linked to this host' }
+      const companion = bridgeLinkFor(home)?.adapter
+      return companion ? { link: companion, meta: { from: 'follower', home } } : { why: 'the cloud companion is not linked to this host' }
     }
     return { why: 'a follower opens streams to the primary or the companion' }
   }
@@ -4101,7 +4192,7 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
   // leads; a stream whose request is never written is then answered on the companion. Keep in sync with daemon-source.ts.
   if (ws.data?.origin === 'bridge') {
     if (to !== 'primary') return { why: 'the companion opens streams to the primary only' }
-    const link = primaryForBridge()
+    const link = primaryForBridge(bridgeHomeOf(ws))
     return link ? { link, meta: { from: 'companion', home: gatewayClientHomes.get(link) } } : { why: 'no primary server connected' }
   }
   const home = isServerClient(ws) ? gatewayClientHomes.get(ws) : undefined
@@ -4231,6 +4322,7 @@ function cmdServerConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 function cmdServerStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = ws.data?.origin === 'follower' ? ws.data.followerHome : typeof cmd.home === 'string' ? cmd.home : ''
   if (!home) return sendError(ws, id, 'server.status: missing home')
+  if (ws.data?.origin !== 'follower' && refuseForeignHome(ws, id, cmd, 'server.status')) return
   sendOk(ws, id, { status: hostServers.status(home) })
 }
 
@@ -4313,11 +4405,17 @@ function cmdJobsLogs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
 
 function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') {
+    // A named link claims only its own Walnut's lead (never fence another companion).
+    const own = bridgeHomeOf(ws)
+    if (own && (leaderBook.recordOf(own)?.walnutId !== cmd.walnutId || (typeof cmd.home === 'string' && cmd.home !== own))) {
+      return sendError(ws, id, 'leader.claim: another Walnut\'s lead', { errorKind: 'not_owner' })
+    }
     const r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch)
     if (!r.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch }))
     return sendOk(ws, id, { epoch: r.record.epoch, holder: r.record.holder })
   }
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home')
+  if (refuseForeignHome(ws, id, cmd, 'leader.claim')) return
   const rec = leaderBook.primaryClaim(cmd.home)
   if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first')
   bindGatewayClientHome(ws, rec.home)
@@ -4325,13 +4423,18 @@ function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 }
 
 function cmdLeaderWitness(ws: ServerWebSocket<WsData>, id: number) {
-  sendOk(ws, id, { walnuts: leaderBook.witness(primarySocketOpen), takeoverMs: LEADER_TAKEOVER_MS })
+  // A named bridge link hears only its own Walnut.
+  const own = bridgeHomeOf(ws)
+  const ownId = own ? leaderBook.recordOf(own)?.walnutId : undefined
+  const walnuts = leaderBook.witness(primarySocketOpen).filter((w) => !own || w.walnutId === ownId)
+  sendOk(ws, id, { walnuts, takeoverMs: LEADER_TAKEOVER_MS })
 }
 
 async function cmdLeaderDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.deliver: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
   if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.deliver: another Walnut\'s companion', { errorKind: 'refused' })
   const delivery = cmd.delivery as LeaderDelivery | undefined
   if (!delivery || typeof delivery !== 'object') return sendError(ws, id, 'leader.deliver: missing delivery')
   const r = await offlineHost.deliverFromLeader(f.home, delivery)
@@ -4343,6 +4446,7 @@ async function cmdLeaderSettings(ws: ServerWebSocket<WsData>, id: number, cmd: R
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.settings: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
   if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.settings: another Walnut\'s companion', { errorKind: 'refused' })
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.settings: not a session of this Walnut on this host')
   const r = await liveSettings.apply(sid, { model: cmd.model, effort: cmd.effort })
@@ -4367,6 +4471,7 @@ async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.control: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
   if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.control: another Walnut\'s companion', { errorKind: 'refused' })
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.control: not a session of this Walnut on this host')
   const session = sessions.get(sid)
@@ -4408,6 +4513,8 @@ async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 async function cmdSessionPermission(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'session.permission: the cloud bridge only', { errorKind: 'refused' })
   if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' })
+  const owner = sessionHomeOf(cmd.sid)
+  if (owner && !bridgeSpeaksFor(ws, owner)) return sendError(ws, id, 'session.permission: not a session of this Walnut', { errorKind: 'refused' })
   const r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers }, 'session.permission')
   if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind })
   return sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId as string, allow: r.allow })
@@ -4770,6 +4877,7 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
     // A probe (host-slice-probe-v1): the Mac names the copy it would send. Holding it,
     // this daemon binds the socket as if it had come, so a reconnect sends no copy.
     if (cmd.slice === undefined && typeof cmd.home === 'string' && typeof cmd.hash === 'string') {
+      if (refuseForeignHome(ws, id, cmd, 'host.slice')) return
       const have = offlineHost.holdsSlice(cmd.home, cmd.hash, cmd.asOf)
       if (have) bindGatewayClientHome(ws, cmd.home)
       return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false })
@@ -4778,6 +4886,7 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
     const slice = (typeof cmd.sliceGz === 'string'
       ? JSON.parse(zlib.gunzipSync(Buffer.from(cmd.sliceGz, 'base64')).toString('utf8'))
       : cmd.slice) as HostSlice
+    if (refuseForeignHome(ws, id, { home: slice?.home }, 'host.slice')) return
     const r = offlineHost.configure(slice)
     bindGatewayClientHome(ws, slice.home)
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) })
@@ -4789,6 +4898,7 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
 /** `kinds` (journal-v2): the v2 kinds the Mac applies; absent, an older Mac's v1 prefix. The reply carries this host's clock. */
 function cmdOfflineDrain(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home')
+  if (refuseForeignHome(ws, id, cmd, 'offline.drain')) return
   const kinds = Array.isArray(cmd.kinds) ? cmd.kinds.filter((k): k is string => typeof k === 'string') : null
   const out = offlineHost.drain(cmd.home, kinds)
   // A batch whose freeze could not be saved is never handed out (its ack could not be saved either).
@@ -4801,7 +4911,10 @@ function cmdOfflineDrain(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const seqs = Array.isArray(cmd.seqs) ? cmd.seqs : undefined
   if (typeof cmd.home !== 'string' || !cmd.home || (typeof cmd.upTo !== 'number' && !seqs)) return sendError(ws, id, 'offline.ack: missing home, seqs or upTo')
-  const held = offlineHost.triggerHolds().size
+  if (refuseForeignHome(ws, id, cmd, 'offline.ack')) return
+  // Counted for this Walnut alone: another Walnut's hold of the same id must not hide a change.
+  const holdsHere = () => offlineHost.triggerHoldsByHome().get(cmd.home as string)?.size ?? 0
+  const held = holdsHere()
   // `now`: the Mac's clock as it acks (a host replica's overlay compares on it, overlay.ts).
   const r = offlineHost.ack(cmd.home, seqs ? { seqs, ...(typeof cmd.now === 'number' ? { leaderNow: cmd.now } : {}) } : (cmd.upTo as number))
   if (r.error) return sendError(ws, id, 'offline.ack: ' + r.error, { errorKind: 'journal_unwritable' })
@@ -4809,7 +4922,7 @@ function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   sendOk(ws, id, r)
   // The server took the trigger changes made here: from now on its set alone
   // decides (a change it refused is undone here too; its push for one it applied follows).
-  if (held > 0 && offlineHost.triggerHolds().size !== held) triggerHoldsChanged()
+  if (held > 0 && holdsHere() !== held) triggerHoldsChanged()
 }
 
 /** A note body a journal record names (journal-v2): at most 2 MB per reply, from `offset`. Trusted only. */
@@ -4823,6 +4936,7 @@ function cmdOfflineBlob(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // The host's copy ('host-replica-v1'): trusted sockets only, like host.slice.
 function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' | 'drop' | 'status', cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') return sendError(ws, id, `replica.${op}: trusted clients only`)
+  if (refuseForeignHome(ws, id, cmd, `replica.${op}`)) return
   try {
     const home = cmd.home as string
     // `confirm`/`confirmFor` (note-journal-v1): the leader's override of the half rule, bound to its manifest.
@@ -4841,6 +4955,7 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
 // The host's copy of the notes' pictures ('attachment-copy-v1'): trusted sockets only, like replica.*.
 function cmdAttachments(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') return sendError(ws, id, `${String(cmd.cmd)}: trusted clients only`)
+  if (refuseForeignHome(ws, id, cmd, String(cmd.cmd))) return
   return attachmentCopy.command(cmd.home as string, cmd.cmd, cmd).then((r) => {
     if (r.ok === true) return sendOk(ws, id, r)
     // A refusal the leader reads (offset, hash_mismatch, manifest_removes_most_rows) carries its code and sizes.
@@ -5029,7 +5144,7 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     errorCode?: string; detail?: unknown
   }
   const pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined
-  if (pending && (ws.data?.origin === 'bridge') !== (pending.via === 'bridge')) {
+  if (pending && ((ws.data?.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId, fromBridge: ws.data?.origin === 'bridge' })
     return sendError(ws, id, 'gateway-result: not sent to this socket')
   }
@@ -5425,6 +5540,7 @@ function writeWalnutShim() {
  * Keep in sync with daemon-source.ts.
  */
 function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (refuseForeignHome(ws, id, cmd, 'taskdir.ensure')) return
   const dir = ensureTaskDir(TASK_DIR_ROOT, cmd.taskId, cmd.home)
   if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made')
   sendOk(ws, id, { path: dir, root: TASK_DIR_ROOT })
@@ -6148,46 +6264,101 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
 const CRON_CHECK_THROTTLE_MS = 30_000
 
 // ── Daemon hooks (declarative rules pushed from walnut) ──
-// The daemon holds ONE compiled rules JSON (daemon-core DaemonHooksConfig),
-// received via the hooks.configure command and persisted to hooks.json so a
-// daemon restart keeps enforcing without waiting for the next connect. It is
-// the ONLY source of interventions: no pushed hooks ⇒ the daemon denies
-// nothing, evicts nothing, rewrites nothing (stream markers stay — they are
-// observation for the human, not intervention).
+// The daemon holds one compiled rules JSON (daemon-core DaemonHooksConfig) per
+// Walnut, received via the hooks.configure command and persisted to hooks.json so
+// a daemon restart keeps enforcing without waiting for the next connect. They are
+// the ONLY source of interventions: no pushed hooks ⇒ the daemon denies nothing,
+// evicts nothing, rewrites nothing (stream markers stay — they are observation for
+// the human, not intervention).
+//
+// Per Walnut (walnut-scope-core.ts): a push names its home and replaces only that
+// Walnut's rules, which apply only to that Walnut's sessions. A push with no home
+// (an older server) is the unnamed copy, kept in hooks.json as before; it applies
+// to every session whose Walnut pushed none of its own. A hooks.json an older
+// daemon wrote (no `scoped` mark) was the one copy for everyone: it applies the
+// same way until the first named push, which drops it.
 //
 // Back-compat: a server older than this protocol sets WALNUT_ENFORCE_SESSION_CRON=1
 // at spawn instead of pushing; synthesize the equivalent built-in rule set at
 // boot (a later hooks.configure replaces it). WALNUT_ALLOW_DURABLE_CRON=1 wins
-// over everything (emergency off-switch).
-const HOOKS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'hooks.json')
-let daemonHooks: DaemonHooksConfig | null = null
-let persistedHooksHash: string | null | undefined = undefined
+// over everything (emergency off-switch). Keep in sync with daemon-source.ts.
+const HOOKS_DIR = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR
+const HOOKS_FILE = path.join(HOOKS_DIR, 'hooks.json')
+interface ScopedHooks { config: DaemonHooksConfig; persistedHash: string | null | undefined; at: number }
+/** Rules by Walnut home; '' is the unnamed copy (an older server, or inherited). */
+const daemonHooksByHome = new Map<string, ScopedHooks>()
+let hooksInherited = false
+// For a session no copy covers: null = provably no hooks file, undefined = unknown.
+let hooksNoneOnDisk: null | undefined = undefined
 const hooksConfigureGate = new DaemonSessionGate()
+function hooksFileOf(home: string): string {
+  return path.join(walnutScope.dirFor(HOOKS_DIR, home), 'hooks.json')
+}
+function readHooksFile(file: string): (DaemonHooksConfig & { home?: unknown; scoped?: unknown }) | null {
+  const loaded = JSON.parse(fs.readFileSync(file, 'utf-8')) as DaemonHooksConfig & { home?: unknown; scoped?: unknown }
+  // Same shape gate as cmdHooksConfigure: a wrong-version/shape file (e.g.
+  // left by a future daemon) falls through to the env fallback, not silence.
+  return loaded && loaded.version === 1 && Array.isArray(loaded.hooks) ? loaded : null
+}
 function loadDaemonHooksAtBoot() {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return
+  for (const [key, dir] of walnutScope.scopeDirs(fs, HOOKS_DIR)) {
+    try {
+      const loaded = readHooksFile(path.join(dir, 'hooks.json'))
+      if (!loaded || typeof loaded.home !== 'string' || walnutScope.keyOf(loaded.home) !== key) continue
+      daemonHooksByHome.set(loaded.home, { config: loaded, persistedHash: typeof loaded.hash === 'string' ? loaded.hash : undefined, at: 0 })
+      logMsg('info', 'daemon hooks loaded from disk', { walnut: key, hash: loaded.hash, hooks: loaded.hooks.length })
+    } catch { /* unreadable: that Walnut pushes again at connect */ }
+  }
+  let persistedHash: null | undefined = undefined
+  hooksNoneOnDisk = undefined
   try {
-    const loaded = JSON.parse(fs.readFileSync(HOOKS_FILE, 'utf-8')) as DaemonHooksConfig
-    // Same shape gate as cmdHooksConfigure: a wrong-version/shape file (e.g.
-    // left by a future daemon) falls through to the env fallback, not silence.
-    if (loaded && loaded.version === 1 && Array.isArray(loaded.hooks)) {
-      daemonHooks = loaded
-      persistedHooksHash = typeof loaded.hash === 'string' ? loaded.hash : undefined
-      logMsg('info', 'daemon hooks loaded from disk', { hash: loaded.hash, hooks: loaded.hooks.length })
+    const loaded = readHooksFile(HOOKS_FILE)
+    if (loaded) {
+      daemonHooksByHome.set('', { config: loaded, persistedHash: typeof loaded.hash === 'string' ? loaded.hash : undefined, at: 0 })
+      hooksInherited = loaded.scoped !== 1
+      logMsg('info', 'daemon hooks loaded from disk', { walnut: 'unnamed', hash: loaded.hash, hooks: loaded.hooks.length, inherited: hooksInherited })
       return
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') persistedHooksHash = null
+    // No file: a cron restore can tell that no hooks were ever on disk.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') persistedHash = null
   }
+  hooksNoneOnDisk = persistedHash
   if (process.env.WALNUT_ENFORCE_SESSION_CRON === '1') {
-    persistedHooksHash = undefined
-    daemonHooks = { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] }
+    daemonHooksByHome.set('', { config: { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] }, persistedHash: undefined, at: 0 })
     logMsg('info', 'daemon hooks synthesized from WALNUT_ENFORCE_SESSION_CRON (legacy server)')
   }
+}
+/** The copy a session runs under: its Walnut's, else the unnamed one. */
+function hooksEntryForSession(sid: unknown): ScopedHooks | undefined {
+  const home = typeof sid === 'string' && sid ? sessionHomeOf(sid) : ''
+  return (home && daemonHooksByHome.get(home)) || daemonHooksByHome.get('')
+}
+function hooksForSession(sid: unknown): DaemonHooksConfig | null {
+  return hooksEntryForSession(sid)?.config ?? null
+}
+/** The hooks on disk a session's cron restore was recorded under (daemon-cron-runtime.ts). */
+function persistedHooksHashFor(sid: string): string | null | undefined {
+  const entry = hooksEntryForSession(sid)
+  return entry ? entry.persistedHash : hooksNoneOnDisk
+}
+/**
+ * What a service handover carries: one rules file, read back as an unmarked (so
+ * inherited) copy, which each Walnut's next push replaces. The unnamed copy when
+ * there is one, else the latest push.
+ */
+function handoverHooks(): DaemonHooksConfig | null {
+  const unnamed = daemonHooksByHome.get('')
+  if (unnamed) return unnamed.config
+  let latest: ScopedHooks | null = null
+  for (const entry of daemonHooksByHome.values()) if (!latest || entry.at > latest.at) latest = entry
+  return latest?.config ?? null
 }
 /** Evaluate the pushed rules at one intercept point (empty when no hooks). */
 function hookActions(point: DaemonHookPoint, ctx: Record<string, unknown>): string[] {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return []
-  try { return evalDaemonHookRules(daemonHooks, point, ctx) } catch { return [] }
+  try { return evalDaemonHookRules(hooksForSession(ctx.sid), point, ctx) } catch { return [] }
 }
 
 async function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -6199,13 +6370,30 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
   if (!next || next.version !== 1 || !Array.isArray(next.hooks) || typeof next.hash !== 'string') {
     return sendError(ws, id, 'hooks.configure: invalid config')
   }
-  const changed = !daemonHooks || next.hash !== daemonHooks.hash
-  if (SERVICE_MODE && DAEMON_STATE_DIR && (changed || persistedHooksHash !== next.hash)) {
-    persistedHooksHash = undefined
-    await persistCronHooks(DAEMON_STATE_DIR, next)
-    persistedHooksHash = next.hash
+  const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'hooks.configure')
+  if (!scope.ok) return sendError(ws, id, scope.error, { errorKind: 'not_owner' })
+  const home = scope.home
+  const prev = daemonHooksByHome.get(home)
+  // An unnamed push over an inherited copy makes the file this daemon's own (marked).
+  const changed = !prev || next.hash !== prev.config.hash || (!home && hooksInherited)
+  // What goes to disk: the unnamed copy marked as this daemon's own, a named one with its home.
+  const stored = home ? { ...next, home, scoped: 1 } : { ...next, scoped: 1 }
+  const dir = walnutScope.dirFor(HOOKS_DIR, home)
+  let persistedHash = prev?.persistedHash
+  if (SERVICE_MODE && DAEMON_STATE_DIR && (changed || persistedHash !== next.hash)) {
+    persistedHash = undefined
+    await persistCronHooks(dir, stored)
+    persistedHash = next.hash
   }
-  daemonHooks = next
+  daemonHooksByHome.set(home, { config: next, persistedHash, at: Date.now() })
+  if (!home) hooksInherited = false
+  // The first push that names its Walnut ends the copy an older daemon left for everyone.
+  if (home && hooksInherited) {
+    hooksInherited = false
+    daemonHooksByHome.delete('')
+    try { fs.unlinkSync(HOOKS_FILE) } catch {}
+    logMsg('info', 'daemon hooks: the copy an older daemon left is replaced by each Walnut\'s own', { walnut: walnutScope.label(home) })
+  }
   // The kill switch gates EVALUATION (hookActions), not storage — accepting
   // the push keeps the daemon current for when the switch is lifted, but an
   // operator debugging "why is nothing enforced" needs to see the switch.
@@ -6217,10 +6405,12 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
     // connect re-pushes) but must be visible: an unwritable DAEMON_DIR means
     // enforcement silently reverts to zero-hook on the next daemon restart.
     if (!SERVICE_MODE) {
-      try { fs.writeFileSync(HOOKS_FILE, JSON.stringify(next), { mode: 0o600 }) }
-      catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: (err as Error).message }) }
+      try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+        fs.writeFileSync(path.join(dir, 'hooks.json'), JSON.stringify(stored), { mode: 0o600 })
+      } catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: (err as Error).message }) }
     }
-    logMsg('info', 'daemon hooks configured', { hash: next.hash, hooks: next.hooks.length })
+    logMsg('info', 'daemon hooks configured', { walnut: walnutScope.label(home), hash: next.hash, hooks: next.hooks.length })
   }
   return sendOk(ws, id, { applied: true, changed, hash: next.hash })
 }
@@ -6243,7 +6433,13 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
 // session of the same Walnut on this host is written into that session by this
 // daemon (deliverUnclaimedFires), then replayed with `host` set so the server
 // only records it. Keep in sync with daemon-source.ts.
-const TRIGGERS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'triggers.json')
+//
+// One set per Walnut (walnut-scope-core.ts): a push names its Walnut (`home`) and
+// replaces only that Walnut's set, its fires go only to that Walnut's sockets, and
+// its files sit under walnuts/<key>/. A push with no home (a server older than the
+// split) is the unnamed scope, kept in the files and with the fan-out it always had.
+const TRIGGERS_BASE_DIR = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR
+const TRIGGERS_FILE = path.join(TRIGGERS_BASE_DIR, 'triggers.json')
 // Each trigger's memory (the ids it reported, its script's state, its unacked
 // fires) must outlive a reboot, and the production runtime dir does not: macOS
 // empties /tmp at boot. On 2026-10-06 one reboot made a watch re-report all eight
@@ -6277,6 +6473,8 @@ const TRIGGER_STDOUT_TAIL = 2_000
 const TRIGGER_TEST_MAX_CONCURRENT = 4
 
 interface ArmedTrigger {
+  /** The Walnut whose set holds it ('' = a push that named none). */
+  home: string
   def: TriggerDef
   state: TriggerHostState
   nextRunAtMs: number
@@ -6291,6 +6489,7 @@ interface ArmedTrigger {
   armedAtMs: number
 }
 
+/** Keyed by triggerKey(home, id), so two Walnuts may even use one id. */
 const armedTriggers = new Map<string, ArmedTrigger>()
 /**
  * Clocks the server took back while fires of theirs were still unacked. No slot
@@ -6301,28 +6500,52 @@ const armedTriggers = new Map<string, ArmedTrigger>()
  */
 const drainingTriggers = new Map<string, ArmedTrigger>()
 
-/** The armed or draining entry of a trigger: what replays, claims, acks and host deliveries act on. */
-function heldTrigger(id: string): ArmedTrigger | undefined {
-  return armedTriggers.get(id) ?? drainingTriggers.get(id)
+/** The map key of a Walnut's trigger: the unnamed scope keeps the plain id it always had. */
+function triggerKey(home: string, id: string): string {
+  return home ? home + '\u0000' + id : id
 }
 
-/** Every entry whose fires still go to the server. */
-function fireHolders(): ArmedTrigger[] {
-  return [...armedTriggers.values(), ...drainingTriggers.values()]
+/** The armed or draining entry of a trigger: what replays, claims, acks and host deliveries act on. */
+function heldTrigger(home: string, id: string): ArmedTrigger | undefined {
+  const key = triggerKey(home, id)
+  return armedTriggers.get(key) ?? drainingTriggers.get(key)
+}
+
+/**
+ * The entry a Walnut's command is about. The unnamed copy an older daemon left
+ * (inherited) still fans its fires out to every server, so any Walnut may claim and
+ * ack those, as before; the claim's owner check still guards the delivery.
+ */
+function triggerFor(home: string, id: string): ArmedTrigger | undefined {
+  return heldTrigger(home, id) ?? (home && triggerScopes.get('')?.inherited ? heldTrigger('', id) : undefined)
+}
+
+/** Every entry whose fires still go to the server (of one Walnut when `home` is given). */
+function fireHolders(home?: string): ArmedTrigger[] {
+  const all = [...armedTriggers.values(), ...drainingTriggers.values()]
+  return home === undefined ? all : all.filter((e) => e.home === home)
 }
 /**
- * Seqs this host is writing into a session right now, by trigger id (claims
+ * Seqs this host is writing into a session right now, by triggerKey (claims
  * answer `busy`). Keyed by id, not held on the entry: a configure that re-arms
  * the trigger mid-write must not make its fires claimable.
  */
 const hostDeliveriesInFlight = new Map<string, Set<number>>()
-let armedTriggersHash: string | null = null
 /**
- * The set as the server last sent it (or as triggers.json kept it). What is armed
- * is this set with the pauses, resumes and deletes a session made here while its
- * Walnut was away (offlineHost.triggerHolds), until the server has taken them.
+ * Per Walnut: the set as its server last sent it (or as its triggers.json kept it),
+ * and that set's hash. What is armed is this set with the pauses, resumes and
+ * deletes a session made here while its Walnut was away (offlineHost.triggerHolds),
+ * until the server has taken them. `inherited`: the unnamed copy loaded from a file
+ * an older daemon wrote (no `scoped` marker), the one global set of whichever Walnut
+ * pushed last; the first named push takes over its triggers (takeInheritedTriggers).
  */
-let configuredTriggerDefs: TriggerDef[] = []
+interface TriggerScope { configured: TriggerDef[]; hash: string | null; inherited?: boolean }
+const triggerScopes = new Map<string, TriggerScope>()
+function triggerScopeOf(home: string): TriggerScope {
+  let scope = triggerScopes.get(home)
+  if (!scope) { scope = { configured: [], hash: null }; triggerScopes.set(home, scope) }
+  return scope
+}
 let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 // keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
 let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null
@@ -6341,8 +6564,8 @@ function hostDeliveryGraceMs(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.max(500, raw) : HOST_DELIVERY_GRACE_MS
 }
 
-function newArmedTrigger(def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number, keepFires = false): ArmedTrigger {
-  const entry: ArmedTrigger = { def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
+function newArmedTrigger(home: string, def: TriggerDef, state: TriggerHostState, nextRunAtMs: number, now: number, keepFires = false): ArmedTrigger {
+  const entry: ArmedTrigger = { home, def, state, nextRunAtMs, running: false, fireSentAt: new Map(), armedAtMs: now }
   if (def.clock) armClock(entry, now, nextRunAtMs - now, keepFires)
   return entry
 }
@@ -6369,7 +6592,7 @@ function armClock(entry: ArmedTrigger, now: number, delayMs: number, keepFires =
     entry.state.clock = clock
     // A new handover: runs nobody took under an older one are not this clock's.
     if (!keepFires) dropStaleClockFires(entry.state, spec.fromMs)
-    persistTriggerState(entry.def.id, entry.state)
+    persistTriggerState(entry.home, entry.def.id, entry.state)
     logMsg('info', 'clock routine armed', {
       id: entry.def.id, fromMs: spec.fromMs, nextRunAtMs: clock.nextRunAtMs,
       handover: !prev ? 'first' : prev.fromMs === spec.fromMs ? 'past-last-run' : 'new',
@@ -6398,7 +6621,7 @@ function runClock(entry: ArmedTrigger, manual: boolean): 'fired' | 'held' {
   // Arbitrated (a server claims it, else the host takes it) when the host can deliver
   // the run itself: into a session here, or by starting the routine's session here.
   const fire = owed ? null : applyClockFire(entry.state, now, slotMs, !!entry.def.deliver || !!entry.def.start, clock.fromMs)
-  persistTriggerState(entry.def.id, entry.state)
+  persistTriggerState(entry.home, entry.def.id, entry.state)
   logMsg('info', 'clock routine run', {
     id: entry.def.id, outcome: fire ? 'fired' : 'held', slotMs, manual,
     ...(fire ? { seq: fire.seq } : {}), nextRunAtMs: entry.state.clock?.nextRunAtMs ?? null,
@@ -6417,46 +6640,101 @@ function triggerIdOf(cmd: Record<string, unknown>): string {
   return typeof cmd.triggerId === 'string' ? cmd.triggerId : ''
 }
 
-function triggerStatePath(id: string): string {
-  return path.join(TRIGGER_STATE_DIR, triggerStateFileName(id))
+/** Where a Walnut's trigger memory is kept: the unnamed scope keeps the old dir. */
+function triggerStateDirOf(home: string): string {
+  return walnutScope.dirFor(TRIGGER_STATE_DIR, home)
 }
 
-function readTriggerState(id: string, nowMs: number): TriggerHostState {
+function triggerStatePath(home: string, id: string): string {
+  return path.join(triggerStateDirOf(home), triggerStateFileName(id))
+}
+
+function mtimeOf(file: string): number | undefined {
+  try { return fs.statSync(file).mtimeMs } catch { return undefined }
+}
+
+/** Another named Walnut already keeps the shared copy of this id. */
+function sharedByAnother(home: string, id: string): boolean {
+  for (const map of [armedTriggers, drainingTriggers]) {
+    for (const e of map.values()) if (e.home && e.home !== home && e.def.id === id && e.state.sharedCopy) return true
+  }
+  return false
+}
+
+function readTriggerState(home: string, id: string, nowMs: number): TriggerHostState {
+  const own = triggerStatePath(home, id)
+  let mine: TriggerHostState | null = null
   try {
-    return coerceHostState(JSON.parse(fs.readFileSync(triggerStatePath(id), 'utf-8')), nowMs)
+    mine = coerceHostState(JSON.parse(fs.readFileSync(own, 'utf-8')), nowMs)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return emptyHostState(nowMs)
   }
-  // Not here yet: a daemon from before the move wrote it to the old dir, and the
-  // upgrade itself must not re-fire everything it had reported.
-  for (const dir of LEGACY_TRIGGER_STATE_DIRS) {
+  // A trigger this Walnut took over keeps the shared copy too, and a downgraded daemon
+  // may have run it there since: the newer of the two is its memory. Only while the
+  // unnamed set does not run that trigger itself.
+  if (mine?.sharedCopy && home && !heldTrigger('', id)) {
+    const shared = path.join(TRIGGER_STATE_DIR, triggerStateFileName(id))
+    if ((mtimeOf(shared) ?? 0) > (mtimeOf(own) ?? 0) + 1) {
+      try {
+        const state = coerceHostState(JSON.parse(fs.readFileSync(shared, 'utf-8')), nowMs)
+        state.sharedCopy = true
+        persistTriggerState(home, id, state)
+        logMsg('info', 'trigger state read back from the shared copy', { id, scope: walnutScope.label(home) })
+        return state
+      } catch { /* unreadable: keep this Walnut's own */ }
+    }
+  }
+  if (mine) return mine
+  // Not here yet: an older daemon wrote it to the shared dir (a named Walnut's first
+  // push after a reboot left no set to inherit) or to an older dir, and the upgrade
+  // itself must not re-fire everything it had reported. The unnamed scope moves it
+  // from an older dir, as it always did; a named Walnut copies it, keeps the shared
+  // copy current from now on, and leaves it to a Walnut that already does.
+  const from = !home ? LEGACY_TRIGGER_STATE_DIRS
+    : heldTrigger('', id) || sharedByAnother(home, id) ? [] : [TRIGGER_STATE_DIR, ...LEGACY_TRIGGER_STATE_DIRS]
+  for (const dir of from) {
     const legacy = path.join(dir, triggerStateFileName(id))
     let raw: unknown
     try { raw = JSON.parse(fs.readFileSync(legacy, 'utf-8')) } catch { continue }
     const state = coerceHostState(raw, nowMs)
-    persistTriggerState(id, state)
-    if (fs.existsSync(triggerStatePath(id))) {
+    if (home) state.sharedCopy = true
+    persistTriggerState(home, id, state)
+    if (!home && fs.existsSync(own)) {
       try { fs.unlinkSync(legacy) } catch {}
-      logMsg('info', 'trigger state moved to its durable dir', { id, from: dir, to: TRIGGER_STATE_DIR })
+      logMsg('info', 'trigger state moved to its durable dir', { id, from: dir, to: triggerStateDirOf(home) })
     }
     return state
   }
   return emptyHostState(nowMs)
 }
 
-function persistTriggerState(id: string, state: TriggerHostState): void {
-  const file = triggerStatePath(id)
+function persistTriggerState(home: string, id: string, state: TriggerHostState): void {
+  const file = triggerStatePath(home, id)
   const tmp = file + '.tmp'
   try {
-    fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 })
+    fs.mkdirSync(triggerStateDirOf(home), { recursive: true, mode: 0o700 })
     fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
     fs.renameSync(tmp, file)
   } catch (err) {
     // In-memory state stays authoritative for this daemon's life; a persist
     // failure only costs the dedup set across a restart, so it must be visible
     // rather than fatal.
-    logMsg('warn', 'trigger state persist failed', { id, error: (err as Error).message })
+    logMsg('warn', 'trigger state persist failed', { id, scope: walnutScope.label(home), error: (err as Error).message })
     try { fs.unlinkSync(tmp) } catch {}
+  }
+  // The same memory where an older daemon reads it, for the Walnut that took it over.
+  if (!home || !state.sharedCopy || heldTrigger('', id)) return
+  const shared = path.join(TRIGGER_STATE_DIR, triggerStateFileName(id))
+  try {
+    fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(shared + '.tmp', JSON.stringify({ ...state, sharedCopy: undefined }), { mode: 0o600 })
+    fs.renameSync(shared + '.tmp', shared)
+    // Same mtime as this Walnut's own, so only an older daemon's later write reads as newer.
+    const at = fs.statSync(file)
+    fs.utimesSync(shared, at.atime, at.mtime)
+  } catch (err) {
+    logMsg('warn', 'trigger shared copy write failed', { id, scope: walnutScope.label(home), error: (err as Error).message })
+    try { fs.unlinkSync(shared + '.tmp') } catch {}
   }
 }
 
@@ -6467,80 +6745,188 @@ function persistTriggerState(id: string, state: TriggerHostState): void {
  * cursor and every unacked fire, and the recreated file would restart `seq` at 0.
  * Age is what reclaims the directory instead — a file untouched for the seen TTL
  * belongs to a trigger nobody re-armed, and its dedup set has expired anyway.
+ * Each Walnut's dir is swept by what that Walnut holds.
  */
 function pruneTriggerStateFiles(nowMs: number): void {
-  let names: string[]
-  try { names = fs.readdirSync(TRIGGER_STATE_DIR) } catch { return }
-  const armedFiles = new Set([...armedTriggers.keys(), ...drainingTriggers.keys()].map((tid) => triggerStateFileName(tid)))
-  for (const name of names) {
-    if (!name.endsWith('.json') || armedFiles.has(name)) continue
-    const file = path.join(TRIGGER_STATE_DIR, name)
-    try {
-      if (nowMs - fs.statSync(file).mtimeMs <= TRIGGER_STATE_TTL_MS) continue
-      fs.unlinkSync(file)
-      logMsg('info', 'trigger state pruned: unarmed and stale', { file: name })
-    } catch { /* raced a write, or already gone */ }
+  const held = new Map<string, Set<string>>()
+  for (const e of fireHolders()) {
+    const dir = triggerStateDirOf(e.home)
+    if (!held.has(dir)) held.set(dir, new Set())
+    held.get(dir)!.add(triggerStateFileName(e.def.id))
+    // A taken-over trigger's shared copy is held too.
+    if (e.home && e.state.sharedCopy) {
+      if (!held.has(TRIGGER_STATE_DIR)) held.set(TRIGGER_STATE_DIR, new Set())
+      held.get(TRIGGER_STATE_DIR)!.add(triggerStateFileName(e.def.id))
+    }
+  }
+  const dirs = [TRIGGER_STATE_DIR, ...walnutScope.scopeDirs(fs, TRIGGER_STATE_DIR).map(([, dir]) => dir)]
+  for (const dir of dirs) {
+    let names: string[]
+    try { names = fs.readdirSync(dir) } catch { continue }
+    const armedFiles = held.get(dir) ?? new Set<string>()
+    for (const name of names) {
+      if (!name.endsWith('.json') || armedFiles.has(name)) continue
+      const file = path.join(dir, name)
+      try {
+        if (nowMs - fs.statSync(file).mtimeMs <= TRIGGER_STATE_TTL_MS) continue
+        fs.unlinkSync(file)
+        logMsg('info', 'trigger state pruned: unarmed and stale', { file: name, ...(dir !== TRIGGER_STATE_DIR ? { dir } : {}) })
+      } catch { /* raced a write, or already gone */ }
+    }
   }
 }
 
-function persistTriggersFile(defs: TriggerDef[]): void {
-  const tmp = TRIGGERS_FILE + '.tmp'
+/** A Walnut's triggers.json: the unnamed scope keeps the legacy file. */
+function triggersFileOf(home: string): string {
+  return home ? path.join(walnutScope.dirFor(TRIGGERS_BASE_DIR, home), 'triggers.json') : TRIGGERS_FILE
+}
+
+/**
+ * Write one Walnut's set. A named file carries its home (the dir name is a hash);
+ * the unnamed one carries `scoped: 1`, which says an older server wrote it after the
+ * split, unless it is still the inherited copy (then it stays unmarked, so a restart
+ * still hands it to the first named push).
+ */
+function persistTriggersFile(home: string): void {
+  const file = triggersFileOf(home)
+  const tmp = file + '.tmp'
+  const scope = triggerScopes.get(home)
   try {
-    const draining = [...drainingTriggers.values()].map((e) => e.def)
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, triggers: defs, ...(draining.length ? { draining } : {}) }), { mode: 0o600 })
-    fs.renameSync(tmp, TRIGGERS_FILE)
+    if (home) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    const draining = fireHolders(home).filter((e) => drainingTriggers.get(triggerKey(home, e.def.id)) === e).map((e) => e.def)
+    const mark = home ? { home } : scope?.inherited ? {} : { scoped: 1 }
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...mark, triggers: scope?.configured ?? [], ...(draining.length ? { draining } : {}) }), { mode: 0o600 })
+    fs.renameSync(tmp, file)
   } catch (err) {
-    logMsg('warn', 'triggers persist failed (in-memory only)', { error: (err as Error).message })
+    logMsg('warn', 'triggers persist failed (in-memory only)', { scope: walnutScope.label(home), error: (err as Error).message })
     try { fs.unlinkSync(tmp) } catch {}
   }
 }
 
-function loadTriggersAtBoot(): void {
-  let raw: unknown
-  try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')) } catch { return }
-  const file = raw as { version?: unknown; triggers?: unknown; draining?: unknown }
-  if (!file || file.version !== 1 || !Array.isArray(file.triggers)) {
-    logMsg('warn', 'triggers file ignored: unexpected shape', { file: TRIGGERS_FILE })
+/**
+ * One Walnut's triggers.json read at boot; `home` is '' for the legacy file. `skip`:
+ * ids another copy of the set runs instead (loadTriggersAtBoot), left out here.
+ */
+function loadTriggerScope(home: string, file: string, raw: unknown, now: number, skip: ReadonlySet<string> = new Set()): void {
+  const parsedFile = raw as { version?: unknown; triggers?: unknown; draining?: unknown; scoped?: unknown }
+  if (!parsedFile || parsedFile.version !== 1 || !Array.isArray(parsedFile.triggers)) {
+    logMsg('warn', 'triggers file ignored: unexpected shape', { file })
     return
   }
-  const now = Date.now()
   const defs: TriggerDef[] = []
-  for (const entry of file.triggers) {
+  for (const entry of parsedFile.triggers) {
     const parsed = validateTriggerDef(entry)
     if (!parsed.ok) {
       logMsg('warn', 'trigger dropped at boot', { error: parsed.error })
       continue
     }
+    if (skip.has(parsed.def.id)) continue
     defs.push(parsed.def)
   }
-  configuredTriggerDefs = defs
+  if (skip.size) logMsg('info', 'triggers held by a newer copy of the set left out', { scope: walnutScope.label(home), ids: [...skip] })
+  const scope = triggerScopeOf(home)
+  scope.configured = defs
+  if (!home && parsedFile.scoped !== 1) scope.inherited = true
   // A pause made here while the server was away holds across a restart too.
-  for (const def of effectiveTriggerDefs(defs)) {
-    armedTriggers.set(def.id, newArmedTrigger(def, readTriggerState(def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
+  for (const def of effectiveTriggerDefs(home, defs)) {
+    armedTriggers.set(triggerKey(home, def.id), newArmedTrigger(home, def, readTriggerState(home, def.id, now), now + TRIGGER_BOOT_RUN_DELAY_MS, now))
   }
   // Released clocks with fires still unacked go on replaying them.
-  for (const raw of Array.isArray(file.draining) ? file.draining : []) {
-    const parsed = validateTriggerDef(raw)
-    if (!parsed.ok || armedTriggers.has(parsed.def.id)) continue
-    const state = readTriggerState(parsed.def.id, now)
-    if (state.pendingFires.length > 0) drainingTriggers.set(parsed.def.id, drainingEntry(parsed.def, state, now))
+  for (const rawDef of Array.isArray(parsedFile.draining) ? parsedFile.draining : []) {
+    const parsed = validateTriggerDef(rawDef)
+    if (!parsed.ok || skip.has(parsed.def.id) || armedTriggers.has(triggerKey(home, parsed.def.id))) continue
+    const state = readTriggerState(home, parsed.def.id, now)
+    if (state.pendingFires.length > 0) drainingTriggers.set(triggerKey(home, parsed.def.id), drainingEntry(home, parsed.def, state, now))
   }
-  armedTriggersHash = triggersSetHash(defs)
+  scope.hash = triggersSetHash(defs)
+  logMsg('info', 'triggers loaded from disk', {
+    scope: walnutScope.label(home), count: defs.length, draining: fireHolders(home).length - armedOf(home).length,
+    hash: scope.hash, ...(scope.inherited ? { inherited: true } : {}),
+  })
+}
+
+/** Every Walnut's set: the legacy file, then each named one. */
+function loadTriggersAtBoot(): void {
+  const now = Date.now()
+  const named: Array<{ home: string; file: string; raw: unknown; at: number; ids: Set<string> }> = []
+  for (const [key, dir] of walnutScope.scopeDirs(fs, TRIGGERS_BASE_DIR)) {
+    const file = path.join(dir, 'triggers.json')
+    let raw: unknown
+    try { raw = JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { continue }
+    const home = (raw as { home?: unknown } | null)?.home
+    if (typeof home !== 'string' || !home || walnutScope.keyOf(home) !== key) {
+      logMsg('warn', 'triggers file ignored: its home does not match its dir', { file })
+      continue
+    }
+    named.push({ home, file, raw, at: mtimeOf(file) ?? 0, ids: triggerIdsIn(raw) })
+  }
+  // Known before the unnamed set arms, so it never takes a named Walnut's offline holds.
+  for (const n of named) triggerScopeOf(n.home)
+  let raw: unknown
+  let legacy = true
+  try { raw = JSON.parse(fs.readFileSync(TRIGGERS_FILE, 'utf-8')) } catch { legacy = false }
+  // After a downgrade and an upgrade again, an unmarked set the older daemon wrote and
+  // a named one from before may both hold a trigger: it runs once, from the newer file.
+  const inherited = legacy && (raw as { scoped?: unknown } | null)?.scoped !== 1
+  const legacyAt = mtimeOf(TRIGGERS_FILE) ?? 0
+  const legacyIds = inherited ? triggerIdsIn(raw) : new Set<string>()
+  const legacySkip = new Set<string>()
+  for (const n of named) {
+    for (const tid of n.ids) if (legacyIds.has(tid) && n.at >= legacyAt) legacySkip.add(tid)
+  }
+  if (legacy) loadTriggerScope('', TRIGGERS_FILE, raw, now, legacySkip)
+  for (const n of named) {
+    const skip = new Set([...n.ids].filter((tid) => legacyIds.has(tid) && n.at < legacyAt))
+    loadTriggerScope(n.home, n.file, n.raw, now, skip)
+  }
+  // Nothing on disk (a fresh daemon): no dir yet either.
+  if (triggerScopes.size === 0) return
   try { fs.mkdirSync(TRIGGER_STATE_DIR, { recursive: true, mode: 0o700 }) } catch {}
   pruneTriggerStateFiles(now)
-  logMsg('info', 'triggers loaded from disk', { count: defs.length, draining: drainingTriggers.size, hash: armedTriggersHash })
+}
+
+/** The trigger ids a triggers.json names, armed or draining. */
+function triggerIdsIn(raw: unknown): Set<string> {
+  const file = raw as { triggers?: unknown; draining?: unknown } | null
+  const out = new Set<string>()
+  for (const list of [file?.triggers, file?.draining]) {
+    for (const def of Array.isArray(list) ? list : []) {
+      const tid = (def as { id?: unknown } | null)?.id
+      if (typeof tid === 'string') out.add(tid)
+    }
+  }
+  return out
+}
+
+/** The armed (not draining) entries of one Walnut. */
+function armedOf(home: string): ArmedTrigger[] {
+  return [...armedTriggers.values()].filter((e) => e.home === home)
 }
 
 /**
- * Trigger events go to EVERY trusted client; the bridge never sees one. Fanning
- * out rather than picking the first is what makes a second window (or a server
- * that reconnected while the old socket was still draining) see a fire at all;
- * the server dedups on (id, epoch, seq). Returns whether anyone received it.
+ * Whether a server socket speaks for `home`'s triggers: the Walnut it configured
+ * them for, else the Walnut it bound. The unnamed scope goes, as it always did, to
+ * every server socket that did not configure a named set. Mirror daemon-source.ts.
  */
-function sendTriggerEvent(ev: 'trigger.fired' | 'trigger.checked', fields: Record<string, unknown>): boolean {
+function triggerClientOf(client: ServerWebSocket<WsData>, home: string): boolean {
+  const configured = client.data?.triggerScope
+  if (configured !== undefined) return configured === home
+  return home ? gatewayClientHomes.get(client) === home : true
+}
+
+/**
+ * Trigger events go to EVERY trusted client of the trigger's Walnut; the bridge
+ * never sees one. Fanning out rather than picking the first is what makes a second
+ * window (or a server that reconnected while the old socket was still draining) see
+ * a fire at all; the server dedups on (id, epoch, seq). The inherited unnamed copy
+ * fans out to every server, as the one global set always did, since it may be any
+ * Walnut's. Returns whether anyone received it.
+ */
+function sendTriggerEvent(home: string, ev: 'trigger.fired' | 'trigger.checked', fields: Record<string, unknown>): boolean {
+  const everyone = !home && triggerScopes.get('')?.inherited === true
   let delivered = false
   for (const client of wsClients) {
-    if (isServerClient(client)) {
+    if (isServerClient(client) && (everyone || triggerClientOf(client, home))) {
       sendEvent(client, ev, fields)
       delivered = true
     }
@@ -6557,8 +6943,8 @@ function sendTriggerEvent(ev: 'trigger.fired' | 'trigger.checked', fields: Recor
 function sendTriggerFire(entry: ArmedTrigger, fire: PendingFire, replay: boolean): boolean {
   // A clock reports its next slot while it holds it; a draining one holds none.
   const next = !entry.def.clock ? entry.nextRunAtMs
-    : armedTriggers.get(entry.def.id) === entry ? entry.state.clock?.nextRunAtMs : undefined
-  const delivered = sendTriggerEvent('trigger.fired', {
+    : armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry ? entry.state.clock?.nextRunAtMs : undefined
+  const delivered = sendTriggerEvent(entry.home, 'trigger.fired', {
     id: entry.def.id, epoch: entry.state.epoch, seq: fire.seq, atMs: fire.atMs, items: fire.items,
     ...(fire.input !== undefined ? { input: fire.input } : {}),
     ...(fire.itemsTruncated ? { itemsTruncated: true } : {}),
@@ -6589,7 +6975,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
   // discarded then: the server no longer knows this id, so the fire would name a
   // stranger, and the persisted state would be a stale write racing whatever a
   // re-arm has already read from that file.
-  const stillArmed = () => armedTriggers.get(entry.def.id) === entry
+  const stillArmed = () => armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry
   try {
     const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
       env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name },
@@ -6605,12 +6991,12 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
     if (error) {
       applyCheckError(entry.state, now)
       entry.nextRunAtMs = now + triggerCadenceMs(entry)
-      persistTriggerState(entry.def.id, entry.state)
+      persistTriggerState(entry.home, entry.def.id, entry.state)
       logMsg('warn', 'trigger run', {
         id: entry.def.id, outcome: 'error', error, durationMs: proc.durationMs,
         consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
       })
-      sendTriggerEvent('trigger.checked', {
+      sendTriggerEvent(entry.home, 'trigger.checked', {
         id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
         nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
       })
@@ -6625,7 +7011,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       arbitrated: !!entry.def.deliver,
     })
     entry.nextRunAtMs = now + triggerCadenceMs(entry)
-    persistTriggerState(entry.def.id, entry.state)
+    persistTriggerState(entry.home, entry.def.id, entry.state)
     logMsg('info', 'trigger run', {
       id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
       ...(fire ? { seq: fire.seq, items: fire.items.length } : { reason: decision.kind === 'quiet' ? decision.reason : undefined }),
@@ -6637,7 +7023,7 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
       return { outcome: 'fired' }
     }
     const reason = decision.kind === 'quiet' ? decision.reason : undefined
-    sendTriggerEvent('trigger.checked', {
+    sendTriggerEvent(entry.home, 'trigger.checked', {
       id: entry.def.id, atMs: now, outcome: 'quiet', ...(reason ? { reason } : {}),
       durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
       ...(output.warnings?.length ? { warnings: output.warnings } : {}),
@@ -6652,12 +7038,15 @@ async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'qu
  * Re-send fires the server never acked. The configure replay only covers a
  * reconnect; this covers the server that stayed connected but lost the event
  * (a restart mid-frame, a dropped job write), which otherwise waited for the
- * next configure that may never come. Bails out on the first undelivered send:
- * with no trusted client there is nowhere to replay to this tick.
+ * next configure that may never come. A Walnut's first undelivered send ends
+ * its replay this tick: with no client of it there is nowhere to replay to. The
+ * other Walnuts' fires go on.
  */
 function replayPendingFires(now: number): void {
   const interval = triggerReplayMs()
+  const unreached = new Set<string>()
   for (const entry of fireHolders()) {
+    if (unreached.has(entry.home)) continue
     // Marks for acked (or trimmed) fires would otherwise pile up for the
     // daemon's life; pendingFires is the authority on what is still owed.
     if (entry.fireSentAt.size > entry.state.pendingFires.length) {
@@ -6667,7 +7056,7 @@ function replayPendingFires(now: number): void {
     for (const fire of entry.state.pendingFires) {
       const sentAt = entry.fireSentAt.get(fire.seq)
       if (sentAt !== undefined && now - sentAt < interval) continue
-      if (!sendTriggerFire(entry, fire, true)) return
+      if (!sendTriggerFire(entry, fire, true)) { unreached.add(entry.home); break }
     }
   }
 }
@@ -6684,7 +7073,9 @@ function deliverUnclaimedFires(now: number): void {
   for (const entry of fireHolders()) {
     const spec = entry.def.deliver
     const id = entry.def.id
-    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(id)) continue
+    const home = entry.home
+    const key = triggerKey(home, id)
+    if ((!spec && !entry.def.start) || hostDeliveriesInFlight.has(key)) continue
     const due = entry.state.pendingFires.filter((f) => fireDueOnHost(f, now, entry.armedAtMs, grace, HOST_DELIVERY_RETRY_MS))
     if (due.length === 0) continue
     if (!spec) { startUnclaimedRun(entry, due[0], now); continue }
@@ -6694,12 +7085,12 @@ function deliverUnclaimedFires(now: number): void {
     const text = entry.def.clock
       ? buildScheduledMessage(entry.def.name, spec.prompt, { dueAtMs: Math.min(...due.map((f) => f.clock?.slotMs ?? f.atMs)), deliveredAtMs: now })
       : buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now })
-    hostDeliveriesInFlight.set(id, new Set(seqs))
+    hostDeliveriesInFlight.set(key, new Set(seqs))
     void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
       // re-armed it, released it into the draining set, or disarmed it.
-      const current = heldTrigger(id)
-      const state = current ? current.state : readTriggerState(id, Date.now())
+      const current = heldTrigger(home, id)
+      const state = current ? current.state : readTriggerState(home, id, Date.now())
       if (state.epoch !== epoch) {
         logMsg('warn', 'trigger host delivery outcome dropped: state file started over', { id, seqs, delivered: r.ok })
         return
@@ -6711,7 +7102,7 @@ function deliverUnclaimedFires(now: number): void {
         for (const fire of state.pendingFires) if (seqs.includes(fire.seq)) fire.hostTriedAt = now
         logMsg('info', 'trigger host delivery skipped', { id, seqs, taskId: spec.taskId, reason: r.reason })
       }
-      persistTriggerState(id, state)
+      persistTriggerState(home, id, state)
       // A server that is connected but slow records it now instead of a minute later.
       if (r.ok && current) {
         for (const fire of current.state.pendingFires) if (seqs.includes(fire.seq)) sendTriggerFire(current, fire, true)
@@ -6719,7 +7110,7 @@ function deliverUnclaimedFires(now: number): void {
     }).catch((err) => {
       logMsg('error', 'trigger host delivery threw', { id, seqs, error: (err as Error).message })
     }).finally(() => {
-      hostDeliveriesInFlight.delete(id)
+      hostDeliveriesInFlight.delete(key)
     })
   }
 }
@@ -6734,15 +7125,17 @@ function deliverUnclaimedFires(now: number): void {
  */
 function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number): void {
   const id = entry.def.id
+  const home = entry.home
+  const key = triggerKey(home, id)
   const def = entry.def
   const start = def.start
   if (!start) return
   const epoch = entry.state.epoch
   const seqs = [fire.seq]
-  hostDeliveriesInFlight.set(id, new Set(seqs))
+  hostDeliveriesInFlight.set(key, new Set(seqs))
   void clockHostStart.start({ id, name: def.name, start }, fire).then((r) => {
-    const current = heldTrigger(id)
-    const state = current ? current.state : readTriggerState(id, Date.now())
+    const current = heldTrigger(home, id)
+    const state = current ? current.state : readTriggerState(home, id, Date.now())
     if (state.epoch !== epoch) {
       logMsg('warn', 'routine run outcome dropped: state file started over', { id, seqs, started: r.ok })
       return
@@ -6754,7 +7147,7 @@ function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number):
     } else {
       return
     }
-    persistTriggerState(id, state)
+    persistTriggerState(home, id, state)
     // A server that is connected but slow records it now instead of a minute later.
     if (r.ok && current) {
       for (const f of current.state.pendingFires) if (seqs.includes(f.seq)) sendTriggerFire(current, f, true)
@@ -6762,7 +7155,7 @@ function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number):
   }).catch((err) => {
     logMsg('error', 'routine run start threw', { id, seqs, error: (err as Error).message })
   }).finally(() => {
-    hostDeliveriesInFlight.delete(id)
+    hostDeliveriesInFlight.delete(key)
   })
 }
 
@@ -6784,10 +7177,11 @@ function tickTriggers(): void {
  * and the server has not taken yet: a trigger paused or deleted here stays off
  * even when a set that still carries it arrives first (the reconnect pushes the
  * set while the journal drains), and one paused and resumed here runs from the
- * def it had.
+ * def it had. A named Walnut takes only its own holds; the unnamed set takes
+ * those of every Walnut that has no set of its own here.
  */
-function effectiveTriggerDefs(defs: TriggerDef[]): TriggerDef[] {
-  const holds = offlineHost.triggerHolds()
+function effectiveTriggerDefs(home: string, defs: TriggerDef[]): TriggerDef[] {
+  const holds = triggerHoldsFor(home)
   if (holds.size === 0) return defs
   const out = defs.filter((def) => holds.get(def.id)?.on !== false)
   for (const [tid, hold] of holds) {
@@ -6798,24 +7192,36 @@ function effectiveTriggerDefs(defs: TriggerDef[]): TriggerDef[] {
   return out
 }
 
+function triggerHoldsFor(home: string): Map<string, { on: boolean; def?: unknown }> {
+  const byHome = offlineHost.triggerHoldsByHome()
+  if (home) return byHome.get(home) ?? new Map()
+  const out = new Map<string, { on: boolean; def?: unknown }>()
+  for (const [h, holds] of byHome) {
+    if (h && triggerScopes.has(h)) continue
+    for (const [tid, hold] of holds) out.set(tid, hold)
+  }
+  return out
+}
+
 /**
- * Arm exactly `defs`. Disarming forgets the trigger but KEEPS its state file: a
- * disable-then-enable (or a push that briefly carries an empty set) must not
- * destroy the dedup set, the script's cursor or an unacked fire. Stale files age
- * out instead.
+ * Arm exactly `defs` for one Walnut. Disarming forgets the trigger but KEEPS its
+ * state file: a disable-then-enable (or a push that briefly carries an empty set)
+ * must not destroy the dedup set, the script's cursor or an unacked fire. Stale
+ * files age out instead. Another Walnut's triggers are never touched.
  */
-function armTriggerSet(defs: TriggerDef[], now: number): ClockReport[] {
+function armTriggerSet(home: string, defs: TriggerDef[], now: number): ClockReport[] {
   const ids = new Set(defs.map((def) => def.id))
   const released: ClockReport[] = []
   const drainingBefore = drainingTriggers.size
-  for (const [tid, entry] of armedTriggers) {
-    if (ids.has(tid)) continue
-    armedTriggers.delete(tid)
-    if (entry.def.clock) released.push(releaseClock(tid, entry))
+  for (const [key, entry] of [...armedTriggers]) {
+    if (entry.home !== home || ids.has(entry.def.id)) continue
+    armedTriggers.delete(key)
+    if (entry.def.clock) released.push(releaseClock(entry.def.id, entry))
   }
   let drainingChanged = drainingTriggers.size !== drainingBefore
   for (const def of defs) {
-    const existing = armedTriggers.get(def.id)
+    const key = triggerKey(home, def.id)
+    const existing = armedTriggers.get(key)
     // A trigger that stays keeps its state file, its cursor and its schedule;
     // only the definition is refreshed. A clock the server started over (a new
     // fromMs) starts from that slot; a def that changed kind is armed anew.
@@ -6825,17 +7231,17 @@ function armTriggerSet(defs: TriggerDef[], now: number): ClockReport[] {
       continue
     }
     // Handed back before its fires drained: those fires stay with it.
-    const draining = drainingTriggers.get(def.id)
-    if (draining) { drainingTriggers.delete(def.id); drainingChanged = true }
-    armedTriggers.set(def.id, newArmedTrigger(def, draining ? draining.state : readTriggerState(def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining))
+    const draining = drainingTriggers.get(key)
+    if (draining) { drainingTriggers.delete(key); drainingChanged = true }
+    armedTriggers.set(key, newArmedTrigger(home, def, draining ? draining.state : readTriggerState(home, def.id, now), now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining))
   }
-  if (drainingChanged) persistTriggersFile(configuredTriggerDefs)
+  if (drainingChanged) persistTriggersFile(home)
   return released
 }
 
 /** A released clock that still has fires to replay: no slot runs. */
-function drainingEntry(def: TriggerDef, state: TriggerHostState, now: number): ArmedTrigger {
-  return { def, state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now }
+function drainingEntry(home: string, def: TriggerDef, state: TriggerHostState, now: number): ArmedTrigger {
+  return { home, def, state, nextRunAtMs: Number.POSITIVE_INFINITY, running: false, fireSentAt: new Map(), armedAtMs: now }
 }
 
 /** Where a clock stands, for the configure reply. */
@@ -6844,10 +7250,10 @@ function clockReportOf(tid: string, entry: ArmedTrigger): ClockReport {
   return { id: tid, fromMs: clock?.fromMs ?? entry.def.clock!.fromMs, ...(clock?.nextRunAtMs !== undefined ? { nextRunAtMs: clock.nextRunAtMs } : {}) }
 }
 
-function clockReports(): ClockReport[] {
+function clockReports(home: string): ClockReport[] {
   const out: ClockReport[] = []
-  for (const [tid, entry] of armedTriggers) {
-    if (entry.def.clock) out.push(clockReportOf(tid, entry))
+  for (const entry of armedOf(home)) {
+    if (entry.def.clock) out.push(clockReportOf(entry.def.id, entry))
   }
   return out
 }
@@ -6860,16 +7266,96 @@ function releaseClock(tid: string, entry: ArmedTrigger): ClockReport {
   const pending = entry.state.pendingFires.length
   if (pending > 0) {
     entry.nextRunAtMs = Number.POSITIVE_INFINITY
-    drainingTriggers.set(tid, entry)
+    drainingTriggers.set(triggerKey(entry.home, tid), entry)
   }
   logMsg('info', 'clock routine released', { id: tid, pending })
   return { ...clockReportOf(tid, entry), ...(pending > 0 ? { pending } : {}) }
 }
 
-/** A session paused, resumed or deleted a trigger here: arm by it now. */
+/** A session paused, resumed or deleted a trigger here: arm every Walnut's set by it now. */
 function triggerHoldsChanged(): void {
-  void armTriggerSet(effectiveTriggerDefs(configuredTriggerDefs), Date.now())
-  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, configured: configuredTriggerDefs.length })
+  const now = Date.now()
+  for (const [home, scope] of triggerScopes) void armTriggerSet(home, effectiveTriggerDefs(home, scope.configured), now)
+  logMsg('info', 'triggers rearmed after a change on this host', { armed: armedTriggers.size, scopes: triggerScopes.size })
+}
+
+/** The Walnut a def delivers into or starts a session of, when it names one. */
+function triggerOwnerOf(def: TriggerDef): string | undefined {
+  return def.deliver?.home ?? def.start?.home
+}
+
+/**
+ * The first named push after a boot that found the inherited unnamed copy takes
+ * its triggers as this Walnut's previous copy (their state, schedule and unacked
+ * fires carry over). That copy was ONE Walnut's, the one that pushed last: a trigger
+ * that names another Walnut waits for that Walnut's push, and when any does, the
+ * ones that name none (a clock the server runs) are not this Walnut's either. The
+ * copy and its legacy file go once nothing is left in it. Returns the ids taken.
+ */
+function takeInheritedTriggers(home: string): string[] {
+  const inherited = triggerScopes.get('')
+  if (!home || !inherited?.inherited) return []
+  const othersNamed = (def: TriggerDef) => { const owner = triggerOwnerOf(def); return !!owner && owner !== home }
+  const anotherWalnut = inherited.configured.some(othersNamed) || fireHolders('').some((e) => othersNamed(e.def))
+  const ours = (def: TriggerDef) => { const owner = triggerOwnerOf(def); return owner ? owner === home : !anotherWalnut }
+  const taken: string[] = []
+  const move = (from: Map<string, ArmedTrigger>, entry: ArmedTrigger) => {
+    const tid = entry.def.id
+    from.delete(tid)
+    const key = triggerKey(home, tid)
+    // Both copies hold it (a set pushed before a downgrade, and the one the older
+    // daemon kept since): the newer memory wins.
+    if (heldTrigger(home, tid)) {
+      if ((mtimeOf(triggerStatePath('', tid)) ?? 0) <= (mtimeOf(triggerStatePath(home, tid)) ?? 0)) return
+      armedTriggers.delete(key)
+      drainingTriggers.delete(key)
+    }
+    entry.home = home
+    entry.state.sharedCopy = true
+    from.set(key, entry)
+    taken.push(tid)
+  }
+  for (const map of [armedTriggers, drainingTriggers]) {
+    for (const entry of [...map.values()]) {
+      if (entry.home !== '' || !ours(entry.def)) continue
+      move(map, entry)
+    }
+  }
+  inherited.configured = inherited.configured.filter((def) => !ours(def))
+  inherited.hash = triggersSetHash(inherited.configured)
+  if (inherited.configured.length === 0 && fireHolders('').length === 0) {
+    triggerScopes.delete('')
+    try { fs.unlinkSync(TRIGGERS_FILE) } catch {}
+  } else {
+    persistTriggersFile('')
+  }
+  logMsg('info', 'triggers: inherited set taken over', { scope: walnutScope.label(home), taken: taken.length, left: inherited.configured.length })
+  return taken
+}
+
+/**
+ * Write the memory of triggers just taken over into this Walnut's dir. The unnamed
+ * copy stays and is kept current with it: a downgraded daemon reads it there.
+ */
+function settleTakenTriggers(home: string, taken: readonly string[]): void {
+  for (const tid of taken) {
+    const entry = heldTrigger(home, tid)
+    if (entry) persistTriggerState(home, tid, entry.state)
+  }
+}
+
+/**
+ * The Walnut a run, ack, claim or test is about: the home it names, else the one
+ * this socket configured triggers for. Null (and refused) when it names a Walnut
+ * this socket does not speak for.
+ */
+function triggerCommandHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, what: string): string | null {
+  const bound = gatewayClientHomes.get(ws) ?? (ws.data?.triggerScope || undefined)
+  if (walnutScope.foreign(cmd, bound)) {
+    sendError(ws, id, `${what}: this socket speaks for another Walnut`)
+    return null
+  }
+  return walnutScope.askedHome(cmd) || ws.data?.triggerScope || ''
 }
 
 function cmdTriggersConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -6881,34 +7367,59 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   if (!payload || typeof payload !== 'object' || payload.version !== 1 || !Array.isArray(payload.triggers)) {
     return sendError(ws, id, 'triggers.configure: invalid config: version must be 1 with a triggers array')
   }
+  const resolved = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'triggers.configure')
+  if (!resolved.ok) return sendError(ws, id, resolved.error)
+  const home = resolved.home
   // A def this daemon cannot take is refused alone; the rest of the set is armed.
-  const { defs, refused } = validateTriggerSet(payload.triggers)
+  const set = validateTriggerSet(payload.triggers)
+  const refused = set.refused
+  // A Walnut holds only its own: a def that delivers into or starts a session of
+  // another Walnut is not its to arm.
+  const defs = !home ? set.defs : set.defs.filter((def) => {
+    const owner = triggerOwnerOf(def)
+    if (!owner || owner === home) return true
+    refused.push({ id: def.id, error: `trigger ${def.id}: it names another Walnut` })
+    return false
+  })
   if (refused.length) logMsg('warn', 'triggers refused', { refused })
 
   const now = Date.now()
+  const taken = takeInheritedTriggers(home)
+  const scope = triggerScopeOf(home)
+  // An older server pushing the unnamed set makes the inherited copy its own.
+  const claimed = !home && scope.inherited === true
+  if (claimed) delete scope.inherited
   const hash = triggersSetHash(defs)
-  const changed = hash !== armedTriggersHash
-  configuredTriggerDefs = defs
-  const released = armTriggerSet(effectiveTriggerDefs(defs), now)
-  if (changed) persistTriggersFile(defs)
-  armedTriggersHash = hash
+  const changed = hash !== scope.hash
+  scope.configured = defs
+  const released = armTriggerSet(home, effectiveTriggerDefs(home, defs), now)
+  scope.hash = hash
+  if (changed || claimed || taken.length) persistTriggersFile(home)
+  settleTakenTriggers(home, taken)
+  // Fires of this Walnut's set go to this socket from now on.
+  if (ws.data) ws.data.triggerScope = home
   pruneTriggerStateFiles(now)
-  const clocks = clockReports()
-  logMsg('info', 'triggers configured', { hash, count: defs.length, changed, clocks: clocks.length, released: released.map((r) => r.id), draining: drainingTriggers.size })
+  const clocks = clockReports(home)
+  logMsg('info', 'triggers configured', {
+    scope: walnutScope.label(home), hash, count: defs.length, changed, clocks: clocks.length,
+    released: released.map((r) => r.id), draining: fireHolders(home).length - armedOf(home).length,
+  })
   sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(refused.length ? { refused } : {}) })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
   // dedups on (id, epoch, seq).
-  for (const entry of fireHolders()) {
+  for (const entry of fireHolders(home)) {
     for (const fire of entry.state.pendingFires) sendTriggerFire(entry, fire, true)
   }
 }
 
 /** Run once and answer; NEVER touch stored state (the form's Test button). */
 async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = triggerCommandHome(ws, id, cmd, 'triggers.test')
+  if (home === null) return
   try {
-    const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined)
+    const result = await runTriggerTest(cmd.check, triggerIdOf(cmd) || undefined, home)
     sendOk(ws, id, { result: result as unknown as Record<string, unknown> })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -6916,7 +7427,7 @@ async function cmdTriggersTest(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
 }
 
 /** One test run (triggers.test, and trigger_test while the Walnut is away); rejects with the refusal. */
-async function runTriggerTest(check: unknown, targetId: string | undefined): Promise<TriggersTestResult> {
+async function runTriggerTest(check: unknown, targetId: string | undefined, home = ''): Promise<TriggersTestResult> {
   const raw = check as Record<string, unknown> | undefined
   if (!raw || typeof raw !== 'object' || typeof raw.run !== 'string' || !raw.run.trim()) {
     throw new Error('triggers.test: check.run is required')
@@ -6932,7 +7443,8 @@ async function runTriggerTest(check: unknown, targetId: string | undefined): Pro
   triggerTestsRunning += 1
   try {
     const now = Date.now()
-    const entry = targetId ? armedTriggers.get(targetId) : undefined
+    const held = targetId ? triggerFor(home, targetId) : undefined
+    const entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined
     const state = entry ? entry.state : emptyHostState(now)
     const proc = await runCheckProcess(spec, buildCheckStdin(state, now), {
       env: {
@@ -6977,8 +7489,11 @@ async function runTriggerTest(check: unknown, targetId: string | undefined): Pro
  * exactly as it does for a clock-driven run.
  */
 function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = triggerCommandHome(ws, id, cmd, 'triggers.run')
+  if (home === null) return
   const tid = triggerIdOf(cmd)
-  const entry = tid ? armedTriggers.get(tid) : undefined
+  const held = tid ? triggerFor(home, tid) : undefined
+  const entry = held && armedTriggers.get(triggerKey(held.home, tid)) === held ? held : undefined
   if (!entry) return sendError(ws, id, 'triggers.run: unknown trigger: ' + tid)
   if (entry.def.clock) return sendOk(ws, id, { ran: true, started: true, outcome: runClock(entry, true) })
   if (entry.running) return sendOk(ws, id, { ran: false, reason: 'running' })
@@ -6997,23 +7512,25 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
  * A socket of another Walnut cannot take a fire of this one's trigger.
  */
 function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const asked = triggerCommandHome(ws, id, cmd, 'triggers.claim')
+  if (asked === null) return
   const tid = triggerIdOf(cmd)
   const seqs = Array.isArray(cmd.seqs) ? (cmd.seqs as unknown[]).filter((s): s is number => typeof s === 'number' && Number.isFinite(s)) : []
-  const entry = tid ? heldTrigger(tid) : undefined
-  const inFlight = hostDeliveriesInFlight.get(tid) ?? new Set<number>()
+  const entry = tid ? triggerFor(asked, tid) : undefined
+  const inFlight = hostDeliveriesInFlight.get(triggerKey(entry ? entry.home : asked, tid)) ?? new Set<number>()
   const empty = { claimed: [] as number[], unknown: [] as number[], host: [], busy: [] as number[] }
   if (!entry || (typeof cmd.epoch === 'string' && cmd.epoch !== entry.state.epoch)) {
     return sendOk(ws, id, { ...empty, busy: seqs.filter((s) => inFlight.has(s)), unknown: seqs.filter((s) => !inFlight.has(s)) })
   }
-  const home = gatewayClientHomes.get(ws)
-  const owner = entry.def.deliver?.home ?? entry.def.start?.home
+  const home = asked || gatewayClientHomes.get(ws)
+  const owner = triggerOwnerOf(entry.def)
   if (owner && home && home !== owner) {
     logMsg('warn', 'trigger claim refused: another Walnut', { id: tid, seqs })
     return sendOk(ws, id, { ...empty, foreign: true })
   }
   const marked = markStartedRuns(entry, seqs)
   const { reply, changed } = claimFires(entry.state, seqs, Date.now(), inFlight)
-  if (changed || marked) persistTriggerState(tid, entry.state)
+  if (changed || marked) persistTriggerState(entry.home, tid, entry.state)
   return sendOk(ws, id, reply as unknown as Record<string, unknown>)
 }
 
@@ -7039,18 +7556,21 @@ function markStartedRuns(entry: ArmedTrigger, seqs: readonly number[]): boolean 
 }
 
 function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = triggerCommandHome(ws, id, cmd, 'triggers.ack')
+  if (home === null) return
   const tid = triggerIdOf(cmd)
   const seq = typeof cmd.seq === 'number' ? cmd.seq : NaN
-  const entry = tid ? heldTrigger(tid) : undefined
+  const entry = tid ? triggerFor(home, tid) : undefined
   if (!entry || !Number.isFinite(seq)) return sendOk(ws, id, { acked: false })
   const acked = ackFire(entry.state, seq)
   if (acked) {
     entry.fireSentAt.delete(seq)
-    persistTriggerState(tid, entry.state)
+    persistTriggerState(entry.home, tid, entry.state)
     // The last fire of a released clock is recorded: nothing of it is left here.
-    if (drainingTriggers.get(tid) === entry && entry.state.pendingFires.length === 0) {
-      drainingTriggers.delete(tid)
-      persistTriggersFile(configuredTriggerDefs)
+    const key = triggerKey(entry.home, tid)
+    if (drainingTriggers.get(key) === entry && entry.state.pendingFires.length === 0) {
+      drainingTriggers.delete(key)
+      persistTriggersFile(entry.home)
       logMsg('info', 'clock routine drained', { id: tid })
     }
   }
@@ -10583,11 +11103,14 @@ function secretsSessionEnv(): Record<string, string> {
 // ── Task workspaces (host-local, capability 'workspace-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is workspace-core.ts
 // (shared with the source twin); this twin only hands it the host's spawn/fs.
+const WORKSPACE_STATE_DIR = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR
 const workspaceCore = createWorkspaceCore({
   spawn: spawn as unknown as WorkspaceCoreDeps['spawn'],
   fs: fs as unknown as WorkspaceCoreDeps['fs'],
   path, homedir: () => HOME_DIR, env: process.env,
-  stateDir: SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR,
+  stateDir: WORKSPACE_STATE_DIR,
+  // One allowlist per Walnut, its adapters under that Walnut's dir.
+  scopeDir: (home) => walnutScope.dirFor(WORKSPACE_STATE_DIR, home),
   randomId: () => crypto.randomBytes(6).toString('hex'),
   killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal as NodeJS.Signals) },
   log: (level, msg, data) => logMsg(level, msg, data),
@@ -10595,7 +11118,10 @@ const workspaceCore = createWorkspaceCore({
 
 function cmdWorkspace(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const name = String(cmd.cmd)
-  const work = () => workspaceCore.handle(name, cmd).then(
+  // Every workspace command speaks for one Walnut (its allowlist, its jobs); '' = an older server.
+  const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), name)
+  if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' })
+  const work = () => workspaceCore.handle(name, cmd, scope.home).then(
     (r) => { if (r.ok) sendOk(ws, id, r); else sendError(ws, id, r.error, r) },
     (err) => sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'failed' }),
   )
@@ -10698,6 +11224,9 @@ const turnSnapshots = createTurnSnapshots({
   env: process.env,
   tmpDir: path.join(DAEMON_DIR, 'turn-snapshots'),
   settingsPath: path.join(DAEMON_DIR, 'turn-snapshots.json'),
+  // Each Walnut's own settings; a session's turn follows its Walnut's (else the unnamed copy).
+  settingsPathFor: (home) => path.join(walnutScope.dirFor(DAEMON_DIR, home), 'turn-snapshots.json'),
+  homeOf: (sid) => sessionHomeOf(sid),
   log: (level, msg, data) => logMsg(level, msg, data),
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
   forceDisabled: process.env.WALNUT_TURN_SNAPSHOTS === '0',
@@ -10715,8 +11244,11 @@ async function cmdTurns(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   const cwd = typeof cmd.cwd === 'string' ? cmd.cwd : ''
   try {
     switch (cmd.cmd) {
-      case 'turns.configure':
-        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }))
+      case 'turns.configure': {
+        const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'turns.configure')
+        if (!scope.ok) return sendError(ws, id, scope.error, { code: 'not_owner' })
+        return sendOk(ws, id, await turnSnapshots.configure({ enabled: cmd.enabled, keep: cmd.keep }, scope.home))
+      }
       case 'turns.list':
         return sendOk(ws, id, await turnSnapshots.list(sid, cwd) as unknown as Record<string, unknown>)
       case 'turns.diff':
@@ -11323,7 +11855,7 @@ function cleanup() {
   if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer) } catch {} runtimeKeepTimer = null }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
-  try { stopBridge() } catch {}
+  try { stopBridges() } catch {}
 
   // Embedded code-server: leave it running on a graceful production restart —
   // the successor adopts it via ~/.open-walnut/code-server/instance.json (same
@@ -11470,39 +12002,130 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
 
 const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json')
 
-interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias: string; home?: string }
+// `scoped: 1` marks a file written since the per-Walnut split. An unnamed file
+// without it is the one global copy an older daemon kept (see BridgeLink.inherited).
+interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias: string; home?: string; scoped?: 1 }
 
-let bridgeConfig: BridgeConfig | null = null
-let bridgeClient: WebSocket | null = null
-let bridgeAdapter: ServerWebSocket<WsData> | null = null
-let bridgeRedialTimer: ReturnType<typeof setTimeout> | null = null
-let bridgePingTimer: ReturnType<typeof setInterval> | null = null
-let bridgeDialTimer: ReturnType<typeof setTimeout> | null = null
-// When the in-flight dial started (null = no dial in flight). Feeds the
-// reconcile decision so an identical-config push can't kill a young dial.
-let bridgeDialStartedAt: number | null = null
-let bridgeBackoffMs = 1000
-// When the pending redial is due (null = none pending). Lets the Mac's periodic
-// heal push preempt a far-away redial instead of waiting out backoff that was
-// earned while the network was down — see decideBridgeRestart in daemon-core.ts.
-let bridgeRedialDueAt: number | null = null
-// When the drop that armed the fast redial window happened (null = none is
-// armed), and whether any established link was lost yet (bridgeRedialStep and
-// armsBridgeFastWindow in daemon-core.ts).
-let bridgeDroppedAt: number | null = null
-let bridgeHasDropped = false
-// Generation guard: every (re)start bumps this; stale socket callbacks and
-// queued redials check it and no-op, so an old dial can't fight a new config.
-let bridgeGeneration = 0
-let bridgeLastInbound = 0
-// Per-connection uplink (pacing + counters) and its identity in the logs; the
-// replica logs the same connId (it rides the hello).
-let bridgeUplink: ReturnType<typeof createBridgeUplink> | null = null
-let bridgeConnId: string | null = null
+/**
+ * One cloud uplink per Walnut (2026-11-03): two Walnuts on this daemon each keep
+ * their own link, and one's configure, re-push or enabled:false never touches the
+ * other's (each re-push used to tear the other's link down). Keyed by the Walnut's
+ * home (walnutScope); '' is a server older than the split, which keeps the legacy
+ * bridge.json. A link's adapter carries its home (`data.bridgeHome`), so what
+ * arrives on it acts for that Walnut only. Keep in sync with daemon-source.ts.
+ */
+interface BridgeLink {
+  home: string
+  config: BridgeConfig | null
+  // An unnamed copy an older daemon left: a named configure of its Walnut takes it
+  // over (takeOverInheritedBridge), so one Walnut never holds two links to one companion.
+  inherited: boolean
+  // The sockets that pushed this link's configure: they serve its relays before
+  // (or without) binding their home, as a server pushes at connect.
+  pushers: WeakSet<ServerWebSocket<WsData>>
+  client: WebSocket | null
+  adapter: ServerWebSocket<WsData> | null
+  redialTimer: ReturnType<typeof setTimeout> | null
+  pingTimer: ReturnType<typeof setInterval> | null
+  dialTimer: ReturnType<typeof setTimeout> | null
+  // When the in-flight dial started (null = no dial in flight). Feeds the
+  // reconcile decision so an identical-config push can't kill a young dial.
+  dialStartedAt: number | null
+  backoffMs: number
+  // When the pending redial is due (null = none pending). Lets the Mac's periodic
+  // heal push preempt a far-away redial instead of waiting out backoff that was
+  // earned while the network was down — see decideBridgeRestart in daemon-core.ts.
+  redialDueAt: number | null
+  // When the drop that armed the fast redial window happened (null = none is
+  // armed), and whether any established link was lost yet (bridgeRedialStep and
+  // armsBridgeFastWindow in daemon-core.ts).
+  droppedAt: number | null
+  hasDropped: boolean
+  // Generation guard: every (re)start bumps this; stale socket callbacks and
+  // queued redials check it and no-op, so an old dial can't fight a new config.
+  generation: number
+  lastInbound: number
+  // Per-connection uplink (pacing + counters) and its identity in the logs; the
+  // replica logs the same connId (it rides the hello).
+  uplink: ReturnType<typeof createBridgeUplink> | null
+  connId: string | null
+  connOpenedAt: number
+  lastError: string | null
+  drift: ReturnType<typeof createLoopDriftProbe>
+}
+const bridgeLinks = new Map<string, BridgeLink>()
+// An older server (no home) pushed since boot: another Walnut is here, so a
+// leftover copy is never taken over just for being the only Walnut known.
+let bridgeUnnamedPushed = false
 let bridgeConnSeq = 0
-let bridgeConnOpenedAt = 0
-let bridgeLastError: string | null = null
-const bridgeDrift = createLoopDriftProbe({ now: Date.now, setInterval, clearInterval: (t) => clearInterval(t as ReturnType<typeof setInterval>) })
+
+function newBridgeLink(home: string): BridgeLink {
+  return {
+    home, config: null, inherited: false, pushers: new WeakSet(), client: null, adapter: null,
+    redialTimer: null, pingTimer: null, dialTimer: null, dialStartedAt: null, backoffMs: 1000,
+    redialDueAt: null, droppedAt: null, hasDropped: false, generation: 0, lastInbound: 0,
+    uplink: null, connId: null, connOpenedAt: 0, lastError: null,
+    drift: createLoopDriftProbe({ now: Date.now, setInterval, clearInterval: (t) => clearInterval(t as ReturnType<typeof setInterval>) }),
+  }
+}
+
+function bridgeFileFor(home: string): string {
+  return home ? path.join(walnutScope.dirFor(DAEMON_DIR, home), 'bridge.json') : BRIDGE_FILE
+}
+
+/** The link `ws` is the live adapter of (null for any other socket). */
+function bridgeLinkOf(ws: ServerWebSocket<WsData>): BridgeLink | null {
+  if (ws.data?.origin !== 'bridge') return null
+  const link = bridgeLinks.get(ws.data.bridgeHome ?? '')
+  return link && link.adapter === ws ? link : null
+}
+
+/**
+ * The link that carries `home`'s traffic: its own, else the unnamed one (an older
+ * server's push names no home, while its leader socket does; or a copy an older
+ * daemon left, until its Walnut's configure takes it over), unless that one names
+ * another Walnut. A new server always pushes its own, so it never rides another's.
+ */
+function bridgeLinkFor(home: string): BridgeLink | null {
+  const own = bridgeLinks.get(home)
+  if (own || !home) return own ?? null
+  const legacy = bridgeLinks.get('')
+  return legacy && (!legacy.config?.home || legacy.config.home === home) ? legacy : null
+}
+
+/**
+ * Whether trusted `client` is a server of the Walnut the link of `home` speaks
+ * for. A named link: only sockets bound to that home. The unnamed link keeps the
+ * old pick, minus servers whose Walnut has a link of its own.
+ */
+function servesBridgeHome(client: ServerWebSocket<WsData>, home: string): boolean {
+  const bound = gatewayClientHomes.get(client)
+  if (home) return bound === home || (!bound && bridgeLinks.get(home)?.pushers.has(client) === true)
+  return !bound || !bridgeLinks.has(bound)
+}
+
+/**
+ * Whether bridge socket `client` may hear about session `sid`: a named link only
+ * of its own Walnut's sessions, or of one whose Walnut is not recorded (as before).
+ */
+function bridgeHearsSession(client: ServerWebSocket<WsData>, sid: string): boolean {
+  const own = bridgeHomeOf(client)
+  if (!own) return true
+  const owner = sessionHomeOf(sid)
+  return !owner || owner === own
+}
+
+/** Whether bridge socket `ws` may act for `home`: a named link for its own Walnut only. */
+function bridgeSpeaksFor(ws: ServerWebSocket<WsData>, home: string): boolean {
+  const own = bridgeHomeOf(ws)
+  return !own || own === home
+}
+
+/** The home a bridge socket speaks for ('' = an older server's link, or not a bridge). */
+function bridgeHomeOf(ws: ServerWebSocket<WsData>): string {
+  return ws.data?.origin === 'bridge' ? ws.data.bridgeHome ?? '' : ''
+}
+
 
 const BRIDGE_BACKOFF_MAX_MS = 60_000
 // The fast redial window after a healthy link drops: waits stop doubling at
@@ -11531,14 +12154,101 @@ const BRIDGE_SILENT_PINGS = BRIDGE_WATCHDOG.silentPings
 // in onopen), which held the bridge down for days. Env override is for tests.
 const BRIDGE_DIAL_TIMEOUT_MS = envTimerMs(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS, 20_000, 500)
 
-function loadBridgeConfig(): void {
+
+function readBridgeFile(file: string): BridgeConfig | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(BRIDGE_FILE, 'utf-8')) as BridgeConfig
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as BridgeConfig
     if (raw && typeof raw.url === 'string' && typeof raw.token === 'string'
-      && typeof raw.hostAlias === 'string') {
-      bridgeConfig = raw
-    }
+      && typeof raw.hostAlias === 'string') return raw
   } catch { /* no bridge configured */ }
+  return null
+}
+
+/** Every saved link: the unnamed one in bridge.json, each Walnut's under its scope dir. */
+function loadBridgeConfig(): void {
+  const legacy = readBridgeFile(BRIDGE_FILE)
+  if (legacy) {
+    const link = newBridgeLink('')
+    link.config = legacy
+    link.inherited = legacy.scoped !== 1
+    bridgeLinks.set('', link)
+  }
+  for (const [, dir] of walnutScope.scopeDirs(fs, DAEMON_DIR)) {
+    const cfg = readBridgeFile(path.join(dir, 'bridge.json'))
+    // The dir name is a hash: the home inside names the Walnut.
+    if (!cfg || typeof cfg.home !== 'string' || !cfg.home || bridgeFileFor(cfg.home) !== path.join(dir, 'bridge.json')) continue
+    const link = newBridgeLink(cfg.home)
+    link.config = cfg
+    bridgeLinks.set(cfg.home, link)
+  }
+}
+
+function startBridges(reason: string): void {
+  for (const link of bridgeLinks.values()) startBridge(link, reason)
+}
+
+function stopBridges(): void {
+  for (const link of bridgeLinks.values()) stopBridge(link)
+}
+
+/** No other Walnut is known here: no older server pushed, no other link, no socket bound to another home, no other Walnut's scope dir under any base. */
+function onlyWalnutHere(home: string): boolean {
+  if (bridgeUnnamedPushed) return false
+  for (const h of bridgeLinks.keys()) if (h && h !== home) return false
+  for (const client of wsClients) {
+    const bound = gatewayClientHomes.get(client)
+    if (bound && bound !== home) return false
+  }
+  // Another Walnut that ever pushed a named setting here left a scope dir under one of these.
+  const key = walnutScope.keyOf(home)
+  for (const base of new Set([DAEMON_DIR, HOOKS_DIR, TRIGGER_STATE_DIR, TRIGGERS_BASE_DIR, WORKSPACE_STATE_DIR])) {
+    for (const [k] of walnutScope.scopeDirs(fs, base)) if (k !== key) return false
+  }
+  return true
+}
+
+/**
+ * A named configure meeting the copy an older daemon kept, tried on every named
+ * push while that copy exists (a disabled push names no url, and a later one finds
+ * its own link made). The copy is this Walnut's when it names this home, has the
+ * same companion host (a host alias counts only with it: two Walnuts may name the
+ * host alike), or this is the only Walnut the daemon knows (almost every host);
+ * one naming another home is that one's. With no link of its
+ * own the link moves to this home as it is, so it is not torn down; with one, the
+ * copy is closed. Either way the legacy file goes.
+ */
+function takeOverInheritedBridge(home: string, cmd: Record<string, unknown>, own: BridgeLink | null): BridgeLink | null {
+  const legacy = bridgeLinks.get('')
+  const cfg = legacy?.config
+  if (!legacy || !legacy.inherited || !cfg) return null
+  let mine = false
+  if (cfg.home) mine = cfg.home === home
+  else {
+    let sameCompanion = false
+    if (typeof cmd.url === 'string' && cmd.url) {
+      try { sameCompanion = cmd.url === cfg.url || new URL(cmd.url).host === new URL(cfg.url).host } catch { sameCompanion = false }
+    }
+    mine = sameCompanion || onlyWalnutHere(home)
+  }
+  if (!mine) return null
+  bridgeLinks.delete('')
+  try { fs.unlinkSync(BRIDGE_FILE) } catch {}
+  if (own) {
+    stopBridge(legacy)
+    logMsg('info', 'bridge: closed the link an older daemon kept, its Walnut has its own', { scope: walnutScope.label(home) })
+    return own
+  }
+  legacy.home = home
+  legacy.inherited = false
+  if (legacy.adapter?.data) legacy.adapter.data.bridgeHome = home
+  bridgeLinks.set(home, legacy)
+  logMsg('info', 'bridge: a Walnut took over the link an older daemon kept', { scope: walnutScope.label(home) })
+  return legacy
+}
+
+/** What decides a restart: the link's home is its key, so it never counts. */
+function bridgeConfigKey(cfg: BridgeConfig | null): string {
+  return cfg ? JSON.stringify([cfg.enabled, cfg.url, cfg.token, cfg.hostAlias]) : ''
 }
 
 function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -11548,17 +12258,32 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   if (enabled && (typeof url !== 'string' || typeof token !== 'string' || typeof hostAlias !== 'string')) {
     return sendError(ws, id, 'bridge.configure: url, token, hostAlias required when enabled')
   }
+  const scope = walnutScope.resolve(cmd, gatewayClientHomes.get(ws), 'bridge.configure')
+  if (!scope.ok) return sendError(ws, id, scope.error)
+  const home = scope.home
+  if (!home) bridgeUnnamedPushed = true
+  let link = bridgeLinks.get(home) ?? null
+  if (home) link = takeOverInheritedBridge(home, cmd, link) ?? link
+  if (!link) { link = newBridgeLink(home); bridgeLinks.set(home, link) }
+  // This socket serves the link's relays until (or without) binding its home.
+  if (home) link.pushers.add(ws)
+  const prev = link.config
   const next: BridgeConfig = {
     enabled: !!enabled,
-    url: url ?? bridgeConfig?.url ?? '',
-    token: token ?? bridgeConfig?.token ?? '',
-    hostAlias: hostAlias ?? bridgeConfig?.hostAlias ?? '',
-    ...(typeof cmd.home === 'string' && cmd.home.length > 0 ? { home: cmd.home } : {}),
+    url: url ?? prev?.url ?? '',
+    token: token ?? prev?.token ?? '',
+    hostAlias: hostAlias ?? prev?.hostAlias ?? '',
+    ...(home ? { home } : {}),
+    scoped: 1,
   }
-  const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig)
-  bridgeConfig = next
+  const changed = bridgeConfigKey(next) !== bridgeConfigKey(prev)
+  link.config = next
+  // An older server's own push: its copy now, never one a named Walnut takes over.
+  link.inherited = false
   try {
-    fs.writeFileSync(BRIDGE_FILE, JSON.stringify(next), { mode: 0o600 })
+    const file = bridgeFileFor(home)
+    if (home) fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(file, JSON.stringify(next), { mode: 0o600 })
   } catch (err) {
     logMsg('error', 'bridge: failed to persist bridge.json', { err: (err as Error).message })
   }
@@ -11568,61 +12293,61 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   const decision = decideBridgeRestart({
     enabled: next.enabled,
     changed,
-    adapterConnected: bridgeAdapter != null,
-    redialPending: bridgeRedialTimer != null,
-    dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    adapterConnected: link.adapter != null,
+    redialPending: link.redialTimer != null,
+    dialAgeMs: link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null,
     dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
-    redialWaitRemainingMs: bridgeRedialDueAt != null ? bridgeRedialDueAt - Date.now() : null,
+    redialWaitRemainingMs: link.redialDueAt != null ? link.redialDueAt - Date.now() : null,
   })
-  if (decision.restart) startBridge(decision.reason)
+  if (decision.restart) startBridge(link, decision.reason)
   logMsg('info', 'bridge: configured', {
-    enabled: next.enabled, hostAlias: next.hostAlias, changed,
+    enabled: next.enabled, hostAlias: next.hostAlias, changed, scope: walnutScope.label(home),
     restarted: decision.restart ? decision.reason : false,
   })
-  sendOk(ws, id, { applied: true, connected: bridgeAdapter != null })
+  sendOk(ws, id, { applied: true, connected: link.adapter != null })
 }
 
-function stopBridge(): void {
-  if (bridgeAdapter) logBridgeConnClose({ code: null, reason: 'stopped', wasClean: true })
-  bridgeGeneration++
-  if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null }
-  bridgeRedialDueAt = null
-  if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
-  if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
-  bridgeDialStartedAt = null
-  if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {} }
-  if (bridgeClient) { try { bridgeClient.close() } catch {} }
-  bridgeClient = null
-  bridgeAdapter = null
+function stopBridge(link: BridgeLink): void {
+  if (link.adapter) logBridgeConnClose(link, { code: null, reason: 'stopped', wasClean: true })
+  link.generation++
+  if (link.redialTimer) { clearTimeout(link.redialTimer); link.redialTimer = null }
+  link.redialDueAt = null
+  if (link.pingTimer) { clearInterval(link.pingTimer); link.pingTimer = null }
+  if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null }
+  link.dialStartedAt = null
+  if (link.adapter) { try { handleDisconnect(link.adapter) } catch {} }
+  if (link.client) { try { link.client.close() } catch {} }
+  link.client = null
+  link.adapter = null
 }
 
-function startBridge(reason: string): void {
-  stopBridge()
-  if (!bridgeConfig?.enabled) return
-  bridgeBackoffMs = 1000
-  logMsg('info', 'bridge: starting', { reason, url: bridgeConfig.url, hostAlias: bridgeConfig.hostAlias })
-  dialBridge(bridgeGeneration)
+function startBridge(link: BridgeLink, reason: string): void {
+  stopBridge(link)
+  if (!link.config?.enabled) return
+  link.backoffMs = 1000
+  logMsg('info', 'bridge: starting', { reason, url: link.config.url, hostAlias: link.config.hostAlias, scope: walnutScope.label(link.home) })
+  dialBridge(link, link.generation)
 }
 
-function scheduleBridgeRedial(gen: number): void {
-  if (gen !== bridgeGeneration || !bridgeConfig?.enabled) return
+function scheduleBridgeRedial(link: BridgeLink, gen: number): void {
+  if (gen !== link.generation || !link.config?.enabled) return
   // One pending redial at a time — a dial-timeout teardown and a late onclose
   // from the same dead socket must not stack two timers.
-  if (bridgeRedialTimer) return
+  if (link.redialTimer) return
   const step = bridgeRedialStep({
-    backoffMs: bridgeBackoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
-    sinceDropMs: bridgeDroppedAt != null ? Date.now() - bridgeDroppedAt : null,
+    backoffMs: link.backoffMs, maxMs: BRIDGE_BACKOFF_MAX_MS, jitter: 0.75 + Math.random() * 0.5,
+    sinceDropMs: link.droppedAt != null ? Date.now() - link.droppedAt : null,
     fastWindowMs: BRIDGE_FAST_WINDOW_MS, fastMaxMs: BRIDGE_FAST_REDIAL_MAX_MS,
   })
   const delay = step.delayMs
-  bridgeBackoffMs = step.nextBackoffMs
+  link.backoffMs = step.nextBackoffMs
   // When this redial is due — lets a heal push preempt a far-away one instead
   // of waiting out backoff earned while the network was down (decideBridgeRestart).
-  bridgeRedialDueAt = Date.now() + delay
-  bridgeRedialTimer = setTimeout(() => {
-    bridgeRedialTimer = null
-    bridgeRedialDueAt = null
-    dialBridge(gen)
+  link.redialDueAt = Date.now() + delay
+  link.redialTimer = setTimeout(() => {
+    link.redialTimer = null
+    link.redialDueAt = null
+    dialBridge(link, gen)
   }, delay)
 }
 
@@ -11694,10 +12419,11 @@ function abandonBridgeSocket(client: WebSocket) {
 // Never 0: safeSend would park it in a drain queue that no drain event ever
 // flushes for a client socket, and everything after it would queue there too.
 // A frame the uplink refused is reported where it matters (mobile-event's ack);
-// the uplink closes the socket itself on overflow.
-function makeBridgeAdapter(client: WebSocket, uplink: ReturnType<typeof createBridgeUplink>): ServerWebSocket<WsData> {
+// the uplink closes the socket itself on overflow. `bridgeHome` names the Walnut
+// whose link it is: what arrives on it acts for that Walnut only.
+function makeBridgeAdapter(client: WebSocket, uplink: ReturnType<typeof createBridgeUplink>, home: string): ServerWebSocket<WsData> {
   const adapter = {
-    data: { origin: 'bridge' } as WsData,
+    data: { origin: 'bridge', bridgeHome: home } as WsData,
     get readyState() { return client.readyState },
     send(payload: string): number {
       return uplink.send(payload) === 'sent' ? payload.length : -1
@@ -11708,52 +12434,56 @@ function makeBridgeAdapter(client: WebSocket, uplink: ReturnType<typeof createBr
 }
 
 function cmdBridgePeer(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  if (ws !== bridgeAdapter || !bridgeUplink) return sendError(ws, id, 'bridge.peer: not the bridge socket')
-  const chunkBytes = bridgeUplink.setChunkBytes(cmd.chunkBytes)
-  logMsg('info', 'bridge: peer reassembles chunks', { connId: bridgeConnId, chunkBytes })
+  const link = bridgeLinkOf(ws)
+  if (!link || !link.uplink) return sendError(ws, id, 'bridge.peer: not the bridge socket')
+  const chunkBytes = link.uplink.setChunkBytes(cmd.chunkBytes)
+  logMsg('info', 'bridge: peer reassembles chunks', { connId: link.connId, chunkBytes })
   sendOk(ws, id, { chunkBytes })
 }
 
-function cmdBridgeStatus(ws: ServerWebSocket<WsData>, id: number) {
+/** The asking Walnut's link: the home it names, else the one its socket speaks for. */
+function cmdBridgeStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return sendError(ws, id, 'bridge.status: this socket speaks for another Walnut')
+  const link = bridgeLinkFor(walnutScope.askedHome(cmd) || (gatewayClientHomes.get(ws) ?? ''))
   sendOk(ws, id, {
-    connected: bridgeAdapter != null,
-    connId: bridgeAdapter != null ? bridgeConnId : null,
-    queuedBytes: bridgeUplink?.queuedBytes ?? 0,
-    inFlightBytes: bridgeUplink?.inFlightBytes ?? 0,
+    connected: link?.adapter != null,
+    connId: link?.adapter != null ? link.connId : null,
+    queuedBytes: link?.uplink?.queuedBytes ?? 0,
+    inFlightBytes: link?.uplink?.inFlightBytes ?? 0,
   })
 }
 
 /** One `bridge-conn-close` line per opened connection (counts and sizes only). */
-function logBridgeConnClose(info: { code: number | null; reason: string; wasClean: boolean | null }): void {
-  const uplink = bridgeUplink
-  if (!uplink || !bridgeConnId) return
+function logBridgeConnClose(link: BridgeLink, info: { code: number | null; reason: string; wasClean: boolean | null }): void {
+  const uplink = link.uplink
+  if (!uplink || !link.connId) return
   const snap = uplink.snapshot()
   const now = Date.now()
   logMsg('info', 'bridge-conn-close', {
-    connId: bridgeConnId,
-    uptimeMs: now - bridgeConnOpenedAt,
+    connId: link.connId,
+    uptimeMs: now - link.connOpenedAt,
     code: info.code,
     reason: info.reason.slice(0, 120),
     wasClean: info.wasClean,
-    lastError: bridgeLastError,
+    lastError: link.lastError,
     bytesIn: snap.bytesIn, bytesOut: snap.bytesOut,
     framesIn: snap.framesIn, framesOut: snap.framesOut,
     maxOutFrameBytes: snap.maxOutFrameBytes, maxOutFrameKind: snap.maxOutFrameKind,
     bufferedAmountPeak: snap.bufferedAmountPeak, bufferedAmountAtClose: snap.bufferedAmountAtClose,
     lastInboundAgeMs: snap.lastInboundAt ? now - snap.lastInboundAt : null,
     rttMsP50: snap.rttMsP50, rttMsMax: snap.rttMsMax,
-    loopDriftMax60sMs: bridgeDrift.max60s(), loopDriftMax5sMs: bridgeDrift.max5s(),
+    loopDriftMax60sMs: link.drift.max60s(), loopDriftMax5sMs: link.drift.max5s(),
     chunkedFrames: snap.chunkedFrames, ackTimeouts: snap.ackTimeouts,
   })
   uplink.close()
-  bridgeDrift.stop()
-  bridgeUplink = null
-  bridgeConnId = null
+  link.drift.stop()
+  link.uplink = null
+  link.connId = null
 }
 
-function dialBridge(gen: number): void {
-  if (gen !== bridgeGeneration || !bridgeConfig?.enabled) return
-  const cfg = bridgeConfig
+function dialBridge(link: BridgeLink, gen: number): void {
+  if (gen !== link.generation || !link.config?.enabled) return
+  const cfg = link.config
   let dialUrl: string
   try {
     // Token rides a query param: the browser-style WebSocket client (Bun
@@ -11772,41 +12502,41 @@ function dialBridge(gen: number): void {
     client = openBridgeClient(dialUrl)
   } catch (err) {
     logMsg('warn', 'bridge: dial failed', { err: (err as Error).message })
-    scheduleBridgeRedial(gen)
+    scheduleBridgeRedial(link, gen)
     return
   }
-  bridgeClient = client
-  bridgeDialStartedAt = Date.now()
-  // NOTE: bridgeLastInbound is (re)set in onopen — the silence watchdog only
+  link.client = client
+  link.dialStartedAt = Date.now()
+  // NOTE: link.lastInbound is (re)set in onopen — the silence watchdog only
   // starts there; the pre-open window is covered by the dial timeout below.
   // Dial timeout: no onopen within the window → tear down + redial. A socket
   // wedged in CONNECTING fires neither onopen nor onclose, so without this
   // timer the bridge would stay down forever with zero log lines.
-  bridgeDialTimer = setTimeout(() => {
-    bridgeDialTimer = null
-    if (gen !== bridgeGeneration || bridgeAdapter != null) return
+  link.dialTimer = setTimeout(() => {
+    link.dialTimer = null
+    if (gen !== link.generation || link.adapter != null) return
     logMsg('warn', 'bridge: dial timeout — abandoning socket', {
-      dialMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+      dialMs: link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null,
     })
-    bridgeDialStartedAt = null
-    if (bridgeClient === client) bridgeClient = null
+    link.dialStartedAt = null
+    if (link.client === client) link.client = null
     abandonBridgeSocket(client)
     // Don't rely on close() firing onclose for a wedged socket — schedule
     // directly. scheduleBridgeRedial dedupes if onclose does fire too.
-    scheduleBridgeRedial(gen)
+    scheduleBridgeRedial(link, gen)
   }, BRIDGE_DIAL_TIMEOUT_MS)
 
   client.onopen = () => {
-    if (gen !== bridgeGeneration) { try { client.close() } catch {}; return }
-    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
-    const dialMs = bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null
-    bridgeDialStartedAt = null
-    bridgeBackoffMs = 1000
-    bridgeLastInbound = Date.now()
-    bridgeConnId = `${DAEMON_INSTANCE_ID}.${++bridgeConnSeq}`
-    bridgeConnOpenedAt = Date.now()
-    bridgeLastError = null
-    const connId = bridgeConnId
+    if (gen !== link.generation) { try { client.close() } catch {}; return }
+    if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null }
+    const dialMs = link.dialStartedAt != null ? Date.now() - link.dialStartedAt : null
+    link.dialStartedAt = null
+    link.backoffMs = 1000
+    link.lastInbound = Date.now()
+    link.connId = `${DAEMON_INSTANCE_ID}.${++bridgeConnSeq}`
+    link.connOpenedAt = Date.now()
+    link.lastError = null
+    const connId = link.connId
     const uplink = createBridgeUplink({
       write: (frame) => client.send(frame),
       now: Date.now,
@@ -11814,15 +12544,15 @@ function dialBridge(gen: number): void {
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
       onOverflow: (queuedBytes) => {
         logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId, queuedBytes })
-        bridgeLastError = 'uplink queue overflow (daemon closed)'
+        link.lastError = 'uplink queue overflow (daemon closed)'
         abandonBridgeSocket(client)
       },
     })
-    bridgeUplink = uplink
-    const adapter = makeBridgeAdapter(client, uplink)
-    bridgeAdapter = adapter
+    link.uplink = uplink
+    const adapter = makeBridgeAdapter(client, uplink, link.home)
+    link.adapter = adapter
     wsClients.add(adapter)
-    bridgeDrift.start()
+    link.drift.start()
     logMsg('info', 'bridge-conn-open', { connId, dialMs, wsClient: 'bun' })
     // hello registers this host in the cloud bridge registry (first frame).
     // `uplink: 1` tells the replica it may send bridge.peer and echo ackSeq.
@@ -11837,13 +12567,13 @@ function dialBridge(gen: number): void {
       // What the companion may ask of this daemon ('bridge-stream-v1': its forward on a stream).
       capabilities: BRIDGE_CAPABILITIES,
     }))
-    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter) })
+    logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter), scope: walnutScope.label(link.home) })
     // The silence watchdog: see BRIDGE_SILENT_PINGS.
-    let heardAt = bridgeLastInbound
+    let heardAt = link.lastInbound
     let silentChecks = 0
-    bridgePingTimer = setInterval(() => {
-      if (gen !== bridgeGeneration) return
-      if (bridgeLastInbound !== heardAt) { heardAt = bridgeLastInbound; silentChecks = 0; return }
+    link.pingTimer = setInterval(() => {
+      if (gen !== link.generation) return
+      if (link.lastInbound !== heardAt) { heardAt = link.lastInbound; silentChecks = 0; return }
       silentChecks++
       if (silentChecks % BRIDGE_CHECKS_PER_PING !== 0) return
       if (silentChecks >= BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS) {
@@ -11852,12 +12582,12 @@ function dialBridge(gen: number): void {
         // close handshake may never finish, so onclose (and a redial hung off
         // it) may never come. onClose runs once per socket.
         logMsg('warn', 'bridge: inbound silence — tearing down', {
-          silentMs: Date.now() - bridgeLastInbound,
+          silentMs: Date.now() - link.lastInbound,
           // The least silence this watchdog tears down at; the bridge monitor
           // tells a counted watchdog from the old wall-clock one by it.
           limitMs: BRIDGE_CHECKS_PER_PING * BRIDGE_SILENT_PINGS * Math.round(BRIDGE_PING_INTERVAL_MS / BRIDGE_CHECKS_PER_PING),
         })
-        bridgeLastError = 'inbound silence (daemon closed)'
+        link.lastError = 'inbound silence (daemon closed)'
         onClose({ code: null, reason: 'inbound silence', wasClean: false })
         abandonBridgeSocket(client)
         return
@@ -11869,38 +12599,38 @@ function dialBridge(gen: number): void {
 
   client.onmessage = (e: MessageEvent) => {
     // Not from a socket this daemon already gave up on (its adapter is gone).
-    if (gen !== bridgeGeneration || !bridgeAdapter || bridgeClient !== client) return
-    bridgeLastInbound = Date.now()
+    if (gen !== link.generation || !link.adapter || link.client !== client) return
+    link.lastInbound = Date.now()
     const msg = typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString()
-    bridgeUplink?.noteInbound(Buffer.byteLength(msg, 'utf8'))
-    handleCommand(bridgeAdapter, msg)
+    link.uplink?.noteInbound(Buffer.byteLength(msg, 'utf8'))
+    handleCommand(link.adapter, msg)
   }
 
   let closeHandled = false
   const onClose = (ev?: { code?: number | null; reason?: string; wasClean?: boolean | null }) => {
-    if (gen !== bridgeGeneration || closeHandled) return
+    if (gen !== link.generation || closeHandled) return
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
     // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
-    // sets bridgeClient=null there is a window where this guard passes
-    // (bridgeClient===null) and the late close falls through to
-    // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
+    // sets link.client=null there is a window where this guard passes
+    // (link.client===null) and the late close falls through to
+    // scheduleBridgeRedial — only the "if (link.redialTimer) return" dedupe
     // stops a SECOND stacked redial then. Change either side only in tandem.
-    if (bridgeClient !== null && bridgeClient !== client) return
+    if (link.client !== null && link.client !== client) return
     closeHandled = true
-    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
-    bridgeDialStartedAt = null
-    if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
-    if (bridgeAdapter) {
-      logBridgeConnClose({ code: ev?.code ?? null, reason: ev?.reason ?? '', wasClean: ev?.wasClean ?? null })
-      try { handleDisconnect(bridgeAdapter) } catch {}
-      bridgeAdapter = null
-      bridgeDroppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - bridgeConnOpenedAt, firstDrop: !bridgeHasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null
-      bridgeHasDropped = true
+    if (link.dialTimer) { clearTimeout(link.dialTimer); link.dialTimer = null }
+    link.dialStartedAt = null
+    if (link.pingTimer) { clearInterval(link.pingTimer); link.pingTimer = null }
+    if (link.adapter) {
+      logBridgeConnClose(link, { code: ev?.code ?? null, reason: ev?.reason ?? '', wasClean: ev?.wasClean ?? null })
+      try { handleDisconnect(link.adapter) } catch {}
+      link.adapter = null
+      link.droppedAt = armsBridgeFastWindow({ uptimeMs: Date.now() - link.connOpenedAt, firstDrop: !link.hasDropped, armUptimeMs: BRIDGE_FAST_ARM_UPTIME_MS }) ? Date.now() : null
+      link.hasDropped = true
     }
-    bridgeClient = null
-    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs })
-    scheduleBridgeRedial(gen)
+    link.client = null
+    logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: link.backoffMs })
+    scheduleBridgeRedial(link, gen)
   }
   client.onclose = onClose
 
@@ -11908,9 +12638,9 @@ function dialBridge(gen: number): void {
   // socket already given up on must not overwrite the cause the next link's
   // close line reports.
   client.onerror = (e: Event) => {
-    if (gen !== bridgeGeneration || bridgeClient !== client) return
+    if (gen !== link.generation || link.client !== client) return
     const m = (e as { message?: unknown }).message
-    bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : e.type || 'error'
+    link.lastError = typeof m === 'string' && m ? m.slice(0, 200) : e.type || 'error'
   }
 }
 
@@ -12162,7 +12892,7 @@ if (action === '--start' || SERVICE_MODE) {
         mode: session.mode, cliVersion: session.cliVersion,
         cronCandidate: Object.keys(session.foldState.cronIds).length > 0,
       })),
-      hooksHash: () => persistedHooksHash,
+      hooksHash: (sid) => persistedHooksHashFor(sid),
       start: async (sid, launch, isCurrent) => {
         const result = await startSessionProcess({ sid, args: launch.args, cwd: launch.cwd, mode: launch.mode, resume: true }, isCurrent)
         return { pid: result.pid, startTime: sessions.get(sid)?.startTime ?? null }
@@ -12348,7 +13078,7 @@ if (action === '--start' || SERVICE_MODE) {
       { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ...(SERVICE_MODE ? [{ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID }] : []),
     ]
-    const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
+    const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE, ...[...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
     if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored })
   }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : RUNTIME_KEEP_MS)
   runtimeKeepTimer.unref?.()
@@ -12356,7 +13086,7 @@ if (action === '--start' || SERVICE_MODE) {
   // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting
   // for the Mac to push bridge.configure again.
   loadBridgeConfig()
-  startBridge('startup')
+  startBridges('startup')
 
   // Heartbeat: one JSON line every 30s with daemon vitals. Absence = wedged
   // daemon (event loop blocked, OOM, etc). Cheap to emit, huge diagnostic

@@ -35,7 +35,14 @@ function hostStream(c: ReplicaCluster, sid: string): Array<Record<string, any>> 
 const routineTurns = (c: ReplicaCluster, sid: string) => hostStream(c, sid).filter((l) => l.type === 'result' && String(l.result).includes(PROMPT))
 
 function hostTriggerState(c: ReplicaCluster, id: string): Record<string, any> | null {
-  try { return JSON.parse(fs.readFileSync(path.join(c.base, 'hd', 'trigger-state', `${id}.json`), 'utf8')) } catch { return null }
+  // The Mac names its Walnut, so the daemon keeps the state under that Walnut's dir.
+  const base = path.join(c.base, 'hd', 'trigger-state')
+  let named: string[] = []
+  try { named = fs.readdirSync(path.join(base, 'walnuts')).map((k) => path.join(base, 'walnuts', k)) } catch { /* none yet */ }
+  for (const dir of [...named, base]) {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8')) } catch { /* not here */ }
+  }
+  return null
 }
 
 function hostSliceHolds(c: ReplicaCluster, needles: string[]): boolean {

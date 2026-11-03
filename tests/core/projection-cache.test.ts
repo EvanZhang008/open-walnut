@@ -220,6 +220,8 @@ describe('pushProjectionToCloud', () => {
     expect(sendSpy).toHaveBeenCalledWith('mobile-event', {
       kind: 'projection-upsert',
       data: { which: 'sessions', data: sessionEnvelope('s1') },
+      // This Walnut's own link on a daemon several Walnuts share.
+      home: WALNUT_HOME,
     });
   });
 
@@ -270,7 +272,7 @@ describe('pushProjectionToCloud', () => {
     // …the self-heal sweep's retry (same call shape) succeeds once it is back.
     fakeConn = { hasCapability: () => true, send: sendSpy };
     await pushProjectionToCloudNow('transcript-upsert', { sid, data: tail(sid) });
-    expect(sendSpy).toHaveBeenCalledWith('mobile-event', { kind: 'transcript-upsert', data: { sid, data: tail(sid) } });
+    expect(sendSpy).toHaveBeenCalledWith('mobile-event', { kind: 'transcript-upsert', data: { sid, data: tail(sid) }, home: WALNUT_HOME });
     expect(_pendingTranscriptPushSidsForTesting().has(sid)).toBe(false);
   });
 });

@@ -6,7 +6,8 @@
  *
  * Layout, under `$XDG_STATE_HOME/open-walnut/secrets` (secretsRoot):
  *   <name>          the value, exactly as given, mode 0600
- *   .index.json     names, versions, the env var a session gets it as; never a value
+ *   .index.json     names, versions, the env var a session gets it as, the Walnut
+ *                   that wrote it (`home`); never a value
  * The directory is 0700. Every write is a temp file renamed into place, so a
  * reader never sees half a value. Nothing here is under the data home, so git
  * sync never carries it, and nothing here logs a value: the daemon logs only
@@ -15,6 +16,13 @@
  * A session reads a secret from its file (`$WALNUT_SECRETS_DIR/<name>`) inside
  * its own command, or gets it in its environment when the user said so
  * (`env` + `sessions`), so the value never has to appear in the transcript.
+ *
+ * The store is per account, shared by every Walnut on the host (2026-11-03: the
+ * user's Walnut and another person's on one daemon). A put records its Walnut's
+ * home as the secret's owner; `sync` (keep these, drop the rest) only drops the
+ * secrets its own Walnut wrote, so one Walnut's sync never deletes another's. A
+ * row with no home was written by a server older than this: an older server's
+ * sync (no home) still prunes those, and only those.
  *
  * Bundled into the binary daemon and shipped as the secrets-core.cjs sidecar
  * for the source twin; 'secrets-v1' is advertised only where it loads.
@@ -59,7 +67,12 @@ export interface SecretEntry {
   updatedAt: string
 }
 
-interface Index { secrets: Record<string, Omit<SecretEntry, 'name'>> }
+interface Index { secrets: Record<string, Omit<SecretEntry, 'name'> & { home?: string }> }
+
+/** The Walnut a command speaks for ('' = a server older than per-Walnut owners). */
+function homeOf(req: { home?: unknown }): string {
+  return typeof req.home === 'string' && req.home.length > 0 && req.home.length <= 1024 ? req.home : ''
+}
 
 function fail(message: string, code: string): never {
   throw Object.assign(new Error(message), { code })
@@ -101,7 +114,7 @@ export function createSecretStore(root: string, now: () => Date = () => new Date
   }
 
   /** Store a value (a newer version replaces it; the same version is a no-op). */
-  function put(req: { name?: unknown; version?: unknown; value?: unknown; env?: unknown; sessions?: unknown }): SecretEntry {
+  function put(req: { name?: unknown; version?: unknown; value?: unknown; env?: unknown; sessions?: unknown; home?: unknown }): SecretEntry {
     if (!isSecretName(req.name)) fail('a secret name is lower case letters, digits, . _ - (at most 64)', 'bad_name')
     if (typeof req.version !== 'number' || !Number.isInteger(req.version) || req.version < 1) fail(`secret ${req.name}: version must be a positive integer`, 'bad_request')
     if (typeof req.value !== 'string' || req.value === '') fail(`secret ${req.name}: the value is empty`, 'bad_request')
@@ -113,11 +126,14 @@ export function createSecretStore(root: string, now: () => Date = () => new Date
     const prev = ix.secrets[req.name]
     if (prev && prev.version > req.version) fail(`secret ${req.name}: this host already has version ${prev.version}`, 'stale_version')
     writeAtomic(path.join(root, req.name), req.value)
+    const owner = homeOf(req)
     ix.secrets[req.name] = {
       version: req.version,
       ...(typeof req.env === 'string' && req.env ? { env: req.env } : {}),
       ...(req.sessions === true ? { sessions: true } : {}),
       updatedAt: now().toISOString(),
+      // The last Walnut that wrote it owns it: only that Walnut's sync may drop it.
+      ...(owner ? { home: owner } : {}),
     }
     writeIndex(ix)
     return list().find((e) => e.name === req.name)!
@@ -134,14 +150,22 @@ export function createSecretStore(root: string, now: () => Date = () => new Date
     return { name: req.name, removed }
   }
 
-  /** Keep exactly these names: every other secret on this host is removed (the Mac's revoke while the host was away). */
-  function sync(req: { keep?: unknown }): { removed: string[] } {
+  /**
+   * Keep exactly these names of this Walnut's secrets: every other one it wrote is
+   * removed (the Mac's revoke while the host was away). Another Walnut's are never
+   * touched; a file with no index row counts as unowned (an older server's).
+   */
+  function sync(req: { keep?: unknown; home?: unknown }): { removed: string[] } {
     const keep = new Set(Array.isArray(req.keep) ? req.keep.filter(isSecretName) : [])
+    const asker = homeOf(req)
     const removed: string[] = []
-    const names = new Set(Object.keys(readIndex().secrets))
+    const rows = readIndex().secrets
+    const names = new Set(Object.keys(rows))
     try { for (const f of fs.readdirSync(root)) if (isSecretName(f)) names.add(f) } catch { /* no dir yet */ }
     for (const name of names) {
       if (keep.has(name) || !isSecretName(name)) continue
+      const owner = rows[name] && typeof rows[name].home === 'string' ? rows[name].home : ''
+      if (owner !== asker) continue
       remove({ name })
       removed.push(name)
     }

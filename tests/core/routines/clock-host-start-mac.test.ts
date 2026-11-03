@@ -166,7 +166,7 @@ describe('a routine run the host started while the Mac was away', () => {
     expect(recorded.state.fireLog).toHaveLength(1)
     expect(recorded.state.fireLog![0]).toMatchObject({ outcome: 'fired', seq: 1 })
     expect(JSON.stringify(recorded.state.fireLog![0])).toContain(`${HOST} started it in session`)
-    expect(acks).toEqual([{ triggerId: job.id, seq: 1 }])
+    expect(acks).toEqual([{ triggerId: job.id, seq: 1, home: WALNUT_HOME }])
 
     const j = journal([create, session])
     await runOfflineHandover(j.conn as never)

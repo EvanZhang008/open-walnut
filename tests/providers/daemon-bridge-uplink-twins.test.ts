@@ -37,7 +37,7 @@ describe('paced uplink: both twins', () => {
     })
 
     it(`${name}: a bridge ping confirms a marker, and bridge.peer / bridge.status are handled`, () => {
-      expect(src).toMatch(/case 'ping':[\s\S]{0,300}bridgeUplink\??\.ack\(cmd\.ackSeq\)/)
+      expect(src).toMatch(/case 'ping':[\s\S]{0,300}(bridgeLinkOf\(ws\)\?\.uplink\?|pingLink\.uplink)\.ack\(cmd\.ackSeq\)/)
       expect(src).toMatch(/case 'bridge\.peer': return cmdBridgePeer\(/)
       expect(src).toMatch(/case 'bridge\.status': return cmdBridgeStatus\(/)
     })

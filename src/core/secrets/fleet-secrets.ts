@@ -14,7 +14,8 @@
  * bridge. A rotate is a new version sent to every host it is shared with; a
  * revoke removes it there. A host that is away gets both when it next connects
  * (reconcileHost on every connect). A host's copy that the Mac never recorded
- * sending is left alone: another Walnut on the same host may own it.
+ * sending is left alone: another Walnut on the same host may own it. Every put
+ * names this Walnut (`home`), which the host records as the copy's owner.
  *
  * Who may do what: only the user adds, rotates, shares or deletes a secret
  * (routes refuse a session: credentials are the user's, in the team charter);
@@ -303,7 +304,7 @@ export function reconcileHost(host: string): Promise<void> {
     if (!relevant.length) return
     const results: Record<string, HostCopy> = {}
     try {
-      const { link } = await import('../hosts/link.js')
+      const [{ link }, { WALNUT_HOME }] = await Promise.all([import('../hosts/link.js'), import('../../constants.js')])
       let timer: ReturnType<typeof setTimeout> | undefined
       const conn = await Promise.race([
         link(h),
@@ -323,13 +324,13 @@ export function reconcileHost(host: string): Promise<void> {
             // Env and sessions ride the put too, so a sharing change is sent as one.
             if (!same || m.copies[h]?.version !== m.version || m.copies[h]?.error) {
               const value = fs.readFileSync(path.join(masterRoot(), name), 'utf8')
-              const r = await conn.send('secrets.put', { name, version: m.version, value, ...(m.env ? { env: m.env } : {}), sessions: m.sessions === true }) as { ok?: boolean; error?: string; code?: string }
+              const r = await conn.send('secrets.put', { name, version: m.version, value, ...(m.env ? { env: m.env } : {}), sessions: m.sessions === true, home: WALNUT_HOME }) as { ok?: boolean; error?: string; code?: string }
               if (!r.ok && r.code === 'stale_version') throw new Error('this host holds a newer copy (another Walnut there?); it was not replaced')
               if (!r.ok) throw new Error(r.error ?? 'the host refused it')
             }
             results[name] = { version: m.version, at }
           } else {
-            const r = await conn.send('secrets.remove', { name }) as { ok?: boolean; error?: string }
+            const r = await conn.send('secrets.remove', { name, home: WALNUT_HOME }) as { ok?: boolean; error?: string }
             if (!r.ok) throw new Error(r.error ?? 'the host could not remove it')
             results[name] = { version: null, at }
           }

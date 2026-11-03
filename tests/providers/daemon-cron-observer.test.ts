@@ -30,7 +30,7 @@ describe('cron recovery observation', () => {
   it('combines the real CLI loaded-chain facts with confirmed process death', async () => {
     const l = lab()
     expect(await l.observe(record)).toEqual({ process: 'dead', cron: 'active' })
-    expect(l.deps.launchBlocker).toHaveBeenCalledExactlyOnceWith(launch, expect.any(AbortSignal))
+    expect(l.deps.launchBlocker).toHaveBeenCalledExactlyOnceWith(launch, expect.any(AbortSignal), sid)
   })
 
   it('does not call a living process scheduler-confirmed', async () => {
