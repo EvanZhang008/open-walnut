@@ -139,10 +139,10 @@ test.describe('on an iPhone', () => {
     await expect(notice.locator('.unpaired-notice-tagline')).toHaveText('Your tasks, AI sessions and notes, from the computer Walnut runs on.')
     await expect(notice.locator('.unpaired-notice-steps li')).toHaveText([
       `1${STEP1}`,
-      "2Click Show QR code, then scan it with this phone's camera.",
+      '2Open the link shown under Open on your phone, on this phone.',
     ])
-    await expect(notice.locator('h2')).toHaveText("Can't scan it?")
-    await expect(notice.locator('.unpaired-notice-hint')).toHaveText('Type the 8-character code shown with the QR code.')
+    await expect(notice.locator('h2')).toHaveText("Can't open the link?")
+    await expect(notice.locator('.unpaired-notice-hint')).toHaveText('Paste the link here.')
     await expect(notice.locator('.unpaired-notice-more')).toHaveText('On the computer Walnut runs on? Open Walnut there; it needs no code.')
     await expect(page.getByTestId('unpaired-code-input')).toHaveAttribute('aria-label', 'Sign-in code')
     await expect(page.getByTestId('unpaired-code-input')).toHaveAttribute('placeholder', 'XXXX-XXXX')
@@ -271,7 +271,7 @@ test.describe('on an iPhone', () => {
     await shot(page, 'phone-rate-limited')
   })
 
-  test('C7 C8: a scanned link says Signing in, then lands in the console; the same link again shows why', async ({ page, browser }) => {
+  test('C7 C8: an opened link says Signing in, then lands in the console; the same link again shows why', async ({ page, browser }) => {
     const code = await mintCode(page)
     await refuseProbe(page)
     // Held until the 6 s slow line shows, then let through. A fixed 20 s hold
@@ -287,7 +287,7 @@ test.describe('on an iPhone', () => {
     await page.goto(`/#pair=${code}`)
     const notice = page.getByTestId('unpaired-notice')
     await expect(notice.locator('h1')).toHaveText('Signing in...', { timeout: 30_000 })
-    await expect(notice).toContainText('Checking the code from your QR scan.')
+    await expect(notice).toContainText('Checking the code from your link.')
     await expect(page.getByTestId('unpaired-code-form')).toHaveCount(0)
     await expect(page.getByTestId('unpaired-pending-ring')).toBeVisible()
     await shot(page, 'phone-pending')
@@ -305,7 +305,7 @@ test.describe('on an iPhone', () => {
     await expect(again.getByTestId('unpaired-code-error')).toHaveText('That code is wrong or has expired. Make a new one in Walnut on your computer.', { timeout: 30_000 })
     await expect(again.getByTestId('unpaired-code-input')).toHaveValue(code)
     await expect(again.getByTestId('unpaired-notice').locator('h1')).toHaveText('Sign in to Walnut')
-    // N23: the scan worked, so the code section no longer asks "Can't scan it?".
+    // N23: the link worked, so the code section no longer asks "Can't open the link?".
     await expect(again.locator('#unpaired-code-heading')).toHaveText('Sign-in code')
     await expect(again.getByTestId('unpaired-code-submit')).toBeDisabled()
     await shot(again, 'phone-used-link')
@@ -393,7 +393,7 @@ test.describe('on an iPhone', () => {
       return !!(code.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING)
     })
     expect(order).toBe(true)
-    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Type the code shown with the QR code in the field above. Scanning the QR code opens Safari, not this app.')
+    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.')
     // N2-20: "above" is true: the field sits before the steps on screen.
     const fieldY = (await page.getByTestId('unpaired-code-input').boundingBox())!.y
     const stepsY = (await notice.locator('.unpaired-notice-steps').boundingBox())!.y
@@ -428,7 +428,7 @@ test.describe('on a computer browser', () => {
     const icon = (await notice.locator('.unpaired-notice-icon').boundingBox())!
     expect(Math.abs(icon.y - 96)).toBeLessThanOrEqual(1)
     await expect(notice.locator('h1')).toHaveText('Sign in to Walnut')
-    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Click Show QR code, then type the code shown with it below.')
+    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Open the link shown under Open on your phone in this browser, or paste it below.')
     await expect(notice.locator('h2')).toHaveText('Sign-in code')
     await expect(notice.locator('.unpaired-notice-hint')).toHaveCount(0)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)

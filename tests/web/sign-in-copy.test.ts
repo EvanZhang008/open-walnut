@@ -10,9 +10,9 @@ import {
 } from '../../web/src/components/common/sign-in-copy'
 
 const STEP1 = 'On your computer, open Walnut and go to Settings > Phones & Cloud.'
-const STEP2_TOUCH = "Click Show QR code, then scan it with this phone's camera."
-const STEP2_DESK = 'Click Show QR code, then type the code shown with it below.'
-const STEP2_HOME = 'Type the code shown with the QR code in the field above. Scanning the QR code opens Safari, not this app.'
+const STEP2_TOUCH = 'Open the link shown under Open on your phone, on this phone.'
+const STEP2_DESK = 'Open the link shown under Open on your phone in this browser, or paste it below.'
+const STEP2_HOME = 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
 const TAGLINE = 'Your tasks, AI sessions and notes, from the computer Walnut runs on.'
 const REVOKED = 'Walnut no longer accepts this sign-in. It may have been removed on your computer. Sign in again below.'
 const FOOTER = 'On the computer Walnut runs on? Open Walnut there; it needs no code.'
@@ -24,8 +24,8 @@ describe('signInCopy', () => {
     expect(c.title).toBe('Sign in to Walnut')
     expect(c.tagline).toBe(TAGLINE)
     expect(c.steps).toEqual([STEP1, STEP2_TOUCH])
-    expect(c.codeHeading).toBe("Can't scan it?")
-    expect(c.codeHint).toBe('Type the 8-character code shown with the QR code.')
+    expect(c.codeHeading).toBe("Can't open the link?")
+    expect(c.codeHint).toBe('Paste the link here.')
     expect(c.submit).toBe('Sign in')
     expect(c.submitBusy).toBe('Signing in...')
     expect(c.footer).toBe(FOOTER)
@@ -50,7 +50,7 @@ describe('signInCopy', () => {
     expect(phone.tagline).toBe(REVOKED)
     expect(phone.retry).toBe('Try again')
     expect(phone.steps).toEqual([STEP1, STEP2_TOUCH])
-    expect(phone.codeHeading).toBe("Can't scan it?")
+    expect(phone.codeHeading).toBe("Can't open the link?")
     const desk = signInCopy({ state: 'revoked', touch: false, standalone: false })
     expect(desk.title).toBe('This browser was signed out')
     expect(desk.tagline).toBe(REVOKED)
@@ -101,7 +101,7 @@ describe('signInCopy', () => {
 
   it('pending and field lines', () => {
     expect(SIGN_IN_PENDING_TITLE).toBe('Signing in...')
-    expect(SIGN_IN_PENDING_LINE).toBe('Checking the code from your QR scan.')
+    expect(SIGN_IN_PENDING_LINE).toBe('Checking the code from your link.')
     expect(SIGN_IN_PENDING_SLOW).toBe('Still waiting for Walnut. The connection may be slow.')
     expect(SIGN_IN_BAD_CHARS).toBe('Codes never use 0, 1, I, L or O.')
   })

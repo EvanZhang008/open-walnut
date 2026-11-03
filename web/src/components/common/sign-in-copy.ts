@@ -47,7 +47,7 @@ export const SIGN_IN_PENDING_TITLE = 'Signing in...';
  * what to do next (make a new code).
  */
 export const SIGN_IN_FAILED_SCAN_HEADING = 'Sign-in code';
-export const SIGN_IN_PENDING_LINE = 'Checking the code from your QR scan.';
+export const SIGN_IN_PENDING_LINE = 'Checking the code from your link.';
 export const SIGN_IN_PENDING_SLOW = 'Still waiting for Walnut. The connection may be slow.';
 export const SIGN_IN_BAD_CHARS = 'Codes never use 0, 1, I, L or O.';
 export const SIGN_IN_SIGNED_OUT_FLAG = 'walnut.signedOut';
@@ -66,17 +66,17 @@ export function signInCopy({ state, touch, standalone }: SignInCopyInput): SignI
       ? `This ${device} no longer has access to Walnut. Sign in again below.`
       : 'Your tasks, AI sessions and notes, from the computer Walnut runs on.';
   const step2 = homeScreen
-    ? 'Type the code shown with the QR code in the field above. Scanning the QR code opens Safari, not this app.'
+    ? 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
     : touch
-      ? "Click Show QR code, then scan it with this phone's camera."
-      : 'Click Show QR code, then type the code shown with it below.';
+      ? 'Open the link shown under Open on your phone, on this phone.'
+      : 'Open the link shown under Open on your phone in this browser, or paste it below.';
   const scanning = touch && !homeScreen;
   return {
     title,
     tagline,
     steps: ['On your computer, open Walnut and go to Settings > Phones & Cloud.', step2],
-    codeHeading: scanning ? "Can't scan it?" : 'Sign-in code',
-    codeHint: scanning ? 'Type the 8-character code shown with the QR code.' : null,
+    codeHeading: scanning ? "Can't open the link?" : 'Sign-in code',
+    codeHint: scanning ? 'Paste the link here.' : null,
     inputLabel: 'Sign-in code',
     placeholder: 'XXXX-XXXX',
     submit: 'Sign in',

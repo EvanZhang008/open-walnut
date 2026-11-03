@@ -9,7 +9,7 @@
  * a moment later, like the real CLI. A page opened at that address is a browser
  * on another device: Walnut must not trust it.
  *
- *   1. turn it on, see the address, make a code (link and QR)
+ *   1. turn it on: the phone link (address + one-time code) shows by itself
  *   2. through the tunnel: the notice asks for a code; a wrong one says why; the
  *      right one signs the browser in and the board loads
  *   3. a `#pair=` link signs a fresh browser in on open and leaves the address bar
@@ -191,7 +191,7 @@ test.describe('Open from a browser', () => {
     await context.close()
   })
 
-  test('turn it on, see the address, make a code', async ({ page, baseURL }) => {
+  test('turn it on: the phone link shows by itself', async ({ page, baseURL }) => {
     await useFakeTunnel(page, baseURL)
     const group = await openDevices(page)
     const state = page.getByTestId('browser-access-state')
@@ -201,16 +201,20 @@ test.describe('Open from a browser', () => {
     await page.getByTestId('browser-access-enabled').click()
     await expect(page.getByTestId('browser-access-enabled')).toHaveAttribute('aria-checked', 'true')
     await expect(state).toContainText('Connected through Custom command.', { timeout: 30_000 })
-    const url = page.getByTestId('browser-access-url')
-    await expect(url).toHaveText(/^127\.0\.0\.1:\d+$/)
-    tunnelUrl = (await url.getAttribute('href'))!
-
-    await page.getByTestId('browser-access-make-code').click()
-    const value = page.getByTestId('browser-access-code-value')
-    await expect(value).toHaveText(/^[2-9A-Z]{4}-[2-9A-Z]{4}$/)
-    await expect(page.getByTestId('browser-access-link')).toContainText('#pair=')
-    await expect(page.getByTestId('browser-access-code').locator('img')).toBeVisible()
-    link = `${tunnelUrl}/#pair=${await value.textContent()}`
+    // Once connected, the phone link is there by itself: the tunnel's address with a
+    // fresh one-time code after #pair=, nothing to press, no QR, one link only. The
+    // text hides the code (a screenshot must not sign anyone in); the href carries it.
+    const row = page.getByTestId('browser-access-code')
+    const shown = page.getByTestId('browser-access-link')
+    await expect(shown).toHaveAttribute('href', /^http:\/\/127\.0\.0\.1:\d+\/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
+    link = (await shown.getAttribute('href'))!
+    tunnelUrl = link.split('/#pair=')[0]!
+    await expect(shown).toHaveText(`${tunnelUrl}/#pair=••••-••••`)
+    await expect(row).not.toContainText(link.split('#pair=')[1]!)
+    await expect(row.getByTestId('browser-access-link')).toHaveCount(1)
+    await expect(row.locator('img')).toHaveCount(0)
+    await expect(page.getByTestId('browser-access-copy-link')).toBeVisible()
+    await expect(page.getByTestId('browser-access-code-value')).toHaveCount(0)
     await shot(page, '2-connected-code', group)
   })
 
@@ -281,8 +285,13 @@ test.describe('Open from a browser', () => {
     await phone.context().close()
   })
 
-  test('a #pair link signs a fresh browser in on open, and the code leaves the address bar', async ({ browser }) => {
+  test('a #pair link signs a fresh browser in on open, the code leaves the address bar, and Settings shows a new link', async ({ page, browser }) => {
     expect(link).toContain('#pair=')
+    // Settings open on this computer while the phone uses the link: it shows its own link now.
+    await openDevices(page)
+    const shown = page.getByTestId('browser-access-link')
+    await expect(shown).toHaveAttribute('href', /#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
+    const before = (await shown.getAttribute('href'))!
     const phone = await tunnelPage(browser)
     await phone.goto(link)
     // A right code reloads the page with the new token, so a read can land mid-reload
@@ -292,6 +301,12 @@ test.describe('Open from a browser', () => {
     expect(phone.url()).not.toContain('#pair')
     await phone.waitForTimeout(1_500)
     await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
+    // The server says a browser signed in (browser:signed-in): a fresh link replaces the shown
+    // one by itself, with no reload or click.
+    await expect.poll(() => shown.getAttribute('href'), { timeout: 15_000 }).not.toBe(before)
+    const after = (await shown.getAttribute('href'))!
+    expect(after.startsWith(`${tunnelUrl}/#pair=`)).toBe(true)
+    expect(after).toMatch(/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/)
     await phone.context().close()
   })
 
@@ -411,7 +426,8 @@ test.describe('Open from a browser', () => {
     await openDevices(page)
     await page.getByTestId('browser-access-enabled').click()
     await expect(page.getByTestId('browser-access-state')).toContainText('Runs Custom command while Walnut runs', { timeout: 30_000 })
-    await expect(page.getByTestId('browser-access-url')).toHaveCount(0)
+    await expect(page.getByTestId('browser-access-link')).toHaveCount(0)
+    await expect(page.getByTestId('browser-access-code')).toContainText('The link shows here once the tunnel is connected.')
     await expect.poll(async () => {
       try { await fetch(`${tunnelUrl}/api/v1/instance`, { signal: AbortSignal.timeout(2_000) }); return 'open' } catch { return 'closed' }
     }, { timeout: 15_000 }).toBe('closed')

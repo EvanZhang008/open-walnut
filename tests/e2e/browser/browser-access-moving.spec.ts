@@ -13,6 +13,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -51,6 +52,13 @@ async function serve(page: Page, s: Server) {
     if (s.afterRetry) s.status = s.afterRetry
     await route.fulfill({ json: { status: s.status } })
   })
+  // The phone link Settings makes by itself once connected (this computer's address).
+  await page.route('**/api/devices/browser-code', (route) => route.fulfill({
+    json: {
+      code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`,
+      addresses: [{ where: 'this-computer', label: 'This computer', url: URL_HERE, link: `${URL_HERE}/#pair=ABCD-EFGH`, alwaysOn: false }],
+    },
+  }))
 }
 
 /** Into the app through a link, then Settings by clicks (SPA navigation only). */
@@ -61,6 +69,7 @@ async function openSettings(page: Page, baseURL: string | undefined) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-devices').click()
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   await expect(group).not.toContainText('Loading...', { timeout: 30_000 })
   return group
@@ -87,8 +96,8 @@ test('moving to a host: it runs here meanwhile, says what the host does, and fol
   await expect(state).toHaveText('Connected through Acme Tunnel. Moving to Dev box once it runs there. Installing Walnut 0.6.7-abc1234 on the host.')
   await expect(state).toHaveAttribute('data-state', 'connected')
   await expect(state.locator('.browser-access-dot')).toHaveAttribute('data-dot', 'done')
-  // This computer's address answers meanwhile; no Retry while it does.
-  await expect(page.getByTestId('browser-access-url')).toHaveText('someone-acme-demo.acme-tunnel.example')
+  // This computer's address answers meanwhile: the phone link opens it; no Retry while it does.
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HERE}/#pair=ABCD-EFGH`)
   await expect(page.getByTestId('browser-access-retry')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-runs-on-devbox')).toHaveAttribute('aria-checked', 'true')
   await shot(page, '1-moving-installing-walnut', group)
@@ -103,7 +112,7 @@ test('moving to a host: it runs here meanwhile, says what the host does, and fol
   // The host holds it: the line names the host, without a reload or a click.
   s.status = { ...base, state: 'connected', url: URL_HERE, runsOn: RUNS_ON }
   await expect(state).toHaveText('Connected through Acme Tunnel on Dev box.', { timeout: 10_000 })
-  await expect(page.getByTestId('browser-access-url')).toHaveText('someone-acme-demo.acme-tunnel.example')
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HERE}/#pair=ABCD-EFGH`)
   await shot(page, '3-handed-over', group)
   expect(errors).toEqual([])
 })

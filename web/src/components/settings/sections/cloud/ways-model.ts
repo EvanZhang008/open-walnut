@@ -12,6 +12,7 @@
 import { timeAgo } from '@/utils/time';
 import type { ExposeStatus } from './browser-access-status';
 import type { PairTargetKind } from './usePairDevice';
+import { BROWSER_LINK_TITLE, browserLinkSubtitle, type BrowserLinkName } from './browser-link-name';
 
 export type WayId = 'cloud' | 'tailscale' | 'browser';
 export type WayDot = 'on' | 'off' | 'warn';
@@ -36,6 +37,8 @@ export interface WaysInput {
   tailscale?: { installed: boolean; running: boolean };
   /** GET /api/expose `status`; null while it loads, 'failed' when it could not be read. */
   expose: ExposeStatus | null | 'failed';
+  /** What the browser link is called: a plugin's tunnel names it after itself (browser-link-name.ts). */
+  linkName?: BrowserLinkName;
   now?: number;
 }
 
@@ -126,8 +129,8 @@ function tailscaleWay(i: WaysInput): Way {
 function browserWay(i: WaysInput): Way {
   const base = {
     id: 'browser' as const,
-    title: 'Browser link',
-    what: 'An HTTPS address that opens Walnut in any browser after you sign in.',
+    title: i.linkName?.title ?? BROWSER_LINK_TITLE,
+    what: browserLinkSubtitle(i.linkName ?? { title: BROWSER_LINK_TITLE, plugin: null }),
     useWhen: 'You are on a computer or phone without the Walnut app.',
     inUse: false,
   };

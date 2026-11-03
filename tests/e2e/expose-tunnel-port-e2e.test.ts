@@ -149,6 +149,11 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
     const pair = (code: string) => fetch(`${tunnelUrl}/api/v1/browser-pair`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }),
     })
+    // Settings on this machine hears that the code was used (browser:signed-in), so it shows a new link.
+    const frames: string[] = []
+    const watcher = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+    watcher.on('message', (data) => frames.push(String(data)))
+    await new Promise((resolve, reject) => { watcher.on('open', resolve); watcher.on('error', reject) })
     const wrong = await pair('ZZZZ-ZZZZ')
     expect(wrong.status).toBe(400)
     expect((await wrong.json()).error.code).toBe('invalid_code')
@@ -157,6 +162,8 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
     const paired = await right.json()
     expect(paired.name).toMatch(/^browser-[0-9a-f]{6}$/)
     token = paired.token
+    await waitFor(async () => frames.some((f) => f.includes('"browser:signed-in"')))
+    watcher.close()
     expect((await pair(body.code)).status).toBe(400)
   })
 

@@ -25,44 +25,19 @@
   word-break: break-all;
 }
 
-.browser-access-code-row {
-  align-items: flex-start;
-  gap: 8px;
-}
 
-.browser-access-code {
-  font-size: 24px;
-  line-height: 30px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  color: var(--fg);
-  user-select: all;
-}
 
-.browser-access-qr {
-  border-radius: 8px;
-  background: #fff;
-}
 
-.browser-access-link-row {
-  max-width: 100%;
-}
 
 .browser-access-link {
+  display: block;
   min-width: 0;
+  margin-bottom: 4px;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.browser-access-manual summary {
-  cursor: pointer;
-  color: var(--fg-muted);
-  font-size: 13px;
-}
 
-.browser-access-manual[open] summary {
-  margin-bottom: 6px;
-}
 
 .browser-access-code-inline {
   font-weight: 600;

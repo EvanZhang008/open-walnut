@@ -510,6 +510,48 @@ describe('host server manager', () => {
     expect(host.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
   })
 
+  it('an upload whose own SSH login was refused runs again by itself until a login works', async () => {
+    const m = createHostServerManager(deps({ loginRetryMs: [20, 1_500] }))
+    const host = fakeHost()
+    host.pollsUntilReady = 1
+    let refusals = 2
+    const upload = host.uploadFile.bind(host)
+    host.uploadFile = async (p, data, opts) => {
+      if (p.endsWith('.gz') && refusals > 0) {
+        refusals -= 1
+        // What daemon-connection.ts throws when the upload's fresh SSH login is refused.
+        const err = new Error('a new SSH login to devbox was refused (proxy_login), the upload waits until a new login works')
+        err.name = 'SshLoginRefusedError'
+        throw err
+      }
+      return upload(p, data, opts)
+    }
+    await m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'error' })
+    expect(m.view('devbox').message).toMatch(/refused \(proxy_login\).*Walnut tries again in 0 s\./)
+    // No connect, no Retry: it tries again, twice, and the second one gets through.
+    await expect.poll(() => host.calls.includes('launch'), { timeout: 5_000 }).toBe(true)
+    expect(refusals).toBe(0)
+    await expect.poll(() => m.view('devbox').phase, { timeout: 5_000 }).not.toBe('error')
+    // A login that worked ends the waiting: a refusal days later starts again at the first wait.
+    refusals = 1
+    host.installState = 'absent'
+    await m.reconcile('devbox', { retry: true })
+    expect(m.view('devbox').message).toMatch(/tries again in 0 s\./)
+    m.stop()
+  })
+
+  it('any other setup failure still waits for Retry', async () => {
+    const m = createHostServerManager(deps({ loginRetryMs: [10] }))
+    const host = fakeHost()
+    let uploads = 0
+    host.uploadFile = async () => { uploads += 1; throw new Error('disk full') }
+    await m.connected(host)
+    await new Promise((r) => setTimeout(r, 80))
+    expect(uploads).toBe(1)
+    expect(m.view('devbox').message).not.toMatch(/tries again/)
+  })
+
   it('a new build that does not answer gives the host back the one that did, until Retry', async () => {
     const host = fakeHost()
     // 0.6.6 was installed and answered.

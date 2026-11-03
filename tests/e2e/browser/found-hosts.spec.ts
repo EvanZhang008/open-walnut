@@ -162,7 +162,12 @@ test('Runs on leads to a found always-on host with Connect first', async ({ page
     await route.fulfill({ json: { ok: true, host: 'lab-mac', answer: 'yes' } })
   })
   await openSettings(page, 'settings-nav-devices')
+  // A plugin's tunnel names the way after itself: its card, its nav row and its pane title.
+  await expect(page.getByTestId('devices-way-browser').locator('.devices-way-title')).toHaveText('Acme Tunnel', { timeout: 30_000 })
   await openWay(page, 'browser')
+  await expect(page.locator('#devices-browser-title')).toHaveText('Acme Tunnel')
+  await expect(page.getByTestId('settings-nav-devices-browser')).toContainText('Acme Tunnel')
+  await expect(page.getByTestId('settings-nav-devices-browser')).not.toContainText('Browser link')
   const runsOn = page.getByTestId('browser-access-runs-on')
   await expect(runsOn).toBeVisible({ timeout: 30_000 })
   await expect(runsOn).toContainText('Lab Mac stays on, but Walnut found it in ~/.ssh/config and does not connect to it until you say so.')

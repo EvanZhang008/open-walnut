@@ -64,6 +64,13 @@ async function serve(page: Page, s: Server) {
     await route.fulfill({ json: exposeBody(s) })
   })
   await page.route('**/api/host-servers', (route) => route.fulfill({ json: hostsBody(s) }))
+  // The phone link Settings makes by itself once connected: the host's always-on address first.
+  await page.route('**/api/devices/browser-code', (route) => route.fulfill({
+    json: {
+      code: 'ABCD-EFGH', expiresAt: Date.now() + 600_000, url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`,
+      addresses: [{ where: 'devbox', label: 'Dev box', url: URL_HOST, link: `${URL_HOST}/#pair=ABCD-EFGH`, alwaysOn: true }],
+    },
+  }))
 }
 
 async function openSettings(page: Page, nav: string) {
@@ -95,7 +102,7 @@ test('runs on the always-on host by default; moves to this computer and back', a
   await expect(page.getByTestId('browser-access-runs-on-devbox')).toHaveAttribute('aria-checked', 'true')
   await expect(runsOn).toContainText('Dev box stays on, so the address answers while this computer sleeps.')
   await expect(page.getByTestId('browser-access-state')).toHaveText('Connected through Acme Tunnel on Dev box.')
-  await expect(page.getByTestId('browser-access-url')).toHaveText('someone-walnut.acme-tunnel.example')
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HOST}/#pair=ABCD-EFGH`)
   await group.scrollIntoViewIfNeeded()
   await shot(page, '1-on-host', group)
 

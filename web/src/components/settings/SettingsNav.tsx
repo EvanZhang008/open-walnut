@@ -21,6 +21,8 @@ import { corePaneFilterEntry, navRowShown } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
 import { SettingsIcon, assignPluginTint, monogramFor, tileKey, type SettingsGlyphName } from './settings-icons'
 import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './settings-pane-context'
+import { WAY_PANES } from './settings-way-panes'
+import { browserLinkSubtitle, useBrowserLinkName } from './sections/cloud/browser-link-name'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
 
@@ -192,6 +194,8 @@ export function useSettingsNavModel(): SettingsNavModel {
   }, [apps.all, pluginUi.settings])
 
   const closedGates = useClosedPaneGates()
+  // A plugin's tunnel names the browser link after itself (browser-link-name.ts).
+  const linkName = useBrowserLinkName()
 
   return useMemo(() => {
     const byGroup = (g: NavGroup) => CORE_ROWS.filter((r) => {
@@ -209,14 +213,20 @@ export function useSettingsNavModel(): SettingsNavModel {
     ]
     const metaByKey = new Map<string, SettingsPaneMeta>(CORE_META)
     for (const r of dynamic.panelRows) metaByKey.set(r.key, r.meta)
+    const named = rows.map((r) => {
+      if (r.key !== WAY_PANES.browser || !linkName.plugin) return r
+      const meta = { ...r.meta, label: linkName.title, title: linkName.title, description: browserLinkSubtitle(linkName) }
+      metaByKey.set(r.key, meta)
+      return { ...r, label: linkName.title, meta }
+    })
     return {
-      rows,
+      rows: named,
       ready,
       pluginKeys: [...dynamic.pluginPanes.keys()],
       pluginPanes: dynamic.pluginPanes,
       metaFor: (sectionId: string) => metaByKey.get(sectionId),
     }
-  }, [dynamic, ready, closedGates])
+  }, [dynamic, ready, closedGates, linkName])
 }
 
 function readPluginCount(): number {

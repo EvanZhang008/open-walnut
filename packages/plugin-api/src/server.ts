@@ -1610,6 +1610,11 @@ export interface ExposeProviderOption {
   help?: string
   /** A regular expression (source text) the value must match in full. */
   pattern?: string
+  /**
+   * The provider fills it itself (`default`, a name it made for this machine, say), so the person
+   * types nothing: Settings shows no field for it. A value saved before still wins.
+   */
+  hidden?: boolean
 }
 
 /**

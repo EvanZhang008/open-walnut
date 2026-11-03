@@ -99,6 +99,13 @@ const DEF: ExposeProviderDefinition = {
 }
 
 describe('resolveRun', () => {
+  it('a blank value saved for a hidden option means its default; for a shown option it stays the value', () => {
+    const hidden: ExposeProviderDefinition = { ...DEF, options: [{ ...DEF.options![0]!, hidden: true }] }
+    expect(resolveRun(hidden, 1, { name: '' }).args[3]).toBe('acme-demo')
+    expect(resolveRun(hidden, 1, { name: '  ' }).args[3]).toBe('acme-demo')
+    expect(resolveRun(hidden, 1, { name: 'mybox' }).args[3]).toBe('mybox')
+    expect(() => resolveRun(DEF, 1, { name: '' })).toThrow(/^Name is not valid for /)
+  })
   it('fills the port and the options into the arguments', () => {
     const run = resolveRun(DEF, 41234, { name: 'mybox' })
     expect(run.args).toEqual(['create', '41234', '--name', 'mybox'])

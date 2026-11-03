@@ -63,7 +63,7 @@ async function mockDevices(page: Page): Promise<MintControl> {
   }))
   await page.route((url) => url.pathname === '/api/expose', (route) => json(route, {
     status: { enabled: true, provider: 'command', providerTitle: 'Example tunnel', state: 'connected', since: Date.now(), url: 'https://walnut.tunnel.example' },
-    providers: [{ id: 'command', title: 'Example tunnel', owner: 'walnut', options: [] }],
+    providers: [{ id: 'command', title: 'Example tunnel', owner: 'core', options: [] }],
     places: [],
     settings: { enabled: true, provider: 'command', options: {} },
   }))

@@ -108,7 +108,9 @@ function expandHome(input: string): string {
 export function resolveRun(def: ExposeProviderDefinition, port: number, values: Record<string, string> = {}): ExposeRun {
   const filled: Record<string, string> = { port: String(port) }
   for (const option of def.options ?? []) {
-    const value = (values[option.key] ?? option.default ?? '').trim()
+    // A hidden option is the provider's own: a blank value saved for it means its default.
+    const saved = option.hidden && !values[option.key]?.trim() ? undefined : values[option.key]
+    const value = (saved ?? option.default ?? '').trim()
     if (option.pattern && !new RegExp(`^(?:${option.pattern})$`).test(value)) {
       throw new Error(`${option.label} is not valid for ${def.title}: it does not have the format the tunnel provider expects.`)
     }

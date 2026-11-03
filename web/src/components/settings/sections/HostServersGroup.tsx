@@ -22,7 +22,7 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { saveErrorMessage } from '../settings-pane-context';
-import { describeExpose } from './cloud/browser-access-status';
+import { describeExpose, optionFits } from './cloud/browser-access-status';
 import { describeHostServer, hostServersPollMs, type HostCopyChoice, type HostServerEntry, type HostServersResponse } from './host-servers-status';
 import { ReplicaCopyRows } from './ReplicaCopyRows';
 import '@/styles/browser-access.css';
@@ -225,7 +225,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                     }
                   />
                 )}
-                {(provider?.options ?? []).map((option) => (
+                {(provider?.options ?? []).filter((option) => !option.hidden || !optionFits(option, exposeSettings.options[option.key])).map((option) => (
                   <SettingsRow
                     indent
                     key={option.key}

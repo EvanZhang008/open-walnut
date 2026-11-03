@@ -28,6 +28,10 @@ import { getConfig } from '../../core/config-manager.js'
 import { getHostServerManager } from '../../core/host-server/index.js'
 import { isPersonAtThisMachine } from './expose.js'
 import { log } from '../../logging/index.js'
+import { bus } from '../../core/event-bus.js'
+
+/** A browser signed in with a link's code: the web's phone link makes the next one. */
+export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in'
 
 export const browserCodeRouter = Router()
 export const browserPairV1Router = Router()
@@ -126,6 +130,8 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     clearAuthFailures(codeKey)
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })
+    // Its link is used up: Settings shows the next one (BrowserAccessGroup's phone link).
+    bus.emit(BROWSER_SIGNED_IN_EVENT, { name }, ['web-ui'], { source: 'browser-pair' })
     res.json({ token: device.token, name })
   } catch (err) {
     next(err)

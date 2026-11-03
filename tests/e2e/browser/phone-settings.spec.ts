@@ -3,7 +3,7 @@
  * C39, C51, C74, C75) on an iPhone 15.
  *
  *   the computer's own browser (the fixture trusts it): list, pane, back,
- *     rows stacked, Show QR code still offered
+ *     rows stacked, the Open on your phone row still offered
  *   a phone through a tunnel (a loopback proxy Walnut does not trust, the
  *     pattern of browser-access-tunnel.spec.ts): no code buttons, its own row
  *     marked, no Remove on other rows, Sign out this phone
@@ -274,11 +274,11 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await openSettings(page)
     await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
     await openWay(page, 'browser')
-    await expect(page.getByTestId('browser-access-make-code')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('browser-access-code')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('browser-access-codes-elsewhere')).toHaveCount(0)
     // N2-36: this tab is on the computer's own address and holds no device token,
     // so nothing can sign it out after a week: no Home Screen tip here.
-    await expect(page.getByTestId('devices-pane-loaded').or(page.getByTestId('browser-access-make-code')).first()).toBeVisible()
+    await expect(page.getByTestId('devices-pane-loaded').or(page.getByTestId('browser-access-code')).first()).toBeVisible()
     await backToDevices(page)
     await expect(page.getByTestId('devices-home-screen-hint')).toHaveCount(0)
     await expect(page.getByText('Add Walnut to your Home Screen', { exact: false })).toHaveCount(0)
@@ -343,8 +343,9 @@ test.describe('a phone signed in through a tunnel', () => {
     const devices = phone.locator('#devices')
     await expect(devices.getByTestId('devices-browsers-group')).toBeVisible({ timeout: 30_000 })
     await openWay(phone, 'browser')
-    await expect(phone.getByTestId('browser-access-make-code')).toHaveCount(0)
-    await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('Make sign-in codes on the computer Walnut runs on.')
+    await expect(phone.getByTestId('browser-access-code')).toHaveCount(0)
+    await expect(phone.getByTestId('browser-access-link')).toHaveCount(0)
+    await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The phone link shows on the computer Walnut runs on.')
     // The Browser link sub-page leads back to the list of devices on Phones & Cloud.
     await backToDevices(phone)
     await expect(devices).not.toContainText('No phones paired yet.')
@@ -414,7 +415,7 @@ test.describe('on a computer', () => {
     const pane = (await page.locator('.settings-pane').boundingBox())!
     expect(pane.x).toBeGreaterThanOrEqual(nav.x + nav.width - 1)
     await openWay(page, 'browser')
-    await expect(page.getByTestId('browser-access-make-code')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('browser-access-code')).toBeVisible({ timeout: 30_000 })
   })
 })
 

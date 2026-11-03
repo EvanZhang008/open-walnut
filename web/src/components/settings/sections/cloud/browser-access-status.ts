@@ -41,6 +41,8 @@ export interface ExposeProviderOption {
   default?: string;
   help?: string;
   pattern?: string;
+  /** The provider fills it itself: no field for it. */
+  hidden?: boolean;
 }
 
 export interface ExposeProviderInfo {
@@ -123,4 +125,13 @@ export function exposePollMs(status: ExposeStatus | null): number {
   if (!status) return 3_000;
   if (status.movingTo) return 3_000;
   return status.state === 'off' || status.state === 'connected' || status.state === 'unavailable' ? 30_000 : 3_000;
+}
+
+/**
+ * A saved value the option takes. None saved, or a blank one, means the provider's own default
+ * (src/core/expose/supervisor.ts resolveRun does the same for a hidden option), so it fits.
+ */
+export function optionFits(option: { pattern?: string }, saved: string | undefined): boolean {
+  if (!saved?.trim() || !option.pattern) return true;
+  try { return new RegExp(`^(?:${option.pattern})$`).test(saved.trim()); } catch { return true; }
 }

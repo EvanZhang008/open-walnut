@@ -12,6 +12,7 @@ import { apiDelete } from '@/api/client';
 import { devicesListChanged } from './cloud/devices-list';
 import { PairQrDialog, type PairQrPhase } from './cloud/PairQrDialog';
 import { WaysOverview } from './cloud/WaysOverview';
+import { useBrowserLinkName } from './cloud/browser-link-name';
 import { deriveWays, type WayId } from './cloud/ways-model';
 import { WAY_PANES } from '../settings-way-panes';
 import { requestFailureText } from '@/utils/request-failure';
@@ -104,6 +105,7 @@ export function DevicesSection() {
   const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
   const qrReturnFocus = useRef<HTMLElement | null>(null);
   const expose = useExposeStatus(replica);
+  const linkName = useBrowserLinkName();
   const { notifySaved } = useSettingsSaved();
   // A browser signed in with a code: its own row says so, other rows offer no Remove.
   const caller = useDeviceCaller();
@@ -262,6 +264,7 @@ export function DevicesSection() {
     cloudWithheld,
     tailscale,
     expose,
+    linkName,
   });
   // Each way is its own sub-page (Settings > Phones & Cloud > Tailscale): a card drills in.
   const onWayAction = (id: WayId) => navigate({ hash: `#${WAY_PANES[id]}` }, { replace: true });

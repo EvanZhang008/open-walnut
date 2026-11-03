@@ -215,6 +215,8 @@ export interface ManagerDeps {
   frozen?(): boolean | Promise<boolean>
   pollMs?: number
   installPollMs?: number
+  /** Waits before a setup an SSH login refused runs again (tests shorten them). */
+  loginRetryMs?: readonly number[]
   /** How long a started server has to send its first report. */
   firstReportMs?: number
   /** When this server began serving its build (default: when the manager was made). */
@@ -286,6 +288,32 @@ export function createHostServerManager(deps: ManagerDeps) {
   const running = new Map<string, Promise<void>>()
   const rerun = new Set<string>()
   const retries = new Set<string>()
+  /**
+   * A setup whose own SSH login was refused (a sign-in that expired or was being renewed, the
+   * proxy's login): it runs again by itself, later and later, until a login works. Before, it
+   * waited for the next connect or Retry, so a renewal at the wrong second left the tunnel on
+   * this Mac for good (2026-11-03).
+   */
+  const loginWaits = new Map<string, { n: number; timer: ReturnType<typeof setTimeout> | null }>()
+  const LOGIN_RETRY_MS = deps.loginRetryMs ?? [30_000, 60_000, 120_000, 300_000, 600_000]
+  function loginRefused(hostKey: string, message: string): string {
+    const wait = loginWaits.get(hostKey) ?? { n: 0, timer: null }
+    if (wait.timer) clearTimeout(wait.timer)
+    const ms = LOGIN_RETRY_MS[Math.min(wait.n, LOGIN_RETRY_MS.length - 1)]!
+    wait.n += 1
+    wait.timer = setTimeout(() => {
+      wait.timer = null
+      if (hosts.get(hostKey)?.connected) void reconcile(hostKey)
+    }, ms)
+    wait.timer.unref?.()
+    loginWaits.set(hostKey, wait)
+    return `${message}. Walnut tries again in ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`}.`
+  }
+  function loginWorked(hostKey: string): void {
+    const wait = loginWaits.get(hostKey)
+    if (wait?.timer) clearTimeout(wait.timer)
+    loginWaits.delete(hostKey)
+  }
   const polls = new Map<string, ReturnType<typeof setInterval>>()
   /** Per host set up: the copy target, the spec last sent (for a tunnel retry), the server pid the target last heard of. */
   const links = new Map<string, { target?: HostCopyTarget; spec?: Record<string, unknown>; ranAs?: number }>()
@@ -609,6 +637,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const enabled = settings?.enabled === true
     if (!enabled) {
       stopPoll(hostKey)
+      loginWorked(hostKey)
       // Also after a restart of this server: the host may still run one it set up before.
       if (host?.connected && host.hasCapability('host-server-v1')) {
         const st = await host.send('server.status', { home: deps.home }, 10_000).catch(() => null)
@@ -740,7 +769,9 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (err instanceof StoppingHere) return
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
-      set(hostKey, { phase: 'error', message })
+      // A refused login is no verdict on the host: try again by itself (loginWaits).
+      const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
+      set(hostKey, { phase: 'error', message: refused ? loginRefused(hostKey, message) : message })
     }
   }
 
@@ -846,6 +877,8 @@ export function createHostServerManager(deps: ManagerDeps) {
         rerun.delete(hostKey)
         const retry = retries.delete(hostKey)
         await reconcileOnce(hostKey, retry)
+        // Whatever path it took, a setup that did not end in an error got its login: wait no more.
+        if (view(hostKey).phase !== 'error') loginWorked(hostKey)
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)
@@ -914,6 +947,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     },
     stop(): void {
       for (const key of [...polls.keys()]) stopPoll(key)
+      for (const key of [...loginWaits.keys()]) loginWorked(key)
     },
   }
 }
