@@ -6,29 +6,41 @@ import XCTest
 /// pushed session to the chat under it, as every tab of every app does.) (the user, 2026-11-02: "if I am in the main
 /// chat, stay in the main chat, don't turn it into a new chat").
 ///
-/// Paired tests: they need a server with chats, an org and asks (`WALNUT_UITEST_SERVER`
-/// through `ios-native/tests/ui/run-ui-tests.sh`), and they SKIP without one. Point
-/// them at an isolated server (an ephemeral copy), never production: opening a chat
-/// sends attention heartbeats, which are writes. Nothing here sends a message.
+/// The app is paired to `ChatPlaceFixtureServer`, a loopback server this runner hosts
+/// with a Main, two conversations and an ask, so the tests run anywhere, CI included,
+/// with no Walnut and nobody's data. Nothing here sends a message.
 final class ChatPlaceUITests: XCTestCase {
 
-    override func setUp() {
-        super.setUp()
+    private var fixture: ChatPlaceFixtureServer?
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
         continueAfterFailure = false
+        // A loaded CI runner can take a while to bring a listener up: once more on a miss.
+        do {
+            let server = try ChatPlaceFixtureServer()
+            try server.start()
+            fixture = server
+        } catch {
+            let server = try ChatPlaceFixtureServer()
+            try server.start()
+            fixture = server
+        }
+    }
+
+    override func tearDown() {
+        fixture?.stop()
+        fixture = nil
+        super.tearDown()
     }
 
     private var arguments: [String] = []
 
     private func launchPaired() throws -> XCUIApplication {
-        guard
-            let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
-            let token = ProcessInfo.processInfo.environment["WALNUT_UITEST_TOKEN"],
-            !server.isEmpty, !token.isEmpty, !server.contains(":9/"), !server.hasSuffix(":9")
-        else {
-            throw XCTSkip("no paired server reached the runner (use tests/ui/run-ui-tests.sh)")
-        }
+        let server = try XCTUnwrap(fixture).url
+        let token = "chat-place-fixture"
         arguments = [
-            "-walnut.serverUrl", UITestLaunch.pairedServer(server),
+            "-walnut.serverUrl", server,
             "-walnut.deviceToken", token,
         ]
         let app = UITestLaunch.launch(arguments)
@@ -111,6 +123,7 @@ final class ChatPlaceUITests: XCTestCase {
     /// Main (the org's CEO node), opened from the drawer's Org view.
     func testMainChatComesBackOnEveryReturn() throws {
         let app = try launchPaired()
+        backToTheChat(app)
         openDrawer(app, view: "Org")
         let ceo = app.buttons["chat.drawer.org.ceo"]
         XCTAssertTrue(ceo.waitForExistence(timeout: 30), "no Main row in the drawer's Org view")

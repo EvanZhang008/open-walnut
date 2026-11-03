@@ -1,0 +1,233 @@
+import Foundation
+import Network
+
+/// The server `ChatPlaceUITests` pair the app to: a loopback `/api/v1` the test
+/// runner hosts itself, so the tests need no Walnut anywhere (CI runs with none) and
+/// never touch anyone's data. It holds just what the Chat tab's ways back need: one
+/// agent with two conversations, one ask with a session, and an org whose Main has a
+/// session. Field names follow `src/web/routes/api-v1.ts` and the app's decoders;
+/// anything else answers the v1 404, which the app reads as "not on this server",
+/// never as offline. Event streams are held open with comments, as the real ones are.
+///
+/// Port 0 on 127.0.0.1 (the simulator shares the Mac's loopback), so two runs never
+/// collide and it is never production's port.
+final class ChatPlaceFixtureServer {
+    static let mainTaskID = "task-fixture-main"
+    static let mainSessionID = "sess-fixture-main"
+    static let askTaskID = "task-fixture-ask"
+    static let askSessionID = "sess-fixture-ask"
+    static let conversationIDs = ["conv-fixture-1", "conv-fixture-2"]
+
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "chat-place-fixture")
+    /// Open event streams, each pinged every 20 s: the app's stream watchdog
+    /// reconnects after 50 s of silence.
+    private var held: [ObjectIdentifier: NWConnection] = [:]
+    private var ping: DispatchSourceTimer?
+    private(set) var port: UInt16 = 0
+
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        parameters.allowLocalEndpointReuse = true
+        listener = try NWListener(using: parameters)
+    }
+
+    var url: String { "http://127.0.0.1:\(port)" }
+
+    func start(timeout: TimeInterval = 30) throws {
+        let ready = DispatchSemaphore(value: 0)
+        var failure: Error?
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready: ready.signal()
+            case .failed(let error): failure = error; ready.signal()
+            default: break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.start(queue: queue)
+        guard ready.wait(timeout: .now() + timeout) == .success else {
+            listener.cancel()
+            throw NSError(domain: "ChatPlaceFixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "listener never got ready"])
+        }
+        if let failure { throw failure }
+        port = listener.port?.rawValue ?? 0
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 20, repeating: 20)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            for connection in self.held.values {
+                connection.send(content: Data(": ping\n\n".utf8), completion: .contentProcessed { _ in })
+            }
+        }
+        timer.resume()
+        ping = timer
+    }
+
+    func stop() {
+        queue.sync {
+            ping?.cancel()
+            ping = nil
+            for connection in held.values { connection.cancel() }
+            held.removeAll()
+        }
+        listener.cancel()
+    }
+
+    // MARK: - HTTP
+
+    private func accept(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        read(connection, buffer: Data())
+    }
+
+    private func read(_ connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, done, error in
+            guard let self else { return }
+            var buffer = buffer
+            if let data { buffer.append(data) }
+            if let head = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                let header = String(decoding: buffer[..<head.lowerBound], as: UTF8.self)
+                let length = Self.contentLength(header)
+                if buffer.count - head.upperBound >= length {
+                    self.answer(connection, requestLine: header.components(separatedBy: "\r\n").first ?? "")
+                    return
+                }
+            }
+            if done || error != nil { connection.cancel(); return }
+            self.read(connection, buffer: buffer)
+        }
+    }
+
+    private static func contentLength(_ header: String) -> Int {
+        for line in header.components(separatedBy: "\r\n") {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            if parts.count == 2, parts[0].lowercased() == "content-length" {
+                return Int(parts[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+        return 0
+    }
+
+    private func answer(_ connection: NWConnection, requestLine: String) {
+        let parts = requestLine.split(separator: " ")
+        let method = parts.first.map(String.init) ?? "GET"
+        let target = parts.count > 1 ? String(parts[1]) : "/"
+        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
+        if method == "GET", Self.isStream(path) {
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
+                + "Connection: keep-alive\r\n\r\n: fixture\n\n"
+            let key = ObjectIdentifier(connection)
+            held[key] = connection
+            connection.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .failed, .cancelled: self?.held[key] = nil
+                default: break
+                }
+            }
+            connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
+            return
+        }
+        let (status, body) = route(method: method, path: path)
+        let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
+        let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
+            + "Content-Length: \(data.count)\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private static func isStream(_ path: String) -> Bool {
+        path == "/api/v1/events"
+            || (path.hasSuffix("/stream")
+                && (path.hasPrefix("/api/v1/sessions/") || path.hasPrefix("/api/v1/conversations/")))
+    }
+
+    // MARK: - The data
+
+    private static let at = "2026-11-02T10:00:00.000Z"
+
+    private static func session(_ id: String, task: String, title: String) -> [String: Any] {
+        [
+            "id": id, "title": title, "task_id": task, "task_title": title, "host": "",
+            "process_status": "idle", "started_at": at, "last_active_at": at, "message_count": 2,
+        ]
+    }
+
+    /// `GET /sessions/:id`, for an open that comes before the session list.
+    private static func sessionDetail(_ id: String, task: String, title: String) -> [String: Any] {
+        [
+            "session": [
+                "claudeSessionId": id, "taskId": task, "title": title, "process_status": "idle",
+                "host": "", "startedAt": at, "lastActiveAt": at, "messageCount": 2,
+            ],
+            "pendingPermissions": [] as [Any],
+        ]
+    }
+
+    private static func task(_ id: String, title: String, session: String) -> [String: Any] {
+        ["id": id, "title": title, "phase": "IN_PROGRESS", "session_ids": [session], "session_id": session]
+    }
+
+    private func route(method: String, path: String) -> (Int, Any) {
+        let v1 = "/api/v1"
+        guard path.hasPrefix(v1) else { return (404, Self.notFound(path)) }
+        let p = String(path.dropFirst(v1.count))
+        switch (method, p) {
+        case ("GET", ""), ("GET", "/"), ("GET", "/status"):
+            return (200, ["mode": "LIVE", "cloud": false, "version": "0.0.0-fixture", "serverTime": Self.at])
+        case ("GET", "/agents"):
+            return (200, [["id": "general", "name": "Walnut", "isMain": true]])
+        case ("GET", "/conversations"):
+            return (200, [
+                ["id": Self.conversationIDs[0], "title": "Weekend plans", "updatedAt": Self.at, "messageCount": 2],
+                ["id": Self.conversationIDs[1], "title": "Reading list", "updatedAt": Self.at, "messageCount": 2],
+            ])
+        case ("GET", "/asks"):
+            return (200, [
+                "agentId": "general", "project": "Ask Walnut", "total": 1, "launch": true,
+                "asks": [[
+                    "id": Self.askTaskID, "title": "Compare two laptops", "state": "idle",
+                    "activityAt": Self.at, "createdAt": Self.at, "sessionId": Self.askSessionID,
+                    "phase": "IN_PROGRESS", "unread": false,
+                ]],
+            ])
+        case ("GET", "/org"):
+            return (200, ["tree": [
+                "main": ["id": Self.mainTaskID, "title": "Main", "phase": "IN_PROGRESS", "hasSession": true, "name": "Main"],
+                "projects": [] as [Any],
+                "counts": ["open": 0, "running": 0, "needsYou": 0, "waiting": 0],
+            ]])
+        case ("GET", "/sessions"):
+            return (200, ["syncedAt": Self.at, "sessions": [
+                Self.session(Self.mainSessionID, task: Self.mainTaskID, title: "Main"),
+                Self.session(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"),
+            ]])
+        case ("GET", "/tasks/\(Self.mainTaskID)"):
+            return (200, ["task": Self.task(Self.mainTaskID, title: "Main", session: Self.mainSessionID)])
+        case ("GET", "/tasks/\(Self.askTaskID)"):
+            return (200, ["task": Self.task(Self.askTaskID, title: "Compare two laptops", session: Self.askSessionID)])
+        case ("GET", "/sessions/\(Self.mainSessionID)"):
+            return (200, Self.sessionDetail(Self.mainSessionID, task: Self.mainTaskID, title: "Main"))
+        case ("GET", "/sessions/\(Self.askSessionID)"):
+            return (200, Self.sessionDetail(Self.askSessionID, task: Self.askTaskID, title: "Compare two laptops"))
+        case ("GET", "/tasks"):
+            return (200, ["tasks": [] as [Any], "syncedAt": Self.at])
+        case ("GET", "/focus/tasks"):
+            return (200, ["pinned_tasks": [] as [Any]])
+        case ("GET", "/human-inbox"):
+            return (200, ["letters": [] as [Any], "unreadCount": 0])
+        case ("POST", _), ("PUT", _), ("PATCH", _):
+            // Logs, heartbeats, the device row: accepted and forgotten.
+            return (200, ["ok": true])
+        default:
+            if method == "GET", p.hasPrefix("/conversations/"), p.hasSuffix("/messages") {
+                return (200, [] as [Any])
+            }
+            return (404, Self.notFound(path))
+        }
+    }
+
+    private static func notFound(_ path: String) -> [String: Any] {
+        ["error": ["code": "not_found", "message": "the chat place fixture does not serve \(path)"]]
+    }
+}
