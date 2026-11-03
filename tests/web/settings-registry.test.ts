@@ -27,7 +27,8 @@ const EXPECTED_IDS = [
   // No Integrations or Heartbeat entry (removed 2026-10-27). Mail rules follows
   // Triage, which reads only Important mail when grouping is on.
   // Org (2026-11-03): the switch that turns Main and the VPs off.
-  'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'backup',
+  // Passwords (2026-11-03): the vault's auto-lock, agent access, master password and export.
+  'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'passwords', 'backup',
   // Phones & Cloud: `devices` is the main entry; each way is a sub-page under it
   // (`parent: 'devices'`), the Cloud companion one keeping the old `#cloud` link.
   'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'remote-hosts', 'advanced',

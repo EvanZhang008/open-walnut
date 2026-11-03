@@ -904,6 +904,9 @@ recording-state.json
 .obsidian/
 .smart-env
 secrets/
+# The password vault when a server keeps it in the data home (a throwaway or fake-HOME
+# server; the real one lives in ~/.local/state). machine.json there opens it. Root only.
+/vault/
 
 # Credential stores by name. git-sync-secrets.ts also scans what every commit adds.
 ${SECRET_IGNORE_PATTERNS.join('\n')}
@@ -975,7 +978,7 @@ const CRITICAL_IGNORE_FILES = [
   'triage-state.json', 'session-requests.json', 'code-server/instance.json',
 ];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/', 'vault/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -985,7 +988,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/',
  */
 const CRITICAL_IGNORE_LINES: Record<string, string> = {
   'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/', 'local/': '/local/',
-  'components/': '/components/',
+  'components/': '/components/', 'vault/': '/vault/',
 };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,

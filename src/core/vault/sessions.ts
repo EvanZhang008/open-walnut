@@ -1,0 +1,130 @@
+/**
+ * A person's unlock of the vault in one client (docs/reference/passwords.md,
+ * "Unlocking"). The master password (as its password key) buys a vault session
+ * token; every item read or write through the API carries it in
+ * `x-walnut-vault-session`. Sessions live in memory only, so a restart locks
+ * every client. A session ends after `idleMinutes` without use (the client's
+ * auto-lock), after MAX_SESSION_HOURS whatever happens, or on Lock.
+ *
+ * Wrong passwords are slowed down per server: after FREE_FAILURES in a row, each
+ * further try waits twice as long as the last (30 s up to an hour). Every check of the
+ * master password (unlock, export, a new password, the Secret Key, the agents switch)
+ * counts, and only one runs at a time (beginAttempt).
+ */
+import crypto from 'node:crypto'
+
+export const SESSION_HEADER = 'x-walnut-vault-session'
+export const DEFAULT_IDLE_MINUTES = 15
+export const MAX_SESSION_HOURS = 12
+const FREE_FAILURES = 5
+
+interface Session { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number }
+
+const sessions = new Map<string, Session>()
+
+function hashOf(token: string): string {
+  return crypto.createHash('sha256').update(`walnut-vault-session\0${token}`).digest('hex')
+}
+
+export function createSession(client: string, idleMinutes: number): { token: string; expiresAt: string; idleMinutes: number } {
+  const token = crypto.randomBytes(32).toString('base64url')
+  const now = Date.now()
+  const idle = Math.max(1, Math.min(MAX_SESSION_HOURS * 60, Math.round(idleMinutes || DEFAULT_IDLE_MINUTES)))
+  sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs: idle * 60_000 })
+  return { token, expiresAt: new Date(now + idle * 60_000).toISOString(), idleMinutes: idle }
+}
+
+function live(s: Session, now: number): boolean {
+  return now - s.lastUsedAt <= s.idleMs && now - s.createdAt <= MAX_SESSION_HOURS * 3_600_000
+}
+
+/**
+ * The session for a token, or null. `touch` (default) restarts its idle clock; a read the page
+ * makes by itself (the one-time code refreshing every 30 s) passes false, so an open item
+ * never keeps a window unlocked.
+ */
+export function useSession(token: string | undefined, touch = true): { client: string } | null {
+  if (!token) return null
+  const s = sessions.get(hashOf(token))
+  const now = Date.now()
+  if (!s) return null
+  if (!live(s, now)) { sessions.delete(s.hash); return null }
+  if (touch) s.lastUsedAt = now
+  return { client: s.client }
+}
+
+export function endSession(token: string | undefined): void {
+  if (token) sessions.delete(hashOf(token))
+}
+
+/** Every session but `keep` (a new master password locks the other windows). */
+export function endOtherSessions(keep: string | undefined): number {
+  const k = keep ? hashOf(keep) : ''
+  let n = 0
+  for (const h of [...sessions.keys()]) if (h !== k) { sessions.delete(h); n++ }
+  return n
+}
+
+export function endAllSessions(): number {
+  const n = sessions.size
+  sessions.clear()
+  return n
+}
+
+export function liveSessionCount(): number {
+  const now = Date.now()
+  for (const s of sessions.values()) if (!live(s, now)) sessions.delete(s.hash)
+  return sessions.size
+}
+
+// ── wrong-password brake ──
+
+let failures = 0
+let blockedUntil = 0
+
+/** Milliseconds until another try is allowed (0 = now). */
+export function unlockWaitMs(now = Date.now()): number {
+  return Math.max(0, blockedUntil - now)
+}
+
+export function noteUnlockFailure(now = Date.now()): void {
+  failures += 1
+  if (failures >= FREE_FAILURES) {
+    const wait = Math.min(3_600_000, 30_000 * 2 ** (failures - FREE_FAILURES))
+    blockedUntil = now + wait
+  }
+}
+
+export function noteUnlockSuccess(): void {
+  failures = 0
+  blockedUntil = 0
+}
+
+let attemptRunning = false
+
+/**
+ * One master-password check at a time, server-wide: a try while the brake holds, or while
+ * another try runs, is refused before any work, so a burst of parallel guesses cannot all
+ * pass the check before the first failure is counted. Returns why not, or null to go on;
+ * the caller ends its try with endAttempt.
+ */
+export function beginAttempt(now = Date.now()): { code: 'unlock_slowed'; waitMs: number } | { code: 'unlock_busy'; waitMs: number } | null {
+  const wait = unlockWaitMs(now)
+  if (wait > 0) return { code: 'unlock_slowed', waitMs: wait }
+  if (attemptRunning) return { code: 'unlock_busy', waitMs: 1000 }
+  attemptRunning = true
+  return null
+}
+
+export function endAttempt(outcome: 'ok' | 'wrong' | 'other'): void {
+  attemptRunning = false
+  if (outcome === 'ok') noteUnlockSuccess()
+  else if (outcome === 'wrong') noteUnlockFailure()
+}
+
+export function resetSessionsForTest(): void {
+  attemptRunning = false
+  sessions.clear()
+  failures = 0
+  blockedUntil = 0
+}

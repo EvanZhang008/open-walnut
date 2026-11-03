@@ -14,6 +14,7 @@ import { HooksSection } from './sections/HooksSection'
 import { MailRulesSection } from './sections/MailRulesSection'
 import { OrgSection } from './sections/OrgSection'
 import { PageUseSection } from './sections/PageUseSection'
+import { PasswordsSection } from './sections/PasswordsSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { ProvidersSection } from './sections/ProvidersSection'
 import { RemoteHostsSection } from './sections/RemoteHostsSection'
@@ -244,6 +245,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'What search results show.',
     keywords: ['index', 'exclude', 'folders', 'notes'],
     render: ({ config, saveSection }) => <SearchSection config={config} onSave={saveSection} />,
+  },
+  {
+    owner: 'walnut', id: 'passwords', label: 'Passwords', title: 'Passwords', group: 'configure',
+    icon: 'key', tint: '#FF9500',
+    description: 'Your password vault: auto-lock, agent access, master password and export.',
+    keywords: ['password', 'vault', 'master password', 'secret key', 'auto-lock', 'export', 'agents', 'autofill'],
+    render: ({ config, saveSection }) => <PasswordsSection config={config} onSave={saveSection} />,
   },
   {
     owner: 'walnut', id: 'backup', label: 'S3 Backup', title: 'S3 Backup', group: 'configure',

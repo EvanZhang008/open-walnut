@@ -218,6 +218,7 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
       'auth.json',
       'plugin-data/',
       'secrets/',
+      '/vault/',
     ]));
   });
 

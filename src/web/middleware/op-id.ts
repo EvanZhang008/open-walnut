@@ -171,6 +171,14 @@ function captureAnswer(res: Response, onEnd: (answer: LedgerOutcome) => void): v
   };
 }
 
+/**
+ * Routes whose answers carry secrets (the password vault): never kept in the applied-ops
+ * ledger, which is a plain file kept for days, and never answered from it, which would skip
+ * the route's own checks. Their writes are not journaled or forwarded either, so an op id
+ * buys them nothing. tests/web/op-id-secret-routes.test.ts pins it.
+ */
+export const SECRET_ROUTE_RE = /^\/api\/v1\/vault(?:[/?]|$)/;
+
 /** The op-id middleware. Mounted on `/api` after auth (an unauthenticated call never takes an id). */
 export function opIdMiddleware(opts: OpIdOptions = {}): RequestHandler {
   const now = opts.now ?? Date.now;
@@ -178,6 +186,7 @@ export function opIdMiddleware(opts: OpIdOptions = {}): RequestHandler {
   const offsetOf = opts.offsetOf ?? hostClockOffset;
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!WRITE_METHODS.has(req.method)) return next();
+    if (SECRET_ROUTE_RE.test(req.originalUrl)) return next();
     const rawId = req.headers[OP_ID_HEADER];
     const rawAt = req.headers[FORWARDED_AT_HEADER];
     if (rawId === undefined && rawAt === undefined) return next();

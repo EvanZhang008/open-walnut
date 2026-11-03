@@ -1,6 +1,6 @@
 import { Navigate } from 'react-router-dom'
 import { appRegistry, type AppComponentProps, type CoreAppContribution } from './registry'
-import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon, AppsIcon } from './icons'
+import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon, AppsIcon, PasswordsIcon } from './icons'
 import { MailApp } from './mail/MailApp'
 import { attachMailBadge } from './mail/mail-live'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -9,6 +9,7 @@ import { CalendarPage } from '@/pages/CalendarPage'
 import { RoutinesPage } from '@/pages/RoutinesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { AppsPage } from '@/pages/AppsPage'
+import { PasswordsApp as PasswordsView } from '@/components/passwords/PasswordsApp'
 import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 
 const EmptyApp = (_props: AppComponentProps) => null
@@ -26,6 +27,7 @@ const CalendarApp = (_props: AppComponentProps) => <CalendarPage />
 const RoutinesApp = (_props: AppComponentProps) => <RoutinesPage />
 const SettingsApp = (_props: AppComponentProps) => <SettingsPage />
 const AppsApp = (_props: AppComponentProps) => <AppsPage />
+const PasswordsApp = (_props: AppComponentProps) => <PasswordsView />
 
 /**
  * Rail order (top → bottom): Home, Notes, Calendar, Tasks, Routines, Apps, Settings.
@@ -54,6 +56,8 @@ export const CORE_APPS: CoreAppContribution[] = [
   },
   { id: 'tasks', title: 'Tasks', path: '/tasks', icon: TasksIcon, component: TasksApp, order: 40 },
   { id: 'routines', title: 'Routines', path: '/routines', icon: ScheduleIcon, component: RoutinesApp, order: 50 },
+  // Passwords (components/passwords/): it owns its three panes and their scroll.
+  { id: 'passwords', title: 'Passwords', path: '/passwords', icon: PasswordsIcon, component: PasswordsApp, order: 60, fullBleed: true },
   // Apps manages everything else on the rail (built-in apps, plugins and their Apps), so
   // it can never be hidden: it is the way back to whatever was hidden. `exactPath`:
   // every plugin App lives under /apps/<id>, which is not the Apps page.

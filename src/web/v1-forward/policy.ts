@@ -31,7 +31,7 @@ export const FORWARD_TARGET_TIMEOUT_MS = 20_000
 
 /** Why the companion answers a route itself, whoever else is up. */
 export type CompanionReason =
-  | 'stream' | 'send' | 'chat' | 'identity' | 'bytes' | 'device-data' | 'task-copy' | 'paged' | 'launch'
+  | 'stream' | 'send' | 'chat' | 'identity' | 'bytes' | 'device-data' | 'task-copy' | 'paged' | 'launch' | 'secret'
 
 interface CompanionRoute {
   methods?: readonly string[]
@@ -78,6 +78,9 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // Data the Mac takes only from the phone's own device token.
   { re: /^\/(health|places)(\/|$)/, why: 'device-data' },
   { re: /^\/time\/heartbeats$/, why: 'device-data' },
+  // Passwords never cross the companion, which would see them in the clear between
+  // its TLS and the bridge: it answers vault_not_here (routes/vault-v1.ts).
+  { re: /^\/vault(\/|$)/, why: 'secret' },
   // The companion's exact copy of the task store: its reads are as fresh as the
   // Mac's. Its writes go to the Mac while it answers (one writer, replica plan
   // WP13); away, the companion's own route applies them and queues them by field.

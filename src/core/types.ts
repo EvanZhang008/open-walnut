@@ -1340,6 +1340,9 @@ export interface Config {
    *  and `enabled`: `false` turns the whole org off (no Main or VP session started, none of the
    *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it. */
   org?: { name?: string; founder_title?: string; enabled?: boolean };
+  /** Passwords (core/vault/). `auto_lock_minutes`: a window's unlock ends after this long
+   *  unused (default 15, at most 720). */
+  passwords?: { auto_lock_minutes?: number };
   defaults: {
     priority: TaskPriority;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'
