@@ -1510,6 +1510,23 @@ if (outputFormat === 'stream-json') {
     // WALNUT_MOCK_CONTINUE_TIMEOUT=1 makes a resumed `continue` turn ALSO time out —
     // used only by the auto-continue hourly-cap integration test to drive repeated
     // retry-exhaustion results without affecting any other test.
+    // 2a.0c. "unreachable-error" — the model endpoint refused the connection (2026-11-03: a local
+    //        model proxy that went down): the CLI's own words for ECONNREFUSED. Drives the endpoint
+    //        wait (src/core/sessions/endpoint-wait.ts). WALNUT_MOCK_CONTINUE_UNREACHABLE=1 makes a
+    //        resumed `continue` turn fail the same way.
+    const continueUnreachable = process.env.WALNUT_MOCK_CONTINUE_UNREACHABLE === '1'
+      && resume && effectiveMessage === 'continue';
+    if (effectiveMessage === 'unreachable-error' || continueUnreachable) {
+      const resultEvent = {
+        type: 'result', subtype: 'success', is_error: true,
+        duration_ms: 20, num_turns: 1,
+        result: 'API Error: Connection refused \u2014 a firewall or proxy may be blocking it (ECONNREFUSED)',
+        session_id: outputSessionId, total_cost_usd: 0.0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      };
+      process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
+      return;
+    }
     const continueAlwaysTimesOut = process.env.WALNUT_MOCK_CONTINUE_TIMEOUT === '1'
       && resume && effectiveMessage === 'continue';
     if (effectiveMessage === 'timeout-error' || effectiveMessage.startsWith('timeout-error:') || continueAlwaysTimesOut) {

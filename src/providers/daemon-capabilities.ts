@@ -836,6 +836,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // bridge-reachable, not for followers. Optional: without it the host's load is unknown
   // and placement never picks it over the default host.
   'host-load-v1',
+  // 'model-endpoint-v1' (host-facts-core.ts endpoint): `host.endpoint {cwd?}` answers whether
+  // this host reaches the model endpoint its Claude Code sessions call (the URL Claude Code
+  // picks from its settings and environment, or the proxy in front of it): one HEAD of the root,
+  // no credential, bounded (3 s). The server's endpoint wait (src/core/sessions/endpoint-wait.ts)
+  // asks it before it continues a turn that ended on a refused connection. Both twins, not
+  // bridge-reachable, not for followers. Optional: without it the wait retries on a timer.
+  'model-endpoint-v1',
   // 'task-move-v1' (transfer-pack-core.ts): `transfer.scan {dir}` lists the git
   // repositories in a task directory and its loose files; `transfer.pack` takes `paths`
   // (only those files of a shared checkout ride) and `exclude` (a folder pack without

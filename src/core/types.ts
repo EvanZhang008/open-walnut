@@ -2344,6 +2344,38 @@ export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent
  */
 export type SessionErrorKind = 'infra' | 'terminal';
 
+/**
+ * A session whose turn ended because its machine could not reach the model endpoint (a refused,
+ * unresolved or unreachable connection: sessions/endpoint-unreachable.ts). Walnut probes the
+ * endpoint through the host's daemon and sends one "continue" once it answers.
+ *   waiting  probing; the task reads Waiting on its machine
+ *   resumed  a continue went out; its turn's end closes the wait or opens it again
+ *   gave_up  6 hours without an answer, or 3 continues that failed the same way: Needs you
+ */
+export interface SessionEndpointWait {
+  state: 'waiting' | 'resumed' | 'gave_up';
+  /** The first turn end of this outage (ISO). */
+  since: string;
+  /** The session's host alias, and the machine in a person's words ("this Mac", "clouddev"). */
+  host: string;
+  where: string;
+  /** The endpoint origin the probe found (from Claude Code's settings and environment). */
+  url?: string;
+  /** What was probed when a proxy stands in front of it. */
+  probed?: string;
+  /** The turn's error text, and the probe's last connection error (ECONNREFUSED, ...). */
+  error?: string;
+  probeError?: string;
+  checkedAt?: string;
+  /** Continues sent after the probe said it answers. */
+  resumes: number;
+  /** Continues sent on a timer (a daemon that cannot probe). */
+  blindTries?: number;
+  resumedAt?: string;
+  gaveUpAt?: string;
+  gaveUpWhy?: 'time' | 'resumes';
+}
+
 /** Persisted auto-recover budget for one session. */
 export interface SessionAutoRecoverState {
   /** Auto-resumes fired inside the rolling window. */
@@ -3310,6 +3342,8 @@ export interface SessionRecord {
   autoRecover?: SessionAutoRecoverState;
   /** Set when a restart (machine, server, host) killed this session's process. */
   restartLoss?: SessionRestartLoss;
+  /** Its last turn could not reach the model endpoint: Walnut waits for it and continues (sessions/endpoint-wait.ts). No status write touches it. */
+  endpointWait?: SessionEndpointWait;
   /** When a person (console, phone, CLI, a letter) last sent this session a message. */
   humanInputAt?: string;
   /** When a person last typed into this session's chat (console, phone, CLI; never a letter's answer):

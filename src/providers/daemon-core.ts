@@ -2298,6 +2298,8 @@ const RETRYABLE_TURN_ERROR_PATTERNS: RegExp[] = [
   /connection (?:error|reset|closed|refused)/i,
   /socket hang up/i,
   /\bECONNRESET\b|\bETIMEDOUT\b|\bECONNREFUSED\b|\bEPIPE\b|\bEAI_AGAIN\b|\bENOTFOUND\b/,
+  /\bEHOSTUNREACH\b|\bENETUNREACH\b|\bEHOSTDOWN\b|\bENETDOWN\b/,
+  /unable to connect/i,
   /fetch failed/i,
   /network error/i,
   /premature close/i,
@@ -2315,7 +2317,9 @@ const RETRYABLE_TURN_ERROR_PATTERNS: RegExp[] = [
 const TERMINAL_TURN_ERROR_PATTERNS: RegExp[] = [
   /can'?t help with this/i,
   /start a new session/i,
-  /\brefus(?:al|ed|es)\b/i,
+  // Not a refused CONNECTION (2026-11-03: "Connection refused" read as a model refusal, so a
+  // turn that never reached the model was never retried): that is a network error, retried above.
+  /(?<!connection )\brefus(?:al|ed|es)\b/i,
   /\bstop_reason["\s:]*['"]?refusal/i,
   /prompt too long/i,
   /context (?:window|length) (?:exceeded|too long)/i,

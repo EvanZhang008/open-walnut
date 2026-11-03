@@ -56,6 +56,7 @@ export interface StatusFacts {
   sessions: Map<string, {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
     errorKind?: string; restartLoss?: { state: string; cause?: string };
+    endpointWait?: UserStatusInput['endpointWait'];
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
@@ -281,6 +282,18 @@ export function liveRestartLoss(
   return undefined;
 }
 
+/** A session's endpoint wait as the status reads it: its record's, or one its error text opens before
+ *  the waiter has written it (the result and the status sync race at a turn end). */
+function endpointWaitOf(
+  rec: import('./types.js').SessionRecord,
+  endpoint: typeof import('./sessions/endpoint-wait.js'),
+): UserStatusInput['endpointWait'] {
+  if (!endpoint.endpointWaitEnabled()) return undefined;
+  if (rec.endpointWait) return rec.endpointWait;
+  if (!endpoint.recordInEndpointWait(rec)) return undefined;
+  return { state: 'waiting', where: endpoint.machineWords(rec.host), since: rec.statusUpdatedAt || rec.last_status_change || new Date().toISOString(), resumes: 0 };
+}
+
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
  *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
 export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id)): Promise<StatusFacts> {
@@ -297,6 +310,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   await safely('sessions', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
     const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
+    const endpoint = await import('./sessions/endpoint-wait.js').catch(() => null);
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
       // Only a live process carries work on: a stopped one's runner state is its last word.
@@ -308,6 +322,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         errorReason: rec.status_reason, statusSince: rec.statusUpdatedAt || rec.last_status_change || rec.lastActiveAt,
         errorKind: rec.errorKind,
         restartLoss: liveRestartLoss(rec, recovery),
+        ...(endpoint && rec.process_status !== 'running' ? { endpointWait: endpointWaitOf(rec, endpoint) } : {}),
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
       });
@@ -418,6 +433,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     errorReason: main?.errorReason ?? null,
     errorKind: main?.errorKind ?? null,
     restartLoss: main?.restartLoss ?? null,
+    endpointWait: main?.endpointWait ?? null,
     projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
     undeliveredMessage: undelivered?.reason ?? null,
     statusSince: main?.statusSince ?? null,

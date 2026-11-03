@@ -99,6 +99,31 @@ export interface HostLoad {
   at: string
 }
 
+/**
+ * Whether this host reaches the model endpoint its Claude Code sessions call ('model-endpoint-v1',
+ * `host.endpoint {cwd?}`; 2026-11-03: the Mac's local model proxy went down with its login session
+ * and eight sessions ended on "Connection refused"). The URL is the one Claude Code itself picks:
+ * the `env` of its settings files (user, then the session folder's project and local ones, each
+ * over the last) over this daemon's environment; Bedrock's or Vertex's base URL when that provider
+ * is on, else ANTHROPIC_BASE_URL, else the public API. A proxy in that environment is what the CLI
+ * connects to, so it is what is probed. `reachable`: any HTTP answer is true (the request reached
+ * it), a refused, unresolved or unreachable connection or no answer in time is false. Nothing is
+ * sent but a HEAD of the root, and no credential: it costs no tokens.
+ */
+export interface ModelEndpointProbe {
+  /** The endpoint the CLI calls (origin only, never a path or query). */
+  url: string
+  /** Where the URL came from: a settings file, the environment, or the provider default. */
+  via: 'settings' | 'env' | 'default'
+  /** The address actually probed: the URL, or the proxy in front of it. */
+  probed: string
+  reachable: boolean
+  /** The connection error code (ECONNREFUSED, ENOTFOUND, ...) or 'timeout' when unreachable. */
+  error?: string
+  ms: number
+  at: string
+}
+
 /** Self-contained factory: see the file comment before adding any reference outside it. */
 export function createHostFacts(deps: HostFactsDeps) {
   var t = deps.timeouts || {}
@@ -483,5 +508,90 @@ export function createHostFacts(deps: HostFactsDeps) {
     return JSON.parse(JSON.stringify(out)) as HostFacts
   }
 
-  return { facts: facts, load: load }
+  /** The origin of a URL (scheme, host, port), or '' when it does not parse. */
+  function originOf(raw: string): string {
+    try { var u = new URL(raw); return u.protocol + '//' + u.host } catch (_e) { return '' }
+  }
+
+  function truthy(v: string | undefined): boolean {
+    return !!v && v !== '0' && v.toLowerCase() !== 'false'
+  }
+
+  /** A NO_PROXY list that covers `host` (exact, a domain suffix, or '*'). */
+  function bypassesProxy(host: string, noProxy: string): boolean {
+    var h = host.toLowerCase().replace(/^\[|\]$/g, '')
+    return noProxy.split(',').map(function (x) { return x.trim().toLowerCase().replace(/:\d+$/, '') }).filter(Boolean).some(function (n) {
+      if (n === '*') return true
+      var d = n.charAt(0) === '.' ? n.slice(1) : n
+      return h === d || h.slice(-(d.length + 1)) === '.' + d
+    })
+  }
+
+  /** Connect to `origin` and send a HEAD of '/': any answer means reached. */
+  function reach(origin: string, ms: number): Promise<{ ok: boolean; error?: string }> {
+    return within(new Promise<{ ok: boolean; error?: string }>(function (resolve) {
+      var u: URL
+      try { u = new URL(origin) } catch (_e) { resolve({ ok: false, error: 'bad-url' }); return }
+      var mod = u.protocol === 'https:' ? deps.https : deps.http
+      var req: ReturnType<HostFactsDeps['http']['request']>
+      try {
+        req = mod.request({ method: 'HEAD', host: u.hostname.replace(/^\[|\]$/g, ''), port: u.port || undefined, path: '/', timeout: ms, agent: false } as never, function (res) {
+          res.resume()
+          resolve({ ok: true })
+        })
+      } catch (_e) { resolve({ ok: false, error: 'request-failed' }); return }
+      req.on('timeout', function () { req.destroy(); resolve({ ok: false, error: 'timeout' }) })
+      req.on('error', function (err: Error & { code?: string }) { resolve({ ok: false, error: err && err.code ? String(err.code) : 'error' }) })
+      req.end()
+    }), ms + 100, { ok: false, error: 'timeout' })
+  }
+
+  async function endpoint(cmd?: Record<string, unknown>): Promise<ModelEndpointProbe> {
+    var started = now()
+    var dir = deps.env.CLAUDE_CONFIG_DIR || deps.home + '/.claude'
+    var cwd = cmd && typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : ''
+    var files = [dir + '/settings.json']
+    if (cwd) files.push(cwd + '/.claude/settings.json', cwd + '/.claude/settings.local.json')
+    var got = await Promise.all(files.map(function (f) { return readJson(f, 4 * 1024 * 1024) }))
+    var fromSettings: Record<string, string> = {}
+    got.forEach(function (g) {
+      var e = g && g.env
+      if (e && typeof e === 'object' && !Array.isArray(e)) {
+        Object.keys(e).forEach(function (k) { var v = (e as Record<string, unknown>)[k]; if (typeof v === 'string') fromSettings[k] = v })
+      }
+    })
+    var pick = function (k: string): { v?: string; via: 'settings' | 'env' } {
+      if (fromSettings[k] !== undefined) return { v: fromSettings[k], via: 'settings' }
+      return { v: deps.env[k], via: 'env' }
+    }
+    var url = ''
+    var via: ModelEndpointProbe['via'] = 'default'
+    var use = function (k: string, fallback: string) {
+      var p = pick(k)
+      var o = p.v ? originOf(p.v) : ''
+      if (o) { url = o; via = p.via } else { url = fallback; via = 'default' }
+    }
+    if (truthy(pick('CLAUDE_CODE_USE_BEDROCK').v)) {
+      var region = pick('AWS_REGION').v || pick('AWS_DEFAULT_REGION').v || 'us-east-1'
+      use('ANTHROPIC_BEDROCK_BASE_URL', 'https://bedrock-runtime.' + region + '.amazonaws.com')
+    } else if (truthy(pick('CLAUDE_CODE_USE_VERTEX').v)) {
+      use('ANTHROPIC_VERTEX_BASE_URL', 'https://' + (pick('CLOUD_ML_REGION').v || 'us-east5') + '-aiplatform.googleapis.com')
+    } else {
+      use('ANTHROPIC_BASE_URL', 'https://api.anthropic.com')
+    }
+    var probed = url
+    try {
+      var host = new URL(url).hostname
+      var https = url.indexOf('https:') === 0
+      var proxy = (https ? pick('HTTPS_PROXY').v || pick('https_proxy').v : '') || pick('HTTP_PROXY').v || pick('http_proxy').v || ''
+      var noProxy = pick('NO_PROXY').v || pick('no_proxy').v || ''
+      if (proxy && originOf(proxy) && !bypassesProxy(host, noProxy)) probed = originOf(proxy)
+    } catch (_e) { /* the URL is probed as it is */ }
+    var r = await reach(probed, PROBE_MS)
+    var out: ModelEndpointProbe = { url: url, via: via, probed: probed, reachable: r.ok, ms: now() - started, at: new Date(now()).toISOString() }
+    if (!r.ok && r.error) out.error = r.error
+    return out
+  }
+
+  return { facts: facts, load: load, endpoint: endpoint }
 }

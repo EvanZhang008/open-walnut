@@ -692,6 +692,7 @@ let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
+let endpointWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
 let autoRecoverHandle: { stop: () => void } | null = null
@@ -3516,6 +3517,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
         autoContinueHandle = startSessionAutoContinue()
       }
+      // Endpoint wait: a turn that never reached the model endpoint continues once the host's
+      // daemon says it answers again (sessions/endpoint-wait.ts). Primary only, like auto-continue.
+      {
+        const { startEndpointWait, endpointWaitEnabled } = await import('../core/sessions/endpoint-wait.js')
+        if (endpointWaitEnabled()) {
+          endpointWaitHandle = startEndpointWait({
+            gaveUp: async (rec, words) => {
+              const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
+              await publishSessionErrorNotification({
+                title: 'Session Error',
+                body: `${ref ? `${ref}: ` : ''}${words}`,
+                dedupScope: `session:${rec.claudeSessionId}:runtime`,
+                sessionId: rec.claudeSessionId,
+                taskId: rec.taskId,
+              })
+            },
+          })
+        }
+      }
 
       // Auto-recover (restart recovery) starts before the startup reconciler and
       // takes its dead on right after it (above); this only reports the opt-out.
@@ -5242,6 +5262,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { getSessionByClaudeId: laneCheckRead } = await import('../core/session-tracker.js')
       const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
+      const { endpointWaitTakes } = await import('../core/sessions/endpoint-wait.js')
+      const endpointWaitHolds = !!sessionId && endpointWaitTakes(eventData<'session:result'>(event))
       if (isError) {
         // A retry-exhaustion result that auto-continue is about to resume is not
         // a condition for the human: the card sat red for the whole continued
@@ -5253,6 +5275,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         )
         if (resumed) {
           log.session.info('session error card held: auto-continue resumes this turn', { sessionId, taskId })
+        } else if (endpointWaitHolds) {
+          // The endpoint was never reached: Walnut waits for it and continues (sessions/endpoint-wait.ts),
+          // and raises the card itself only if it gives up.
+          log.session.info('session error card held: the endpoint wait continues this turn', { sessionId, taskId })
         } else {
           await publishSessionErrorNotification({
             title: 'Session Error',
@@ -5295,7 +5321,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       if (isError || !taskId) {
         // A foreground error does not mean that background work still running has ended; the error notification is kept on its own.
-        if (taskId && sessionId && !workContinues) {
+        // A turn the endpoint wait holds keeps its session and phase: Walnut continues it (endpoint-wait.ts).
+        if (taskId && sessionId && !workContinues && !endpointWaitHolds) {
           try {
             const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
             const { task } = await clearSessionSlot(taskId, sessionId)
@@ -6999,6 +7026,10 @@ export async function stopServer(opts: { dropConnections?: boolean } = {}): Prom
   }
   for (const h of threadAiHandles) h.stop()
   threadAiHandles = []
+  if (endpointWaitHandle) {
+    endpointWaitHandle.stop()
+    endpointWaitHandle = null
+  }
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null

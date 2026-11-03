@@ -2379,6 +2379,18 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     else if (record?.pendingPermission) outcome = 'awaiting_human';
     else if (record?.process_status === 'error') outcome = 'error';
 
+    // Its turn never reached the model endpoint: Walnut waits for the endpoint and continues that turn
+    // (sessions/endpoint-wait.ts), so its askers and its lead hear of the turn that follows, not of a
+    // machine blip (2026-11-03: a proxy that went down failed eight sessions at once). A wait that gave
+    // up is the user's, and their status says so.
+    if (phase !== 'COMPLETE' && record) {
+      const { recordInEndpointWait } = await import('../sessions/endpoint-wait.js');
+      if (recordInEndpointWait(record)) {
+        log.session.info('turn-end notices held: the endpoint wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
+        return;
+      }
+    }
+
     // A turn that only made progress leaves the requests it owes open (sessions/request-progress.ts):
     // its own work runs on, it parked itself, or it waits on another task. A plain stop on the phase
     // edge is judged by the turn-end report a few seconds later, which is what moves the phase.

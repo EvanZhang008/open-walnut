@@ -4068,6 +4068,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.realpath': return replyTransfer(ws, id, 'transfer.realpath', function () { return transferCore.realpath(cmd); }, false);
     case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
     case 'host.load': return replyTransfer(ws, id, 'host.load', function () { return hostFacts.load(cmd); }, false);
+    case 'host.endpoint': return replyTransfer(ws, id, 'host.endpoint', function () { return hostFacts.endpoint(cmd); }, false);
     case 'transfer.scan': return replyTransfer(ws, id, 'transfer.scan', function () { return transferPack.scan(cmd); }, false);
     case 'transfer.apply': return replyTransfer(ws, id, 'transfer.apply', function () { return transferPack.apply(cmd); }, true);
     case 'transfer.clear': return replyTransfer(ws, id, 'transfer.clear', function () { return transferPack.clear(cmd); }, true);
@@ -9461,6 +9462,8 @@ var RETRYABLE_TURN_ERROR_PATTERNS = [
   /connection (?:error|reset|closed|refused)/i,
   /socket hang up/i,
   /\\bECONNRESET\\b|\\bETIMEDOUT\\b|\\bECONNREFUSED\\b|\\bEPIPE\\b|\\bEAI_AGAIN\\b|\\bENOTFOUND\\b/,
+  /\\bEHOSTUNREACH\\b|\\bENETUNREACH\\b|\\bEHOSTDOWN\\b|\\bENETDOWN\\b/,
+  /unable to connect/i,
   /fetch failed/i,
   /network error/i,
   /premature close/i,
@@ -9469,7 +9472,7 @@ var RETRYABLE_TURN_ERROR_PATTERNS = [
 var TERMINAL_TURN_ERROR_PATTERNS = [
   /can'?t help with this/i,
   /start a new session/i,
-  /\\brefus(?:al|ed|es)\\b/i,
+  /(?<!connection )\\brefus(?:al|ed|es)\\b/i,
   /\\bstop_reason["\\s:]*['"]?refusal/i,
   /prompt too long/i,
   /context (?:window|length) (?:exceeded|too long)/i,

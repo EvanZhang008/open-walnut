@@ -14,6 +14,8 @@ import { WebSocket } from 'ws'
 import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import fs from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
@@ -137,6 +139,26 @@ describe.each(TWINS)('$name', (twin) => {
     expect(load.ok, String(load.error)).toBe(true)
     expect(load).toMatchObject({ cpus: expect.any(Number), diskPath: home, memTotalBytes: expect.any(Number) })
     expect((load.load as number[]).length).toBe(3)
+    // 'model-endpoint-v1': the endpoint the session folder's settings name, reached or refused.
+    const open = http.createServer((_req, res) => { res.writeHead(404); res.end() })
+    await new Promise<void>((r) => open.listen(0, '127.0.0.1', () => r()))
+    const openPort = (open.address() as AddressInfo).port
+    const closed = http.createServer()
+    await new Promise<void>((r) => closed.listen(0, '127.0.0.1', () => r()))
+    const closedPort = (closed.address() as AddressInfo).port
+    await new Promise<void>((r) => closed.close(() => r()))
+    const proj = path.join(dir, 'proj')
+    fs.mkdirSync(path.join(proj, '.claude'), { recursive: true })
+    try {
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.local.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${openPort}/v1` } }))
+      const up = await rpc({ cmd: 'host.endpoint', cwd: proj })
+      expect(up).toMatchObject({ ok: true, url: `http://127.0.0.1:${openPort}`, via: 'settings', reachable: true })
+      fs.writeFileSync(path.join(proj, '.claude', 'settings.local.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${closedPort}` } }))
+      const down = await rpc({ cmd: 'host.endpoint', cwd: proj })
+      expect(down).toMatchObject({ ok: true, url: `http://127.0.0.1:${closedPort}`, reachable: false, error: 'ECONNREFUSED' })
+    } finally {
+      await new Promise<void>((r) => open.close(() => r()))
+    }
     const scanned = await rpc({ cmd: 'transfer.scan', dir })
     expect(scanned.ok, String(scanned.error)).toBe(true)
     expect((scanned.repos as Array<{ rel: string }>).map((r) => r.rel)).toContain('repo')

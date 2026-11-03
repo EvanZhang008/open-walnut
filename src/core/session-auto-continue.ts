@@ -44,8 +44,13 @@ import { log } from '../logging/index.js'
 // one didn't. Never maintain two lists again.
 import { classifyTurnError } from '../providers/daemon-core.js'
 
+import { endpointWaitEnabled, matchesEndpointUnreachable } from './sessions/endpoint-unreachable.js'
+
 export function matchesRetryExhaustion(text: string | null | undefined): boolean {
   if (!text) return false
+  // A connection the endpoint never answered is the endpoint wait's (sessions/endpoint-wait.ts):
+  // it continues once a probe says the endpoint answers, not on this blind 3-minute timer.
+  if (endpointWaitEnabled() && matchesEndpointUnreachable(text)) return false
   return classifyTurnError(text) === 'retryable'
 }
 
@@ -148,6 +153,8 @@ export class SessionAutoContinue {
         // Prefer the emitter's structured signal (covers the CLI api_timeout debug
         // marker even when the result text is generic); fall back to text matching
         // for emitters that don't stamp it.
+        // The endpoint wait owns a connection the endpoint never answered, whatever the flag says.
+        if (endpointWaitEnabled() && matchesEndpointUnreachable(d.result)) return
         if (!d.retryExhausted && !matchesRetryExhaustion(d.result)) return
         this.schedule(d.sessionId, d.taskId)
         break
@@ -198,6 +205,7 @@ export class SessionAutoContinue {
    */
   willResume(sessionId: string, result: string | null | undefined, retryExhausted?: boolean): boolean {
     if (!this.cfg.enabled || this.cfg.maxPerHour <= 0) return false
+    if (endpointWaitEnabled() && matchesEndpointUnreachable(result)) return false
     if (!retryExhausted && !matchesRetryExhaustion(result)) return false
     return this.pending.has(sessionId) || this.firesInWindow(sessionId) < this.cfg.maxPerHour
   }

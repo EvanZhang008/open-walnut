@@ -16,9 +16,9 @@ import crypto from 'node:crypto'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
 import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
-import type { HostFacts, HostLoad } from '../../providers/host-facts-core.js'
+import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
 
-export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad }
+export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad, ModelEndpointProbe }
 
 export const TRANSFER_CAPABILITY = 'transfer-v1'
 export const WRITE_PART_CAPABILITY = 'fs-write-part-v1'
@@ -26,6 +26,8 @@ export const HOST_FACTS_CAPABILITY = 'host-facts-v1'
 /** transfer.scan / transfer.apply and pack's `paths` / `exclude` / `asDir`. */
 export const TASK_MOVE_CAPABILITY = 'task-move-v1'
 export const HOST_LOAD_CAPABILITY = 'host-load-v1'
+/** host.endpoint: whether the host reaches its sessions' model endpoint. */
+export const MODEL_ENDPOINT_CAPABILITY = 'model-endpoint-v1'
 /** fs.writePart `private: true`: the transcript stage a Claude to Claude transfer resumes from. */
 export const PRIVATE_STAGE_CAPABILITY = 'transfer-private-v1'
 /** fs.readRange is a required capability; named here so a fake can leave it out. */
@@ -175,6 +177,11 @@ export function applyPack(host: string, opts: { dest: string; bundleDir: string;
 /** How busy `host` is now (load, CPU, memory, disk under `path`). */
 export function probeHostLoad(host: string, opts: { path?: string; timeoutMs?: number } = {}): Promise<HostLoad> {
   return call<HostLoad>(host, HOST_LOAD_CAPABILITY, 'host.load', opts.path ? { path: opts.path } : {}, opts.timeoutMs ?? 8_000)
+}
+
+/** Whether `host` reaches the model endpoint a session in `cwd` calls (no tokens spent). */
+export function probeModelEndpoint(host: string, opts: { cwd?: string; timeoutMs?: number } = {}): Promise<ModelEndpointProbe> {
+  return call<ModelEndpointProbe>(host, MODEL_ENDPOINT_CAPABILITY, 'host.endpoint', opts.cwd ? { cwd: opts.cwd } : {}, opts.timeoutMs ?? 10_000)
 }
 
 export interface WritePartOptions {

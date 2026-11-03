@@ -2664,6 +2664,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transfer.realpath': return replyTransfer(ws, id as number, 'transfer.realpath', () => transferCore.realpath(cmd), false)
     case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
     case 'host.load': return replyTransfer(ws, id as number, 'host.load', () => hostFacts.load(cmd), false)
+    case 'host.endpoint': return replyTransfer(ws, id as number, 'host.endpoint', () => hostFacts.endpoint(cmd), false)
     case 'transfer.scan': return replyTransfer(ws, id as number, 'transfer.scan', () => transferPack.scan(cmd), false)
     case 'transfer.apply': return replyTransfer(ws, id as number, 'transfer.apply', () => transferPack.apply(cmd), true)
     case 'transfer.clear': return replyTransfer(ws, id as number, 'transfer.clear', () => transferPack.clear(cmd), true)

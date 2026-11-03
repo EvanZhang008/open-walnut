@@ -30,6 +30,8 @@
  */
 
 import { infraStopCause } from './session-error-kind.js';
+import { endpointGaveUpWords, endpointWords } from './sessions/endpoint-unreachable.js';
+import type { SessionEndpointWait } from './types.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
@@ -231,6 +233,10 @@ export interface UserStatusInput {
   /** A restart killed its session (SessionRecord.restartLoss): only a loss of its current death
    *  that recovery still holds (queued, sent) or gave up on; the sync drops every other. */
   restartLoss?: { state: string; cause?: string } | null;
+  /** Its last turn could not reach the model endpoint (SessionRecord.endpointWait): Walnut waits for
+   *  it and continues the turn (sessions/endpoint-wait.ts), so it waits on its machine, not the user,
+   *  until the wait gives up. The sync passes it only while no turn runs. */
+  endpointWait?: Pick<SessionEndpointWait, 'state' | 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy'> | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
   /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
@@ -485,6 +491,15 @@ const RESTART_WORDS: Record<string, string> = {
  */
 function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: number): UserStatus | null {
   // The sync passes only a loss of the session's CURRENT death (user-status-sync.ts liveRestartLoss).
+  // Its turn never reached the model endpoint: Walnut continues it once the endpoint answers, and
+  // only a wait that gave up is the user's (2026-11-03: eight sessions read Needs you over a proxy
+  // that went down with the Mac's login session).
+  const ew = input.endpointWait;
+  if (ew && input.processStatus !== 'running') {
+    if (ew.state === 'gave_up') return strip<UserStatus>({ state: 'needs', source: 'error', ask: endpointGaveUpWords(ew), ...w, stoppedBy: 'machine' });
+    const what = endpointWords(ew);
+    return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: `${what.charAt(0).toUpperCase()}${what.slice(1)}, to answer again: Walnut continues the turn by itself when it does`, ...w, stoppedBy: 'machine' });
+  }
   const loss = input.restartLoss;
   const live = input.processStatus === 'running' || input.processStatus === 'idle';
   const owner = input.hasLeader || input.projectLead;
