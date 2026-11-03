@@ -680,7 +680,8 @@ test('a Waiting task\'s header chip says until when and why, and a message moves
   await box.fill('how is it going?')
   await box.press('Enter')
   await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).not.toBe('WAITING')
-  await expect.poll(async () => (await labelsBtn.count()) === 0 ? '' : (await labelsBtn.getAttribute('title')) ?? '', { timeout: 15_000 }).not.toMatch(/(^| · )Wait/)
+  // The page hears the phase move over its socket: give a loaded machine the time the phase poll above has.
+  await expect.poll(async () => (await labelsBtn.count()) === 0 ? '' : (await labelsBtn.getAttribute('title')) ?? '', { timeout: 30_000 }).not.toMatch(/(^| · )Wait/)
   await expect(panel.getByText(/I processed your message: how is it going\?/).first()).toBeVisible({ timeout: 60_000 })
   await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).toBe('NEED_ACTION')
   const after = await taskOf(taskId)
