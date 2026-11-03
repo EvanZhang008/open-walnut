@@ -10,6 +10,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type ApprovalKey } from '@/api/approvals';
+import { vaultSession } from '@/api/vault';
 import { hasTouchIdBridge, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
@@ -86,6 +87,12 @@ export function canSignHere(s: ApprovalsState): boolean {
 
 /** The Approve this window offers: a tap, Touch ID, or none (approve it on the phone). */
 export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' | null {
+  if (a.guard) {
+    // A vault ask: signed here when this Mac signs, else a tap only with Passwords unlocked here.
+    if (canSignHere(s)) return 'touch-id';
+    const sensitiveSigned = a.guard === 'vault-sensitive' && a.mode === 'biometric';
+    return !sensitiveSigned && vaultSession() ? 'tap' : null;
+  }
   if (a.mode !== 'biometric') return 'tap';
   const ownEnrollment = !!a.enrollsKey && a.enrollsKey === s.touchId?.keyId;
   return canSignHere(s) && !ownEnrollment ? 'touch-id' : null;
@@ -93,6 +100,8 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
 
 /** Why a biometric approval has no Approve here, in the words the person reads. */
 export function noApproveReason(s: ApprovalsState, a: Approval): string {
+  if (a.guard === 'vault') return 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID.';
+  if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
   if (a.enrollsKey && a.enrollsKey === s.touchId?.keyId) {
     return 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).';
   }
@@ -199,6 +208,7 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny', 
       decision,
       ...(sig ? { keyId: sig.keyId, signature: sig.signature } : {}),
       device: { name: mac ? (state.touchId?.name ?? 'Mac app') : 'Web console', kind: mac ? 'mac-app' : 'web' },
+      ...(a.guard && decision === 'approve' && !sig && vaultSession() ? { vaultSession: vaultSession()! } : {}),
     });
     settle(r.approval);
   } catch (err) {

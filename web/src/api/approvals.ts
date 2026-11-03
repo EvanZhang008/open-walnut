@@ -21,6 +21,8 @@ export interface Approval {
   status: ApprovalStatus;
   answer?: { decision: 'approve' | 'deny'; at: string; mode: ApprovalMode; device: { id?: string; name: string; kind: string } };
   enrollsKey?: string;
+  /** A vault ask: Approve needs a device signature, or (`vault`) this window's Passwords unlock. */
+  guard?: 'vault' | 'vault-sensitive';
   canceledReason?: string;
   testRun?: string;
 }
@@ -49,6 +51,8 @@ export interface AnswerBody {
   keyId?: string;
   signature?: string;
   device?: { name: string; kind: 'mac-app' | 'web' };
+  /** This window's Passwords unlock, the proof a `vault` approval needs. */
+  vaultSession?: string;
 }
 
 export function answerApproval(id: string, body: AnswerBody): Promise<{ approval: Approval }> {

@@ -42,6 +42,8 @@ export interface ApprovalAnswer {
 
 export type ApprovalDeviceKind = 'iphone' | 'mac-app' | 'web' | 'cli'
 
+export type ApprovalGuard = 'vault' | 'vault-sensitive'
+
 export interface ApprovalRecord {
   id: string
   what: string
@@ -62,6 +64,13 @@ export interface ApprovalRecord {
   waitTokenHash: string
   /** An enrollment approval: approving it activates this pending device key. */
   enrollsKey?: string
+  /**
+   * Approving gives an agent a vault item, so Approve needs proof only the person has
+   * (approvals-v1.ts vaultApprover): a device key's signature, or for `vault` also a Passwords
+   * unlock in the answering window. `vault-sensitive` takes only a signature while a device can
+   * sign. Not part of the signed digest.
+   */
+  guard?: ApprovalGuard
   /** A removal approval: approving it removes this device key. */
   removesKey?: string
   canceledReason?: string

@@ -37,6 +37,7 @@ const OWN_WORDS: Record<string, string> = {
   'components/agents/AgentForm.tsx#def.label': 'a picker of context sources in the agent form: taken only by Save',
   'components/tasks/TasksColumnsMenu.tsx#def.label': 'a column picker: the column\'s name is the option',
   'components/org/OrgInlineAnswer.tsx#o.label': 'an answer option the user picks: its text is the option',
+  'components/passwords/GeneratorPanel.tsx#label': 'a character class the password generator uses (A-Z, 0-9): the option\'s own name',
   'components/sessions/SessionRewindDialog.tsx#fileStats': 'how many files the option restores, part of its sentence; taken only by Rewind',
   'components/sessions/SessionRewindDialog.tsx#filesReason': 'why the option is off, part of its sentence',
   'components/sessions/SessionCommitRepo.tsx#hunk.newStart + 1': 'a picker of changes to commit: where the change is; taken only by Commit',

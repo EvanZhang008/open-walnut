@@ -32,6 +32,7 @@ const WEB_SRC = join(ROOT, 'web/src');
 /** Files that touch sessionStorage, and why that is per tab by design. */
 const SESSION_FILES: Record<string, string> = {
   'api/test-run.ts': 'the ?walnut-test-run= marker is for the tab that was opened with it',
+  'api/vault.ts': 'the Passwords unlock of this tab: a secret that must end with the tab, never be kept on disk',
   'components/common/AppErrorBoundary.tsx': 'a debug switch that crashes this tab once',
   'components/common/UnpairedNotice.tsx': 'a sign-out notice for this tab only',
   'components/common/server-update-pill.ts': 'the Walnut version this tab last saw, so a restart into a new one is announced once per tab',
@@ -54,6 +55,7 @@ const SESSION_FILES: Record<string, string> = {
 /** sessionStorage keys read or written directly by name. */
 const SESSION_KEYS: Record<string, string> = {
   'walnut-test-run': 'test-run marker',
+  'walnut.vault.session': 'the Passwords unlock of this tab (a secret, never on disk)',
   'open-walnut-debug-crash-once': 'debug crash switch',
   'walnut.signedOut': 'sign-out notice',
   'walnut.phoneRestore': 'one reload anchor',

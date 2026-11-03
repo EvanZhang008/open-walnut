@@ -22,6 +22,35 @@ interface Session { hash: string; client: string; createdAt: number; lastUsedAt:
 
 const sessions = new Map<string, Session>()
 
+// When the last session runs out by itself (nobody pressed Lock), the vault closes too: the
+// route layer registers what closing means (closeIfNobody), and one timer waits for the
+// earliest expiry.
+let onExpire: (() => void) | null = null
+let timer: ReturnType<typeof setTimeout> | null = null
+
+export function onSessionsExpired(cb: (() => void) | null): void {
+  onExpire = cb
+  schedule()
+}
+
+function expiryOf(s: Session): number {
+  return Math.min(s.lastUsedAt + s.idleMs, s.createdAt + MAX_SESSION_HOURS * 3_600_000)
+}
+
+function schedule(): void {
+  if (timer) { clearTimeout(timer); timer = null }
+  if (!onExpire || sessions.size === 0) return
+  let next = Infinity
+  for (const s of sessions.values()) next = Math.min(next, expiryOf(s))
+  timer = setTimeout(() => {
+    timer = null
+    const left = liveSessionCount()
+    if (left === 0) onExpire?.()
+    else schedule()
+  }, Math.max(1000, Math.min(next - Date.now() + 1000, 2 ** 31 - 1)))
+  timer.unref?.()
+}
+
 function hashOf(token: string): string {
   return crypto.createHash('sha256').update(`walnut-vault-session\0${token}`).digest('hex')
 }
@@ -31,6 +60,7 @@ export function createSession(client: string, idleMinutes: number): { token: str
   const now = Date.now()
   const idle = Math.max(1, Math.min(MAX_SESSION_HOURS * 60, Math.round(idleMinutes || DEFAULT_IDLE_MINUTES)))
   sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs: idle * 60_000 })
+  schedule()
   return { token, expiresAt: new Date(now + idle * 60_000).toISOString(), idleMinutes: idle }
 }
 
@@ -48,13 +78,14 @@ export function useSession(token: string | undefined, touch = true): { client: s
   const s = sessions.get(hashOf(token))
   const now = Date.now()
   if (!s) return null
-  if (!live(s, now)) { sessions.delete(s.hash); return null }
-  if (touch) s.lastUsedAt = now
+  if (!live(s, now)) { sessions.delete(s.hash); schedule(); return null }
+  if (touch) s.lastUsedAt = now // the timer, when it fires early, schedules itself again
   return { client: s.client }
 }
 
 export function endSession(token: string | undefined): void {
   if (token) sessions.delete(hashOf(token))
+  schedule()
 }
 
 /** Every session but `keep` (a new master password locks the other windows). */
@@ -62,12 +93,14 @@ export function endOtherSessions(keep: string | undefined): number {
   const k = keep ? hashOf(keep) : ''
   let n = 0
   for (const h of [...sessions.keys()]) if (h !== k) { sessions.delete(h); n++ }
+  schedule()
   return n
 }
 
 export function endAllSessions(): number {
   const n = sessions.size
   sessions.clear()
+  schedule()
   return n
 }
 
@@ -102,6 +135,11 @@ export function noteUnlockSuccess(): void {
 
 let attemptRunning = false
 
+/** A master-password check runs now (a close waits for it: it may be about to open a session). */
+export function isAttemptRunning(): boolean {
+  return attemptRunning
+}
+
 /**
  * One master-password check at a time, server-wide: a try while the brake holds, or while
  * another try runs, is refused before any work, so a burst of parallel guesses cannot all
@@ -125,6 +163,7 @@ export function endAttempt(outcome: 'ok' | 'wrong' | 'other'): void {
 export function resetSessionsForTest(): void {
   attemptRunning = false
   sessions.clear()
+  if (timer) { clearTimeout(timer); timer = null }
   failures = 0
   blockedUntil = 0
 }

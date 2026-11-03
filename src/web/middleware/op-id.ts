@@ -177,7 +177,7 @@ function captureAnswer(res: Response, onEnd: (answer: LedgerOutcome) => void): v
  * the route's own checks. Their writes are not journaled or forwarded either, so an op id
  * buys them nothing. tests/web/op-id-secret-routes.test.ts pins it.
  */
-export const SECRET_ROUTE_RE = /^\/api\/v1\/vault(?:[/?]|$)/;
+export const SECRET_ROUTE_RE = /^\/api\/v1\/vault(?:[/?]|$)/i;
 
 /** The op-id middleware. Mounted on `/api` after auth (an unauthenticated call never takes an id). */
 export function opIdMiddleware(opts: OpIdOptions = {}): RequestHandler {

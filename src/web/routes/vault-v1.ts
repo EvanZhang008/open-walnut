@@ -31,9 +31,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
-import { isFollower } from '../../core/server-role.js'
+import { isFollower, role } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
-import { CLOUD_MODE } from '../../constants.js'
 import { derivePasswordKey, toB64, type KdfParams } from '../../core/vault/crypto.js'
 import type { VaultItemInput } from '../../core/vault/types.js'
 
@@ -56,7 +55,7 @@ function param(v: unknown): string {
  */
 function gate(req: Request, res: Response, readStatus = false): boolean {
   res.setHeader('Cache-Control', 'no-store')
-  if (CLOUD_MODE || isFollower()) {
+  if (role() !== 'leader' || isFollower()) {
     res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
     return false
   }
@@ -74,8 +73,15 @@ function gate(req: Request, res: Response, readStatus = false): boolean {
   return true
 }
 
+let expiryHooked = false
 async function sessions() {
-  return import('../../core/vault/sessions.js')
+  const s = await import('../../core/vault/sessions.js')
+  if (!expiryHooked) {
+    expiryHooked = true
+    // The last window idling out closes the vault as a Lock would.
+    s.onSessionsExpired(() => { void closeIfNobody().catch(() => undefined) })
+  }
+  return s
 }
 
 async function store() {
@@ -130,10 +136,16 @@ async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; passwo
   throw new VaultError('passwordKey (or password) is required', 400, 'bad_password_key')
 }
 
+/**
+ * Nobody else reads this link: https here, this machine (a local proxy such as Tailscale Serve
+ * included), or Tailscale's own addresses. A forwarded-proto header is not trusted: any client
+ * can send one.
+ */
 function privateLink(req: Request): boolean {
-  if (req.secure || header(req, 'x-forwarded-proto') === 'https') return true
+  if (req.secure) return true
+  // This machine, by the caller-origin rule (a loopback self-call made for someone else is not).
+  if (requestOrigin(req) === LOCAL_ORIGIN) return true
   const ip = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
-  if (ip === '127.0.0.1' || ip === '::1') return true
   const m = /^100\.(\d+)\./.exec(ip)
   if (m && Number(m[1]) >= 64 && Number(m[1]) <= 127) return true // Tailscale's 100.64.0.0/10
   return /^fd7a:115c:a1e0:/i.test(ip)
@@ -142,25 +154,30 @@ function privateLink(req: Request): boolean {
 /**
  * Run one check of the master password under the brake (sessions.beginAttempt): refused while
  * slowed or while another check runs, and a wrong password counts, whichever route it came by.
+ * `work` does everything a guess costs (deriving a typed password included), so a burst of
+ * guesses is refused before any of that work. Null: the refusal was answered.
  */
-async function attempt<T>(res: Response, work: () => Promise<T>): Promise<T | undefined> {
+async function attempt<T>(res: Response, work: () => Promise<T>): Promise<{ value: T } | null> {
   const s = await sessions()
+  const { VaultError } = await store()
   const busy = s.beginAttempt()
   if (busy) {
     res.status(429).json({
       error: busy.code === 'unlock_slowed' ? `Too many wrong passwords: try again in ${Math.ceil(busy.waitMs / 1000)} s.` : 'Another unlock is being checked; try again in a moment.',
       code: busy.code, waitMs: busy.waitMs,
     })
-    return undefined
+    return null
   }
-  const { VaultError } = await store()
+  let outcome: 'ok' | 'wrong' | 'other' = 'other'
   try {
-    const out = await work()
-    s.endAttempt('ok')
-    return out
+    const value = await work()
+    outcome = 'ok'
+    return { value }
   } catch (err) {
-    s.endAttempt(err instanceof VaultError && err.code === 'wrong_password' ? 'wrong' : 'other')
+    if (err instanceof VaultError && err.code === 'wrong_password') outcome = 'wrong'
     throw err
+  } finally {
+    s.endAttempt(outcome)
   }
 }
 
@@ -170,10 +187,12 @@ async function attempt<T>(res: Response, work: () => Promise<T>): Promise<T | un
  */
 export async function closeIfNobody(): Promise<void> {
   const s = await sessions()
-  if (s.liveSessionCount() > 0) return
+  if (s.liveSessionCount() > 0 || s.isAttemptRunning()) return
   const st = await store()
   if (!st.isOpen()) return
   if ((await st.vaultStatus()).agentsWhileAway) return
+  // Checked again with no await before the close: an unlock may have opened a window meanwhile.
+  if (s.liveSessionCount() > 0 || s.isAttemptRunning()) return
   st.closeVault()
 }
 
@@ -190,7 +209,7 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
     const unlocked = !!s.useSession(header(req, s.SESSION_HEADER))
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
-    return { ...st, unlocked, autoLockMinutes: await autoLockMinutes(), waitMs: s.unlockWaitMs() }
+    return { ...st, unlocked, autoLockMinutes: await autoLockMinutes(), waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
   })
 })
 
@@ -201,10 +220,14 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
     const body = (req.body ?? {}) as { kdf?: KdfParams; agentsWhileAway?: boolean }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
-    const passwordKey = await passwordKeyOf(req, req.body ?? {}, kdf)
-    const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true })
-    const session = (await sessions()).createSession(clientName(req), await autoLockMinutes())
-    return { ...made, session }
+    const minutes = await autoLockMinutes()
+    const s = await sessions()
+    const r = await attempt(res, async () => {
+      const passwordKey = await passwordKeyOf(req, req.body ?? {}, kdf)
+      const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true })
+      return { ...made, session: s.createSession(clientName(req), minutes) }
+    })
+    return r ? r.value : SENT
   })
 })
 
@@ -219,11 +242,15 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
     if (typeof body.kdfSalt === 'string' && status.kdf && body.kdfSalt !== status.kdf.salt) {
       throw new st.VaultError('The master password was changed in another window: try again.', 409, 'kdf_changed')
     }
-    const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
     const s = await sessions()
-    const ok = await attempt(res, () => st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) }))
-    if (ok === undefined && res.headersSent) return SENT
-    return { session: s.createSession(clientName(req), await autoLockMinutes()) }
+    const minutes = await autoLockMinutes()
+    // The session is made inside the check, so no close can run between the open and it.
+    const r = await attempt(res, async () => {
+      const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
+      await st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) })
+      return { session: s.createSession(clientName(req), minutes) }
+    })
+    return r ? r.value : SENT
   })
 })
 
@@ -234,6 +261,10 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
     let ended = 1
     if ((req.body as { all?: boolean } | undefined)?.all) {
       ended = s.endAllSessions()
+      // Lock all also ends every agent grant and withdraws the asks still waiting.
+      const { endAllGrants } = await import('../../core/vault/agent.js')
+      const { endAgentAccess } = await import('./vault-agent-v1.js')
+      await endAgentAccess(endAllGrants())
     } else s.endSession(header(req, s.SESSION_HEADER))
     await closeIfNobody()
     return { ended }
@@ -339,8 +370,8 @@ vaultV1Router.post('/vault/settings', async (req, res, next) => {
     const st = await store()
     if (typeof body.agentsWhileAway === 'boolean') {
       const status = await st.vaultStatus()
-      const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
-      if (await attempt(res, () => st.setAgentsWhileAway(body.agentsWhileAway!, passwordKey)) === undefined && res.headersSent) return SENT
+      const r = await attempt(res, async () => st.setAgentsWhileAway(body.agentsWhileAway!, await passwordKeyOf(req, req.body ?? {}, status.kdf)))
+      if (!r) return SENT
     }
     return st.vaultStatus()
   })
@@ -354,9 +385,12 @@ vaultV1Router.post('/vault/password', async (req, res, next) => {
     const body = (req.body ?? {}) as { oldPasswordKey?: string; oldPassword?: string; newPasswordKey?: string; newPassword?: string; kdf?: KdfParams }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
-    const oldPasswordKey = await passwordKeyOf(req, { passwordKey: body.oldPasswordKey, password: body.oldPassword }, status.kdf)
-    const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
-    if (await attempt(res, () => st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf })) === undefined && res.headersSent) return SENT
+    const r = await attempt(res, async () => {
+      const oldPasswordKey = await passwordKeyOf(req, { passwordKey: body.oldPasswordKey, password: body.oldPassword }, status.kdf)
+      const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
+      await st.changeMasterPassword({ oldPasswordKey, newPasswordKey, kdf })
+    })
+    if (!r) return SENT
     const s = await sessions()
     return { ok: true, otherWindowsLocked: s.endOtherSessions(header(req, s.SESSION_HEADER)) }
   })
@@ -369,8 +403,7 @@ vaultV1Router.post('/vault/export', async (req, res, next) => {
     const status = await st.vaultStatus()
     const body = (req.body ?? {}) as { format?: string }
     // An export is every secret in one file: the master password again, whatever the session.
-    const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
-    if (await attempt(res, () => st.revealSecretKey(passwordKey)) === undefined && res.headersSent) return SENT
+    if (!await attempt(res, async () => st.revealSecretKey(await passwordKeyOf(req, req.body ?? {}, status.kdf)))) return SENT
     const { exportItems } = await import('../../core/vault/export.js')
     const format = body.format === 'json' ? 'json' : 'csv'
     return { format, fileName: `walnut-passwords-${new Date().toISOString().slice(0, 10)}.${format}`, text: exportItems(await st.allItems(), format) }
@@ -382,9 +415,7 @@ vaultV1Router.post('/vault/secret-key', async (req, res, next) => {
   await run(res, next, async () => {
     const st = await store()
     const status = await st.vaultStatus()
-    const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
-    const secretKey = await attempt(res, () => st.revealSecretKey(passwordKey))
-    if (secretKey === undefined) return SENT
-    return { secretKey }
+    const r = await attempt(res, async () => st.revealSecretKey(await passwordKeyOf(req, req.body ?? {}, status.kdf)))
+    return r ? { secretKey: r.value } : SENT
   })
 })

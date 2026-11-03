@@ -84,6 +84,18 @@ export function registerCommands(program: Command): void {
       await runApproveCommand(at >= 0 ? process.argv.slice(at + 1) : []);
     });
 
+  program
+    .command('pass [args...]')
+    .description('Passwords for scripts and agents: list what they may use, get one, or run a command with secrets in its env (masked in its output)')
+    .allowUnknownOption(true)
+    .helpOption(false)
+    .action(async () => {
+      const { runPassCommand } = await import('./pass.js');
+      // The shared parser reads the raw words, the same ones the remote hosts' CLI gets.
+      const at = process.argv.indexOf('pass');
+      await runPassCommand(at >= 0 ? process.argv.slice(at + 1) : []);
+    });
+
   const approvals = program
     .command('approvals')
     .description('Approvals waiting for you, and the devices that sign them');

@@ -157,6 +157,7 @@ import { hostCopyV1Router } from './routes/host-copy-v1.js'
 import { secretsV1Router } from './routes/secrets-v1.js'
 import { approvalsV1Router } from './routes/approvals-v1.js'
 import { vaultV1Router } from './routes/vault-v1.js'
+import { vaultAgentV1Router } from './routes/vault-agent-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
@@ -2539,6 +2540,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', secretsV1Router)
   app.use('/api/v1', approvalsV1Router)
   app.use('/api/v1', vaultV1Router)
+  app.use('/api/v1', vaultAgentV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.

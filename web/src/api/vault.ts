@@ -24,9 +24,22 @@ export interface VaultStatus {
   itemCount?: number
   autoLockMinutes: number
   waitMs: number
+  /** Nobody else reads the link to the server (https, this machine, Tailscale). */
+  privateLink?: boolean
 }
 
 export interface SecurityReport { weak: string[]; reused: string[][]; old: string[]; insecureUrl: string[] }
+
+export type AgentsSwitch = 'off' | 'ask' | 'allow'
+export interface AgentGrant { asker: string; itemId: string; until: string }
+export interface AgentPolicy { agents: AgentsSwitch; grants: AgentGrant[] }
+export interface AgentLogEntry {
+  at: string
+  kind: 'released' | 'asked' | 'denied' | 'refused' | 'expired'
+  itemId?: string; itemTitle?: string; fields?: string[]; purpose?: string
+  via?: 'allow' | 'grant' | 'approval'; reason?: string; approvalId?: string
+  taskId?: string; taskTitle?: string; host?: string; command?: string
+}
 
 export interface ImportReport {
   format: string
@@ -43,6 +56,11 @@ export class VaultApiError extends Error {
     super(message)
     this.name = 'VaultApiError'
   }
+}
+
+/** This window's unlock is over (its session lapsed, or the vault closed): show the lock screen. */
+export function isLockedError(err: unknown): boolean {
+  return err instanceof VaultApiError && ((err.status === 401 && err.code === 'vault_session_needed') || (err.status === 423 && err.code === 'vault_locked'))
 }
 
 const TOKEN_KEY = 'walnut.vault.session'
@@ -78,7 +96,8 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   })
   const data = await res.json().catch(() => ({})) as Record<string, unknown>
   if (!res.ok) {
-    if (res.status === 401 && data.code === 'vault_session_needed' && s) setSession(null)
+    // A closed vault (a restart, Lock all elsewhere) ends this window's unlock as a lapsed session does.
+    if (s && ((res.status === 401 && data.code === 'vault_session_needed') || (res.status === 423 && data.code === 'vault_locked'))) setSession(null)
     throw new VaultApiError(res.status, String(data.error ?? `HTTP ${res.status}`), typeof data.code === 'string' ? data.code : undefined, typeof data.waitMs === 'number' ? data.waitMs : undefined)
   }
   return data as T
@@ -86,10 +105,17 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
 
 const canDerive = () => typeof globalThis.crypto?.subtle?.deriveBits === 'function'
 
-/** The body that proves the master password: its key when WebCrypto is here, else the password. */
+/**
+ * The body that proves the master password: its key when WebCrypto is here, else the password
+ * itself, and that only over a link the server calls private (it refuses one anyway; this
+ * keeps the password from leaving the page at all).
+ */
 async function proof(password: string, kdf: KdfParams | undefined, field: 'password' | 'oldPassword' | 'newPassword' = 'password'): Promise<Record<string, string>> {
   const keyField = field === 'password' ? 'passwordKey' : field === 'oldPassword' ? 'oldPasswordKey' : 'newPasswordKey'
   if (kdf && canDerive()) return { [keyField]: toB64(await derivePasswordKey(password, kdf)) }
+  if (!(await call<VaultStatus>('GET', '/vault/status')).privateLink) {
+    throw new VaultApiError(400, 'Open Walnut over https or Tailscale to unlock Passwords from this device: plain http would send the master password readable on the network.', 'insecure_link')
+  }
   return { [field]: password }
 }
 
@@ -154,6 +180,11 @@ export const vaultApi = {
   report: () => call<SecurityReport>('GET', '/vault/report'),
   importFile: (text: string, fileName: string, dryRun: boolean, format?: string) =>
     call<{ dryRun: boolean; report: ImportReport; added?: number }>('POST', '/vault/import', { text, fileName, dryRun, ...(format ? { format } : {}) }, 120_000),
+  agentPolicy: () => call<AgentPolicy>('GET', '/vault/agent/policy'),
+  setAgentsSwitch: (agents: AgentsSwitch) => call<AgentPolicy>('PUT', '/vault/agent/policy', { agents }),
+  endAgentGrants: () => call<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
+  agentLog: () => call<{ entries: AgentLogEntry[] }>('GET', '/vault/agent/log').then((r) => r.entries),
+
   /** Turning agents-while-away on or off asks for the master password again. */
   async setAgentsWhileAway(on: boolean, password: string, kdf: KdfParams | undefined): Promise<VaultStatus> {
     return call<VaultStatus>('POST', '/vault/settings', { agentsWhileAway: on, ...(await proof(password, kdf)) }, 60_000)
@@ -181,11 +212,18 @@ export const vaultApi = {
  * page may not read the clipboard it leaves it alone rather than wipe something the
  * person copied since.
  */
+let lastCopy = 0
+
 export async function copySecret(text: string, clearMs = 30_000): Promise<void> {
   await navigator.clipboard.writeText(text)
+  const mine = ++lastCopy
   window.setTimeout(() => {
     void navigator.clipboard.readText()
       .then((now) => (now === text ? navigator.clipboard.writeText('') : undefined))
-      .catch(() => {})
+      .catch(() => {
+        // Reading the clipboard is refused (Safari, Firefox): clear it only when this page made
+        // the last copy and still has focus, so something the person copied elsewhere since stays.
+        if (mine === lastCopy && document.hasFocus()) void navigator.clipboard.writeText('').catch(() => {})
+      })
   }, clearMs)
 }

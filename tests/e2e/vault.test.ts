@@ -291,6 +291,23 @@ describe('the vault, start to end', () => {
     session = ok.body.session.token
   })
 
+  it('a new master password with agents-while-away on makes a new machine key', async () => {
+    const pw = 'a whole new test phrase'
+    expect((await http('POST', '/vault/settings', { agentsWhileAway: true, password: pw })).body.agentsWhileAway).toBe(true)
+    const mk1 = JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey
+    expect((await http('POST', '/vault/password', { oldPassword: pw, newPassword: 'a third test phrase' })).status).toBe(200)
+    expect((await http('POST', '/vault/password', { oldPassword: 'a third test phrase', newPassword: pw })).status).toBe(200)
+    const after = JSON.parse(await fsp.readFile(path.join(vaultDirPath(), 'machine.json'), 'utf8')).machineKey
+    expect(after).toBeTruthy()
+    expect(after).not.toBe(mk1)
+    resetVaultForTest(null)
+    expect((await http('GET', '/vault/status')).body.open).toBe(true)
+  })
+
+  it('tells the page whether its link is private (this machine is)', async () => {
+    expect((await http('GET', '/vault/status')).body.privateLink).toBe(true)
+  })
+
   it('exports only with the master password again', async () => {
     expect((await http('POST', '/vault/export', { password: 'wrong', format: 'csv' })).status).toBe(401)
     const r = await http('POST', '/vault/export', { password: 'a whole new test phrase', format: 'csv' })

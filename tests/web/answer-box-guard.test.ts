@@ -61,6 +61,7 @@ const BOXES: Record<string, Kind> = {
   'components/settings/sections/cloud/CloudManualPaste.tsx': form('a setup script to paste'),
   'components/tasks/PhoneTaskDetailHead.tsx': form("a task's title"),
   'components/tasks/TaskForm.tsx': form("a task's fields"),
+  'components/passwords/ItemEditor.tsx': form("a vault item's notes"),
   'components/board/kanban/KanbanCardEditor.tsx': form("a card's fields"),
   'components/board/board-items.frame.js': form("the Board frame's hidden mark field; the note is written in BoardReplyDock (ChatInput)"),
 }

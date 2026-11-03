@@ -226,6 +226,29 @@ describe('vault sessions', () => {
     }
   })
 
+  it('closes the vault when the last window idles out, with nobody pressing Lock', async () => {
+    const { vi } = await import('vitest')
+    const s = await import('../../../src/core/vault/sessions.js')
+    s.resetSessionsForTest()
+    vi.useFakeTimers()
+    let closed = 0
+    try {
+      s.onSessionsExpired(() => { closed++ })
+      const a = s.createSession('a', 1)
+      s.createSession('b', 3)
+      await vi.advanceTimersByTimeAsync(62_000)
+      expect(s.useSession(a.token)).toBeNull()
+      expect(closed).toBe(0) // b is still open
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(closed).toBe(1)
+      expect(s.liveSessionCount()).toBe(0)
+    } finally {
+      s.onSessionsExpired(null)
+      vi.useRealTimers()
+      s.resetSessionsForTest()
+    }
+  })
+
   it('lets one master-password check run at a time, and the brake counts it', async () => {
     const s = await import('../../../src/core/vault/sessions.js')
     s.resetSessionsForTest()

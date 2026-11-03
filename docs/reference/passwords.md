@@ -51,8 +51,16 @@ password manager that keeps its Secret Key on the device.
 
 A new master password, and turning the machine key off, make a new vault key and wrap every
 item key again under it (the items' own ciphertext stays), and the sealed side files are
-sealed again. So an old password with an old backup, or a machine key copied earlier, opens
-nothing written since. A new master password also locks every other window.
+sealed again. A new master password with the machine key on also makes a new machine key. So
+an old password with an old backup, or a machine key copied earlier, opens nothing written
+since. A new master password also locks every other window.
+
+Each of these steps writes its files in an order a crash cannot turn against the person: the
+machine key is written before the wrap it opens and removed before the vault key changes, a
+side file is sealed under the new key as `<name>.next` before `vault.json` takes that key and
+renamed after, and a machine key that does not open the vault (a crash between two writes)
+only means the password opens it. A new vault sets another vault's `machine.json` aside as
+`machine-<vaultId>-<time>.json`, since it holds that vault's Secret Key.
 
 The Secret Key is shown at setup, and again for the master password in Settings → Passwords
 (Download recovery kit).
@@ -72,7 +80,14 @@ A window that read the KDF before another one changed the master password is tol
 `kdf_changed` and reads it again, instead of being charged a wrong password.
 
 The typed master password crosses the wire only from a page with no WebCrypto, and only over
-this machine, https or Tailscale; plain http on a shared network is refused.
+this machine, https or Tailscale: the status says whether the link is private (`privateLink`),
+the page sends nothing otherwise, and the server refuses it anyway. A forwarded-proto header
+is not trusted. Every check runs its whole cost (deriving a typed password included) under the
+brake, and the window's session is made inside the check, so a close cannot fall between them.
+
+When the last window's session runs out by itself, the vault closes as if it had been locked
+(with the machine key off). Known limit: Lock all is a person's call that needs no session, so
+any page on a link the gate accepts can end every window's unlock; it never opens anything.
 
 ## Who may open it
 
@@ -88,7 +103,10 @@ days, and none is answered from it (`SECRET_ROUTE_RE` in `src/web/middleware/op-
 ## Writes
 
 Every change works on copies of the file and the items and replaces the in-memory state only
-after the write succeeded, so a full disk leaves memory and disk the same. Each write is a temp
+after the write succeeded, so a full disk leaves memory and disk the same. Changes run one at a
+time, and a read that finds the file changed waits its turn before reading it again, so it never
+takes a write still landing for a backup put back. A close (Lock all, the last window gone)
+wins over a change still running: its write stands, and nothing goes back into memory. Each write is a temp
 file, fsync and rename; the previous `vault.json` is kept once a day in `backups/`. A
 `vault.json` put back by hand (a backup restored) is read again. When a server keeps its vault
 in the data home (a throwaway server), git sync never carries it (`/vault/` in its ignores).
@@ -109,3 +127,74 @@ Bitwarden's columns, or Walnut JSON.
 
 The security check (weak, reused, not changed in a year, saved for plain http) runs on this
 machine; no password or site leaves it.
+
+## Agents
+
+Code: `src/core/vault/agent.ts` (policy, asks, grants, brakes), `agent-log.ts`, `policy.ts`,
+`pass-cli.ts` (`walnut pass`), `src/web/routes/vault-agent-v1.ts`, `src/ops/vault.ts`, the
+`walnut-passwords` skill, and Passwords, Agent Activity in the app.
+
+An agent never holds a vault session. It names an item (its id, name, a site, or an API key's
+env var) and says why, and Walnut decides:
+
+| | Item set to never | Item set to ask (default) | Item set to without asking |
+| --- | --- | --- | --- |
+| Switch off | refused | refused | refused |
+| Switch ask each time | refused | the person approves | given |
+| Switch without asking | refused | given | given |
+
+A **sensitive** item always asks, with Face ID or Touch ID on a device that signs approvals (a
+tap when none is set up yet, and the ask says so). The ask is an approval (`core/approvals/`): a
+card on every console window, a system notification, and a push to the phone with Approve and
+Deny, naming the item, its sites, the fields, the purpose, the task, the host, the directory and
+the command. One approval lets one use through; an agent may ask `scope: "task"`, which gives
+that task, in the session that asked, the fields it asked for, for an hour.
+
+**Approving needs proof only the person has.** A plain tap from this machine is something any
+process here could send, an agent knows its own ask's id, and a process here can even make
+itself a device token. So an approval that gives an agent a vault item (`guard` on the
+approval) is asked with Face ID or Touch ID wherever a device can sign (the iPhone app, the Mac
+app), and takes Approve only with that device key's signature, or, for an item that is not
+sensitive (and for a sensitive one while no device can sign), from a window that has Passwords
+unlocked (its vault session, which only the master password buys). Anything else gets
+`403 vault_unlock_needed`, and the card says to unlock Passwords or use the phone. Deny is open
+to any answer.
+
+Who asked: a session id counts only from the host that session runs on (`requesterOf` in
+`approvals-v1.ts`), so a script on a dev box cannot name another host's session to borrow its
+task's grant. Known limit: a process on the Mac itself, as the same user, can name any session
+and claim any host (the `x-walnut-origin` header is believed from this machine), so it can use a
+grant some task already holds and make its card say another host. It cannot approve an ask.
+
+The switch lives in `policy.json`, sealed with the vault key, never in `config.yaml`, which an
+agent can write; a missing or tampered file reads "ask each time" (never "without asking"). Only a person with the vault
+unlocked changes it, in Settings or in Agent Activity.
+
+Brakes, per asker (its task, else its host): at most 3 asks waiting at once, at most 30 uses in
+10 minutes, and after 3 denials in 30 minutes its asks pause for 30 minutes. Grants and waiting
+asks live in memory; a restart ends them, and Lock all ends every grant and withdraws every
+waiting ask; an ask nobody waits on is dropped once its approval runs out. Lock all and every move
+of the switch also stop a release still running: an approval that comes back after it gives
+nothing (`withdrawn`). With the machine key off, an agent can use the vault only while some window has
+Passwords unlocked.
+
+Every ask, use and refusal goes to `agent-log.json` (newest 500), sealed with the vault key, so
+item names and purposes stay as private as the vault; it never holds a value.
+
+`walnut pass` (the Mac's CLI and every host's):
+
+```
+walnut pass list [words] [--site <url>]
+walnut pass get <item> --purpose "<why>" [--field <name>]... [--task]
+walnut pass run --purpose "<why>" --env NAME=<item>[:field] [--env <item>]... [--task] -- <command> [args...]
+```
+
+`run` gives the command its secrets as environment variables and replaces each of them (3
+characters or more) with `********` in its stdout and stderr, across chunk boundaries, also
+URL-encoded, JSON-escaped, inside base64 and line by line for a value that spans lines, so a
+secret printed by accident reaches neither the terminal, an agent's context nor a transcript. It
+guards against accidents, not against a command set on printing a secret in some other shape.
+`password_use` and `pass get` return the value itself, which stays in the session's transcript:
+they are for a value the agent must type. While an ask waits `run` says so on stderr; Ctrl-C
+withdraws the ask. Exit codes before the command runs: 1 denied or refused, 2 nobody answered,
+3 error, 130 stopped; once it runs, the command's own code (128+n for signal n).

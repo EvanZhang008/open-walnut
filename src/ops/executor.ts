@@ -166,8 +166,13 @@ async function rawRequest(
   }
 
   if (!res.ok) {
-    const e = (parsed as { error?: { code?: unknown; message?: unknown } | string } | undefined)?.error
-    const code = typeof e === 'object' && typeof e?.code === 'string' ? e.code : String(res.status)
+    const body = parsed as { error?: { code?: unknown; message?: unknown } | string; code?: unknown } | undefined
+    const e = body?.error
+    // Two shapes answer an error: { error: { code, message } } and { error: "<message>", code }.
+    // The code is what a caller acts on (approval_used, denied), so either one keeps it.
+    // A 5xx keeps its number: callers read "503" as the server being away (trigger-check-core.ts).
+    const flat = res.status < 500 && typeof e === 'string' && typeof body?.code === 'string' && /^[a-z][a-z0-9_]*$/.test(body.code) ? body.code : undefined
+    const code = typeof e === 'object' && typeof e?.code === 'string' ? e.code : flat ?? String(res.status)
     const msg = typeof e === 'object' && typeof e?.message === 'string' ? e.message
       : typeof e === 'string' ? e
         : (text || res.statusText)

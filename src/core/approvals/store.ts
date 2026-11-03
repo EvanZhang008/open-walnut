@@ -22,7 +22,7 @@ import {
   APPROVAL_DEFAULT_TIMEOUT_MS, APPROVAL_DETAIL_MAX, APPROVAL_KEEP_MAX, APPROVAL_KEEP_MS, APPROVAL_MAX_TIMEOUT_MS,
   APPROVAL_MIN_TIMEOUT_MS, APPROVAL_WAIT_MAX_MS, APPROVAL_WHAT_MAX, isTerminal,
   type ApprovalAnswer, type ApprovalDecision, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRecord,
-  type ApprovalRequester, type ApprovalsFile, type ApprovalView,
+  type ApprovalGuard, type ApprovalRequester, type ApprovalsFile, type ApprovalView,
 } from './types.js'
 
 export const APPROVAL_CHANGED = 'approval:changed'
@@ -135,6 +135,7 @@ export interface CreateInput {
   enrollsKey?: string
   removesKey?: string
   testRun?: string
+  guard?: ApprovalGuard
 }
 
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
@@ -184,6 +185,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.enrollsKey ? { enrollsKey: input.enrollsKey } : {}),
     ...(input.removesKey ? { removesKey: input.removesKey } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
+    ...(input.guard ? { guard: input.guard } : {}),
   }
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     settleClock(file, now)
@@ -225,6 +227,11 @@ export interface AnswerInput {
   keyId?: string
   signature?: string
   device: { name: string; kind: ApprovalDeviceKind }
+  /**
+   * The route checked another proof only the person has (a Passwords unlock, for a vault ask:
+   * approvals-v1.ts vaultApprover), so an unsigned Approve of a biometric approval is let through.
+   */
+  proven?: boolean
 }
 
 /** A key the answer check may use: active, with its SPKI. Injected so the store never imports keys.ts' file. */
@@ -248,7 +255,7 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     }
     signed = { id: key.id, name: key.name, kind: key.kind }
   }
-  if (current.mode === 'biometric' && input.decision === 'approve' && !signed) {
+  if (current.mode === 'biometric' && input.decision === 'approve' && !signed && !input.proven) {
     throw new ApprovalError(403, 'biometric_required', 'This approval needs Face ID or Touch ID on a device that signs approvals.')
   }
   let out: ApprovalRecord | undefined

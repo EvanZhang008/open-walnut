@@ -93,5 +93,6 @@ export function fullConfigFixture(): Record<string, unknown> {
     cloud: { device_token: cloudToken },
     sync: { remote: `https://marina:${syncPass}@git.example.com/sync.git` },
     private_tasks: { words: ['planted private word', '/planted-pattern/'], model_check: true },
+    passwords: { auto_lock_minutes: 15 },
   }
 }

@@ -14,12 +14,15 @@
  * the file and the items, and replaces the in-memory state only after the write succeeded
  * (`mutate`), so a failed write (a full disk) leaves memory and disk the same. Each write is a
  * temp file plus fsync plus rename; the previous vault.json is kept as a daily copy in backups/.
- * A vault.json changed by hand (a backup put back) is read again and its items decrypted again.
+ * A vault.json changed by hand (a backup put back) is read again and its items decrypted again,
+ * inside the queue, so a read that races a write never mistakes our own write for an outside one.
+ * A close (Lock all, the last window gone) wins over any change still running: `closeGen`.
  */
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { vaultDir } from './paths.js'
 import { open, openJson, seal, sealJson, fromB64, type KdfParams, type Sealed } from './crypto.js'
 import type { VaultItem } from './types.js'
@@ -77,6 +80,9 @@ let cache: Map<string, VaultItem> | null = null
 let fileCache: { f: VaultFile; mtimeMs: number; size: number } | null = null
 let opening: Promise<boolean> | null = null
 let queue: Promise<unknown> = Promise.resolve()
+/** Bumped by every close: a change that began before it never puts a key or items back. */
+let closeGen = 0
+const inQueue = new AsyncLocalStorage<true>()
 
 /** Tests: point the store at a directory and forget everything in memory. */
 export function resetVaultForTest(d: string | null): void {
@@ -86,14 +92,18 @@ export function resetVaultForTest(d: string | null): void {
   fileCache = null
   opening = null
   queue = Promise.resolve()
+  closeGen++
 }
 
 export async function dir(): Promise<string> {
   return dirOverride ?? vaultDir()
 }
 
+/** One change at a time. Work already in the queue runs nested work at once (never waits on itself). */
 export function serial<T>(work: () => Promise<T>): Promise<T> {
-  const run = queue.then(work, work)
+  if (inQueue.getStore()) return work()
+  const job = () => inQueue.run(true, work)
+  const run = queue.then(job, job)
   queue = run.catch(() => undefined)
   return run
 }
@@ -125,13 +135,18 @@ export async function writeAtomic(file: string, value: unknown): Promise<void> {
   }
 }
 
-/** The vault file as on disk now (read again when something else changed it). */
+/**
+ * The vault file as on disk now. A file that differs from the one we know is read again only
+ * inside the queue: outside it, the difference may be a write of ours that has renamed its file
+ * and not yet recorded it, so the read waits its turn and looks again.
+ */
 export async function loadFile(): Promise<VaultFile | null> {
   const file = path.join(await dir(), 'vault.json')
   let st: fs.Stats | null = null
   try { st = await fsp.stat(file) } catch { st = null }
+  if (fileCache && st && fileCache.mtimeMs === st.mtimeMs && fileCache.size === st.size) return fileCache.f
+  if (!inQueue.getStore()) return serial(() => loadFile())
   if (!st) { fileCache = null; return null }
-  if (fileCache && fileCache.mtimeMs === st.mtimeMs && fileCache.size === st.size) return fileCache.f
   const f = await readJson<VaultFile>(file)
   if (!f) { fileCache = null; return null }
   if (f.format !== VAULT_FORMAT || typeof f.version !== 'number') throw new VaultError('vault.json is not a Walnut vault', 500, 'vault_unreadable')
@@ -140,7 +155,8 @@ export async function loadFile(): Promise<VaultFile | null> {
   fileCache = { f, mtimeMs: st.mtimeMs, size: st.size }
   if (changedOutside && vk) {
     // Put back by hand: decrypt again with the key we hold, or close when it no longer opens it.
-    try { cache = await decryptAll(f, vk) } catch { vk = null; cache = null }
+    const key = vk
+    try { cache = await decryptAll(f, key) } catch { if (vk === key) { vk = null; cache = null } }
   }
   return f
 }
@@ -151,6 +167,12 @@ export async function loadMachine(): Promise<MachineFile | null> {
 
 export async function writeMachine(m: MachineFile): Promise<void> {
   await writeAtomic(path.join(await dir(), 'machine.json'), m)
+}
+
+/** Move a machine.json of another vault aside (`machine-<vaultId>.json`) before a new vault takes its place. */
+export async function setAsideMachine(m: MachineFile): Promise<void> {
+  const d = await dir()
+  await fsp.rename(path.join(d, 'machine.json'), path.join(d, `machine-${String(m.vaultId).replace(/[^\w-]/g, '_')}-${Date.now()}.json`))
 }
 
 /** Keep one copy of the previous vault.json per day (ciphertext), newest BACKUPS_KEPT. Never fails a write. */
@@ -192,13 +214,19 @@ async function openWithMachine(): Promise<boolean> {
   if (vk) return true
   if (!opening) {
     opening = (async () => {
+      const gen = closeGen
       const f = await loadFile()
       const m = await loadMachine()
       if (!f || !m?.machineKey || !f.wraps.machine || m.vaultId !== f.id) return false
-      const key = await open(fromB64(m.machineKey), f.wraps.machine, aadWrap(f.id, 'machine'))
+      let key: Uint8Array
+      try {
+        key = await open(fromB64(m.machineKey), f.wraps.machine, aadWrap(f.id, 'machine'))
+      } catch {
+        return false // a machine key that does not open this wrap (a crash between two writes): the password opens it
+      }
       const items = await decryptAll(f, key)
-      if (!vk) { cache = items; vk = key }
-      return true
+      if (!vk && gen === closeGen) { cache = items; vk = key }
+      return !!vk
     })().finally(() => { opening = null })
   }
   return opening
@@ -228,24 +256,35 @@ export async function requireOpen(): Promise<OpenState> {
  */
 export async function mutate<R>(fn: (s: OpenState) => Promise<{ result: R; key?: Uint8Array; write?: boolean }>): Promise<R> {
   return serial(async () => {
+    const gen = closeGen
     const cur = await requireOpen()
     const s: OpenState = { f: structuredClone(cur.f), key: cur.key, items: new Map(cur.items) }
     const out = await fn(s)
     if (out.write !== false) await saveFile(s.f)
-    cache = s.items
-    if (out.key) vk = out.key
+    // Closed meanwhile: the write stands, but nothing goes back into memory.
+    if (gen === closeGen) {
+      cache = s.items
+      if (out.key) vk = out.key
+    }
     return out.result
   })
 }
 
-/** Install a freshly opened or made vault's key and items (setup, unlock). */
-export function setOpen(key: Uint8Array, items: Map<string, VaultItem>): void {
+/** The close generation, for a change that installs a key later (setOpen). */
+export function openGen(): number {
+  return closeGen
+}
+
+/** Install a freshly opened, made or rekeyed vault's key and items, unless it was closed since `gen`. */
+export function setOpen(key: Uint8Array, items: Map<string, VaultItem>, gen: number = closeGen): void {
+  if (gen !== closeGen) return
   vk = key
   cache = items
 }
 
 /** Forget the vault key: nothing in this process can read the vault until it is opened again. */
 export function closeVault(): void {
+  closeGen++
   vk = null
   cache = null
 }
@@ -259,17 +298,22 @@ export async function openKey(): Promise<{ vaultId: string; key: Uint8Array }> {
 }
 
 async function readSide<T>(name: SideFile, vaultId: string, key: Uint8Array): Promise<T | null> {
-  const body = await readJson<SideFileBody>(path.join(await dir(), name))
-  if (!body || body.vaultId !== vaultId) return null
-  try {
-    return await openJson<T>(key, body.data, aadSide(vaultId, name))
-  } catch {
-    return null
+  // `<name>.next` is the copy sealed under a new key before vault.json took that key (a rekey
+  // that crashed before renaming it): it is the one that opens then.
+  for (const file of [name, `${name}.next`]) {
+    const body = await readJson<SideFileBody>(path.join(await dir(), file))
+    if (!body || body.vaultId !== vaultId) continue
+    try {
+      return await openJson<T>(key, body.data, aadSide(vaultId, name))
+    } catch { /* sealed under another key: try the other copy */ }
   }
+  return null
 }
 
 async function writeSide(name: SideFile, vaultId: string, key: Uint8Array, value: unknown): Promise<void> {
-  await writeAtomic(path.join(await dir(), name), { version: 1, vaultId, data: await sealJson(key, value, aadSide(vaultId, name)) } satisfies SideFileBody)
+  const d = await dir()
+  await writeAtomic(path.join(d, name), { version: 1, vaultId, data: await sealJson(key, value, aadSide(vaultId, name)) } satisfies SideFileBody)
+  await fsp.rm(path.join(d, `${name}.next`), { force: true }) // a rekey's copy left by a crash is older now
 }
 
 /** A side file's contents (null when absent or unreadable). Needs the vault open. */
@@ -290,12 +334,26 @@ export async function updateSide<T>(name: SideFile, fn: (cur: T | null) => T): P
   })
 }
 
-/** Seal every side file again under a new vault key (called inside the queue, before vault.json is written). */
-export async function resealSides(vaultId: string, oldKey: Uint8Array, newKey: Uint8Array): Promise<void> {
+/**
+ * A rekey, step one (inside the queue, before vault.json takes the new key): seal every side
+ * file again under the new key as `<name>.next`. Step two, after vault.json is written:
+ * commitSides renames them over the old ones. A crash between leaves both, and readSide finds
+ * whichever opens with the key vault.json holds.
+ */
+export async function prepareSides(vaultId: string, oldKey: Uint8Array, newKey: Uint8Array): Promise<SideFile[]> {
+  const ready: SideFile[] = []
   for (const name of SIDE_FILES) {
     const v = await readSide<unknown>(name, vaultId, oldKey)
-    if (v !== null) await writeSide(name, vaultId, newKey, v)
+    if (v === null) continue
+    await writeAtomic(path.join(await dir(), `${name}.next`), { version: 1, vaultId, data: await sealJson(newKey, v, aadSide(vaultId, name)) } satisfies SideFileBody)
+    ready.push(name)
   }
+  return ready
+}
+
+export async function commitSides(ready: SideFile[]): Promise<void> {
+  const d = await dir()
+  for (const name of ready) await fsp.rename(path.join(d, `${name}.next`), path.join(d, name)).catch(() => undefined)
 }
 
 /** Rewrap every item key under a new vault key (items' own ciphertext is untouched). */

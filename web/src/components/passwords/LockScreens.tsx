@@ -97,14 +97,14 @@ export function SetupFlow({ onDone }: { onDone: () => void }) {
         <input data-no-draft="secret" id="pw-setup-2" className="pw-input" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} />
         {pw2 && !matches && <div className="pw-hint pw-hint-bad">The two passwords differ.</div>}
         {pw && !strongEnough && <div className="pw-hint">At least 10 characters and Fair or better.</div>}
-        <label className="pw-toggle-row">
+        <div className="pw-toggle-row">
           <span className="pw-toggle-icon"><RobotIcon /></span>
-          <span className="pw-toggle-text">
+          <label className="pw-toggle-text" htmlFor="pw-setup-agents">
             <b>Let agents ask while you are away</b>
             <span>Keeps a key on this Mac so a task can use an item after you approve it on your phone, even when no window is unlocked. Each use still needs your approval, but any program running as you on this Mac could then read the vault without the master password. Off by default; you can turn it on later in Settings.</span>
-          </span>
-          <input type="checkbox" className="pw-switch" checked={agents} onChange={(e) => setAgents(e.target.checked)} />
-        </label>
+          </label>
+          <input id="pw-setup-agents" type="checkbox" className="pw-switch" checked={agents} onChange={(e) => setAgents(e.target.checked)} />
+        </div>
         {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
         <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!strongEnough || !matches || busy}>{busy ? 'Creating…' : 'Create vault'}</button>
       </form>
@@ -137,7 +137,7 @@ export function UnlockScreen({ status, onUnlocked }: { status: VaultStatus; onUn
       onUnlocked()
     } catch (err) {
       if (err instanceof VaultApiError && err.code === 'secret_key_needed') setNeedKey(true)
-      if (err instanceof VaultApiError && err.waitMs) setWaitUntil(Date.now() + err.waitMs)
+      if (err instanceof VaultApiError && err.code === 'unlock_slowed' && err.waitMs) setWaitUntil(Date.now() + err.waitMs)
       setError(errorText(err))
       setPw('')
       input.current?.focus()

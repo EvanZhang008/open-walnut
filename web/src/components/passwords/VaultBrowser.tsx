@@ -5,29 +5,30 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { vaultApi, VaultApiError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
+import { vaultApi, VaultApiError, isLockedError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
 import { usePageView } from '@/utils/view-memory'
 import { useMenuPlacement } from '@/hooks/useMenuPlacement'
 import { log } from '@/utils/log'
 import type { VaultItemType } from '../../../../src/core/vault/types'
 import { displayHost } from '../../../../src/core/vault/url-match'
 import {
-  SECTIONS, inSection, isPasswordsSection, isPasswordsSort, matchesQuery, sectionCounts, sortItems, typeLabel,
+  SECTIONS, inSection, isPasswordsSection, isPasswordsSort, isViewSection, matchesQuery, sectionCounts, sortItems, typeLabel,
   type PasswordsSection, type PasswordsSort,
 } from './passwords-model'
 import { ItemView, SiteTile } from './ItemView'
 import { ItemEditor } from './ItemEditor'
 import { ImportDialog } from './ImportDialog'
 import { GeneratorPanel } from './GeneratorPanel'
+import { AgentActivity } from './AgentActivity'
 import {
   GridIcon, StarIcon, UserKeyIcon, ClockIcon, CodeIcon, NoteIcon, CardIcon, ShieldIcon, TrashIcon, PlusIcon, SearchIcon,
-  LockIcon, ImportIcon, DiceIcon, KeyIcon,
+  LockIcon, ImportIcon, DiceIcon, KeyIcon, RobotIcon,
 } from './pw-icons'
 
 const SECTION_ICON: Record<PasswordsSection, React.ReactNode> = {
   all: <GridIcon size={16} />, favorites: <StarIcon size={16} />, logins: <UserKeyIcon size={16} />, codes: <ClockIcon size={16} />,
   api_keys: <CodeIcon size={16} />, notes: <NoteIcon size={16} />, cards: <CardIcon size={16} />, security: <ShieldIcon size={16} />,
-  trash: <TrashIcon size={16} />,
+  agents: <RobotIcon size={16} />, trash: <TrashIcon size={16} />,
 }
 
 const NEW_TYPES: VaultItemType[] = ['login', 'api_key', 'note', 'card']
@@ -137,7 +138,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
       setItems(await vaultApi.list())
       setLoadError('')
     } catch (err) {
-      if (err instanceof VaultApiError && err.status === 401) { onLocked(); return }
+      if (isLockedError(err)) { onLocked(); return }
       setLoadError(err instanceof Error ? err.message : String(err))
     }
   }, [onLocked])
@@ -146,12 +147,12 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
 
   // Open the selected item; a slower answer for an item no longer selected is dropped.
   useEffect(() => {
-    if (!selectedId || section === 'security') { setOpened(null); return }
+    if (!selectedId || isViewSection(section)) { setOpened(null); return }
     const seq = ++openSeq.current
     vaultApi.get(selectedId).then((it) => { if (seq === openSeq.current) setOpened(it) }).catch((err) => {
       if (seq !== openSeq.current) return
       setOpened(null)
-      if (err instanceof VaultApiError && err.status === 401) onLocked()
+      if (isLockedError(err)) onLocked()
       else if (err instanceof VaultApiError && err.status === 404) setSelectedId('')
     })
   }, [selectedId, section, onLocked, setSelectedId])
@@ -174,7 +175,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
   const counts = useMemo(() => sectionCounts(items ?? []), [items])
   const shownItems = useMemo(() => sortItems((items ?? []).filter((i) => inSection(i, section) && matchesQuery(i, query)), sort), [items, section, query, sort])
 
-  const pickSection = (s: PasswordsSection) => { setSection(s); setEditing(null); if (s === 'security') setSelectedId('') }
+  const pickSection = (s: PasswordsSection) => { setSection(s); setEditing(null); if (isViewSection(s)) setSelectedId('') }
   const select = (id: string) => { setEditing(null); setSelectedId(id) }
   const saved = (it: VaultItem) => {
     setEditing(null)
@@ -201,7 +202,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
             <button key={s.id} type="button" className={`pw-side-item${section === s.id ? ' on' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => pickSection(s.id)} data-testid={`pw-section-${s.id}`}>
               <span className="pw-side-icon">{SECTION_ICON[s.id]}</span>
               <span className="pw-side-label">{s.label}</span>
-              {s.id !== 'security' && <span className="pw-side-count">{counts[s.id] || ''}</span>}
+              {!isViewSection(s.id) && <span className="pw-side-count">{counts[s.id] || ''}</span>}
             </button>
           ))}
         </nav>
@@ -250,10 +251,11 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
         {editing?.kind === 'new' && <ItemEditor key={`new-${editing.type}`} type={editing.type} onSaved={saved} onCancel={() => setEditing(null)} />}
         {editing?.kind === 'edit' && <ItemEditor key={`edit-${editing.item.id}`} type={editing.item.type} item={editing.item} onSaved={saved} onCancel={() => setEditing(null)} />}
         {!editing && section === 'security' && items && <SecurityView items={items} onOpen={(id) => { setSection('all'); setSelectedId(id) }} />}
-        {!editing && section !== 'security' && opened && opened.id === selectedId && (
+        {!editing && section === 'agents' && items && <AgentActivity items={items} onOpen={(id) => { setSection('all'); setSelectedId(id) }} onLocked={onLocked} />}
+        {!editing && !isViewSection(section) && opened && opened.id === selectedId && (
           <ItemView key={opened.id} item={opened} onEdit={() => setEditing({ kind: 'edit', item: opened })} onChanged={changed} />
         )}
-        {!editing && section !== 'security' && !selectedId && (
+        {!editing && !isViewSection(section) && !selectedId && (
           <div className="pw-detail pw-empty">
             <KeyIcon size={40} />
             <p>{items?.length ? 'Pick an item to see it.' : 'Your vault is empty.'}</p>

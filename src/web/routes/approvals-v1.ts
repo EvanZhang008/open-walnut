@@ -26,7 +26,7 @@ import os from 'node:os'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
+import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, hostOrigin } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
@@ -86,7 +86,7 @@ function str(v: unknown, max: number): string | undefined {
 }
 
 /** Who asked: the session's task when a session did, its host, and what the CLI said of itself. */
-async function requesterOf(req: Request, body: Record<string, unknown>) {
+export async function requesterOf(req: Request, body: Record<string, unknown>) {
   const sid = header(req, 'x-walnut-caller-sid')
   const hostHeader = header(req, 'x-walnut-caller-host')
   const origin = requestOrigin(req)
@@ -98,7 +98,9 @@ async function requesterOf(req: Request, body: Record<string, unknown>) {
   if (sid && sid !== 'external') {
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
     const caller = await resolveCaller(sid)
-    if (caller.kind === 'session') {
+    // A session id is a name, not a proof: it counts only from the host that session runs on, so
+    // a script on one host cannot take another host's session (and its task's grants) by naming it.
+    if (caller.kind === 'session' && hostOrigin(caller.record.host || LOCAL_ORIGIN) === origin) {
       out.sessionId = sid
       out.taskId = caller.record.taskId
       try {
@@ -215,6 +217,21 @@ approvalsV1Router.post('/approvals/:id/cancel', (req: Request, res: Response, ne
   })
 })
 
+/**
+ * An unsigned Approve of giving an agent a vault item. A tap from this machine is not enough:
+ * any process here can send one (see the header), and an agent holds its own ask's id; a device
+ * token is not enough either, since a process here can make one (devices.ts). The proof is a
+ * device key's signature (answerApproval checks it) or a live Passwords unlock in this window (a
+ * vault session, which only the master password buys). A sensitive item takes only a signature
+ * while some device can sign.
+ */
+async function vaultApprover(req: Request, body: Record<string, unknown>, target: { mode: string; guard?: string }): Promise<boolean> {
+  if (target.guard === 'vault-sensitive' && target.mode === 'biometric') return false
+  const { useSession, SESSION_HEADER } = await import('../../core/vault/sessions.js')
+  const token = header(req, SESSION_HEADER) ?? (typeof body.vaultSession === 'string' ? body.vaultSession : undefined)
+  return !!useSession(token)
+}
+
 approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
   if (!personOnly(req, res, 'answers an approval')) return
@@ -225,6 +242,16 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
     // A test run answers only its own approvals, and the person never answers a test run's by accident.
     const target = await getApproval(param(req.params.id))
     if (!target || !visibleTo(target, ambientTestRun())) throw new ApprovalError(404, 'not_found', 'No such approval.')
+    let proven = false
+    if (target.guard && body.decision === 'approve' && !body.signature) {
+      // Unsigned: only a Passwords unlock in this window proves it is the person (vaultApprover).
+      if (!(await vaultApprover(req, body, target))) {
+        throw new ApprovalError(403, 'vault_unlock_needed', target.guard === 'vault-sensitive' && target.mode === 'biometric'
+          ? 'This item needs Face ID or Touch ID: approve it on your iPhone or in the Walnut Mac app.'
+          : 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID: giving an agent a password needs the master password or a device that signs.')
+      }
+      proven = true
+    }
     const device = (body.device ?? {}) as Record<string, unknown>
     const deviceName = (req as Request & { deviceName?: string }).deviceName
     const kinds: ApprovalDeviceKind[] = ['iphone', 'mac-app', 'web']
@@ -234,6 +261,7 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
       keyId: str(body.keyId, 80),
       signature: str(body.signature, 400),
       device: { name: deviceName ?? str(device.name, 80) ?? (kind === 'web' ? 'Web console' : kind), kind },
+      proven,
     }, async (id) => keys.activeKey(id))
     if (approval.answer?.keyId) await keys.touchKey(approval.answer.keyId)
     if (approval.enrollsKey) await keys.applyKeyApproval(approval)

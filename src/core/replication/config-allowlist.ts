@@ -89,6 +89,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   plugin_ai: 'plugin AI switches and budgets apply where the plugin runs, on the Mac',
   plugin_jobs: 'where plugin jobs run is chosen on the Mac, which sends each machine its own jobs',
   calendar: 'calendar accounts and credentials',
+  passwords: 'the password vault opens only on the Mac, so its settings stay there',
   favorites: 'copied by the prefs kind',
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',

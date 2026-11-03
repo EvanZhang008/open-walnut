@@ -11,8 +11,9 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch'
 import { SettingsGroup, SettingsRow } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
 import { NumberInput } from '../inputs/NumberInput'
+import { SegmentedControl } from '../inputs/SegmentedControl'
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
-import { onVaultSessionChange, vaultApi, VaultApiError, type VaultStatus } from '@/api/vault'
+import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type VaultStatus } from '@/api/vault'
 import { downloadRecoveryKit } from '@/components/passwords/LockScreens'
 
 interface Props {
@@ -32,9 +33,14 @@ export function PasswordsSection({ config, onSave }: Props) {
   const [newPw, setNewPw] = useState('')
   const [newPw2, setNewPw2] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
+  const [agents, setAgents] = useState<AgentsSwitch | null>(null)
 
   const refresh = useCallback(() => {
-    vaultApi.status().then(setStatus).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    vaultApi.status().then((st) => {
+      setStatus(st)
+      if (st.unlocked) vaultApi.agentPolicy().then((p) => setAgents(p.agents)).catch(() => setAgents(null))
+      else setAgents(null)
+    }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }, [])
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => onVaultSessionChange(refresh), [refresh])
@@ -81,6 +87,18 @@ export function PasswordsSection({ config, onSave }: Props) {
           control={<SettingsButton busy={busy === 'lock'} disabled={!status?.setUp} onClick={() => void run('lock', async () => { await vaultApi.lock(true); return 'Every window is locked.' })}>Lock all</SettingsButton>}
         />
       </SettingsGroup>
+
+      {status?.setUp && (
+        <SettingsGroup heading="Agents" footer={<>Each item also has its own setting (ask, without asking, never). Every ask, use and refusal is listed in Passwords, Agent Activity.</>}>
+          <SettingsRow
+            label="Agents may use passwords"
+            help={needUnlock ?? (agents === 'off' ? 'No agent gets any item.' : agents === 'allow' ? 'Items set to ask are given at once; sensitive ones still ask for Face ID or Touch ID.' : 'Each item decides: you approve on your Mac or phone, or it is given without asking, or never.')}
+            control={<SegmentedControl<AgentsSwitch> id="pw-agents-switch" aria-label="Agents may use passwords" value={agents ?? 'ask'} disabled={!unlocked || !agents || busy === 'switch'}
+              options={[{ value: 'off', label: 'Off' }, { value: 'ask', label: 'Ask each time' }, { value: 'allow', label: 'Without asking' }]}
+              onChange={(v) => void run('switch', async () => { setAgents((await vaultApi.setAgentsSwitch(v)).agents) })} />}
+          />
+        </SettingsGroup>
+      )}
 
       {status?.setUp && (
         <SettingsGroup heading="Master password">

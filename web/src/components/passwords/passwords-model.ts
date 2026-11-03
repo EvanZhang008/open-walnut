@@ -5,7 +5,7 @@
 import type { VaultItemSummary } from '@/api/vault'
 import { displayHost } from '../../../../src/core/vault/url-match'
 
-export type PasswordsSection = 'all' | 'favorites' | 'logins' | 'codes' | 'api_keys' | 'notes' | 'cards' | 'security' | 'trash'
+export type PasswordsSection = 'all' | 'favorites' | 'logins' | 'codes' | 'api_keys' | 'notes' | 'cards' | 'security' | 'agents' | 'trash'
 
 export const SECTIONS: Array<{ id: PasswordsSection; label: string }> = [
   { id: 'all', label: 'All Items' },
@@ -16,10 +16,14 @@ export const SECTIONS: Array<{ id: PasswordsSection; label: string }> = [
   { id: 'notes', label: 'Secure Notes' },
   { id: 'cards', label: 'Cards' },
   { id: 'security', label: 'Security' },
+  { id: 'agents', label: 'Agent Activity' },
   { id: 'trash', label: 'Recently Deleted' },
 ]
 
 export const isPasswordsSection = (v: unknown): v is PasswordsSection => SECTIONS.some((s) => s.id === v)
+
+/** Sections that show a view of their own on the right instead of an item. */
+export const isViewSection = (s: PasswordsSection): boolean => s === 'security' || s === 'agents'
 
 export type PasswordsSort = 'title' | 'updated' | 'used'
 export const isPasswordsSort = (v: unknown): v is PasswordsSort => v === 'title' || v === 'updated' || v === 'used'
@@ -28,7 +32,7 @@ export function inSection(i: VaultItemSummary, s: PasswordsSection): boolean {
   if (s === 'trash') return !!i.trashedAt
   if (i.trashedAt) return false
   switch (s) {
-    case 'all': case 'security': return true
+    case 'all': case 'security': case 'agents': return true
     case 'favorites': return !!i.favorite
     case 'logins': return i.type === 'login'
     case 'codes': return i.hasTotp
@@ -40,7 +44,7 @@ export function inSection(i: VaultItemSummary, s: PasswordsSection): boolean {
 
 export function sectionCounts(items: VaultItemSummary[]): Record<PasswordsSection, number> {
   const out = Object.fromEntries(SECTIONS.map((s) => [s.id, 0])) as Record<PasswordsSection, number>
-  for (const i of items) for (const s of SECTIONS) if (s.id !== 'security' && inSection(i, s.id)) out[s.id]++
+  for (const i of items) for (const s of SECTIONS) if (!isViewSection(s.id) && inSection(i, s.id)) out[s.id]++
   return out
 }
 

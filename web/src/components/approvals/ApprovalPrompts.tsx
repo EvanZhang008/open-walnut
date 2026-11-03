@@ -82,7 +82,7 @@ function ApprovalBody({ a, s, now, detailOpen = false }: { a: Approval; s: Appro
   return (
     <>
       <div className="approval-head">
-        <span className="approval-kicker">{biometric ? 'Approval · Face ID / Touch ID' : 'Approval'}</span>
+        <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approval · Face ID / Touch ID' : 'Approval'}</span>
         <span className="approval-clock" title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>{timeLeft(a.expiresAt, now)}</span>
       </div>
       <div className="approval-what">{a.what}</div>
@@ -95,7 +95,7 @@ function ApprovalBody({ a, s, now, detailOpen = false }: { a: Approval; s: Appro
       ) : null}
       {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
-      {biometric && !approveKind(s, a) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
+      {(biometric || a.guard) && !approveKind(s, a) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
       <ApprovalButtons a={a} s={s} />
     </>
   );

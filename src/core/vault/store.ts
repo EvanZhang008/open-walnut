@@ -13,8 +13,8 @@ import {
   PBKDF2_ITERATIONS, deriveUnlockKey, newSecretKey, open, parseSecretKey, randomBytes, seal, fromB64, toB64, type KdfParams,
 } from './crypto.js'
 import {
-  VAULT_FORMAT, VAULT_VERSION, VaultError, aadWrap, isOpen, loadFile, loadMachine, requireOpen, resealSides,
-  rewrapItems, saveFile, serial, setOpen, tryOpenWithMachine, writeMachine, decryptAll, type MachineFile, type VaultFile,
+  VAULT_FORMAT, VAULT_VERSION, VaultError, aadWrap, commitSides, isOpen, loadFile, loadMachine, openGen, prepareSides, requireOpen,
+  rewrapItems, saveFile, serial, setAsideMachine, setOpen, tryOpenWithMachine, writeMachine, decryptAll, type MachineFile, type VaultFile,
 } from './state.js'
 
 export { VAULT_FORMAT, VAULT_VERSION, VaultError, closeVault, isOpen, openKey, resetVaultForTest } from './state.js'
@@ -89,6 +89,10 @@ export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agent
     const key = randomBytes(32)
     const now = new Date().toISOString()
     const machineKey = p.agentsWhileAway ? randomBytes(32) : null
+    // A machine.json of an earlier vault (its vault.json deleted or moved) holds that vault's
+    // Secret Key: keep it beside, never write over it.
+    const prior = await loadMachine()
+    if (prior) await setAsideMachine(prior)
     const f: VaultFile = {
       format: VAULT_FORMAT, version: VAULT_VERSION, id, rev: 0, createdAt: now, updatedAt: now,
       kdf: p.kdf, aukSalt: toB64(aukSalt),
@@ -144,6 +148,10 @@ export async function revealSecretKey(passwordKey: string): Promise<string> {
   })
 }
 
+async function machineOpens(f: VaultFile, machineKey: string): Promise<boolean> {
+  try { await open(fromB64(machineKey), f.wraps.machine!, aadWrap(f.id, 'machine')); return true } catch { return false }
+}
+
 /**
  * Turn "agents may ask while nobody unlocked" on or off. Needs the master password: on puts
  * a key on this disk that opens the vault without it, off makes a new vault key so a copy of
@@ -151,30 +159,34 @@ export async function revealSecretKey(passwordKey: string): Promise<string> {
  */
 export async function setAgentsWhileAway(on: boolean, passwordKey: string): Promise<void> {
   await serial(async () => {
+    const gen = openGen()
     const cur = await requireOpen()
     const m = await loadMachine()
     if (!m || m.vaultId !== cur.f.id) throw new VaultError('This machine does not have the Secret Key', 428, 'secret_key_needed')
     const { sk } = await checkPassword(cur.f, m, passwordKey)
     const f = structuredClone(cur.f)
+    const { machineKey: _drop, ...noKey } = m
     if (on) {
-      if (f.wraps.machine && m.machineKey) return
+      if (f.wraps.machine && m.machineKey && await machineOpens(f, m.machineKey)) return
+      // The key first, then the wrap: a crash between leaves a key that opens nothing.
       const mk = randomBytes(32)
+      await writeMachine({ ...noKey, machineKey: toB64(mk) })
       f.wraps.machine = await seal(mk, cur.key, aadWrap(f.id, 'machine'))
       await saveFile(f)
-      await writeMachine({ ...m, machineKey: toB64(mk) })
       return
     }
     if (!f.wraps.machine && !m.machineKey) return
+    // The key goes first: from then on nothing on this disk opens the vault without the password.
+    await writeMachine(noKey)
     const newKey = randomBytes(32)
     await rewrapItems(f, cur.key, newKey)
     delete f.wraps.machine
     const auk = await deriveUnlockKey(pwKeyBytes(passwordKey), sk, fromB64(f.aukSalt))
     f.wraps.password = await seal(auk, newKey, aadWrap(f.id, 'password'))
+    const sides = await prepareSides(f.id, cur.key, newKey)
     await saveFile(f)
-    setOpen(newKey, cur.items)
-    await resealSides(f.id, cur.key, newKey)
-    const { machineKey: _drop, ...rest } = m
-    await writeMachine(rest)
+    setOpen(newKey, cur.items, gen)
+    await commitSides(sides)
   })
 }
 
@@ -183,6 +195,7 @@ export async function changeMasterPassword(p: { oldPasswordKey: string; newPassw
   checkKdf(p.kdf)
   const newPw = pwKeyBytes(p.newPasswordKey)
   await serial(async () => {
+    const gen = openGen()
     const cur = await requireOpen()
     const m = await loadMachine()
     let sk: Uint8Array
@@ -199,10 +212,17 @@ export async function changeMasterPassword(p: { oldPasswordKey: string; newPassw
     f.kdf = p.kdf
     f.aukSalt = toB64(aukSalt)
     f.wraps.password = await seal(await deriveUnlockKey(newPw, sk, aukSalt), newKey, aadWrap(f.id, 'password'))
-    const mk = f.wraps.machine && m?.machineKey ? fromB64(m.machineKey) : null
-    if (mk) f.wraps.machine = await seal(mk, newKey, aadWrap(f.id, 'machine'))
+    if (f.wraps.machine && m?.machineKey) {
+      // A new machine key too, so a copy of the old one opens nothing written from now on. It is
+      // written first: a crash before vault.json leaves a key that opens nothing, and the
+      // (old) password still opens the vault.
+      const mk = randomBytes(32)
+      await writeMachine({ ...m, machineKey: toB64(mk) })
+      f.wraps.machine = await seal(mk, newKey, aadWrap(f.id, 'machine'))
+    }
+    const sides = await prepareSides(f.id, cur.key, newKey)
     await saveFile(f)
-    setOpen(newKey, cur.items)
-    await resealSides(f.id, cur.key, newKey)
+    setOpen(newKey, cur.items, gen)
+    await commitSides(sides)
   })
 }
