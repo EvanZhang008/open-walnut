@@ -229,7 +229,7 @@ async function main() {
   }
   if (opts.live) {
     process.stdout.write(`rehearsing the live update of ${opts.live} in ${work}\n`)
-    const video = opts.liveVideo ? { dir: opts.liveVideo } : null
+    const video = opts.liveVideo ? { dir: opts.liveVideo, collapsed: process.env.WALNUT_LIVE_VIDEO_COLLAPSED === '1' } : null
     const expected = await rehearseLive({ work, liveJson: opts.live, scenario, walnuts, video })
     if (video?.result) process.stdout.write(`video: ${JSON.stringify(video.result.lines.filter((l) => l.done || l.ffmpeg))}\n`)
     return finish(opts, work, 'live update', expected)

@@ -21,8 +21,12 @@
  *   live-install   install.sh puts A into ~/.local/share/open-walnut (versions
  *                  layout); `walnut --version` names it.
  *   live-serve     `walnut web` started as a plain child (a terminal: nothing
- *                  supervises it) serves A; a task, and a session that answers
- *                  two messages; GET /api/system/update says `live` idle, can install.
+ *                  supervises it) becomes the supervisor at once: the server on
+ *                  the port is its child before any update. It serves A; a task,
+ *                  and a session that answers two messages; GET /api/system/update
+ *                  says `live` idle, can install. From here to live-stop the
+ *                  started process is watched: it never listens and never opens
+ *                  the data files.
  *   live-update    B is published (its platform package; the tag moves); a
  *                  person was active a moment ago; POST /api/system/update/check.
  *                  `live` goes downloading -> installed/waiting -> restarting,
@@ -34,11 +38,16 @@
  *                  C is published and the server (now supervised: exit 75 to the
  *                  parent) restarts into it the same way; a fourth message.
  *   live-stop      SIGTERM to the terminal's process ends the chain: it exits,
- *                  the server child is gone and nothing listens on the port.
+ *                  the server child is gone and nothing listens on the port. The
+ *                  log holds no server work of the started process (no SERVER
+ *                  EXIT of its pid, no write to data it handed on, one boot of
+ *                  the background jobs per server child).
  *   live-rollback  a fresh install of A takes the broken version: it installs
  *                  (its --version is right), the restart's first start exits 1,
  *                  A is linked back and serves on the same port, the broken
  *                  version is held (bad/<version>, `live.held`) and not installed again.
+ *                  Then its server child dies by SIGKILL: the started process exits
+ *                  with the child's code (137) and starts nothing.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -49,7 +58,7 @@ import { fileURLToPath } from 'node:url'
 import { nextVersion, setManifestVersion } from '../release.mjs'
 import { builtName } from '../release-files.mjs'
 import { packVersion, publishedTags } from './field-packs.mjs'
-import { alive, childrenOf, commandOf, groupAlive, listenersOf, parentOf, startedAt } from './live-proc.mjs'
+import { alive, childrenOf, commandOf, cpuTicks, groupAlive, listenersOf, openPaths, parentOf, startedAt } from './live-proc.mjs'
 import { startRegistry } from './registry.mjs'
 import { INSTALL_SH, systemPathWithoutNode } from './runtime.mjs'
 import { compareVersions } from './version-order.mjs'
@@ -231,6 +240,46 @@ function cliGroupOf(w, sid) {
   try { return Number(fs.readFileSync(path.join(`${w.daemonDir}-streams`, `${sid}.pgid`), 'utf8').trim()) || null } catch { return null }
 }
 
+/**
+ * Watch the started process (the supervisor) every 500 ms: it must never listen
+ * on the port nor hold a file of the data home (the databases, the instance lock).
+ */
+function watchParent(w) {
+  const pid = w.server.pid
+  const violations = []
+  let samples = 0
+  let cpu = null
+  const timer = setInterval(() => {
+    if (!alive(pid)) return
+    samples++
+    cpu = cpuTicks(pid) ?? cpu
+    if (listenersOf(w.port).includes(pid)) violations.push(`listened on :${w.port}`)
+    for (const p of openPaths(pid)) if (p.startsWith(w.walnutHome + path.sep) && /\.(sqlite|db)(-wal|-shm|-journal)?$|lock/i.test(p)) violations.push(`held ${p}`)
+  }, 500)
+  return { stop: () => { clearInterval(timer); return { violations: [...new Set(violations)], samples, cpu: cpuTicks(pid) ?? cpu } } }
+}
+
+/**
+ * What the shared log says of the started process: no SERVER EXIT of its pid, no
+ * write refused by a sealed database, and the background jobs booted once per
+ * server child (`boots`), so none of them ran in the parent.
+ */
+function parentLog(w, parent, boots) {
+  const text = fs.readFileSync(w.logFile, 'utf8')
+  const lines = text.split('\n')
+  const exitPids = lines.filter((l) => l.includes('SERVER EXIT')).map((l) => Number((/"pid":(\d+)|pid=(\d+)/.exec(l) ?? [])[1] ?? (/pid=(\d+)/.exec(l) ?? [])[1]))
+  for (const f of ['/tmp/open-walnut-exit.log', path.join(w.home, '.cache/open-walnut/exit.log')]) {
+    try { for (const l of fs.readFileSync(f, 'utf8').split('\n')) { const m = /"pid":(\d+)|pid=(\d+)/.exec(l); if (m) exitPids.push(Number(m[1] ?? m[2])) } } catch { /* none */ }
+  }
+  if (exitPids.includes(parent)) throw new Error(`the started process ${parent} wrote a SERVER EXIT`)
+  const sealed = lines.filter((l) => l.includes('handed its data'))
+  if (sealed.length) throw new Error(`a process wrote to data it handed on: ${sealed[0].slice(0, 200)}`)
+  const started = lines.filter((l) => l.includes('host-learning: started')).length
+  if (started !== boots) throw new Error(`host-learning started ${started} times for ${boots} server children`)
+  const count = (re) => lines.filter((l) => re.test(l)).length
+  return `log: SERVER EXIT pids ${[...new Set(exitPids)].join(', ') || 'none'} (never ${parent}); host-learning started ${started}x for ${boots} server children; host-learning/summary/usage/orphan-recovery lines ${count(/host-learning|project-summary|turn-complete-summary|usage collection|orphan recovery/)} in all, 0 sealed-data errors`
+}
+
 /** Publish `to`, have a person active, ask for a check, and follow the live update to `to` on the same port. */
 async function updateTo(w, registry, to, label) {
   const before = treeOf(w)
@@ -299,15 +348,18 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const l = up.json?.live
       if (!l || l.state !== 'idle' || l.canInstall !== true) throw new Error(`live is ${JSON.stringify(l)}, expected idle and canInstall (install ${JSON.stringify(up.json?.install)})`)
       const tree = treeOf(w)
-      if (tree.server !== tree.parent) throw new Error(`before any update the server should be the terminal's own process: ${JSON.stringify(tree)}`)
+      if (!tree.server || tree.server === tree.parent || tree.serverParent !== tree.parent) throw new Error(`before any update the server on :${w.port} must be the child of the started process ${tree.parent}: ${JSON.stringify(tree)}`)
+      state.watch = watchParent(w)
+      state.boots = new Set([tree.server])
       if (video) {
         recorder = startRecorder(w.base, video)
         await recorder.ready
       }
-      return `A ${V.a} on :${w.port} (pid ${tree.parent}, install kind ${up.json.install.kind}); task ${state.taskId}; session ${state.sid} answered 2; daemon ${state.daemon}; CLI group ${state.cli}; live ${l.state}, canInstall ${l.canInstall}`
+      return `A ${V.a} on :${w.port} (started pid ${tree.parent} supervises; server ${tree.server} is its child; install kind ${up.json.install.kind}); task ${state.taskId}; session ${state.sid} answered 2; daemon ${state.daemon}; CLI group ${state.cli}; live ${l.state}, canInstall ${l.canInstall}`
     })
     const updated = serving && await scenario('live-update', async () => {
       const r = await updateTo(w, registry, V.b, 'A -> B')
+      state.boots.add(r.after.server)
       const list = await w.api('GET', '/api/v1/tasks')
       if (!(list.json?.tasks ?? []).some((t) => t.id === state.taskId && t.title === state.title)) throw new Error(`task ${state.taskId} is gone under B`)
       const messages = await w.waitForAnswer(state.sid, ask('two', state.marks[1]).answer, 60_000)
@@ -336,6 +388,7 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const no = await w.api('POST', '/api/system/update/restart', {})
       if (no.status !== 409 || no.json?.error !== 'no_update') throw new Error(`POST /api/system/update/restart with nothing new answered ${no.status} ${no.text.slice(0, 200)}`)
       const r = await updateTo(w, registry, V.c, 'B -> C')
+      state.boots.add(r.after.server)
       const four = ask('four', state.marks[3])
       const send = await w.api('POST', '/api/v1/messages', { to: state.sid, text: four.text })
       if (send.status !== 202) throw new Error(`POST /api/v1/messages answered ${send.status}`)
@@ -360,7 +413,10 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       if (left.length) throw new Error(`still listening on :${w.port}: ${left.map((p) => `${p} ${commandOf(p)}`).join('; ')}`)
       const orphans = childrenOf(1).filter((p) => /walnut/.test(commandOf(p)) && commandOf(p).includes(' web'))
       const daemonAlive = alive(state.daemon)
-      return `parent ${tree.parent} exited (code ${end.code}, signal ${end.signal}) in ${ms}ms; child ${child} gone; nothing on :${w.port}; reparented walnut web processes: ${orphans.length}; daemon ${state.daemon} ${daemonAlive ? 'still runs (by design)' : 'gone'}`
+      const watched = state.watch.stop()
+      if (watched.violations.length) throw new Error(`the started process ${tree.parent} did server work: ${watched.violations.slice(0, 5).join('; ')}`)
+      const said = parentLog(w, tree.parent, state.boots.size)
+      return `parent ${tree.parent} exited (code ${end.code}, signal ${end.signal}) in ${ms}ms; child ${child} gone; nothing on :${w.port}; reparented walnut web processes: ${orphans.length}; daemon ${state.daemon} ${daemonAlive ? 'still runs (by design)' : 'gone'}; the started process over ${watched.samples} samples: never listened, never opened a data file, ${watched.cpu} CPU ticks; ${said}`
     })
     if (w) await w.shutdown()
 
@@ -394,8 +450,19 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       if (l.state === 'downloading' || l.state === 'installed' || l.state === 'waiting') throw new Error(`the held version is being installed again: ${l.state}`)
       const said = fs.readFileSync(r.logFile, 'utf8')
       const line = said.split('\n').find((x) => x.includes('going back to')) ?? '(no line)'
+      // The child dies with a code of its own: the started process ends with it and starts nothing.
+      const now = treeOf(r)
+      if (!now.server || now.server <= 1 || now.serverParent !== now.parent || !listenersOf(r.port).includes(now.server)) throw new Error(`no server child to stop: ${JSON.stringify(now)}`)
+      const exited = new Promise((res) => r.server.once('exit', (code, signal) => res({ code, signal })))
+      process.kill(now.server, 'SIGKILL')
+      const end = await Promise.race([exited, sleep(30_000).then(() => null)])
+      if (!end) throw new Error(`the started process ${now.parent} outlived its SIGKILLed child ${now.server} by 30s`)
+      r.server = null
+      if (end.code !== 137) throw new Error(`the child died by SIGKILL (137) and the started process exited ${end.code} (signal ${end.signal})`)
+      for (let i = 0; i < 20 && listenersOf(r.port).length; i++) await sleep(250)
+      if (listenersOf(r.port).length) throw new Error(`something listens on :${r.port} after the chain ended`)
       await r.shutdown()
-      return `${states.join(' -> ')}; A back on :${r.port} ${Math.round((Date.now() - t0 + down) / 1000)}s after restarting (server ${before.server} -> ${after.server}, child of ${after.parent}); bin/walnut -> ${linked(r)}; ${path.relative(r.installRoot, badMark)}: ${fs.readFileSync(badMark, 'utf8').trim()}; after a new check live ${l.state}, held "${l.held.slice(0, 120)}"; log: ${line.trim().slice(0, 200)}`
+      return `${states.join(' -> ')}; A back on :${r.port} ${Math.round((Date.now() - t0 + down) / 1000)}s after restarting (server ${before.server} -> ${after.server}, child of ${after.parent}); bin/walnut -> ${linked(r)}; ${path.relative(r.installRoot, badMark)}: ${fs.readFileSync(badMark, 'utf8').trim()}; after a new check live ${l.state}, held "${l.held.slice(0, 120)}"; log: ${line.trim().slice(0, 200)}; server child ${now.server} SIGKILLed: the started process exited ${end.code}, nothing restarted, port free`
     })
     return 6
   } finally {
@@ -407,7 +474,8 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
 /** live-video.mjs on Node, open on `base`; ready once the page has loaded, stop() resolves its timeline. */
 function startRecorder(base, video) {
   const node = process.env.WALNUT_REHEARSAL_NODE || 'node'
-  const child = spawn(node, [path.join(root, 'scripts/release-rehearsal/live-video.mjs'), '--url', base, '--out', video.dir], { cwd: root, stdio: ['pipe', 'pipe', 'inherit'] })
+  const extra = video.collapsed ? ['--collapsed'] : []
+  const child = spawn(node, [path.join(root, 'scripts/release-rehearsal/live-video.mjs'), '--url', base, '--out', video.dir, ...extra], { cwd: root, stdio: ['pipe', 'pipe', 'inherit'] })
   const lines = []
   let markReady
   const ready = new Promise((r) => { markReady = r })
@@ -429,6 +497,8 @@ function startRecorder(base, video) {
     stop: async () => {
       child.stdin.write('stop\n')
       const code = await Promise.race([exited, sleep(120_000).then(() => 'timeout')])
+      // Our own recorder, still there after its deadline: it must not hold the run open.
+      if (code === 'timeout' && child.exitCode === null) child.kill('SIGTERM')
       return { code, lines }
     },
   }

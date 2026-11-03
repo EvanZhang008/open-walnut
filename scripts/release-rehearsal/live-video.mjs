@@ -94,3 +94,5 @@ if (spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0) {
   else emit({ ffmpeg: (r.stderr || '').slice(-400) })
 }
 emit({ done: true, webm, mp4 })
+// The stdin reader would keep this process (and so the rehearsal and its container) alive.
+process.exit(0)

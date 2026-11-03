@@ -99,3 +99,22 @@ export function listenersOf(port) {
   }
   return out
 }
+
+/** What `pid`'s open file descriptors point at (Linux), or []. */
+export function openPaths(pid) {
+  const dir = `/proc/${pid}/fd`
+  let fds = []
+  try { fds = fs.readdirSync(dir) } catch { return [] }
+  const out = []
+  for (const fd of fds) { try { out.push(fs.readlinkSync(`${dir}/${fd}`)) } catch { /* closed meanwhile */ } }
+  return out
+}
+
+/** CPU time `pid` used (user + system, clock ticks; Linux), or null. */
+export function cpuTicks(pid) {
+  try {
+    const f = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const cols = f.slice(f.lastIndexOf(')') + 2).split(' ')
+    return Number(cols[11]) + Number(cols[12])
+  } catch { return null }
+}
