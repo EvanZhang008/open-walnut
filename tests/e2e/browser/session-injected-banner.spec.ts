@@ -230,7 +230,7 @@ test('the Msgs list previews the typed words, and its count agrees', async ({ pa
   // room to fold anything, so it has to already hold the typed text.
   await panel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click()
   // The row lives in the menu's Views group (kebab-group-helpers.ts).
-  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views')
+  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open')
   const msgsItem = views.locator('.task-kebab-item')
     .filter({ hasText: /Msgs \(/ })
   await expect(msgsItem).toHaveCount(1)

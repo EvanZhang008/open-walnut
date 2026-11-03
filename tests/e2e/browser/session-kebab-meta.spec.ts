@@ -107,7 +107,7 @@ test('the menu ends with Created, Updated and Host from the session record', asy
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
   // Every Session row draws an SVG icon, never an emoji or text glyph (every group open).
-  await openKebabGroup(menu, 'session-kebab-views')
+  await openKebabGroup(menu, 'session-kebab-open')
   const copyOpen = await openKebabGroup(menu, 'session-kebab-copy-open')
   await openKebabGroup(menu, 'session-kebab-debug')
   const icons = await menu.locator('.task-kebab-section').last().locator('.task-kebab-icon').evaluateAll((els) =>
@@ -136,8 +136,10 @@ test('the menu ends with Created, Updated and Host from the session record', asy
   await closeMenu(page)
   await panel.locator('.session-panel-header').click({ button: 'right', position: { x: 40, y: 12 } })
   const ctxMenu = page.locator('.task-kebab-menu')
-  // Closed by default, the Details row says what it holds; open, the rows are there.
-  await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('created · updated · host')
+  // Closed by default (inside the Session group), the Session info row says what it holds;
+  // open, the rows are there.
+  await openKebabGroup(ctxMenu, 'session-kebab-session')
+  await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('time · created · updated · host')
   await expect(ctxMenu.getByTestId('session-kebab-meta')).toHaveCount(0)
   await openKebabGroup(ctxMenu, 'session-kebab-details')
   await expect(ctxMenu.getByTestId('session-kebab-meta')).toBeVisible()
@@ -160,8 +162,8 @@ test('a remote session shows its host alias, the full hostname on hover', async 
   await expect(host).toHaveAttribute('title', 'devbox.example.test')
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
-  // One divider after the last action, then the Details group, then nothing.
-  const tail = await menu.locator('.task-kebab-section').last().evaluate((el) =>
+  // Inside the Session group: one divider after the last action, then Session info, then nothing.
+  const tail = await menu.locator('[data-testid="session-kebab-session"] > .task-kebab-group-body').evaluate((el) =>
     Array.from(el.children).slice(-3).map((c) =>
       c.classList.contains('task-kebab-divider') ? 'divider'
         : c.getAttribute('data-testid') === 'session-kebab-details' ? 'details'

@@ -143,6 +143,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/SideQuestionDrawer.tsx#legacyOpen': 'a section inside the question drawer, an overlay',
   'components/sessions/SideQuestionDrawer.tsx#notesOpen': 'notes inside the question drawer, an overlay',
   'components/sessions/TaskQuickActions.tsx#memoryOpen': 'the task memory, a dialog',
+  'components/sessions/TaskQuickActions.tsx#detailOpen': 'the task details popup opened from the menu where the host has no detail pane, a dialog',
   'components/sessions/ThreadCommentCard.tsx#expanded': 'one comment unfolded',
   'components/sessions/TriggerPickerPopover.tsx#listOpen': 'a list inside a popover',
   'components/sessions/WorkflowProgress.tsx#transcriptTarget': 'one agent\'s transcript, an overlay',

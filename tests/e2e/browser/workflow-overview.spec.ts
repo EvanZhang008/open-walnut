@@ -288,7 +288,7 @@ function backgroundNote(panel: ReturnType<Page['locator']>) {
  *  Views group open (the Background tasks row lives there). */
 async function openSessionMenu(page: Page, panel: ReturnType<Page['locator']>) {
   await panel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click()
-  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views')
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open')
   const row = page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]')
   return row
 }

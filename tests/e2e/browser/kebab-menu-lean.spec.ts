@@ -110,13 +110,15 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   await expect(menu.getByText('Unpin', { exact: true })).toHaveCount(0)
   await expect(menu.locator('.task-kebab-priority')).toHaveCount(0)
 
-  // The tier pills are still there (the 3 built-ins Focus, Satellite and Parked,
-  // since 982af739 retired Backlog, then any custom tier another spec left in the
-  // shared fixture): pinning is one click, unpinning the same pill.
-  const tiers = menu.locator('.task-kebab-tier-btn')
-  await expect(tiers.nth(0)).toHaveText('Focus')
-  await expect(tiers.nth(1)).toHaveText('Satellite')
-  await expect(tiers.nth(2)).toHaveText('Parked')
+  // The tiers live in the Pin to group (2026-11-02, the user: "pin is pin, not mix with
+  // date"): the 3 built-ins Focus, Satellite and Parked, since 982af739 retired Backlog,
+  // then any custom tier another spec left in the shared fixture; pinning is one click,
+  // unpinning the same row.
+  const tiers = (await openKebabGroup(menu, 'kebab-group-pin')).locator('[data-testid^="kebab-pin-"]')
+  // A row carries a check when it is the task's tier.
+  await expect(tiers.nth(0)).toHaveText(/^Focus✓?$/)
+  await expect(tiers.nth(1)).toHaveText(/^Satellite✓?$/)
+  await expect(tiers.nth(2)).toHaveText(/^Parked✓?$/)
 
   // Start and Due live in the Dates group (TaskMenuRows), closed until clicked.
   const toggles = (await openKebabGroup(menu, 'kebab-group-dates')).locator('.task-kebab-date-toggle')
@@ -142,15 +144,15 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   await expect(again.locator('.dp-content')).toHaveCount(0)
 })
 
-test('the lit tier pill is the pin: clicking it again unpins', async ({ page }) => {
+test('the lit tier row is the pin: clicking it again unpins', async ({ page }) => {
   const task = await createTask('Pill unpin')
   await pinToFocus(task.id)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const menu = await openRowKebab(page, task)
 
-  await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pinned')
-  const lit = menu.locator('.task-kebab-tier-btn.active')
+  await expect(menu.getByTestId('kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText('pinned · Focus')
+  const lit = (await openKebabGroup(menu, 'kebab-group-pin')).locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')
   await expect(lit).toHaveCount(1)
   await expect(lit).toHaveAttribute('title', /^Unpin from Focus/)
 
@@ -160,8 +162,8 @@ test('the lit tier pill is the pin: clicking it again unpins', async ({ page }) 
 
   // Reopened: nothing lit, label back to "Pin to", still no separate Unpin row.
   const again = await openRowKebab(page, task)
-  await expect(again.locator('.task-kebab-tier-label')).toHaveText('Pin to')
-  await expect(again.locator('.task-kebab-tier-btn.active')).toHaveCount(0)
+  await expect(again.getByTestId('kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText('focus · satellite · parked')
+  await expect((await openKebabGroup(again, 'kebab-group-pin')).locator('[aria-pressed="true"]')).toHaveCount(0)
   await expect(again.getByText('Unpin', { exact: true })).toHaveCount(0)
 })
 

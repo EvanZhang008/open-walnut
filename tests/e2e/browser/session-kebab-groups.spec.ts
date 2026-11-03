@@ -9,9 +9,14 @@
  * 2026-10-30, the user: "why it is missing so many things": the Panels row, the task's
  * source row (now in Move & transfer) and the Created / Updated / Host rows (the Session
  * info group) came back.
+ * 2026-11-02, the user's pick of ten designs (design 2, revised): Open (the header's views and
+ * what Views held), Window and the Panels switch lead; Pin to, Dates and a plugin's fields are
+ * each their own group; one Session group holds Copy & open, Debug, Restart, Terminate and
+ * Session info (with the time it took).
  */
 import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { openKebabGroup, type KebabGroupId } from './kebab-group-helpers'
 
 const SHOTS = '/tmp/session-kebab-groups'
 // A local session that keeps its task in the fixture (one per engine, so two engines
@@ -55,7 +60,7 @@ async function firstLevel(menu: Locator): Promise<string[]> {
         const c = child as HTMLElement
         if (c.offsetParent === null && getComputedStyle(c).position !== 'fixed') continue
         if (c.matches('.task-kebab-divider')) continue
-        if (c.matches('.task-kebab-item, .task-kebab-tier, .task-kebab-section-label, .task-kebab-group-toggle, .task-kebab-status-toggle')) {
+        if (c.matches('.task-kebab-item, .task-kebab-tier, .task-kebab-panels, .task-kebab-section-label, .task-kebab-group-toggle, .task-kebab-status-toggle')) {
           out.push(c.innerText.replace(/\s+/g, ' ').trim())
           continue
         }
@@ -68,12 +73,7 @@ async function firstLevel(menu: Locator): Promise<string[]> {
 }
 
 const group = (menu: Locator, id: string) => menu.getByTestId(id)
-async function openGroup(menu: Locator, id: string): Promise<Locator> {
-  const g = group(menu, id)
-  await g.locator('.task-kebab-group-toggle').click()
-  await expect(g.locator('.task-kebab-group-toggle')).toHaveAttribute('aria-expanded', 'true')
-  return g.locator('.task-kebab-group-body')
-}
+const openGroup = (menu: Locator, id: KebabGroupId) => openKebabGroup(menu, id)
 
 async function shoot(page: Page, menu: Locator, name: string) {
   await fs.mkdir(SHOTS, { recursive: true })
@@ -86,29 +86,33 @@ async function shoot(page: Page, menu: Locator, name: string) {
 
 test.use({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 })
 
-test('the first level holds the frequent rows and six groups; nothing else', async ({ page, browserName }) => {
+test('the first level holds the frequent rows and the groups; nothing else', async ({ page, browserName }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const panel = await openColumn(page, sidFor(browserName))
   const menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Panels/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & transfer/, /^Team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Session info/]
+  const order = [/^Open/, /^Window/, /^Panels/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
-  // Inside a group, not on the first level: the "Local" source row, the copy rows, the
-  // views and the read-only times.
-  for (const gone of [/^Inbox/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Created/, /^Capture debug/, /^Raw input/]) {
+  // Inside a group, not on the first level: the views, the window moves, the pin tiers, the
+  // "Local" source row, the copy rows, Restart / Terminate and the read-only times.
+  for (const gone of [/^Changed/, /^Files$/, /^Inbox/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Locate/, /^Find on Home/, /^Open in new tab/, /^Full screen/,
+    /^Focus$/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Created/, /^Capture debug/, /^Raw input/, /^Restart/, /^Terminate/, /^Session info/]) {
     expect(rows.some((r) => gone.test(r)), `${gone} is not on the first level: ${rows.join(' | ')}`).toBe(false)
   }
   // The closed rows say what they hold.
   await expect(group(menu, 'kebab-group-dates').locator('.task-kebab-group-hint')).toHaveText(/start|due/)
-  await expect(group(menu, 'session-kebab-views').locator('.task-kebab-group-hint')).toHaveText('inbox · code · web · notes')
-  await expect(group(menu, 'session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('created · updated · host')
-  // The strip's panel count is back on top (it left the menu in the regroup; the user
-  // missed it): the same choices as Settings.
-  await expect(menu.locator('.task-kebab-tier').filter({ hasText: /^Panels/ }).locator('.task-kebab-tier-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
+  await expect(group(menu, 'kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText(/focus · satellite · parked|^pinned · /)
+  await expect(group(menu, 'session-kebab-open').locator('.task-kebab-group-hint')).toHaveText(/^changed · files .*inbox · code/)
+  await expect(group(menu, 'session-kebab-session').locator('.task-kebab-group-hint')).toHaveText('copy · debug · restart · info')
+  // The strip's panel count stays on the first level, as a segmented switch with the same
+  // choices as Settings.
+  const opts = menu.getByTestId('kebab-panels').locator('.task-kebab-panels-opt')
+  expect(await opts.evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))).toEqual(['1', '2', '3', '4', '5', 'Auto'])
+  await expect(menu.getByTestId('kebab-panels').locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveCount(1)
   await shoot(page, menu, '1-first-level')
   expect(errors).toEqual([])
 })
@@ -117,8 +121,12 @@ test('each group opens its rows in place, and the menu reopens with every group 
   const panel = await openColumn(page, sidFor(browserName))
   let menu = await openMenu(page, panel)
 
-  const views = await openGroup(menu, 'session-kebab-views')
-  await expect(views.locator('.task-kebab-item')).toContainText(['Inbox', 'Code', 'Web preview', 'Notes', 'Msgs', 'Usage & Budget'])
+  const views = await openGroup(menu, 'session-kebab-open')
+  await expect(views.locator('.task-kebab-item')).toContainText(['Changed', 'Files', 'Inbox', 'Code', 'Web preview', 'Notes', 'Msgs', 'Usage & Budget'])
+  const win = await openGroup(menu, 'session-kebab-window')
+  await expect(win.locator('.task-kebab-item')).toContainText(['Open in new tab', 'Full screen'])
+  const pin = await openGroup(menu, 'kebab-group-pin')
+  await expect(pin.locator('.task-kebab-item')).toContainText(['Focus', 'Satellite', 'Parked'])
   const copy = await openGroup(menu, 'session-kebab-copy-open')
   await expect(copy.locator('.task-kebab-item')).toContainText(['Open in VS Code', 'Copy folder path', 'Copy session ID', 'Copy resume command'])
   await expect(copy.getByTestId('session-kebab-meta')).toHaveCount(0)
@@ -127,6 +135,8 @@ test('each group opens its rows in place, and the menu reopens with every group 
   await expect(details.locator('.task-kebab-meta-value').first()).toHaveText(/^(just now|\d+(m|h|d|w|mo|y) ago)$/)
   const debug = await openGroup(menu, 'session-kebab-debug')
   await expect(debug.locator('.task-kebab-item')).toHaveText(['Raw input & output', 'Capture debug snapshot'])
+  const session = group(menu, 'session-kebab-session').locator('> .task-kebab-group-body')
+  await expect(session.locator('> .task-kebab-item')).toContainText(['Restart', 'Terminate'])
   const dates = await openGroup(menu, 'kebab-group-dates')
   await expect(dates.locator('.task-kebab-date-toggle')).toContainText(['Start', 'Due'])
   const move = await openGroup(menu, 'kebab-group-move')
@@ -134,7 +144,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
   // Where the task comes from is back: a local task says Local, a synced one names its service.
   await expect(move.locator('[data-testid="kebab-source-row"], [data-testid="kebab-source-link"]')).toHaveCount(1)
   // A group's rows carry no section dividers of their own.
-  for (const body of [views, copy, details, debug, dates, move]) {
+  for (const body of [views, win, pin, copy, details, debug, dates, move]) {
     await expect(body.locator('.task-kebab-divider:visible')).toHaveCount(0)
   }
   // Every group open still fits the window: the menu scrolls instead of running off
@@ -169,7 +179,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
 test('a row inside a group still does its job: Notes opens and closes the menu', async ({ page, browserName }) => {
   const panel = await openColumn(page, sidFor(browserName))
   const menu = await openMenu(page, panel)
-  const views = await openGroup(menu, 'session-kebab-views')
+  const views = await openGroup(menu, 'session-kebab-open')
   await views.getByText('Notes', { exact: true }).click()
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await expect(panel.locator('.session-notes-body').first()).toBeVisible({ timeout: 15_000 })
@@ -197,19 +207,19 @@ async function sendLetter(request: APIRequestContext, sid: string, subject: stri
 }
 
 // Last in the file: the letter it sends stays on the session for the rest of the run.
-test('Inbox lives in Views: a letter counts on the closed row, and the row opens the tab', async ({ page, request, browserName }) => {
+test('Inbox lives in Open: a letter counts on the closed row, and the row opens the tab', async ({ page, request, browserName }) => {
   const sid = sidFor(browserName)
   await sendLetter(request, sid, `PW kebab inbox ${browserName} ${Date.now()}`)
   const panel = await openColumn(page, sid)
   const menu = await openMenu(page, panel)
-  const toggle = group(menu, 'session-kebab-views').locator('.task-kebab-group-toggle')
-  // Closed, the Views row carries the letter count the Inbox row used to show.
+  const toggle = group(menu, 'session-kebab-open').locator('.task-kebab-group-toggle')
+  // Closed, the Open row carries the letter count the Inbox row used to show.
   await expect(toggle.locator('.session-action-chip-count').first()).toHaveText(/^[1-9]/, { timeout: 20_000 })
   await shoot(page, menu, '5-views-inbox-count')
-  const views = await openGroup(menu, 'session-kebab-views')
-  // Open, the count moves to the Inbox row, which leads the group.
+  const views = await openGroup(menu, 'session-kebab-open')
+  // Open, the count moves to the Inbox row, which leads the group's second half.
   await expect(toggle.locator('.session-action-chip-count')).toHaveCount(0)
-  const inbox = views.locator('.task-kebab-item').first()
+  const inbox = views.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })
   await expect(inbox).toHaveText(/^Inbox\s*[1-9]/)
   await shoot(page, menu, '6-views-open-inbox')
   await inbox.click()

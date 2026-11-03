@@ -1200,7 +1200,7 @@ describe('a test that loads a page again after it opened full screen or a split 
   // leaves full screen first (`leaveFullscreen` in draft-helpers.ts, which closes the split too),
   // unless what it checks after the load is the kept view itself (KEEPS below, with why).
   // A click on a split view's chip or on Full screen; a line that sees a split view open.
-  const OPEN_CLICK = /session-board-chip|session-action-chip(?!-)|data-header-id="?(?:changed|files|terminal|board)\b|getByRole\('button', \{ name: ['"](?:Changed|Files|Terminal|Board)['"]|Expand session to full screen|host-row-expand/
+  const OPEN_CLICK = /session-board-chip|session-action-chip(?!-)|data-header-id="?(?:changed|files|terminal|board)\b|getByRole\('button', \{ name: ['"](?:Changed|Files|Terminal|Board)['"]|Expand session to full screen|session-menu-(?:changed|files|terminal|board|fullscreen)\b/
   const OPEN_SEEN = /task-board-pane|session-file-explorer(?!-)/
   // The header's Full screen button is a toggle: in full screen it leaves.
   const TOGGLE = /session-panel-expand/

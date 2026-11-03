@@ -58,7 +58,8 @@ async function kebabPanels(page: Page) {
   await kebab.click()
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
-  return menu.locator('.task-kebab-tier').filter({ has: page.getByText('Panels', { exact: true }) })
+  // A segmented switch since the 2026-11-02 menu redesign: each option names its value in data-value.
+  return menu.getByTestId('kebab-panels')
 }
 /** The Display menu shows whole, its Session columns row included, with nothing to scroll (the body is what scrolls). */
 const viewFits = (page: Page) => page.locator('.fb-menu').evaluate((el) => {
@@ -116,11 +117,11 @@ test('the Display menu shows the column count and a pick moves the strip at once
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['2'])
   await closeViewMenu(page)
-  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['2'])
+  await expect((await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveAttribute('data-value', '2')
   await page.keyboard.press('Escape')
 
   // C58: Panels 1 from the session kebab: the strip drops to one column and Display shows 1.
-  await (await kebabPanels(page)).locator('.task-kebab-tier-btn').filter({ hasText: /^1$/ }).click()
+  await (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="1"]').click()
   await expect(columns(page)).toHaveCount(1, { timeout: 5000 })
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('1')
   await openViewMenu(page)
@@ -136,7 +137,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await expect(columns(page)).toHaveCount(1, { timeout: 30_000 })
 
   // 4 from the session kebab: the Display menu shows 4.
-  await (await kebabPanels(page)).locator('.task-kebab-tier-btn').filter({ hasText: /^4$/ }).click()
+  await (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="4"]').click()
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('4')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
@@ -166,7 +167,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await closeViewMenu(page)
 
   // The session kebab's Panels row holds the same state (its Auto carries no count).
-  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['Auto'])
+  await expect((await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveAttribute('data-value', 'Auto')
   await page.keyboard.press('Escape')
 
   // The choice survives a reload.

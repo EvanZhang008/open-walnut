@@ -23,7 +23,7 @@ async function openPopout(page: Page, sessionId: string): Promise<{ child: Page;
 
 async function showInbox(child: Page): Promise<void> {
   await child.getByRole('button', { name: 'More actions', exact: true }).click()
-  const views = await openKebabGroup(child.locator('.task-kebab-menu:visible'), 'session-kebab-views')
+  const views = await openKebabGroup(child.locator('.task-kebab-menu:visible'), 'session-kebab-open')
   await views.locator('.task-kebab-item').filter({ hasText: /^Inbox/ }).click()
   await expect(child.locator('.session-inbox-pane')).toBeVisible()
 }

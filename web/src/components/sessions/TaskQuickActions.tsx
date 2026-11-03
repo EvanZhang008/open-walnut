@@ -19,6 +19,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
+import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 import { KebabIcon } from '@/components/tasks/KebabIcon';
 
@@ -108,6 +109,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const [kebabOpen, setKebabOpen] = useState(false);
   // Main's, a lead's or a VP's "Memory & instructions" (opened from the row below Task detail).
   const [memoryOpen, setMemoryOpen] = useState(false);
+  // The task's details where the host has no detail pane of its own (an Org node's chat).
+  const [detailOpen, setDetailOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
@@ -403,7 +406,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
               onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
               onMoveToProject={handleMoveToProject}
-              detail={onOpenTaskDetail ? { onToggle: () => onOpenTaskDetail(task.id) } : undefined}
+              detail={{ onToggle: () => (onOpenTaskDetail ? onOpenTaskDetail(task.id) : setDetailOpen(true)) }}
               onOpenMemory={() => setMemoryOpen(true)}
               onDelete={() => handleDelete(task.id)}
             />
@@ -421,6 +424,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         document.body,
       )}
       {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
+      {detailOpen && task && <OutsideTaskDetail task={task} onClose={() => setDetailOpen(false)} />}
     </div>
   );
 }

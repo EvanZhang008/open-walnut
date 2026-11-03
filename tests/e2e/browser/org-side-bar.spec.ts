@@ -24,6 +24,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -139,7 +140,7 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
   await shot(page, 'header')
 })
 
-test('the kebab holds Changed, Files, Terminal and Board: Files opens beside the chat, Board opens the side bar on it', async ({ page }) => {
+test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files opens beside the chat, Board opens the side bar on it', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
@@ -148,14 +149,15 @@ test('the kebab holds Changed, Files, Terminal and Board: Files opens beside the
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"]`)
   await expect(chat).toBeVisible({ timeout: 30_000 })
   let menu = await openKebab(page)
-  await expect(menu.getByTestId('phone-row-changed')).toBeVisible()
-  await expect(menu.getByTestId('phone-row-files')).toBeVisible()
-  await expect(menu.getByTestId('phone-row-terminal')).toBeVisible()
-  await expect(menu.getByTestId('phone-row-board')).toBeVisible()
+  await openKebabGroup(menu, 'session-kebab-open')
+  await expect(menu.getByTestId('session-menu-changed')).toBeVisible()
+  await expect(menu.getByTestId('session-menu-files')).toBeVisible()
+  await expect(menu.getByTestId('session-menu-terminal')).toBeVisible()
+  await expect(menu.getByTestId('session-menu-board')).toBeVisible()
   await page.screenshot({ path: `${SHOTS}/org-side-bar-kebab-${test.info().project.name}.png`, clip: { x: 700, y: 0, width: 740, height: 520 } })
   // Files opens full-screen with the chat beside it, as a session column's Files does; the panel's
   // own header is back there, so its Files chip (or Escape) closes it again.
-  await menu.getByTestId('phone-row-files').click()
+  await menu.getByTestId('session-menu-files').click()
   await expect(chat).toHaveClass(/is-changed-open/)
   await expect(chat.locator('.chat-input-textarea')).toBeVisible()
   await expect(chat).not.toHaveClass(/has-host-header/)
@@ -171,7 +173,8 @@ test('the kebab holds Changed, Files, Terminal and Board: Files opens beside the
   // Board: the side bar's Tasks on the lead's Board, the chat still beside it.
   await detail.getByTestId('org-top-threads').click()
   menu = await openKebab(page)
-  await menu.getByTestId('phone-row-board').click()
+  await openKebabGroup(menu, 'session-kebab-open')
+  await menu.getByTestId('session-menu-board').click()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
   await expect(detail.getByTestId('org-task-mode-board')).toHaveAttribute('aria-pressed', 'true')
   await expect(detail.getByTestId('org-rail-board')).toBeVisible()
@@ -209,8 +212,9 @@ test('Tasks by Status, Team or Board, kept per node; a node with no Board offers
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.plainSid}"]`)
   await expect(chat).toBeVisible({ timeout: 30_000 })
   const menu = await openKebab(page)
-  await expect(menu.getByTestId('phone-row-files')).toBeVisible()
-  await expect(menu.getByTestId('phone-row-board')).toHaveCount(0)
+  await openKebabGroup(menu, 'session-kebab-open')
+  await expect(menu.getByTestId('session-menu-files')).toBeVisible()
+  await expect(menu.getByTestId('session-menu-board')).toHaveCount(0)
   await page.keyboard.press('Escape')
 })
 

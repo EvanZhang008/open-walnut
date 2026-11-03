@@ -87,6 +87,33 @@ describe('task menus share one row definition', () => {
     }
   });
 
+  it('each kind of setting is its own group: Pin to, Dates, a plugin\'s fields (the user: "pin is pin, not mix with date")', () => {
+    const rows = files.find((f) => f.rel === ROWS_FILE)!.src;
+    const groupOf = (label: string) => {
+      const at = rows.indexOf(`label="${label}"`);
+      expect(at, `${label} group`).toBeGreaterThan(0);
+      return rows.slice(at, rows.indexOf('</KebabGroup>', at));
+    };
+    expect(groupOf('Pin to')).toMatch(/part="pin"[\s\S]*pinRows/);
+    expect(groupOf('Pin to')).not.toContain('part="dates"');
+    expect(groupOf('Dates')).toContain('part="dates"');
+    expect(groupOf('More fields')).toContain('<PluginFieldsSection');
+    // No plugin field row on the first level.
+    expect(rows.split('<PluginFieldsSection').length - 1).toBe(1);
+  });
+
+  it('a session menu opens with Open, Window and Panels, and Open holds what Views held', () => {
+    const open = files.find((f) => f.rel === 'components/sessions/SessionMenuOpen.tsx')!.src;
+    const group = open.slice(open.indexOf('label="Open"'), open.indexOf('</KebabGroup>', open.indexOf('label="Open"')));
+    for (const row of ['Changed', 'Files', 'Terminal', 'Board', '<SessionViewItems']) expect(group).toContain(row);
+    expect(open).toContain('label="Window"');
+    expect(open).toContain('<PanelCountRow');
+    expect(files.find((f) => f.rel === 'components/sessions/SessionPanel.tsx')!.src).toContain('renderMenuOpen(close)');
+    // The old separate Views group is gone everywhere.
+    const views = files.filter((f) => /<KebabGroup[^>]*label="Views"/.test(f.src)).map((f) => f.rel);
+    expect(views).toEqual([]);
+  });
+
   it('every listed exception still exists and still needs its entry', () => {
     for (const [rel, { components }] of Object.entries(ALLOWED)) {
       const src = files.find((f) => f.rel === rel)?.src;

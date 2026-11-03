@@ -88,8 +88,9 @@ import { headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, T
 import { useTaskControlSlot } from './useTaskControlSlot';
 import { useBoardTab } from './useBoardTab';
 import { panelTaskCopy } from './panel-task-copy';
-import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
-import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
+import { SessionKebabSection, type SessionViewItemsProps } from './SessionKebabSection';
+import { SessionMenuOpen } from './SessionMenuOpen';
+import { PinnedSessionFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -2119,7 +2120,50 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
   // The session's kebab. On a phone it lives in the top bar's right slot (a portal,
   // so it keeps this tree), led by the header's own row-1 actions (C64).
-  const renderSessionKebab = (phoneRows?: (close: () => void) => ReactNode, hostRows?: (close: () => void) => ReactNode) => (
+  // What opens beside the chat and what moves the panel: the menu's Open and Window rows
+  // (SessionMenuOpen), the same on a Home column, an Org node and a pop-out.
+  // Built only while the menu is open: the Msgs count is a pass over every user turn.
+  const renderMenuOpen = (close: () => void) => {
+    const menuViews: SessionViewItemsProps = {
+      sessionId,
+      activeView,
+      onToggleView: toggleView,
+      unreadCount: letterUnread,
+      decisionCount: letterDecisions,
+      attentionCount: letterAttention,
+      notesOpen,
+      onToggleNotes: () => setNotesOpen(o => !o),
+      messagesOpen,
+      onToggleMessages: () => setMessagesOpen(o => !o),
+      // typedUserText: a turn that was only a machine block Walnut prepended is not one of
+      // "my messages", so it must not be counted here either — the list below drops it.
+      msgCount: historyMessages.filter(m => m.role === 'user' && typedUserText(m.text).trim()).length,
+      onOpenUsage: openUsageDialog,
+    };
+    return (
+    <SessionMenuOpen
+      close={close}
+      views={menuViews}
+      inset={inset}
+      board={onHostBoard ? 'live' : boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
+      onBoard={onHostBoard}
+      terminal={terminalOffered && !inset}
+      onPlan={hasPlanContent || showExecuteButtons ? () => setPlanPopoverOpen(true) : undefined}
+      locate={taskSlot === 'live' && session?.taskId && !locateWaitReason ? {
+        label: onLocateTask ?? onTaskClick ? 'Locate task' : 'Find on Home',
+        onClick: () => {
+          const taskId = session.taskId!;
+          const locate = onLocateTask ?? onTaskClick;
+          if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
+        },
+      } : undefined}
+      onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
+      onFullscreen={inset ? undefined : (isFullscreen ? exitFullscreen : enterFullscreen)}
+      fullscreenLabel={isFullscreen ? 'Exit full screen' : 'Full screen'}
+    />
+    );
+  };
+  const renderSessionKebab = (phoneRows?: (close: () => void) => ReactNode) => (
     <TaskQuickActions
       taskId={session?.taskId}
       task={session?.taskId ? sessionTask : null}
@@ -2135,40 +2179,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
       // cursor: the header is the session's object, so its actions
       // belong to the gesture people already try there.
       contextMenuScope=".session-panel-header"
-      // The header's pills that did not fit, the strip's own control (PanelCountRow
-      // explains) and the time lead the menu.
+      // Open, Window and the Panels switch lead the menu (SessionMenuOpen).
       // A phone gets the short list (N12): its own rows, Task detail and status.
       // Panel columns, new tabs, editors and directory copies mean nothing there.
       phoneMenu={!!phoneRows}
-      leadingSection={(close) => phoneRows ? phoneRows(close) : (
-        <>
-          {hostRows?.(close)}
-          <PanelCountRow onAfterAction={close} />
-          <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
-        </>
-      )}
+      leadingSection={(close) => phoneRows ? phoneRows(close) : renderMenuOpen(close)}
       extraSection={phoneRows ? undefined : (close) => (
         <SessionKebabSection
           sessionId={sessionId}
+          taskId={session?.taskId}
           cwd={session?.cwd}
           host={session?.host}
           hostname={session?.hostname}
           archived={session?.archived}
           startedAt={session?.startedAt}
           lastActiveAt={session?.lastActiveAt}
-          activeView={activeView}
-          onToggleView={toggleView}
-          unreadCount={letterUnread}
-          decisionCount={letterDecisions}
-          attentionCount={letterAttention}
-          notesOpen={notesOpen}
-          onToggleNotes={() => setNotesOpen(o => !o)}
-          messagesOpen={messagesOpen}
-          onToggleMessages={() => setMessagesOpen(o => !o)}
-          // typedUserText: a turn that was only a machine block Walnut
-          // prepended is not one of "my messages", so it must not be
-          // counted here either — the list below drops it.
-          msgCount={historyMessages.filter(m => m.role === 'user' && typedUserText(m.text).trim()).length}
           onRestart={handleRestart}
           restartBusy={restartBusy}
           onTerminate={handleTerminate}
@@ -2177,7 +2202,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
           investigating={investigating}
           investigateResult={investigateResult}
           onOpenVscodeError={handleOpenVscodeError}
-          onOpenUsage={openUsageDialog}
           onAfterAction={close}
         />
       )}
@@ -2679,30 +2703,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                     />
                   )}
                   <SessionHeaderLabels>{headerLabels}</SessionHeaderLabels>
-                  {sessionId && renderSessionKebab(undefined, (close) => (
-                    <PhoneSessionHeaderRows
-                      sessionId={sessionId}
-                      close={close}
-                      activeView={activeView}
-                      onToggleView={(v) => { if (v === 'board' && onHostBoard) onHostBoard(); else toggleView(v); }}
-                      board={onHostBoard ? 'live' : boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
-                      terminal={terminalOffered && !inset}
-                      plan={!!(hasPlanContent || showExecuteButtons)}
-                      onPlan={() => setPlanPopoverOpen(true)}
-                      background={false}
-                      extra={[
-                        ...(taskSlot === 'live' && session?.taskId && !locateWaitReason ? [{ label: 'Locate task', testId: 'host-row-locate', onClick: () => {
-                          const taskId = session.taskId!;
-                          const locate = onLocateTask ?? onTaskClick;
-                          if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
-                        } }] : []),
-                        ...(!inset ? [
-                          { label: 'Open in new tab', testId: 'host-row-popout', onClick: () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd }) },
-                          { label: 'Full screen', testId: 'host-row-expand', onClick: enterFullscreen },
-                        ] : []),
-                      ]}
-                    />
-                  ))}
+                  {sessionId && renderSessionKebab()}
                 </>,
                 headerSlot,
                 'host-header',

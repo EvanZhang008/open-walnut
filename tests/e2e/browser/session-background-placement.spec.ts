@@ -110,8 +110,8 @@ async function openMenu(page: Page, panel: Locator) {
   return menu;
 }
 
-/** The Background tasks row lives in the menu's Views group, closed each time the menu opens. */
-const openViews = (menu: Locator) => openKebabGroup(menu, 'session-kebab-views');
+/** The Background tasks row lives in the menu's Open group, closed each time the menu opens. */
+const openViews = (menu: Locator) => openKebabGroup(menu, 'session-kebab-open');
 
 /** Plain background work leaves nothing at the top of the session: no card, no bar words. */
 async function expectNoBarAtTop(panel: Locator) {
@@ -199,9 +199,9 @@ test.describe('Session background work placement', () => {
     });
     expect(fit).toEqual({ cut: false, inside: true });
     await shoot(page, note, '2-after-turn-line');
-    // The ⋮ menu counts what still runs, on the closed Views row too.
+    // The ⋮ menu counts what still runs, on the closed Open row too.
     let menu = await openMenu(page, panel);
-    const viewsToggle = menu.getByTestId('session-kebab-views').locator('.task-kebab-group-toggle');
+    const viewsToggle = menu.getByTestId('session-kebab-open').locator('.task-kebab-group-toggle');
     await expect(viewsToggle.locator('.session-action-chip-count')).toHaveText('2');
     await expect(viewsToggle.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
     const views = await openViews(menu);
@@ -209,13 +209,13 @@ test.describe('Session background work placement', () => {
     await expect(menuRow).toContainText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveText('2');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
-    // It is a row of Views, after "Msgs" (the group's last row).
+    // It is a row of Open, after "Msgs" (the group's last row).
     const order = await views.locator('.task-kebab-item').evaluateAll(els => els.map(el => (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()));
     const msgsAt = order.findIndex(t => /^Msgs\b/.test(t));
     const bgAt = order.findIndex(t => /^Background tasks/.test(t));
-    expect(msgsAt, `Views rows: ${order.join(' | ')}`).toBeGreaterThanOrEqual(0);
-    expect(bgAt, `Views rows: ${order.join(' | ')}`).toBeGreaterThan(msgsAt);
-    expect(bgAt, `Views rows: ${order.join(' | ')}`).toBe(order.length - 1);
+    expect(msgsAt, `Open rows: ${order.join(' | ')}`).toBeGreaterThanOrEqual(0);
+    expect(bgAt, `Open rows: ${order.join(' | ')}`).toBeGreaterThan(msgsAt);
+    expect(bgAt, `Open rows: ${order.join(' | ')}`).toBe(order.length - 1);
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     await note.click();

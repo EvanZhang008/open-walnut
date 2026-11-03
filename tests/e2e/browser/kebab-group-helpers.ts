@@ -1,25 +1,38 @@
 /**
- * Every task ⋮ menu groups its rows (KebabGroup): Dates, Move & transfer on the task
- * half (TaskMenuRows), Views, Copy & open, Debug and Session info on the session half. Every group starts closed each
- * time the menu opens, so a spec reaching a row inside one opens its group first.
+ * Every task ⋮ menu groups its rows (KebabGroup): Pin to, Dates, More fields and Move &
+ * transfer on the task half (TaskMenuRows); Open and Window at the top of a session's menu
+ * (SessionMenuOpen) and one Session group at its foot holding Copy & open, Debug and Session
+ * info. Every group starts closed each time the menu opens, so a spec reaching a row inside
+ * one opens its group first; a group nested in Session opens Session on the way.
  */
 import { expect, type Locator } from '@playwright/test'
 
 export type KebabGroupId =
+  | 'kebab-group-pin'
   | 'kebab-group-dates'
+  | 'kebab-group-fields'
   | 'kebab-group-move'
-  | 'session-kebab-views'
+  | 'session-kebab-open'
+  | 'session-kebab-window'
+  | 'session-kebab-session'
   | 'session-kebab-copy-open'
   | 'session-kebab-debug'
   | 'session-kebab-details'
 
-/** Open one group of an open task or session menu (idempotent); returns the group's rows. */
-export async function openKebabGroup(menu: Locator, id: KebabGroupId): Promise<Locator> {
-  const group = menu.getByTestId(id)
-  const toggle = group.locator('.task-kebab-group-toggle')
+/** The groups that live inside the Session group. */
+const IN_SESSION: ReadonlySet<KebabGroupId> = new Set(['session-kebab-copy-open', 'session-kebab-debug', 'session-kebab-details'])
+
+async function expand(group: Locator): Promise<Locator> {
+  const toggle = group.locator('> .task-kebab-group-toggle')
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  return group.locator('.task-kebab-group-body')
+  return group.locator('> .task-kebab-group-body')
+}
+
+/** Open one group of an open task or session menu (idempotent); returns the group's rows. */
+export async function openKebabGroup(menu: Locator, id: KebabGroupId): Promise<Locator> {
+  if (IN_SESSION.has(id)) await expand(menu.getByTestId('session-kebab-session'))
+  return expand(menu.getByTestId(id))
 }
 
 /**

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { clampColumn } from './composer-controls-overflow-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 import { startTimeFixture, type TimeFixture } from './time-app-fixture'
 
 /**
@@ -102,6 +103,8 @@ async function openMenu(page: Page, col: Locator): Promise<Locator> {
   await col.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).first().click()
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
+  // The time a session took sits in Session info, inside the Session group (2026-11-02).
+  await openKebabGroup(menu, 'session-kebab-details')
   return menu
 }
 
@@ -211,8 +214,8 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   const fact = menu.getByTestId('time-session-fact')
   await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
-  // A labelled row at the top of the menu, above Task detail, seen without scrolling;
-  // its "Header" toggle at the end, off.
+  // A labelled row at the top of Session info (2026-11-02 menu redesign: the Time row moved
+  // there from the menu's head), above Created; its "Header" toggle at the end, off.
   const row = menu.locator('.task-kebab-fact')
   await expect(row.locator('.task-kebab-fact-label')).toHaveText('Time')
   await expect(row.locator('.task-kebab-fact-value')).toHaveText('You 50m \u00b7 Agent 3h 02m')
@@ -220,16 +223,17 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   await expect(row.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
   await expect(fact).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
   await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
-  const [rowBox, menuBox, detailBox] = await Promise.all([
+  await row.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  const [rowBox, menuBox, createdBox, detailBox] = await Promise.all([
     row.boundingBox(), menu.boundingBox(),
+    menu.locator('[data-meta="created"]').boundingBox(),
     menu.locator('.task-kebab-item').filter({ hasText: /^Details$/ }).boundingBox(),
   ])
-  expect(rowBox!.y).toBeLessThan(detailBox!.y)
-  expect(rowBox!.y - menuBox!.y).toBeLessThan(120)
+  expect(rowBox!.y).toBeLessThan(createdBox!.y)
   // One line (its Header toggle makes it a little taller than a plain row), never a
-  // stacked block. It used to be measured against the Panels row, gone from this menu.
+  // stacked block.
   expect(rowBox!.height).toBeLessThan(detailBox!.height * 1.5)
-  await page.screenshot({ path: `${SHOTS}/session-menu-fact.png`, clip: { x: menuBox!.x, y: menuBox!.y, width: menuBox!.width, height: 220 } })
+  await page.screenshot({ path: `${SHOTS}/session-menu-fact.png`, clip: { x: menuBox!.x, y: menuBox!.y, width: menuBox!.width, height: menuBox!.height } })
 
   await fact.click()
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))

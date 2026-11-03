@@ -11,6 +11,7 @@
  * stored tab was Backlog opens on Parked.
  */
 import { test, expect } from './shortcut-test-fixture'
+import { openKebabGroup } from './kebab-group-helpers'
 import { type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView, sectionTab } from './todo-panel-helpers'
 import { pinnedTierOf } from './draft-outcome-helpers'
@@ -63,13 +64,14 @@ test('a move with the retired name lands in Parked, and the board draws it there
   await expect(card).toBeVisible()
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-parked-card.png`, clip: { x: 0, y: 0, width: 1100, height: 700 } })
 
-  // The card's ⋮ tier row offers the three tiers and nothing called Backlog.
+  // The card's ⋮ Pin to group offers the three tiers and nothing called Backlog.
   await card.hover()
   await card.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
-  await expect(menu.locator('.task-kebab-tier-btn')).toHaveText([/Focus/, /Satellite/, /Parked/])
-  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Parked/)
+  const pin = await openKebabGroup(menu, 'kebab-group-pin')
+  await expect(pin.locator('[data-testid^="kebab-pin-"]')).toHaveText([/Focus/, /Satellite/, /Parked/])
+  await expect(pin.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Parked/)
   await menu.screenshot({ path: `${SHOTS}/${test.info().project.name}-kebab-tiers.png` })
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)

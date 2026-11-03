@@ -147,7 +147,7 @@ async function openMoreActions(panel: Locator): Promise<Locator> {
   const menu = moreMenu(panel.page())
   await expect(menu).toBeVisible({ timeout: 15_000 })
   // Inbox is the first row of the menu's Views group.
-  await openKebabGroup(menu, 'session-kebab-views')
+  await openKebabGroup(menu, 'session-kebab-open')
   return menu
 }
 

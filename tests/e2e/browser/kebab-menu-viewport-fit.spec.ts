@@ -116,7 +116,7 @@ async function assertFitsViewport(page: Page, menu: Locator, label: string) {
 }
 
 /** The session menu's groups (KebabGroup), top to bottom; each starts closed. */
-const SESSION_MENU_GROUPS: KebabGroupId[] = ['kebab-group-dates', 'kebab-group-move', 'session-kebab-views', 'session-kebab-copy-open', 'session-kebab-debug', 'session-kebab-details']
+const SESSION_MENU_GROUPS: KebabGroupId[] = ['session-kebab-open', 'session-kebab-window', 'kebab-group-pin', 'kebab-group-dates', 'kebab-group-move', 'session-kebab-copy-open', 'session-kebab-debug', 'session-kebab-details']
 
 async function openAllGroups(menu: Locator) {
   for (const id of SESSION_MENU_GROUPS) await openKebabGroup(menu, id)
@@ -322,7 +322,10 @@ test.describe('zoom stability', () => {
         for (let round = 0; round < 3; round++) {
           await row.getByRole('button', { name: 'More actions' }).click()
           await expect(menu).toBeVisible()
-          await expect(menu.getByRole('button', { name: 'Virtual Teammate', exact: true })).toBeVisible()
+          // The widest content: a long custom tier (in Pin to) and a plugin field (in More fields).
+          await openKebabGroup(menu, 'kebab-group-pin')
+          await openKebabGroup(menu, 'kebab-group-fields')
+          await expect(menu.getByRole('button', { name: /Virtual Teammate/ })).toBeVisible()
           await expect(menu.getByText('Sprint', { exact: true })).toBeVisible()
           const samples = await menu.evaluate(async (el) => {
             const frames: Array<{ left: number; right: number; width: number; contentLeft: number }> = []

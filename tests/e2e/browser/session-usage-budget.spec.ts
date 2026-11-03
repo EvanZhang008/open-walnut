@@ -71,8 +71,8 @@ test('session budget keeps dirty edits, conflicts, pauses and recovery honest', 
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sessionId}"]`);
   await expect(panel).toBeVisible();
   await panel.getByRole('button', { name: 'More actions', exact: true }).click();
-  // Usage & Budget is a row of the menu's Views group.
-  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views');
+  // Usage & Budget is a row of the menu's Open group.
+  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
   await views.getByRole('button', { name: 'Usage & Budget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Usage & Budget' });
   await expect(dialog).toBeVisible(); await expect(dialog.locator('.session-usage-total strong')).toHaveText('$5.99');

@@ -31,7 +31,9 @@ import { WatchMenuItem } from './WatchToggle';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
 import { TaskSyncMenuRows } from './TaskSyncMenuRows';
-import { PluginFieldsSection } from './PluginFieldPicker';
+import { PluginFieldsSection, usePluginTaskFields } from './PluginFieldPicker';
+import { TIER_OPTIONS } from './TaskKebabMenu';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
@@ -99,6 +101,8 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
   const activeSessionId = useActiveSessionId();
   const isDone = p.isDone ?? (task.status === 'done' || task.phase === 'COMPLETE');
   const ownSession = resolveTaskSessionId(task);
+  const fields = usePluginTaskFields();
+  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
   const act = (fn: () => void) => () => { fn(); close(); };
 
   return (
@@ -127,21 +131,28 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       <TaskStatusMenuSection task={task} onSetPhase={p.onSetPhase} onSetWaitUntil={p.onSetWaitUntil} afterAction={close} />
 
       {!p.phoneMenu && (<>
-        <TaskActionMenuItems
-          task={task}
-          part="pin"
-          isPinned={p.isPinned}
-          pinnedTier={p.pinnedTier}
-          isDone={isDone}
-          onSetPriority={p.onSetPriority}
-          onPinTask={p.onPinTask}
-          onUnpinTask={p.onUnpinTask}
-          onSetTier={p.onSetTier}
-          afterAction={close}
-        />
+        {/* Each kind of setting its own row (the user: "pin is pin, not mix with date, date is
+            date, and the sprint is other"): Pin to, Dates, then a plugin's own fields. */}
+        <div className="task-kebab-divider" />
+        {!isDone && (p.onPinTask || p.isPinned) && (
+          <KebabGroup label="Pin to" hint={pinHint(p.isPinned, p.pinnedTier, customTiers)} icon={ICONS.ICON_PIN} testId="kebab-group-pin">
+            <TaskActionMenuItems
+              task={task}
+              part="pin"
+              pinRows
+              isPinned={p.isPinned}
+              pinnedTier={p.pinnedTier}
+              isDone={isDone}
+              onSetPriority={p.onSetPriority}
+              onPinTask={p.onPinTask}
+              onUnpinTask={p.onUnpinTask}
+              onSetTier={p.onSetTier}
+              afterAction={close}
+            />
+          </KebabGroup>
+        )}
 
-        {(p.onSetStartDate || p.onSetDate) && (<>
-          <div className="task-kebab-divider" />
+        {(p.onSetStartDate || p.onSetDate) && (
           <KebabGroup label="Dates" hint={datesHint(task)} icon={ICONS.ICON_CALENDAR} testId="kebab-group-dates">
             <TaskActionMenuItems
               task={task}
@@ -155,7 +166,18 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
               startLabel="Start"
             />
           </KebabGroup>
-        </>)}
+        )}
+
+        {/* Plugin-declared task fields (manifest taskFields), e.g. a tracker's Sprint: only when
+            a plugin declares one. The task's details show them too (PluginFieldPills). */}
+        {fields.length > 0 && (
+          <KebabGroup label="More fields" hint={fields.map((f) => f.label.toLowerCase()).join(' · ')} icon={ICONS.ICON_NOTE} testId="kebab-group-fields">
+            <PluginFieldsSection task={task} afterAction={close} />
+          </KebabGroup>
+        )}
+
+        {/* Priority (only with Settings → Tasks → Show task priority) is its own setting too. */}
+        <TaskActionMenuItems task={task} part="priority" isPinned={p.isPinned} isDone={isDone} onSetPriority={p.onSetPriority} afterAction={close} />
 
         <KebabGroup label="Move & transfer" hint="project · host · engine · source" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
           {p.onMoveToProject && <MoveToProjectSection current={task.project || ''} onMove={p.onMoveToProject} afterAction={close} />}
@@ -175,8 +197,6 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
           <Item icon="⊙" onClick={act(() => list.onUnhideGroup!(task.group_id!))}>Unhide folder in Focus</Item>
         )}
 
-        {/* Plugin-declared task fields (manifest taskFields), e.g. a tracker's Sprint. */}
-        <PluginFieldsSection task={task} afterAction={close} />
         {/* The task's isolated workspace: details, Retry, Remove workspace… */}
         <WorkspaceMenuSection task={task} afterAction={close} />
 
@@ -187,6 +207,13 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       </>)}
     </>
   );
+}
+
+/** The closed Pin to row: where it is pinned, else what the row holds. */
+function pinHint(isPinned: boolean, tier: FocusTier | null | undefined, custom: ReadonlyArray<{ id: string; label: string }>): string {
+  if (!isPinned) return 'focus · satellite · parked';
+  const label = TIER_OPTIONS.find((t) => t.value === tier)?.label ?? custom.find((t) => t.id === tier)?.label;
+  return `pinned · ${label ?? 'Focus'}`;
 }
 
 /** The list's own moves (only a list has an order and folders): left out of a parent, up, down, out of a folder. */

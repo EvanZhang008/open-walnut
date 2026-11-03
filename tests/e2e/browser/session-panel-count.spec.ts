@@ -538,8 +538,11 @@ async function openSessionKebab(page: Page) {
   return menu
 }
 
-const panelsRow = (menu: ReturnType<Page['locator']>) =>
-  menu.locator('.task-kebab-tier').filter({ has: menu.page().getByText('Panels', { exact: true }) })
+const panelsRow = (menu: ReturnType<Page['locator']>) => menu.getByTestId('kebab-panels')
+/** The segmented switch's options, by their names (1 to 5 are drawn as columns). */
+const panelOpt = (row: ReturnType<Page['locator']>, name: string) => row.locator(`.task-kebab-panels-opt[data-value="${name}"]`)
+const activePanels = (row: ReturnType<Page['locator']>) =>
+  row.locator('.task-kebab-panels-opt[aria-pressed="true"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))
 
 test('the session kebab exposes the panel count and applies it immediately', async ({ page }) => {
   await page.setViewportSize({ width: 2560, height: 1200 })
@@ -552,19 +555,21 @@ test('the session kebab exposes the panel count and applies it immediately', asy
   const menu = await openSessionKebab(page)
   const row = panelsRow(menu)
   await expect(row).toBeVisible()
-  // FIRST row of the menu, above Task detail: the strip's own control, found before
-  // any task or session action (it used to sit between the view toggles, unseen).
-  await expect(menu.locator(':scope > *').first()).toHaveClass(/task-kebab-tier/)
+  // On the menu's first level, right under Open and Window and above every task row: the
+  // strip's own control, found before any task or session action (it used to sit between
+  // the view toggles, unseen).
+  const lead = await menu.locator(':scope > *').evaluateAll((els) => els.slice(0, 3).map((e) => e.getAttribute('data-testid')))
+  expect(lead).toContain('kebab-panels')
   // Same options as Settings, plus Auto — one control, one vocabulary.
-  await expect(row.locator('.task-kebab-tier-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
+  expect(await row.locator('.task-kebab-panels-opt').evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))).toEqual(['1', '2', '3', '4', '5', 'Auto'])
   // It reflects the CURRENT value, so the menu is a readout as well as a control.
-  await expect(row.locator('.task-kebab-tier-btn.active')).toHaveText(['5'])
+  await expect.poll(() => activePanels(row)).toEqual(['5'])
   await page.screenshot({ path: `${SCREENSHOT_DIR}/kebab-panels-row.png`, fullPage: false })
 
   // Pick 2 from the session menu → the strip must react WITHOUT waiting on config.
   // A 3s budget is far below the ~2s+ WS/file-lock round-trip plus render, so this
   // fails if the in-tab fan-out regresses to relying on the echo.
-  await row.locator('.task-kebab-tier-btn').filter({ hasText: /^2$/ }).click()
+  await panelOpt(row, '2').click()
   await expect(columns).toHaveCount(2, { timeout: 3000 })
   assertColumnsFitStrip(await measureStrip(page), 80)
 
@@ -598,7 +603,7 @@ test('a change made in Settings shows up in the session kebab', async ({ page })
   await expect(columns).toHaveCount(1, { timeout: 25_000 })
 
   const row = panelsRow(await openSessionKebab(page))
-  await expect(row.locator('.task-kebab-tier-btn.active')).toHaveText(['1'])
+  await expect.poll(() => activePanels(row)).toEqual(['1'])
 })
 
 /**

@@ -2,10 +2,11 @@
  * SessionKebabSection — the "Session" half of the session-panel kebab dropdown.
  *
  * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
- * divider, so a single dropdown holds Task actions (top) + Session actions
- * (bottom): three groups (KebabGroup) that open in place: Views (Inbox first), Copy &
- * open, Debug; then Restart / Terminate, and the Details group (Created, Updated, Host) last. Presentational only: both session panels own the actual handlers
- * (restart / investigate / open-notes …) and pass them down.
+ * divider, so a single dropdown holds the surface's rows (top: Open, Window, Panels),
+ * the task's rows, then this: ONE Session group (KebabGroup) holding Copy & open, Debug,
+ * Restart / Terminate and Session info (the time it took, Created, Updated, Host).
+ * `SessionViewItems` is the Open group's second half (Inbox, Code, Web, Notes, Msgs,
+ * Usage, Background). Presentational only: the session panel owns the handlers.
  */
 import { useState, useRef, useEffect } from 'react';
 import { copyTextRobust } from '@/utils/clipboard';
@@ -20,6 +21,7 @@ import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { openSessionRawView } from './SessionRawView';
 import { backgroundRunningLabel } from './background-ledger';
 import { KebabGroup } from './KebabGroup';
+import { SessionMetaFacts } from './SessionMetaFacts';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -68,15 +70,20 @@ const PANEL_CHOICES: SessionPanelMode[] = [
 export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
   return (
-    <div className="task-kebab-tier">
-      <span className="task-kebab-tier-label" title="How many session panels sit side by side (applies to all sessions)">
+    <div className="task-kebab-panels" data-testid="kebab-panels">
+      <span className="task-kebab-icon">{VIEWS_ICON}</span>
+      <span className="task-kebab-panels-label" title="How many session panels sit side by side (applies to all sessions)">
         Panels
       </span>
-      <div className="task-kebab-tier-options">
+      <div className="task-kebab-panels-track" role="group" aria-label="Session panels side by side">
         {PANEL_CHOICES.map((value) => (
           <button
             key={value}
-            className={`task-kebab-tier-btn${mode === value ? ' active' : ''}`}
+            type="button"
+            aria-pressed={mode === value}
+            data-value={value === 'auto' ? 'Auto' : value}
+            aria-label={value === 'auto' ? 'Auto panels' : `${value} panel${value === '1' ? '' : 's'}`}
+            className={`task-kebab-panels-opt${mode === value ? ' active' : ''}`}
             title={value === 'auto' ? 'Adjust automatically to the window width' : `Show ${value} side by side`}
             onClick={(e) => {
               e.stopPropagation();
@@ -86,7 +93,11 @@ export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void })
               onAfterAction?.();
             }}
           >
-            {value === 'auto' ? 'Auto' : value}
+            {value === 'auto' ? 'Auto' : (
+              <span className="task-kebab-panels-bars" aria-hidden="true">
+                {Array.from({ length: Number(value) }, (_, i) => <i key={i} />)}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -94,16 +105,9 @@ export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void })
   );
 }
 
-interface SessionKebabSectionProps {
+/** What opens beside or over the chat besides the header's own views (the Open group's second half). */
+export interface SessionViewItemsProps {
   sessionId: string;
-  cwd?: string;
-  /** SSH host alias for remote sessions (absent = this machine) — the Host row. */
-  host?: string;
-  hostname?: string;
-  archived?: boolean;
-  /** Session record times — the Created / Updated rows. */
-  startedAt?: string;
-  lastActiveAt?: string;
   activeView: SessionSplitView | null;
   onToggleView: (view: SessionSplitView) => void;
   unreadCount: number;
@@ -115,6 +119,23 @@ interface SessionKebabSectionProps {
   messagesOpen: boolean;
   onToggleMessages: () => void;
   msgCount?: number;
+  onOpenUsage?: () => void;
+  /** Called after any item runs so the parent can close the dropdown. */
+  onAfterAction?: () => void;
+}
+
+interface SessionKebabSectionProps {
+  sessionId: string;
+  /** The session's task: its plugin facts (the time it took) sit in Session info. */
+  taskId?: string;
+  cwd?: string;
+  /** SSH host alias for remote sessions (absent = this machine) — the Host row. */
+  host?: string;
+  hostname?: string;
+  archived?: boolean;
+  /** Session record times — the Created / Updated rows. */
+  startedAt?: string;
+  lastActiveAt?: string;
   // Restart
   onRestart: () => void;
   restartBusy: boolean;
@@ -126,7 +147,6 @@ interface SessionKebabSectionProps {
   investigating: boolean;
   investigateResult: { kind: 'ok'; id: string } | { kind: 'error' } | null;
   onOpenVscodeError: (error: unknown) => void;
-  onOpenUsage?: () => void;
   /** Called after any item runs so the parent can close the dropdown. */
   onAfterAction?: () => void;
 }
@@ -156,143 +176,157 @@ function CopyItem({ label, value, onAfter }: { label: string; value: string; onA
   );
 }
 
-export function SessionKebabSection({
-  sessionId, cwd, host, hostname, archived, startedAt, lastActiveAt, activeView, onToggleView,
-  unreadCount, decisionCount, attentionCount,
-  notesOpen, onToggleNotes, messagesOpen, onToggleMessages, msgCount,
-  onRestart, restartBusy,
-  onTerminate, terminateBusy,
-  onInvestigate, investigating, investigateResult,
-  onOpenVscodeError, onOpenUsage, onAfterAction,
-}: SessionKebabSectionProps) {
+/**
+ * The Open group's second half (SessionMenuOpen.tsx): the Inbox tab first, then Code, Web
+ * preview, Notes, Msgs, Usage and the background list. Letters that need the user and work
+ * still running in the background show their counts on the closed Open row (ViewsBadge).
+ */
+export function SessionViewItems({
+  sessionId, activeView, onToggleView, unreadCount, decisionCount, attentionCount,
+  notesOpen, onToggleNotes, messagesOpen, onToggleMessages, msgCount, onOpenUsage, onAfterAction,
+}: SessionViewItemsProps) {
   const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
-  // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
-  const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
   const { tasks: backgroundTasks, running: bgRunning } = useBackgroundRunning(sessionId);
-  const cdPrefix = cwd ? `cd ${shellWord(cwd)} && ` : '';
-  const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
   const inboxCount = attentionCount > 0 ? (
     <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}
       title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}>
       {attentionCount > 99 ? '99+' : attentionCount}
     </span>
   ) : null;
-  const viewsBadge = attentionCount > 0 || bgRunning.total > 0 ? (
+  return (
     <>
-      {inboxCount}
+      <button
+        className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'inbox'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('inbox'); onAfterAction?.(); }}
+        title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}
+      >
+        <span className="task-kebab-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 4h16l2 10v6H2v-6L4 4Z" />
+            <path d="M2 14h6l2 3h4l2-3h6" />
+          </svg>
+        </span>
+        <span>Inbox</span>
+        {inboxCount}
+      </button>
+
+      <button
+        className={`task-kebab-item${activeView === 'code' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'code'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('code'); onAfterAction?.(); }}
+        onMouseEnter={() => {
+          clearTimeout(codeHoverTimer.current);
+          codeHoverTimer.current = setTimeout(() => prefetchVscodeEmbed(sessionId), 400);
+        }}
+        onMouseLeave={() => clearTimeout(codeHoverTimer.current)}
+        title="Embedded VS Code in the session working directory"
+      >
+        <span className="task-kebab-icon">{ICON_VSCODE}</span>
+        <span>Code</span>
+      </button>
+
+      <button
+        className={`task-kebab-item${activeView === 'web' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'web'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('web'); onAfterAction?.(); }}
+        title="Open a localhost or host:port service this session started, next to the chat"
+      >
+        <span className="task-kebab-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18" />
+            <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
+          </svg>
+        </span>
+        <span>Web preview</span>
+      </button>
+
+      <button
+        className={`task-kebab-item${notesOpen ? ' task-kebab-item-active' : ''}`}
+        onClick={(e) => { e.stopPropagation(); onToggleNotes(); onAfterAction?.(); }}
+      >
+        <span className="task-kebab-icon">{ICON_NOTE}</span>
+        <span>Notes</span>
+      </button>
+
+      <button
+        className={`task-kebab-item${messagesOpen ? ' task-kebab-item-active' : ''}`}
+        onClick={(e) => { e.stopPropagation(); onToggleMessages(); onAfterAction?.(); }}
+      >
+        <span className="task-kebab-icon">{ICON_CHAT}</span>
+        <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
+      </button>
+
+      {onOpenUsage && (
+        <button type="button" className="task-kebab-item" onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onAfterAction?.(); onOpenUsage(); }}>
+          <span className="task-kebab-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 16v-3m5 3V8m5 8v-5" /></svg>
+          </span>
+          <span>Usage &amp; Budget</span>
+        </button>
+      )}
+
+      {/* The session's background commands and agents, finished ones too: the list the old
+          Background bar's "View all" opened (2026-10-26). Only once there has been some. */}
+      {backgroundTasks.length > 0 && (
+        <button
+          type="button"
+          className="task-kebab-item"
+          data-testid="session-kebab-background"
+          onClick={(e) => { e.stopPropagation(); onAfterAction?.(); openBackgroundPanel(sessionId); }}
+        >
+          <span className="task-kebab-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M7 9l3 3-3 3M12.5 15H17" />
+            </svg>
+          </span>
+          <span>Background tasks</span>
+          {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
+        </button>
+      )}
+
+    </>
+  );
+}
+
+/** The counts the closed Open row carries: letters that need the user, background work running. */
+export function ViewsBadge({ sessionId, unreadCount, decisionCount, attentionCount }: Pick<SessionViewItemsProps, 'sessionId' | 'unreadCount' | 'decisionCount' | 'attentionCount'>) {
+  const { running: bgRunning } = useBackgroundRunning(sessionId);
+  if (attentionCount <= 0 && bgRunning.total <= 0) return null;
+  return (
+    <>
+      {attentionCount > 0 && (
+        <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}
+          title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}>
+          {attentionCount > 99 ? '99+' : attentionCount}
+        </span>
+      )}
       {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
     </>
-  ) : undefined;
+  );
+}
+
+export function SessionKebabSection({
+  sessionId, cwd, host, hostname, archived, startedAt, lastActiveAt,
+  onRestart, restartBusy,
+  onTerminate, terminateBusy,
+  onInvestigate, investigating, investigateResult,
+  onOpenVscodeError, onAfterAction, taskId,
+}: SessionKebabSectionProps) {
+  // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
+  const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
+  const cdPrefix = cwd ? `cd ${shellWord(cwd)} && ` : '';
+  const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 
   return (
     <div className="task-kebab-section">
-      <div className="task-kebab-section-label">Session</div>
-
-      {/* Views: what opens beside or over the chat, the Inbox tab first. Letters that
-          need the user and work still running in the background show their counts on
-          the closed row. */}
-      <KebabGroup
-        label="Views"
-        hint="inbox · code · web · notes"
-        icon={VIEWS_ICON}
-        testId="session-kebab-views"
-        badge={viewsBadge}
-      >
-        <button
-          className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}
-          aria-pressed={activeView === 'inbox'}
-          onClick={(e) => { e.stopPropagation(); onToggleView('inbox'); onAfterAction?.(); }}
-          title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}
-        >
-          <span className="task-kebab-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 4h16l2 10v6H2v-6L4 4Z" />
-              <path d="M2 14h6l2 3h4l2-3h6" />
-            </svg>
-          </span>
-          <span>Inbox</span>
-          {inboxCount}
-        </button>
-
-        <button
-          className={`task-kebab-item${activeView === 'code' ? ' task-kebab-item-active' : ''}`}
-          aria-pressed={activeView === 'code'}
-          onClick={(e) => { e.stopPropagation(); onToggleView('code'); onAfterAction?.(); }}
-          onMouseEnter={() => {
-            clearTimeout(codeHoverTimer.current);
-            codeHoverTimer.current = setTimeout(() => prefetchVscodeEmbed(sessionId), 400);
-          }}
-          onMouseLeave={() => clearTimeout(codeHoverTimer.current)}
-          title="Embedded VS Code in the session working directory"
-        >
-          <span className="task-kebab-icon">{ICON_VSCODE}</span>
-          <span>Code</span>
-        </button>
-
-        <button
-          className={`task-kebab-item${activeView === 'web' ? ' task-kebab-item-active' : ''}`}
-          aria-pressed={activeView === 'web'}
-          onClick={(e) => { e.stopPropagation(); onToggleView('web'); onAfterAction?.(); }}
-          title="Open a localhost or host:port service this session started, next to the chat"
-        >
-          <span className="task-kebab-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M3 12h18" />
-              <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
-            </svg>
-          </span>
-          <span>Web preview</span>
-        </button>
-
-        <button
-          className={`task-kebab-item${notesOpen ? ' task-kebab-item-active' : ''}`}
-          onClick={(e) => { e.stopPropagation(); onToggleNotes(); onAfterAction?.(); }}
-        >
-          <span className="task-kebab-icon">{ICON_NOTE}</span>
-          <span>Notes</span>
-        </button>
-
-        <button
-          className={`task-kebab-item${messagesOpen ? ' task-kebab-item-active' : ''}`}
-          onClick={(e) => { e.stopPropagation(); onToggleMessages(); onAfterAction?.(); }}
-        >
-          <span className="task-kebab-icon">{ICON_CHAT}</span>
-          <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
-        </button>
-
-        {onOpenUsage && (
-          <button type="button" className="task-kebab-item" onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); onAfterAction?.(); onOpenUsage(); }}>
-            <span className="task-kebab-icon" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 16v-3m5 3V8m5 8v-5" /></svg>
-            </span>
-            <span>Usage &amp; Budget</span>
-          </button>
-        )}
-
-        {/* The session's background commands and agents, finished ones too: the list the old
-            Background bar's "View all" opened (2026-10-26). Only once there has been some. */}
-        {backgroundTasks.length > 0 && (
-          <button
-            type="button"
-            className="task-kebab-item"
-            data-testid="session-kebab-background"
-            onClick={(e) => { e.stopPropagation(); onAfterAction?.(); openBackgroundPanel(sessionId); }}
-          >
-            <span className="task-kebab-icon" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2.5" />
-                <path d="M7 9l3 3-3 3M12.5 15H17" />
-              </svg>
-            </span>
-            <span>Background tasks</span>
-            {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
-          </button>
-        )}
-
-      </KebabGroup>
+      {/* One row for the session process itself (the user's pick of the menu redesign,
+          2026-11-02): what opens beside the chat lives in Open at the top of the menu. */}
+      <KebabGroup label="Session" hint="copy · debug · restart · info" icon={ICON_CHAT} testId="session-kebab-session">
 
       {/* Copy & open: take the session somewhere else (an editor, a terminal, the
           clipboard), and the facts that go with it. */}
@@ -378,7 +412,9 @@ export function SessionKebabSection({
       {/* Details: the session's created / updated time and its host, read-only, at the
           foot of the menu where they always were; closed, the row says what it holds. */}
       <div className="task-kebab-divider" />
-      <KebabGroup label="Session info" hint="created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
+      <KebabGroup label="Session info" hint="time · created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
+        {/* Plugin facts about the session (the time it took), with their Header toggle. */}
+        <SessionMetaFacts sessionId={sessionId} taskId={taskId} onAfterAction={onAfterAction} />
         <div className="task-kebab-meta" data-testid="session-kebab-meta">
           {metaRows.map((row) => (
             <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} title={row.title}>
@@ -387,6 +423,7 @@ export function SessionKebabSection({
             </div>
           ))}
         </div>
+      </KebabGroup>
       </KebabGroup>
     </div>
   );

@@ -207,7 +207,7 @@ function WalnutPickRow({ pick, afterAction }: {
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
-  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, startLabel, part,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, startLabel, part, pinRows,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
@@ -252,7 +252,9 @@ export function TaskActionMenuItems({
   startLabel?: string;
   /** One half only: the session ⋮ menu draws Pin (and Priority) on its first level
    *  and the dates inside its Dates group. Absent, both halves (the board kebab). */
-  part?: 'pin' | 'dates';
+  part?: 'pin' | 'dates' | 'priority';
+  /** The pin tiers as one row each (the session and board menus' Pin to group), not chips. */
+  pinRows?: boolean;
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
@@ -265,8 +267,35 @@ export function TaskActionMenuItems({
   return (
     <>
       {/* Pin / Tier */}
-      {part !== 'dates' && (batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
-        <>
+      {part !== 'dates' && part !== 'priority' && (batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
+        pinRows ? (
+          tierOptions.map((t) => {
+            const isCurrent = isPinned && pinnedTier === t.value;
+            return (
+              <button
+                key={t.value}
+                type="button"
+                className={`task-kebab-item${isCurrent ? ' task-kebab-item-active' : ''}`}
+                data-testid={`kebab-pin-${t.value}`}
+                aria-pressed={isCurrent || undefined}
+                title={isCurrent ? `Unpin from ${t.label}` : `Pin to ${t.label}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (isCurrent) onUnpinTask?.();
+                  else if (isPinned) onSetTier?.(t.value);
+                  else if (onPinWithTier) onPinWithTier(t.value);
+                  // Same race guard as the chips below.
+                  else { onPinTask?.(); setTimeout(() => onSetTier?.(t.value), 100); }
+                  afterAction();
+                }}
+              >
+                <span className="task-kebab-icon" style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}>{t.icon}</span>
+                <span>{t.label}</span>
+                {isCurrent && <span className="task-kebab-check" aria-hidden="true">✓</span>}
+              </button>
+            );
+          })
+        ) : <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-tier">
             <span className="task-kebab-tier-label">{tierHeading ?? (!batchMode && isPinned ? 'Pinned' : 'Pin to')}</span>
@@ -316,7 +345,7 @@ export function TaskActionMenuItems({
       )}
 
       {/* Priority (hidden unless Settings → Tasks → Show task priority) */}
-      {part !== 'dates' && onSetPriority && showPriority && (
+      {part !== 'dates' && !pinRows && onSetPriority && showPriority && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-priority">
@@ -345,7 +374,7 @@ export function TaskActionMenuItems({
 
       {/* Start (when to begin; drives the Now view's deferral) and Due (the
           deadline): collapsed rows, calendar on click. */}
-      {part !== 'pin' && (<>
+      {part !== 'pin' && part !== 'priority' && (<>
       {(onSetStartDate || onSetDate) && <div className="task-kebab-divider" />}
       {onSetStartDate && (
         <KebabDateRow

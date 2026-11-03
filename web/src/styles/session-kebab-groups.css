@@ -23,3 +23,47 @@
 }
 /* The rows inside bring their own section dividers; inside a group they are noise. */
 .task-kebab-group-body .task-kebab-divider { display: none; }
+
+/* A thin rule between the two halves of a group (Open: the header's views, then the rest). */
+.task-kebab-group-sep { height: 1px; background: var(--border); margin: 4px 8px; }
+/* A disabled row's reason, after its label (Board "Not written yet"). */
+.task-kebab-row-why { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+/* The current pin tier in the Pin to group. */
+.task-kebab-check { margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 600; }
+
+/* Panels: a segmented track (2026-11-02, the user: "the panel switch should at least be in top
+   level, in a really nice way"), each option drawn as that many columns. */
+.task-kebab-panels { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; min-height: 32px; }
+.task-kebab-panels-label { font-size: 13px; color: var(--fg); white-space: nowrap; }
+.task-kebab-panels-track {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-tertiary, rgba(118, 118, 128, 0.12));
+}
+.task-kebab-panels-opt {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.task-kebab-panels-opt:hover { color: var(--fg); }
+.task-kebab-panels-opt.active {
+  background: var(--bg-elevated, #fff);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+.task-kebab-panels-bars { display: inline-flex; gap: 1.5px; align-items: center; }
+.task-kebab-panels-bars i { display: block; width: 3px; height: 10px; border-radius: 1px; background: currentColor; opacity: 0.8; }
