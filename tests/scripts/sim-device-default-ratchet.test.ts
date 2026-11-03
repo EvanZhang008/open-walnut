@@ -49,7 +49,13 @@ interface SimViolation { rule: SimRule; line: number; text: string }
  * Each entry needs a reason a reviewer can check. A file listed here may break
  * only the named rule; the stale-entry test fails once it no longer does.
  */
-const ALLOWLIST: Array<{ file: string; rule: SimRule; reason: string }> = []
+const ALLOWLIST: Array<{ file: string; rule: SimRule; reason: string }> = [
+  {
+    file: 'ios-native/tests/fleet/remote-run.sh',
+    rule: 'first-device',
+    reason: 'ranks iPhone device TYPES of the newest runtime for the `simctl create` of its own "Walnut Fleet Test" simulator; it never picks an existing device (it drives the UDID it wrote down when it made one, or --udid)',
+  },
+]
 
 /** How far (in lines) a lookup may sit from the device list it reads. */
 const WINDOW = 6

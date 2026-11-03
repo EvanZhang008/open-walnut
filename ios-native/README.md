@@ -75,6 +75,30 @@ renders disk-cached rows offline). Pass a real `WALNUT_UITEST_SERVER` when you
 want live content, and `WALNUT_UITEST_ROW_ID` for the board's tap test, which
 needs a throwaway task the run owns.
 
+### From another host (a Linux devbox, any task)
+
+`scripts/ios-fleet-test.sh` runs these on a Mac of your Walnut fleet from a task on
+any host: it picks the least loaded connected Mac tagged `ios` (`host_list`,
+`host_load`), sends this checkout's iOS sources with `host_copy`, runs
+`tests/fleet/remote-run.sh` there through `host_exec`, prints the output as it
+comes, and brings `summary.json`, the attached screenshots and (with `--video`)
+a screen recording back to `$WALNUT_TASK_DIR/ios-fleet/<run>/`.
+
+```bash
+scripts/ios-fleet-test.sh unit                                  # WalnutTests
+scripts/ios-fleet-test.sh --video ui -- -only-testing:WalnutUITests/BoardRingTapUITests
+scripts/ios-fleet-test.sh --host mac-mini build                 # one Mac, by its alias
+scripts/ios-fleet-test.sh run -- xcodebuild -version            # any command, WALNUT_SIM_UDID set
+```
+
+The Mac may be someone's computer in use, so a run keeps out of their way: it
+refuses to start while the Mac's load is over 0.75 per CPU (the script then tries
+the next Mac), boots its own simulator ("Walnut Fleet Test") headless with
+`simctl` (no Simulator window, nothing takes focus), builds at utility priority
+with half the cores, keeps its build products in the task's directory on that
+Mac, and shuts its simulator down at the end. The first run for a task on a Mac
+asks the user to allow it (the `host_exec` grant).
+
 ## Architecture
 
 ```
