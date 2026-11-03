@@ -85,6 +85,22 @@ function quietExec(cmd, args) {
   execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 16 * 1024 * 1024 })
 }
 
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * Detaches a scanned .dmg, trying again while macOS still holds the volume (2026-11-03:
+ * one `hdiutil detach -force` on a CI Mac failed once after a complete scan, and the
+ * release's scan read as skipped). Returns the last error, or null once it is detached.
+ */
+export function detachDmg(mnt, { exec = quietExec, sleep = sleepSync, waits = [1000, 2000, 4000, 8000] } = {}) {
+  let last = null
+  for (let i = 0; i <= waits.length; i++) {
+    try { exec('hdiutil', ['detach', mnt, '-force']); return null } catch (e) { last = e }
+    if (i < waits.length) sleep(waits[i])
+  }
+  return last
+}
+
 /**
  * Scans one file unless a file with the same bytes was scanned already: the platform
  * archives of a release, and the archive inside the Mac app, carry the same dependency
@@ -133,7 +149,7 @@ function scanFile(rules, file, shown, report, seen) {
   return true
 }
 
-export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit, onSkip } = {}) {
+export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit, onSkip, onWarn, detach = detachDmg } = {}) {
   const stats = { files: 0, bytes: 0, copies: 0, deps: 0, hits: 0, skipped: 0, labels: new Map() }
   const seen = new Set()
   const report = (shown, h, text) => {
@@ -173,13 +189,19 @@ export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit
     stats.files++
     stats.bytes += st.size
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}${process.pid}-`))
+    let stuck = false
     try {
       if (kind === 'dmg') {
         if (process.platform !== 'darwin') return skip(shown, 'a .dmg opens only on macOS')
         const mnt = path.join(dir, 'mnt')
         fs.mkdirSync(mnt)
         quietExec('hdiutil', ['attach', '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mnt, real])
-        try { walk(mnt, `${shown}!`, null, depth + 1) } finally { quietExec('hdiutil', ['detach', mnt, '-force']) }
+        // A volume that will not detach after a whole scan is a warning, never a skip: its
+        // files were read. It stays mounted for the next run's reapStale.
+        try { walk(mnt, `${shown}!`, null, depth + 1) } finally {
+          const e = detach(mnt)
+          if (e) { stuck = true; onWarn?.({ file: shown, why: `left mounted at ${mnt}: ${String(e.message).split('\n')[0]}` }) }
+        }
       } else {
         if (kind === 'tgz' || kind === 'tar') quietExec('tar', ['-xf', real, '-C', dir])
         else if (kind === 'zip') quietExec('unzip', ['-qq', '-o', real, '-d', dir])
@@ -189,13 +211,15 @@ export function scanPaths(rules, inputs, { exclude = [], skipDeps = false, onHit
     } catch (e) {
       skip(shown, `could not open: ${String(e.message).split('\n')[0]}`)
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      if (!stuck) fs.rmSync(dir, { recursive: true, force: true })
     }
   }
 
   for (const p of inputs) walk(path.resolve(p), p, null, 0)
   return stats
 }
+
+const mountedAt = (mnt, dir) => { try { return fs.statSync(mnt).dev !== fs.statSync(dir).dev } catch { return false } }
 
 /**
  * Removes what a killed scan left: its extracted archives and its mounted .dmg. The scan is
@@ -211,7 +235,9 @@ export function reapStale(tmp = os.tmpdir(), alive = (pid) => { try { process.ki
     if (!m || Number(m[1]) === process.pid || alive(Number(m[1]))) continue
     const dir = path.join(tmp, name)
     const mnt = path.join(dir, 'mnt')
-    if (process.platform === 'darwin' && fs.existsSync(mnt)) { try { quietExec('hdiutil', ['detach', mnt, '-force']) } catch {} }
+    // still mounted (another device than its dir) and will not detach: removing it would
+    // reach into the read-only volume, so a later run tries again
+    if (mountedAt(mnt, dir) && detachDmg(mnt, { waits: [] })) continue
     fs.rmSync(dir, { recursive: true, force: true })
     reaped++
   }
@@ -250,6 +276,7 @@ function main() {
         console.log(opts.mode === 'redact' ? `leak-scan: HIT ${h.label} ${where}` : `leak-scan: HIT ${h.label} ${where} ${JSON.stringify(h.snippet)}`)
       },
       onSkip: (s) => { if (opts.mode !== 'count') console.log(`leak-scan: SKIPPED ${show(s.file)} (${s.why})`) },
+      onWarn: (w) => { if (opts.mode !== 'count') console.log(`leak-scan: WARNING ${show(w.file)} (${w.why})`) },
     })
   } catch (e) {
     // A scan that stopped part way is an error (2), never a hit (1): the gate and the

@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { binaryHits, compileRules, loadRules, scanText, printableRuns, runOffset, termKey } from '../../scripts/leak-scan/core.mjs'
-import { reapStale } from '../../scripts/leak-scan/leak-scan.mjs'
+import { detachDmg, reapStale, scanPaths } from '../../scripts/leak-scan/leak-scan.mjs'
 import { parseSource } from '../../scripts/leak-scan/build-rules.mjs'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
@@ -450,6 +450,62 @@ describe('leak-scan CLI', () => {
       expect(res.code).toBe(2)
       expect(res.out).toMatch(/SKIPPED .*broken\.zip \(could not open/)
       expect(run(['--rules', r, '--skip-ok', path.join(dir, 'broken.zip')]).code).toBe(0)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('leak-scan: a scanned .dmg that will not detach', () => {
+  it('is detached again while macOS still holds it, and the last error comes back when it never lets go', () => {
+    const calls: string[][] = []
+    const sleeps: number[] = []
+    let fails = 2
+    const exec = (cmd: string, args: string[]) => { calls.push([cmd, ...args]); if (fails-- > 0) throw new Error('hdiutil: couldn\'t unmount: Resource busy') }
+    expect(detachDmg('/v/mnt', { exec, sleep: (ms: number) => sleeps.push(ms) })).toBeNull()
+    expect(calls).toEqual(Array(3).fill(['hdiutil', 'detach', '/v/mnt', '-force']))
+    expect(sleeps).toEqual([1000, 2000])
+
+    const never = detachDmg('/v/mnt', { exec: () => { throw new Error('busy') }, sleep: () => {}, waits: [1, 1] })
+    expect(String(never)).toContain('busy')
+  })
+
+  it('every detach in the scan goes through detachDmg, so no cleanup reads as a skip', () => {
+    // 2026-11-03: a bare `hdiutil detach` in the walk's finally threw after a complete scan
+    // of a release DMG, the scan reported it skipped and the leak audit failed.
+    const src = fs.readFileSync(path.join(REPO, 'scripts', 'leak-scan', 'leak-scan.mjs'), 'utf8')
+    const bare = src.split('\n').filter((l) => /['"]detach['"]/.test(l) && !/exec\('hdiutil', \['detach', mnt, '-force'\]\)/.test(l))
+    expect(bare).toEqual([])
+    // the walk detaches through scanPaths' `detach` (detachDmg by default), the reaper directly
+    expect(src).toContain('detach = detachDmg }')
+    expect(src).toContain('const e = detach(mnt)')
+    expect(src).toContain('mountedAt(mnt, dir) && detachDmg(mnt, { waits: [] })')
+  })
+
+  it.runIf(process.platform === 'darwin')('warns, never skips, and keeps the mount for the next run', () => {
+    const dir = tmp()
+    try {
+      const src = path.join(dir, 'src')
+      fs.mkdirSync(src)
+      fs.writeFileSync(path.join(src, 'a.txt'), 'plain words\n')
+      const dmg = path.join(dir, 'x.dmg')
+      execFileSync('hdiutil', ['create', '-quiet', '-fs', 'HFS+', '-srcfolder', src, '-volname', 'x', dmg])
+      const skipped: unknown[] = []
+      const warned: { why: string }[] = []
+      let mnt = ''
+      const stats = scanPaths(rules(), [dmg], {
+        onSkip: (s: unknown) => skipped.push(s), onWarn: (w: { why: string }) => warned.push(w),
+        detach: (m: string) => { mnt = m; return new Error('busy') },
+      })
+      try {
+        expect(skipped).toEqual([])
+        expect(stats.skipped).toBe(0)
+        expect(stats.files).toBeGreaterThanOrEqual(2)
+        expect(warned[0].why).toContain('left mounted')
+        expect(fs.existsSync(path.join(mnt, 'a.txt'))).toBe(true)
+      } finally {
+        if (mnt) { execFileSync('hdiutil', ['detach', mnt, '-force']); fs.rmSync(path.dirname(mnt), { recursive: true, force: true }) }
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
