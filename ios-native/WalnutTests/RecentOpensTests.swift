@@ -135,7 +135,10 @@ final class RecentOpensTests: XCTestCase {
             sessions: [session("s1", taskId: "t1", status: "idle")], now: t0 + 120
         )
         XCTAssertEqual(rows.map(\.title), ["Renamed"])
-        XCTAssertEqual(rows.first?.meta, "2m ago · marina")
+        // The time words are the OS formatter's own, and they differ by iOS version
+        // ("2m ago" on 26.0, "2 mins ago" on 26.2), so the row is checked around them.
+        XCTAssertEqual(rows.first?.meta, "\(RelativeTime.short(date: t0, relativeTo: t0 + 120)) · marina")
+        XCTAssertNotEqual(RelativeTime.short(date: t0, relativeTo: t0 + 120), "now")
         guard case .session(let opened)? = rows.first?.primary else {
             return XCTFail("a row whose conversation was opened goes back to it")
         }

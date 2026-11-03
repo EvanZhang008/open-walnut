@@ -55,11 +55,11 @@ SIM_FILE="$HOME/Library/Caches/walnut-fleet/simulator-udid"   # the UDID of the 
 mkdir -p "$OUT"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-UDID=""; REC_PID=""; STATUS=0
+UDID=""; REC_PID=""; STATUS=0; XCODE=""; RUNTIME_NAME=""
 result() { # $1 = exit status, $2 = word
   local bytes=0
   [ -f "$RUN_DIR/out.tgz" ] && bytes=$(stat -f %z "$RUN_DIR/out.tgz")
-  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s"}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID"
+  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s","xcode":"%s","runtime":"%s"}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID" "$XCODE" "$RUNTIME_NAME"
 }
 refuse() { echo "remote-run: $2" >&2; result "$1" "$3"; exit "$1"; }
 
@@ -67,6 +67,8 @@ refuse() { echo "remote-run: $2" >&2; result "$1" "$3"; exit "$1"; }
 DEV=$(/usr/bin/xcode-select -p 2>/dev/null || true)
 case $DEV in *.app/*) ;; *) refuse 69 "no full Xcode on this Mac (xcode-select -p: ${DEV:-none})" missing ;; esac
 command -v xcodegen >/dev/null || refuse 69 "xcodegen is not on this Mac (brew install xcodegen)" missing
+# Named in the result: a test can pass on one Mac's Xcode and fail on another's.
+XCODE=$(/usr/bin/xcodebuild -version 2>/dev/null | awk 'NR == 1 {print $2}')
 SIM_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/sim-device.sh"
 [ -f "$SIM_LIB" ] || refuse 69 "the sent sources have no scripts/lib/sim-device.sh" missing
 . "$SIM_LIB"
@@ -166,7 +168,12 @@ print(rt["identifier"], (types or rt["supportedDeviceTypes"])[-1]["identifier"])
 fi
 walnut_sim_check "$UDID" || refuse 64 "the simulator $UDID may not be used here (see above)" failed
 UDID=$WALNUT_SIM_DEVICE
-echo "remote-run: simulator $UDID; load $LOAD1 on $CPUS CPUs"
+RUNTIME_NAME=$(/usr/bin/xcrun simctl list -j devices | /usr/bin/python3 -c '
+import json, sys
+for rt, devs in json.load(sys.stdin)["devices"].items():
+    if any(d["udid"] == sys.argv[1] for d in devs):
+        print(rt.rsplit(".", 1)[-1].replace("iOS-", "iOS ", 1).replace("-", ".")); break' "$UDID" 2>/dev/null)
+echo "remote-run: simulator $UDID (${RUNTIME_NAME:-runtime unknown}, Xcode ${XCODE:-unknown}); load $LOAD1 on $CPUS CPUs"
 # A boot that works is this run's to undo; one that fails found it running already (or
 # broken, which bootstatus says next).
 if /usr/bin/xcrun simctl boot "$UDID" >/dev/null 2>&1; then

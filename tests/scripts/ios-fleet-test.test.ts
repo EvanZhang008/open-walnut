@@ -18,7 +18,12 @@ let dir = ''
 let repo = ''
 let taskDir = ''
 
-interface Mac { host: string; label?: string; tags?: string[]; connected?: boolean; loadPerCpu?: number | null; result?: { exit: number; state: string } }
+interface Mac {
+  host: string; label?: string; tags?: string[]; connected?: boolean; loadPerCpu?: number | null
+  result?: { exit: number; state: string; xcode?: string; runtime?: string }
+  /** The fetch of out.tgz fails this many times first (a dropped answer from a loaded Mac), with this error. */
+  fetchFails?: number; fetchError?: string
+}
 
 /** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call. */
 function fakeWalnut(macs: Mac[], outTgz: string): string {
@@ -37,7 +42,12 @@ const mac = (h) => macs.find((m) => m.host === h)
 if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 if (op === 'host_load') out({ hosts: macs.map((m) => ({ host: m.host, known: m.loadPerCpu != null, loadPerCpu: m.loadPerCpu })) })
 if (op === 'host_copy') {
-  if (args.from_host) { fs.copyFileSync(outTgz, args.to); out({ outcome: 'Copied back.' }) }
+  if (args.from_host) {
+    const m = mac(args.from_host), n = path.join(dir, 'fetch-fails')
+    const failed = fs.existsSync(n) ? Number(fs.readFileSync(n, 'utf8')) : 0
+    if (failed < (m.fetchFails || 0)) { fs.writeFileSync(n, String(failed + 1)); process.stderr.write('walnut: ' + (m.fetchError || 'hub_timeout: primary server timed out')); process.exit(1) }
+    fs.copyFileSync(outTgz, args.to); out({ outcome: 'Copied back.' })
+  }
   // What was sent, for the test to read.
   fs.copyFileSync(args.from, path.join(dir, 'sent-' + args.to_host + '.tgz'))
   // A big file: the copy answers running first, host_copy_result has the end.
@@ -48,7 +58,7 @@ if (op === 'host_exec') out(args.background ? { jobId: 'hx-' + args.host, runnin
 if (op === 'host_exec_read') {
   const m = mac(args.host)
   const r = m.result || { exit: 0, state: 'passed' }
-  const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U' }) + '\\n'
+  const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U', xcode: r.xcode || '', runtime: r.runtime || '' }) + '\\n'
   // The run ends while 2 more chunks of its log are still unread.
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
   if (args.offset === 24) out({ output: 'app log noise\\n', nextOffset: 38, outputBytes: 38 + tail.length, running: false })
@@ -67,7 +77,7 @@ function git(...a: string[]): void {
 function run(args: string[], bin: string) {
   const r = spawnSync('bash', [SCRIPT, ...args], {
     cwd: repo, encoding: 'utf8',
-    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir },
+    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0' },
   })
   const calls = fs.existsSync(path.join(dir, 'calls.jsonl'))
     ? fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op: string; args: Record<string, unknown> })
@@ -177,6 +187,44 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
     // Nothing is fetched from the busy one.
     expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host).map((c) => c.args.from_host)).toEqual(['mac-two'])
+  })
+
+  it('a fetch Walnut drops under load is asked again; the results arrive and the Mac is cleaned', () => {
+    // 2026-11-03: the Mac ran at load 106, host_copy of the 44 MB out.tgz answered hub_timeout,
+    // and the run's folder on the other Mac was removed with the results still in it.
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, fetchFails: 2, result: { exit: 0, state: 'passed', xcode: '26.2', runtime: 'iOS 26.2' } }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('host_copy: Walnut did not answer (hub_timeout); asking again in 0 s')
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(3)
+    expect(r.stderr).toContain('ran with Xcode 26.2 and iOS 26.2 on mac-mini')
+    expect(r.stderr).toContain('Passed: 41 passed')
+    const clean = r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)
+    expect(clean).toHaveLength(1)
+    expect((clean[0].args.argv as string[])[2]).toMatch(/^rm -rf /)
+  })
+
+  it('results that never come back stay on the Mac, with the call that fetches them', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, fetchFails: 99, result: { exit: 0, state: 'passed' } }], outTgz())
+    const r = run(['unit'], bin)
+    // A pass whose results are not here is not a pass for the caller.
+    expect(r.status).toBe(74)
+    expect(r.stderr).toContain('the run ended with exit 0 on mac-mini, but its results are still there')
+    expect(r.stderr).not.toContain('results: ')
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(6)
+    expect(r.stderr).toMatch(/could not bring the results back from mac-mini; they stay there until fetched: walnut tools call host_copy '\{"from_host": "mac-mini", "from": "~\/\.local\/state\/open-walnut\/tasks\/task-1\/ios-fleet\/[^"]+\/out\.tgz"/)
+    // Nothing removed on the Mac.
+    expect(r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)).toHaveLength(0)
+    // An older remote-run.sh names no versions, and the line is left out.
+    expect(r.stderr).not.toContain('ran with')
+  })
+
+  it('a refusal that is not a dropped answer is not asked again', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, fetchFails: 99, fetchError: 'Walnut API error (409): may_prompt', result: { exit: 0, state: 'passed' } }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(1)
+    expect(r.stderr).toContain('may_prompt')
+    expect(r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)).toHaveLength(0)
   })
 
   it('no Mac can take it: says why and exits 75 without sending anything', () => {

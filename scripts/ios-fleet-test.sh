@@ -32,6 +32,10 @@
 # the script stops with the grant's message; run it again once they have.
 # The Mac may be someone else's computer: see remote-run.sh for how a run stays out of
 # their way (no window, its own simulator, utility priority, refuses when busy).
+#
+# Exit: the tests' own status; 75 no Mac can take a run now; 74 the run ended but its
+# results did not come back (they stay on the Mac, and the line to fetch them is printed);
+# 64 a wrong option.
 set -uo pipefail
 
 die() { printf 'ios-fleet: %s\n' "$*" >&2; exit "${2:-1}"; }
@@ -78,14 +82,26 @@ op() { # $1 = op, $2 = JSON args
   printf '%s' "$out"
 }
 js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
+# A call Walnut may drop while the Mac it runs on is loaded (hub_timeout, hub_unreachable,
+# throttled) is asked again, six times 10 s apart; any other refusal is final.
+op_again() { # $1 = op, $2 = JSON args
+  local out i why
+  for i in 1 2 3 4 5 6; do
+    out=$(op "$1" "$2" 2>&1) && { printf '%s' "$out"; return 0; }
+    why=$(printf '%s' "$out" | grep -oE 'hub_timeout|hub_unreachable|throttled' | head -1)
+    [ -n "$why" ] && [ "$i" -lt 6 ] || { printf '%s\n' "$out" >&2; return 1; }
+    say "$1: Walnut did not answer ($why); asking again in ${IOS_FLEET_RETRY_SECS:-10} s"
+    sleep "${IOS_FLEET_RETRY_SECS:-10}"
+  done
+}
 # host_copy, waited for: a big file answers running:true first, host_copy_result waits on.
 copy() { # $1 = JSON args; prints the finished answer
   local got id
-  got=$(op host_copy "$1") || return 1
+  got=$(op_again host_copy "$1") || return 1
   while printf '%s' "$got" | js 'sys.exit(0 if d.get("running") else 1)'; do
     id=$(printf '%s' "$got" | js 'print(d.get("copyId") or "")')
     [ -n "$id" ] || { printf '%s\n' "$got" >&2; return 1; }
-    got=$(op host_copy_result "{\"copy_id\":\"$id\",\"wait_ms\":60000}") || return 1
+    got=$(op_again host_copy_result "{\"copy_id\":\"$id\",\"wait_ms\":60000}") || return 1
   done
   printf '%s' "$got"
 }
@@ -140,7 +156,7 @@ while IFS= read -r p; do REFS+=("$p"); done < <(repo_refs)
 say "packed $(du -h "$LOCAL/src.tgz" | cut -f1) of sources ($(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" status --porcelain -- ios-native | grep -q . && echo ', with uncommitted changes'))"
 
 q() { printf '%q ' "$@"; }
-STATUS=1
+STATUS=1; FETCHED=1
 while IFS=$'\t' read -r H NOTE; do
   [ -n "$H" ] || continue
   say "using $NOTE"
@@ -180,13 +196,22 @@ while IFS=$'\t' read -r H NOTE; do
   STATUS=$(printf '%s' "$RES" | js 'print(d["exit"])')
   STATE=$(printf '%s' "$RES" | js 'print(d["state"])')
   if [ "$STATE" = busy ] && [ -z "$HOST" ]; then say "$H is busy; trying the next Mac"; continue; fi
+  VERSIONS=$(printf '%s' "$RES" | js 'print(" and ".join(x for x in (("Xcode " + d["xcode"]) if d.get("xcode") else "", d.get("runtime") or "") if x))')
+  [ -z "$VERSIONS" ] || say "ran with $VERSIONS on $H"
+  FETCH=$(python3 -c 'import json,sys; print(json.dumps({"from_host": sys.argv[1], "from": sys.argv[2], "to": sys.argv[3]}))' "$H" "$REMOTE/out.tgz" "$LOCAL/out.tgz")
+  FETCHED=1
   if [ "$(printf '%s' "$RES" | js 'print(d.get("bytes", 0))')" != 0 ]; then
-    copy "$(python3 -c 'import json,sys; print(json.dumps({"from_host": sys.argv[1], "from": sys.argv[2], "to": sys.argv[3]}))' "$H" "$REMOTE/out.tgz" "$LOCAL/out.tgz")" >/dev/null \
-      && tar -xzf "$LOCAL/out.tgz" -C "$LOCAL" || say "could not bring the results back from $H"
+    if ! { copy "$FETCH" >/dev/null && tar -xzf "$LOCAL/out.tgz" -C "$LOCAL"; }; then
+      FETCHED=0
+      say "could not bring the results back from $H; they stay there until fetched: walnut tools call host_copy '$FETCH'"
+    fi
   fi
-  CLEANUP="rm -rf \"\$HOME/$REMOTE_REL\""
-  [ "$CLEAN" = 1 ] && CLEANUP="$CLEANUP \"\$HOME/.local/state/open-walnut/tasks/$TASK_ID/ios-fleet/DerivedData\""
-  op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "timeout_ms": 60000}))' "$H" "$CLEANUP")" >/dev/null || true
+  # The run's folder on the Mac goes only once its results are here.
+  if [ "$FETCHED" = 1 ]; then
+    CLEANUP="rm -rf \"\$HOME/$REMOTE_REL\""
+    [ "$CLEAN" = 1 ] && CLEANUP="$CLEANUP \"\$HOME/.local/state/open-walnut/tasks/$TASK_ID/ios-fleet/DerivedData\""
+    op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "timeout_ms": 60000}))' "$H" "$CLEANUP")" >/dev/null || true
+  fi
   break
 done <<< "$PICKS"
 
@@ -199,6 +224,11 @@ print("ios-fleet: %s: %s passed, %s failed, %s skipped of %s" % (s.get("result")
 for f in (s.get("testFailures") or [])[:10]:
     print("  FAIL %s: %s" % (f.get("testIdentifierString") or f.get("testName"), (f.get("failureText") or "")[:200]))
 PY
+fi
+if [ "$FETCHED" = 0 ]; then
+  # The run ended there, but nothing of it is here: not a pass for the caller.
+  say "the run ended with exit $STATUS on $H, but its results are still there (see above); only its log is here: $LOCAL/run.log"
+  exit 74
 fi
 say "results: $LOCAL$([ -f "$LOCAL/out/run.mp4" ] && echo " (video: $LOCAL/out/run.mp4)")"
 exit "$STATUS"
