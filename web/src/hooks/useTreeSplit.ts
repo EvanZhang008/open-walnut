@@ -172,8 +172,12 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     const l = live.current;
     // The left half goes away with either close: focus in it (its composer,
     // its close button) moves to the composer that stays, never to <body>.
+    // Safari gives a clicked button no focus, so a press on Close drops the
+    // composer's focus onto <body> before this runs: that counts as the half's.
     const panel = panelRef.current;
-    const leftHadFocus = !!panel?.querySelector('.tree-split-left')?.contains(document.activeElement);
+    const active = document.activeElement;
+    const leftHadFocus = !active || active === document.body
+      || !!panel?.querySelector('.tree-split-left')?.contains(active);
     setRecord((prev) => (prev.split ? { ...prev, split: false } : prev));
     goTo(closeHalfTarget(side, l.shownIndex), side === 'R' ? 'close-right' : 'close-left');
     if (leftHadFocus) {
