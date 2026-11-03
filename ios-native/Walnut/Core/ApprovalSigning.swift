@@ -90,6 +90,16 @@ enum ApprovalSigning {
         return dir.appendingPathComponent("se-key.blob")
     }
 
+    /// The Secure Enclave on a device. The simulator reports one, yet refuses to make a key
+    /// guarded by biometry there (LAError -1020), so it takes the software key below.
+    private static var useEnclave: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return SecureEnclave.isAvailable
+        #endif
+    }
+
     struct PublicKey {
         let spki: Data
         var base64: String { spki.base64EncodedString() }
@@ -98,7 +108,7 @@ enum ApprovalSigning {
 
     /// This phone's public key, made on first use. Making one asks for nothing.
     static func publicKey() throws -> PublicKey {
-        if SecureEnclave.isAvailable {
+        if useEnclave {
             if let blob = try? Data(contentsOf: blobURL),
                let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob) {
                 return PublicKey(spki: key.publicKey.derRepresentation)
@@ -155,7 +165,7 @@ enum ApprovalSigning {
         }
         let message = Data(answerMessage(digest: approval.digest, decision: decision).utf8)
         let pub = try publicKey()
-        if SecureEnclave.isAvailable {
+        if useEnclave {
             let blob = try Data(contentsOf: blobURL)
             let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob, authenticationContext: ctx)
             return (pub.id, try key.signature(for: message).derRepresentation.base64EncodedString())

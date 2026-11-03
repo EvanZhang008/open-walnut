@@ -8,6 +8,10 @@ struct ApprovalSheet: View {
     @State private var working: String?
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// At the accessibility text sizes a row of two buttons wraps a letter per line: stack them.
+    private var stacked: Bool { typeSize.isAccessibilitySize }
 
     var body: some View {
         NavigationStack {
@@ -46,10 +50,11 @@ struct ApprovalSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: approval.isBiometric ? "faceid" : "checkmark.shield")
-                Text(approval.isBiometric ? "Needs Face ID" : "Needs your OK")
-                Spacer()
+            let row = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 6))
+            row {
+                Label(approval.isBiometric ? "Needs Face ID" : "Needs your OK",
+                      systemImage: approval.isBiometric ? "faceid" : "checkmark.shield")
+                if !stacked { Spacer() }
                 if approval.isPending, let end = approval.expiresDate {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         Text(Self.left(until: end, now: ctx.date))
@@ -80,13 +85,9 @@ struct ApprovalSheet: View {
                         : "This iPhone cannot sign approvals yet."))
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                HStack(spacing: 12) {
-                    Button(role: .destructive) { run("deny", signed: false) } label: {
-                        Text(working == "deny" ? "Denying…" : "Deny").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .accessibilityIdentifier("approval.deny")
+                let buttons = stacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
+                buttons {
+                    if !stacked { denyButton }
                     if !approval.isBiometric {
                         Button { run("approve", signed: false) } label: {
                             Text(working == "approve" ? "Approving…" : "Approve").frame(maxWidth: .infinity)
@@ -103,6 +104,8 @@ struct ApprovalSheet: View {
                         .controlSize(.large)
                         .accessibilityIdentifier("approval.approve")
                     }
+                    // Stacked, Approve leads and Deny comes under it.
+                    if stacked { denyButton }
                 }
                 .disabled(working != nil)
             }
@@ -117,6 +120,15 @@ struct ApprovalSheet: View {
                     .controlSize(.large)
             }
         }
+    }
+
+    private var denyButton: some View {
+        Button(role: .destructive) { run("deny", signed: false) } label: {
+            Text(working == "deny" ? "Denying…" : "Deny").frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityIdentifier("approval.deny")
     }
 
     private func run(_ decision: String, signed: Bool) {
@@ -143,7 +155,8 @@ struct ApprovalSheet: View {
     static func endLine(_ a: Approval) -> String {
         switch a.status {
         case "approved":
-            let how = a.answer?.mode == "biometric" ? "with Face ID or Touch ID" : "with a tap"
+            let how = a.answer?.mode != "biometric" ? "with a tap"
+                : a.answer?.device.kind == "mac-app" ? "with Touch ID" : "with Face ID"
             return "Approved on \(a.answer?.device.name ?? "a device") \(how)"
         case "denied": return "Denied on \(a.answer?.device.name ?? "a device")"
         case "expired": return "Expired: nobody answered in time"
