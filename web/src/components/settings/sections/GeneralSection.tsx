@@ -104,7 +104,8 @@ interface Props {
 }
 
 /**
- * Update on start (config `updates.auto`): only an npm install and the compiled
+ * Update automatically (config `updates.auto`): the running server installs a new
+ * release in the background and restarts when the person is idle. Only an npm install and the compiled
  * file install.sh puts in place have anything to install, so the row is absent
  * on a source checkout, a replica, a Homebrew keg and an unpacked bundle, where
  * the same words would promise something that never happens.
@@ -120,8 +121,8 @@ function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<t
   if (status?.install.kind !== 'npm' && status?.install.kind !== 'binary') return null;
   return (
     <SettingsRow
-      label="Install updates on start"
-      help="Installs a newer release when open-walnut web starts."
+      label="Update Walnut automatically"
+      help="Installs new releases in the background and restarts Walnut once you have been away 10 minutes."
       htmlFor="settings-updates-auto"
       error={setting.error}
       data-testid="settings-updates-auto-row"

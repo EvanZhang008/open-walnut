@@ -34,6 +34,7 @@ const SESSION_FILES: Record<string, string> = {
   'api/test-run.ts': 'the ?walnut-test-run= marker is for the tab that was opened with it',
   'components/common/AppErrorBoundary.tsx': 'a debug switch that crashes this tab once',
   'components/common/UnpairedNotice.tsx': 'a sign-out notice for this tab only',
+  'components/common/server-update-pill.ts': 'the Walnut version this tab last saw, so a restart into a new one is announced once per tab',
   'components/settings/sections/cloud/OwnDeviceSignOut.tsx': 'sets the sign-out notice flag',
   'components/settings/SettingsSection.tsx': 'the settings hash target of this visit',
   'components/board/kanban/useKanbanLayout.ts': 'done rails opened for this visit (spec 3.2)',

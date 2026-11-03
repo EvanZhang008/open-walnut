@@ -556,7 +556,7 @@ rather than discovered in a publish.
 `src/core/self-update/` (checker, install kind, channel) and the surfaces that read it:
 
 - The server asks `https://registry.npmjs.org/-/package/open-walnut/dist-tags` 20 seconds
-  after it listens, then every 24 hours (an hour after a failure), 5 second deadline, in
+  after it listens, then every 6 hours (an hour after a failure), 5 second deadline, in
   memory only. It compares its own version with the tag of its channel.
 - The answer shows in the notification panel's System section (`Open Walnut` card), as an
   accent dot on the System rail, on the Settings build line, in `open-walnut doctor`, and
@@ -589,7 +589,7 @@ guess):
   The restart runs what started it: the `bin/walnut` link (now the new version) for the
   file, the launcher for npm. This is on by default for file and npm installs whose
   directory the process can write; a read-only prefix prints what to do and starts as it is. Turn it off in
-  Settings > General > `Install updates on start`, with `updates.auto: false` in
+  Settings > General > `Update Walnut automatically` (it also turns off the live update below), with `updates.auto: false` in
   `config.yaml`, or with `WALNUT_NO_AUTO_UPDATE=1`. An install gets one minute: whoever waits for
   the port (the Mac app, a service manager, a person) must not wait for npm, which took 6.5
   minutes under load. Past that the current version starts and the install goes on (the file's
@@ -616,6 +616,60 @@ guess):
   well (the only switch 0.6.x knows) and moves the archive to the file itself: the file it
   carries before the server starts, else the newest release's through its `install.sh` while the
   server runs (`desktop/README.md`).
+
+### Live update: the running server updates itself
+
+`src/core/self-update/live-update.ts`. A server that can replace its own install while it
+serves (the compiled file in install.sh's layout, or an npm install of the compiled file,
+writable by this user; never a Node build, whose lazily imported chunks the install would
+replace, a Homebrew keg, a source checkout, a replica, an ephemeral server or the Mac app's
+server) installs a newer release after the check that finds it, with `updates.auto` on and
+the release not held back. It uses the startup update's machinery (the file's swap under the
+root's update lock; npm detached with the release fetched ahead, its record and log as above,
+then the relaunch must print the new version) and writes `update-unverified.json`, so the
+restarted server's first start is watched and gone back from when it fails.
+
+Then it restarts when the **idle gate** (`src/core/self-update/idle-gate.ts`) opens, asked every
+minute, and only while `updates.auto` is still on: no person activity for 10 minutes (`WALNUT_UPDATE_IDLE_MS`; activity is the end of any
+time heartbeat window from the web page or the phone, and any message a person sends into a
+session), and no session turn running, unless the install has waited 6 hours (sessions live in
+the daemon and survive a restart). The windows hear every check and state change as WS
+`system:update` (the same body as `GET /api/system/update`, whose `live` block holds `state`
+`off | idle | downloading | installed | waiting | restarting | failed`, `version`, `error`,
+`canInstall`, `held`, `updatesAuto` and `idle`). `POST /api/system/update/install` installs
+now (with auto off or a held version too: the person asked) and restarts at once;
+`POST /api/system/update/restart` restarts into the installed version; both answer 409
+`cannot_install` (with `fix`, the command), `no_update` or `no_restart`. A failed install keeps
+its error and is tried again at the next check. The Mac app's server never installs; its page
+reads `live.idle.ready` and `live.updatesAuto` to download and restart the app.
+
+**How it restarts** (`src/core/self-update/restart-supervisor.ts`, `src/commands/web-restart.ts`).
+Only a supervised server restarts: one whose thin parent loops. A thin parent of this version
+starts its child with `WALNUT_RESTART_SUPERVISED=1` (the child reads and removes it at once, so
+no session inherits it), and that server restarts by tearing down as on SIGTERM (dropping open
+connections so the port is free) and exiting with **75**. The parent then runs the startup
+update path again (the version the install runs now is what its relaunch prints, else the
+version the live install recorded), which starts the new version, watches its first start and
+goes back when it fails, and loops while its child keeps exiting 75 (more than 5 restarts in 10
+minutes stops it). Two parents loop:
+
+- the one a startup update leaves behind (it installed before listening and started the new
+  version as its child);
+- a `walnut web` whose install can update while it serves (`src/core/self-update/live-eligible.ts`:
+  the compiled file, writable, its update checks on, not the Mac app's server), whatever
+  `updates.auto` says (with it off the person's Update button still installs and restarts). After
+  the startup update it never boots a server itself: it starts the server as its supervised child
+  right away, so it runs no background work and holds no server memory.
+
+Under an older thin parent (which does not loop and never sets the variable, so its child never
+hands it a 75) a qualifying `walnut web` supervises all the same: old parent, supervisor, server;
+the supervisor writes the old parent's ready file once its child listens. While a child runs,
+SIGINT, SIGTERM and SIGHUP go on to it and the parent ends with the child's code (128 plus the
+signal's number when the child died of one); a signal between children starts nothing more. A
+server nobody supervises (a Node build, a source checkout, the Mac app's server) has no restart
+handler: a version installed for it waits for its next start, and Restart answers 409
+`no_restart`. The local session daemon is never stopped: sessions survive the restart, as on
+every deploy.
 
 ## Checklist for a release
 

@@ -108,7 +108,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
   const { health, gitSync, loading } = useSystemHealth();
   const statuses = useAllHostStatus();
   const navigate = useNavigate();
-  // The panel fetched this when it opened (the rail dot needs it); the pane only reads and re-checks.
+  // The shared live copy the update notice started at app start; the pane only reads and re-checks.
   const update = useUpdateStatus(true);
   // Open Settings lands on the host's own Settings row, as the Home card's button does.
   const onOpenSettings = useCallback((alias?: string) => {

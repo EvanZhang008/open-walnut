@@ -55,6 +55,8 @@ function baseView(s: UpdateStatus): UpdateCardView {
   if (s.available && s.latest) {
     const note = !s.install.updateCommand
       ? `No package manager found for this install; see ${s.packageUrl}`
+      : s.live?.canInstall && s.live.updatesAuto && !s.live.held
+        ? 'Installs itself in the background, then restarts once you have been away 10 minutes'
       : s.autoUpdate
         ? 'Installs itself the next time open-walnut web starts, or run the command now'
         : 'Restart Walnut after installing';

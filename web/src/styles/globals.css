@@ -32665,6 +32665,29 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .stale-build-pill.is-docked .stale-build-pill-later { margin-left: auto; }
+/* Docked (the open rail, a popout's bar): a heading too long for one line ("Updating
+   Walnut to 0.6.25 nightly…") takes a second line instead of losing its version to an
+   ellipsis. Short headings stay on one line, so the notice keeps its height. Plain
+   wrapping, no -webkit-line-clamp: WebKit shrinks a -webkit-box flex item to 1px. */
+.stale-build-pill.is-docked .stale-build-pill-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  padding: 5px 0;
+}
+
+/* A step with nothing to click (the server installing or restarting, "updated to X"):
+   the words carry it; only the collapsed rail, which hides the words, shows the
+   short status word in the button's place. */
+.stale-build-pill-action.is-status { display: none; cursor: default; color: var(--fg-muted); }
+.stale-build-pill:not(.is-docked) .stale-build-pill-action.is-status + .stale-build-pill-later { margin-left: 6px; }
+
+/* "How to update": the command(s) that update a copy that cannot update itself. */
+.how-to-update p { margin: 0 0 8px; }
+.how-to-update-row { margin: 0 0 10px; }
+.how-to-update-note { color: var(--fg-muted); font-size: 12px; }
+.how-to-update-command { display: flex; align-items: center; gap: 8px; max-width: 100%; }
+.how-to-update-command .setup-command { min-width: 0; overflow-wrap: anywhere; user-select: all; }
 
 /* A light shadow disappears on a dark background; the border carries the edge. */
 [data-theme="dark"] .stale-build-pill {
@@ -32735,6 +32758,16 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-icon { display: block; }
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action.is-status { display: flex; }
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action.is-status:hover { background: none; }
+/* Installing or restarting: the icon turns, so "Wait" reads as work under way. */
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action.is-working .stale-build-pill-icon {
+  animation: stale-build-pill-spin 1.1s linear infinite;
+}
+@keyframes stale-build-pill-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action.is-working .stale-build-pill-icon { animation: none; }
+}
 
 .sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action:hover {
   background: var(--bg-hover, rgba(0, 0, 0, 0.05));

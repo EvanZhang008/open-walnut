@@ -43,9 +43,11 @@ import { spawn } from 'node:child_process'
 import type { UpdateStatus } from './update-check.js'
 import { managerArgv, notWritableFix, type BinaryInstall, type InstallInfo } from './install-kind.js'
 import type { InstallJob } from './background-install.js'
-import { APPLIED_ENV, reexecSelf, relaunchVersion, type ReexecResult } from './startup-relaunch.js'
+import { APPLIED_ENV, type ReexecResult } from './startup-relaunch.js'
 
-export { APPLIED_ENV, READY_FILE_ENV, reexecSelf, relaunchArgv, relaunchVersion, type ReexecResult } from './startup-relaunch.js'
+export {
+  APPLIED_ENV, READY_FILE_ENV, RESTART_EXIT_CODE, RESTART_SUPERVISED_ENV, reexecSelf, relaunchArgv, relaunchVersion, type ReexecResult,
+} from './startup-relaunch.js'
 
 export const NO_AUTO_UPDATE_ENV = 'WALNUT_NO_AUTO_UPDATE'
 /** Set by a launcher that updates the install itself while the server runs (the Mac app): no update before listen. */
@@ -217,6 +219,11 @@ export interface StartupUpdateDeps {
   reexec: (env: Record<string, string | undefined>, install: InstallInfo) => Promise<ReexecResult>
   /** The budget and the signals (default: watchStop()). */
   watch?: () => UpdateStop
+  /**
+   * A stop signal the caller already received (a restart loop's parent records them,
+   * restart-supervisor.ts): nothing new is started once it says one came.
+   */
+  stopSignal?: () => NodeJS.Signals | null
   err: (line: string) => void
 }
 
@@ -436,6 +443,8 @@ export async function confirmNpmInstall(o: {
  */
 async function startInstalled(deps: StartupUpdateDeps, status: UpdateStatus, version: string, from: string | null): Promise<StartupUpdateOutcome> {
   const env = { ...deps.env, [APPLIED_ENV]: '1' }
+  const stopped = deps.stopSignal?.()
+  if (stopped) return { kind: 'stopped', signal: stopped }
   const first = await deps.reexec(env, status.install)
   if (!failedToStart(first) || !from || from === version || !deps.rollBack) return { kind: 'reexeced', version, exitCode: first.exitCode }
   const reason = `exited with ${first.exitCode} before it served`
@@ -446,71 +455,14 @@ async function startInstalled(deps: StartupUpdateDeps, status: UpdateStatus, ver
     deps.err(`Could not go back to ${from} (${messageOf(e)}).`)
     return { kind: 'reexeced', version, exitCode: first.exitCode }
   }
+  const stoppedBack = deps.stopSignal?.()
+  if (stoppedBack) return { kind: 'stopped', signal: stoppedBack }
   const second = await deps.reexec(env, status.install)
   if (failedToStart(second) && second.ms < QUICK_EXIT_MS) {
     deps.err(`Open Walnut ${from} did not start either, so ${version} was not the cause; the next start runs ${version} again.`)
     await deps.undoRollBack?.(status, version).catch((e) => deps.err(`Could not undo going back (${messageOf(e)}).`))
   }
   return { kind: 'reexeced', version: from, exitCode: second.exitCode, rolledBackFrom: version }
-}
-
-/**
- * The startup update as `walnut web` runs it: this process's own install
- * (install-kind.ts), the registry's answer, npm or the file's own installer,
- * and the restart. `configAuto` reads config.yaml's `updates.auto`.
- */
-export async function runStartupUpdate(configAuto: () => Promise<boolean | undefined>): Promise<StartupUpdateOutcome> {
-  const { UpdateChecker } = await import('./update-check.js')
-  const { installFileVersion, registryBaseFor, rollBack, undoRollBack } = await import('./binary-install.js')
-  const { badDirFor, clearBad, heldBack, markBad } = await import('./held-versions.js')
-  const { installRunning, noteInstalledInBackground, platformSpecFor, prefetchArgv, readUnverified, sequenceArgv, startDetachedInstall, writeUnverified } = await import('./background-install.js')
-  const { WALNUT_HOME } = await import('../../constants.js')
-  const err = (line: string) => { process.stderr.write(`${line}\n`) }
-  const record = path.join(WALNUT_HOME, 'local', 'update-installing.json')
-  const unverifiedFile = path.join(WALNUT_HOME, 'local', 'update-unverified.json')
-  return updateOnStart({
-    checkNow: () => new UpdateChecker().checkNow(),
-    configAuto,
-    env: process.env,
-    writable: installDirWritable,
-    held: (status) => heldBack(status.install, status.latest!, badDirFor(status.install, WALNUT_HOME)),
-    run: runInherited,
-    startInstall: (file, args, version) => {
-      // The download first, the install untouched; then the install from the cache (background-install.ts).
-      const ahead = prefetchArgv({ file, args }, `open-walnut@${version}`, platformSpecFor(process.execPath, version))
-      const job = sequenceArgv(ahead ? [ahead, { file, args }] : [{ file, args }])
-      return startDetachedInstall(job.file, job.args, { logFile: path.join(WALNUT_HOME, 'local', 'update-install.log'), record, version })
-    },
-    busy: async () => {
-      const job = await installRunning(record)
-      return job ? `the install of ${job.version} an earlier start began still runs (pid ${job.pid})` : null
-    },
-    installedLater: noteInstalledInBackground,
-    unverified: async () => readUnverified(unverifiedFile),
-    markUnverified: (pending) => writeUnverified(unverifiedFile, pending),
-    installFile: async (install, version, signal) => {
-      const done = await installFileVersion({ install, version, registry: registryBaseFor(process.env.WALNUT_UPDATE_REGISTRY_URL), log: err, signal })
-      return { from: done.from }
-    },
-    versionOf: relaunchVersion,
-    rollBack: async (status, from, to, reason) => {
-      const binary = status.install.kind === 'binary' ? status.install.binary : null
-      if (binary) return rollBack(binary.root, from, to, reason)
-      const dir = badDirFor(status.install, WALNUT_HOME)
-      if (!status.install.manager || !dir) throw new Error('no package manager to go back with')
-      markBad(dir, to, reason)
-      const back = managerArgv(status.install.manager, `open-walnut@${from}`, status.install.runtimePrefix)
-      const code = await runInherited(back.file, back.args)
-      if (code !== 0) throw new Error(`${back.file} exited with ${code}; run: ${back.file} ${back.args.join(' ')}`)
-    },
-    undoRollBack: async (status, to) => {
-      const binary = status.install.kind === 'binary' ? status.install.binary : null
-      if (binary) return undoRollBack(binary.root, to)
-      clearBad(badDirFor(status.install, WALNUT_HOME), to)
-    },
-    reexec: reexecSelf,
-    err,
-  })
 }
 
 /** The installer, in the terminal (or the service log): the user sees npm's own progress. A signal to this process goes on to it. */

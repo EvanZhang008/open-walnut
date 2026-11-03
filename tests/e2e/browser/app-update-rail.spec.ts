@@ -152,6 +152,19 @@ async function openSessionPopout(page: Page): Promise<Page> {
 test.beforeEach(async ({ page }) => {
   await isolatePrefs(page)
   await healthyGitSync(page)
+  // These walk the person's own clicks: with `updates.auto` on (the fixture's default) the page
+  // would download and restart by itself (app-auto-update.spec.ts covers that).
+  await page.context().route('**/api/system/update', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    try {
+      const response = await route.fetch()
+      const json = await response.json() as { live?: Record<string, unknown> }
+      if (json.live) json.live = { ...json.live, updatesAuto: false }
+      await route.fulfill({ response, json })
+    } catch (e) {
+      if (!String(e).includes('has been closed')) throw e
+    }
+  })
   await page.context().route('**/api/system/desktop-update', (route) => {
     if (route.request().method() !== 'GET') return route.continue()
     return route.fulfill({ json: { available: false, token: null, version: null } })

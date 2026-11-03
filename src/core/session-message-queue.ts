@@ -46,6 +46,7 @@ import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-no
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 import { frameForSource } from './sessions/send-frame.js';
 import { replaceHintedText } from './hints/hint-format.js';
+import { noteUserActivity } from './self-update/idle-gate.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -223,6 +224,8 @@ export async function sendMessageToSession(
     hinted?: boolean;
   },
 ): Promise<QueuedMessage> {
+  // A person's own words: they are using Walnut, so a live update waits (idle-gate.ts).
+  if (queueSentBy(opts?.source) === 'person') noteUserActivity();
   const { bus, EventNames } = await import('./event-bus.js');
   // A session an engine switch replaced never takes a message: it goes to the
   // task's active session (sessions/engine-switch.ts).

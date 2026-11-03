@@ -101,16 +101,19 @@ export async function downloadVerified(url: string, dest: string, integrity: str
 /**
  * Copy one regular file out of a tar (ustar, with pax and GNU long names), by
  * positional reads: an npm tarball holds a few files, the one wanted is large.
+ * The reads never block: a running server installs the file live
+ * (live-update.ts), and copying ~100 MB in one synchronous loop would hold
+ * every route for that long.
  */
-export function extractTarEntry(tarPath: string, entry: string, outPath: string): void {
-  const fd = fs.openSync(tarPath, 'r')
+export async function extractTarEntry(tarPath: string, entry: string, outPath: string): Promise<void> {
+  const fh = await fs.promises.open(tarPath, 'r')
   try {
-    const size = fs.fstatSync(fd).size
+    const size = (await fh.stat()).size
     const header = Buffer.alloc(512)
     let offset = 0
     let longName: string | null = null
     while (offset + 512 <= size) {
-      fs.readSync(fd, header, 0, 512, offset)
+      await fh.read(header, 0, 512, offset)
       if (header.every((b) => b === 0)) break
       const field = (start: number, len: number) => header.subarray(start, start + len).toString('utf8').replace(/\0.*$/s, '')
       const bodySize = parseInt(field(124, 12).trim() || '0', 8)
@@ -121,31 +124,31 @@ export function extractTarEntry(tarPath: string, entry: string, outPath: string)
       const body = offset + 512
       if (type === 'x' || type === 'L') {
         const data = Buffer.alloc(bodySize)
-        fs.readSync(fd, data, 0, bodySize, body)
+        await fh.read(data, 0, bodySize, body)
         if (type === 'L') longName = data.toString('utf8').replace(/\0.*$/s, '')
         else {
           const m = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(data.toString('utf8'))
           if (m) longName = m[1]!
         }
       } else if ((type === '0' || type === '\0') && name === entry) {
-        const out = fs.openSync(outPath, 'w', 0o700)
+        const out = await fs.promises.open(outPath, 'w', 0o700)
         try {
           const chunk = Buffer.alloc(1 << 20)
           for (let done = 0; done < bodySize;) {
-            const n = fs.readSync(fd, chunk, 0, Math.min(chunk.length, bodySize - done), body + done)
+            const { bytesRead: n } = await fh.read(chunk, 0, Math.min(chunk.length, bodySize - done), body + done)
             if (n <= 0) throw new Error(`the tarball ends inside ${entry}`)
-            fs.writeSync(out, chunk, 0, n)
+            await out.write(chunk, 0, n)
             done += n
           }
         } finally {
-          fs.closeSync(out)
+          await out.close()
         }
         return
       }
       offset = body + Math.ceil(bodySize / 512) * 512
     }
   } finally {
-    fs.closeSync(fd)
+    await fh.close()
   }
   throw new Error(`the package holds no ${entry}`)
 }
@@ -349,7 +352,7 @@ export async function installFileVersion(opts: InstallFileOptions): Promise<Inst
     await pipeline(fs.createReadStream(tgz), zlib.createGunzip(), fs.createWriteStream(tar), { signal })
     fs.rmSync(tgz)
     const staged = path.join(work, 'walnut')
-    extractTarEntry(tar, PACKAGE_FILE, staged)
+    await extractTarEntry(tar, PACKAGE_FILE, staged)
     fs.rmSync(tar)
     fs.chmodSync(staged, 0o755)
     const printed = await versionOfFile(staged, VERSION_TIMEOUT_MS, signal)

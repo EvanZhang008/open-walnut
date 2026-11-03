@@ -15,6 +15,14 @@ import { binaryLinkOf, runsCompiled, type InstallInfo } from './install-kind.js'
 export const APPLIED_ENV = 'WALNUT_UPDATE_APPLIED'
 /** The file the restarted server writes once it listens (web.ts): it started, so its exit is no failure to start. */
 export const READY_FILE_ENV = 'WALNUT_STARTUP_READY_FILE'
+/**
+ * Set by a thin parent that loops (restart-supervisor.ts) on the child it starts:
+ * "exit with RESTART_EXIT_CODE and I start Walnut again". An older parent never
+ * sets it, so its child never hands it a code it would only exit with.
+ */
+export const RESTART_SUPERVISED_ENV = 'WALNUT_RESTART_SUPERVISED'
+/** A supervised server's exit that asks for a restart (EX_TEMPFAIL). */
+export const RESTART_EXIT_CODE = 75
 
 export interface ReexecResult {
   exitCode: number
@@ -55,7 +63,11 @@ export function relaunchArgv(install: Pick<InstallInfo, 'relaunch' | 'binary'> |
  * Run this install again (relaunchArgv) and stay alive as a thin parent:
  * signals are forwarded, and the result says whether it served first.
  */
-export function reexecSelf(env: Record<string, string | undefined>, install: InstallInfo | null = null): Promise<ReexecResult> {
+export function reexecSelf(
+  env: Record<string, string | undefined>,
+  install: InstallInfo | null = null,
+  o: { readyAlso?: string } = {},
+): Promise<ReexecResult> {
   return new Promise((resolve) => {
     const { file, args } = relaunchArgv(install)
     const ready = path.join(os.tmpdir(), `walnut-ready-${process.pid}-${crypto.randomBytes(4).toString('hex')}`)
@@ -63,6 +75,19 @@ export function reexecSelf(env: Record<string, string | undefined>, install: Ins
     let stopped = false
     let ended = false
     const child = spawn(file, args, { stdio: 'inherit', env: { ...env, [READY_FILE_ENV]: ready } })
+    // A parent above this one waits on its own ready file (an older thin parent above a
+    // supervisor): written once the child has listened, never before.
+    let passOn: ReturnType<typeof setInterval> | null = null
+    if (o.readyAlso) {
+      const target = o.readyAlso
+      passOn = setInterval(() => {
+        if (!fs.existsSync(ready)) return
+        try { fs.writeFileSync(target, `${process.pid}\n`) } catch { /* that parent then reads an exit as a failed start */ }
+        if (passOn) clearInterval(passOn)
+        passOn = null
+      }, 500)
+      passOn.unref?.()
+    }
     const forward = (signal: NodeJS.Signals) => () => {
       stopped = true
       if (child.exitCode === null && child.signalCode === null) child.kill(signal)
@@ -72,8 +97,10 @@ export function reexecSelf(env: Record<string, string | undefined>, install: Ins
     const finish = (exitCode: number) => {
       if (ended) return
       ended = true
+      if (passOn) clearInterval(passOn)
       for (const [sig, fn] of handlers) process.off(sig, fn)
       const served = fs.existsSync(ready)
+      if (served && o.readyAlso) { try { fs.writeFileSync(o.readyAlso, `${process.pid}\n`) } catch { /* as above */ } }
       fs.rmSync(ready, { force: true })
       resolve({ exitCode, served, stopped, ms: Date.now() - started })
     }

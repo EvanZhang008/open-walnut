@@ -9,6 +9,7 @@
  *   bun scripts/release-rehearsal/run.mjs --field latest --field-packs <dir>/field.json   (field-packs.mjs wrote it)
  *   bun scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
  *   BUN_BE_BUN=1 <walnut file> scripts/release-rehearsal/run.mjs --binary <walnut file>   (binary.mjs)
+ *   bun scripts/release-rehearsal/run.mjs --live <dir>/live.json [--live-video <dir>]   (live.mjs build wrote it)
  *
  * Scenarios (each isolated: own npm prefix, HOME, data, daemon; mock `claude`):
  *   install    `npm install -g` the tarball with the updater's --allow-scripts list;
@@ -39,6 +40,11 @@
  *              updated to the one after it; --archive: a built one, alone) the
  *              self-contained archive install.sh puts in place, run with no Node
  *              on PATH (runtime.mjs).
+ *   live*      (--live) the compiled file installed by install.sh, started from a
+ *              terminal, installs newer releases while it serves and restarts
+ *              into them when nobody uses it, on the same port, with its task,
+ *              history, daemon and CLI; SIGTERM ends the chain; a release that
+ *              fails to start is gone back from and held (live.mjs).
  *
  * CI runs it on Linux and macOS for every push (ci.yml, job `rehearsal`), so the
  * release only ever publishes code whose package has done all of this.
@@ -52,12 +58,13 @@ import { rehearseBinary } from './binary.mjs'
 import { FIELD_SCENARIOS, rehearseField } from './field.mjs'
 import { readFieldJson } from './field-packs.mjs'
 import { rehearseRuntime } from './runtime.mjs'
+import { rehearseLive } from './live.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
 import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, runtimePacks: null, archive: null, binary: null }
+  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, runtimePacks: null, archive: null, binary: null, live: null, liveVideo: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -76,9 +83,11 @@ function parseArgs(argv) {
     else if (a === '--runtime-packs') out.runtimePacks = path.resolve(argv[++i])
     else if (a === '--archive') out.archive = path.resolve(argv[++i])
     else if (a === '--binary') out.binary = path.resolve(argv[++i])
+    else if (a === '--live') out.live = path.resolve(argv[++i])
+    else if (a === '--live-video') out.liveVideo = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.current && !out.archive && !out.binary && !out.fieldPacks && !out.runtime && !out.runtimePacks) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--runtime --runtime-packs <field.json>] [--work <dir>] [--keep] | --runtime --runtime-packs <field.json> | --field latest --field-packs <field.json> | --archive <archive> | --binary <walnut file>')
+  if (!out.current && !out.archive && !out.binary && !out.live && !out.fieldPacks && !out.runtime && !out.runtimePacks) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--runtime --runtime-packs <field.json>] [--work <dir>] [--keep] | --runtime --runtime-packs <field.json> | --field latest --field-packs <field.json> | --archive <archive> | --binary <walnut file> | --live <live.json> [--live-video <dir>]')
   // A release's archive holds the launcher and its file (release-archives.yml), never a Node package of this commit.
   if (out.runtime && !out.runtimePacks) throw new Error('--runtime builds the archive from the launcher and platform packages field-packs.mjs builds: pass --runtime-packs <field.json>')
   if (out.runtimePacks && !out.runtime) throw new Error('--runtime-packs needs --runtime')
@@ -217,6 +226,13 @@ async function main() {
     process.stdout.write(`rehearsing ${path.basename(opts.binary)} in ${work}\n`)
     const expected = await rehearseBinary({ work, binary: opts.binary, scenario, walnuts })
     return finish(opts, work, path.basename(opts.binary), expected)
+  }
+  if (opts.live) {
+    process.stdout.write(`rehearsing the live update of ${opts.live} in ${work}\n`)
+    const video = opts.liveVideo ? { dir: opts.liveVideo } : null
+    const expected = await rehearseLive({ work, liveJson: opts.live, scenario, walnuts, video })
+    if (video?.result) process.stdout.write(`video: ${JSON.stringify(video.result.lines.filter((l) => l.done || l.ffmpeg))}\n`)
+    return finish(opts, work, 'live update', expected)
   }
   if (opts.archive) {
     process.stdout.write(`rehearsing ${path.basename(opts.archive)} in ${work}\n`)

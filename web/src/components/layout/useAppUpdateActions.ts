@@ -28,14 +28,17 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
 
-  const toastError = useCallback((title: string, body: string) => {
+  const toastError = useCallback((title: string, body: string, auto = false) => {
+    if (auto) { log.warn('app-update', 'automatic update step failed', { title, body }); return; }
     if (!lent) setError(body || title);
     else notify({ kind: 'operation-error', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
   }, []);
 
   /** `checked`: the update notice already looked at every window and asked (StaleBuildPill), so the
-   *  install goes ahead without the app's own sheet; `force` when the user chose to restart anyway. */
-  const run = useCallback(async (opts?: { checked?: boolean; force?: boolean }) => {
+   *  install goes ahead without the app's own sheet; `force` when the user chose to restart anyway.
+   *  `auto`: the page's own step (useAppAutoUpdate): no toast and no dialog, a failure is only logged,
+   *  because nobody asked and the notice still offers the step. */
+  const run = useCallback(async (opts?: { checked?: boolean; force?: boolean; auto?: boolean }) => {
     if (!state || inFlight.current || isAppUpdateButtonDisabled(state)) return;
     const action = resolveAppUpdateButtonAction(state);
     inFlight.current = true;
@@ -44,7 +47,9 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
     try {
       if (action === 'download') {
         const result = await appUpdateBridge.download();
-        if (result.completed) {
+        if (result.completed && opts?.auto) {
+          log.info('app-update', 'update downloaded by itself', { version: getAppUpdateDownloadedVersion(result.state) });
+        } else if (result.completed) {
           const version = getAppUpdateDownloadedVersion(result.state);
           notify({
             kind: 'hint', severity: 'success', persistent: false,
@@ -57,12 +62,12 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
             } : {}),
           });
         } else if (shouldToastAppUpdateActionResult(result)) {
-          toastError('Could not download update', getAppUpdateActionError(result) ?? '');
+          toastError('Could not download update', getAppUpdateActionError(result) ?? '', opts?.auto);
         }
       } else if (action === 'install' && opts?.checked) {
         const result = await appUpdateBridge.install(opts.force === true);
         if (shouldToastAppUpdateActionResult(result)) {
-          toastError('Could not install update', getAppUpdateActionError(result) ?? '');
+          toastError('Could not install update', getAppUpdateActionError(result) ?? '', opts.auto);
         }
       } else if (action === 'install') {
         if (hasUnsavedWork()) {
@@ -92,7 +97,7 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
       log.warn('app-update', 'update action failed', { action, error: String(err) });
       const title = action === 'install' ? 'Could not install update'
         : action === 'download' ? 'Could not start update download' : 'Could not check for updates';
-      toastError(title, err instanceof Error ? err.message : 'An unexpected error occurred.');
+      toastError(title, err instanceof Error ? err.message : 'An unexpected error occurred.', opts?.auto);
     } finally {
       inFlight.current = false;
       setPending(false);

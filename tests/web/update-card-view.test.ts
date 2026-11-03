@@ -31,6 +31,17 @@ describe('updateCardView', () => {
     expect(v.command).toBe('npm install -g open-walnut@latest');
   });
 
+  it('a server that installs and restarts itself (live, auto on, nothing held) says so; held or unable keeps the old notes', () => {
+    const idle = { ready: false, userIdleMs: null, turnsRunning: 0, waitingSince: null };
+    const live = { state: 'idle' as const, version: null, error: null, canInstall: true, held: null, updatesAuto: true, idle };
+    expect(updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true, live })).note)
+      .toBe('Installs itself in the background, then restarts once you have been away 10 minutes');
+    expect(updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true, live: { ...live, held: 'failed before' } })).note)
+      .toBe('Installs itself the next time open-walnut web starts, or run the command now');
+    expect(updateCardView(status({ latest: '0.6.0', available: true, live: { ...live, canInstall: false, updatesAuto: false, state: 'off' as const } })).note)
+      .toBe('Restart Walnut after installing');
+  });
+
   it('a Homebrew keg that updates itself keeps its own state, and adds the brew upgrade line in every state', () => {
     const brewHint = { note: 'Homebrew installed this copy, and it updates itself; brew upgrade open-walnut moves it to the compiled file (formula 0.6.0).', command: 'brew upgrade open-walnut' };
     const newer = updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true, brewHint }));

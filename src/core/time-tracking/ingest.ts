@@ -52,6 +52,7 @@ import { deadline } from './deadline.js';
 import { appendRecords, hydrate, recordTime } from './store.js';
 import { emitTimeBanked } from './presence-events.js';
 import type { TimeRecord, TimeSource } from './types.js';
+import { latestSampleEnd, noteUserActivity } from '../self-update/idle-gate.js';
 
 /** Session→task resolution is bounded: at most this many lookups per request. */
 const MAX_TASK_LOOKUPS = 20;
@@ -240,6 +241,8 @@ export async function bankHeartbeatSamples(
   try {
     const pairs = pairSamples(rawSamples, opts.defaultSource, opts.now ?? new Date());
     if (pairs.length === 0) return NOTHING;
+    // The phone's (and a relayed) window counts as the person's activity too (idle-gate.ts).
+    noteUserActivity(latestSampleEnd(pairs.map((p) => p.rec)) ?? Date.now());
 
     // Hydration FIRST, and before anything is claimed: the store parks records
     // written during its read, and a parked batch cannot report its own append

@@ -62,7 +62,7 @@ const EXEMPT = new Set([
  * own server), with the number of raw signal sites each may have.
  */
 const RAW_SIGNAL_BUDGET: Record<string, number> = {
-  'src/commands/web.ts': 1,                        // the ephemeral child it launched, on a failed launch
+  'src/commands/web-ephemeral.ts': 1,              // the ephemeral child it launched, on a failed launch
   'src/core/calendar/sources/eventkit.ts': 1,      // its own calendar-write helper's group, at the deadline
   'src/core/companion-build/box-smoke.ts': 1,      // the local daemon of the smoke server it launched (its daemon.pid, checked against its command line)
   'src/core/companion-build/box.ts': 1,            // ends itself so its launcher starts the trial build

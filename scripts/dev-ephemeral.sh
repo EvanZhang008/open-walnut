@@ -9,7 +9,7 @@
 #
 # The default stays the source build: the compiled file costs a minute of build
 # on top of the dist. Either way the launcher is the same code
-# (src/commands/web.ts runEphemeralLauncher), so the isolation is the same: its
+# (src/commands/web-ephemeral.ts runEphemeralLauncher), so the isolation is the same: its
 # own copy of the data, its own local daemon, the copied cron jobs paused, the
 # phone push tokens removed, no remote hosts unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1.
 # The file also unpacks its runtime tree (the web app, data files); that goes to

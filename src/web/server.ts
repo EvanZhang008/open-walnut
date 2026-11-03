@@ -2823,11 +2823,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
-  // The daily "is a newer open-walnut published?" check: armed after listen so its
+  // The "is a newer open-walnut published?" check (every 6 h): armed after listen so its
   // first call (20 s out) is clear of the boot fan-out. A source checkout, a
-  // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op.
+  // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op. The live
+  // update rides on it: install in the background, restart when idle, and every
+  // check and state change pushed to the windows as `system:update`.
   if (bootPolicy('update-check')) try {
     const { getUpdateChecker } = await import('../core/self-update/update-check.js')
+    const { startLiveUpdate } = await import('../core/self-update/live-update.js')
+    const { updateStatusForClient } = await import('../core/self-update/client-status.js')
+    await startLiveUpdate(() => {
+      void updateStatusForClient().then((status) => broadcastEvent('system:update', status)).catch(() => {})
+    })
     const checker = getUpdateChecker()
     let announced: string | null = null
     checker.onChecked((s) => {
@@ -6615,7 +6622,7 @@ function startPluginSyncPolling(): void {
 /**
  * Gracefully shut down the server.
  */
-export async function stopServer(): Promise<void> {
+export async function stopServer(opts: { dropConnections?: boolean } = {}): Promise<void> {
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()
@@ -6695,6 +6702,7 @@ export async function stopServer(): Promise<void> {
     notificationReconcileTimer = null
   }
   try {
+    ;(await import('../core/self-update/live-update.js')).stopLiveUpdate()
     const { resetUpdateChecker } = await import('../core/self-update/update-check.js')
     resetUpdateChecker()
   } catch { /* best-effort */ }
@@ -7016,11 +7024,15 @@ export async function stopServer(): Promise<void> {
   try {
     if (httpServer) {
       await new Promise<void>((resolve, reject) => {
-        httpServer!.close((err) => {
+        const closing = httpServer!
+        closing.close((err) => {
           httpServer = null
           if (err) reject(err)
           else resolve()
         })
+        // A restart into an update keeps this process (web-restart.ts): an open window's
+        // keep-alive socket would hold the port past the bail, so they go now.
+        if (opts.dropConnections) closing.closeAllConnections?.()
       })
     }
   } finally {

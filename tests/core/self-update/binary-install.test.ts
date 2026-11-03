@@ -374,7 +374,7 @@ describe('the layout helpers', () => {
     expect(fs.readdirSync(root)).toEqual([])
   })
 
-  it('takes the one file out of a tarball with long names and pax headers', () => {
+  it('takes the one file out of a tarball with long names and pax headers', async () => {
     const dir = fs.mkdtempSync(path.join(scratch, 'tar-'))
     const deep = path.join(dir, 'package', 'a'.repeat(60), 'b'.repeat(60))
     fs.mkdirSync(deep, { recursive: true })
@@ -382,10 +382,10 @@ describe('the layout helpers', () => {
     fs.writeFileSync(path.join(dir, 'package', 'walnut'), 'the file é')
     const tar = path.join(dir, 'p.tar')
     execFileSync('tar', ['-cf', tar, '-C', dir, 'package'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
-    extractTarEntry(tar, `package/${'a'.repeat(60)}/${'b'.repeat(60)}/x.txt`, path.join(dir, 'out1'))
+    await extractTarEntry(tar, `package/${'a'.repeat(60)}/${'b'.repeat(60)}/x.txt`, path.join(dir, 'out1'))
     expect(fs.readFileSync(path.join(dir, 'out1'), 'utf8')).toBe('deep')
-    extractTarEntry(tar, 'package/walnut', path.join(dir, 'out2'))
+    await extractTarEntry(tar, 'package/walnut', path.join(dir, 'out2'))
     expect(fs.readFileSync(path.join(dir, 'out2'), 'utf8')).toBe('the file é')
-    expect(() => extractTarEntry(tar, 'package/missing', path.join(dir, 'out3'))).toThrow('holds no package/missing')
+    await expect(extractTarEntry(tar, 'package/missing', path.join(dir, 'out3'))).rejects.toThrow('holds no package/missing')
   })
 })

@@ -48,6 +48,7 @@ import { startCallsCollector, stopCallsCollector } from '../../core/time-trackin
 import { recordLeaseDetails, startSentMarkers, stopSentMarkers } from '../../core/time-tracking/detail-store.js';
 import { MAX_SAMPLES_PER_REQUEST, sampleDetail, sanitizeSample } from '../../core/time-tracking/rollup.js';
 import { noteWalnutHost, walnutHostsFor } from '../../core/time-tracking/walnut-hosts.js';
+import { latestSampleEnd, noteUserActivity } from '../../core/self-update/idle-gate.js';
 import { taskTimeRouter } from './time-task.js';
 import { timeReportRouter } from './time-report.js';
 import { timeTimelineRouter } from './time-timeline.js';
@@ -137,6 +138,8 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
       res.status(204).end();
       return;
     }
+    // The person had Walnut in front of them: a live update waits (idle-gate.ts).
+    noteUserActivity(latestSampleEnd(records) ?? Date.now());
     // The client sends sessionId for a session panel and lets the server own the
     // session→task mapping (the panel DOM carries no task id, and the client
     // must not be the authority on it). Shared with the v1 (phone) path so the

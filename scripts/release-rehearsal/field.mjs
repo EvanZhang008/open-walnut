@@ -198,10 +198,12 @@ async function expectServing(w, version, { archive = false } = {}) {
   if (install?.kind !== 'npm' || install?.manager !== 'npm' || !Array.isArray(install?.relaunch)) {
     throw new Error(`the release sees its install as ${JSON.stringify(install)}, not the npm launcher's`)
   }
+  // The release under test updates itself while it serves too (live-update.ts): its status says how.
+  if (typeof update.json?.live?.state !== 'string') throw new Error(`the release's /api/system/update has no live state: ${JSON.stringify(update.json?.live)}`)
   if (archive && (!install.runtimePrefix || install.updateCommand !== 'walnut update')) {
     throw new Error(`the release does not see the archive it runs in: ${JSON.stringify(install)}`)
   }
-  return { root, file: path.join(root, 'node_modules/@open-walnut', hostTarget(), 'walnut'), platforms }
+  return { root, file: path.join(root, 'node_modules/@open-walnut', hostTarget(), 'walnut'), platforms, live: update.json.live }
 }
 
 /** Run `file args` with the install's env to its end; output into the Walnut's dir. */
@@ -401,20 +403,20 @@ async function updateInUse(w, from, field, registry, upstream) {
   registry.setDistTags(tags(field.release.version))
   await w.start({ timeoutMs: 900_000 })
   expectStartupUpdate(w, from.version, field.release.version)
-  const { file } = await expectServing(w, field.release.version)
+  const { file, live } = await expectServing(w, field.release.version)
   await expectWorkKept(w, done, field.release.version, 3)
   const daemon = expectDaemonUpdated(w, done, file)
   const title = `rehearsal task ${nonce()} (written by ${field.release.version})`
   const made = await w.api('POST', '/api/v1/tasks', { title })
   if (made.status !== 201 || !made.json?.task?.id) throw new Error(`POST /api/v1/tasks under ${field.release.version} answered ${made.status} ${made.text.slice(0, 300)}`)
   done.tasks.push([made.json.task.id, title])
-  return { done, file, daemon }
+  return { done, file, daemon, live }
 }
 
 async function inUse({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
     const w = walnutFor(work, `field-work-${from.version}`, registry, walnuts, { WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS })
-    const { done, file, daemon } = await updateInUse(w, from, field, registry, opts.upstream)
+    const { done, file, daemon, live } = await updateInUse(w, from, field, registry, opts.upstream)
     await w.stop()
     const sqlite = checkSqlite(file, done.dbs.map((d) => path.join(w.walnutHome, d)), w.env)
     const bad = Object.entries(sqlite).filter(([, r]) => r.check !== 'ok' || r.wrote !== 1)
@@ -433,7 +435,7 @@ async function inUse({ from, field, work, walnuts, opts }) {
       await expectServing(w, field.release.version)
     }
     await w.shutdown()
-    return `${from.version} -> ${field.release.version}: task, history, session kept (third message); ${daemon}; ${done.dbs.length} SQLite files of ${from.version} check ok and take a write under bun:sqlite (${done.dbs.join(', ') || 'none'})${after}`
+    return `${from.version} -> ${field.release.version}: task, history, session kept (third message); live ${live.state} (canInstall ${live.canInstall}); ${daemon}; ${done.dbs.length} SQLite files of ${from.version} check ok and take a write under bun:sqlite (${done.dbs.join(', ') || 'none'})${after}`
   })
 }
 

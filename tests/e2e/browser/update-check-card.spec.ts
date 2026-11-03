@@ -181,7 +181,7 @@ test('UC-7: with update-on-start on, the card says the next start installs it (t
   await c.screenshot({ path: `${SHOTS}/uc7-auto-on.png` })
 })
 
-test('UC-8: Settings > General shows "Install updates on start" for an npm install, saves both states, and hides it on a source checkout', async ({ page, request }) => {
+test('UC-8: Settings > General shows "Update Walnut automatically" for an npm install, saves both states, and hides it on a source checkout', async ({ page, request }) => {
   await routeUpdate(page, CURRENT)
   await loadApp(page, '/settings')
   await page.getByTestId('settings-nav-general').click()
@@ -222,7 +222,8 @@ test('UC-10: the installed file updates itself like npm (row shown, walnut updat
   await page.getByTestId('settings-nav-general').click()
   const row = page.getByTestId('settings-updates-auto-row')
   await expect(row).toBeVisible({ timeout: 20_000 })
-  await expect(row).toContainText('Installs a newer release when open-walnut web starts.')
+  await expect(row).toContainText('Update Walnut automatically')
+  await expect(row).toContainText('Installs new releases in the background and restarts Walnut once you have been away 10 minutes.')
   await expect(row.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByTestId('settings-build-line-update')).toHaveAttribute('title', 'Update with: walnut update')
   await row.screenshot({ path: `${SHOTS}/uc10-binary-row.png` })

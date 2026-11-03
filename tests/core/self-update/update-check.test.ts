@@ -1,5 +1,5 @@
 /**
- * The update checker: one registry GET, cached in memory, scheduled daily.
+ * The update checker: one registry GET, cached in memory, scheduled every 6 hours.
  *
  * Pinned here: when it refuses to run (source, replica, opt-out, tests, an
  * unknown version), what a success / a failure / a timeout do to the status,
@@ -245,7 +245,8 @@ describe('UpdateChecker', () => {
     expect(opted.status().reason).toBe('opted-out')
   })
 
-  it('schedules the first check 20 s out, then daily; an hour after a failure; stop() disarms', async () => {
+  it('schedules the first check 20 s out, then every 6 hours; an hour after a failure; stop() disarms', async () => {
+    expect(UPDATE_CHECK_INTERVAL_MS).toBe(6 * 60 * 60 * 1000)
     const { checker, r, t } = make('0.6.0')
     checker.start()
     checker.start()

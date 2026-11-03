@@ -129,44 +129,39 @@ systemRouter.post('/desktop-update/restart', async (req, res) => {
 /** The registry call is 5 s; this is the route's own ceiling so a stalled socket never pins a request. */
 const UPDATE_CHECK_DEADLINE_MS = 8_000
 
-/**
- * The status plus whether `open-walnut web` installs updates on start (config `updates.auto`),
- * for the card's wording. Only an npm or binary install updates itself; Homebrew and source never do.
- * An install this server's user cannot write (a root-owned npm prefix, installed with
- * `sudo npm i -g`, or a compiled file's root) does not either, and its command is the
- * sudo one the start names.
- */
-async function updateStatusForClient() {
-  const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
-  const { autoUpdateEnabled, installWritable } = await import('../../core/self-update/startup-update.js')
-  const { notWritableFix } = await import('../../core/self-update/install-kind.js')
-  let configAuto: boolean | undefined
-  try { configAuto = (await getConfig()).updates?.auto } catch { /* default */ }
-  const status = getUpdateChecker().status()
-  const selfUpdates = status.install.kind === 'npm' || status.install.kind === 'binary'
-  // A 0.6.x Homebrew keg that updates itself: the way to the compiled file, when brew takes nothing back.
-  let brewHint: { note: string; command: string } | null = null
-  if (status.install.homebrewKeg) {
-    const { brewUpgradeHint } = await import('../../core/self-update/homebrew-keg.js')
-    const hint = await brewUpgradeHint(status.install.homebrewKeg, status.current).catch(() => null)
-    if (hint) brewHint = { note: hint.note, command: hint.command }
-  }
-  // Installed after this server started (the startup update outlived its budget): a restart runs it.
-  const { installedInBackground } = await import('../../core/self-update/background-install.js')
-  const installed = installedInBackground()
-  const writable = !selfUpdates || installWritable(status.install)
-  // Every kind that updates itself: an unwritable compiled file's `walnut update` only exits 1.
-  const install = !writable ? { ...status.install, updateCommand: notWritableFix(status.install) } : status.install
-  return {
-    ...status, install, autoUpdate: selfUpdates && writable && autoUpdateEnabled(configAuto, process.env),
-    ...(brewHint ? { brewHint } : {}), ...(installed ? { installed } : {}),
-  }
-}
+const updateStatusForClient = async (o: { freshTurns?: boolean } = {}) =>
+  (await import('../../core/self-update/client-status.js')).updateStatusForClient(o)
 
-// GET /api/system/update: the cached answer, never a network call.
+// GET /api/system/update: the cached answer, never a network call. The live
+// update's idle gate counts the running turns now (bounded), so the Mac app's
+// page restarts its shell on a current answer.
 systemRouter.get('/update', async (_req, res) => {
-  res.json(await updateStatusForClient())
+  res.json(await updateStatusForClient({ freshTurns: true }))
 })
+
+// POST /api/system/update/install {}: install `latest` now (also with updates.auto
+// off or a held version: the person asked) and restart as soon as it is in.
+// POST /api/system/update/restart {}: restart into the version already installed.
+// Person actions; a session may ask too (agent parity), logged with its id.
+for (const action of ['install', 'restart'] as const) {
+  systemRouter.post(`/update/${action}`, async (req, res) => {
+    const { getLiveUpdater } = await import('../../core/self-update/live-update.js')
+    const caller = req.get('x-walnut-caller-sid') ?? null
+    // A test run (a browser under automation on the real Walnut) never replaces or restarts it.
+    const testRun = (await import('../../core/test-run.js')).ambientTestRun()
+    if (testRun) { res.status(409).json({ error: 'test_run', message: 'A test run does not install or restart this Walnut.' }); return }
+    log.web.info(`update: ${action} asked`, { caller })
+    const updater = getLiveUpdater()
+    const answer = updater
+      ? (action === 'install' ? updater.installNow(caller) : updater.restartNow('asked', caller))
+      : { ok: false as const, code: action === 'install' ? 'cannot_install' as const : 'no_restart' as const, fix: null }
+    const status = await updateStatusForClient()
+    if (answer.ok) { res.status(202).json(status); return }
+    // The client's command: for an install this user cannot write it is the sudo one.
+    const fix = answer.code === 'cannot_install' ? (status.install.updateCommand ?? answer.fix ?? null) : undefined
+    res.status(409).json({ error: answer.code, ...(fix !== undefined ? { fix } : {}), status })
+  })
+}
 
 // POST /api/system/update/check: ask the registry now (the card's "Check now",
 // `walnut update --check`). 202 with the stored status when the check outran the deadline.

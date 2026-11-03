@@ -129,8 +129,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const navigate = useNavigate();
   const indexStatus = useSearchIndexStatus(open, section === 'system');
-  // Fetched once per open, like the index status: the System rail wears a quiet
-  // accent dot (not the amber one) when a newer Open Walnut is published.
+  // The shared live copy (read at app start, pushed over WS), read again on open: the
+  // System rail wears a quiet accent dot (not the amber one) when a newer Open Walnut is published.
   const update = useUpdateStatus(open);
   const hasUpdate = updateAvailable(update.status);
 

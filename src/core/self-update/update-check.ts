@@ -6,9 +6,11 @@
  * the registry's `/latest` document and print the install command):
  *
  *   - ONE small GET of the package's dist-tags (`latest`, `nightly`), 5 s
- *     deadline, 20 s after listen (never in the boot fan-out) and then daily. A
- *     failure keeps the last good answer and retries in an hour. In memory only:
- *     the server is long-lived, and a restart re-asks once.
+ *     deadline, 20 s after listen (never in the boot fan-out) and then every
+ *     6 hours (a running server installs a release by itself, live-update.ts, so
+ *     it should hear of one the same day). A failure keeps the last good answer
+ *     and retries in an hour. In memory only: the server is long-lived, and a
+ *     restart re-asks once.
  *   - Two channels, read off the installed version: `x.y.z-nightly.*` follows
  *     the `nightly` tag (main, published on a schedule), anything else follows
  *     `latest` (a tagged release). The update command names the same tag.
@@ -43,7 +45,7 @@ export function channelOf(version: string): UpdateChannel {
 }
 export const REGISTRY_TIMEOUT_MS = 5_000
 export const FIRST_CHECK_DELAY_MS = 20_000
-export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 export const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000
 
 export type UpdateCheckDisabledReason = 'source' | 'replica' | 'opted-out' | 'test' | 'unknown-version'
@@ -186,7 +188,8 @@ export class UpdateChecker {
     this.inflight = this.run().then(() => {
       this.inflight = null
       const status = this.status()
-      for (const fn of this.listeners) {
+      const all = this === shared ? [...this.listeners, ...sharedListeners] : [...this.listeners]
+      for (const fn of all) {
         try { fn(status) } catch { /* a listener's failure is its own */ }
       }
       return status
@@ -211,7 +214,7 @@ export class UpdateChecker {
     return () => { this.listeners.delete(fn) }
   }
 
-  /** Arm the schedule: first check after a delay, then daily (hourly after a failure). Idempotent. */
+  /** Arm the schedule: first check after a delay, then every UPDATE_CHECK_INTERVAL_MS (hourly after a failure). Idempotent. */
   start(): void {
     if (this.started || this.disabled) return
     this.started = true
@@ -236,6 +239,17 @@ export class UpdateChecker {
 }
 
 let shared: UpdateChecker | null = null
+/**
+ * Told after every check of whichever checker is the shared one right now, so a
+ * listener outlives a checker a test swaps in (live-update.ts).
+ */
+const sharedListeners = new Set<(status: UpdateStatus) => void>()
+
+/** Listen to every check of the process-wide checker; returns the unsubscribe. */
+export function onSharedChecked(fn: (status: UpdateStatus) => void): () => void {
+  sharedListeners.add(fn)
+  return () => { sharedListeners.delete(fn) }
+}
 
 /** The process-wide checker (the server starts it after listen; routes and the CLI read it). */
 export function getUpdateChecker(): UpdateChecker {
