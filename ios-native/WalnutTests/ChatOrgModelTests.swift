@@ -57,9 +57,9 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(readOnly.state, .needs)
         let old = try XCTUnwrap(rows(#"{"open":4,"running":0,"needsYou":1,"waiting":3}"#).first { $0.kind == .vp })
         XCTAssertEqual(old.needs, 1)
-        // The CEO's line sums the VP rows: To read once, never twice.
+        // The CEO's line counts its threads, never the teams' asks (they are in its Tasks).
         let ceo = try XCTUnwrap(rows(#"{"open":4,"running":0,"needsYou":1,"toRead":2,"waiting":1}"#).first { $0.kind == .ceo })
-        XCTAssertTrue(ceo.line.contains("3 need you"), ceo.line)
+        XCTAssertEqual(ceo.line, "0 threads · 1 VP")
     }
 
     func testDecodesTheLiveShape() throws {
@@ -87,8 +87,10 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.project.isEmpty && $0.kind == .vp })
     }
 
-    /// By the user's status: Needs you, then Working, then Waiting; the VP itself counts once
-    /// on its own row (the task list's `user_status` wins over the tree's phase).
+    /// A VP's own row is red only for its threads (2026-11-03, the user: "the little red should be
+    /// thread instead of need u ... even if no thread, show 0 thread"): its tasks' asks stay
+    /// counted (`needs`, the VP itself once, the task list's `user_status` over the tree's phase)
+    /// but its state is Working or Waiting and its badge is "0" threads.
     func testStatesAndBadgesFollowTheUserStatus() throws {
         let tasks = [
             task("lead-m", phase: "NEED_ACTION", user: "needs"),
@@ -97,19 +99,21 @@ final class ChatOrgModelTests: XCTestCase {
         ]
         let rows = ChatOrgModel.rows(tree: try tree(), tasks: tasks)
         let by = Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0) })
-        XCTAssertEqual(by["Marina"]?.state, .needs)
+        XCTAssertEqual(by["Marina"]?.state, .waiting)
         XCTAssertEqual(by["Marina"]?.needs, 4) // 3 in Dock Team + the VP itself
-        XCTAssertEqual(by["Personal"]?.state, .needs)
+        XCTAssertEqual(by["Marina"]?.threadsBadge, 0)
+        XCTAssertEqual(by["Personal"]?.state, .waiting)
         XCTAssertEqual(by["Personal"]?.needs, 1) // its stored status says waiting
-        XCTAssertEqual(by["Walnut"]?.state, .needs)
+        XCTAssertEqual(by["Walnut"]?.state, .working)
         XCTAssertEqual(by["Walnut"]?.working, 9)
+        XCTAssertEqual(by["Walnut"]?.line, "Working")
         XCTAssertEqual(by["Ops"]?.state, .waiting)
         XCTAssertEqual(by["Ops"]?.line, "Nothing open")
         // The CEO waits itself, and works while any team works.
         XCTAssertEqual(by["CEO"]?.state, .working)
         XCTAssertEqual(by["CEO"]?.needs, 0)
-        // The VP rows' needs (4 + 1 + 3): the line adds up to the rows under it, the Inbox has none.
-        XCTAssertEqual(by["CEO"]?.line, "4 VPs · 9 working · 8 need you")
+        XCTAssertEqual(by["CEO"]?.threadsBadge, 0)
+        XCTAssertEqual(by["CEO"]?.line, "0 threads · 4 VPs · 9 working")
     }
 
     func testWithoutTheTaskListTheTreePhaseDecides() throws {
@@ -161,7 +165,9 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(rows[1].state, .working)
         // No "N open" count on a row (the web dropped it from the node header, 2026-11-03).
         XCTAssertEqual(rows[1].line, "Working")
-        XCTAssertEqual(rows[0].line, "1 VP · 1 working")
+        XCTAssertEqual(rows[0].line, "0 threads · 1 VP · 1 working")
+        // A project with no VP of its own keeps its tasks' badge.
+        XCTAssertNil(rows[1].threadsBadge)
     }
 
     private func node(_ id: String, phase: String = "IN_PROGRESS", status: WalnutUserStatus) -> WalnutTask {
@@ -214,9 +220,7 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(row.userStatus?.threads?.title, "Plan the trip")
     }
 
-    /// A VP's own Threads lead its row while one waits on him, or while no task asks him
-    /// anything; the badge adds the ones waiting on him to its tasks' asks, and the VP's
-    /// thread-sourced Needs you is those threads, not one more ask.
+    /// A VP's own Threads lead its row and are its badge and its red, whatever its tasks ask.
     func testAVPRowShowsItsThreadsFirstAndCountsThemOnce() throws {
         let tasks = [
             node("lead-p", status: threadNeeds("Pick a host", shown: 2, needs: 1)),
@@ -225,28 +229,27 @@ final class ChatOrgModelTests: XCTestCase {
         ]
         let rows = ChatOrgModel.rows(tree: try tree(), tasks: tasks)
         let by = Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0) })
-        // One waits on him: the thread line, though a task under Personal asks too.
         let personal = try XCTUnwrap(by["Personal"])
         XCTAssertEqual(personal.line, "2 threads: Pick a host")
-        // 1 thread waiting on him + 1 task under Personal; the VP itself is not counted again.
-        XCTAssertEqual(personal.needs, 2)
+        XCTAssertEqual(personal.threadsBadge, 2)
         XCTAssertEqual(personal.state, .needs)
         XCTAssertEqual(personal.threads?.needs, 1)
-        // Threads that only show answers never hide a task's ask: Walnut's 3 asks keep its line.
+        // Threads that show answers are his to read too: Walnut's row leads with them.
         let walnut = try XCTUnwrap(by["Walnut"])
-        XCTAssertEqual(walnut.line, "Needs you")
-        XCTAssertEqual(walnut.needs, 3)
-        XCTAssertEqual(walnut.threads?.shown, 3)
-        // Nothing else asks him: the thread line, no badge.
+        XCTAssertEqual(walnut.line, "3 threads: Rename the app")
+        XCTAssertEqual(walnut.threadsBadge, 3)
+        XCTAssertEqual(walnut.state, .needs)
         let ops = try XCTUnwrap(by["Ops"])
         XCTAssertEqual(ops.line, "1 thread: Plan the trip")
-        XCTAssertEqual(ops.needs, 0)
-        XCTAssertEqual(ops.state, .waiting)
+        XCTAssertEqual(ops.threadsBadge, 1)
+        XCTAssertEqual(ops.state, .needs)
+        // Marina has none: "0", not red, though its tasks ask.
+        XCTAssertEqual(by["Marina"]?.threadsBadge, 0)
+        XCTAssertNotEqual(by["Marina"]?.state, .needs)
         // A project led by another VP never shows that VP's threads on a row of its own.
         XCTAssertFalse(rows.contains { $0.name == "Garden" })
-        // The CEO counts only the tasks' asks under the VPs, never their threads:
-        // Marina 4 (by the tree's phase) + Personal 1 + Walnut 3.
-        XCTAssertEqual(by["CEO"]?.line, "4 VPs · 9 working · 8 need you")
+        // The CEO's line counts its own threads only.
+        XCTAssertEqual(by["CEO"]?.line, "0 threads · 4 VPs · 9 working")
         // A count of zero threads is no threads.
         XCTAssertNil(ChatOrgModel.threadsOf("lead-x", tasks: ["lead-x": node("lead-x", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts()))]))
     }
@@ -266,35 +269,36 @@ final class ChatOrgModelTests: XCTestCase {
         let ops = try XCTUnwrap(by["Ops"])
         XCTAssertEqual(ops.line, "1 thread: Watch list")
         XCTAssertTrue(ops.linePinned)
-        // A task's ask holds Walnut's line: the pin is not on it.
-        XCTAssertEqual(by["Walnut"]?.line, "Needs you")
-        XCTAssertEqual(by["Walnut"]?.linePinned, false)
-        // The CEO's line names a thread only while one waits on him.
-        XCTAssertEqual(by["CEO"]?.linePinned, false)
+        // A VP's own threads lead its line over its tasks' asks, the pin with them.
+        XCTAssertEqual(by["Walnut"]?.line, "1 thread: Rename")
+        XCTAssertEqual(by["Walnut"]?.linePinned, true)
+        // The CEO's line names its newest thread, so its pin shows there too.
+        XCTAssertEqual(by["CEO"]?.linePinned, true)
         XCTAssertTrue(ChatDrawerOrgList.accessibilityText(ops).contains("pinned, 1 thread: Watch list"))
     }
 
-    /// The CEO's own Threads lead its line; one waiting on him names itself there and is its
-    /// badge, never counted twice with the status it gives Main.
+    /// The CEO's own Threads lead its line (the newest named) and are its badge; none is "0 threads".
     func testTheCEOLineStartsWithItsThreads() throws {
         let shownOnly = ChatOrgModel.rows(tree: try tree(), tasks: [
             node("main-1", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 2, needs: 0, title: "Weekly plan"))),
         ])[0]
         XCTAssertEqual(shownOnly.kind, .ceo)
-        XCTAssertEqual(shownOnly.line, "2 threads · 4 VPs · 9 working · 9 need you")
-        XCTAssertEqual(shownOnly.needs, 0)
-        XCTAssertEqual(shownOnly.state, .working)
+        XCTAssertEqual(shownOnly.line, "2 threads: Weekly plan · 4 VPs · 9 working")
+        XCTAssertEqual(shownOnly.threadsBadge, 2)
+        XCTAssertEqual(shownOnly.state, .needs)
 
         let waiting = ChatOrgModel.rows(tree: try tree(), tasks: [
             node("main-1", status: threadNeeds("Approve the budget", shown: 3, needs: 2)),
         ])[0]
-        XCTAssertEqual(waiting.line, "3 threads: Approve the budget · 4 VPs · 9 working · 9 need you")
-        XCTAssertEqual(waiting.needs, 2)
+        XCTAssertEqual(waiting.line, "3 threads: Approve the budget · 4 VPs · 9 working")
+        XCTAssertEqual(waiting.threadsBadge, 3)
         XCTAssertEqual(waiting.state, .needs)
 
-        // An older server: no threads, the line and badge as before.
+        // No threads (or an older server): "0 threads", grey.
         let old = ChatOrgModel.rows(tree: try tree(), tasks: [node("main-1", status: WalnutUserStatus(state: "waiting"))])[0]
-        XCTAssertEqual(old.line, "4 VPs · 9 working · 9 need you")
+        XCTAssertEqual(old.line, "0 threads · 4 VPs · 9 working")
+        XCTAssertEqual(old.threadsBadge, 0)
+        XCTAssertEqual(old.state, .working)
         XCTAssertNil(old.threads)
     }
 
@@ -346,5 +350,10 @@ final class ChatOrgModelTests: XCTestCase {
             id: "project:marina", kind: .vp, name: "Marina", contactId: "x", project: "Marina",
             state: .needs, needs: 2, working: 0, open: 5, ledProjects: ["Garden"], line: "1 thread: Pick a host"
         )), "Marina, VP, also leads Garden, 1 thread: Pick a host, 2 need you")
+        // A node's own row says its threads, 0 included.
+        XCTAssertEqual(ChatDrawerOrgList.accessibilityText(ChatOrgModel.Row(
+            id: "project:ops", kind: .vp, name: "Ops", contactId: "x", project: "Operations",
+            state: .waiting, needs: 2, working: 0, open: 5, ledProjects: [], line: "Waiting", threadsBadge: 0
+        )), "Ops, VP, Waiting, 0 threads")
     }
 }

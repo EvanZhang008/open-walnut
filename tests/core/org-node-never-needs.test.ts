@@ -7,9 +7,10 @@
  * derivation is the one place to hold it. Guard: the org roles are read from the source, so a new
  * role fails here until it is covered.
  *
- * The one exception (2026-11-03, the user, on a VP whose header read "1 To read" while a thread
- * waited on his pick: "this here should show need action ... all place consistent"): a Thread of his
- * own waiting on him makes the node itself Needs you, named by that thread, whatever else it does.
+ * His own requests to a node are its Threads, and a thread waiting on him is no exception: the node
+ * carries the counts and the Org page shows them as threads (2026-11-03, the user, after a thread
+ * had made every VP read Needs you on each surface: "All replaced to Need Action which is the same
+ * as the task status, is this right?"; before that: "thread is better than need u").
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -76,25 +77,31 @@ describe('no org node is ever Needs you', () => {
   })
 })
 
-describe('a Thread waiting on him is the node\'s one Needs you', () => {
+describe('a Thread waiting on him is shown as threads, never as the node\'s Needs you', () => {
   const threads = { shown: 2, needs: 1, title: 'Pick a header design', id: 'th-1' }
   const base: Partial<UserStatusInput> = { hasSession: true, phaseChangedAt: at, phase: 'IN_PROGRESS', processStatus: 'idle' }
 
-  it('every org role, whatever it is doing, reads Needs you with the thread as its ask', () => {
+  it('every org role, whatever it is doing, carries the counts and is never Needs you', () => {
     for (const role of roles()) {
       for (const facts of [{}, { processStatus: 'running' }, ...Object.values(ASKING)]) {
         const s = deriveUserStatus({ ...base, ...facts, ...flags(role), threads }, NOW)
-        expect(s, `${role} ${JSON.stringify(facts)}`).toMatchObject({ state: 'needs', source: 'thread', ask: 'Pick a header design', threads, category: 'decide' })
+        expect(s.state, `${role} ${JSON.stringify(facts)}`).not.toBe('needs')
+        expect(s.source).not.toBe('thread')
+        expect(s.threads).toEqual(threads)
       }
     }
   })
 
-  it('several waiting say how many more', () => {
-    const s = deriveUserStatus({ ...base, isLead: true, threads: { ...threads, needs: 3 } }, NOW)
-    expect(s.ask).toBe('Pick a header design (and 2 more)')
+  it('the thread is not its ask or its wait: those stay the node\'s own, so a new thread is no status move', () => {
+    const one = deriveUserStatus({ ...base, isLead: true, threads }, NOW)
+    const other = deriveUserStatus({ ...base, isLead: true, threads: { ...threads, needs: 3, title: 'Another pick' } }, NOW)
+    expect(one.waitingOn).toBe(other.waitingOn)
+    // The title rides only in its threads count, never in the node's own words.
+    const { threads: _counts, ...own } = one
+    expect(JSON.stringify(own)).not.toContain('Pick a header design')
   })
 
-  it('threads that only show an answer keep the node as it was, carrying the counts', () => {
+  it('threads that only show an answer carry the counts the same way', () => {
     const shown = { shown: 1, needs: 0, title: 'What changed', id: 'th-2' }
     for (const role of roles()) {
       const s = deriveUserStatus({ ...base, ...ASKING.letter, ...flags(role), threads: shown }, NOW)
@@ -104,12 +111,13 @@ describe('a Thread waiting on him is the node\'s one Needs you', () => {
   })
 
   it('an individual task never reads threads, and a done node stays done', () => {
-    expect(deriveUserStatus({ ...base, threads }, NOW).source).not.toBe('thread')
+    expect(deriveUserStatus({ ...base, threads }, NOW).threads).toBeUndefined()
     expect(deriveUserStatus({ ...base, isMain: true, phase: 'COMPLETE', threads }, NOW).state).toBe('done')
   })
 
-  it('a snoozed node sleeps under Waiting with the thread held back', () => {
+  it('a snoozed node sleeps under Waiting, its threads still counted', () => {
     const s = deriveUserStatus({ ...base, isLead: true, threads, snoozedUntil: '2026-11-06' }, NOW)
     expect(s.state).toBe('waiting')
+    expect(s.threads).toEqual(threads)
   })
 })

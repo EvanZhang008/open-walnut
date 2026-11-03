@@ -104,16 +104,18 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('the sidebar opens Main and the leads; a lead waiting on the user comes first', async ({ page }) => {
+test('the sidebar opens Main and the leads; a lead\'s red is its threads, its tasks\' asks are in its Tasks', async ({ page }) => {
   await openOrg(page)
   await expect(page.getByTestId('org-channel-main')).toBeVisible()
+  // The CEO's and a VP's own row count their threads, "0" in grey (2026-11-03, the user: "the
+  // little red should be thread instead of need u ... even if no thread, show 0 thread").
+  await expect(page.getByTestId('org-channel-main').getByTestId('org-channel-badge')).toHaveAttribute('title', /^\d+ threads?$/)
   const alpha = row(page, ALPHA)
-  await expect(alpha).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
-  await expect(alpha.getByTestId('org-channel-badge')).toHaveText('1')
-  await expect(alpha.getByTestId('org-channel-latest')).toHaveText(`Asks you: Alpha ask ${STAMP}`)
-  // Needs you sorts above quiet work.
-  const keys = await page.getByTestId('org-channel').evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
-  expect(keys.indexOf(rowKey(ALPHA))).toBeLessThan(keys.indexOf(rowKey(BETA)))
+  await expect(alpha.getByTestId('org-channel-latest')).toHaveText(`Asks you: Alpha ask ${STAMP}`, { timeout: 30_000 })
+  await expect(alpha.getByTestId('org-channel-badge')).toHaveText('0')
+  await expect(alpha.getByTestId('org-channel-badge')).toHaveClass(/is-none/)
+  await expect(alpha.getByTestId('org-channel-badge')).toHaveAttribute('title', '0 threads')
+  await expect(alpha).not.toHaveAttribute('data-state', 'alert')
 
   await alpha.click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
@@ -121,10 +123,13 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
   // No "N open" pill (2026-11-03, the user: "remove xx open not needed").
   await expect(detail.getByTestId('org-detail-counts')).not.toContainText(' open')
-  // The one user status's words (src/core/user-status.ts), as on the Board: the question needs
-  // the user, the task not started waits.
-  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Needs you')
-  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Waiting / snoozed')
+  // Its threads first ("0 threads"), then the one user status's words (src/core/user-status.ts):
+  // the task not started waits; the question is in its Tasks, never a Needs you of the node.
+  const counts = detail.getByTestId('org-detail-counts')
+  await expect(counts.locator('> *').first()).toHaveAttribute('data-testid', 'org-pill-threads')
+  await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads')
+  await expect(counts).not.toContainText('Needs you')
+  await expect(counts).toContainText('1 Waiting / snoozed')
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
   await expect(askRow.getByTestId('org-ask-summary')).toHaveText('Asks you a question')

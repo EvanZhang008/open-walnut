@@ -140,6 +140,11 @@
   font-weight: 600;
 }
 .org-badge.is-alert { background: var(--error, #FF3B30); color: #fff; }
+/* A node's "0 threads": its count stays, in grey. */
+.org-badge.is-none {
+  background: color-mix(in srgb, var(--fg-muted, #8e8e93) 16%, transparent);
+  color: var(--fg-muted, #8e8e93);
+}
 .org-badge.is-working {
   background: color-mix(in srgb, var(--success, #34C759) 16%, transparent);
   color: color-mix(in srgb, var(--success, #34C759) 70%, var(--fg));

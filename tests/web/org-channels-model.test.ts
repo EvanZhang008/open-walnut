@@ -68,19 +68,23 @@ describe('org channels', () => {
     expect(personal.contactId).toBeUndefined()
     expect(personal.contactTitle).toBe('Personal VP')
     expect(main.key).toBe(MAIN_KEY)
-    expect(main.latest).toBe('4 VPs · 1 Working')
+    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
   })
 
   it('puts a project whose work waits on a prompt first, with the prompt as its line', () => {
     const probe: AlertProbe = (task) => (task.id === 'w3' ? { kind: 'question' } : task.id === 't1' ? { kind: 'permission', tool: 'Bash' } : null)
     const live = prompting(['w3', 't1'])
     const { main, rows } = buildChannels(buildOrgTree(live), live, probe)
-    expect(rows.map((r) => r.name).slice(0, 2)).toEqual(['Walnut', 'Travel'])
-    expect(rows[0]!.state).toBe('alert')
-    expect(rows[0]!.latest).toBe('Asks you: w3 title')
-    expect(rows[1]!.latest).toBe('Wants approval (Bash): t1 title')
-    expect(main.latest).toBe('4 VPs · 1 Working · 2 Needs you')
-    expect([rows[0]!.needs, rows[1]!.needs, main.needs]).toEqual([1, 1, 2])
+    // A VP's own row keeps the prompt as its line and its alert, but its red is only its threads
+    // (2026-11-03: "the little red should be thread instead of need u").
+    const walnut = rows.find((r) => r.name === 'Walnut')!
+    expect([walnut.state, walnut.latest, walnut.threadsBadge]).toEqual(['working', 'Asks you: w3 title', 0])
+    const travel = rows.find((r) => r.name === 'Travel')!
+    expect(travel.latest).toBe('Wants approval (Bash): t1 title')
+    expect(travel.state).not.toBe('alert')
+    expect(travel.threadsBadge).toBe(0)
+    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
+    expect([walnut.needs, travel.needs, main.needs]).toEqual([1, 1, 2])
     // The count is the task's own status: a prompt its status does not read as Needs you yet
     // (answered a moment ago, or not derived) counts nothing.
     const stale = buildChannels(buildOrgTree(tasks), tasks, probe)
@@ -90,8 +94,7 @@ describe('org channels', () => {
   it('counts a lead\'s own prompt and a failed session as needing the user', () => {
     const probe: AlertProbe = (task) => (task.id === 'tl' ? { kind: 'error' } : null)
     const failed = tasks.map((x) => (x.id === 'tl' ? { ...x, user_status: { state: 'needs' as const, source: 'error' as const, ask: 'Its session failed' } } : x))
-    const travel = buildChannels(buildOrgTree(failed), failed, probe).rows[0]!
-    expect(travel.name).toBe('Travel')
+    const travel = buildChannels(buildOrgTree(failed), failed, probe).rows.find((r) => r.name === 'Travel')!
     expect(travel.alerts).toEqual([{ taskId: 'tl', title: 'Travel VP', kind: 'error' }])
     expect(alertText(travel.alerts[0]!)).toBe('Failed: Travel VP')
     // A failure its status reads as Waiting (a host gone a moment, a trigger armed) is no alert,
@@ -114,7 +117,7 @@ describe('org channels', () => {
     expect(personal.needs).toBe(1)
     expect(personal.counts.needsYou).toBe(1)
     expect(main.needs).toBe(1)
-    expect(main.latest).toBe('4 VPs · 1 Working · 1 Needs you')
+    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
       ['needs', [['p1', 'Decide: Pick the renewal date']]], ['waiting', [['p2', undefined]]],
     ])
@@ -139,7 +142,7 @@ describe('org channels', () => {
     expect([personal.counts.needsYou, personal.counts.toRead]).toEqual([0, 2])
     expect(personal.latest).toBe('Take a look: It answered your question')
     expect(main.needs).toBe(2)
-    expect(main.latest).toBe('4 VPs · 1 Working · 2 Needs you')
+    expect(main.latest).toBe('0 threads · 4 VPs · 1 Working')
     expect(main.latest).not.toContain('To read')
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
       ['needs', [['p2', 'Take a look: It answered your question'], ['p1', 'Can close: The result is ready']]],
@@ -302,7 +305,7 @@ describe('org channels', () => {
       ['Insights', 'Marina', projectRowKey('Marina'), false],
     ])
     // Main counts its VPs, not the projects under them.
-    expect(channels.main.latest).toMatch(/^2 VPs/)
+    expect(channels.main.latest).toMatch(/^0 threads · 2 VPs/)
     expect(mainTeamColumns(channels.rows).flatMap((c) => c.items.map((i) => i.title)).sort()).toEqual(['Marina', 'Other'])
   })
 

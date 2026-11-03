@@ -168,7 +168,9 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
     await expect(detail.getByTestId('org-alert').first()).toHaveAttribute('data-own', '1')
     await expect(own.getByTestId('org-ask-own')).toContainText('asks you')
   }
-  await expect(detail.getByTestId('org-pill-needs')).toContainText(String(needsCount))
+  // The node's header counts its threads, never its tasks' asks (those are this tab).
+  await expect(detail.getByTestId('org-pill-needs')).toHaveCount(0)
+  await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/)
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'needs')
   await detail.getByTestId('org-pill-waiting').click()
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'waiting')

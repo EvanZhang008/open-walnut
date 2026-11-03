@@ -23,6 +23,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
 import { stateCountLabel } from '@open-walnut/user-status';
+import { threadCountLabel } from '@open-walnut/thread-view';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { OrgChartProject } from './OrgChartProject';
@@ -331,7 +332,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                 <span className="oc-card-name"><span className="oc-card-title">CEO</span></span>
                 <span className="oc-card-line">{ceoLine(cards)}</span>
               </span>
-              {main.alerts.length > 0 && <span className="oc-badge" title={needsTitle(main.alerts.length)}>{main.alerts.length}</span>}
+              <span className={`oc-badge${main.threadsBadge ? '' : ' is-none'}`} data-testid="org-chart-ceo-threads" title={threadCountLabel(main.threadsBadge ?? 0)}>{main.threadsBadge ?? 0}</span>
             </button>
             {nodeMore(null, 'More for the CEO')}
           </div>
@@ -382,11 +383,14 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                           <span className="oc-card-title">{c.name}</span>
                           <span className="oc-role">{c.role}</span>
                         </span>
-                        <span className={`oc-card-news${c.needsYou > 0 ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</span>
+                        <span className={`oc-card-news${c.row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</span>
                         <span className="oc-card-line" data-testid="org-chart-vp-meta">{metaLine(c.newsAt, c.newsTask, now)}</span>
                         {c.projects.length > 1 && <span className="oc-card-line" data-testid="org-chart-vp-line">{c.line}</span>}
                       </span>
-                      {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
+                      {/* A VP's own card counts its threads, 0 in grey, as its row does in the list. */}
+                      {c.row.threadsBadge !== undefined
+                        ? <span className={`oc-badge${c.row.threadsBadge ? '' : ' is-none'}`} data-testid="org-chart-vp-threads" title={threadCountLabel(c.row.threadsBadge)}>{c.row.threadsBadge}</span>
+                        : c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
                     </div>
                     {c.role === 'VP' && nodeMore(c, `More for ${theVp(c.name)}`)}
                   </div>

@@ -137,6 +137,10 @@
   text-align: center;
 }
 .oc-badge.is-small { min-width: 16px; line-height: 16px; font-size: 10.5px; }
+.oc-badge.is-none {
+  background: color-mix(in srgb, var(--fg-muted, #8e8e93) 16%, transparent);
+  color: var(--fg-muted, #8e8e93);
+}
 
 .oc-vps {
   display: grid;

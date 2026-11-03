@@ -92,7 +92,11 @@ struct ChatDrawerOrgList: View {
         if row.kind == .vp { parts.append("VP") }
         if !row.ledProjects.isEmpty { parts.append("also leads \(row.ledProjects.joined(separator: ", "))") }
         parts.append(row.linePinned ? "pinned, \(row.line)" : row.line)
-        if row.needs > 0 { parts.append("\(row.needs) \(row.needs == 1 ? "needs" : "need") you") }
+        if let t = row.threadsBadge {
+            parts.append(ChatOrgModel.threadCountLabel(t))
+        } else if row.needs > 0 {
+            parts.append("\(row.needs) \(row.needs == 1 ? "needs" : "need") you")
+        }
         return parts.joined(separator: ", ")
     }
 }
@@ -167,7 +171,10 @@ struct ChatOrgRowView: View {
 
     @ViewBuilder
     private var badge: some View {
-        if row.needs > 0 {
+        // The CEO's and a VP's own row: its threads, red, else "0" in grey (as on the web).
+        if let t = row.threadsBadge {
+            count(t, color: t > 0 ? UserStatePill.color(.needs) : Color(.systemGray3))
+        } else if row.needs > 0 {
             count(row.needs, color: UserStatePill.color(.needs))
         } else if row.kind == .vp, row.working > 0 {
             count(row.working, color: UserStatePill.color(.working))

@@ -68,13 +68,16 @@ test.afterAll(async ({ request }) => {
 test('a snoozed task is not Needs you on the Org page; its date passing brings it back', async ({ page, request }) => {
   await openOrg(page)
   const row = page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`)
-  await expect(row.getByTestId('org-channel-badge')).toHaveText('1', { timeout: 30_000 })
+  // A VP's own row: its badge is its threads (none here), never its tasks' asks.
+  await expect(row.getByTestId('org-channel-badge')).toHaveText('0', { timeout: 30_000 })
   await row.click()
   const detail = page.getByTestId('org-detail')
   const counts = detail.getByTestId('org-detail-counts')
-  await expect(counts).toContainText('1 Needs you')
+  await expect(counts).toContainText('0 threads')
   await expect(counts).toContainText('Waiting / snoozed')
-  await expect(counts).not.toContainText('need you')
+  await expect(counts).not.toContainText(/needs? you/i)
+  const needsTab = detail.locator('[data-testid="org-task-tab"]').filter({ hasText: /^Needs you/ })
+  await expect(needsTab.locator('.org-task-tab-count')).toHaveText('1')
   // Only the plain one is asked of the user.
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toHaveCount(0)
@@ -93,6 +96,6 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await patch(request, ids.snoozed, { start_date: '2026-01-01' })
   await expect(col('needs').locator(`[data-task-id="${ids.snoozed}"]`)).toBeVisible({ timeout: 30_000 })
   await expectChatShown(detail)
-  await expect(counts).toContainText('2 Needs you', { timeout: 30_000 })
+  await expect(col('needs').getByTestId('org-team-item')).toHaveCount(2, { timeout: 30_000 })
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/org-snooze-ended.png` })
 })

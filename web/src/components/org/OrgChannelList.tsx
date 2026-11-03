@@ -18,7 +18,6 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { threadCountLabel } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
-import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
@@ -67,14 +66,14 @@ export type ChannelMenuTarget = { row: ChannelRow } | { moved: MovedRow };
 type OnMenu = (e: MouseEvent, target: ChannelMenuTarget) => void;
 
 function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: OnMenu }) {
-  // What opening this row lets the user answer: on Main its own asks, not every team's again.
-  // Main answers for the person, so the approvals a script waits on count on its row too.
-  const approvals = usePendingApprovals().length;
-  // Its own threads waiting on him count first (row.threads, the server's status of the node).
-  const threadsNeed = row.threads?.needs ?? 0;
-  const own = threadsNeed + row.alerts.length + (row.kind === 'main' ? approvals : 0);
-  const badge = own > 0
-    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={[threadsNeed ? threadCountLabel(threadsNeed) : '', own - threadsNeed ? stateCountLabel('needs', own - threadsNeed) : ''].filter(Boolean).join(', ')}>{own}</span>
+  // The CEO's and a VP's own row: its threads his view shows, red, else "0" in grey (2026-11-03, the
+  // user: "the little red should be thread instead of need u ... even if no thread, show 0 thread").
+  // Any other row: what opening it lets the user answer.
+  const own = row.alerts.length;
+  const badge = row.threadsBadge !== undefined
+    ? <span className={`org-badge ${row.threadsBadge ? 'is-alert' : 'is-none'}`} data-testid="org-channel-badge" data-threads={row.threadsBadge} title={threadCountLabel(row.threadsBadge)}>{row.threadsBadge}</span>
+    : own > 0
+    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>
     : row.kind === 'project' && row.counts.running > 0
       ? <span className="org-badge is-working" data-testid="org-channel-badge" title={stateCountLabel('working', row.counts.running)}>{row.counts.running}</span>
       : null;

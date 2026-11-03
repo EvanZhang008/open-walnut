@@ -331,9 +331,10 @@ export interface UserStatus {
   /** needs: where the ask lives, so a surface can take the user there: a prompt in the
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
+  /** 'thread': a node's Thread, as Walnut stored it from 2026-11-03 until the same day; no longer made. */
   source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session' | 'thread';
   /** Main or a lead: what its Threads hold for the user (shown, waiting on him, the newest's title).
-   *  A thread waiting on him is the node's Needs you (orgNodeNeverNeeds). */
+   *  The Org page shows them as threads; the node itself is never Needs you (orgNodeNeverNeeds). */
   threads?: ThreadCounts;
   /** waiting: on whom or what, in words. read: what there is to read. */
   waitingOn?: string;
@@ -856,21 +857,17 @@ function wakeSource(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: 
  * task he had snoozed, stood in Main's Needs you: "这个都是 individual task is needs you ... We can
  * choose talk to VP"). Main or a lead whose status would ask the user waits instead: on its teams,
  * with its question in its chat, where he talks to it. A decision that belongs to no task goes on a
- * task of its own. Its prompt or failure is in its chat too. The one exception is his own request
- * to it: a Thread waiting on him (2026-11-03) is Needs you on the node itself, named by the thread.
+ * task of its own. Its prompt or failure is in its chat too. His own requests to it are its Threads:
+ * the node carries their counts (`threads`), and every Org surface shows them as threads ("3
+ * threads" and the newest's title), never as a task's status (2026-11-03, the user, after a thread
+ * waiting on him had made each VP read Needs you everywhere: "All replaced to Need Action which is
+ * the same as the task status, is this right?"; before: "thread is better than need u").
  */
 function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
   if (!(input.isMain || input.isLead)) return s;
-  // Its Threads are his own requests to it: a thread waiting on him is the node's one Needs you,
-  // whatever else it does (2026-11-03, the user, on a VP whose header read "1 To read · 18 Working"
-  // while a thread waited on his pick: "this here should show need action ... all place consistent").
   const th = input.threads && input.threads.shown > 0 ? input.threads : undefined;
-  if (th && th.needs > 0 && s.state !== 'done') {
-    const more = th.needs > 1 ? ` (and ${th.needs - 1} more)` : '';
-    return { state: 'needs', source: 'thread', ask: `${clean(th.title) || 'A thread waits on you'}${more}`, threads: th };
-  }
   const out = asOrgNode(s);
-  return th ? { ...out, threads: th } : out;
+  return th && out.state !== 'done' ? { ...out, threads: th } : out;
 }
 
 function asOrgNode(s: UserStatus): UserStatus {

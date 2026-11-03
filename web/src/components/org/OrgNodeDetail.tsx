@@ -101,7 +101,11 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
  *  its cards, a result or an answer to look at included (To read has no pill of its own). Its own
  *  Threads come first, and no "N open" (2026-11-03, the user: "remove xx open not needed also show
  *  thread and number"). */
-function CountPills({ tabs, onOpen, approvals, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; threads?: ThreadCounts; onThreads?: () => void }) {
+/** The header's counts. `keepsThreads` (the CEO, a VP): its threads first, always, "0 threads" in grey,
+ *  and no Needs you of its own (2026-11-03, the user: "the little red should be thread instead of need
+ *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. */
+function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
+  const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{stateCountLabel(tab, n)}
@@ -109,19 +113,19 @@ function CountPills({ tabs, onOpen, approvals, threads, onThreads }: { tabs: Org
   );
   return (
     <span className="org-pills" data-testid="org-detail-counts">
-      {!!threads?.shown && (
+      {keepsThreads && (
         <button
           type="button"
           className="org-pill is-button"
           data-testid="org-pill-threads"
-          data-needs={threads.needs}
+          data-threads={shown}
           onClick={onThreads}
-          title={threads.needs ? `${threadCountLabel(threads.needs)} waiting on you${threads.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
+          title={shown ? `${threadCountLabel(shown)} for you${threads?.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
         >
-          <i style={{ background: threads.needs ? TAB_DOT.needs : 'var(--accent, #007AFF)' }} />{threadCountLabel(threads.shown)}
+          <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)}
         </button>
       )}
-      {tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
+      {!keepsThreads && tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
     </span>
@@ -407,7 +411,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         <div className="org-detail-who">
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
-            <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
+            <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} keepsThreads={keepsBrief} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
             {!!row.led?.length && (
               <span className="org-detail-led org-muted" data-testid="org-detail-led">
                 {/* A VP made only to put projects under leads no work of its own while its home has none. */}
