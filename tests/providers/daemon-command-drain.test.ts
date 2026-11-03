@@ -246,7 +246,7 @@ describe.each([
     const operation = vi.fn(() => accepted.promise)
     const sendError = vi.fn()
     const handle = compile<(ws: unknown, msg: string) => void>(`${extract(source, 'handleCommand')}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, {
-      daemonCommands, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), resolveAgentCommand,
+      daemonCommands, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(), resolveAgentCommand,
       cmdStart: operation, cmdSend: operation, cmdSendRaw: operation, cmdStop: operation,
       cmdHooksConfigure: operation, cmdCronSupervision: operation, cmdBridgeResume: operation, cmdServiceHandover: operation,
       cmdTriggersConfigure: operation, cmdTriggersRun: operation, cmdTriggersAck: operation,
@@ -291,7 +291,7 @@ describe.each([
         process: { platform: 'linux', pid: 4242 }, os: { userInfo: () => ({ uid: 501 }) },
         readStartTime: () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
         acp: { workers: new Map() }, sttRelayPending: new Map(), launchRelayPending: new Map(),
-        controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(),
+        controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(), gatewayWaiting: new Set(),
         // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).
         hostExec: { running: () => 0 },
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
@@ -492,7 +492,7 @@ describe.each([
     const cmdVscodeEnsure = vi.fn(() => download.promise)
     const sendError = vi.fn()
     const handle = compile<(ws: unknown, msg: string) => void>(`${extract(source, 'handleCommand')}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, {
-      daemonCommands, cmdVscodeEnsure, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
+      daemonCommands, cmdVscodeEnsure, sendError, logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(),
     })
     handle({}, JSON.stringify({ id: 1, cmd: 'vscode.ensure' }))
     await daemonCommands.close()
@@ -514,7 +514,7 @@ describe.each([
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
     const hostFix = { cancel: vi.fn(() => false) }
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix,
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
       cronRuntime: { close: vi.fn(() => cron.promise) },
       netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') },
@@ -547,7 +547,7 @@ describe.each([
     const logMsg = vi.fn()
     const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix,
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
@@ -745,7 +745,7 @@ describe('standalone ACP command lifetime', () => {
     const sendError = vi.fn()
     const handle = compile<(ws: unknown, msg: string) => void>(`${extract(standalone, 'handleCommand')}\n${extract(standalone, 'dispatchCommand')}\nreturn handleCommand;`, {
       daemonCommands, cmdAcpStart: operation, cmdAcpOp: operation, sendError, resolveAgentCommand,
-      logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(),
+      logMsg: vi.fn(), BRIDGE_ALLOWED_COMMANDS: new Set(), SERVED_PUSHES: new Set(),
     })
     handle({}, JSON.stringify({ id: 1, ...frame }))
     await daemonCommands.close()
