@@ -38,12 +38,12 @@ const REFUSED = 'Only mac-primary itself or the Mac this cloud companion belongs
 const UNPAIR_WARNING = 'Unpairing this Mac stops cloud sync, cuts your phones off from this Mac through the companion, and takes the Cloud host offline. Pairing it again needs a new token made on the companion.'
 const UNPAIRED = 'This Mac is no longer paired with the cloud companion.'
 
-/** Settings › Phones & Cloud, by real clicks. */
+/** Settings › Phones & Cloud › Devices, by real clicks. */
 async function openDevices(page: Page): Promise<Locator> {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
   await page.getByTestId('settings-nav-devices').click()
-  return page.locator('#devices')
+  return backToDevices(page)
 }
 /** The page-level Saved / Not saved indicator (settings-pane-context.tsx), wherever it renders. */
 const savedIndicator = (page: Page) => page.getByTestId('settings-saved-indicator')
@@ -216,7 +216,7 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   // 5. Unpair this Mac, confirmed: the companion drops it and the credential it
   // minted. The section says so plainly (no red, no "may have been"), Cloud is
   // no longer a pairing target, and Cloud Companion no longer says Connected.
-  // The Cloud companion sub-page says Connected first.
+  // The Cloud companion tab says Connected first.
   section = await openDevices(page)
   const cloudCard = await openWay(page, 'cloud')
   await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
@@ -237,7 +237,7 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   expect(boxNames).not.toContain('mac-second')
   expect(owners(f)).toEqual([])
   await section.screenshot({ path: path.join(SHOTS, `devices-unpaired-plain-${browserName}.png`) })
-  // And its sub-page no longer says Connected.
+  // And its tab no longer says Connected.
   await openWay(page, 'cloud')
   await expect(cloudCard.getByText('Not paired', { exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)

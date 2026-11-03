@@ -27,14 +27,14 @@ async function openCloudSection(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-  // The Cloud companion is a sub-page of Phones & Cloud: its card there opens it.
+  // The Cloud companion is a tab of Phones & Cloud.
   const nav = page.getByTestId('settings-nav-devices')
   await expect(nav).toHaveCount(1)
   await expect(nav).toContainText('Phones & Cloud')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', /page|true/)
-  await page.getByTestId('devices-way-cloud-action').click()
-  await expect(page.getByTestId('settings-nav-cloud')).toHaveAttribute('aria-current', 'page')
+  await page.getByTestId('pc-tab-cloud').click()
+  await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
 
   const section = page.locator('#cloud')
   await section.scrollIntoViewIfNeeded()

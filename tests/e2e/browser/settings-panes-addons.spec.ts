@@ -34,6 +34,11 @@ async function clickNav(page: Page, id: string) {
   const item = page.getByTestId(NAV(id))
   await item.click()
   await expect(item).toHaveAttribute('aria-current', 'page')
+  // Phones & Cloud replaces its own address with the tab in use: wait for that tab.
+  if (id === 'devices') {
+    await expect(page.getByTestId('pc-tabs').locator('.pc-tab[aria-current="page"]')).toHaveCount(1, { timeout: 30_000 })
+    return
+  }
   await expect(page.locator(`.settings-pane [id="${id}"].settings-section`)).toBeVisible({ timeout: 30_000 })
 }
 
@@ -368,9 +373,12 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  // The Cloud companion is its own sub-page now: not on this one, a row under it in the nav.
+  // No companion and no Tailscale: Phones & Cloud opens on Devices. The Cloud companion is
+  // its own tab: not on this one, a tab in the bar.
+  await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#cloud.settings-section')).toHaveCount(0)
-  await expect(page.getByTestId(NAV('cloud'))).toBeVisible()
+  await expect(page.getByTestId('pc-tab-cloud')).toBeVisible()
+  await expect(page.getByTestId(NAV('cloud'))).toHaveCount(0)
   const row = page.locator('.devices-row', { hasText: 'Test phone' })
   await expect(row).toBeVisible()
 
@@ -412,7 +420,7 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await remove.click()
   await remove.click()
   await expect.poll(() => deletes).toEqual(['DELETE /api/devices/Test%20phone'])
-  await expect(page.locator('#devices')).toContainText('No phones paired yet.')
+  await expect(page.locator('#devices-phones')).toContainText('No phones paired yet.')
 })
 
 test('Remote Hosts: Add host lives in the header, the empty state says so', async ({ page }) => {
@@ -688,6 +696,9 @@ test('C65 C36: cascade asks before writing, quarantine offers Try again, setup r
 // ---------------------------------------------------------------------------
 
 // Plugins is not a Settings pane any more: the test audits it last, on the Apps page.
+/** Phones & Cloud's tabs (settings-way-panes.ts), audited under its `devices` entry. */
+const PHONES_CLOUD_TABS = ['cloud', 'devices-tailscale', 'devices-browser', 'devices-phones']
+
 const OWNED_PANES = [
   'calendar', 'permissions', 'backup', 'devices', 'remote-hosts',
   'audio-capture', 'usage', 'suggest-accuracy', 'bug-report',
@@ -697,7 +708,8 @@ interface PaneAudit { transformed: string[]; upper: string[]; glyphs: string[]; 
 
 /** Runs in the page: what C8, C10, C14, C19, C20 and C80 forbid, found in one pane. */
 function auditPane(root: Element, provided: string[]): PaneAudit {
-  const ABBR = new Set(['JSON', 'HTML', 'TOML', 'HEARTBEAT', 'CLAUDE'])
+  // Acronyms read as words (the browser link says it is an HTTPS address).
+  const ABBR = new Set(['JSON', 'HTML', 'TOML', 'HEARTBEAT', 'CLAUDE', 'HTTPS'])
   // Em and en dash, middle dot, arrows, triangles, check and cross marks, times, ellipsis (as escapes).
   const GLYPHS = /[\u2014\u2013\u00b7\u2192\u203a\u25b8\u25be\u2713\u2717\u00d7\u2026\u2197]/
   const shown = (el: Element) => (el as HTMLElement).getClientRects().length > 0
@@ -732,12 +744,19 @@ test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switche
   await openSettings(page)
   for (const id of OWNED_PANES) {
     await clickNav(page, id)
-    // Every disclosure open, so the hidden rows are audited too.
-    const closed = page.locator('.settings-pane button.settings-disclosure-row[aria-expanded="false"]')
-    for (let i = 0; i < 20 && (await closed.count()) > 0; i += 1) await closed.first().click()
-    await page.waitForTimeout(300)
-    const audit = await page.locator('.settings-pane').evaluate(auditPane, provided)
-    expect(audit, `pane ${id}`).toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
+    // Phones & Cloud is four tabs, each its own pane: audit every one.
+    for (const tab of id === 'devices' ? PHONES_CLOUD_TABS : [null]) {
+      if (tab) {
+        await page.getByTestId(`pc-tab-${tab}`).click()
+        await expect(page.locator(`.settings-pane [id="${tab}"].settings-section`)).toBeVisible({ timeout: 30_000 })
+      }
+      // Every disclosure open, so the hidden rows are audited too.
+      const closed = page.locator('.settings-pane button.settings-disclosure-row[aria-expanded="false"]')
+      for (let i = 0; i < 20 && (await closed.count()) > 0; i += 1) await closed.first().click()
+      await page.waitForTimeout(300)
+      const audit = await page.locator('.settings-pane').evaluate(auditPane, provided)
+      expect(audit, `pane ${tab ?? id}`).toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
+    }
   }
   // The plugin cards, where Settings' Plugins row now leads.
   await openApps(page)

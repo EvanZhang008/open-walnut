@@ -8,7 +8,7 @@
  * address the QR carries is never loopback.
  */
 import { test, expect } from '@playwright/test'
-import { qrDialog } from './devices-ways-helpers'
+import { backToDevices, qrDialog } from './devices-ways-helpers'
 
 test.describe('Settings → Phones & Cloud pairing', () => {
   test('Devices section is reachable and its QR never points at loopback', async ({ page }) => {
@@ -19,16 +19,17 @@ test.describe('Settings → Phones & Cloud pairing', () => {
     await page.getByRole('link', { name: /settings/i }).first().click()
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-    // The nav entry the user remembered must exist, and clicking it must land
-    // on a visible Devices section.
+    // The nav entry the user remembered must exist; clicking it opens Phones &
+    // Cloud, and its Devices tab holds the phones and Add a phone.
     const devicesNav = page.getByTestId('settings-nav-devices')
     await expect(devicesNav).toHaveCount(1)
     await expect(devicesNav).toContainText('Phones & Cloud')
     await devicesNav.click()
     await expect(devicesNav).toHaveAttribute('aria-current', 'page')
 
-    const section = page.locator('#devices')
-    await expect(section).toBeVisible()
+    const section = await backToDevices(page)
+    await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
+    await expect(devicesNav).toHaveAttribute('aria-current', 'page')
     await expect(section).toContainText(/Pair a phone by scanning a QR code/i)
 
     // Pair a device through the UI exactly as a user would.

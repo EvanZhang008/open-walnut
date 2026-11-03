@@ -25,6 +25,7 @@ import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { expandSystemAttention } from './host-problems-helpers'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL } from './draft-helpers'
+import { backToDevices } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -207,7 +208,7 @@ test('Phones & Cloud lists the other Mac as a Mac, and this Mac told the compani
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
   await page.getByTestId('settings-nav-devices').click()
-  const section = page.locator('#devices')
+  const section = await backToDevices(page)
   const macs = section.getByTestId('devices-macs')
   const second = macs.locator('.devices-row[data-device-name="mac-second"]')
   await expect(second).toBeVisible({ timeout: 30_000 })

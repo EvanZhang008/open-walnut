@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
+import { PHONES_CLOUD_TABS } from '../../web/src/components/settings/settings-way-panes'
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
 
 const EXPECTED_IDS = [
@@ -29,9 +30,9 @@ const EXPECTED_IDS = [
   // Org (2026-11-03): the switch that turns Main and the VPs off.
   // Passwords (2026-11-03): the vault's auto-lock, agent access, master password and export.
   'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'passwords', 'backup',
-  // Phones & Cloud: `devices` is the main entry; each way is a sub-page under it
-  // (`parent: 'devices'`), the Cloud companion one keeping the old `#cloud` link.
-  'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'remote-hosts', 'advanced',
+  // Phones & Cloud: `devices` is the entry; its four tabs are panes of their own
+  // (`tabOf: 'devices'`), the Cloud companion one keeping the old `#cloud` link.
+  'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'devices-phones', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).
   'providers',
   // Diagnostics group. No `time` row: time tracking's only UI is the walnut-time
@@ -145,20 +146,24 @@ describe('core settings registry', () => {
     expect(ungated, 'sections that can render nothing with no `requires` gate').toEqual([])
   })
 
-  it('puts the three ways under Phones & Cloud as sub-pages, Tailscale and Browser link on the Mac only', () => {
-    const subs = CORE_SETTINGS_CONTRIBUTIONS.filter((e) => e.parent)
-    expect(subs.map((e) => [e.id, e.parent, e.label])).toEqual([
+  it('puts the three ways and Devices under Phones & Cloud as tabs, Tailscale and Browser link on the Mac only', () => {
+    const tabs = CORE_SETTINGS_CONTRIBUTIONS.filter((e) => e.tabOf)
+    expect(tabs.map((e) => [e.id, e.tabOf, e.label])).toEqual([
       ['cloud', 'devices', 'Cloud companion'],
       ['devices-tailscale', 'devices', 'Tailscale'],
       ['devices-browser', 'devices', 'Browser link'],
+      ['devices-phones', 'devices', 'Devices'],
     ])
-    // A sub-page follows its parent in the registry, is a pane of its own, and its parent is visible.
-    for (const sub of subs) {
-      const parent = CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === sub.parent)
+    // The tab bar's order is the registry's, and settings-way-panes names the same panes.
+    expect(tabs.map((e) => e.id)).toEqual([...PHONES_CLOUD_TABS])
+    for (const tab of tabs) {
+      const parent = CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === tab.tabOf)
       expect(parent?.navHidden).toBeFalsy()
-      expect(sub.navHidden).toBeFalsy()
-      expect(parent?.group).toBe(sub.group)
+      expect(tab.navHidden).toBeFalsy()
+      expect(tab.parent).toBeUndefined()
+      expect(parent?.group).toBe(tab.group)
     }
+    expect(CORE_SETTINGS_CONTRIBUTIONS.some((e) => e.parent === 'devices')).toBe(false)
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'devices-tailscale')?.requires).toBe('primary')
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'devices-browser')?.requires).toBe('primary')
   })

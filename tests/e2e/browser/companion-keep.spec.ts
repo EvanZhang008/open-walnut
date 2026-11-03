@@ -27,7 +27,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { openWay } from './devices-ways-helpers'
+import { backToDevices, openWay } from './devices-ways-helpers'
 import { fixtureHome } from './engine-settings-helpers'
 
 test.setTimeout(120_000)
@@ -375,10 +375,10 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
     await page.waitForLoadState('domcontentloaded')
     await page.getByRole('link', { name: /settings/i }).first().click()
     await page.getByTestId('settings-nav-devices').click()
-    const section = page.locator('#devices')
+    const section = await backToDevices(page)
     await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
     await expect(section.locator('.settings-row').first()).toBeVisible()
-    // Its sub-page holds only the companion's setup.
+    // Its tab holds only the companion's setup.
     await openWay(page, 'cloud')
     await expect(page.getByTestId('companion-keep')).toHaveCount(0)
   })

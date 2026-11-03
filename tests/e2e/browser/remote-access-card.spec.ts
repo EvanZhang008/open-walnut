@@ -1,5 +1,5 @@
 /**
- * Settings → Phones & Cloud: the Tailscale steps, opened from the Tailscale card.
+ * Settings → Phones & Cloud: the Tailscale steps, on the Tailscale tab.
  *
  * Three numbered steps with a status dot each (muted / amber / green), fed by
  * GET /api/devices/tailscale (polled every 5s while step 1 or 2 is open) and
@@ -84,11 +84,11 @@ async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  const section = page.locator('#devices')
-  await expect(section).toBeVisible()
+  // The Tailscale steps are the Tailscale tab; the phone list is the Devices tab.
+  if (way) return openWay(page, way)
+  const section = await backToDevices(page)
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
-  // The Tailscale steps are the Tailscale sub-page, opened from its card.
-  return way ? openWay(page, way) : section
+  return section
 }
 
 async function shot(page: Page, name: string, region: Locator) {
@@ -110,10 +110,11 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
 
     const card = section.getByTestId('remote-access-card')
     await expect(card).toBeVisible()
-    // Opened from its card, the sub-page is named after it and holds only this way.
-    await expect(page.locator('#devices-tailscale-title')).toHaveText('Tailscale')
+    // Its tab is open under Phones & Cloud and holds only this way.
+    await expect(page.getByTestId('pc-tab-devices-tailscale')).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('#devices-tailscale-title')).toHaveText('Phones & Cloud')
     await expect(card.getByRole('heading', { name: 'Steps', exact: true })).toBeVisible()
-    await expect(page.locator('#devices')).toHaveCount(0)
+    await expect(page.locator('#devices-phones')).toHaveCount(0)
 
     const mac = step(card, 'mac')
     await expect(mac).toHaveAttribute('data-dot', 'action')
@@ -277,12 +278,13 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     expect([doneColor, actionColor]).not.toContain(pendingColor)
     await shot(page, 'd1-phone-step', card)
 
-    // The row takes the person back to Phones & Cloud with the picker on Tailscale and the
+    // The row takes the person to the Devices tab with the picker on Tailscale and the
     // cursor in the name (the picker starts on this network otherwise).
     const pair = step(card, 'pair')
     await expect(pair).toContainText('Pair the phone on Phones & Cloud with the Tailscale address')
     await pair.click()
-    const main = page.locator('#devices')
+    await expect(page.getByTestId('pc-tab-devices-phones')).toHaveAttribute('aria-current', 'page')
+    const main = page.locator('#devices-phones')
     await expect(main.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
     await expect(main.locator('#devices-new-name')).toBeFocused()
     // The button does the same by keyboard.
@@ -291,8 +293,8 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
     const again = await openWay(page, 'tailscale')
     await again.getByTestId('remote-access-use-tailnet').focus()
     await page.keyboard.press('Enter')
-    await expect(page.locator('#devices').getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await shot(page, 'd2-section', page.locator('#devices'))
+    await expect(page.locator('#devices-phones').getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
+    await shot(page, 'd2-section', page.locator('#devices-phones'))
   })
 
   test('(f) real fixture server, no mocks: the card reads this machine\'s own Tailscale state (nothing is clicked)', async ({ page }) => {

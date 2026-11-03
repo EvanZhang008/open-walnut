@@ -82,14 +82,14 @@ async function openDevices(page: Page, { waitForList = true } = {}) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  const section = page.locator('#devices')
-  await expect(section).toBeVisible()
+  // Phones & Cloud opens the tab in use; the phone list and Add a phone are on Devices.
+  const section = await backToDevices(page)
   if (waitForList) await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
   return section
 }
 
 /** The section (or `region` of it), at most 1280 CSS px wide; one file per engine. */
-async function shot(page: Page, name: string, region = page.locator('#devices')) {
+async function shot(page: Page, name: string, region = page.locator('#devices-phones')) {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
   await region.screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
@@ -191,7 +191,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect(ts.locator('.settings-notice')).toHaveCount(0)
     await shot(page, 'install-card-lan-only', ts)
 
-    // Pairing still works on Wi-Fi, back on Phones & Cloud.
+    // Pairing still works on Wi-Fi, back on the Devices tab.
     const main = await backToDevices(page)
     await main.locator('#devices-new-name').fill('Spare phone')
     await main.getByRole('button', { name: /Pair new device/i }).click()
@@ -243,11 +243,11 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     const section = await openDevices(page)
     await expect(section.locator('#devices-new-name')).toBeVisible()
     // The replica flag hides the line and the guided card alike, and the Tailscale and
-    // Browser link sub-pages have no nav row there.
+    // Browser link tabs are not offered there.
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
-    await expect(page.getByTestId('settings-nav-cloud')).toBeVisible()
-    await expect(page.getByTestId('settings-nav-devices-tailscale')).toHaveCount(0)
-    await expect(page.getByTestId('settings-nav-devices-browser')).toHaveCount(0)
+    await expect(page.getByTestId('pc-tab-cloud')).toBeVisible()
+    await expect(page.getByTestId('pc-tab-devices-tailscale')).toHaveCount(0)
+    await expect(page.getByTestId('pc-tab-devices-browser')).toHaveCount(0)
   })
 
   test('a phone paired while the first list read is still out shows up in the list', async ({ page }) => {

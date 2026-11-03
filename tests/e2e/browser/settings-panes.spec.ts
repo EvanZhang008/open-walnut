@@ -24,6 +24,11 @@ async function clickNav(page: Page, id: string) {
   const item = page.getByTestId(NAV(id))
   await item.click()
   await expect(item).toHaveAttribute('aria-current', 'page')
+  // Phones & Cloud replaces its own address with the tab in use: wait for that tab.
+  if (id === 'devices') {
+    await expect(page.getByTestId('pc-tabs').locator('.pc-tab[aria-current="page"]')).toHaveCount(1, { timeout: 20_000 })
+    return
+  }
   await expect(page.locator(`.settings-pane [id="${id}"].settings-section`)).toBeVisible({ timeout: 20_000 })
 }
 
@@ -66,16 +71,25 @@ test('C2: each nav entry mounts only its own pane', async ({ page }) => {
   // Plugins is a link to the Apps page now (an anchor, not a pane button), so it is not listed.
   expect(panes).toEqual(expect.arrayContaining(['hooks', 'general', 'tasks', 'devices', 'advanced', 'bug-report']))
   expect(panes).not.toContain('plugin-store')
+  const TABS = ['cloud', 'devices-tailscale', 'devices-browser', 'devices-phones']
   for (const id of panes.filter((p) => !p.includes(':'))) {
     await clickNav(page, id)
+    // Phones & Cloud opens one of its tabs, and mounts only that tab.
+    if (id === 'devices') {
+      await expect.poll(async () => { const m = await mountedSections(page); return m.length === 1 && TABS.includes(m[0]) }).toBe(true)
+      continue
+    }
     await expect.poll(() => mountedSections(page)).toEqual(folded[id] ?? [id])
   }
-  // Phones & Cloud's sub-pages: their rows show under it once it is open, each mounting only itself.
-  expect(panes).not.toContain('devices-tailscale')
-  for (const id of ['cloud', 'devices-tailscale', 'devices-browser']) {
-    await clickNav(page, 'devices')
-    await clickNav(page, id)
+  // Phones & Cloud's tabs: no nav rows of their own; each tab mounts only itself, and the
+  // Phones & Cloud row stays selected.
+  for (const id of TABS) expect(panes).not.toContain(id)
+  await clickNav(page, 'devices')
+  for (const id of TABS) {
+    await page.getByTestId(`pc-tab-${id}`).click()
+    await expect(page.getByTestId(`pc-tab-${id}`)).toHaveAttribute('aria-current', 'page')
     await expect.poll(() => mountedSections(page)).toEqual([id])
+    await expect(page.getByTestId(NAV('devices'))).toHaveAttribute('aria-current', 'page')
   }
 })
 

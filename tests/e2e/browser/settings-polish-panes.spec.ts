@@ -7,6 +7,7 @@
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { backToDevices } from './devices-ways-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -113,7 +114,8 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  const section = page.locator('#devices')
+  // Add a phone is on the Devices tab of Phones & Cloud.
+  const section = await backToDevices(page)
   await section.locator('#devices-new-name').fill('Test phone')
   await section.getByRole('button', { name: 'Pair new device' }).click()
   await expect.poll(() => names).toEqual(['Test-phone'])

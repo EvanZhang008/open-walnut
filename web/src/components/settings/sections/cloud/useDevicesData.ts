@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
 import { fetchDevicesList } from './devices-list';
+import { DEVICES_CHANGED_EVENT } from './device-rows-copy';
 import type { ExposeStatus } from './browser-access-status';
 import type { PairingTarget, PairTargetKind } from './usePairDevice';
 
@@ -54,6 +55,8 @@ export interface DevicesData {
   /** This Mac unpaired itself: the cloud half is gone on purpose. */
   cloudUnpaired: boolean;
   cloudWithheld: boolean;
+  /** The list answered and Tailscale's state is known (or was asked for as often as it will be). */
+  settled: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -102,17 +105,30 @@ export function useDevicesData(opts: { replica: boolean; onTargets?: (kinds: Pai
     void refresh();
   }, [refresh]);
 
+  // A phone paired or removed elsewhere on the page (the Devices tab, under the tab bar
+  // that counts them): read again, so every reader shows the same list.
+  useEffect(() => {
+    const onChanged = () => { void refresh(); };
+    window.addEventListener(DEVICES_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(DEVICES_CHANGED_EVENT, onChanged);
+  }, [refresh]);
+
   // The server leaves Tailscale out of the list until its first probe answers: ask
   // again a few times, so the card does not sit on "Checking..." (an older server never says).
-  const tailscaleAsks = useRef(0);
+  // The count is state, not a ref: a read that still lacks the field changes nothing else,
+  // and the next ask (and `settled` after the last) must still follow it.
+  const [tailscaleAsks, setTailscaleAsks] = useState(0);
   const { replica } = opts;
   useEffect(() => {
-    if (replica || listState !== 'ready' || tailscale || tailscaleAsks.current >= 3) return;
-    const t = setTimeout(() => { tailscaleAsks.current += 1; void refresh(); }, 4_000);
+    if (replica || listState !== 'ready' || tailscale || tailscaleAsks >= 3) return;
+    const t = setTimeout(() => {
+      void refresh().finally(() => setTailscaleAsks((n) => n + 1));
+    }, 4_000);
     return () => clearTimeout(t);
-  }, [replica, listState, tailscale, refresh]);
+  }, [replica, listState, tailscale, tailscaleAsks, refresh]);
 
-  return { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, refresh };
+  const settled = listState !== 'loading' && (replica || listState === 'failed' || !!tailscale || tailscaleAsks >= 3);
+  return { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, settled, refresh };
 }
 
 /**

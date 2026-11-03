@@ -1,14 +1,59 @@
-/* Settings, Phones & Cloud: how the phone reaches Walnut now, the three ways to
-   reach it away from home (components/settings/sections/cloud/WaysOverview.tsx),
+/* Settings, Phones & Cloud: the tab bar, each tab's intro and how the phone
+   reaches Walnut now (components/settings/sections/cloud/PhonesCloudTabs.tsx),
    and the pairing QR dialog (cloud/PairQrDialog.tsx). Colors through tokens; the
    tag tints are the ones .settings-tag uses (settings-controls-misc.css). */
 
-.devices-ways { margin: 0 0 22px; }
+/* The tab bar: one tab per way, and Devices. Scrolls sideways when the pane is narrow. */
+.pc-head { margin: 0 0 18px; }
+.pc-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--settings-group-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pc-tabs::-webkit-scrollbar { display: none; }
+.pc-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-secondary, var(--fg-muted));
+  font-size: 13.5px;
+  line-height: 20px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pc-tab:hover { color: var(--fg); }
+.pc-tab[aria-current='page'] { border-bottom-color: var(--accent); color: var(--fg); font-weight: 600; }
+.pc-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 
-/* "iphone reaches Walnut through the cloud companion" */
+/* What the tab is, when to use it, and its state now. */
+.pc-intro {
+  margin: 0 0 14px;
+  padding: 0 calc(var(--settings-row-pad-x, 16px) + 1px);
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--fg);
+}
+.pc-intro p { margin: 0; }
+.pc-intro-what { font-size: 14px; line-height: 20px; }
+.pc-intro .pc-intro-when, .pc-intro .pc-intro-now { margin-top: 4px; }
+.pc-intro-key { display: inline-block; min-width: 84px; margin-right: 8px; color: var(--fg-muted); }
+/* A phone: each line's word above its text, so the text keeps the width. */
+@media (max-width: 560px) {
+  .pc-intro-when .pc-intro-key { display: block; }
+  /* A finger's worth of height for each tab. */
+  .pc-tab { min-height: 44px; box-sizing: border-box; }
+}
+
+/* "iphone reaches Walnut through the cloud companion", on the tab in use. */
 .devices-now {
   box-sizing: border-box;
-  margin: 0 0 22px;
   padding: 14px var(--settings-row-pad-x, 16px);
   background: var(--settings-group-bg);
   border: 1px solid var(--settings-group-border);
@@ -31,31 +76,7 @@
 .devices-now-arrow { color: var(--fg-muted); font-size: 12px; }
 .devices-now-detail { margin-top: 6px; color: var(--fg-muted); font-size: 13px; line-height: 18px; }
 
-/* Three cards side by side; one column when the pane is narrow. */
-.devices-ways-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
-}
-.devices-way {
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 14px;
-  background: var(--settings-group-bg);
-  border: 1px solid var(--settings-group-border);
-  border-radius: 10px;
-}
-/* The way the phone used last: framed, so "which one is active" reads at a glance. */
-.devices-way[data-in-use='true'] { border-color: var(--success); box-shadow: inset 0 0 0 1px var(--success); }
-/* A card opens its way's sub-page from anywhere on it. */
-.devices-way { cursor: pointer; }
-.devices-way:hover { border-color: var(--accent); }
-.devices-way-chevron { margin-left: 6px; font-size: 15px; line-height: 1; }
-.devices-way-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.devices-way-title { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 20px; color: var(--fg); }
+/* State words and dots, in the tab bar and the intro. */
 .devices-way-tag {
   flex: 0 0 auto;
   padding: 0 7px;
@@ -68,26 +89,20 @@
 }
 .devices-way-tag[data-dot='on'] { background: rgba(52, 199, 89, 0.14); color: var(--settings-tag-success-fg, var(--success)); }
 .devices-way-tag[data-dot='warn'] { background: rgba(255, 149, 0, 0.14); color: var(--priority-important-text, var(--warning)); }
-.devices-way-what { margin: 0; font-size: 13px; line-height: 18px; color: var(--fg); }
-.devices-way-facts { margin: 0; font-size: 12.5px; line-height: 17px; }
-.devices-way-facts dt { margin-top: 6px; color: var(--fg-muted); }
-.devices-way-facts dd { margin: 1px 0 0; color: var(--fg); overflow-wrap: anywhere; }
 .devices-way-dot {
   display: inline-block;
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-right: 6px;
   border-radius: 50%;
   background: var(--fg-muted);
   opacity: 0.55;
-  vertical-align: 0;
 }
+.pc-intro-now .devices-way-dot { margin-right: 6px; vertical-align: 0; }
 .devices-way-dot[data-dot='on'] { background: var(--success); opacity: 1; }
 .devices-way-dot[data-dot='warn'] { background: var(--warning); opacity: 1; }
-.devices-way-foot { margin-top: auto; padding-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-.devices-ways-home { margin: 8px 0 0; padding: 0 calc(var(--settings-row-pad-x, 16px) + 1px); }
 
-/* A way's own settings, on its sub-page (Phones & Cloud > Tailscale). */
+/* A way's own settings, under its intro. */
 .devices-way-panel { margin: 0 0 22px; }
 
 /* The pairing QR dialog. */

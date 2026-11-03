@@ -37,6 +37,7 @@ import {
   pluginIdOfKey,
   resolvePane,
   sectionsForPane,
+  tabParent,
 } from '@/components/settings/settings-routing'
 import {
   SettingsPaneProvider,
@@ -409,7 +410,8 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
     const previous = document.title
     return () => { document.title = previous }
   }, [])
-  const titleLabel = view.kind === 'plugin-off' ? view.pluginName : model.metaFor(paneId)?.label ?? meta.label
+  // A tab is named by its entry (the tab bar names the tab): "Phones & Cloud" in the phone bar and the window.
+  const titleLabel = view.kind === 'plugin-off' ? view.pluginName : model.metaFor(tabParent(paneId) ?? paneId)?.label ?? meta.label
   useEffect(() => {
     document.title = `Settings: ${titleLabel}`
   }, [titleLabel])

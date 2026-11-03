@@ -17,7 +17,7 @@ import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import { useClosedPaneGates, type SettingsPaneGate } from './settings-pane-gates'
-import { corePaneFilterEntry, navRowShown } from './settings-routing'
+import { corePaneFilterEntry, navRowShown, tabParent } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
 import { SettingsIcon, assignPluginTint, monogramFor, tileKey, type SettingsGlyphName } from './settings-icons'
 import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './settings-pane-context'
@@ -404,7 +404,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
 
   const renderRow = (row: NavRow) => {
     const hit = filtering ? hitByKey.get(row.key) : undefined
-    const active = row.kind === 'pane' && row.key === activePane
+    const active = row.kind === 'pane' && (row.key === activePane || (!filtering && tabParent(activePane) === row.key))
     const highlighted = filtering && row.key === highlight
     const className = 'settings-nav-item'
       + (row.kind === 'link' ? ' settings-nav-page-link' : '')

@@ -1,36 +1,48 @@
 /**
- * Settings › Phones & Cloud is the main entry; each way (Cloud companion, Tailscale,
- * Browser link) is its own sub-page under it, opened from its card on the main entry
- * or its indented row in the sidebar (devices-ways-and-qr.spec.ts). Specs about a
- * way's settings open its sub-page first, the way a person does.
+ * Settings › Phones & Cloud is four tabs: each way (Cloud companion, Tailscale,
+ * Browser link) and Devices (paired phones and browsers, Add a phone). The entry
+ * opens the tab in use (devices-ways-and-qr.spec.ts). Specs about one tab open it
+ * from the tab bar first, the way a person does.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 
 export type DeviceWay = 'cloud' | 'tailscale' | 'browser'
 
-/** The sub-page's lead section id (core-settings-registry): `#cloud` kept its old deep link. */
+/** The tab's section id (core-settings-registry): `#cloud` kept its old deep link. */
 export const WAY_PANE: Record<DeviceWay, string> = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser' }
 
-/**
- * Open a way's sub-page from its card on Phones & Cloud (no-op when it is showing)
- * and return its section. Phones & Cloud must be open, or the sub-page already.
- */
-export async function openWay(page: Page, id: DeviceWay): Promise<Locator> {
-  const pane = page.locator(`#${WAY_PANE[id]}`)
+/** The Devices tab's pane id: paired phones and browsers, Add a phone. */
+export const DEVICES_TAB = 'devices-phones'
+
+/** Open a tab from the bar (no-op when it is showing) and return its section. Any tab must be open. */
+async function openTab(page: Page, paneId: string): Promise<Locator> {
+  const pane = page.locator(`#${paneId}`)
   if (await pane.isVisible()) return pane
-  const btn = page.getByTestId(`devices-way-${id}-action`)
-  await expect(btn).toBeVisible({ timeout: 30_000 })
-  await btn.click()
+  const tab = page.getByTestId(`pc-tab-${paneId}`)
+  await expect(tab).toBeVisible({ timeout: 30_000 })
+  await tab.click()
   await expect(pane).toBeVisible({ timeout: 30_000 })
   return pane
 }
 
-/** From a sub-page back to Phones & Cloud by its back link; returns the main entry's section. */
+/** Open a way's tab (no-op when it is showing) and return its section. */
+export async function openWay(page: Page, id: DeviceWay): Promise<Locator> {
+  return openTab(page, WAY_PANE[id])
+}
+
+/** Open the Devices tab (no-op when it is showing) and return its section. */
 export async function backToDevices(page: Page): Promise<Locator> {
-  await page.getByTestId('settings-pane-back').click()
-  const section = page.locator('#devices')
-  await expect(section).toBeVisible({ timeout: 30_000 })
-  return section
+  return openTab(page, DEVICES_TAB)
+}
+
+/**
+ * Settings, then Phones & Cloud from the sidebar, then the Devices tab; returns its
+ * section. Settings must be open (the sidebar shows).
+ */
+export async function openDevicesTab(page: Page): Promise<Locator> {
+  await page.getByTestId('settings-nav-devices').click()
+  await expect(page.getByTestId('pc-tabs')).toBeVisible({ timeout: 30_000 })
+  return openTab(page, DEVICES_TAB)
 }
 
 /** The pairing QR dialog (cloud/PairQrDialog.tsx). */

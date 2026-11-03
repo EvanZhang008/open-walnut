@@ -3,7 +3,7 @@
  * and the three way cards (web/src/components/settings/sections/cloud/ways-model.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { deriveWays, latestUse, type WaysInput } from '../../web/src/components/settings/sections/cloud/ways-model'
+import { deriveWays, landingWay, latestUse, type WaysInput } from '../../web/src/components/settings/sections/cloud/ways-model'
 
 const NOW = Date.parse('2026-10-28T12:00:00Z')
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString()
@@ -121,5 +121,23 @@ describe('the way cards', () => {
     })).ways[2]).toMatchObject({ dot: 'on', tag: 'On', status: 'Connected through Tunnels, runs on Dev box.' })
     expect(deriveWays(base({ expose: { enabled: true, provider: 'command', state: 'needs-sign-in', since: 0 } })).ways[2])
       .toMatchObject({ dot: 'warn', tag: 'Needs you' })
+  })
+})
+
+describe('the tab Phones & Cloud opens on', () => {
+  const land = (over: Partial<WaysInput>) => { const i = base(over); return landingWay(i, deriveWays(i).ways) }
+  it('the way the phone came in through, else a phone way that is on, else Devices', () => {
+    expect(land({ listState: 'loading' })).toBeNull()
+    expect(land({ listState: 'failed' })).toBe('devices')
+    expect(land({ targets: [LAN, CLOUD], phoneUses: [{ name: 'p', via: 'cloud', lastUsedAt: ago(1) }] })).toBe('cloud')
+    // Set up, but the phone came in directly last: still the way that works away from home.
+    expect(land({ targets: [LAN, CLOUD], phoneUses: [{ name: 'p', via: 'lan', lastUsedAt: ago(1) }] })).toBe('cloud')
+    expect(land({ targets: [LAN, TAILNET], tailscale: { installed: true, running: true } })).toBe('tailscale')
+    expect(land({ cloudWithheld: true })).toBe('cloud')
+    // Nothing for away (only Wi-Fi), or a browser link alone: Devices, never the browser link.
+    expect(land({ phoneUses: [{ name: 'p', via: 'lan', lastUsedAt: ago(1) }] })).toBe('devices')
+    expect(land({ expose: { enabled: true, provider: 'command', state: 'connected', since: 0 } })).toBe('devices')
+    // A companion that does not answer: its tab, which says so.
+    expect(land({ targets: [LAN, CLOUD], cloudError: 'down' })).toBe('cloud')
   })
 })

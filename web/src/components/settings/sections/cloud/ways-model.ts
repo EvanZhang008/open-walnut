@@ -208,3 +208,25 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
   const tailscale = tailscaleWay(i);
   return { now: nowLine(i, cloud, tailscale), ways: [cloud, tailscale, browserWay(i)] };
 }
+
+/** The Devices tab's own two lines, in the shape of a way's (what it is, when to use it). */
+export const DEVICES_INTRO = {
+  what: 'The phones and browsers that can open Walnut, and pairing a new phone.',
+  useWhen: 'You add a phone or remove one. Pair a phone once: it then finds its own way, at home and away.',
+} as const;
+
+/**
+ * Which tab Phones & Cloud opens on: the way the phone last came in through, else
+ * a way for the phone that is on, else a companion that is set up but not answering
+ * (its tab says so), else Devices (nothing set up for away: the phone reaches this
+ * Mac on Wi-Fi, or none is paired yet). Null while the list loads. The browser link
+ * is for browsers, not the phone, so it is never the landing.
+ */
+export function landingWay(i: Pick<WaysInput, 'listState' | 'cloudError'>, ways: readonly Way[]): WayId | 'devices' | null {
+  if (i.listState === 'loading') return null;
+  if (i.listState === 'failed') return 'devices';
+  const phoneWays = ways.filter((w) => w.id !== 'browser');
+  const pick = phoneWays.find((w) => w.inUse) ?? phoneWays.find((w) => w.dot === 'on');
+  if (pick) return pick.id;
+  return i.cloudError ? 'cloud' : 'devices';
+}

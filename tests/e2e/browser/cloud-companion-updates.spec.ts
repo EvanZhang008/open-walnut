@@ -12,6 +12,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -60,11 +61,10 @@ async function openCloud(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // The Cloud companion is its own sub-page under Phones & Cloud, in the sidebar too.
-  const sub = page.getByTestId('settings-nav-cloud')
-  await sub.click()
-  await expect(sub).toHaveAttribute('aria-current', 'page')
-  const section = page.locator('#cloud')
+  // The Cloud companion is a tab of Phones & Cloud; the sidebar row stays selected.
+  const section = await openWay(page, 'cloud')
+  await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
+  await expect(nav).toHaveAttribute('aria-current', 'page')
   await expect(section).toContainText('Cloud sync', { timeout: 30_000 })
   await expect(section).not.toHaveAttribute('data-crashed', 'true')
   return section

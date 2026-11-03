@@ -35,6 +35,16 @@ export const PANE_PARENT: Readonly<Record<string, string>> = Object.fromEntries(
   CORE_SETTINGS_CONTRIBUTIONS.flatMap((entry) => (entry.parent ? [[entry.id, entry.parent] as const] : [])),
 )
 
+/** Tab pane id -> the entry whose tab bar it sits under (core-settings-registry `tabOf`). */
+export const TAB_OF: Readonly<Record<string, string>> = Object.fromEntries(
+  CORE_SETTINGS_CONTRIBUTIONS.flatMap((entry) => (entry.tabOf ? [[entry.id, entry.tabOf] as const] : [])),
+)
+
+/** The entry a tab sits under, or null when the pane is not a tab. */
+export function tabParent(paneId: string): string | null {
+  return TAB_OF[paneId] ?? null
+}
+
 /** The entry a sub-page sits under, or null for a top-level pane. */
 export function parentPane(paneId: string): string | null {
   return PANE_PARENT[paneId] ?? null
@@ -42,9 +52,12 @@ export function parentPane(paneId: string): string | null {
 
 /**
  * Whether a nav row shows: a sub-page's row only while its parent or one of its
- * siblings is the open pane, or while Find a setting is filtering (a hit must show).
+ * siblings is the open pane, a tab's row only while Find a setting is filtering
+ * (a hit must show).
  */
 export function navRowShown(rowKey: string, activePane: string, filtering: boolean): boolean {
+  // A tab is reached from its entry's tab bar; only a Find a setting hit lists it.
+  if (TAB_OF[rowKey]) return filtering
   const parent = PANE_PARENT[rowKey]
   if (!parent || filtering) return true
   return activePane === parent || PANE_PARENT[activePane] === parent

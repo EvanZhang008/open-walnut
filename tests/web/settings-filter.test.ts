@@ -97,9 +97,9 @@ describe('Find a setting matcher', () => {
     expect(primaryHit(filterEntries(ENTRIES, 'port'))?.key).toBe('advanced')
     expect(hit('port', 'advanced')?.hint).toBe('Port') // N17: the row's real label
     expect(keys('slack')).toContain('triage')
-    expect(keys('wifi')).toContain('devices')
+    expect(keys('wifi')).toContain('devices-phones')
     expect(hit('theme', 'general')?.hint).toBe('Appearance')
-    expect(hit('qr', 'devices')?.hint).toBe('Device name')
+    expect(hit('qr', 'devices-phones')?.hint).toBe('Device name')
   })
 
   it('keeps nav order inside one rank level', () => {

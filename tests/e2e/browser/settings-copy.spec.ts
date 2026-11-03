@@ -5,6 +5,7 @@
  * never changes under another spec.
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
+import { backToDevices, openWay } from './devices-ways-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -106,6 +107,8 @@ test('N15: every disabled push button looks the same, and one outside a dimmed g
     } else {
       await clickNav(page, pane)
     }
+    // Phones & Cloud opens the tab in use; its buttons are measured on the Devices tab.
+    if (pane === 'devices') await backToDevices(page)
     if (pane === 'advanced') await expandAll(page)
     await page.waitForTimeout(400)
     const found = await page.evaluate((root) => Array.from(document.querySelectorAll<HTMLButtonElement>(
@@ -211,18 +214,19 @@ test('N21: Search and Hooks copy agrees with what the pane does', async ({ page 
 test('N24: Cloud Companion has a one-sentence description and names the chat agent Ask Walnut', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  // Its own sub-page under Phones & Cloud, whose row shows once Phones & Cloud is open.
+  // A tab of Phones & Cloud: the tab names it, the pane title and its one-sentence
+  // description are Phones & Cloud's, and the tab's intro says what the companion is.
   await clickNav(page, 'devices')
-  await clickNav(page, 'cloud')
-  const cloud = page.locator('.settings-pane #cloud')
-  await expect(cloud).toBeVisible({ timeout: 20_000 })
-  const desc = await cloud.evaluate((el) => {
-    const title = Array.from(el.querySelectorAll<HTMLElement>('h2, h3, [class*="title"]')).find((t) => /Cloud companion/i.test(t.textContent ?? ''))
-    const next = title?.nextElementSibling as HTMLElement | null
-    return { text: (next?.textContent ?? '').trim(), size: next ? parseFloat(getComputedStyle(next).fontSize) : 0 }
-  })
+  const cloud = await openWay(page, 'cloud')
+  await expect(page.locator('.settings-pane #cloud')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('pc-tab-cloud').locator('.pc-tab-label')).toHaveText('Cloud companion')
+  await expect(page.locator('#cloud-title')).toHaveText('Phones & Cloud')
+  const descEl = page.locator('#cloud-title + .settings-pane-desc')
+  await expect(descEl).toHaveCount(1)
+  const desc = await descEl.evaluate((el) => ({ text: (el.textContent ?? '').trim(), size: parseFloat(getComputedStyle(el).fontSize) }))
   expect(desc.text, 'description under the title').toMatch(/^[A-Z][^.]+\.$/)
   expect(desc.size).toBeLessThan(14)
+  await expect(cloud.getByTestId('pc-intro-cloud').locator('.pc-intro-what')).toContainText('A small server of yours in the cloud')
   await expect(page.locator('.settings-pane')).not.toContainText('Personal AI')
 })
 
@@ -270,14 +274,20 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   await recordWrites(page)
   await openSettings(page)
   await clickNav(page, 'devices')
-  const devices = page.locator('#devices')
+  // Phones & Cloud waits for the list to know which tab is in use: it says it is checking.
+  const landing = page.locator('#devices')
+  await expect(landing).toContainText('Checking how your phone reaches Walnut...')
+  await expect(landing.getByTestId('pc-tabs')).toBeVisible()
+  await expect(landing).not.toContainText('No phones paired yet.')
+  // The Devices tab, opened while the list is out, claims nothing either.
+  const devices = await backToDevices(page)
   await expect(devices).toContainText('Loading paired phones...')
   // No "no address" notice and no "No phones" claim while the list is unknown.
   await expect(devices).not.toContainText('No address for this machine')
   await expect(devices).not.toContainText('No phones paired yet.')
   release()
   await expect(devices).not.toContainText('Loading paired phones...', { timeout: 20_000 })
-  // The Cloud companion it once guarded is its own sub-page now, so nothing deep-linked sits
+  // The Cloud companion it once guarded is its own tab now, so nothing deep-linked sits
   // below this list; the pane's own row link (#devices-new-name) is held by holdAnchor while
   // content above it grows (settings-panes.spec.ts C74).
   await expect(devices.getByTestId('devices-add-group')).toBeVisible()

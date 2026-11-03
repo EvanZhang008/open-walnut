@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getDeviceToken } from '@/api/device-token';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -11,21 +9,19 @@ import { formatAbsoluteTime } from './addons-format';
 import { apiDelete } from '@/api/client';
 import { devicesListChanged } from './cloud/devices-list';
 import { PairQrDialog, type PairQrPhase } from './cloud/PairQrDialog';
-import { WaysOverview } from './cloud/WaysOverview';
-import { useBrowserLinkName } from './cloud/browser-link-name';
-import { deriveWays, type WayId } from './cloud/ways-model';
-import { WAY_PANES } from '../settings-way-panes';
+import { PhonesCloudTabHead, usePhonesCloudView } from './cloud/PhonesCloudTabs';
+import { DEVICES_TAB } from '../settings-way-panes';
 import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
 import { browserRowLabels } from './browser-labels';
 import { usePairDevice, type PairTargetKind } from './cloud/usePairDevice';
-import { clearRequestedPairTarget, peekRequestedPairTarget, useDevicesData, useExposeStatus, type DeviceEntry } from './cloud/useDevicesData';
+import { clearRequestedPairTarget, peekRequestedPairTarget, useDevicesData, type DeviceEntry } from './cloud/useDevicesData';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
-import { isIosSafariTab, ownFirst, useDeviceCaller } from './cloud/device-caller';
+import { ownFirst, useDeviceCaller } from './cloud/device-caller';
 import { OwnDeviceSignOut } from './cloud/OwnDeviceSignOut';
 import { describeDevice, describeMacRow, reachWords, ROLE_NOTE, UNPAIR_SELF_WARNING, CLOUD_UNPAIRED_NOTICE, DEVICES_CHANGED_EVENT } from './cloud/device-rows-copy';
 
@@ -51,6 +47,7 @@ interface QrDialogState {
 }
 
 /**
+ * Settings > Phones & Cloud > Devices (a tab, PhonesCloudTabs.tsx).
  * Paired devices (iOS app etc.) — list, revoke, and pair a new device by
  * showing a wn://pair QR code the Walnut iOS app scans. The token appears
  * exactly once (only its hash is stored server-side), so the QR block stays
@@ -62,7 +59,7 @@ interface QrDialogState {
  */
 export function DevicesSection() {
   const replica = useIsCloudReplica();
-  const navigate = useNavigate();
+  const tabView = usePhonesCloudView();
   const [target, setTarget] = useState<TargetKind>('lan');
   // "Use the tailnet address" on the Tailscale sub-page: picked here once the list offers it.
   const [firstWanted] = useState(peekRequestedPairTarget);
@@ -104,14 +101,9 @@ export function DevicesSection() {
   // Show QR and Pair new device: the code opens in a dialog in front of the user.
   const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
   const qrReturnFocus = useRef<HTMLElement | null>(null);
-  const expose = useExposeStatus(replica);
-  const linkName = useBrowserLinkName();
   const { notifySaved } = useSettingsSaved();
   // A browser signed in with a code: its own row says so, other rows offer no Remove.
   const caller = useDeviceCaller();
-  // Only a Safari tab signed in with a token can lose it after a week (N2-36):
-  // a tab on the Mac's own address holds none, so the tip would say nothing true.
-  const [homeScreenHint] = useState(() => isIosSafariTab() && !!getDeviceToken());
 
   const openQrDialog = (next: QrDialogState) => {
     qrReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -137,6 +129,8 @@ export function DevicesSection() {
     if (made) {
       if (!dlg.repair) nameDraft.clear(nameDraft.key);
       await refresh();
+      // The tab bar counts the devices from its own read.
+      window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
     }
   };
 
@@ -249,25 +243,6 @@ export function DevicesSection() {
   const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
   const macs = rows.filter((r) => r.role === 'mac');
   const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
-  // How the phone reaches Walnut now and the three ways (cloud/ways-model.ts): a primary only.
-  const showWays = !replica;
-  const isPhone = (d: DeviceEntry) => (d.role ?? 'phone') === 'phone';
-  const waysView = deriveWays({
-    listState,
-    phoneUses: [
-      ...devices.filter(isPhone).map((d) => ({ name: d.name, via: 'lan' as const, lastUsedAt: d.lastUsedAt })),
-      ...cloudDevices.filter(isPhone).map((d) => ({ name: d.name, via: 'cloud' as const, lastUsedAt: d.lastUsedAt })),
-    ],
-    targets,
-    cloudError,
-    cloudUnpaired,
-    cloudWithheld,
-    tailscale,
-    expose,
-    linkName,
-  });
-  // Each way is its own sub-page (Settings > Phones & Cloud > Tailscale): a card drills in.
-  const onWayAction = (id: WayId) => navigate({ hash: `#${WAY_PANES[id]}` }, { replace: true });
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
 
   /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
@@ -373,18 +348,9 @@ export function DevicesSection() {
   };
 
   return (
-    <SectionCard id="devices" title="Phones & Cloud">
+    <SectionCard id={DEVICES_TAB} title="Phones & Cloud">
+      <PhonesCloudTabHead tab={DEVICES_TAB} view={tabView} />
       <div className="devices-section">
-        {homeScreenHint && (
-          <p className="settings-row-help devices-home-screen-hint" data-testid="devices-home-screen-hint">
-            Add Walnut to your Home Screen (Share &gt; Add to Home Screen) to keep this phone signed in. Safari may sign it
-            out after a week without a visit.
-          </p>
-        )}
-        {showWays && (
-          <WaysOverview now={waysView.now} ways={waysView.ways} onAction={onWayAction} />
-        )}
-
         {/* A phone signed in only by browser: its group is Signed-in browsers, no empty box here. */}
         {(phones.length > 0 || listState !== 'ready' || browsers.length === 0 || cloudUnpaired || cloudError) && (
         <SettingsGroup heading="Paired phones" data-testid="devices-phones-group">

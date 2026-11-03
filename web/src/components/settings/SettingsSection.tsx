@@ -27,6 +27,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useInRouterContext, useLocation } from 'react-router-dom'
 import { log } from '@/utils/log'
+import { PHONES_CLOUD_PANE, PHONES_CLOUD_TABS } from './settings-way-panes'
 import {
   SettingsPaneTile,
   SettingsSavedIndicator,
@@ -63,7 +64,9 @@ const hasContent = (n: ReactNode) => n !== undefined && n !== null && n !== fals
 function PaneHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   const { paneId, leadSectionId, metaFor, compact } = useSettingsPane()
   const { setLeadHeader, stickyActionsHost } = useSettingsPaneChrome()
-  const meta = leadSectionId ? metaFor(leadSectionId) : undefined
+  // A Phones & Cloud tab wears its entry's tile and title; its tab bar names the tab.
+  const headId = leadSectionId && (PHONES_CLOUD_TABS as readonly string[]).includes(leadSectionId) ? PHONES_CLOUD_PANE : leadSectionId
+  const meta = headId ? metaFor(headId) : undefined
   const desc = meta?.description || description
   return (
     <header className="settings-pane-header" ref={setLeadHeader}>

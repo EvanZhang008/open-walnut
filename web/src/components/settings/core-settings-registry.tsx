@@ -8,6 +8,7 @@ import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
 import { DevicesSection } from './sections/DevicesSection'
 import { DevicesWaySection } from './sections/DevicesWaySection'
+import { PhonesCloudLanding } from './sections/PhonesCloudLanding'
 import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HooksSection } from './sections/HooksSection'
@@ -63,6 +64,13 @@ export interface CoreSettingsContribution {
    * pane leads with a way back to the parent (SettingsPaneBack).
    */
   parent?: string
+  /**
+   * A tab of another entry (Phones & Cloud's ways and Devices, settings-way-panes.ts):
+   * its own pane and address, drawn under the entry's tab bar. It has no nav row of
+   * its own (Find a setting still finds it), the entry's row stays selected while it
+   * is open, and it needs no way back: the tab bar is the way to its siblings.
+   */
+  tabOf?: string
   /**
    * A server fact the pane needs to have anything to show (settings-pane-gates.ts).
    * A section that can render nothing names one, so no nav entry opens an empty pane
@@ -260,21 +268,19 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: ['s3', 'bucket', 'region', 'prefix', 'aws', 'profile', 'access key'],
     render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} />,
   },
-  // Machines: Phones & Cloud is the main entry (paired phones and browsers, pairing a
-  // phone, and the three ways at a glance); each way is its own sub-page under it.
-  // SSH hosts for remote sessions are their own entry.
+  // Machines: Phones & Cloud is one entry with four tabs (settings-way-panes.ts): the
+  // three ways to reach Walnut, and Devices. The entry opens the tab in use. SSH hosts
+  // for remote sessions are their own entry.
   {
     owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure',
     icon: 'phone', tint: '#5856D6',
     description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a browser link.',
-    keywords: ['phone', 'iphone', 'pair', 'paired phones', 'signed-in browsers',
-      { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
-      { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],
-    render: () => <DevicesSection />,
+    keywords: ['phone', 'iphone'],
+    render: () => <PhonesCloudLanding />,
   },
-  // `#cloud` keeps its old deep link: it is the Cloud companion sub-page now.
+  // `#cloud` keeps its old deep link: it is the Cloud companion tab now.
   {
-    owner: 'walnut', id: 'cloud', label: 'Cloud companion', title: 'Cloud companion', group: 'configure', parent: 'devices',
+    owner: 'walnut', id: 'cloud', label: 'Cloud companion', title: 'Cloud companion', group: 'configure', tabOf: 'devices',
     icon: 'cloud', tint: '#5856D6',
     description: 'A small server of yours in the cloud that your phone talks to, even while this Mac sleeps.',
     keywords: ['cloud', 'companion', 'bridge', 'relay', 'updates',
@@ -283,7 +289,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: ({ config, saveSection }) => <CloudSection config={config} onSave={saveSection} />,
   },
   {
-    owner: 'walnut', id: 'devices-tailscale', label: 'Tailscale', title: 'Tailscale', group: 'configure', parent: 'devices',
+    owner: 'walnut', id: 'devices-tailscale', label: 'Tailscale', title: 'Tailscale', group: 'configure', tabOf: 'devices',
     requires: 'primary',
     icon: 'network', tint: '#5856D6',
     description: 'A private network between this Mac and your phone, so the phone talks to this Mac directly.',
@@ -291,12 +297,21 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <DevicesWaySection way="tailscale" />,
   },
   {
-    owner: 'walnut', id: 'devices-browser', label: 'Browser link', title: 'Browser link', group: 'configure', parent: 'devices',
+    owner: 'walnut', id: 'devices-browser', label: 'Browser link', title: 'Browser link', group: 'configure', tabOf: 'devices',
     requires: 'primary',
     icon: 'globe', tint: '#5856D6',
     description: 'An HTTPS address that opens Walnut in any browser after you sign in.',
     keywords: ['browser link', 'tunnel', 'open from a browser', 'sign-in code', 'https'],
     render: () => <DevicesWaySection way="browser" />,
+  },
+  {
+    owner: 'walnut', id: 'devices-phones', label: 'Devices', title: 'Devices', group: 'configure', tabOf: 'devices',
+    icon: 'phone', tint: '#34AADC',
+    description: 'Your paired phones and signed-in browsers, and pairing a new phone.',
+    keywords: ['phone', 'iphone', 'pair', 'paired phones', 'signed-in browsers', 'devices',
+      { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
+      { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],
+    render: () => <DevicesSection />,
   },
   {
     owner: 'walnut', id: 'remote-hosts', label: 'Remote Hosts', title: 'Remote Hosts', group: 'configure',

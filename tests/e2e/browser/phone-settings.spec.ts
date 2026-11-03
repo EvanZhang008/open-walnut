@@ -73,6 +73,11 @@ async function openSettings(page: Page) {
 }
 
 /** Tap one Settings row; its pane opens as a layer with Back and its name. */
+/** Phones & Cloud opens the tab in use (it replaces its own address): wait until a tab is open. */
+async function landedTab(page: Page) {
+  await expect(page.getByTestId('pc-tabs').locator('.pc-tab[aria-current="page"]')).toHaveCount(1, { timeout: 30_000 })
+}
+
 async function openPane(page: Page, testId: string, name: string) {
   await page.getByTestId(testId).click()
   await expect(page.locator('.settings-layout[data-phone-settings="pane"]')).toBeVisible({ timeout: 30_000 })
@@ -172,7 +177,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     expect(paneBox.x).toBe(0)
     expect(Math.abs(paneBox.width - vp.width)).toBeLessThanOrEqual(1)
     await expect(nav).toBeHidden()
-    await expect(page.locator('#devices')).toBeVisible({ timeout: 30_000 })
+    await landedTab(page)
     await shot(page, 'pane-devices')
     await page.goBack()
     await expect(page.locator('.settings-layout[data-phone-settings="list"]')).toBeVisible()
@@ -190,6 +195,8 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await openSettings(page)
     for (const [testId, name] of [['settings-nav-general', 'General'], ['settings-nav-devices', 'Phones & Cloud']] as const) {
       await openPane(page, testId, name)
+      // Phones & Cloud: measure its Devices tab (the phone list and Add a phone).
+      if (testId === 'settings-nav-devices') { await landedTab(page); await backToDevices(page) }
       await page.waitForTimeout(1_500)
       const stacked = await page.locator('.settings-pane .settings-row').evaluateAll((els) => els
         .filter((el) => el.querySelector(':scope > .settings-row-copy') && el.querySelector(':scope > .settings-row-actions'))
@@ -227,7 +234,9 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
       expect(await findSmallTargets(page, '.settings-nav'), 'list targets').toEqual([])
       expect(await findSmallText(page, 12, '.settings-nav'), 'list text').toEqual([])
       await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
-      await expect(page.locator('#devices')).toBeVisible({ timeout: 30_000 })
+      await landedTab(page)
+      // The tab bar scrolls sideways on its own; the Devices tab holds the most rows.
+      await backToDevices(page)
       await page.waitForTimeout(1_500)
       // Walk the pane a screen at a time: only what is on screen can be measured.
       const pane = page.locator('.settings-pane')
@@ -340,13 +349,13 @@ test.describe('a phone signed in through a tunnel', () => {
     const { phone, context, name } = await signedInPhone(browser, page)
     await openSettings(phone)
     await openPane(phone, 'settings-nav-devices', 'Phones & Cloud')
-    const devices = phone.locator('#devices')
+    const devices = await backToDevices(phone)
     await expect(devices.getByTestId('devices-browsers-group')).toBeVisible({ timeout: 30_000 })
     await openWay(phone, 'browser')
     await expect(phone.getByTestId('browser-access-code')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-link')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The phone link shows on the computer Walnut runs on.')
-    // The Browser link sub-page leads back to the list of devices on Phones & Cloud.
+    // The Devices tab holds the list of devices.
     await backToDevices(phone)
     await expect(devices).not.toContainText('No phones paired yet.')
     const group = devices.getByTestId('devices-browsers-group')
@@ -379,6 +388,7 @@ test.describe('a phone signed in through a tunnel', () => {
     phone.on('request', (req) => { if (req.method() === 'DELETE') deletes.push(new URL(req.url()).pathname) })
     await openSettings(phone)
     await openPane(phone, 'settings-nav-devices', 'Phones & Cloud')
+    await backToDevices(phone)
     const own = phone.locator(`[data-device-name="${name}"]`)
     await own.getByTestId('devices-sign-out').click({ timeout: 30_000 })
     const sheet = phone.getByTestId('devices-sign-out-sheet')
@@ -407,7 +417,7 @@ test.describe('on a computer', () => {
     await page.goto('/')
     await page.getByRole('link', { name: /settings/i }).first().click()
     await page.getByTestId('settings-nav-devices').click({ timeout: 60_000 })
-    await expect(page.locator('#devices')).toBeVisible({ timeout: 30_000 })
+    await landedTab(page)
     await expect(page.getByTestId('devices-home-screen-hint')).toHaveCount(0)
     await expect(page.locator('.settings-layout')).not.toHaveAttribute('data-phone-settings', /.+/)
     // Nav and pane side by side, as before.
@@ -434,7 +444,7 @@ test.describe('a Home Screen app', () => {
     await page.goto('/')
     await openSettings(page)
     await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
-    await expect(page.locator('#devices')).toBeVisible({ timeout: 30_000 })
+    await landedTab(page)
     await expect(page.getByTestId('devices-home-screen-hint')).toHaveCount(0)
   })
 })

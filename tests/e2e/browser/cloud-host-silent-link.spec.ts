@@ -34,7 +34,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, seedColumns } from './draft-helpers'
-import { openWay } from './devices-ways-helpers'
+import { backToDevices, openWay } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -206,14 +206,12 @@ test('a connected companion that went silent: Files, the slash menu and the fold
   expect(errors).toEqual([])
 })
 
-/** Settings › Phones & Cloud, by clicks. */
+/** Settings › Phones & Cloud › Devices, by clicks. */
 async function openDevices(page: Page): Promise<Locator> {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-devices').click()
-  const section = page.locator('#devices')
-  await expect(section).toBeVisible({ timeout: 30_000 })
-  return section
+  return backToDevices(page)
 }
 
 test('removing a cloud phone while the companion does not answer says how long the Mac waited, in plain words', async ({ page, browserName }) => {

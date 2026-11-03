@@ -56,8 +56,7 @@ async function openDevices(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('#devices')).not.toContainText('Loading paired phones...', { timeout: 30_000 })
-  // The Cloud companion sub-page holds the row.
+  // The Cloud companion tab holds the row.
   return openWay(page, 'cloud')
 }
 

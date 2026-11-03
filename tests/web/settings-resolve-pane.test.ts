@@ -4,7 +4,7 @@ import {
   CORE_PANE_IDS,
   NAV_OWNER,
   navRowShown,
-  parentPane,
+  parentPane, tabParent,
   resolvePane,
   sectionsForPane,
 } from '../../web/src/components/settings/settings-routing.js'
@@ -48,19 +48,27 @@ describe('resolvePane', () => {
     expect(resolvePane('#companion-keep', [])).toMatchObject({ paneId: 'cloud', targetId: 'companion-keep' })
     expect(resolvePane('#browser-access-runs-on', [])).toMatchObject({ paneId: 'devices-browser', targetId: 'browser-access-runs-on' })
     expect(resolvePane('#remote-access-card', [])).toMatchObject({ paneId: 'devices-tailscale', targetId: 'remote-access-card' })
-    expect(resolvePane('#devices-new-name', [])).toMatchObject({ known: false })
-    expect(parentPane('devices-tailscale')).toBe('devices')
-    expect(parentPane('cloud')).toBe('devices')
-    expect(parentPane('devices')).toBeNull()
+    // The Devices tab's rows: an old link to the name field lands on Devices.
+    expect(resolvePane('#devices-new-name', [])).toEqual({ paneId: 'devices-phones', targetId: 'devices-new-name', known: true, row: true })
+    expect(resolvePane('#devices-others', [])).toMatchObject({ paneId: 'devices-phones' })
+    expect(resolvePane('#devices-phones', [])).toEqual({ paneId: 'devices-phones', targetId: null, known: true })
+    // Tabs are not sub-pages: no way back to a parent (the tab bar is the way to the siblings).
+    expect(parentPane('devices-tailscale')).toBeNull()
+    expect(parentPane('cloud')).toBeNull()
+    expect(tabParent('cloud')).toBe('devices')
+    expect(tabParent('devices-phones')).toBe('devices')
+    expect(tabParent('devices')).toBeNull()
   })
 
-  it('shows a sub-page row only while its parent or a sibling is open, or while filtering', () => {
+  it('lists a tab in the nav only as a Find a setting hit', () => {
     expect(navRowShown('devices', 'general', false)).toBe(true)
-    expect(navRowShown('devices-tailscale', 'general', false)).toBe(false)
-    expect(navRowShown('devices-tailscale', 'devices', false)).toBe(true)
-    expect(navRowShown('devices-tailscale', 'cloud', false)).toBe(true)
-    expect(navRowShown('devices-tailscale', 'devices-tailscale', false)).toBe(true)
+    expect(navRowShown('devices', 'cloud', false)).toBe(true)
+    for (const open of ['general', 'devices', 'cloud', 'devices-tailscale', 'devices-phones']) {
+      expect(navRowShown('devices-tailscale', open, false)).toBe(false)
+      expect(navRowShown('devices-phones', open, false)).toBe(false)
+    }
     expect(navRowShown('cloud', 'general', true)).toBe(true)
+    expect(navRowShown('devices-phones', 'general', true)).toBe(true)
   })
 
   it('opens Remote Hosts for one host row and targets that row', () => {
