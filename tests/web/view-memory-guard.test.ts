@@ -193,7 +193,7 @@ const PASSING: Record<string, string> = {
 /** The view choices the user named, and where each is kept now. */
 const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: string }> = [
   { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.top', row\.key,/, what: 'an Org node\'s Task / Brief / Threads view, per node' },
-  { file: 'components/org/OrgNodeDetail.tsx', state: 'taskTab', key: /usePageViewOf<OrgRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
+  { file: 'components/org/OrgNodeDetail.tsx', state: 'keptTab', key: /usePageViewOf<KeptRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
   { file: 'components/board/BoardStatusView.tsx', state: 'filter', key: /usePageViewOf<StatusFilter>\('board', 'statusFilter', ownerId,/, what: 'a board\'s status filter, per board' },

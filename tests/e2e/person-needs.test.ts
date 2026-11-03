@@ -78,7 +78,7 @@ describe('a person sets NEED_ACTION', () => {
 
       const theirs = await idleTask()
       await move(theirs, '99999999-2222-4333-8444-555555555555')
-      expect(await statusAfter(theirs), name).toMatchObject({ state: 'waiting', toRead: 'turn' })
+      expect(await statusAfter(theirs), name).toMatchObject({ state: 'read', toRead: 'turn' })
     })
   }
 
