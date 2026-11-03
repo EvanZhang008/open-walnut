@@ -1,24 +1,22 @@
 /**
- * Tasks pinned to an Org node (2026-10-31, the user, translated: "for this VP I have some tasks I want
- * to pin here ... it shows which ones are my special focus"; picked design B: a Pinned tab first in the node's Task
- * view, and the node's pins listed under its chat in the Org list, each unpinned right there).
+ * The Org page's Watching (2026-11-02, the user, through his VP: "if it watching then concideras
+ * pinnedl rename this to watching ... same wathcing as regular home pannel"). There is one list of
+ * tasks the user keeps in view: the Watch of the home task panel (`Task.watched_at`). The Org page's
+ * Watching tab of a node lists the watched tasks of that node's work, and its eye watches a task or
+ * stops watching it, the same write as Home's.
  *
- * A pin is the user's focus on one node, kept apart from the board's own pins (Focus / Satellite /
- * Parked). It lives on the pinned task (`Task.org_pins`), one entry per node, so a task pinned to
- * the CEO and to its VP shows in both, and it goes wherever the task goes. A node is the Org page's
- * row key: `main` for the CEO, `project:<key>` for a VP (projectKey of its project). The user or
- * any agent pins and unpins (2026-10-27, the user: "all human action can be done by agent also");
- * each pin records who made it. Writes run inside the org lock, so two pins of one task at once
- * both land.
+ * Before, a task was pinned to one Org node (`Task.org_pins`, 2026-10-31), a second list apart
+ * from the watch. Those pins are carried over as watches (carryPinsToWatch, at the primary's boot);
+ * the pins stay on the row for an older Walnut, which still shows them on its Pinned tab, and
+ * stopping a watch takes them off too (task-manager updateTask), so a pin never brings a watch
+ * back. The routes and the `org_pin` op that pinned now watch, so an older page or session that
+ * still pins reaches the same list.
  */
-import type { OrgPin, Task } from '../types.js';
+import type { Task } from '../types.js';
 import { log } from '../../logging/index.js';
-import { OrgError, orgTasks, withOrgLock } from './org-store.js';
-import { ORG_MAIN_NODE, nodePins, orgProjectNode, projectKey } from './org-tree.js';
+import { OrgError, orgTasks } from './org-store.js';
+import { ORG_MAIN_NODE, orgProjectNode, projectKey } from './org-tree.js';
 import type { OrgWriter } from './org-node-edit.js';
-
-/** A node holds at most this many pins: a focus list, not a second board. */
-export const ORG_PINS_MAX = 50;
 
 type NodeTask = Pick<Task, 'project' | 'org_role' | 'org_name' | 'org_leads' | 'phase'>;
 
@@ -66,44 +64,60 @@ export function pinNodeName(node: string, tasks: readonly NodeTask[]): string {
   return `the ${name} VP`;
 }
 
-export interface PinResult { task: Task; node: string; nodeName: string; changed: boolean }
+/** The node a watched task shows under on the Org page: the VP whose work holds its project. */
+export function watchNodeOf(task: Pick<Task, 'project'>, tasks: readonly NodeTask[]): string {
+  return rowNode(task.project ?? '', tasks);
+}
 
-/** Pin `taskId` to `node` (as the caller named it), or take that pin off. Pinning twice changes nothing. */
-export function setOrgPin(taskId: string, rawNode: string, pinned: boolean, writer: OrgWriter): Promise<PinResult> {
-  return withOrgLock(async () => {
-    const tm = await import('../task-manager.js');
-    const task = await tm.getTask(taskId).catch(() => null);
-    if (!task) throw new OrgError('task_not_found', 404, `No task with id "${taskId}".`);
-    // A plugin's own task shows only in its plugin's view, so a pin of it would show nowhere.
-    if (pinned && task.plugin_only) throw new OrgError('not_on_org', 409, `"${task.title}" shows only in its plugin's view, never on the Org page.`);
-    const tasks = await orgTasks();
-    // Unpinning takes any node the task holds, even one no row shows any more.
-    // A project named by its name counts too: once another VP leads it, its pins still show under
-    // that VP's row, and resolvePinNode names the VP's own node.
-    const held = (n: string) => task.org_pins?.some((p) => p.node === n) ?? false;
-    const raw = rawNode.trim();
-    const node = !pinned && held(raw) ? raw
-      : !pinned && raw && held(orgProjectNode(raw)) ? orgProjectNode(raw)
-      : resolvePinNode(rawNode, tasks);
-    if (!node) throw new OrgError('not_org_node', 404, `"${rawNode}" names no node of the org: pass "main", a project's name, or a VP's name.`);
-    const pins = task.org_pins ?? [];
-    const has = pins.some((p) => p.node === node);
-    const nodeName = pinNodeName(node, tasks);
-    if (has === pinned) return { task, node, nodeName, changed: false };
-    // Counted as the page shows them: open tasks (a done one may be off the loaded list).
-    if (pinned && nodePins(tasks.filter((t) => t.phase !== 'COMPLETE' && !t.plugin_only), node).length >= ORG_PINS_MAX) {
-      throw new OrgError('too_many_pins', 409, `${nodeName} already holds ${ORG_PINS_MAX} open pins. Unpin one first.`);
+export interface WatchResult { task: Task; watched: boolean; node: string; nodeName: string; changed: boolean }
+
+/**
+ * Watch `taskId` (Home's Watching, shown on the Org page under the node its work belongs to), or
+ * stop watching it. `rawNode` is what an older pin named; the task shows under its own node
+ * whatever it names. Watching twice changes nothing.
+ */
+export async function setOrgWatch(taskId: string, watched: boolean, writer: OrgWriter, rawNode = ''): Promise<WatchResult> {
+  const tm = await import('../task-manager.js');
+  const task = await tm.getTask(taskId).catch(() => null);
+  if (!task) throw new OrgError('task_not_found', 404, `No task with id "${taskId}".`);
+  // A plugin's own task shows only in its plugin's view, so a watch of it would show on no Org node.
+  if (watched && task.plugin_only) throw new OrgError('not_on_org', 409, `"${task.title}" shows only in its plugin's view, never on the Org page.`);
+  // An older page or session still names a node; one that names none of the org is still refused,
+  // so a typo is not taken for a watch.
+  const tasks = await orgTasks();
+  if (rawNode.trim() && watched && !resolvePinNode(rawNode, tasks)) {
+    throw new OrgError('not_org_node', 404, `"${rawNode}" names no node of the org: pass "main", a project's name, or a VP's name, or no node at all.`);
+  }
+  const node = watchNodeOf(task, tasks);
+  const nodeName = pinNodeName(node, tasks);
+  const was = !!task.watched_at;
+  // Stopping clears an old pin too, whether or not a watch was on (an older Walnut may have pinned it since).
+  if (was === watched && (watched || !task.org_pins?.length)) return { task, watched, node, nodeName, changed: false };
+  // The same write as Home's eye (PATCH watched_at), so every surface reads it the same way.
+  const res = await tm.updateTask(task.id, { watched_at: watched ? new Date().toISOString() : '' }, { source: 'api' });
+  log.task.info(watched ? 'org: task watched' : 'org: task no longer watched', { taskId: task.id, node, by: writer.by });
+  return { task: res.task, watched, node, nodeName, changed: true };
+}
+
+/**
+ * Carry every Org pin over as a watch: a task pinned to a node and not watched is watched from the
+ * time of its first pin, so nothing the user pinned leaves his view. Runs once a boot on the
+ * primary; a task with no pin left (a watch stopped takes them off) is never touched again.
+ */
+export async function carryPinsToWatch(): Promise<number> {
+  const tm = await import('../task-manager.js');
+  const due = (await tm.listTasks()).filter((t) => t.org_pins?.length && !t.watched_at && !t.plugin_only);
+  let carried = 0;
+  for (const t of due) {
+    const first = t.org_pins!.map((p) => p.at).filter((at) => Number.isFinite(Date.parse(at))).sort()[0] ?? new Date().toISOString();
+    try {
+      // Raw, under the row's own lock: no updated_at bump, so no list reshuffles on upgrade.
+      const res = await tm.updateTaskRaw(t.id, (cur) => (cur.watched_at || !cur.org_pins?.length ? null : { watched_at: first }), { emitEvent: true, source: 'internal' });
+      if (res.changed) carried++;
+    } catch (err) {
+      log.task.warn('org: carrying a pin over as a watch failed', { taskId: t.id, error: String(err) });
     }
-    const pin: OrgPin = { node, at: new Date().toISOString(), by: writer.by, ...(writer.byName ? { by_name: writer.byName } : {}) };
-    // Read-modify-write of the row as stored, under the task's own lock: another write of the task
-    // (a phase move, a sync pull) never takes the pin back out.
-    const res = await tm.updateTaskRaw(task.id, (current) => {
-      const now = current.org_pins ?? [];
-      if (now.some((p) => p.node === node) === pinned) return null;
-      const next = pinned ? [...now, pin] : now.filter((p) => p.node !== node);
-      return { org_pins: (next.length ? next : null) as unknown as OrgPin[] };
-    }, { emitEvent: true, source: 'api' });
-    if (res.changed) log.task.info(pinned ? 'org: task pinned to a node' : 'org: task unpinned from a node', { taskId: task.id, node, by: writer.by });
-    return { task: res.task ?? await tm.getTask(task.id), node, nodeName, changed: res.changed };
-  });
+  }
+  if (carried) log.task.info('org: pins carried over as watches', { carried });
+  return carried;
 }

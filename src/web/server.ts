@@ -2452,6 +2452,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const taskDirSweep = startTaskDirSweep()
     // Removal of test runs' tasks, sessions and projects once idle (core/test-run-sweep.ts).
     const testRunSweep = (await import('../core/test-run-sweep.js')).startTestRunSweep()
+    // Org pins become watches, Home's one Watching list (core/org/org-pins.ts); off the boot path.
+    void import('../core/org/org-pins.js').then((m) => m.carryPinsToWatch()).catch((err) => log.web.warn('org pin carry-over failed', { error: String(err) }))
     // The companion's copy of the task store (core/replication/task-replica.ts).
     const { startTaskReplicaSync } = await import('../core/replication/task-replica.js')
     const taskReplica = startTaskReplicaSync()

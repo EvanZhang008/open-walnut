@@ -178,24 +178,10 @@ export function projectKey(project: string | undefined): string {
   return (project ?? '').trim().toLowerCase();
 }
 
-/** The Org node a pin names (Task.org_pins, org-pins.ts): the CEO, or a VP by its project. The Org
- *  page's row keys are the same strings, so a pin is found by the row it shows under. */
+/** An Org node's key: the CEO, or a VP by its project. The Org page's row keys are the same
+ *  strings (a watched task shows under the row of its node, org-pins.ts). */
 export const ORG_MAIN_NODE = 'main';
 export const orgProjectNode = (project: string | undefined): string => `project:${projectKey(project)}`;
-
-type Pinnable = { org_pins?: ReadonlyArray<{ node: string; at: string }> };
-/** A node, or every node one row shows (a VP's own and the projects it leads). */
-type Nodes = string | readonly string[];
-const inNodes = (nodes: Nodes, node: string) => (typeof nodes === 'string' ? nodes === node : nodes.includes(node));
-export const isPinnedTo = (task: Pinnable, nodes: Nodes): boolean => !!task.org_pins?.some((p) => inNodes(nodes, p.node));
-/** The nodes of `nodes` the task is pinned to. */
-export const pinnedNodesOf = (task: Pinnable, nodes: Nodes): string[] => (task.org_pins ?? []).filter((p) => inNodes(nodes, p.node)).map((p) => p.node);
-
-/** The tasks pinned to `nodes`, in the order they were pinned. */
-export function nodePins<T extends Pinnable>(tasks: readonly T[], nodes: Nodes): T[] {
-  const at = (t: T) => Math.min(...(t.org_pins ?? []).filter((p) => inNodes(nodes, p.node)).map((p) => Date.parse(p.at) || 0));
-  return tasks.filter((t) => isPinnedTo(t, nodes)).sort((a, b) => at(a) - at(b));
-}
 
 function hasSession(task: OrgTaskLike): boolean {
   return !!(task.session_id || task.exec_session_id);

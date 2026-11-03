@@ -6,8 +6,8 @@
  * sections use too. The Needs you tab holds the node's asks (its row's alerts, the cards).
  */
 import type { Task } from '@open-walnut/core';
-import { nodePins, projectKey, userStateOf } from '@open-walnut/org-tree';
-import { STATUS_SECTION_LABELS } from '@/components/tasks/status-sections';
+import { projectKey, userStateOf } from '@open-walnut/org-tree';
+import { STATUS_SECTION_LABELS, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
 import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 
@@ -18,11 +18,19 @@ export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
   waiting: STATUS_SECTION_LABELS.waiting, done: STATUS_SECTION_LABELS.done,
 };
 
-/** The rail's tabs: the tasks the user pinned to the node first (2026-10-31, the user picked "B: a
- *  Pinned tab first"; org-pins.ts), then the four status tabs. A node still opens on Needs you. */
-export type OrgRailTab = 'pinned' | OrgTaskTab;
-export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['pinned', ...ORG_TASK_TABS];
-export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { pinned: 'Pinned', ...ORG_TASK_TAB_LABELS };
+/** The rail's tabs: the tasks the user watches first, then the four status tabs, as on the home
+ *  panel. Watching is Home's own list (Task.watched_at; 2026-11-02, the user: "if it watching then
+ *  concideras pinnedl rename this to watching ... same wathcing as regular home pannel"): the
+ *  node's tab holds the watched tasks of its work. A node still opens on Needs you. */
+export type OrgRailTab = 'watching' | OrgTaskTab;
+export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['watching', ...ORG_TASK_TABS];
+export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { watching: STATUS_SECTION_LABELS.watching, ...ORG_TASK_TAB_LABELS };
+
+/** A kept tab (usePageViewOf): one of the tabs, or the Pinned tab an older build kept, which is
+ *  Watching now (railTabShown). */
+export type KeptRailTab = OrgRailTab | 'pinned';
+export const isKeptRailTab = (v: unknown): v is KeptRailTab => v === 'pinned' || (ORG_RAIL_TABS as readonly unknown[]).includes(v);
+export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'watching' : v);
 
 /** Each status tab's dot. */
 export const TAB_DOT: Record<OrgTaskTab, string> = {
@@ -33,8 +41,8 @@ export const TAB_DOT: Record<OrgTaskTab, string> = {
 export const ORG_DONE_WINDOW_DAYS = 7;
 
 export interface OrgTaskTabs {
-  /** The tasks pinned to this node, in the order they were pinned, whatever their state. */
-  pinned: Task[];
+  /** The watched tasks of this node's work, in the order they were watched, whatever their state. */
+  watching: Task[];
   /** The cards: every ask in the node's work. */
   needs: OrgAlertView[];
   working: Task[];
@@ -72,9 +80,10 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
   const done = tasks
     .filter((t) => userStateOf(t) === 'done' && !t.plugin_only && projects.has(projectKey(t.project)) && doneAt(t) >= cutoff)
     .sort((a, b) => doneAt(b) - doneAt(a));
-  // A pin is the user's: it shows whatever project the task is in now, done or not.
-  const pinned = nodePins(tasks.filter((t) => !t.plugin_only), rowPinNodes(row));
-  return { pinned, needs, working: of('working'), waiting: of('waiting'), done };
+  // Watched, done or not: on the CEO every one Home's Watching lists, on a VP those of its projects.
+  const watching = sortSectionTasks('watching', tasks.filter((t) => isWatched(t) && !t.plugin_only
+    && (row.kind === 'main' || projects.has(projectKey(t.project)))));
+  return { watching, needs, working: of('working'), waiting: of('waiting'), done };
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
@@ -82,11 +91,25 @@ function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
   return alerts.filter((a) => (seen.has(a.taskId) ? false : (seen.add(a.taskId), true)));
 }
 
-/** The nodes a row shows the pins of: its own, and each project its VP leads (a project put under
- *  this VP after a task was pinned to it keeps that pin in view). */
-export const rowPinNodes = (row: Pick<ChannelRow, 'key' | 'led'>): string[] => [row.key, ...(row.led ?? []).map((l) => l.key)];
+/**
+ * The watched tasks under each row of the Org list, each under one row: the VP whose work holds its
+ * project (its own or one it leads), else the CEO. In the order they were watched.
+ */
+export function watchedByRow(main: ChannelRow | null, rows: readonly ChannelRow[], tasks: readonly Task[]): Map<string, Task[]> {
+  const rowOf = new Map<string, string>();
+  for (const r of rows) for (const p of [r.project, ...(r.led ?? []).map((l) => l.project)]) {
+    const k = projectKey(p);
+    if (!rowOf.has(k)) rowOf.set(k, r.key);
+  }
+  const out = new Map<string, Task[]>();
+  for (const t of sortSectionTasks('watching', tasks.filter((x) => isWatched(x) && !x.plugin_only))) {
+    const key = rowOf.get(projectKey(t.project)) ?? main?.key;
+    if (key) out.set(key, [...(out.get(key) ?? []), t]);
+  }
+  return out;
+}
 
-/** The status tab a task's own state belongs to (a pinned row wears its dot and its line). */
+/** The status tab a task's own state belongs to (a watched row wears its dot and its line). */
 export const stateTab = (task: Task): OrgTaskTab => userStateOf(task);
 
 /** The line under a task in its tab: what it does, or what it waits on, in its status's words. */

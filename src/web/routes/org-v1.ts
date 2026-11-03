@@ -19,8 +19,8 @@
  *   POST /org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt, since }
  *                                                     Main's or a lead's report for the user
  *
- *   PUT    /org/pins/:taskId { node }  → { task, node, nodeName, changed }   pin a task to a node (org-pins.ts)
- *   DELETE /org/pins/:taskId?node=     → { task, node, nodeName, changed }   take that pin off
+ *   PUT    /org/pins/:taskId { node? } → { task, watched, node, nodeName, changed }   watch a task (org-pins.ts)
+ *   DELETE /org/pins/:taskId           → { task, watched, node, nodeName, changed }   stop watching it
  *
  * Reads work anywhere; the writes make or change org tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
@@ -282,17 +282,22 @@ orgV1Router.put('/org/projects/:project/vp', async (req: Request, res: Response,
   }
 })
 
-// Pin a task to a node, or take the pin off (src/core/org/org-pins.ts): the user's focus there.
-// The user or any agent may; the pin records who made it.
-async function pinRoute(req: Request, res: Response, next: NextFunction, pinned: boolean): Promise<void> {
+// Watch a task, or stop watching it (src/core/org/org-pins.ts): the routes that pinned a task to
+// a node now set Home's Watch, so an older page or session that still pins reaches the same list.
+// `node` is optional; the task shows under the node its work belongs to.
+async function pinRoute(req: Request, res: Response, next: NextFunction, watched: boolean): Promise<void> {
   try {
-    primaryOnly(pinned ? 'A task is pinned' : 'A pin is taken off')
-    const node = pinned ? req.body?.node : req.query.node
-    if (typeof node !== 'string' || !node.trim()) throw new OrgError('bad_node', 400, '`node` names the node: "main", a project\'s name, or a VP\'s name.')
+    primaryOnly(watched ? 'A task is watched' : 'A watch is stopped')
+    // Stopping needs no node (an older page still sends one, ignored).
+    const node = watched ? req.body?.node : undefined
+    if (node !== undefined && typeof node !== 'string') throw new OrgError('bad_node', 400, '`node`, when given, names the node: "main", a project\'s name, or a VP\'s name.')
     const { writer } = await nodeCaller(req)
-    const { setOrgPin } = await import('../../core/org/org-pins.js')
-    const out = await setOrgPin(String(req.params.taskId), node, pinned, writer)
-    res.json({ task: { ...brief(out.task), org_pins: out.task.org_pins ?? [] }, node: out.node, nodeName: out.nodeName, changed: out.changed })
+    const { setOrgWatch } = await import('../../core/org/org-pins.js')
+    const out = await setOrgWatch(String(req.params.taskId), watched, writer, node ?? '')
+    res.json({
+      task: { ...brief(out.task), watched_at: out.task.watched_at ?? null, org_pins: out.task.org_pins ?? [] },
+      watched: out.watched, node: out.node, nodeName: out.nodeName, changed: out.changed,
+    })
   } catch (err) {
     sendError(res, next, err)
   }

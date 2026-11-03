@@ -20,13 +20,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { rowPinNodes } from '@/components/org/org-task-tabs';
-import { buildOrgTree, nodePins } from '@open-walnut/org-tree';
+import { watchedByRow } from '@/components/org/org-task-tabs';
+import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { hydrateTaskSessionStatuses } from '@/api/sessions';
-import { resolveOrgContact, setOrgPin } from '@/api/org';
+import { resolveOrgContact } from '@/api/org';
 import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -95,7 +95,7 @@ function useMinuteNow(): number {
 }
 
 export function OrgPage() {
-  const { tasks, loading: tasksLoading, showOperationError, patchTasksLocal } = useTasksContext();
+  const { tasks, loading: tasksLoading, showOperationError, update: updateTaskInStore } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -133,46 +133,8 @@ export function OrgPage() {
     failed: failedAnswers,
     seen: (taskId) => setFailedAnswers((prev) => without(prev, taskId)),
   }), [failedAnswers]);
-  // A pin shows on the click (the rail and the list read the task's org_pins), and the server's
-  // answer settles it; a refused one goes back with the reason. One task's writes go one after
-  // another, so the server ends on the last click; only the newest click's answer is drawn.
-  const pinSeq = useRef(new Map<string, number>());
-  const pinChain = useRef(new Map<string, Promise<void>>());
-  const pin = useCallback((taskId: string, nodes: readonly string[], pinned: boolean) => {
-    const task = tasksNow.current.find((t) => t.id === taskId);
-    if (!task || !nodes.length) return;
-    const before = task.org_pins ?? [];
-    const next = pinned
-      ? [...before, ...nodes.filter((n) => !before.some((p) => p.node === n)).map((node) => ({ node, at: new Date().toISOString(), by: 'human' as const }))]
-      : before.filter((p) => !nodes.includes(p.node));
-    const seq = (pinSeq.current.get(taskId) ?? 0) + 1;
-    pinSeq.current.set(taskId, seq);
-    patchTasksLocal({ [taskId]: { org_pins: next } });
-    const run = async () => {
-      let pins: NonNullable<Task['org_pins']> | null = null;
-      try {
-        // One write per node, in turn; the last answer is the task's pins as stored.
-        for (const node of nodes) pins = (await setOrgPin(taskId, node, pinned)).org_pins;
-        if (pinSeq.current.get(taskId) === seq && pins) patchTasksLocal({ [taskId]: { org_pins: pins } });
-        log.info('org-page', pinned ? 'task pinned to an org node' : 'task unpinned from an org node', { taskId, nodes });
-      } catch (err) {
-        log.warn('org-page', 'org pin failed', { taskId, nodes, pinned, error: String(err) });
-        // Undo only this click's own change, on the pins as they are now (an agent's pin that came
-        // in meanwhile stays).
-        if (pinSeq.current.get(taskId) === seq) {
-          const now = tasksNow.current.find((t) => t.id === taskId)?.org_pins ?? [];
-          const undone = pinned
-            ? now.filter((p) => !nodes.includes(p.node) || before.some((b) => b.node === p.node))
-            : [...now, ...before.filter((b) => nodes.includes(b.node) && !now.some((p) => p.node === b.node))];
-          patchTasksLocal({ [taskId]: { org_pins: pins ?? undone } });
-        }
-        showOperationError(`${pinned ? 'Pin' : 'Unpin'} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    };
-    const chained = (pinChain.current.get(taskId) ?? Promise.resolve()).then(run);
-    pinChain.current.set(taskId, chained);
-    void chained.finally(() => { if (pinChain.current.get(taskId) === chained) pinChain.current.delete(taskId); });
-  }, [patchTasksLocal, showOperationError]);
+  // Stopping a watch from the Org list: Home's eye, the same write (WatchToggle), shown on the click.
+  const unwatch = useCallback((taskId: string) => { void updateTaskInStore(taskId, { watched_at: '' }); }, [updateTaskInStore]);
   // A hold ends when the task asks again or its session's prompt moves (a new ask shows at once).
   useEffect(() => {
     setAnswered((prev) => settleHolds(prev, allTasks, (t) => promptKey(probe(t)), Date.now()));
@@ -192,9 +154,6 @@ export function OrgPage() {
   }, [answered]);
 
   const tree = useMemo(() => buildOrgTree(shownTasks), [shownTasks]);
-  // The tasks pinned to a row (org-pins.ts), in pin order: its own node and the projects it leads.
-  const pinnable = useMemo(() => shownTasks.filter((t) => !t.plugin_only && t.org_pins?.length), [shownTasks]);
-  const pinsOf = useCallback((row: ChannelRow) => nodePins(pinnable, rowPinNodes(row)), [pinnable]);
   // The org's own tasks: Main, the leads, and every task under a project.
   const orgTasks = useMemo(() => {
     const ids = new Set<string>(tree.main ? [tree.main.id] : []);
@@ -256,6 +215,9 @@ export function OrgPage() {
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;
   const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
+  // The watched tasks (Home's Watching) under each row of the list: the VP whose work holds each.
+  const watched = useMemo(() => watchedByRow(channels.main, channels.rows, shownTasks), [channels.main, channels.rows, shownTasks]);
+  const watchedOf = useCallback((row: ChannelRow) => watched.get(row.key) ?? [], [watched]);
   const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
   const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
@@ -464,9 +426,9 @@ export function OrgPage() {
           onQuery={setQuery}
           onSelect={select}
           onOpenChart={() => openChart()}
-          pinsOf={pinsOf}
+          watchedOf={watchedOf}
           onOpenTask={openTask}
-          onUnpin={(taskId, nodes) => pin(taskId, nodes, false)}
+          onUnwatch={unwatch}
           now={now}
         />
       )}
@@ -510,7 +472,6 @@ export function OrgPage() {
             answers={answers}
             onStartChat={(row) => { void startChat(row); }}
             {...(phone ? { onBack: back } : {})}
-            onPin={pin}
             now={now}
           />}
         </section>

@@ -226,30 +226,32 @@ defineOp({
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
-// Pins on an Org node (src/core/org/org-pins.ts): the user's focus there, listed first in the
-// node's Task view (its Pinned tab) and under its chat in the Org list.
+// Watching (src/core/org/org-pins.ts): the user's one list of tasks he keeps in view, Home's
+// Watching section and the Org page's Watching tab of the node a task's work belongs to. The op
+// keeps the name it had when a task was pinned to a node, so sessions that learned it still work.
 defineOp({
   name: 'org_pin',
-  title: 'Pin a task to the CEO or a VP',
+  title: 'Watch a task (Home and the Org page)',
   description:
-    'Pins a task to an Org node as the user does on the Org page: the node\'s Pinned tab lists it first, and the Org '
-    + 'list shows it under that node\'s chat. Pin only what the user asked to keep in view there; it is his focus, '
-    + 'apart from the board\'s own pins. unpin:true takes the pin off. A task may be pinned to several nodes.',
+    'Watches a task as the user does with the eye on Home or the Org page: it is kept at the top of the home task '
+    + 'panel (Watching), on the Watching tab of the Org node its work belongs to (its VP, and the CEO), and under '
+    + 'that node in the Org list. Watch only what the user asked to keep in view. unpin:true stops watching it. '
+    + 'The same as task_update watched_at.',
   input: {
-    task: z.string().min(1).describe('The task to pin'),
-    node: z.string().min(1).describe('"main" for the CEO, a project\'s name ("Inbox" for the Inbox), or the name the user gave a VP'),
-    unpin: z.boolean().optional().describe('Take the pin off instead'),
+    task: z.string().min(1).describe('The task to watch'),
+    node: z.string().min(1).optional().describe('Not needed: the task shows under the node its work belongs to. Accepted from older callers ("main", a project\'s name, a VP\'s name)'),
+    unpin: z.boolean().optional().describe('Stop watching it instead'),
   },
   handler: async ({ task, node, unpin }, call) => {
     const id = encodeURIComponent(String(task));
     const body = unpin
-      ? await call('DELETE', `/org/pins/${id}?node=${encodeURIComponent(String(node))}`)
-      : await call('PUT', `/org/pins/${id}`, { node });
-    const out = body as { task?: { title?: string }; node?: string; nodeName?: string; changed?: boolean };
+      ? await call('DELETE', `/org/pins/${id}`)
+      : await call('PUT', `/org/pins/${id}`, node ? { node } : {});
+    const out = body as { task?: { title?: string }; nodeName?: string; changed?: boolean };
     const what = out?.task?.title ?? String(task);
-    const where = out?.nodeName ?? String(node);
-    if (!out?.changed) return withOutcome(out ?? {}, unpin ? `${what} was not pinned to ${where}.` : `${what} was already pinned to ${where}.`, 'Nothing changed.');
-    return withOutcome(out, unpin ? `Unpinned ${what} from ${where}.` : `Pinned ${what} to ${where}.`, 'The Org page shows it at once.');
+    const where = out?.nodeName ? ` (on the Org page under ${out.nodeName})` : '';
+    if (!out?.changed) return withOutcome(out ?? {}, unpin ? `${what} was not watched.` : `${what} was already watched${where}.`, 'Nothing changed.');
+    return withOutcome(out, unpin ? `Stopped watching ${what}.` : `Watching ${what}${where}.`, 'Home and the Org page show it at once.');
   },
   routes: [{ method: 'PUT', path: '/org/pins/:taskId' }, { method: 'DELETE', path: '/org/pins/:taskId' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

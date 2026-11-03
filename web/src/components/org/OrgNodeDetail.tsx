@@ -40,7 +40,7 @@ import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFo
 import { newsAt, sharedAnswers, shownToHim } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, isKeptRailTab, orgTaskTabs, ownAskFirst, railTabShown, type KeptRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -80,8 +80,6 @@ interface Props {
   onStartChat: (row: ChannelRow) => void;
   /** Phone: back to the list. */
   onBack?: () => void;
-  /** Pin a task to a node, or take the pin off (the page's, OrgPage). */
-  onPin: (taskId: string, nodes: readonly string[], pinned: boolean) => void;
   now: number;
 }
 
@@ -151,7 +149,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, onBack, now }: Props) {
   // What opens instead of this node or beside it (another node, a task's panel, the chat this
   // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
   // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened.
@@ -184,7 +182,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     || (!!row.contactId && (row.kind === 'main' || row.isLead));
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
   /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
-  const [taskTab, setTaskTab] = usePageViewOf<OrgRailTab>('org', 'node.taskTab', row.key, 'needs', oneOf(ORG_RAIL_TABS));
+  const [keptTab, setTaskTab] = usePageViewOf<KeptRailTab>('org', 'node.taskTab', row.key, 'needs', isKeptRailTab);
+  const taskTab = railTabShown(keptTab);
   /** Tasks by status, by team, or as the Board (2026-11-02: Team and Board went under Tasks). */
   const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'status', oneOf(ORG_TASK_MODES));
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
@@ -368,7 +367,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
-      onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'} onPin={onPin}
+      onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
       {...(railSide ? { width: railCss } : {})}
     />
   );

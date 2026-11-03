@@ -4660,9 +4660,10 @@ export async function updateTask(
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.unread !== undefined) task.unread = updates.unread;
-  // '' stops watching: the key goes, so the row holds no watch at all.
+  // '' stops watching: the key goes, so the row holds no watch at all. An Org pin the watch was
+  // carried over from goes with it (org-pins.ts), or the next boot would watch the task again.
   if (updates.watched_at) task.watched_at = updates.watched_at;
-  else if (updates.watched_at !== undefined) delete task.watched_at;
+  else if (updates.watched_at !== undefined) { delete task.watched_at; delete task.org_pins; }
   // Stored as presence-only (true or absent), mirroring addTask.
   if (updates.walnut_agent !== undefined) task.walnut_agent = updates.walnut_agent || undefined;
   // Track parent change for plugin notification (fired after writeStore)
@@ -8437,6 +8438,11 @@ function prepareRawUpdate(
     const sync = opts?.pulledTags ? registry.get(task.source)?.sync : undefined;
     if (sync?.mergePulledTags) safeUpdates.tags = sync.mergePulledTags(task, safeUpdates.tags as string[]);
     safeUpdates.tags = normalizeTags(safeUpdates.tags as string[]);
+  }
+  // A watch stopped on any raw path (the offline merge, the outbox) takes the Org pins it was
+  // carried over from too (org-pins.ts), as updateTask does, or the next boot watches it again.
+  if ('watched_at' in safeUpdates && !safeUpdates.watched_at && task.org_pins?.length) {
+    (safeUpdates as Record<string, unknown>).org_pins = null;
   }
   // Day-precision echo guard: sync pull must not downgrade a time-level
   // due_date/start_date to its own truncated day (a genuinely different day
