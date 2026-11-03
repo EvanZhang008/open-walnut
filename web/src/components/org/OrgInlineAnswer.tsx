@@ -18,6 +18,9 @@ import { answerLetter } from '@/api/human-inbox';
 import { retrySession } from '@/api/sessions';
 import { KanbanCardPrompt } from '@/components/board/kanban/KanbanCardPrompt';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
+import { buildImageRefsPayload } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@/components/inbox/letter-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useDraft } from '@/hooks/useDraft';
@@ -31,7 +34,7 @@ import { answerMessage, formOptions, inlineShape, type AskOption } from './org-a
 import type { OrgAlertView } from './org-channels-model';
 
 /** Where an answer failed: the reason, and the words the user had typed, to put back. */
-export interface AnswerFailure { message: string; draft?: string; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
+export interface AnswerFailure { message: string; draft?: string; /** The pictures to put back with the words. */ images?: ImageAttachment[]; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
 /** Settles an answer sent from a row: no argument once it was taken, a failure to bring the row back. */
 export type AnswerSettle = (failure?: AnswerFailure) => void;
 
@@ -60,11 +63,13 @@ function Options({ options, recommended, onPick, testId }: {
 
 /** A line in the user's own words. Kept under `draftKey` (the ask's own box: the session's composer,
  *  the Board choice's) until the answer is taken; the caller clears it then. */
-function WordsField({ placeholder, initial = '', draftKey: key, onSend, sendLabel = 'Send', autoFocus }: {
+function WordsField({ placeholder, initial = '', pictures, draftKey: key, onSend, sendLabel = 'Send', autoFocus }: {
   placeholder: string;
   initial?: string;
+  /** The form's pictures (useFormPictures): they go with the words, and with a pick too. */
+  pictures: ImageAttachments;
   draftKey: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: ImageAttachment[]) => void;
   sendLabel?: string;
   autoFocus?: boolean;
 }) {
@@ -72,7 +77,7 @@ function WordsField({ placeholder, initial = '', draftKey: key, onSend, sendLabe
   const [plain, setPlain] = useState(initial);
   const text = key ? draft.text : plain;
   const setText = key ? draft.setText : setPlain;
-  const send = (t: string) => { draft.flush(); onSend(t); };
+  const send = (t: string) => { draft.flush(); onSend(t, takePictures(pictures)); };
   return (
     <AnswerBox
       className="org-answer-words"
@@ -85,8 +90,28 @@ function WordsField({ placeholder, initial = '', draftKey: key, onSend, sendLabe
       onChange={setText}
       onSubmit={send}
       sendLabel={sendLabel}
+      pictures={pictures}
     />
   );
+}
+
+/**
+ * A form's pictures, as in the chat (common/image-attachments.ts): pasted into its words box, sent
+ * with the words or with a pick, and put back with a failed send's words.
+ */
+function useFormPictures(failure: AnswerFailure | undefined): ImageAttachments {
+  const pictures = useImageAttachments();
+  const { set } = pictures;
+  const back = failure?.images;
+  useEffect(() => { if (back?.length) set(back); }, [back, set]);
+  return pictures;
+}
+
+/** Take the form's pictures for a send (they leave the box with it). */
+function takePictures(pictures: ImageAttachments): ImageAttachment[] | undefined {
+  const images = pictures.images;
+  pictures.clear();
+  return images.length ? images : undefined;
 }
 
 /** "Other": a choice answered in words, opened on a click so the choices stay the first thing. */
@@ -150,7 +175,8 @@ interface ChoiceFound { owner: string; id: string; title: string; options: Array
 
 function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords: () => void }) {
   const [found, setFound] = useState<ChoiceFound | null | undefined>(undefined);
-  const [other, setOther] = useState(!!failure?.draft);
+  const [other, setOther] = useState(!!failure?.draft || !!failure?.images?.length);
+  const pictures = useFormPictures(failure);
   useEffect(() => {
     let alive = true;
     // The server finds it by the rule the task's status counts by: on any Board, not only the
@@ -166,9 +192,12 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   useEffect(() => { if (found === null) onWords(); }, [found, onWords]);
   if (!found) return <div className="org-answer-note" role="status">{found === undefined ? 'Loading the choice…' : ''}</div>;
   const wordsKey = boardChoiceDraftKey(found.owner, found.id);
-  const answer = (body: { option?: string; text?: string }) => {
+  const answer = (body: { option?: string; text?: string }, images?: ImageAttachment[]) => {
     const settle = onSend();
-    apiPut(`/api/v1/tasks/${encodeURIComponent(found.owner)}/board/choices/${encodeURIComponent(found.id)}`, body).then(() => {
+    // A choice's words are its answer: a picture goes with words, never alone ('' clears the words).
+    if (images?.length && !body.option && !body.text) { settle({ message: 'Add a few words to go with the picture.', images }); return; }
+    // Pictures go up over HTTP first; the answer carries their names (api/image-upload.ts).
+    buildImageRefsPayload(images).then((pictures) => apiPut(`/api/v1/tasks/${encodeURIComponent(found.owner)}/board/choices/${encodeURIComponent(found.id)}`, { ...body, ...pictures })).then(() => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'choice', owner: found.owner, choiceId: found.id, option: body.option ?? '' });
       if (body.text) clearDraft(wordsKey);
       settle();
@@ -176,16 +205,16 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
       log.warn('org-page', 'org alert answer failed', { taskId: alert.taskId, shape: 'choice', error: String(err) });
       // A replica answers 501 to every Board write.
       const message = (err as { status?: number }).status === 501 ? 'Boards are read only here. Answer it from the main Walnut.' : 'Not saved. Try again.';
-      settle({ message, ...(body.text ? { draft: body.text } : {}) });
+      settle({ message, ...(body.text ? { draft: body.text } : {}), ...(images?.length ? { images } : {}) });
     });
   };
   const words = (
-    <WordsField placeholder={found.options.length ? 'Say it in your words' : 'Your answer'} initial={failure?.draft ?? ''} draftKey={wordsKey} onSend={(t) => answer({ text: t })} autoFocus={found.options.length > 0} />
+    <WordsField placeholder={found.options.length ? 'Say it in your words' : 'Your answer'} initial={failure?.draft ?? ''} pictures={pictures} draftKey={wordsKey} onSend={(t, images) => answer({ text: t }, images)} autoFocus={found.options.length > 0} />
   );
   return (
     <>
       {found.options.length > 0 && (
-        <Options testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v })} />
+        <Options testId="org-answer-choice" options={found.options} {...(found.recommended ? { recommended: found.recommended } : {})} onPick={(v) => answer({ option: v }, takePictures(pictures))} />
       )}
       {/* A choice with no options is answered in words, on its Board all the same. */}
       {found.options.length ? <OtherWords open={other} onOpen={() => setOther(true)}>{words}</OtherWords> : words}
@@ -200,17 +229,18 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
 }) {
   const { send } = useSessionSend(sessionId);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [other, setOther] = useState(!!failure?.draft);
+  const [other, setOther] = useState(!!failure?.draft || !!failure?.images?.length);
+  const pictures = useFormPictures(failure);
   // A failed session: its probe says so, or the task's status names the failure as its ask.
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
   const wordsKey = sessionDraftKey(sessionId);
-  const reply = (text: string, words?: string) => {
+  const reply = (text: string, words?: string, images?: ImageAttachment[]) => {
     const settle = onSend();
-    void send(sessionId, text).catch(() => false).then((ok) => {
-      log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape, sessionId, ok });
+    void send(sessionId, text, images).catch(() => false).then((ok) => {
+      log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape, sessionId, ok, images: images?.length ?? 0 });
       if (ok && words !== undefined) clearDraft(wordsKey);
-      settle(ok ? undefined : { message: 'Not sent. Try again.', ...(words !== undefined ? { draft: words } : {}) });
+      settle(ok ? undefined : { message: 'Not sent. Try again.', ...(words !== undefined ? { draft: words } : {}), ...(images?.length ? { images } : {}) });
     });
   };
   const retry = () => {
@@ -231,8 +261,13 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
     <WordsField
       placeholder={failed ? 'Or tell it what to do' : shape === 'text' ? 'Your answer' : 'Say it in your words'}
       initial={failure?.draft ?? ''}
+      pictures={pictures}
       draftKey={wordsKey}
-      onSend={(t) => reply(answerMessage(alert.form, summary, { words: t }), t)}
+      onSend={(t, images) => {
+        // The words are the answer: a picture goes with them, never as "(no answer)".
+        if (!t.trim() && images?.length) { onSend()({ message: 'Add a few words to go with the picture.', images }); return; }
+        reply(answerMessage(alert.form, summary, { words: t }), t, images);
+      }}
       autoFocus={shape !== 'text'}
     />
   );
@@ -240,7 +275,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
     <>
       {failed && <Options testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />}
       {(shape === 'yes_no' || shape === 'single') && options.length > 0 && (
-        <Options testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }))} />
+        <Options testId="org-answer-form" options={options.map((o) => ({ value: o.id, label: o.label }))} {...(recommended ? { recommended } : {})} onPick={(id) => reply(answerMessage(alert.form, summary, { picked: [id] }), undefined, takePictures(pictures))} />
       )}
       {shape === 'multi' && options.length > 0 && (
         <div className="org-answer-multi" data-testid="org-answer-multi">
@@ -258,7 +293,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape }: Fo
             className="btn btn-sm btn-primary"
             data-testid="org-answer-send-picked"
             disabled={!picked.size}
-            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }))}
+            onClick={() => reply(answerMessage(alert.form, summary, { picked: options.filter((o) => picked.has(o.id)).map((o) => o.id) }), undefined, takePictures(pictures))}
           >Send{picked.size ? ` ${picked.size}` : ''}</button>
         </div>
       )}

@@ -41,6 +41,8 @@ import { cardView, exchangesOf, sharedAnswers, shownToHim, snoozedNow, type Thre
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments } from '@/components/common/image-attachments';
+import type { ImageAttachment } from '@/api/chat';
 import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
@@ -78,7 +80,7 @@ interface Props {
   tasks: readonly Task[];
   onOpenTask: (id: string) => void;
   /** Send a message filed under this thread; null when the node has no chat yet. */
-  onFollowUp: ((threadId: string, text: string) => Promise<boolean>) | null;
+  onFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
   now: number;
 }
 
@@ -137,25 +139,28 @@ function TaskChips({ ids, tasks, onOpenTask }: { ids: readonly string[]; tasks: 
   );
 }
 
-function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolean>; onDone: () => void }) {
+function FollowUp({ onSend, onDone }: { onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const mic = useRef<BoxMicHandle | null>(null);
+  const pictures = useImageAttachments();
   const goNow = async () => {
     const words = text.trim();
-    if (!words || busy) return;
+    const images = pictures.images;
+    if ((!words && images.length === 0) || busy) return;
     setBusy(true);
     setFailed(false);
-    const ok = await onSend(words);
+    const ok = await onSend(words, images.length > 0 ? images : undefined);
     setBusy(false);
-    if (ok) { setText(''); onDone(); } else setFailed(true);
+    if (ok) { setText(''); pictures.clear(); onDone(); } else setFailed(true);
   };
   // Cmd+Enter and Send wait for a live dictation's words, then send.
   const gate = useSendAfterDictation([mic], () => { void goNow(); });
+  const empty = !text.trim() && pictures.images.length === 0;
   return (
     <div className="org-thread-follow" data-testid="org-thread-follow">
-      {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside. */}
+      {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside, pictures as in the chat. */}
       <AnswerBox
         autoFocus
         value={text}
@@ -163,6 +168,7 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
         placeholder="Follow up on this request"
         testId="org-thread-follow-input"
         micRef={mic}
+        pictures={pictures}
         onChange={setText}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); }
@@ -171,9 +177,9 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
         }}
       />
       <div className="org-thread-follow-row">
-        {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words are still here.</span>}
+        {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
         <button type="button" className="btn btn-sm" onClick={onDone}>Cancel</button>
-        <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-follow-send" disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || busy} onClick={gate.send} {...dictationWaitProps(gate)}>
+        <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-follow-send" disabled={(empty && !gate.micBusy && !gate.waiting) || busy} onClick={gate.send} {...dictationWaitProps(gate)}>
           {busy ? 'Sending…' : 'Send'}
         </button>
       </div>
@@ -352,7 +358,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
         </ol>
       )}
       {following && onFollowUp ? (
-        <FollowUp onSend={(text) => onFollowUp(t.id, text)} onDone={() => setFollowing(false)} />
+        <FollowUp onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
       ) : (
         <div className="org-thread-actions">
           {closed ? (<>

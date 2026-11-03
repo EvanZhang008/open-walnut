@@ -45,6 +45,7 @@ import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
 import { ORG_TASK_TAB_LABELS, isKeptRailTab, orgTaskTabs, ownAskFirst, railTabShown, type KeptRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
+import type { ImageAttachment } from '@/api/chat';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
@@ -252,7 +253,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     const shared = sharedAnswers(list);
     return list.filter((t) => shownToHim(t, shared)).length;
   }, [threads.threads]);
-  const followUp = sessionId ? (threadId: string, text: string) => send(sessionId, text, undefined, { threadId }) : null;
+  const followUp = sessionId ? (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId }) : null;
   /** A task chip on the Board: a node of this page is selected; any other task opens beside it. */
   const openChip = (id: string) => {
     const hit = rows.find((r) => r.contactId === id);

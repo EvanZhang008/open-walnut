@@ -48,6 +48,7 @@ import { cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
+import type { ImageAttachment } from '@/api/chat';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -304,7 +305,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
   briefUpdating: boolean;
   /** The node's Threads (useOrgThreads), and a send filed under one of them (null: no chat yet). */
   threads: OrgThreadsState;
-  onThreadFollowUp: ((threadId: string, text: string) => Promise<boolean>) | null;
+  onThreadFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
   contact: Task | undefined;
   title: string;
   onOpenAlert: (a: OrgAlertView) => void;

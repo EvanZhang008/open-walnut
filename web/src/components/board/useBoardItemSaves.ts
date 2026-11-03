@@ -17,6 +17,8 @@
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { ApiError, apiPut } from '@/api/client';
+import { buildImageRefsPayload } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { log } from '@/utils/log';
 import type { BoardCheck, BoardChoice, BoardMark, BoardProject, BoardReminder } from './board-model';
 import { changedCheckHash, checkFromRoute } from './board-items-model';
@@ -204,11 +206,13 @@ export function useBoardItemSaves(
   }, [ownerRef, putChoice]);
 
   /** The user's own words on a choice: saved beside the pick, delivered with it in one message. */
-  const putChoiceWords = useCallback(async (choiceId: string, text: string, from: string) => {
+  const putChoiceWords = useCallback(async (choiceId: string, text: string, from: string, images?: ImageAttachment[]) => {
     const boardTask = ownerRef.current;
-    log.info('board', 'choice words saving', { taskId: boardTask, choiceId, chars: text.length, from });
+    log.info('board', 'choice words saving', { taskId: boardTask, choiceId, chars: text.length, images: images?.length ?? 0, from });
+    // Pictures go up over HTTP first; the answer carries their names (api/image-upload.ts).
+    const pictures = await buildImageRefsPayload(images);
     const res = await apiPut<{ choice: BoardChoice | null; delivery?: Delivery }>(
-      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { text },
+      `${boardPath(boardTask)}/choices/${encodeURIComponent(choiceId)}`, { text, ...pictures },
     );
     log.info('board', 'choice words saved', {
       taskId: boardTask, choiceId, option: res.choice?.option ?? '', chars: res.choice?.text?.length ?? 0, from,
@@ -225,9 +229,9 @@ export function useBoardItemSaves(
    * The docked composer's Send on a choice. Resolves to null when saved, else the
    * reason (the composer keeps the text). The frame hears how far it went.
    */
-  const saveChoiceText = useCallback(async (choiceId: string, text: string): Promise<string | null> => {
+  const saveChoiceText = useCallback(async (choiceId: string, text: string, images?: ImageAttachment[]): Promise<string | null> => {
     try {
-      await putChoiceWords(choiceId, text, 'page');
+      await putChoiceWords(choiceId, text, 'page', images);
       return null;
     } catch (err) {
       const message = boardErrorMessage(err);
@@ -237,9 +241,9 @@ export function useBoardItemSaves(
   }, [ownerRef, putChoiceWords]);
 
   /** An Overview card's words on a choice: saved, and whether the leader was told now. */
-  const answerChoiceWords = useCallback(async (choiceId: string, text: string): Promise<ChoiceSave> => {
+  const answerChoiceWords = useCallback(async (choiceId: string, text: string, images?: ImageAttachment[]): Promise<ChoiceSave> => {
     try {
-      const res = await putChoiceWords(choiceId, text, 'overview');
+      const res = await putChoiceWords(choiceId, text, 'overview', images);
       return { ok: true, delivered: deliveredNow(res.delivery) };
     } catch (err) {
       const message = boardErrorMessage(err);

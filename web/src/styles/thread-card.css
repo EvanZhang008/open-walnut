@@ -171,6 +171,11 @@
   border-top: 1px solid var(--border);
 }
 .thread-card[data-draft="true"] .thread-card-composer { border-top: 0; }
+.thread-card .thread-card-pictures { flex: none; padding: 6px 10px 0; border-top: 1px solid var(--border); }
+.thread-card .thread-card-pictures .chat-image-preview { width: 48px; height: 48px; }
+.thread-card .thread-card-pictures .chat-image-remove { opacity: 1; }
+.thread-card-pictures + .thread-card-composer { border-top: 0; }
+.thread-card-composer.is-drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; }
 .thread-card-input {
   flex: 1 1 auto;
   min-width: 0;

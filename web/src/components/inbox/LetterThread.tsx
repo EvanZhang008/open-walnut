@@ -37,6 +37,22 @@ export function LetterThread({ entries, subject, onBodyClick, letterId, onNaviga
           {entry.text && (
             <div className="hib-turn-text"><LinkifiedText text={entry.text} /></div>
           )}
+          {entry.images && entry.images.length > 0 && (
+            <div className="chat-message-images hib-turn-images" data-testid="letter-turn-images">
+              {entry.images.map((name) => (
+                <a key={name} href={`/api/images/${encodeURIComponent(name)}`} target="_blank" rel="noreferrer">
+                  <img
+                    className="chat-message-image"
+                    src={`/api/images/${encodeURIComponent(name)}`}
+                    alt="Attached picture (no longer on disk)"
+                    loading="lazy"
+                    // Pictures live in the images folder, which a reboot may clear: say so, never a broken icon.
+                    onError={(e) => { e.currentTarget.replaceWith(Object.assign(document.createElement('span'), { className: 'hib-note', textContent: 'A picture (no longer on disk)' })); }}
+                  />
+                </a>
+              ))}
+            </div>
+          )}
           {entry.by?.userWords && (
             <div className="hib-turn-text hib-turn-quote" data-testid="letter-turn-user-words">On your words: “{entry.by.userWords}”</div>
           )}

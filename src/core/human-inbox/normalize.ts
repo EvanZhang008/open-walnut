@@ -22,6 +22,7 @@ import {
 } from './types.js';
 import { truncatePreview } from './preview.js';
 import { normalizeItems, disableDuplicateItems } from './item-schema.js';
+import { cleanPictureNames } from '../answer-pictures.js';
 
 /** `lt-<timestamp36>-<rand>` — the only id shape that can name a body file. */
 export const LETTER_ID_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}$/;
@@ -87,6 +88,8 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
         ? { clientId: e.clientId } : {}),
       ...(from === 'human' ? normalizeDelivery(e.delivery) : {}),
       ...(from === 'human' ? normalizeBy(e.by) : {}),
+      // The pictures sent with it survive a rewrite too (core/answer-pictures.ts).
+      ...(from === 'human' && Array.isArray(e.images) && cleanPictureNames(e.images).length ? { images: cleanPictureNames(e.images) } : {}),
       ...(from === 'agent' && e.items !== undefined ? { items: normalizeItems(e.items) } : {}),
     });
   }

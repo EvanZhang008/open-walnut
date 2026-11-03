@@ -96,6 +96,7 @@ import {
   boardWriter, boardWriterStamp, kanbanFields, resolveBoardCaller, resolveTeamBoardTask, teamSnapshot, type BoardCaller,
 } from '../../core/boards/board-team.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { picturesHeader, saveAnswerPictures } from '../../core/answer-pictures.js'
 
 export { buildBoardThreadPrompt }
 
@@ -358,7 +359,9 @@ boardV1Router.post('/tasks/:id/board/threads/:thread', route(async (req, res) =>
   const b = body(req)
   if (typeof b.text !== 'string') throw new RouteError(400, 'bad_request', '`text` must be a string')
   const author = caller.kind === 'human' ? 'user' as const : caller.kind === 'task' ? `task:${caller.taskId}` as const : 'agent' as const
-  const message = await postBoardMessage(task.id, thread, { author, text: b.text })
+  // Pictures with the words (`imageRefs` from the web's upload, or inline `images`), as in the chat.
+  const images = await saveAnswerPictures(b)
+  const message = await postBoardMessage(task.id, thread, { author, text: b.text, ...(images.length ? { images } : {}) })
   if (caller.kind !== 'human') {
     res.status(201).json({ message, delivery: { state: 'stored' } })
     return
@@ -474,7 +477,9 @@ boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => 
   if (option === undefined && text === undefined) throw new RouteError(400, 'bad_request', 'Give `option`, `text` or both')
   const choiceId = param(req.params.choice)
   const overrideUser = bodyFlag(b, 'override_user')
-  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined },
+  // Pictures with the answer (`imageRefs` or inline `images`): kept on the choice, named in every delivery of it.
+  const images = await saveAnswerPictures(b)
+  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined, ...(images.length ? { images } : {}) },
     { writer: await boardWriterStamp(caller), overrideUser })
   let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
   if (!result.choice) delivery = { state: 'skipped', reason: 'cleared' }
@@ -484,7 +489,7 @@ boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => 
   else if (caller.kind === 'task' && caller.taskId === task.id) delivery = { state: 'skipped', reason: 'self' }
   else {
     const board = await getBoard(task.id)
-    const text = await buildChoicePrompt(board?.html ?? '', choiceId, result.choice)
+    const text = await picturesHeader(result.choice.images) + await buildChoicePrompt(board?.html ?? '', choiceId, result.choice)
     // The user's answer goes as the user; an agent's as a message from that agent's session (peer provenance).
     delivery = await deliverBoardText(task.id, text, { choice: choiceId, option: result.choice.option },
       caller.kind === 'human' ? undefined : { callerSid: caller.sessionId })
@@ -532,6 +537,7 @@ boardV1Router.delete('/tasks/:id/board', route(async (req, res) => {
 /** Never fails the post: the message is already stored, so a send failure is reported, not thrown. */
 async function deliverToLeader(task: Task, thread: string, message: BoardMessage): Promise<BoardDelivery> {
   const board = await getBoard(task.id)
-  const text = buildBoardThreadPrompt(await threadHeading(board?.html ?? '', thread, board?.projects), thread, message.text)
+  const text = await picturesHeader(message.images)
+    + buildBoardThreadPrompt(await threadHeading(board?.html ?? '', thread, board?.projects), thread, message.text || '(a picture, named above)')
   return deliverBoardText(task.id, text, { thread, messageId: message.id })
 }

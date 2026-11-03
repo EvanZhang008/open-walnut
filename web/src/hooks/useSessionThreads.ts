@@ -647,10 +647,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
 
   /** The comment card's box: into the card's question (the stack's key). */
   const sendToTarget = useCallback(
-    (text: string) => sendAnchored(text, undefined, false, refs.current.stack.api.currentKey), [sendAnchored]);
+    (text: string, images?: ImageAttachment[]) => sendAnchored(text, images, false, refs.current.stack.api.currentKey), [sendAnchored]);
   /** A review card's box: into that card's question, whichever page is current. */
   const sendToQuestion = useCallback(
-    (key: string, text: string) => sendAnchored(text, undefined, false, key), [sendAnchored]);
+    (key: string, text: string, images?: ImageAttachment[]) => sendAnchored(text, images, false, key), [sendAnchored]);
 
   const markViewedNow = useCallback((key: string) => {
     const r = refs.current;

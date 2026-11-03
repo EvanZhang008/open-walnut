@@ -23,6 +23,8 @@ export interface BoardMessage {
   author: BoardAuthor;
   text: string;
   ts: string;
+  /** Pictures sent with it, as names under /api/images/. */
+  images?: string[];
 }
 
 export interface BoardMark {

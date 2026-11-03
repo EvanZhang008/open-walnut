@@ -13,6 +13,10 @@ import { useEffect, useRef, useState } from 'react';
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useImageAttachments } from '@/components/common/image-attachments';
+import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
+import { buildImageRefsPayload } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraft } from '@/hooks/useDraft';
 import { sessionDraftKey } from '@/utils/composer-insert';
@@ -28,11 +32,13 @@ export function composerPlaceholder(title: string): string {
 }
 
 /** The send itself (the composer's own RPC), failing after 15s without an answer. */
-export async function sendToCardSession(sessionId: string, message: string): Promise<void> {
+export async function sendToCardSession(sessionId: string, message: string, images?: ImageAttachment[]): Promise<void> {
+  // Pictures go up over HTTP first, never on the socket; the RPC carries their names (api/image-upload.ts).
+  const pictures = await buildImageRefsPayload(images);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer in 15s')), SEND_TIMEOUT_MS); });
   try {
-    await Promise.race([wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message }), timeout]);
+    await Promise.race([wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message, ...pictures }), timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -51,11 +57,15 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
   const [error, setError] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
   const mic = useRef<BoxMicHandle | null>(null);
+  // Pictures go with the message, as in the chat (common/image-attachments.ts).
+  const pictures = useImageAttachments();
+  const pictureInput = usePictureInput(pictures, !sending);
   useEffect(() => { ref.current?.focus(); }, []);
 
   const sendNow = async () => {
     const message = text.trim();
-    if (!message || sending) return;
+    const images = pictures.images;
+    if ((!message && images.length === 0) || sending) return;
     const sessionId = card.sessionId;
     if (!sessionId) { setError('No session yet. Use Start worker.'); return; }
     setSending(true);
@@ -63,11 +73,12 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
     const started = Date.now();
     const sentKey = draft.key;
     try {
-      await sendToCardSession(sessionId, message);
-      log.info('board', 'kanban card message sent', { cardTaskId: card.taskId, sessionId, ms: Date.now() - started });
+      await sendToCardSession(sessionId, message, images.length ? images : undefined);
+      log.info('board', 'kanban card message sent', { cardTaskId: card.taskId, sessionId, images: images.length, ms: Date.now() - started });
       setSending(false);
       draft.clear(sentKey);
       mic.current?.clear();
+      pictures.clear();
       onSent();
     } catch (err) {
       log.warn('board', 'kanban card message failed', { cardTaskId: card.taskId, sessionId, error: String(err) });
@@ -81,7 +92,8 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
   return (
     <div className="kanban-card-composer" data-testid="kanban-card-composer" data-sending={sending || undefined}
       onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
-      <div className="kanban-composer-row">
+      <PictureStrip pictures={pictures} className="kanban-composer-pictures" testId="kanban-card-composer-pictures" readOnly={sending} />
+      <div className={`kanban-composer-row${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
         <textarea
           ref={ref}
           className="kanban-composer-input"
@@ -93,18 +105,20 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
           value={text}
           readOnly={sending}
           onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
+          onPaste={pictureInput.onPaste}
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
           }}
         />
+        <AttachPictureButton pictures={pictures} testId="kanban-card-composer-attach" disabled={sending} />
         <BoxMic boxRef={ref} text={text} setText={(v) => { setText(v); if (error) setError(''); }} handleRef={mic} disabled={sending} />
         {sending ? <span className="kanban-spinner" data-testid="kanban-card-composer-sending" aria-label="Sending" /> : (
           <button
             type="button" className="kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"
-            aria-disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || undefined}
-            onClick={gate.send} {...dictationWaitProps(gate, text.trim() || gate.micBusy ? 'Send (Enter)' : 'Type a message first')}
+            aria-disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || undefined}
+            onClick={gate.send} {...dictationWaitProps(gate, text.trim() || pictures.images.length || gate.micBusy ? 'Send (Enter)' : 'Type a message first')}
           >Send</button>
         )}
       </div>

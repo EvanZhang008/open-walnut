@@ -57,6 +57,7 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-msg-meta { display: flex; align-items: center; gap: 8px; padding: 0 6px; font-size: .78em; line-height: 1.5; }
 .wn-who { font-weight: 600; opacity: .8; }
 .wn-when { opacity: .6; }
+.wn-pics { margin-top: 2px; font-size: 12px; opacity: .65; }
 .wn-msg[data-unread] .wn-who::before {
   content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%;
   background: var(--wn-need, #d93025); vertical-align: 1px;

@@ -50,6 +50,7 @@ import {
 } from './board-store.js';
 import { checkHashes, choiceSpecs, own, threadMeta, type BoardChoiceSpec } from './board-html.js';
 import { log } from '../../logging/index.js';
+import { cleanPictureNames } from '../answer-pictures.js';
 
 export const BOARD_MAX_PROJECTS = 200;
 export const BOARD_MAX_CHECKS = 2000;
@@ -319,10 +320,12 @@ export interface ChoiceResult {
 export async function setBoardChoice(
   taskId: string,
   id: string,
-  input: { option?: string; text?: string },
+  input: { option?: string; text?: string; images?: string[] },
   opts: { writer?: BoardWriterStamp; overrideUser?: boolean } = {},
 ): Promise<ChoiceResult> {
   checkItemId(id, 'choice');
+  // New pictures replace the answer's; none given keeps the ones it has (as the words are kept).
+  const images = cleanPictureNames(input.images);
   if (input.option !== undefined && typeof input.option !== 'string') {
     throw new BoardError('bad_request', 400, undefined, '`option` must be a string');
   }
@@ -380,7 +383,9 @@ export async function setBoardChoice(
       if (words.by) choice.text_by = words.by;
       if (words.by_name) choice.text_by_name = words.by_name;
     }
-    if (prev && pickSame && (prev.text ?? '') === nextText) {
+    const nextImages = images.length ? images : prev?.images ?? [];
+    if (nextImages.length) choice.images = nextImages;
+    if (prev && pickSame && (prev.text ?? '') === nextText && images.length === 0) {
       // The same answer: nothing to deliver. The user repeating an agent's part takes it over.
       tookOver = (choice.by ?? '') !== (prev.by ?? '') || (choice.text_by ?? '') !== (prev.text_by ?? '');
       const kept = tookOver ? { ...choice, ...(prev.undelivered ? { undelivered: true as const } : {}) } : prev;

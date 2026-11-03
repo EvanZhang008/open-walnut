@@ -4924,9 +4924,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setCardOpen(false);
     threadsApi.quoteInChat(key, 'card');
   }, [threadsApi.quoteInChat, sessionId, threadTree]);
-  const sendFromCard = useCallback(async (text: string) => {
+  const sendFromCard = useCallback(async (text: string, images?: ImageAttachment[]) => {
     cardSendHold.current = true;
-    try { return await threadsApi.sendToTarget(text); } finally { cardSendHold.current = false; }
+    try { return await threadsApi.sendToTarget(text, images); } finally { cardSendHold.current = false; }
   }, [threadsApi.sendToTarget]);
   const cardMenu = cardKey && cardNode && threadsApi.actions ? (
     <ThreadStackMenu

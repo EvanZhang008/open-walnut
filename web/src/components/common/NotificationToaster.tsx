@@ -42,6 +42,7 @@ import { NotificationActionButtons } from './NotificationActionButtons';
 import { navigateToTarget } from '@/utils/open-session';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
+import type { ImageAttachment } from '@/api/chat';
 
 /** Upward travel that dismisses a toast on the phone. */
 const SWIPE_DISMISS_PX = 40;
@@ -252,13 +253,14 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
 
   const respond = (
     allow: boolean,
-    opts?: { optionId?: string; answers?: Record<string, string>; message?: string },
+    opts?: { optionId?: string; answers?: Record<string, string>; message?: string; images?: ImageAttachment[] },
   ) => {
     if (!n.sessionId || !requestId) return;
     void respondToPermissionRequest(n.sessionId, requestId, allow, {
       ...(opts?.optionId ? { optionId: opts.optionId } : {}),
       ...(opts?.answers ? { answers: opts.answers } : {}),
       ...(opts?.message ? { message: opts.message } : {}),
+      ...(opts?.images?.length ? { images: opts.images } : {}),
     });
   };
 
@@ -377,7 +379,7 @@ function PermissionToast({ n, onDismiss, onPin, navigate, phone = false }: {
           disabled={busy}
           resolved={false}
           scrollable
-          onSubmit={(answers) => respond(true, { answers })}
+          onSubmit={(answers, images) => respond(true, { answers, ...(images?.length ? { images } : {}) })}
           onDismissQuestions={() => respond(false, { message: 'User dismissed the questions' })}
         />
       ) : (

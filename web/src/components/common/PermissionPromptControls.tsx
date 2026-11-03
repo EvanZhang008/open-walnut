@@ -57,6 +57,7 @@ export function usePermissionAnswer(n: Notification): PermissionAnswer {
       ...(opts?.optionId ? { optionId: opts.optionId } : {}),
       ...(opts?.answers ? { answers: opts.answers } : {}),
       ...(opts?.message ? { message: opts.message } : {}),
+      ...(opts?.images?.length ? { images: opts.images } : {}),
     });
   };
   return {
@@ -144,7 +145,7 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Approve', dismis
         questions={detail.questions}
         disabled={!answerable || busy}
         resolved={!!resolved}
-        onSubmit={(answers) => go(true, { answers })}
+        onSubmit={(answers, images) => go(true, { answers, ...(images?.length ? { images } : {}) })}
         onDismissQuestions={() => go(false, { message: 'User dismissed the questions' })}
         {...(dismissLabel ? { dismissLabel } : {})}
         {...(dismissTitle ? { dismissTitle } : {})}

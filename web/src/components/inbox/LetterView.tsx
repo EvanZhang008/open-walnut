@@ -40,6 +40,7 @@ import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments } from '@/components/common/image-attachments';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
@@ -118,8 +119,13 @@ export function LetterView({
   const replyMic = useRef<BoxMicHandle | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
-  // Another letter in the same view: a late transcription must not land in it.
-  useEffect(() => () => { replyMic.current?.clear(); noteMic.current?.clear(); }, [letterId]);
+  // Pictures go with the words, as in the chat (common/image-attachments.ts).
+  const replyPictures = useImageAttachments();
+  const notePictures = useImageAttachments();
+  const { clear: clearReplyPictures } = replyPictures;
+  const { clear: clearNotePictures } = notePictures;
+  // Another letter in the same view: a late transcription must not land in it, nor a picture.
+  useEffect(() => () => { replyMic.current?.clear(); noteMic.current?.clear(); clearReplyPictures(); clearNotePictures(); }, [letterId, clearReplyPictures, clearNotePictures]);
 
   // Envelope state (read / pinned / archived / answered) comes from the ONE shared
   // store, layered OVER this reader's own GET: the rail and a session tab can pin
@@ -218,10 +224,11 @@ export function LetterView({
     setBusy(true);
     const sentKey = noteDraft.key;
     try {
-      const result = await answerLetter(letterId, actionId, freeText.trim() || undefined);
+      const result = await answerLetter(letterId, actionId, freeText.trim() || undefined, notePictures.images);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
       noteDraft.clear(sentKey);
       noteMic.current?.clear();
+      notePictures.clear();
       log.info('inbox', 'letter answered', { letterId, actionId, delivery: result.delivery });
     } catch (err) {
       const status = (err as { status?: number }).status;
@@ -237,7 +244,7 @@ export function LetterView({
     } finally {
       setBusy(false);
     }
-  }, [busy, letterId, freeText, applyResult, noteDraft]);
+  }, [busy, letterId, freeText, applyResult, noteDraft, notePictures]);
 
   const turns = letter?.thread.length ?? 0;
   const thread = useThreadPane({ letterId, turns, enabled: turns > 0 });
@@ -245,16 +252,18 @@ export function LetterView({
 
   const onReply = useCallback(async () => {
     const text = replyText.trim();
-    if (!text || busy) return;
+    const images = replyPictures.images;
+    if ((!text && images.length === 0) || busy) return;
     setBusy(true);
     // The human's own reply always comes into view, wherever they were reading.
     followThread();
     const sentKey = replyDraft.key;
     try {
-      const result = await humanReplyToLetter(letterId, text);
+      const result = await humanReplyToLetter(letterId, text, images);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
       replyDraft.clear(sentKey);
       replyMic.current?.clear();
+      replyPictures.clear();
       log.info('inbox', 'letter human reply sent', { letterId, delivery: result.delivery });
     } catch (err) {
       setDelivery('Could not send that reply — try again');
@@ -262,7 +271,7 @@ export function LetterView({
     } finally {
       setBusy(false);
     }
-  }, [replyText, busy, letterId, applyResult, followThread, replyDraft]);
+  }, [replyText, busy, letterId, applyResult, followThread, replyDraft, replyPictures]);
 
   // A decision's note and the reply each wait for a live dictation's words, then go.
   const pendingAction = useRef<string | null>(null);
@@ -384,6 +393,8 @@ export function LetterView({
               onChange={setFreeText}
               sending={busy}
               minRows={2}
+              pictures={notePictures}
+              testId="letter-note-input"
             />
           </div>
         )}
@@ -495,6 +506,8 @@ export function LetterView({
           placeholder="Reply to this letter…"
           value={replyText}
           onChange={setReplyText}
+          pictures={replyPictures}
+          testId="letter-reply-input"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); replyGate.send(); }
           }}
@@ -503,7 +516,7 @@ export function LetterView({
         >
           <button
             className="hib-send-btn"
-            disabled={busy || (!replyText.trim() && !replyGate.micBusy && !replyGate.waiting)}
+            disabled={busy || (!replyText.trim() && replyPictures.images.length === 0 && !replyGate.micBusy && !replyGate.waiting)}
             onClick={replyGate.send}
             {...dictationWaitProps(replyGate)}
           >

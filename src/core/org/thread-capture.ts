@@ -42,10 +42,7 @@ const LETTER_BY_USER_RE = /^\[Letter reply\] Your user answered a letter you sen
 export function userWordsOf(message: string, opts: { inChat: boolean }): UserWords | null {
   const raw = message.replace(/\r\n/g, '\n');
   if (!raw.trim() || raw.startsWith('/')) return null;
-  if (LETTER_BY_USER_RE.test(raw)) return letterWords(raw);
-  // A message from another task or Walnut, sent under a person's source.
-  if (/^\s*<walnut-message[\s>]/.test(raw) || raw.startsWith('[Letter reply]')) return null;
-  if (!opts.inChat) return null;
+  // Pictures lead the line under their header, a letter answer's too (letter-ops.ts).
   let text = raw;
   const images: string[] = [];
   for (let i = 0; i < 4; i++) {
@@ -57,20 +54,24 @@ export function userWordsOf(message: string, opts: { inChat: boolean }): UserWor
     }
     text = text.slice(m[0].length);
   }
+  if (LETTER_BY_USER_RE.test(text)) return letterWords(text, images);
+  // A message from another task or Walnut, sent under a person's source.
+  if (/^\s*<walnut-message[\s>]/.test(text) || text.startsWith('[Letter reply]')) return null;
+  if (!opts.inChat) return null;
   text = stripReferenceCards(text).trim();
   if (!text && !images.length) return null;
   return { text, images, via: 'chat' };
 }
 
 /** A letter answer's note (letter-ops.ts buildLetterDeliveryText puts it last inside the fence). */
-function letterWords(raw: string): UserWords | null {
+function letterWords(raw: string, images: string[]): UserWords | null {
   const fence = /(---letter-answer-[a-f0-9]{6,40}---)\n([\s\S]*?)\n\1 \(end of letter answer\)/.exec(raw);
   if (!fence) return null;
   const body = fence[2];
-  const note = /(?:^|\n)note: ([\s\S]*)$/.exec(body)?.[1]?.replace(/\nuser's words: [\s\S]*$/, '').trim();
-  if (!note) return null;
+  const note = /(?:^|\n)note: ([\s\S]*)$/.exec(body)?.[1]?.replace(/\nuser's words: [\s\S]*$/, '').trim() ?? '';
+  if (!note && !images.length) return null;
   const about = /(?:^|\n)subject: ([^\n]*)/.exec(body)?.[1]?.trim();
-  return { text: note, images: [], via: 'letter', ...(about ? { about } : {}) };
+  return { text: note, images, via: 'letter', ...(about ? { about } : {}) };
 }
 
 export interface ThreadHintState {

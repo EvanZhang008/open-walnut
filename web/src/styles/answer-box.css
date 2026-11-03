@@ -16,3 +16,9 @@
 .answer-box-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .answer-box-tools .mic-btn { min-width: 28px; height: 28px; }
 .answer-box-send { border-radius: 9px; }
+/* Pictures going with the words: the chat's thumbnails on their own row above the text. */
+.answer-box.has-pictures { flex-wrap: wrap; }
+.answer-box.is-drag-over { border-color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }
+.answer-box .answer-box-pictures { width: 100%; flex-basis: 100%; padding: 4px 0 2px; gap: 6px; }
+.answer-box .answer-box-pictures .chat-image-preview { width: 52px; height: 52px; }
+.answer-box .answer-box-pictures .chat-image-remove { opacity: 1; }

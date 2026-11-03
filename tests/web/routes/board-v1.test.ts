@@ -75,6 +75,16 @@ async function sessionFor(taskId: string, title: string): Promise<string> {
 
 let events: BusEvent[] = []
 
+const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+/** A picture uploaded as the web uploads one (POST /api/images/upload): its file name. */
+async function uploadPicture(): Promise<string> {
+  const res = await fetch(`http://localhost:${port}/api/images/upload`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: PNG_1X1, mediaType: 'image/png' }),
+  })
+  const json = await res.json() as { filename: string }
+  return json.filename
+}
+
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
@@ -262,6 +272,19 @@ describe('threads', () => {
     // A thread the html does not title is named by its id.
     await call('POST', `${boardPath(team.leader)}/threads/plain`, { body: { text: 'hi' } })
     expect((performSessionSendMock.mock.calls[1][0] as { text: string }).text).toMatch(/^Board thread "plain": the user wrote/)
+  })
+
+  it('a human message with pictures keeps their names and names the files at the head of the delivery; a picture alone is a message', async () => {
+    const name = await uploadPicture()
+    const res = await call('POST', `${boardPath(team.leader)}/threads/plain`, { body: { text: 'Like this one', imageRefs: [{ filename: name }] } })
+    expect(res.status).toBe(201)
+    expect(res.json.message).toMatchObject({ author: 'user', text: 'Like this one', images: [name] })
+    const text = (performSessionSendMock.mock.calls[0][0] as { text: string }).text
+    expect(text).toMatch(new RegExp(`^\\[Images attached \u2014 use the Read tool to view them\\]\\n- \\S+${name.replace('.', '\\.')}\\n\\nBoard thread "plain"`))
+    const alone = await call('POST', `${boardPath(team.leader)}/threads/plain`, { body: { text: '', imageRefs: [{ filename: name }] } })
+    expect(alone.json.message).toMatchObject({ text: '', images: [name] })
+    expect((performSessionSendMock.mock.calls[1][0] as { text: string }).text).toContain('> (a picture, named above)')
+    expect((await call('POST', `${boardPath(team.leader)}/threads/plain`, { body: { text: ' ' } })).status).toBe(400)
   })
 
   it('a session\'s post (the leader answering, a worker reporting) is stored only', async () => {
@@ -763,6 +786,25 @@ describe('round two', () => {
       expect(clear.json).toEqual({ choice: null, delivery: { state: 'skipped', reason: 'cleared' } })
       expect(performSessionSendMock).toHaveBeenCalledTimes(1)
       expect((await getBoard(crew.boss))!.choices).toEqual({})
+    })
+
+    it('pictures go with a choice answer: kept on it, named in every delivery, a redelivery after a failed send included', async () => {
+      const name = await uploadPicture()
+      const head = /^\[Images attached \u2014 use the Read tool to view them\]\n- \S+\n\nOn your Board the user chose option 2/
+      const res = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'now', imageRefs: [{ filename: name }] } })
+      expect(res.json.delivery).toMatchObject({ state: 'queued' })
+      expect(res.json.choice.images).toEqual([name])
+      expect((performSessionSendMock.mock.calls[0][0] as { text: string }).text).toMatch(head)
+      // The same answer with no new picture is no news.
+      expect((await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'now' } })).json.delivery).toEqual({ state: 'skipped', reason: 'unchanged' })
+      // A new picture on the same answer is news; its send fails, so the next try delivers it again, pictures and all.
+      performSessionSendMock.mockRejectedValueOnce(new Error('boom'))
+      const again = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'now', imageRefs: [{ filename: name }] } })
+      expect(again.json.delivery).toEqual({ state: 'stored', reason: 'delivery_failed' })
+      const retry = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'now' } })
+      expect(retry.json.delivery).toMatchObject({ state: 'queued' })
+      expect((performSessionSendMock.mock.calls.at(-1)![0] as { text: string }).text).toMatch(head)
+      await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: '' } })
     })
 
     it('400 bad_option, 404 choice_not_found; a send failure keeps the answer', async () => {

@@ -51,9 +51,9 @@ export interface BoardReplyDockProps {
   /** Bumped each time a thread asks for the box: focus it again. */
   focusNonce: number;
   /** Resolves to null when stored, else the reason it was not. */
-  onSend: (thread: string, text: string) => Promise<string | null>;
-  /** A choice answered in words: null when saved, else the reason. */
-  onAnswer?: (choice: string, text: string) => Promise<string | null>;
+  onSend: (thread: string, text: string, images?: ImageAttachment[]) => Promise<string | null>;
+  /** A choice answered in words (and pictures): null when saved, else the reason. */
+  onAnswer?: (choice: string, text: string, images?: ImageAttachment[]) => Promise<string | null>;
   /** A note written here: null when saved, else the reason. */
   onSaveNote?: (mark: string, text: string) => Promise<string | null>;
   /** Every change of a note's text, kept until it is saved (the frame saves it when the box closes). */
@@ -151,9 +151,10 @@ export function BoardReplyDock({
   }, [noting, onNoteDraft, mark, target.text]);
 
   const send = useCallback(async (text: string, images?: ImageAttachment[]): Promise<boolean> => {
-    if (images?.length) {
-      setError(noting ? 'A note takes text only. Remove the image to save.'
-        : answering ? 'An answer takes text only. Remove the image to send.' : 'A board thread takes text only. Remove the image to send.');
+    // A note is words kept on the page, not a message: it takes no picture. A thread message and a
+    // choice answer go to the board's session with their pictures, as a chat message does.
+    if (images?.length && noting) {
+      setError('A note takes text only. Remove the image to save.');
       return false;
     }
     const body = text.trim();
@@ -166,9 +167,13 @@ export function BoardReplyDock({
       onClose();
       return true;
     }
-    if (!body) return false;
+    const pictures = images?.length ? images : undefined;
+    if (!body && !(pictures && !answering)) {
+      if (pictures) setError('Add a few words to go with the picture.');
+      return false;
+    }
     setError(null);
-    const failed = answering ? await onAnswer!(choice!, body) : await onSend(thread, body);
+    const failed = answering ? await onAnswer!(choice!, body, pictures) : await onSend(thread, body, pictures);
     if (failed) { setError(failed); return false; }
     // An answer is one message: the choice shows it, and the box is done.
     if (answering) onClose();

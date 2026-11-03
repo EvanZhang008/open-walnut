@@ -38,6 +38,7 @@ import {
 import { statStagedBody, takeStagedBody } from './staged-body.js';
 import { validateNewItems, allLetterItems, assertItemIds } from './item-schema.js';
 import { duplicateLetterMessage, duplicateReplyMessage, findDuplicateLetter, findDuplicateReply, senderKey } from './duplicate-letter.js';
+import { cleanPictureNames } from '../answer-pictures.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
@@ -1096,10 +1097,11 @@ export async function settleLettersWhere(
  */
 export async function answerLetter(
   id: string,
-  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy },
+  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[] },
 ): Promise<LetterRecord> {
   requireValidId(id);
   const actionId = str(input?.actionId).trim();
+  const images = cleanPictureNames(input?.images);
   if (!actionId) throw invalid('actionId is required');
   const freeText = str(input?.freeText).trim();
   if (freeText) assertBodySize(freeText, 'freeText');
@@ -1129,6 +1131,7 @@ export async function answerLetter(
       text: note ? `${action.label}: ${note}` : action.label,
       at,
       ...(by ? { by } : {}),
+      ...(images.length ? { images } : {}),
       // Recorded with the answer, so a reader never sees an answer with no
       // delivery state while the attempt runs (answerLetterAndDeliver replaces it).
       delivery: { status: 'pending', at },
@@ -1221,11 +1224,13 @@ export interface HumanReplyTurn {
  */
 export async function humanReplyTurn(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[] },
 ): Promise<HumanReplyTurn> {
   requireValidId(id);
   const text = str(input?.text).trim();
-  if (!text) throw invalid('text is required');
+  const images = cleanPictureNames(input?.images);
+  // A picture alone is a reply too, as in the chat.
+  if (!text && images.length === 0) throw invalid('text is required');
   assertBodySize(text, 'text');
   const clientId = input?.clientId === undefined ? undefined : str(input.clientId);
   if (clientId !== undefined && !CLIENT_ID_RE.test(clientId)) {
@@ -1244,6 +1249,7 @@ export async function humanReplyTurn(
       at,
       ...(clientId !== undefined ? { clientId } : {}),
       ...(input.by ? { by: input.by } : {}),
+      ...(images.length ? { images } : {}),
       // In the same write as the words: a reader that sees this turn before the
       // attempt ends knows its outcome is still to come (humanReplyAndDeliver
       // replaces it), instead of seeing a turn with no delivery at all.

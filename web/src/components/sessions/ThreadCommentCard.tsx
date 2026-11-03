@@ -28,6 +28,9 @@ import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useImageAttachments } from '@/components/common/image-attachments';
+import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
+import type { ImageAttachment } from '@/api/chat';
 import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ThreadStatusWord } from './ThreadStatusWord';
@@ -86,7 +89,7 @@ export interface ThreadCommentCardProps {
   canAsk: boolean;
   /** The header's menu (the owner supplies the page menu). */
   menu?: ReactNode;
-  onSend: (text: string) => Promise<boolean> | boolean;
+  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean> | boolean;
   onClose: () => void;
   /** "Quote in chat": the chat's composer writes to this question from now on. */
   onQuote?: () => void;
@@ -167,6 +170,9 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   // The question is dictated the way the composer's message is: into this box.
   const mic = useRef<BoxMicHandle | null>(null);
+  // Pictures go with the question, as in the chat (common/image-attachments.ts).
+  const pictures = useImageAttachments();
+  const pictureInput = usePictureInput(pictures, p.canAsk);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const initialRef = useRef(p.initialText);
@@ -270,15 +276,17 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
 
   const send = useCallback(async () => {
     const t = text.trim();
-    if (!t || sending || !p.canAsk) return;
+    const images = pictures.images;
+    if ((!t && images.length === 0) || sending || !p.canAsk) return;
     setSending(true);
     // A first send turns an Ask into a question with its own key: the words go from the one they were typed under.
     const sentKey = draft.key;
     try {
-      const ok = await p.onSend(t);
+      const ok = await p.onSend(t, images.length ? images : undefined);
       if (ok) {
         // A transcription landing after the send would repeat what was just sent.
         mic.current?.clear();
+        pictures.clear();
         draft.clear(sentKey, t);
         pinned.current = true;
       }
@@ -286,7 +294,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       setSending(false);
       boxRef.current?.focus({ preventScroll: true });
     }
-  }, [text, sending, p, draft]);
+  }, [text, sending, p, draft, pictures]);
   // Send (button or Enter) while the mic is recording waits for its last words.
   const gate = useSendAfterDictation([mic], () => { void send(); });
 
@@ -436,7 +444,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
           )}
         </div>
       )}
-      <div className="thread-card-composer">
+      <PictureStrip pictures={pictures} className="thread-card-pictures" testId="thread-card-pictures" />
+      <div className={`thread-card-composer${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
         <textarea
           ref={boxRef}
           className="thread-card-input"
@@ -447,14 +456,16 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
           disabled={!p.canAsk || sending}
           aria-label={placeholder}
           onChange={(e) => setText(e.target.value)}
+          onPaste={pictureInput.onPaste}
           onKeyDown={onKeyDown}
         />
+        <AttachPictureButton pictures={pictures} className="thread-card-attach" testId="thread-card-attach" disabled={!p.canAsk || sending} />
         <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
         <button
           type="button"
           className="thread-card-send"
           aria-label="Send"
-          disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || sending || !p.canAsk}
+          disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || sending || !p.canAsk}
           onClick={gate.send}
           {...dictationWaitProps(gate, 'Send (Enter)')}
         >

@@ -18,6 +18,8 @@
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
+import type { ImageAttachment } from '@/api/chat';
 import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -30,9 +32,11 @@ import {
 
 /** One question's own-words answer, with the composer's mic inside its right edge.
  *  The form's Submit waits for this mic's words (`answerMic`), then settles the ask. */
-function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey, answerMic }: {
+function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey, answerMic, pictures }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
   answerMic: RefObject<BoxMicHandle | null>;
+  /** The form's pictures (one set per ask, shown under its last question). */
+  pictures?: ImageAttachments;
 }) {
   return (
     <AnswerBox
@@ -45,6 +49,7 @@ function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey, an
       onChange={onChange}
       maxRows={4}
       micRef={answerMic}
+      pictures={pictures}
     />
   );
 }
@@ -55,7 +60,8 @@ interface PermissionAnswerFormProps {
   disabled: boolean;
   /** Already settled — render nothing at all (the settled chip speaks instead). */
   resolved: boolean;
-  onSubmit: (answers: Record<string, string>) => void;
+  /** The answers, and the pictures that go with them (sent right after: RespondOptions.images). */
+  onSubmit: (answers: Record<string, string>, images?: ImageAttachment[]) => void;
   /** Refuse the ask outright ("the user dismissed the questions"), i.e. a deny. */
   onDismissQuestions: () => void;
   /** The refuse button's word and tooltip (default `Dismiss`; a kanban card says `Skip question`). */
@@ -79,13 +85,17 @@ export function PermissionAnswerForm({
   // Settled (answered or dismissed, here or on another surface): the words are spent.
   const clearOther = otherDraft.clear;
   useEffect(() => { if (resolved) clearOther(); }, [resolved, clearOther]);
+  // Pictures with the answers, sent right after them (RespondOptions.images); spent once it settles.
+  const pictures = useImageAttachments();
+  const { clear: clearPictures } = pictures;
+  useEffect(() => { if (resolved) clearPictures(); }, [resolved, clearPictures]);
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
 
   // Each question's own-words mic, and all of them as the one control Submit waits on.
   const { micOf, group: answerMic } = useDictationGroup<BoxMicHandle>();
   const submitNow = () => {
     if (disabled || !complete) return;
-    onSubmit(buildAskUserAnswers(questions, selections, otherText));
+    onSubmit(buildAskUserAnswers(questions, selections, otherText), pictures.images.length ? pictures.images : undefined);
   };
   const gate = useSendAfterDictation([answerMic], submitNow);
 
@@ -93,7 +103,7 @@ export function PermissionAnswerForm({
 
   return (
     <div className={`nfc-answer${scrollable ? ' nfc-answer--scroll' : ''}`}>
-      {questions.map((q) => {
+      {questions.map((q, qi) => {
         const picked = selections[q.question] ?? [];
         return (
           <div key={q.question} className="nfc-answer-q">
@@ -130,6 +140,7 @@ export function PermissionAnswerForm({
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
               draftKey={otherDraft.key}
               answerMic={micOf(q.question)}
+              {...(qi === questions.length - 1 ? { pictures } : {})}
             />
           </div>
         );

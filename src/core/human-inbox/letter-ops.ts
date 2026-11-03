@@ -283,6 +283,8 @@ function clip(value: string, max: number): string {
 export function buildLetterDeliveryText(
   letter: Pick<LetterRecord, 'id' | 'subject'>,
   human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
+  /** The images header naming the pictures sent with the answer (core/answer-pictures.ts picturesHeader), or ''. */
+  pictures = '',
 ): string {
   const fields = [
     `letter: ${letter.id}`,
@@ -316,11 +318,14 @@ export function buildLetterDeliveryText(
     fields,
     `${marker} (end of letter answer)`,
     '',
+    ...(pictures ? ['The pictures named above, under the images header, came with this answer: they are part of it.', ''] : []),
     'Continue the work accordingly, then reply in the letter thread (not just in this '
     + 'session) so the answer reaches them wherever they are:',
     `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
   ].join('\n');
-  if (!by) return text;
+  // The header leads the line, where every reader (the daemon's image blocks, the web and phone
+  // timelines, the Org thread capture) looks for pictures.
+  if (!by) return pictures + text;
   // Another task's answer is a delivery from that task, like any peer note: in
   // the walnut-message envelope its sender is read from, so every timeline folds
   // it with the other messages the session received instead of drawing it as the
@@ -335,7 +340,7 @@ export function buildLetterDeliveryText(
       title: kit.messageTitle(`Answered your letter: ${oneLine(letter.subject ?? '', WRAPPER_FIELD_MAX_CHARS)}`),
       note: 'another of your user\'s tasks answered your letter in their place',
     },
-    body: text,
+    body: pictures + text,
   });
 }
 
@@ -357,7 +362,7 @@ export function buildLetterDeliveryText(
  */
 export async function deliverLetterToOrigin(
   letter: LetterRecord,
-  human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
+  human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy; images?: string[] },
   options: { messageId?: string } = {},
 ): Promise<LetterDelivery> {
   const sid = letter.sender.sessionId;
@@ -372,7 +377,8 @@ export async function deliverLetterToOrigin(
     // delivery would only echo its own words back as a new message.
     if (human.by?.sessionId === sid) return { status: 'skipped', reason: 'answered_by_origin', sessionId: sid };
 
-    const text = buildLetterDeliveryText(letter, human);
+    const { picturesHeader } = await import('../answer-pictures.js');
+    const text = buildLetterDeliveryText(letter, human, await picturesHeader(human.images));
     if (record.pendingPermission) {
       const { enqueueMessage } = await import('../session-message-queue.js');
       const parked = await withTimeout(enqueueMessage(sid, frameForSource(text, human.by ? 'peer' : 'human-inbox'), { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' }), DELIVERY_TIMEOUT_MS, () => null);
@@ -551,7 +557,7 @@ export async function answeredByCaller(sid: string | undefined): Promise<LetterA
 /** An action was picked (by the user, or a task for them): record it first, then deliver the choice. */
 export async function answerLetterAndDeliver(
   id: string,
-  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy },
+  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[] },
   source: LetterAnswerSource = 'web',
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
@@ -570,6 +576,7 @@ export async function answerLetterAndDeliver(
     text: record.answered?.freeText,
     ...(input.by ? { by: input.by } : {}),
     ...(replaces ? { replaces } : {}),
+    ...(record.thread[turn]?.images ? { images: record.thread[turn].images } : {}),
   });
   trackInFlight(`${id}#${turn}`, attempt);
   return answerWhenDue(record, turn, attempt, wait);
@@ -611,7 +618,7 @@ export async function withdrawLetterAndAnnounce(
  */
 export async function humanReplyAndDeliver(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[] },
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
   await refuseApprovalByTask(id, input.by, { text: input.text });
@@ -624,7 +631,11 @@ export async function humanReplyAndDeliver(
     if (onRecord && onRecord.status !== 'failed' && onRecord.status !== 'pending') {
       return { letter: await withBodies(record), delivery: deliveryFromRecord(onRecord) };
     }
-    attempt = deliverAndRecord(record, turn, { text: entry?.text ?? input.text, ...(entry?.by ? { by: entry.by } : {}) });
+    attempt = deliverAndRecord(record, turn, {
+      text: entry?.text ?? input.text,
+      ...(entry?.by ? { by: entry.by } : {}),
+      ...(entry?.images ? { images: entry.images } : {}),
+    });
     trackInFlight(key, attempt);
   }
   return answerWhenDue(record, turn, attempt, wait);
@@ -676,7 +687,7 @@ async function answerWhenDue(
 async function deliverAndRecord(
   record: LetterRecord,
   turn: number,
-  human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy },
+  human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy; images?: string[] },
 ): Promise<LetterDelivery> {
   const delivery = await deliverLetterToOrigin(record, human);
   const entry = record.thread[turn];

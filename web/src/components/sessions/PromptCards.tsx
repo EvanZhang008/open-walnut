@@ -19,6 +19,8 @@ import { useArmAfterAppear, useHoldSettled } from '@/hooks/useArmAfterAppear';
 import { foldLongCommand } from './tool-call-grouping';
 import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
+import type { ImageAttachment } from '@/api/chat';
 import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -31,9 +33,11 @@ import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnsw
 
 /** One question's own-words answer, with the composer's mic. The card's Submit
  *  waits for this mic's words (`answerMic`), then settles the card. */
-function AskOtherInput({ placeholder, value, disabled, onChange, draftKey, answerMic }: {
+function AskOtherInput({ placeholder, value, disabled, onChange, draftKey, answerMic, pictures }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
   answerMic: RefObject<BoxMicHandle | null>;
+  /** The card's pictures (one set per ask, shown under its last question). */
+  pictures?: ImageAttachments;
 }) {
   return (
     <AnswerBox
@@ -46,6 +50,7 @@ function AskOtherInput({ placeholder, value, disabled, onChange, draftKey, answe
       onChange={onChange}
       maxRows={4}
       micRef={answerMic}
+      pictures={pictures}
     />
   );
 }
@@ -60,7 +65,7 @@ function AskOtherInput({ placeholder, value, disabled, onChange, draftKey, answe
  * QuestionPopover `qp-*` styles; the frame keeps the permission-card classes. */
 function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, answered }: {
   questions: AskQuestion[];
-  onSubmit: (answers: Record<string, string>) => void;
+  onSubmit: (answers: Record<string, string>, images?: ImageAttachment[]) => void;
   onDismiss: () => void;
   status: PermissionRequestStatus;
   /** A response is in flight: the controls lock, but the card already shows the
@@ -76,6 +81,10 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
   const settledNow = isSettledPermission(status);
   const clearOther = otherDraft.clear;
   useEffect(() => { if (settledNow) clearOther(); }, [settledNow, clearOther]);
+  // Pictures with the answers, sent right after them (RespondOptions.images); spent once it settles.
+  const pictures = useImageAttachments();
+  const { clear: clearPictures } = pictures;
+  useEffect(() => { if (settledNow) clearPictures(); }, [settledNow, clearPictures]);
   const phone = usePhoneLayout();
   const arm = useArmAfterAppear<HTMLDivElement>(undefined, phone && !isSettledPermission(status));
   const locked = !!busy || !arm.armed;
@@ -87,7 +96,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
   const { micOf, group: answerMic } = useDictationGroup<BoxMicHandle>();
   const submitNow = () => {
     if (!complete || locked) return;
-    onSubmit(buildAskUserAnswers(questions, selections, otherText));
+    onSubmit(buildAskUserAnswers(questions, selections, otherText), pictures.images.length ? pictures.images : undefined);
   };
   const gate = useSendAfterDictation([answerMic], submitNow);
 
@@ -129,7 +138,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
         <span className="permission-request-icon" aria-hidden="true"><QuestionCircleIcon size={14} /></span>
         <span className="permission-request-tool">Agent has a question</span>
       </div>
-      {questions.map((q) => {
+      {questions.map((q, qi) => {
         const picked = selections[q.question] ?? [];
         return (
           <div key={q.question} className="ask-user-question">
@@ -164,6 +173,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
               draftKey={otherDraft.key}
               answerMic={micOf(q.question)}
+              {...(qi === questions.length - 1 ? { pictures } : {})}
             />
           </div>
         );
@@ -226,13 +236,14 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
   const face: PermissionRequestStatus = holding ? 'pending' : status;
   const locked = busy || holding || !arm.armed;
 
-  const handleResponse = (allow: boolean, optionId?: string, message?: string, answers?: Record<string, string>) => {
+  const handleResponse = (allow: boolean, optionId?: string, message?: string, answers?: Record<string, string>, images?: ImageAttachment[]) => {
     if (locked) return;
     setTapped(optionId ?? (allow ? 'allow' : 'deny'));
     void respondToPermissionRequest(sessionId, requestId, allow, {
       ...(optionId ? { optionId } : {}),
       ...(message ? { message } : {}),
       ...(answers ? { answers } : {}),
+      ...(images?.length ? { images } : {}),
     });
   };
   const btnBusy = (key: string) => ((busy || holding) && tapped === key ? ' is-busy' : '');
@@ -244,7 +255,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
         status={face}
         busy={busy || holding}
         {...(stored?.answers ? { answered: stored.answers } : {})}
-        onSubmit={(answers) => handleResponse(true, undefined, undefined, answers)}
+        onSubmit={(answers, images) => handleResponse(true, undefined, undefined, answers, images)}
         onDismiss={() => handleResponse(false, undefined, 'User dismissed the questions')}
       />
     );

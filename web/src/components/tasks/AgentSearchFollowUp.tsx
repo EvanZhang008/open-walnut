@@ -52,7 +52,7 @@ export function AgentSearchFollowUp({
   onOpenTask?: (taskId: string) => void;
 }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [firstMessage, setFirstMessage] = useState<string | null>(null);
+  const [firstMessage, setFirstMessage] = useState<{ text: string; images?: ImageAttachment[] } | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionSend = useSessionSend(sessionId);
@@ -75,15 +75,16 @@ export function AgentSearchFollowUp({
   useEffect(() => {
     if (!sessionId || !firstMessage || sentFirstRef.current) return;
     sentFirstRef.current = true;
-    const text = firstMessage;
+    const { text, images } = firstMessage;
     setFirstMessage(null);
-    void sessionSend.send(sessionId, text).catch(() => { /* the hook shows sendError */ });
+    // The first question keeps its pictures too (it went out without them before).
+    void sessionSend.send(sessionId, text, images).catch(() => { /* the hook shows sendError */ });
   }, [sessionId, firstMessage, sessionSend]);
 
   /** Resolves false when the question was NOT consumed — the caller hands it back. */
   const submit = useCallback(async (message: string, images?: ImageAttachment[]): Promise<boolean> => {
     const text = message.trim();
-    if (!text) return true;
+    if (!text && !images?.length) return true;
     if (sessionId) {
       void sessionSend.send(sessionId, text, images);
       return true;
@@ -105,7 +106,7 @@ export function AgentSearchFollowUp({
         return false;
       }
       setSessionId(adopted.sessionId);
-      setFirstMessage(text);
+      setFirstMessage({ text, ...(images?.length ? { images } : {}) });
       onLive(adopted.sessionId);
       return true;
     } catch {

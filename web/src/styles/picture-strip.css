@@ -1,0 +1,7 @@
+/* PictureStrip.tsx: the attach button any text box for an AI uses (the thumbnails are the chat's). */
+.picture-attach {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px;
+  padding: 0; border: none; border-radius: 8px; background: transparent; color: var(--fg-muted); cursor: pointer;
+}
+.picture-attach:hover:not(:disabled) { color: var(--fg, var(--fg-primary)); background: var(--bg-hover, rgba(127, 127, 127, 0.12)); }
+.picture-attach:disabled { opacity: 0.4; cursor: default; }

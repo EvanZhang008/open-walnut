@@ -25,6 +25,9 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { respondToPermission } from '@/api/sessions';
+import { wsClient } from '@/api/ws';
+import { buildImageRefsPayload } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { log } from '@/utils/log';
 
 /**
@@ -151,6 +154,25 @@ export interface RespondOptions {
   optionId?: string;
   answers?: Record<string, string>;
   message?: string;
+  /**
+   * Pictures with an own-words answer. An answer is the tool's result, which carries text only,
+   * so they follow it as the next message into the same session (sendAnswerPictures).
+   */
+  images?: ImageAttachment[];
+}
+
+/**
+ * The pictures of an answer, as the next message: the pictures alone, no words (nothing the person
+ * did not type), exactly what the chat sends for a picture sent with an empty box.
+ */
+async function sendAnswerPictures(sessionId: string, images: ImageAttachment[]): Promise<void> {
+  try {
+    const pictures = await buildImageRefsPayload(images);
+    await wsClient.sendRpc('session:send', { sessionId, message: '', ...pictures });
+    log.info('notifications', 'answer pictures sent', { sessionId, count: images.length });
+  } catch (err) {
+    log.warn('notifications', 'answer pictures failed', { sessionId, count: images.length, error: String(err) });
+  }
 }
 
 /**
@@ -186,6 +208,7 @@ export async function respondToPermissionRequest(
 
   try {
     await respondToPermission(sessionId, requestId, allow, opts.message, opts.optionId, opts.answers);
+    if (allow && opts.images?.length) await sendAnswerPictures(sessionId, opts.images);
     const settled = entries.get(requestId);
     // A server event may have landed while we waited (the resolution we just
     // caused, or a withdrawal) — it wins, so only clear the in-flight flag.

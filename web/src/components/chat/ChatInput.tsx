@@ -23,7 +23,7 @@ import { StatusBadge } from '../common/StatusBadge';
 import { MicButton, type MicControl } from '../common/MicButton';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
-import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
+import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, subscribeDraft, unmarkDraftSent } from '@/utils/drafts';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
@@ -31,9 +31,9 @@ import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './pl
 import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
+import { IMAGE_ACCEPT, MAX_IMAGES, imageFilesOf, pastedImageFiles, readImageFile } from '@/components/common/image-attachments';
 
-const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-const MAX_IMAGES = 5;
+// Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
 /**
  * Format a selected path as an "@" reference token for insertion into the message.
@@ -681,24 +681,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // on a concurrent re-render), so kicking off the read inside a setImages(prev => …)
     // updater fired two FileReaders per file and appended the same image twice — every
     // pasted/dropped photo showed up doubled. Keep the updater pure; do the read here.
-    const imageFiles = Array.from(files).filter((f) => ALLOWED_TYPES.has(f.type));
-    for (const file of imageFiles) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        // Strip "data:image/png;base64," prefix
-        const base64 = dataUrl.split(',')[1];
-        if (!base64) return;
-        setImages((curr) => {
-          if (curr.length >= MAX_IMAGES) return curr;
-          return [...curr, {
-            data: base64,
-            mediaType: file.type,
-            name: file.name || 'pasted-image',
-          }];
-        });
-      };
-      reader.readAsDataURL(file);
+    for (const file of imageFilesOf(files)) {
+      void readImageFile(file).then((img) => {
+        if (!img) return;
+        setImages((curr) => (curr.length >= MAX_IMAGES ? curr : [...curr, img]));
+      });
     }
   }, []);
 
@@ -1356,15 +1343,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // Excel/Word/PowerPoint ship a picture of the selection ALONGSIDE the real
     // HTML, so the image branch below used to win and attach a screenshot of
     // the cells. For an Office clipboard the text is what was copied.
-    const fromOffice = isOfficeClipboardHtml(e.clipboardData?.getData('text/html'));
-    const items = fromOffice ? null : e.clipboardData?.files;
-    if (items && items.length > 0) {
-      const imageFiles = Array.from(items).filter(f => ALLOWED_TYPES.has(f.type));
-      if (imageFiles.length > 0) {
-        e.preventDefault();
-        processFiles(imageFiles);
-        return;
-      }
+    const imageFiles = pastedImageFiles(e);
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      processFiles(imageFiles);
+      return;
     }
     // Rich text from a wiki/doc editor: its text/plain flavour loses list
     // markers and nesting, so rebuild markdown from the text/html flavour.
@@ -1836,7 +1819,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
+          accept={IMAGE_ACCEPT}
           multiple
           style={{ display: 'none' }}
           onChange={handleFileChange}

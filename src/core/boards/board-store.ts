@@ -31,6 +31,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { BoardChangedEvent } from '../event-types.js';
 import { BOARD_ITEM_ID_RE, choiceSigs, own } from './board-html.js';
+import { cleanPictureNames } from '../answer-pictures.js';
 import {
   isLaneTemplateId, normalizeCards, normalizeKanbanSeen, normalizeLanes,
   type BoardCard, type BoardKanbanSeen, type BoardLane, type LaneTemplateId,
@@ -104,6 +105,8 @@ export interface BoardMessage {
   author: BoardAuthor;
   text: string;
   ts: string;
+  /** Pictures sent with it, as file names in the images folder (core/answer-pictures.ts). */
+  images?: string[];
 }
 
 /** A note on the page. No `by`: the user wrote it (every mark before 2026-10-27 is the user's). */
@@ -177,6 +180,8 @@ export interface BoardChoice {
    * again instead of answering `unchanged`. Cleared once one goes out.
    */
   undelivered?: true;
+  /** Pictures sent with the answer (file names, core/answer-pictures.ts); every delivery of it names them. */
+  images?: string[];
 }
 
 /** "Remind me later" on a choice or a thread (one per target). The clock is board-reminders.ts. */
@@ -576,11 +581,13 @@ export async function editBoardHtml(
 export async function postBoardMessage(
   taskId: string,
   thread: string,
-  input: { author: BoardAuthor; text: string },
+  input: { author: BoardAuthor; text: string; images?: string[] },
 ): Promise<BoardMessage> {
   checkItemId(thread, 'thread');
   const text = typeof input.text === 'string' ? input.text.trim() : '';
-  if (!text) throw new BoardError('bad_request', 400, undefined, '`text` must be a non-empty string');
+  const images = cleanPictureNames(input.images);
+  // A picture alone is a message too, as in the chat.
+  if (!text && images.length === 0) throw new BoardError('bad_request', 400, undefined, '`text` must be a non-empty string');
   if (bytes(text) > BOARD_MESSAGE_MAX_BYTES) {
     throw new BoardError('message_too_long', 413, { max: BOARD_MESSAGE_MAX_BYTES });
   }
@@ -596,6 +603,7 @@ export async function postBoardMessage(
       author: input.author,
       text,
       ts: last && last > now ? last : now,
+      ...(images.length ? { images } : {}),
     };
     // The user posting in a thread answers a reminder that came due on it.
     const due = input.author === 'user' && own(current.reminders, thread);

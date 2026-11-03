@@ -115,6 +115,12 @@ export interface ThreadEntry {
   /** HUMAN turns only: a task's session wrote this turn in the user's place (see LetterAnsweredBy). */
   by?: LetterAnsweredBy;
   /**
+   * HUMAN turns only: the pictures sent with the words, as file names in the images folder
+   * (GET /api/images/<name>; core/answer-pictures.ts). The delivery names them for the session to see.
+   * Absent on a turn with none, and on every turn written before the field existed.
+   */
+  images?: string[];
+  /**
    * HUMAN turns only: how far this turn got toward the origin session. Written
    * as `pending` in the same write that records the turn, then replaced by the
    * attempt's outcome. Absent on turns recorded before the field existed. A

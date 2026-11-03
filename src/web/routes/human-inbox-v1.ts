@@ -460,14 +460,16 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
     const sid = callerSid(req)
     if (CLOUD_MODE) {
       // The primary resolves the caller and checks the letter: it holds the letter for sure.
-      await relayDelivering(res, 'server.human-inbox.answer', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
+      await relayDelivering(res, 'server.human-inbox.answer', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
     const { answerLetterAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
     const by = withUserWords(await answeredByCaller(sid), b)
+    const images = await savePictures(b)
     const result = await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
+      ...(images.length ? { images } : {}),
       ...(by ? { by } : {}),
       // A request that presented a device token came from a paired device (the phone); the
       // console reaches this over the LAN bypass and has no device name. That is the only
@@ -477,7 +479,23 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
   })
 })
 
-// POST /api/v1/human-inbox/:id/human-reply { text, clientId? }
+/** The pictures of an answer, saved on this box (core/answer-pictures.ts). */
+async function savePictures(b: Record<string, unknown>): Promise<string[]> {
+  const { saveAnswerPictures } = await import('../../core/answer-pictures.js')
+  return saveAnswerPictures(b)
+}
+
+/** The companion's relay body: its own uploads go to the Mac inline, never as names of files here. */
+async function withInlinePictures(b: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!Array.isArray(b.imageRefs) && !Array.isArray(b.images)) return b
+  const { inlineAnswerPictures } = await import('../../core/answer-pictures.js')
+  const { imageRefs: _refs, images: _images, ...rest } = b
+  const images = await inlineAnswerPictures(b)
+  return images.length ? { ...rest, images } : rest
+}
+
+// POST /api/v1/human-inbox/:id/human-reply { text, clientId?, imageRefs? | images? }
+// A picture alone is a reply (text may be empty when pictures come).
 // Same contract as answer: 200 with the delivery's outcome, or 202 with the
 // recorded turn and a pending delivery when the delivery outlasts the budget.
 humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res: Response, next: NextFunction) => {
@@ -492,14 +510,16 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
     }
     const sid = callerSid(req)
     if (CLOUD_MODE) {
-      await relayDelivering(res, 'server.human-inbox.human-reply', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
+      await relayDelivering(res, 'server.human-inbox.human-reply', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
     const { humanReplyAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
     const by = withUserWords(await answeredByCaller(sid), b)
+    const images = await savePictures(b)
     // `clientId` (optional) makes a retry of the same reply idempotent; see humanReplyAndDeliver.
     const result = await humanReplyAndDeliver(id, {
       text: typeof b.text === 'string' ? b.text : '',
+      ...(images.length ? { images } : {}),
       ...(by ? { by } : {}),
       ...(b.clientId !== undefined ? { clientId: typeof b.clientId === 'string' ? b.clientId : '' } : {}),
     }, { answerBy })

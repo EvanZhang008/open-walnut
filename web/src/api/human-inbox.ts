@@ -14,6 +14,8 @@
  */
 import { apiGet, apiPost } from './client';
 import type { InboxLetterItem } from './human-inbox-items';
+import type { ImageAttachment } from './chat';
+import { buildImageRefsPayload } from './image-upload';
 
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 export type LetterBodyFormat = 'html' | 'markdown';
@@ -73,6 +75,8 @@ export interface LetterThreadEntry {
   bodyUrl?: string;
   /** Human turns only: a task wrote this turn in the user's place. */
   by?: LetterAnsweredBy;
+  /** Human turns only: the pictures sent with it, as names under /api/images/. */
+  images?: string[];
 }
 
 /** Index record — what the envelope rows render. No body content. */
@@ -194,6 +198,8 @@ function normalizeDetail(raw: unknown): LetterDetail {
       ...(str(entry.bodyUrl) ? { bodyUrl: str(entry.bodyUrl) } : {}),
       ...(Array.isArray(entry.items) ? { items: entry.items as InboxLetterItem[] } : {}),
       ...(entry.by && typeof (entry.by as Json).sessionId === 'string' ? { by: entry.by as unknown as LetterAnsweredBy } : {}),
+      ...(Array.isArray(entry.images) && entry.images.length
+        ? { images: (entry.images as unknown[]).filter((n): n is string => typeof n === 'string' && /^[\w.-]+$/.test(n)) } : {}),
     };
   });
   return {
@@ -287,17 +293,21 @@ export async function answerLetter(
   id: string,
   actionId: string,
   freeText?: string,
+  images?: ImageAttachment[],
 ): Promise<LetterActionResult> {
+  // Pictures go up over HTTP first; the answer carries their names (api/image-upload.ts).
+  const pictures = await buildImageRefsPayload(images);
   const raw = await apiPost<unknown>(`${BASE}/${encodeURIComponent(id)}/answer`, {
     actionId,
     ...(freeText ? { freeText } : {}),
+    ...pictures,
   });
   return normalizeResult(raw);
 }
 
 /** Free-text reply from the human — threads under the letter and is delivered. */
-export async function humanReplyToLetter(id: string, text: string): Promise<LetterActionResult> {
-  const raw = await apiPost<unknown>(`${BASE}/${encodeURIComponent(id)}/human-reply`, { text });
+export async function humanReplyToLetter(id: string, text: string, images?: ImageAttachment[]): Promise<LetterActionResult> {
+  const raw = await apiPost<unknown>(`${BASE}/${encodeURIComponent(id)}/human-reply`, { text, ...(await buildImageRefsPayload(images)) });
   return normalizeResult(raw);
 }
 

@@ -91,7 +91,7 @@
     });
   }
   kit.onHost['wn-board:sending'] = function (d) {
-    threadsWithId(String(d.thread || '')).forEach(function (t) { t.wnSending(String(d.key || ''), String(d.text || '')); });
+    threadsWithId(String(d.thread || '')).forEach(function (t) { t.wnSending(String(d.key || ''), String(d.text || ''), Number(d.pictures) || 0); });
   };
   kit.onHost['wn-board:sent'] = function (d) {
     var thread = String(d.thread || '');
@@ -291,10 +291,10 @@
       });
     }
     /** The docked composer is sending: a pending row, and the thread goes to its newest message. */
-    wnSending(key, text) {
+    wnSending(key, text, pictures) {
       // A new send retires the rows of earlier failures (their text is still in the reply box).
       this.wnLocal = this.wnLocal.filter(function (l) { return l.status !== 'failed'; })
-        .concat([{ key: key, text: text, ts: new Date().toISOString(), status: 'pending' }]);
+        .concat([{ key: key, text: text, pictures: pictures || 0, ts: new Date().toISOString(), status: 'pending' }]);
       this.wnPinned = true;
       this.wnKeepOpen = true;
       this.wnRender();
@@ -324,7 +324,8 @@
         + (unread ? ' data-unread=""' : '') + '><div class="wn-msg-meta"><span class="wn-who">' + esc(kit.whoOf(m.author))
         + '</span><span class="wn-when">' + esc(kit.when(m.ts)) + '</span>' + (extra || '')
         + (stored ? this.wnDeleteControl(m.id) : '') + '</div><div class="wn-text">'
-        + kit.richText(m.text) + '</div></div>';
+        + kit.richText(m.text) + (m.images && m.images.length ? '<div class="wn-pics">'
+        + (m.images.length === 1 ? 'With a picture' : 'With ' + m.images.length + ' pictures') + '</div>' : '') + '</div></div>';
     }
     wnRender() {
       var self = this;
@@ -351,7 +352,7 @@
       this.wnLocal.forEach(function (l) {
         var failed = l.status === 'failed';
         rows.push({
-          html: self.wnRow({ author: 'user', ts: l.ts, text: l.text }, failed ? 'wn-failed' : 'wn-pending',
+          html: self.wnRow({ author: 'user', ts: l.ts, text: l.text, images: new Array(l.pictures || 0) }, failed ? 'wn-failed' : 'wn-pending',
             failed ? '<span class="wn-error">' + esc(l.error) + '</span>' : ''),
         });
       });

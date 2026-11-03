@@ -22,6 +22,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, apiDelete, apiPost, apiPut } from '@/api/client';
+import { buildImageRefsPayload } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { ICON_REFRESH } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -250,14 +252,16 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
    * the board's session by the route. The frame shows it pending, then stored or
    * failed. Resolves to null when stored, else the reason (the composer keeps the text).
    */
-  const sendFromDock = useCallback(async (thread: string, text: string): Promise<string | null> => {
+  const sendFromDock = useCallback(async (thread: string, text: string, images?: ImageAttachment[]): Promise<string | null> => {
     const boardTask = ownerRef.current;
     const key = `dock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    log.info('board', 'thread message sending', { taskId: boardTask, thread, key, chars: text.length });
-    toFrame({ t: 'wn-board:sending', thread, key, text });
+    log.info('board', 'thread message sending', { taskId: boardTask, thread, key, chars: text.length, images: images?.length ?? 0 });
+    toFrame({ t: 'wn-board:sending', thread, key, text, pictures: images?.length ?? 0 });
     try {
+      // Pictures go up over HTTP first; the message carries their names (api/image-upload.ts).
+      const pictures = await buildImageRefsPayload(images);
       const res = await apiPost<{ message: BoardMessage; delivery?: { state: string; reason?: string; sessionId?: string } }>(
-        `${boardPath(boardTask)}/threads/${encodeURIComponent(thread)}`, { text },
+        `${boardPath(boardTask)}/threads/${encodeURIComponent(thread)}`, { text, ...pictures },
       );
       log.info('board', 'thread message stored', {
         taskId: boardTask, thread, key, messageId: res.message.id,
