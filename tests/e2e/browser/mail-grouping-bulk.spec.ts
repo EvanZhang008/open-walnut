@@ -231,7 +231,9 @@ test.describe('the dense fixture', () => {
     const failed = first.log.filter((one) => !one.ok)
     expect(failed).toHaveLength(count)
     await retry.click()
-    await expect(statusLine(page, new RegExp(`^Marked ${count} read`))).toBeVisible({ timeout: 60_000 })
+    // The retry's own line, never the first result: with 48 unread the first one reads
+    // "Marked 24 read. 24 couldn't be changed", which `^Marked 24 read` alone also matches.
+    await expect(statusLine(page, new RegExp(`^Marked ${fmt(count)} read(?!\\. ${count} couldn't)`))).toBeVisible({ timeout: 60_000 })
     const rerun = (await markReadLog(fixture)).log.slice(first.calls)
     expect(rerun.map((one) => one.messageId).sort()).toEqual(failed.map((one) => one.messageId).sort())
     for (const one of failed.slice(0, 4)) expect((await flags(fixture, one.accountId, one.messageId)).seen).toBe(true)

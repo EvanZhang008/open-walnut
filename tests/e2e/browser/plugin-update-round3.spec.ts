@@ -126,6 +126,14 @@ test('(N3-2)(N3-18) a row the server is still checking spins, never reads Not ch
     await route.fulfill({ response, json: body })
   })
   const started: Array<{ path: string; at: number }> = []
+  // When each `plugin:linked-changed` frame arrived: the server's word that the linked listing
+  // it answered without (a cold server waits 100 ms for its first scan, then answers "not
+  // scanned") has landed, which the page answers with one more registry read (f7a70a356).
+  const linkedChanged: number[] = []
+  page.on('websocket', (ws) => ws.on('framereceived', (frame) => {
+    const text = typeof frame.payload === 'string' ? frame.payload : frame.payload.toString('utf8')
+    if (text.includes('"plugin:linked-changed"')) linkedChanged.push(Date.now())
+  }))
   page.on('request', (req) => {
     const p = new URL(req.url()).pathname
     if (req.method() === 'GET' && (p === '/api/plugin-runtime/registry' || p === '/api/plugin-updates')) started.push({ path: p, at: Date.now() })
@@ -155,10 +163,17 @@ test('(N3-2)(N3-18) a row the server is still checking spins, never reads Not ch
 
   // The status GET was issued alongside the registry GET, not 1.7 s after its answer, and
   // the registry was read ONCE on mount (StrictMode used to fire it twice in the same ms).
-  // Opening a plugin's page and coming back reads it no more.
+  // Opening a plugin's page and coming back reads it no more: every later read is one the
+  // server asked for with `plugin:linked-changed` since the read before it.
   const registry = started.filter((r) => r.path === '/api/plugin-runtime/registry')
   const updates = started.filter((r) => r.path === '/api/plugin-updates')
-  expect(registry.length, JSON.stringify(started)).toBe(1)
+  const trace = JSON.stringify({ started, linkedChanged })
+  expect(registry.length, trace).toBeGreaterThanOrEqual(1)
+  for (let i = 1; i < registry.length; i++) {
+    const asked = linkedChanged.some((at) => at >= registry[i - 1].at && at <= registry[i].at)
+    expect(asked, `registry read ${i + 1} had no plugin:linked-changed since the read before: ${trace}`).toBe(true)
+  }
+  expect(registry.length, trace).toBeLessThanOrEqual(1 + linkedChanged.length)
   expect(updates.length).toBeGreaterThanOrEqual(1)
   expect(Math.abs(updates[0].at - registry[0].at), `updates GET vs registry GET: ${JSON.stringify(started)}`).toBeLessThan(600)
 })

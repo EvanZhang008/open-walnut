@@ -53,8 +53,25 @@ const UNREACHABLE = base({ latest: null, checkedAt: null, error: 'fetch failed' 
 /** Route both update routes: GET answers `get`, POST answers `post` (default: the same). */
 async function routeUpdate(page: Page, get: WireUpdate, post: WireUpdate = get): Promise<{ posts: () => number }> {
   let posts = 0
-  await page.route('**/api/system/update', (route) => route.fulfill({ json: get }))
-  await page.route('**/api/system/update/check', (route) => { posts++; return route.fulfill({ json: post }) })
+  // What this test's server answers now: the GET's status, the check's once one ran.
+  let current = get
+  await page.route('**/api/system/update', (route) => route.fulfill({ json: current }))
+  await page.route('**/api/system/update/check', (route) => { posts++; current = post; return route.fulfill({ json: post }) })
+  // The status is also pushed live (WS `system:update`, useUpdateStatus.ts): the fixture
+  // server pushes its own (a source checkout) on every config change, which took the
+  // Settings row away mid-test (UC-8's second click waited for a switch that was gone).
+  // Each push carries what this test's server answers instead.
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((message) => server.send(message))
+    server.onMessage((message) => {
+      const text = typeof message === 'string' ? message : message.toString('utf8')
+      let frame: { type?: string; name?: string } | null = null
+      try { frame = JSON.parse(text) } catch { /* not JSON: pass it on */ }
+      if (frame?.type === 'event' && frame.name === 'system:update') ws.send(JSON.stringify({ ...frame, data: current }))
+      else ws.send(message)
+    })
+  })
   return { posts: () => posts }
 }
 
@@ -192,18 +209,25 @@ test('UC-8: Settings > General shows "Update Walnut automatically" for an npm in
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   await row.screenshot({ path: `${SHOTS}/uc8-settings-row.png` })
 
-  const saved = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
-  await toggle.click()
-  await saved
-  await expect(toggle).toHaveAttribute('aria-checked', 'false')
-  // The server has it: the real config, read back.
-  await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(false)
+  // The switch writes the shared fixture's real config: put it back however this ends, or every
+  // later test reads "off" as the default (CI: UC-8's retry and UC-10 did).
+  const restore = () => request.put('/api/config', { data: { updates: { auto: true } } }).catch(() => undefined)
+  try {
+    const saved = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
+    await toggle.click()
+    await saved
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    // The server has it: the real config, read back.
+    await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(false)
 
-  const savedAgain = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
-  await toggle.click()
-  await savedAgain
-  await expect(toggle).toHaveAttribute('aria-checked', 'true')
-  await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(true)
+    const savedAgain = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
+    await toggle.click()
+    await savedAgain
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(true)
+  } finally {
+    await restore()
+  }
 })
 
 test('UC-9: the row is absent when Walnut runs from a source checkout (the fixture server as it is)', async ({ page }) => {
