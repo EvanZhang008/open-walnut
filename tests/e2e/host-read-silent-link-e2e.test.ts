@@ -44,6 +44,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { CLOUD_BOX_HOST_ALIAS as A } from '../../src/core/hosts/cloud-box-host.js'
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
 import { getDaemonConnectState } from '../../src/providers/daemon-connection.js'
+import { exportSessionProjection, exportSessionTranscripts, _resetTranscriptSweepForTesting } from '../../src/core/session-projection.js'
 
 const OUT = process.env.HOST_READ_SILENT_OUT
 const report: Record<string, unknown> = {}
@@ -425,13 +426,28 @@ describe('a real companion that goes silent while connected', () => {
     // As the client does: ask again at once while the answer says "still
     // loading" (four at most, so a regression is seen, not hung on).
     const answers: Array<Awaited<ReturnType<typeof hit>> & { startedAfterMs: number }> = []
-    for (let n = 0; n < 4; n++) {
-      const startedAfterMs = Date.now() - t0
-      const a = await hit(history)
-      answers.push({ ...a, startedAfterMs })
-      if (!a.json?.loading) break
+    // The minute transcript sweep reaches the same file while the history read is under
+    // way, as any session event inside that read asks for (CI 2026-11-02: the session's
+    // turn summary landed mid-read and the owed sweep read the 3MB file beside it, so
+    // each read had half the link and the history took 261s, four "loading"). Started
+    // here, so the race is on every run, not only on a runner slow enough to hit it.
+    const sweepRun: { done: Promise<number> | null } = { done: null }
+    const sweepTimer = setTimeout(() => {
+      _resetTranscriptSweepForTesting()
+      sweepRun.done = exportSessionProjection().then(() => exportSessionTranscripts())
+    }, 10_000)
+    try {
+      for (let n = 0; n < 4; n++) {
+        const startedAfterMs = Date.now() - t0
+        const a = await hit(history)
+        answers.push({ ...a, startedAfterMs })
+        if (!a.json?.loading) break
+      }
+    } finally {
+      clearTimeout(sweepTimer)
     }
     const total = Date.now() - t0
+    const swept = sweepRun.done ? await sweepRun.done : null
     const first = answers[0]!
     const final = answers[answers.length - 1]!
     const messages = (final.json?.messages ?? []) as Array<Record<string, unknown>>
@@ -441,6 +457,7 @@ describe('a real companion that goes silent while connected', () => {
         messages: (a.json?.messages as unknown[] | undefined)?.length,
       })),
       totalMs: total,
+      swept,
     }
     save()
     proxy.setMode('pass')
@@ -455,6 +472,9 @@ describe('a real companion that goes silent while connected', () => {
     expect(shape.slice(0, -1).every((s) => s === 'loading'), `answers: ${shape.join(', ')}`).toBe(true)
     expect(shape.length).toBeGreaterThanOrEqual(2)
     expect(shape.length).toBeLessThanOrEqual(4)
+    // Whether the sweep had anything new to write is its own business (swept may be 0):
+    // what this case pins is the history's time, which a second transfer beside it doubles.
+    // tests/core/transcript-read-shared.test.ts pins that the two reads share one transfer.
     expect(first.status).toBe(200)
     expect(first.json?.stale).toBe(true)
     expect(first.json?.loading).toEqual({ from: 'Cloud' })

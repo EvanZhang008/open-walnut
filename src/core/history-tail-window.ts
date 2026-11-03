@@ -13,7 +13,8 @@
 
 /** What the reader must answer (DaemonFileReader): bytes [start, EOF), undecoded. */
 export interface TailReader {
-  readFileRangeBuffer(path: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null>
+  /** `at`: the stat this read is for, so a read of the same bytes already in flight is joined. */
+  readFileRangeBuffer(path: string, start: number, at?: { mtimeMs: number; size: number; epoch?: string }): Promise<{ buf: Buffer; fileSize: number } | null>
 }
 
 interface TailWindow {
@@ -149,7 +150,7 @@ async function grow<M>(
   key: string, held: TailWindow, reader: TailReader, st: { mtimeMs: number; size: number; epoch?: string },
   window: number, parse: (text: string) => Promise<M[]>,
 ): Promise<M[] | null> {
-  const res = await reader.readFileRangeBuffer(held.path, held.lastLineStart)
+  const res = await reader.readFileRangeBuffer(held.path, held.lastLineStart, st)
   if (res === null) { drop(key); return null }
   const buf = res.buf
   // The line held last must still be there, byte for byte: else the file was rewritten
@@ -182,7 +183,7 @@ async function fresh<M>(
 ): Promise<M[] | null> {
   drop(key)
   const start = Math.max(0, st.size - window)
-  const res = await reader.readFileRangeBuffer(path, start)
+  const res = await reader.readFileRangeBuffer(path, start, st)
   if (res === null) return null
   let buf = res.buf
   // Skip the first (almost certainly partial) line when the read did not start at 0.

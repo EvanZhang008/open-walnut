@@ -2095,12 +2095,14 @@ async function tryIncrementalHistoryRead(
   newMtimeMs: number,
   reader: InstanceType<(typeof import('./daemon-file-reader.js'))['DaemonFileReader']>,
   newSize?: number,
+  at?: { mtimeMs: number; size: number; epoch?: string },
 ): Promise<SessionHistoryMessage[] | null> {
   const inc = cached.inc!;
   try {
     // Re-read from the last parsed line's start: verifies the file wasn't
     // rewritten in place (/compact) AND picks up the appended bytes in one RPC.
-    const res = await reader.readFileRange(inc.filePath, inc.lastLineStart);
+    // `at` only when the stat was of this very file: then a read of the same bytes in flight is joined.
+    const res = await reader.readFileRange(inc.filePath, inc.lastLineStart, at);
     if (res === null) { cached.inc = undefined; return null; }
     const reread = res.content;
     // The re-read starts at the last parsed LINE's start, so its first line is
@@ -2450,7 +2452,9 @@ async function readSessionHistoryTailWindow(
     // never be able to exceed the limit that triggered it.
     const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
     const start = Math.max(0, st.size - window);
-    const res = await reader.readFileRange(statPath, start);
+    // Shared with a read of the same window already in flight (the transcript
+    // sweep's, say): one transfer for both.
+    const res = await reader.readFileRange(statPath, start, st);
     if (res === null) return null;
     // Skip the first (almost certainly partial) line when we didn't start at 0.
     let windowText = res.content;
@@ -2727,6 +2731,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           if (cached?.inc && options?.skipSubagents && statResult.size >= cached.inc.parsedBytes) {
             const incMessages = await tryIncrementalHistoryRead(
               sessionId, host, cached, statResult.mtimeMs, reader, statResult.size,
+              statResult.path === cached.inc.filePath ? { mtimeMs: statResult.mtimeMs, size: statResult.size, epoch: statResult.epoch } : undefined,
             );
             if (incMessages) return handOff(incMessages);
             // Incremental failed (rewrite detected / transport) — state was

@@ -33,6 +33,9 @@ export class DaemonNeedsUpgradeError extends Error {
   }
 }
 
+/** A file as one stat saw it: which file (epoch, when the daemon says), its size and mtime. */
+export interface FileIdentity { mtimeMs: number; size: number; epoch?: string }
+
 export class DaemonFileReader implements SessionFileReader {
   private host: string
   private known = false
@@ -99,6 +102,38 @@ export class DaemonFileReader implements SessionFileReader {
     return DaemonFileReader.DEFAULT_MAX_READ_BYTES
   }
 
+  /** Reads moving a file's bytes now, by what they read (shareRead). */
+  private static readsInFlight = new Map<string, Promise<unknown>>()
+
+  /**
+   * One transfer for every reader of the same bytes of the same file as it stands.
+   *
+   * Each caller family keeps its own in-flight dedup (readSessionHistory per option
+   * set, the history route per request shape), so two families reading one file
+   * never met: the minute transcript sweep and an open session's history read the
+   * same 3 MB transcript side by side over a 64 KB/s link, each at half its speed,
+   * and the history the person waited for took 261 s instead of 131 s (2026-11-02).
+   * Here, where every family's read meets, a read of the same file at the same stat
+   * (incarnation, size, mtime) and the same range joins the one in flight. The stat
+   * is the caller's, taken before it asked, so a joiner gets the bytes a read of its
+   * own would have got; a file that changed since is another key and a read of its own.
+   */
+  private shareRead<T>(what: string, remotePath: string, at: FileIdentity, run: () => Promise<T>): Promise<T> {
+    const key = [this.host, at.epoch ?? remotePath, at.size, at.mtimeMs, what].join('\u0000')
+    const inFlight = DaemonFileReader.readsInFlight
+    const running = inFlight.get(key)
+    if (running) {
+      log.session.info('DaemonFileReader: joined a read in flight', {
+        host: this.host, path: remotePath, what, fileSize: at.size,
+      })
+      return running as Promise<T>
+    }
+    const read = run()
+    inFlight.set(key, read)
+    void read.finally(() => { if (inFlight.get(key) === read) inFlight.delete(key) }).catch(() => { /* the caller sees it */ })
+    return read
+  }
+
   private static async acquireFullReadSlot(): Promise<void> {
     if (DaemonFileReader.fullReadsInFlight < DaemonFileReader.MAX_CONCURRENT_FULL_READS) {
       DaemonFileReader.fullReadsInFlight++
@@ -131,20 +166,32 @@ export class DaemonFileReader implements SessionFileReader {
     // large. stat failures (old daemon without fs.stat / transient) fall
     // through to plain fs.read — no behavior regression for small files or
     // old daemons.
+    let st: FileIdentity | null
     try {
-      const st = await this.stat(remotePath)
-      if (st === null) return null // definitive ENOENT
-      if (st.size > DaemonFileReader.CHUNK_THRESHOLD) {
-        return await this.readFileChunked(remotePath, st.size)
-      }
-    } catch (err) {
-      // A byte-ceiling rejection MUST propagate: falling through to the plain
-      // fs.read below would perform the very unbounded whole-file read the
-      // ceiling exists to prevent (and blow the ws maxPayload besides).
-      if (err instanceof Error && err.message.includes('byte ceiling')) throw err
-      /* stat unavailable — plain read below */
+      st = await this.stat(remotePath)
+    } catch {
+      return this.readFilePlain(conn, remotePath) // stat unavailable: plain read, unshared
     }
+    if (st === null) return null // definitive ENOENT
+    const at = st
+    // A reader of the same file as it stands now joins a read already moving it
+    // (shareRead): the transcript sweep and an open history once read one 3 MB
+    // file side by side on a slow link, each at half its speed.
+    return this.shareRead('file', remotePath, at, async () => {
+      if (at.size <= DaemonFileReader.CHUNK_THRESHOLD) return this.readFilePlain(conn, remotePath)
+      try {
+        return await this.readFileChunked(remotePath, at.size)
+      } catch (err) {
+        // A byte-ceiling rejection MUST propagate: falling through to the plain
+        // fs.read below would perform the very unbounded whole-file read the
+        // ceiling exists to prevent (and blow the ws maxPayload besides).
+        if (err instanceof Error && err.message.includes('byte ceiling')) throw err
+        return this.readFilePlain(conn, remotePath) // no fs.readRange (old daemon): plain read
+      }
+    })
+  }
 
+  private async readFilePlain(conn: Awaited<ReturnType<typeof link>>, remotePath: string): Promise<string | null> {
     const result = await conn.send('fs.read', { path: remotePath, encoding: 'utf-8' })
     if (result.ok) return result.data as string
 
@@ -458,8 +505,8 @@ export class DaemonFileReader implements SessionFileReader {
    * throw — callers see the same transport-failure contract as fs.read.
    * `start` > 0 is the incremental turn-delta path (read only appended bytes).
    */
-  async readFileRange(remotePath: string, start: number): Promise<{ content: string; fileSize: number } | null> {
-    const res = await this.readFileRangeBuffer(remotePath, start)
+  async readFileRange(remotePath: string, start: number, at?: FileIdentity): Promise<{ content: string; fileSize: number } | null> {
+    const res = await this.readFileRangeBuffer(remotePath, start, at)
     return res === null ? null : { content: res.buf.toString('utf-8'), fileSize: res.fileSize }
   }
 
@@ -467,8 +514,17 @@ export class DaemonFileReader implements SessionFileReader {
    * readFileRange's bytes, undecoded: a caller that keeps byte offsets (the tail
    * window, history-tail-window.ts) must never count a decoded string, which turns
    * a character cut at either end into a replacement of another length.
+   *
+   * `at`, the caller's stat of the file: a read of the same range of the file as it
+   * stands then joins one already in flight (shareRead) instead of moving the bytes
+   * again. The buffer is then shared: a caller never writes into it.
    */
-  async readFileRangeBuffer(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
+  async readFileRangeBuffer(remotePath: string, start: number, at?: FileIdentity): Promise<{ buf: Buffer; fileSize: number } | null> {
+    if (at) return this.shareRead(`range:${start}`, remotePath, at, () => this.readFileRangeBufferOnce(remotePath, start))
+    return this.readFileRangeBufferOnce(remotePath, start)
+  }
+
+  private async readFileRangeBufferOnce(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
     await this.resolve()
     const conn = await link(this.host)
     const chunks: Buffer[] = []
