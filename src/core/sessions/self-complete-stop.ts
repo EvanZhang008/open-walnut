@@ -15,26 +15,22 @@
  * Before the stop, the session writes its summary of that last turn into the
  * task note (awaitFinalSummary): once the CLI is gone nothing can answer, and
  * a completed task has no next turn to catch up in.
+ *
+ * The wait is turn-end-wait.ts: a status event or a poll looks, and nothing holds the stop
+ * longer than SELF_COMPLETE_STOP_MAX_MS (lifecycle-waits.ts lists it).
  */
-import { bus, EventNames } from '../event-bus.js';
-import type { SessionStatusChangedEvent } from '../event-types.js';
 import { log } from '../../logging/index.js';
+import { TurnEndWait } from './turn-end-wait.js';
 
 interface Wait {
   /** When the wait began: the summary of the turn that ends it is newer. */
   since: number;
-  /** The turn ended and the stop is running. */
-  stopping: boolean;
-  /** When the status left 'running'. */
-  endedAt?: number;
 }
-
-const pending = new Map<string, Wait>();
 
 /** A turn end that another turn follows at once is not the session's end: a
  *  background command that finishes after the completing turn leaves the
  *  session idle for about 0.1s before the CLI starts its follow-up turn
- *  (2026-10-06, measured 50-100ms). The stop decides only after this long, and
+ *  (2026-10-06, measured 50-100ms). The stop looks only after this long, and
  *  a session running again by then is stopped when that turn ends instead. */
 const SETTLE_MS = 3_000;
 let settleMs = SETTLE_MS;
@@ -44,26 +40,44 @@ export function __setSelfCompleteSettleMs(ms?: number): void {
   settleMs = ms ?? SETTLE_MS;
 }
 
-const SUBSCRIBER = 'self-complete-stop';
+/** The task is complete: a turn (or the background work it left) holds the stop at most this long. */
+export const SELF_COMPLETE_STOP_MAX_MS = 24 * 60 * 60_000;
+
+/** Sessions whose stop is running now (the wait is over, the stop is not yet). */
+const stopping = new Set<string>();
+
+const waiter = new TurnEndWait<Wait>({
+  name: 'self-complete-stop',
+  // A completed task's own background work (a deploy it started, say) may finish: it holds
+  // the stop as long as a turn does, a day.
+  limits: { backgroundGraceMs: SELF_COMPLETE_STOP_MAX_MS, maxMs: SELF_COMPLETE_STOP_MAX_MS },
+  queue: false,
+  get settleMs() { return settleMs; },
+  // Reopened during the rest of the turn (task_update, a message): it keeps running.
+  asked: async (sid, wait) => (await stillComplete(sid) ? { askedAt: wait.since } : null),
+  act: async (sid, wait) => {
+    stopping.add(sid);
+    try {
+      await stopIfStillComplete(sid, wait);
+    } finally {
+      stopping.delete(sid);
+      if (!waiter.has(sid)) {
+        const { forgetFinalSummary } = await import('../session-hooks/builtins.js');
+        forgetFinalSummary(sid);
+      }
+    }
+  },
+});
 
 export function stopWhenTurnEnds(sessionId: string): void {
-  pending.set(sessionId, { since: Date.now(), stopping: false });
-  // Idempotent: the bus keys subscribers by name.
-  bus.subscribe(SUBSCRIBER, (event) => {
-    const status = event.data as Partial<SessionStatusChangedEvent> | undefined;
-    const sid = status?.sessionId;
-    const wait = sid ? pending.get(sid) : undefined;
-    if (!sid || !wait || wait.stopping || !status.process_status || status.process_status === 'running') return;
-    wait.stopping = true;
-    wait.endedAt = Date.now();
-    void stopIfStillComplete(sid, wait);
-  }, { global: true, interest: [EventNames.SESSION_STATUS_CHANGED] });
+  if (waiter.has(sessionId)) return;
+  waiter.watch(sessionId, { since: Date.now() });
 }
 
 /** A session that stops at this turn's end: the task's other writes leave it
  *  alone, and its summary of the turn runs at once. Stays true until it stopped. */
 export function isAwaitingTurnEnd(sessionId: string): boolean {
-  return pending.has(sessionId);
+  return waiter.has(sessionId) || stopping.has(sessionId);
 }
 
 async function stillComplete(sessionId: string): Promise<string | undefined> {
@@ -77,12 +91,9 @@ async function stillComplete(sessionId: string): Promise<string | undefined> {
 
 async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void> {
   try {
-    // Reopened during the rest of the turn (task_update, a message): it keeps running.
     if (!await stillComplete(sessionId)) return;
     const { awaitFinalSummary } = await import('../session-hooks/builtins.js');
     const summary = await awaitFinalSummary(sessionId, wait.since);
-    const settleLeft = (wait.endedAt ?? Date.now()) + settleMs - Date.now();
-    if (settleLeft > 0) await new Promise((resolve) => setTimeout(resolve, settleLeft).unref?.());
     const taskId = await stillComplete(sessionId);
     if (!taskId) return;
     const { completeTaskSessions } = await import('../session-tracker.js');
@@ -93,20 +104,14 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
     log.session.warn('stop at turn end failed for a self-completed session', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     });
-  } finally {
-    // A new wait registered meanwhile (a turn began again) is kept.
-    if (pending.get(sessionId) === wait) {
-      pending.delete(sessionId);
-      const { forgetFinalSummary } = await import('../session-hooks/builtins.js');
-      forgetFinalSummary(sessionId);
-    }
   }
 }
 
 export function _pendingSelfCompleteStopsForTest(): string[] {
-  return [...pending.keys()];
+  return [...new Set([...waiter.keys(), ...stopping])];
 }
 
 export function _resetSelfCompleteStopsForTest(): void {
-  pending.clear();
+  waiter.clear();
+  stopping.clear();
 }

@@ -18,9 +18,22 @@ const edges = vi.hoisted(() => ({
   nextSid: 0,
   history: {} as Record<string, Array<Record<string, unknown>>>,
   gate: undefined as Promise<void> | undefined,
+  /** Sessions whose finished turn left a background command running. */
+  outlives: new Set<string>(),
   /** What a remote host says it can run (core/agents/host-engines.ts). */
   hostEngines: {} as Record<string, Record<string, { installed: boolean; version: string | null; reason: string | null }>>,
 }));
+vi.mock('../../../src/providers/claude-code-session.js', async (orig) => {
+  const real = await orig<typeof import('../../../src/providers/claude-code-session.js')>();
+  // Only the one question the switch asks the live runner: does its finished turn leave work running?
+  const sessionRunner = new Proxy(real.sessionRunner, {
+    get: (t, k, r) => (k === 'hasWorkOutlivingTurn' ? (sid: string) => edges.outlives.has(sid)
+      // A session in `outlives` has ended its model turn; the rest have no runner here.
+      : k === 'isInTurn' ? (sid: string) => (edges.outlives.has(sid) ? false : null)
+      : Reflect.get(t, k, r)),
+  });
+  return { ...real, sessionRunner };
+});
 vi.mock('../../../src/core/agents/host-engines.js', () => ({
   hostEngineAvailability: async (host: string, engine: string) => edges.hostEngines[host]?.[engine] ?? null,
 }));
@@ -71,7 +84,11 @@ import {
   createSessionRecord, getSessionByClaudeId, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
 import { requestEngineSwitch, cancelPendingSwitch, activeSessionFor } from '../../../src/core/sessions/engine-switch.js';
-import { resumeEngineSwitches } from '../../../src/core/sessions/engine-switch-watch.js';
+import {
+  resumeEngineSwitches, watchPendingSwitch, pendingVerdict,
+  SWITCH_BACKGROUND_GRACE_MS, SWITCH_PENDING_MAX_MS,
+} from '../../../src/core/sessions/engine-switch-watch.js';
+import { BACKGROUND_CUT_NOTE } from '../../../src/core/sessions/engine-switch.js';
 import { linkSession, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { taskConversation } from '../../../src/core/sessions/task-session-claim.js';
 import { createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
@@ -83,7 +100,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.failStart = false; edges.history = {};
+  edges.failStart = false; edges.history = {}; edges.outlives.clear();
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
 });
@@ -339,6 +356,54 @@ describe('engine switch inside a task', () => {
     await vi.waitFor(async () => expect((await getTask(taskId)).engine_switch?.state).toBe('done'), { timeout: 5_000, interval: 100 });
     expect(String(edges.starts[0].message).trimEnd().endsWith('After this turn.')).toBe(true);
     expect((await getTask(taskId)).engine_switch?.message).toBeUndefined();
+  }, 20_000);
+
+  it('a pending switch always ends: free runs, background runs after its grace, a turn past the limit fails', () => {
+    const at = 1_000_000;
+    expect(pendingVerdict({ hold: 'free', askedAt: at, now: at })).toBe('run');
+    expect(pendingVerdict({ hold: 'turn', askedAt: at, now: at + SWITCH_PENDING_MAX_MS - 1 })).toBe('wait');
+    expect(pendingVerdict({ hold: 'turn', askedAt: at, now: at + SWITCH_PENDING_MAX_MS })).toBe('expire');
+    expect(pendingVerdict({ hold: 'queue', askedAt: at, now: at + SWITCH_PENDING_MAX_MS })).toBe('expire');
+    expect(pendingVerdict({ hold: 'background', askedAt: at, backgroundSince: at, now: at + SWITCH_BACKGROUND_GRACE_MS - 1 })).toBe('wait');
+    expect(pendingVerdict({ hold: 'background', askedAt: at, backgroundSince: at, now: at + SWITCH_BACKGROUND_GRACE_MS })).toBe('run-over-background');
+    // Past the limit, background work never holds it either.
+    expect(pendingVerdict({ hold: 'background', askedAt: at, backgroundSince: at + SWITCH_PENDING_MAX_MS, now: at + SWITCH_PENDING_MAX_MS })).toBe('run-over-background');
+    // An unreadable ask time is no reason to wait forever.
+    expect(pendingVerdict({ hold: 'turn', askedAt: Number.NaN, now: at })).toBe('expire');
+  });
+
+  it('a move held only by its finished turn\'s background command runs after the grace and tells the new session', async () => {
+    // 2026-11-03: the turn that asked for the move had started a test run; the session read running for 1 h 50 min.
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    edges.outlives.add(sid);
+    const res = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on.', source: 'test' });
+    expect(res.state).toBe('pending');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(edges.starts).toHaveLength(0);
+    // The grace has run out (the clock is the task's own `at`, so a restart keeps it).
+    await updateTaskRaw(taskId, (cur) => ({ engine_switch: { ...cur.engine_switch!, at: new Date(Date.now() - SWITCH_PENDING_MAX_MS - 1).toISOString() } }), { source: 'test' });
+    watchPendingSwitch(taskId, sid);
+    await vi.waitFor(async () => expect((await getTask(taskId)).engine_switch?.state).toBe('done'), { timeout: 10_000, interval: 100 });
+    expect(edges.stops).toContain(sid);
+    expect(String(edges.starts[0].message)).toContain(BACKGROUND_CUT_NOTE);
+    expect((await getTask(taskId)).engine_switch?.background_cut).toBe(true);
+  }, 20_000);
+
+  it('a switch whose turn never ends fails at the limit with its reason; the message stays and the session is told', async () => {
+    const { taskId, sid } = await taskOn('claude', { status: 'running' });
+    await requestEngineSwitch({ taskId, engine: 'codex', message: 'Keep me.', source: 'test' });
+    await updateTaskRaw(taskId, (cur) => ({ engine_switch: { ...cur.engine_switch!, at: new Date(Date.now() - SWITCH_PENDING_MAX_MS - 1).toISOString() } }), { source: 'test' });
+    watchPendingSwitch(taskId, sid);
+    await vi.waitFor(async () => expect((await getTask(taskId)).engine_switch?.state).toBe('failed'), { timeout: 10_000, interval: 100 });
+    const sw = (await getTask(taskId)).engine_switch!;
+    expect(sw.error).toContain('still in a turn');
+    expect(sw.message).toBe('Keep me.');
+    expect(edges.starts).toHaveLength(0);
+    expect(edges.stops).toHaveLength(0);
+    await vi.waitFor(async () => {
+      const rows = (await getStore()).queues[sid] ?? [];
+      expect(rows.some((r) => String(r.message).includes('switch-expired'))).toBe(true);
+    }, { timeout: 5_000, interval: 100 });
   }, 20_000);
 
   it('a pending switch can be cancelled, and a cancelled one never runs when the turn ends', async () => {

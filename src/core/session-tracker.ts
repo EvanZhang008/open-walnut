@@ -628,13 +628,16 @@ export async function listSessionsForTasks(
   return awaySessionRows ? withAway(linked, (s) => (!!s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) : linked;
 }
 
-export async function listPendingSessionStops(host: string): Promise<SessionRecord[]> {
+/** The sessions whose stop waits for its host's confirmation: on `host`, or on every host. */
+export async function listPendingSessionStops(host?: string): Promise<SessionRecord[]> {
   await ensureSessionInit();
   const db = getDb();
   if (!db) throw new Error('Session database is unavailable');
-  const rows = db.prepare(`SELECT * FROM sessions
+  const rows = (host === undefined
+    ? db.prepare(`SELECT * FROM sessions WHERE json_extract(payload, '$.stopRequest.state') = 'pending'`).all()
+    : db.prepare(`SELECT * FROM sessions
     WHERE json_extract(payload, '$.stopRequest.state') = 'pending'
-    AND COALESCE(host, '__local__') = ?`).all(host) as Record<string, any>[];
+    AND COALESCE(host, '__local__') = ?`).all(host)) as Record<string, any>[];
   return rows.map(rowToSession);
 }
 

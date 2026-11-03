@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
+import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
@@ -446,7 +447,12 @@ export class LocalDaemon {
           // open turns in acp-busy.json; while any are open, keep the old
           // daemon and try again on a clock (scheduleUpgradeRecheck).
           const busySids = this.readAcpBusySids()
-          if (busySids.length > 0) {
+          // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
+          const acpHold = acpUpgradeHolds('__local__', busySids.length > 0)
+          if (busySids.length > 0 && !acpHold.holds) {
+            log.session.warn('local daemon upgrade goes ahead over ACP turns open too long', { busySids, heldMs: acpHold.heldMs })
+          }
+          if (busySids.length > 0 && acpHold.holds) {
             log.session.warn('local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
               running: helloResult.version,
               expected: expectedVersion,

@@ -22,6 +22,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
+import { TurnEndWait } from './turn-end-wait.js';
 
 export interface TeamStopMember {
   id: string;
@@ -44,6 +45,8 @@ export interface TeamStopRecord {
   /** Only the wake sources were paused; the sessions kept running. */
   keptSessions?: boolean;
   members: TeamStopMember[];
+  /** Sessions a `turn_end` stop waits on, so a restart still stops them (resumeTeamStopWaits). */
+  at_turn_end?: { taskId: string; sessionId: string }[];
 }
 
 export interface TeamStopResult {
@@ -64,7 +67,6 @@ const DEPTH_CAP = 8;
 const STOP_PARALLEL = 4;
 /** How long the subtask notices of a team stop are held back. */
 const QUIET_MS = 2 * 60_000;
-const SETTLE_MS = 3_000;
 
 const quietUntil = new Map<string, number>();
 
@@ -115,52 +117,83 @@ async function stopSession(sessionId: string): Promise<string | null> {
 
 let lifecycleMod: Promise<typeof import('./session-lifecycle.js')> | null = null;
 const lifecycle = () => (lifecycleMod ??= import('./session-lifecycle.js'));
+let taskManagerMod: Promise<typeof import('../task-manager.js')> | null = null;
+const taskManager = () => (taskManagerMod ??= import('../task-manager.js'));
+let trackerMod: Promise<typeof import('../session-tracker.js')> | null = null;
+const tracker = () => (trackerMod ??= import('../session-tracker.js'));
 
 // ── Stops at turn end ──
 
-interface TurnEndWait { rootId: string; at: string; taskId: string }
-const turnEnd = new Map<string, TurnEndWait>();
-const SUBSCRIBER = 'team-stop-turn-end';
+interface TurnEndWaitData { rootId: string; at: string; taskId: string }
 
-async function watchTurnEnds(): Promise<void> {
-  const { bus, EventNames } = await import('../event-bus.js');
-  bus.subscribe(SUBSCRIBER, (event) => {
-    const data = event.data as { sessionId?: string; process_status?: string } | undefined;
-    const sid = data?.sessionId;
-    const wait = sid ? turnEnd.get(sid) : undefined;
-    if (!sid || !wait || !data?.process_status || data.process_status === 'running') return;
-    turnEnd.delete(sid);
-    void stopAtTurnEnd(sid, wait);
-  }, { global: true, interest: [EventNames.SESSION_STATUS_CHANGED] });
-}
+/** A turn still running this long after the stop is stopped anyway; background work its turn left, this long. */
+export const TEAM_TURN_END_MAX_MS = 2 * 60 * 60_000;
+export const TEAM_BACKGROUND_GRACE_MS = 10 * 60_000;
 
-async function stopAtTurnEnd(sessionId: string, wait: TurnEndWait): Promise<void> {
-  try {
-    // A background command's follow-up turn starts about 0.1 s after the turn ends.
-    await new Promise((r) => setTimeout(r, SETTLE_MS).unref?.());
-    const { getTask } = await import('../task-manager.js');
+const turnEnd = new TurnEndWait<TurnEndWaitData>({
+  name: 'team-stop-turn-end',
+  limits: { backgroundGraceMs: TEAM_BACKGROUND_GRACE_MS, maxMs: TEAM_TURN_END_MAX_MS },
+  queue: false,
+  asked: async (_sid, wait) => {
+    const { getTask } = await taskManager();
     const root = await getTask(wait.rootId).catch(() => null);
     // Resumed (or stopped again since): this wait is over.
-    if (root?.team_stop?.at !== wait.at) return;
-    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    return root?.team_stop?.at === wait.at ? { askedAt: Date.parse(wait.at) } : null;
+  },
+  // Whatever the verdict, the stop was asked for: the turn's end only spared the running turn.
+  act: async (sessionId, wait, verdict) => {
+    // Resumed while the look read: nothing to stop.
+    const { getTask } = await taskManager();
+    if ((await getTask(wait.rootId).catch(() => null))?.team_stop?.at !== wait.at) return;
+    const { getSessionByClaudeId } = await tracker();
     const rec = await getSessionByClaudeId(sessionId).catch(() => null);
-    if (rec?.process_status === 'running') { turnEnd.set(sessionId, wait); return; }
-    if (!rec || !LIVE.has(rec.process_status)) return;
-    quietUntil.set(wait.taskId, Date.now() + QUIET_MS);
-    const why = await stopSession(sessionId);
-    log.session.info('team stop: session stopped at its turn end', { rootId: wait.rootId, taskId: wait.taskId, sessionId, ...(why ? { kept: why } : {}) });
-  } catch (err) {
-    log.session.warn('team stop at turn end failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    if (rec && LIVE.has(rec.process_status)) {
+      quietUntil.set(wait.taskId, Date.now() + QUIET_MS);
+      const why = await stopSession(sessionId);
+      log.session.info('team stop: session stopped at its turn end', {
+        rootId: wait.rootId, taskId: wait.taskId, sessionId, ...(verdict !== 'run' ? { verdict } : {}), ...(why ? { kept: why } : {}),
+      });
+    }
+    const { updateTaskRaw } = await taskManager();
+    await updateTaskRaw(wait.rootId, (cur) => {
+      const ts = cur.team_stop;
+      if (ts?.at !== wait.at || !ts.at_turn_end?.some((w) => w.sessionId === sessionId)) return null;
+      const left = ts.at_turn_end.filter((w) => w.sessionId !== sessionId);
+      const { at_turn_end: _drop, ...rest } = ts;
+      return { team_stop: left.length ? { ...rest, at_turn_end: left } : rest };
+    }, { emitEvent: false, push: false, source: 'team-stop' }).catch(() => {});
+  },
+});
+
+/** At startup: every session a team stop still waits on is watched again, with the stop's own time. */
+export async function resumeTeamStopWaits(): Promise<number> {
+  const { listTasks } = await import('../task-manager.js');
+  let n = 0;
+  for (const task of await listTasks()) {
+    const ts = task.team_stop;
+    if (!ts || ts.when !== 'turn_end') continue;
+    for (const w of ts.at_turn_end ?? []) {
+      turnEnd.watch(w.sessionId, { rootId: task.id, at: ts.at, taskId: w.taskId });
+      n++;
+    }
   }
+  if (n > 0) log.session.info('team stop: turn-end waits resumed at startup', { count: n });
+  return n;
 }
 
 /** Test seam. */
 export function _turnEndStopsForTest(): string[] {
-  return [...turnEnd.keys()];
+  return turnEnd.keys();
+}
+
+/** Test seam: shorter limits and poll for the turn-end waits (no argument restores them). */
+export function _setTeamTurnEndClockForTest(clock?: Parameters<TurnEndWait<TurnEndWaitData>['setClockForTest']>[0]): void {
+  turnEnd.setClockForTest(clock);
 }
 
 export function _resetTeamStopForTest(): void {
   turnEnd.clear();
+  turnEnd.setClockForTest();
   quietUntil.clear();
 }
 
@@ -327,14 +360,22 @@ export async function stopTeam(rootRef: string, opts: {
     // Its own turn end must not tell its parent "it stopped" either.
     quietUntil.set(task.id, Date.now() + QUIET_MS);
     if (when === 'turn_end' && s.process_status === 'running') {
-      turnEnd.set(s.claudeSessionId, { rootId: root.id, at, taskId: task.id });
       result.atTurnEnd.push(ref);
       return;
     }
     const why = await stopSession(s.claudeSessionId);
     if (why) result.kept.push({ ...ref, why }); else result.stopped.push(ref);
   });
-  if (result.atTurnEnd.length) await watchTurnEnds();
+  if (result.atTurnEnd.length) {
+    // Recorded first, so a restart before the turn ends still stops them.
+    await updateTaskRaw(root.id, (cur) => {
+      if (cur.team_stop?.at !== at) return null;
+      const known = new Map((cur.team_stop.at_turn_end ?? []).map((w) => [w.sessionId, w] as const));
+      for (const r of result.atTurnEnd) known.set(r.sessionId, r);
+      return { team_stop: { ...cur.team_stop, at_turn_end: [...known.values()] } };
+    }, { emitEvent: false, push: false, source: 'team-stop' });
+    for (const r of result.atTurnEnd) turnEnd.watch(r.sessionId, { rootId: root.id, at, taskId: r.taskId });
+  }
   log.session.info(opts.keepSessions ? 'team wake sources paused, sessions kept' : 'team stopped', {
     rootId: root.id, by: opts.by, when, tasks: members.length, stopped: result.stopped.length,
     atTurnEnd: result.atTurnEnd.length, kept: result.kept.length, pausedTriggers: result.pausedTriggers, clocksOff: result.clocksOff,
@@ -356,7 +397,7 @@ export async function resumeTeam(rootRef: string, opts: { by: string }): Promise
   const record = root.team_stop;
   const result: TeamResumeResult = { root: { id: root.id, title: root.title }, resumedTriggers: 0, clocksOn: 0, skipped: 0 };
   if (!record) return result;
-  for (const [sid, w] of turnEnd) if (w.rootId === root.id) turnEnd.delete(sid);
+  for (const [sid, w] of turnEnd.values()) if (w.rootId === root.id) turnEnd.cancel(sid);
   const { patchRoutine } = await import('../routines/routines-core.js');
   const requests = await import('../session-requests.js');
   const byId = new Map((await listTasksByIds(record.members.map((m) => m.id)).catch(() => [] as Task[])).map((t) => [t.id, t] as const));

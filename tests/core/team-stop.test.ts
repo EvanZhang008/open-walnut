@@ -4,7 +4,7 @@
  * wake clocks; a running turn may finish first; resume turns exactly those triggers and clocks
  * back on, and leaves a closed task alone.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import type { SessionRecord, Task } from '../../src/core/types.js';
 
 const tasks = new Map<string, Task>();
@@ -63,13 +63,34 @@ vi.mock('../../src/core/sessions/session-lifecycle.js', () => ({
   },
 }));
 
-import { _resetTeamStopForTest, _turnEndStopsForTest, resumeTeam, stopTeam, stoppedByTeam, teamOf } from '../../src/core/sessions/team-stop.js';
+const outlives = new Set<string>();
+/** Sessions whose model turn is still running (no result yet). */
+const inTurn = new Set<string>();
+vi.mock('../../src/providers/claude-code-session.js', () => ({
+  sessionRunner: {
+    hasWorkOutlivingTurn: (sid: string) => outlives.has(sid),
+    isInTurn: (sid: string) => (inTurn.has(sid) ? true : outlives.has(sid) ? false : null),
+  },
+}));
+
+import {
+  _resetTeamStopForTest, _setTeamTurnEndClockForTest, _turnEndStopsForTest, resumeTeam, resumeTeamStopWaits, stopTeam, stoppedByTeam, teamOf,
+  TEAM_BACKGROUND_GRACE_MS, TEAM_TURN_END_MAX_MS,
+} from '../../src/core/sessions/team-stop.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 
 const task = (id: string, extra: Partial<Task> = {}): Task =>
   ({ id, title: `T ${id}`, phase: 'IN_PROGRESS', status: 'in_progress', ...extra }) as Task;
 const sess = (sid: string, taskId: string, status = 'idle'): SessionRecord =>
   ({ claudeSessionId: sid, taskId, process_status: status }) as SessionRecord;
+
+// Concurrent first imports of one module can resolve to the real one under bun's runner: load the mocked ones first.
+beforeAll(async () => {
+  await import('../../src/core/task-manager.js');
+  await import('../../src/core/session-tracker.js');
+  await import('../../src/core/sessions/session-lifecycle.js');
+  await import('../../src/providers/claude-code-session.js');
+});
 
 beforeEach(() => {
   tasks.clear();
@@ -79,6 +100,8 @@ beforeEach(() => {
   patched.length = 0;
   cronOwner = new Set();
   asks = [];
+  outlives.clear();
+  inTurn.clear();
   _resetTeamStopForTest();
   // lead → a, b; a → a1 (two levels); done is closed; other is not in the team.
   for (const t of [
@@ -158,6 +181,7 @@ describe('stopTeam / resumeTeam', () => {
     await import('../../src/core/sessions/session-lifecycle.js');
     await import('../../src/core/session-tracker.js');
     await import('../../src/core/task-manager.js');
+    await import('../../src/providers/claude-code-session.js');
     vi.useFakeTimers({ toFake: ['setTimeout'] });
     try {
       sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1', 'running')];
@@ -178,6 +202,60 @@ describe('stopTeam / resumeTeam', () => {
       vi.useRealTimers();
     }
   });
+});
+
+describe('a turn-end stop always ends', () => {
+
+
+  it('a turn still running at the limit is stopped anyway; background work its turn left, after the grace', async () => {
+    // Real time, shortened: background holds 150 ms, anything else 600 ms; a look every 20 ms.
+    _setTeamTurnEndClockForTest({ limits: { backgroundGraceMs: 150, maxMs: 600 }, pollMs: 20 });
+    // s-a's turn never ends; s-a1's turn ended but left a background command running (it reads running).
+    sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1', 'running')];
+    outlives.add('s-a1');
+    await stopTeam('lead', { by: 'human', when: 'turn_end', includeRoot: false });
+    expect(tasks.get('lead')!.team_stop?.at_turn_end?.map((w) => w.sessionId).sort()).toEqual(['s-a', 's-a1']);
+    await vi.waitFor(() => expect(terminated).toEqual(['s-a1']), { timeout: 500, interval: 10 });
+    await vi.waitFor(() => expect(terminated).toEqual(['s-a1', 's-a']), { timeout: 2_000, interval: 20 });
+    expect(_turnEndStopsForTest()).toEqual([]);
+    await vi.waitFor(() => expect(tasks.get('lead')!.team_stop?.at_turn_end).toBeUndefined());
+    // The real limits a production wait uses.
+    expect(TEAM_BACKGROUND_GRACE_MS).toBe(10 * 60_000);
+    expect(TEAM_TURN_END_MAX_MS).toBe(2 * 60 * 60_000);
+  });
+
+  it('a turn that started a background command and keeps working is a turn: not cut at the background grace', async () => {
+    _setTeamTurnEndClockForTest({ limits: { backgroundGraceMs: 100, maxMs: 700 }, pollMs: 20 })
+    sessions = [sess('s-a', 'a', 'running')];
+    outlives.add('s-a');
+    inTurn.add('s-a');
+    await stopTeam('lead', { by: 'human', when: 'turn_end', includeRoot: false });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(terminated).toEqual([]);
+    // Its model turn ends with the command still running: from then on the grace counts.
+    inTurn.delete('s-a');
+    await vi.waitFor(() => expect(terminated).toEqual(['s-a']), { timeout: 600, interval: 10 });
+  });
+
+  it('a resume while a look is reading stops nothing', async () => {
+    _setTeamTurnEndClockForTest({ limits: { backgroundGraceMs: 100, maxMs: 200 }, pollMs: 20 })
+    sessions = [sess('s-a', 'a', 'running')];
+    await stopTeam('lead', { by: 'human', when: 'turn_end', includeRoot: false });
+    await new Promise((r) => setTimeout(r, 150));
+    await resumeTeam('lead', { by: 'human' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(terminated).toEqual([]);
+  });
+
+  it('a restart before the turn ends still stops the session: the wait is on the record', async () => {
+    sessions = [sess('s-a', 'a', 'running')];
+    await stopTeam('lead', { by: 'human', when: 'turn_end', includeRoot: false });
+    _resetTeamStopForTest(); // the restart: the in-memory wait is gone
+    expect(await resumeTeamStopWaits()).toBe(1);
+    sessions[0].process_status = 'idle';
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: 's-a', process_status: 'idle' }, ['*']);
+    await vi.waitFor(() => expect(terminated).toEqual(['s-a']), { timeout: 8_000 });
+  }, 15_000);
 });
 
 describe('wake sources only (sessions:"keep") and wakeSourcesOf', () => {

@@ -35,6 +35,7 @@ import { registerForwardSocket } from '../lib/forward-lane-ports.js'
 import { laneForwardForTesting, sshLaneForward, StreamLane } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble } from './session-io.js'
@@ -3475,13 +3476,19 @@ export class DaemonConnection {
       const busyRaw = (await this.sshExec(
         `cat ${shq(this._remoteDir + '/acp-busy.json')} 2>/dev/null || true`, 5_000,
       )).trim()
-      if (!busyRaw) return false
-      const busy = JSON.parse(busyRaw) as { busySids?: string[]; updatedAt?: number }
-      if (
-        typeof busy.updatedAt === 'number'
+      const busy = (busyRaw ? JSON.parse(busyRaw) : {}) as { busySids?: string[]; updatedAt?: number }
+      const open = typeof busy.updatedAt === 'number'
         && Date.now() - busy.updatedAt < 2 * 60_000
         && Array.isArray(busy.busySids) && busy.busySids.length > 0
-      ) {
+      // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
+      const { holds, heldMs } = acpUpgradeHolds(this.hostKey, open)
+      if (open && !holds) {
+        log.session.warn('DaemonConnection: daemon upgrade goes ahead over ACP turns open too long', {
+          host: this.hostKey, expected, busySids: busy.busySids, heldMs,
+        })
+        return false
+      }
+      if (open) {
         log.session.warn('DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
           host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
           busySids: busy.busySids,

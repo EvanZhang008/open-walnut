@@ -58,6 +58,9 @@ export function useSessionSupervision(sid: string): SupervisionSnapshot {
  * blocked or failed restart, a host that went unavailable, or recovery running
  * for a session whose cron badge is gone. The calm case lives in CronJobsCard.
  */
+/** How long a stop that ended unconfirmed is still shown. */
+const FAILED_STOP_SHOWN_MS = 6 * 60 * 60_000;
+
 export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: {
   sid: string;
   snapshot: SupervisionSnapshot;
@@ -68,7 +71,12 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   const supervision = value?.supervision;
   const activeCron = useActiveSessionCron(sid);
   const recovering = supervision?.enabled && ['watching', 'checking', 'restarting'].includes(supervision.state);
-  const forced = stopPending || stopping || !!error || supervision?.state === 'blocked'
+  // A stop its host never confirmed ends as failed (core/sessions/session-stop.ts): say so for a while,
+  // since the session takes messages again and its CLI may still run.
+  const stopAsked = Date.parse(value?.stopRequest?.requestedAt ?? '');
+  const failedStop = value?.stopRequest?.state === 'failed' && Number.isFinite(stopAsked) && Date.now() - stopAsked < FAILED_STOP_SHOWN_MS
+    ? value.stopRequest : null;
+  const forced = stopPending || stopping || !!failedStop || !!error || supervision?.state === 'blocked'
     || supervision?.reason === 'launch-failed' || (supervision && (unavailable || value?.available === false))
     || (recovering && !activeCron);
   if (!forced) return null;
@@ -80,14 +88,16 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   if (stale && !stopping && !stopPending && (!error || /not found/i.test(error)) && isPhoneLayout()) return null;
   const title = stopping ? 'Requesting stop'
     : stopPending ? 'Stop pending host confirmation'
+    : failedStop ? 'Stop not confirmed'
     : stale ? 'Recovery status unavailable'
     : supervision ? STATE_LABELS[supervision.state] : 'Automatic recovery';
   const detail = stopping || stopPending
     ? 'The session may still run until its host confirms the stop. Automatic recovery will also be disabled.'
+    : failedStop ? failedStop.error ?? 'The host never confirmed the stop; the session may still be running.'
     : supervision?.reason ? REASONS[supervision.reason] ?? supervision.reason : '';
   const change = (next: boolean) => { void changeSessionSupervision(sid, next); };
   return (
-    <section className="session-supervision" aria-label="Cron recovery" data-state={stopPending ? 'stop-pending' : supervision?.state ?? 'unknown'}>
+    <section className="session-supervision" aria-label="Cron recovery" data-state={stopPending ? 'stop-pending' : failedStop ? 'stop-failed' : supervision?.state ?? 'unknown'}>
       <div className="session-supervision-heading">
         <strong role="status">{title}</strong>
         {supervision && !archived && (
@@ -104,8 +114,8 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
         <span>{STARTUP_LABELS[value?.startup ?? 'unavailable']}</span>
         {requestedEnabled !== null && <span role="status">Saving…</span>}
         {supervision?.retryAt && !stopPending && <span>Retry after {new Date(supervision.retryAt).toLocaleTimeString()}</span>}
-        {stopPending ? (
-          <button type="button" disabled={writing} onClick={onRetryStop}>Retry stop</button>
+        {stopPending || failedStop ? (
+          <button type="button" disabled={writing} onClick={onRetryStop}>{failedStop ? 'Stop again' : 'Retry stop'}</button>
         ) : supervision?.state === 'blocked' && value?.available && !unavailable && !archived ? (
           <button type="button" disabled={writing} onClick={() => change(true)}>Retry recovery</button>
         ) : error ? (

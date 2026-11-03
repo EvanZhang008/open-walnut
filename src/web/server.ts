@@ -3228,6 +3228,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       void import('../core/sessions/engine-switch-watch.js').then((m) => m.resumeEngineSwitches()).catch((err) => {
         log.session.warn('engine switch resume failed', { error: err instanceof Error ? err.message : String(err) })
       })
+      // A stop its host never confirmed keeps its deadline (core/sessions/session-stop.ts).
+      void import('../core/sessions/session-stop.js').then((m) => m.sessionStops.resumeDeadlines()).catch((err) => {
+        log.session.warn('session stop deadlines not resumed', { error: err instanceof Error ? err.message : String(err) })
+      })
+      // A team stop waiting for its sessions' turns to end stops them still (core/sessions/team-stop.ts).
+      void import('../core/sessions/team-stop.js').then((m) => m.resumeTeamStopWaits()).catch((err) => {
+        log.session.warn('team stop resume failed', { error: err instanceof Error ? err.message : String(err) })
+      })
     }, 15_000).unref?.()
   } catch (err) {
     log.session.error('one-session-per-task migration failed', {

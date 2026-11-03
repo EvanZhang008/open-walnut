@@ -25,6 +25,8 @@ export interface SessionStopDeps {
   save(sid: string, updates: Partial<SessionRecord>): Promise<SessionRecord>
   confirm(sid: string, request: StopRequest): Promise<SessionRecord | null>
   pending(host: string): Promise<SessionRecord[]>
+  /** Every pending stop, on any host (startup arms their deadlines). */
+  pendingAll?(): Promise<SessionRecord[]>
   park(sid: string): Promise<void>
   connection(host: string): Promise<SessionStopConnection | null>
   changed(record: SessionRecord): void
@@ -41,6 +43,22 @@ export interface SessionStopDeps {
  * "awaiting host confirmation" for good, though one more stop confirmed it.
  */
 export const STOP_RETRY_DELAYS_MS = [5_000, 15_000, 60_000, 300_000]
+
+/**
+ * Every stop ends with a result (listed in tests/core/sessions/lifecycle-waits-ratchet.test.ts).
+ * A host that answered every try without confirming fails it once the tries are used up:
+ * `state: 'failed'` with the reason, and the session takes messages again (a stop the host
+ * refused would otherwise block it for good). A host that was offline keeps it pending,
+ * sent again when the host comes back (flush), for at most STOP_OFFLINE_MAX_MS from the ask;
+ * then it fails the same way.
+ */
+export const STOP_OFFLINE_MAX_MS = 24 * 60 * 60_000
+export const STOP_HOST_UNAVAILABLE = 'Host unavailable; waiting for stop confirmation'
+
+export function stopFailedText(lastError: string | undefined, tries: number): string {
+  return `The host did not confirm the stop after ${tries} ${tries === 1 ? 'try' : 'tries'}`
+    + `${lastError ? ` (last answer: ${lastError})` : ''}. The session takes messages again; stop it again if it is still running.`
+}
 
 export class SessionStopCoordinator {
   private readonly pending = new Map<string, Promise<unknown>>()
@@ -93,13 +111,23 @@ export class SessionStopCoordinator {
     }
     if (held?.armed) return request
     const attempt = held?.attempt ?? 0
-    // Tries used up: the next is when the host reconnects (flush), which starts them over.
-    if (attempt >= STOP_RETRY_DELAYS_MS.length) { this.retries.delete(sid); return request }
     const schedule = this.deps.schedule ?? ((fn: () => void, ms: number) => {
       const t = setTimeout(fn, ms)
       t.unref?.()
       return () => clearTimeout(t)
     })
+    if (attempt >= STOP_RETRY_DELAYS_MS.length) {
+      // Tries used up on a host that answered: the stop fails now.
+      if (request.error !== STOP_HOST_UNAVAILABLE) {
+        this.retries.delete(sid)
+        void this.fail(sid, request.id, attempt + 1)
+        return request
+      }
+      // An offline host: its reconnect sends it again (flush, which starts the tries over),
+      // and the deadline fails it if the host never came back.
+      this.armOfflineDeadline(sid, request, attempt)
+      return request
+    }
     const entry = { attempt: attempt + 1, armed: true, cancel: () => {} }
     this.retries.set(sid, entry)
     entry.cancel = schedule(() => {
@@ -117,13 +145,67 @@ export class SessionStopCoordinator {
     return request
   }
 
+  private armOfflineDeadline(sid: string, request: StopRequest, attempt: number): void {
+    const schedule = this.deps.schedule ?? ((fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms)
+      t.unref?.()
+      return () => clearTimeout(t)
+    })
+    const asked = Date.parse(request.requestedAt)
+    const left = Number.isFinite(asked) ? Math.max(0, asked + STOP_OFFLINE_MAX_MS - Date.now()) : 0
+    const entry = { attempt, armed: true, cancel: () => {} }
+    this.retries.set(sid, entry)
+    entry.cancel = schedule(() => {
+      if (this.retries.get(sid) !== entry) return
+      this.retries.delete(sid)
+      void this.fail(sid, request.id, attempt + 1)
+    }, left)
+  }
+
+  /**
+   * At startup: every stop still pending gets its deadline back, counted from its ask (the
+   * retries were in memory). A host that connects sends it again (flush) and starts the tries over.
+   */
+  async resumeDeadlines(): Promise<number> {
+    const records = await this.deps.pendingAll?.() ?? []
+    let n = 0
+    for (const record of records) {
+      const sid = record.claudeSessionId
+      const request = record.stopRequest
+      if (request?.state !== 'pending' || this.retries.has(sid)) continue
+      this.armOfflineDeadline(sid, request, STOP_RETRY_DELAYS_MS.length)
+      n++
+    }
+    return n
+  }
+
   async flush(host: string, connection?: SessionStopConnection): Promise<void> {
     for (const record of await this.deps.pending(host)) {
       await this.serial(record.claudeSessionId, async () => {
         const current = await this.deps.get(record.claudeSessionId)
-        if (current?.stopRequest?.state === 'pending') this.settle(record.claudeSessionId, await this.deliver(current, connection))
+        if (current?.stopRequest?.state !== 'pending') return
+        // The host is back: its tries start over (an offline wait's deadline goes with them).
+        const held = this.retries.get(record.claudeSessionId)
+        if (held && !held.armed) return
+        held?.cancel()
+        this.retries.delete(record.claudeSessionId)
+        this.settle(record.claudeSessionId, await this.deliver(current, connection))
       })
     }
+  }
+
+  /** The wait ran out: a stop still pending (the same one) fails with its reason. */
+  private fail(sid: string, id: string, tries: number): Promise<void> {
+    return this.serial(sid, async () => {
+      const current = await this.deps.get(sid)
+      const request = current?.stopRequest
+      if (request?.state !== 'pending' || request.id !== id) return
+      const failed: StopRequest = { id, requestedAt: request.requestedAt, state: 'failed', error: stopFailedText(request.error, tries) }
+      const updated = await this.deps.confirm(sid, failed)
+      if (updated) this.deps.changed(updated)
+      const { log } = await import('../../logging/index.js')
+      log.session.warn('session stop: the host never confirmed it; the session takes messages again', { sessionId: sid, stopRequestId: id, tries, lastError: request.error })
+    }).catch(() => {})
   }
 
   private async deliver(record: SessionRecord, connection?: SessionStopConnection): Promise<StopRequest> {
@@ -136,7 +218,7 @@ export class SessionStopCoordinator {
       // A person's stop names this Walnut, so a daemon that records the session
       // for another Walnut refuses it (owner-home-v1, stop-provenance.ts).
       const provenance = conn?.connected ? stopProvenance(conn, 'human') : null
-      if (!conn?.connected) error = 'Host unavailable; waiting for stop confirmation'
+      if (!conn?.connected) error = STOP_HOST_UNAVAILABLE
       else if (!provenance) error = STOP_NOT_SENT_NO_OWNERSHIP_CHECK
       else {
         const reply = await conn.send('stop', { sid, reason: 'user', stopRequestId: request.id, ...provenance }, 10_000)
@@ -175,6 +257,7 @@ export const sessionStops = new SessionStopCoordinator({
     }, (current) => current.stopRequest?.id === request.id && current.stopRequest.state === 'pending')
   },
   pending: async (host) => (await import('../session-tracker.js')).listPendingSessionStops(host),
+  pendingAll: async () => (await import('../session-tracker.js')).listPendingSessionStops(),
   park: async (sid) => {
     const { getQueue, parkMessages } = await import('../session-message-queue.js')
     const { STOP_PARKED_REASON } = await import('../relay-fates.js')

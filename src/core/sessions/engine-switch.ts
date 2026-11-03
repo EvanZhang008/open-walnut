@@ -30,6 +30,7 @@
  * session starts there with the carried context. A failed copy or start restores the
  * old session as above; the old host's copies are never touched.
  */
+import { turnHold, type TurnHold } from './turn-end-wait.js';
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { EngineSwitchState, SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } from '../types.js';
@@ -95,6 +96,10 @@ const inFlight = new Map<string, { from: string; work: Promise<EngineSwitchResul
  *  session it replaces never waits for it: it is held on the old session's queue
  *  (MOVE_HELD_REASON) and goes with the task (or back to the old session when the move fails). */
 const MOVE_WAIT_MS = 15 * 60_000;
+/** Read by the new session when the old one's background work was stopped (engine-switch-watch.ts). */
+export const BACKGROUND_CUT_NOTE = 'The previous session still had background work running (a detached command or an armed wakeup) '
+  + 'when this switch ran, past the time a switch waits for it after the turn ends; that work was stopped. '
+  + 'Check whether it finished, and run it again here if it is still needed.';
 const SWITCH_WAIT_MS = 120_000;
 
 function by(callerSid: string | undefined, callerTaskId: string | undefined): string {
@@ -107,10 +112,19 @@ function by(callerSid: string | undefined, callerTaskId: string | undefined): st
  * starts): a switch waits for that turn.
  */
 export async function sessionBusy(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>): Promise<boolean> {
-  if (rec.process_status === 'running') return true;
-  const { getStore } = await import('../session-queue-store.js');
-  const rows = (await getStore().catch(() => null))?.queues[rec.claudeSessionId] ?? [];
-  return rows.some((r) => r.status === 'pending' || r.status === 'processing');
+  return (await switchHold(rec)) !== 'free';
+}
+
+/**
+ * What holds a switch back: a message queued for the session (`queue`), a turn the model
+ * runs (`turn`), or only work its finished turn left running, a detached background
+ * command or an armed wakeup (`background`, 2026-11-03: a task's move waited 1 h 50 min for
+ * the test run its turn had started). `free` runs it now.
+ */
+export type SwitchHold = TurnHold;
+
+export async function switchHold(rec: Pick<SessionRecord, 'claudeSessionId' | 'process_status'>): Promise<SwitchHold> {
+  return turnHold(rec, { queue: true });
 }
 
 /**
@@ -248,10 +262,10 @@ export async function cancelPendingSwitch(taskId: string, opts: { deliver?: bool
 }
 
 /** Run a recorded (or fresh) switch now. One at a time per task. */
-export function runEngineSwitch(taskId: string, state: EngineSwitchState): Promise<EngineSwitchResult> {
+export function runEngineSwitch(taskId: string, state: EngineSwitchState, opts: { overBackground?: boolean } = {}): Promise<EngineSwitchResult> {
   const running = inFlight.get(taskId);
   if (running) return running.work;
-  const work = execute(taskId, state).finally(() => inFlight.delete(taskId));
+  const work = execute(taskId, state, opts).finally(() => inFlight.delete(taskId));
   inFlight.set(taskId, { from: state.from_session_id, work, maxMs: state.move ? MOVE_WAIT_MS : SWITCH_WAIT_MS, move: !!state.move });
   return work;
 }
@@ -314,7 +328,7 @@ export async function awaitSwitch(taskId: string, maxMs?: number): Promise<boole
   return true;
 }
 
-async function execute(taskId: string, state: EngineSwitchState): Promise<EngineSwitchResult> {
+async function execute(taskId: string, state: EngineSwitchState, opts: { overBackground?: boolean }): Promise<EngineSwitchResult> {
   const tm = await import('../task-manager.js');
   const tracker = await import('../session-tracker.js');
   const task = await tm.getTask(taskId);
@@ -328,7 +342,8 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
   // The old session's host, except for a move (task_move); a pending switch an older
   // Walnut recorded with `confirm_move` stays put.
   const host = state.move ? normalizeHost(state.to.host) : normalizeHost(old.host);
-  if (await sessionBusy(old)) {
+  const hold = await switchHold(old);
+  if (hold !== 'free' && !(hold === 'background' && opts.overBackground)) {
     // A turn started after the check (a trigger, a peer): the switch waits for it.
     let parked = false;
     await tm.updateTaskRaw(taskId, (cur) => {
@@ -341,6 +356,7 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
     watchPendingSwitch(taskId, old.claudeSessionId);
     return { state: 'pending', taskId, switchId: state.id, fromSessionId: old.claudeSessionId, engine, host };
   }
+  if (hold === 'background') state = { ...state, background_cut: true };
   let claimed = false;
   await tm.updateTaskRaw(taskId, (cur) => {
     if (!mayRun(cur.engine_switch, state)) return null;
@@ -540,7 +556,8 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     ...(moveMeta ? { move: moveMeta } : {}),
   }, Math.floor(window * CARRY_WINDOW_SHARE));
   const { composeHinted, renderHintBlock } = await import('../hints/hint-format.js');
-  const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)];
+  const cut = state.background_cut ? `\n\n${BACKGROUND_CUT_NOTE}` : '';
+  const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text + cut)];
   if (carried.trimmedTurns > 0) {
     // The user is told in the session (a system row) as well as the model in its context.
     log.session.info('engine switch: carried context trimmed to fit the target window', {
@@ -551,7 +568,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   const mode = state.to.permission_mode ?? old.mode;
   return {
     message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
-    ...(resume ? { resume: { ...resume, message: composeHinted(state.message ?? '', { before: [renderHintBlock(ENGINE_SWITCH_HINT, resume.text)], after: [] }) } } : {}),
+    ...(resume ? { resume: { ...resume, message: composeHinted(state.message ?? '', { before: [renderHintBlock(ENGINE_SWITCH_HINT, resume.text + cut)], after: [] }) } } : {}),
   };
 }
 

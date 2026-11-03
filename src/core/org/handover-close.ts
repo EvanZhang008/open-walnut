@@ -10,10 +10,12 @@
  *
  * In memory: after a server restart a waiting lead simply stays open. It is no
  * longer the project's contact (pickLead prefers the VP), so nothing is lost.
+ * The wait is turn-end-wait.ts: a status event or a poll looks. A lead that has not read
+ * its notice or ended its turn HANDOVER_CLOSE_MAX_MS after it is kept open and the unread
+ * notice withdrawn, never closed mid-turn (lifecycle-waits.ts lists it).
  */
-import { bus, EventNames } from '../event-bus.js';
-import type { SessionStatusChangedEvent } from '../event-types.js';
 import { log } from '../../logging/index.js';
+import { TURN_END_POLL_MS, TurnEndWait } from '../sessions/turn-end-wait.js';
 import { pickLead, projectKey } from './org-tree.js';
 
 export interface PendingHandover {
@@ -25,47 +27,58 @@ export interface PendingHandover {
   messageId?: string;
 }
 
-const pending = new Map<string, PendingHandover>();
-const SUBSCRIBER = 'org-handover-close';
 /** A turn end another turn follows at once is not the end (self-complete-stop.ts measured 50-100 ms). */
 const SETTLE_MS = 3_000;
 let settleMs = SETTLE_MS;
+export const HANDOVER_CLOSE_MAX_MS = 2 * 60 * 60_000;
 
 /** Test-only: change (or restore, with no argument) the settle window. */
 export function __setHandoverSettleMs(ms?: number): void {
   settleMs = ms ?? SETTLE_MS;
 }
 
+const waiter = new TurnEndWait<PendingHandover & { at: number }>({
+  name: 'org-handover-close',
+  limits: { backgroundGraceMs: 10 * 60_000, maxMs: HANDOVER_CLOSE_MAX_MS },
+  queue: false,
+  get settleMs() { return settleMs; },
+  // The turn that reads the notice may not have started yet: only its end counts.
+  firstLookMs: TURN_END_POLL_MS,
+  asked: async (_sid, wait) => ({ askedAt: wait.at }),
+  // Not read yet: the notice still waits in its queue.
+  holdsToo: async (sid, wait) => {
+    if (!wait.messageId) return false;
+    const { isMessageQueued } = await import('../session-message-queue.js');
+    return isMessageQueued(sid, wait.messageId);
+  },
+  act: async (sid, wait, verdict, hold) => {
+    if (verdict === 'expire') { await keepOpen(sid, wait, hold); return; }
+    await closeIfDone(sid, wait, verdict);
+  },
+});
+
 /** Test-only: what waits. */
 export function __pendingHandovers(): PendingHandover[] {
-  return [...pending.values()];
+  return waiter.values().map(([, w]) => { const { at: _at, ...p } = w; return p; });
 }
 
 /** `sessionId` reads a handover now, and Walnut closes its task after that turn. */
 export function hasPendingHandover(sessionId: string): boolean {
-  return pending.has(sessionId);
+  return waiter.has(sessionId);
 }
 
 /** Close `p.taskId` once its session has read the handover and its turn is over. */
 export function closeAfterHandover(p: PendingHandover): void {
-  pending.set(p.sessionId, p);
-  // Idempotent: the bus keys subscribers by name.
-  bus.subscribe(SUBSCRIBER, (event) => {
-    const status = event.data as Partial<SessionStatusChangedEvent> | undefined;
-    const sid = status?.sessionId;
-    const wait = sid ? pending.get(sid) : undefined;
-    if (!sid || !wait || !status.process_status || status.process_status === 'running') return;
-    void closeIfDone(sid, wait);
-  }, { global: true, interest: [EventNames.SESSION_STATUS_CHANGED] });
+  waiter.watch(p.sessionId, { ...p, at: Date.now() });
 }
 
 /** The project changed again (given back, or moved on): forget its waiting handovers and withdraw unread ones. */
 export async function cancelHandovers(project: string, exceptTaskId?: string): Promise<string[]> {
   const key = projectKey(project);
   const dropped: string[] = [];
-  for (const [sid, p] of pending) {
+  for (const [sid, p] of waiter.values()) {
     if (projectKey(p.project) !== key || p.taskId === exceptTaskId) continue;
-    pending.delete(sid);
+    waiter.cancel(sid);
     dropped.push(p.taskId);
     if (!p.messageId) continue;
     const { deleteMessage } = await import('../session-message-queue.js');
@@ -75,15 +88,25 @@ export async function cancelHandovers(project: string, exceptTaskId?: string): P
   return dropped;
 }
 
-async function closeIfDone(sid: string, wait: PendingHandover): Promise<void> {
+/**
+ * The wait ran out with the notice unread or the turn still going: the lead is never closed
+ * mid-turn or before it summed up. Its unread notice is withdrawn and it stays open, which is
+ * harmless (it is no longer the project's contact); the log says why.
+ */
+async function keepOpen(sid: string, wait: PendingHandover, hold: string): Promise<void> {
+  let withdrawn = false;
+  if (wait.messageId) {
+    const { deleteMessage } = await import('../session-message-queue.js');
+    withdrawn = await deleteMessage(sid, wait.messageId).catch(() => false);
+  }
+  log.task.warn('org: handover lead kept open, its handover did not finish in time', {
+    taskId: wait.taskId, project: wait.project, sessionId: sid, hold, noticeWithdrawn: withdrawn, waitedMs: HANDOVER_CLOSE_MAX_MS,
+  });
+}
+
+async function closeIfDone(sid: string, wait: PendingHandover, verdict: string): Promise<void> {
   try {
-    const { isMessageQueued } = await import('../session-message-queue.js');
-    if (wait.messageId && await isMessageQueued(sid, wait.messageId)) return; // not read yet
-    await new Promise((r) => setTimeout(r, settleMs));
-    const { getSessionByClaudeId } = await import('../session-tracker.js');
-    if ((await getSessionByClaudeId(sid))?.process_status === 'running') return; // its follow-up turn: wait for that end
-    if (pending.get(sid) !== wait) return; // cancelled or replaced meanwhile
-    pending.delete(sid);
+    if (verdict !== 'run') log.task.info('org: handover lead closed; its turn ended, background work it left was not waited for', { taskId: wait.taskId, sessionId: sid, verdict });
     const { completeTask, listTasks } = await import('../task-manager.js');
     const tasks = await listTasks();
     const lead = tasks.find((t) => t.id === wait.taskId);

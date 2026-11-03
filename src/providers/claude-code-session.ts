@@ -10645,6 +10645,11 @@ export class SessionRunner {
     return this.findSessionByClaudeId(claudeSessionId)?.workOutlivesTurn ?? false
   }
 
+  /** The model's turn is still running (no result yet); null when this server holds no runner for it. */
+  isInTurn(claudeSessionId: string): boolean | null {
+    return this.findSessionByClaudeId(claudeSessionId)?.inTurn ?? null
+  }
+
   /** Check if a session has background workflow/subagent tasks still running.
    *  Used by health monitor to skip the idle-timeout kill — a dynamic workflow can run
    *  for many minutes with no main-turn output, but the session is NOT idle.

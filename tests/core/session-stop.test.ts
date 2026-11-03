@@ -2,6 +2,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   STOP_RETRY_DELAYS_MS,
+  STOP_OFFLINE_MAX_MS,
+  STOP_HOST_UNAVAILABLE,
   SessionStopCoordinator,
   type SessionStopConnection,
   type SessionStopDeps,
@@ -640,12 +642,13 @@ describe('SessionStopCoordinator retries a stop the host did not confirm', () =>
     expect(h.scheduled).toHaveLength(1)
   })
 
-  it('tries on every delay, then waits for the host to reconnect, which starts the tries over', async () => {
+  it('a host that answers every try without confirming fails the stop once the tries are used up', async () => {
     const h = makeHarness([makeRecord('s1')])
     const conn = replying([{ ok: false, error: 'stop: process group still exists without its original leader; stop confirmation is pending' }])
     h.setConnection('devbox', conn)
     const c = h.build()
     await c.request('s1')
+    await expect(c.fence('s1')).rejects.toThrow('awaiting host confirmation')
     for (let i = 0; i < STOP_RETRY_DELAYS_MS.length; i++) {
       expect(h.scheduled).toHaveLength(i + 1)
       h.scheduled[i]!.fn()
@@ -653,11 +656,61 @@ describe('SessionStopCoordinator retries a stop the host did not confirm', () =>
       await settled()
     }
     expect(h.scheduled.map((e) => e.ms)).toEqual(STOP_RETRY_DELAYS_MS)
-    expect(h.read('s1').stopRequest?.state).toBe('pending')
-
+    // A clear result, not pending for good: failed with the reason, and the session takes messages again.
+    await vi.waitFor(() => expect(h.read('s1').stopRequest?.state).toBe('failed'))
+    const stop = h.read('s1').stopRequest!
+    expect(stop.error).toContain(`after ${STOP_RETRY_DELAYS_MS.length + 1} tries`)
+    expect(stop.error).toContain('without its original leader')
+    expect(h.read('s1').process_status).toBe('running')
+    await expect(c.fence('s1')).resolves.toBe(stop.id)
+    // Nothing is sent again, a reconnect included.
     await c.flush('devbox')
-    expect(h.scheduled).toHaveLength(STOP_RETRY_DELAYS_MS.length + 1)
-    expect(h.scheduled.at(-1)!.ms).toBe(STOP_RETRY_DELAYS_MS[0])
+    expect(conn.send).toHaveBeenCalledTimes(STOP_RETRY_DELAYS_MS.length + 1)
+  })
+
+  it('an offline host keeps the stop pending for its reconnect, which sends it again; one that never comes back fails at the deadline', async () => {
+    const h = makeHarness([makeRecord('s1'), makeRecord('s2')])
+    const c = h.build()
+    // No connection to devbox: every try reads "host unavailable".
+    await c.request('s1')
+    await c.request('s2')
+    const drain = async () => {
+      for (let n = 0; n < 2 * STOP_RETRY_DELAYS_MS.length; n++) {
+        const next = h.scheduled.find((e) => !(e as { ran?: boolean }).ran && e.ms !== STOP_OFFLINE_MAX_MS && e.ms <= 300_000)
+        if (!next) break
+        ;(next as { ran?: boolean }).ran = true
+        next.fn()
+        await settled(); await settled()
+      }
+    }
+    await drain()
+    expect(h.read('s1').stopRequest).toMatchObject({ state: 'pending', error: STOP_HOST_UNAVAILABLE })
+    // The last wait is the deadline, counted from the ask.
+    const deadlines = h.scheduled.filter((e) => e.ms > 300_000)
+    expect(deadlines).toHaveLength(2)
+    for (const d of deadlines) expect(d.ms).toBeLessThanOrEqual(STOP_OFFLINE_MAX_MS)
+
+    // s1's host comes back and confirms: the reconnect sends it again.
+    h.setConnection('devbox', replying([{ ok: true, stopped: true }]))
+    h.store.get('s2')!.host = 'other'
+    await c.flush('devbox')
+    expect(h.read('s1').stopRequest?.state).toBe('confirmed')
+    expect(h.read('s1').process_status).toBe('stopped')
+    // s2's host never came back: its deadline fails it.
+    deadlines[1]!.fn()
+    await vi.waitFor(() => expect(h.read('s2').stopRequest?.state).toBe('failed'))
+    expect(h.read('s2').stopRequest?.error).toContain('Host unavailable')
+  })
+
+  it('after a restart, a stop still pending gets its deadline back, counted from its ask', async () => {
+    const asked = new Date(Date.now() - STOP_OFFLINE_MAX_MS + 60_000).toISOString()
+    const h = makeHarness([makeRecord('s1', { stopRequest: { id: 'stop-1', requestedAt: asked, state: 'pending', error: STOP_HOST_UNAVAILABLE } })])
+    const c = new SessionStopCoordinator({ ...h.deps, pendingAll: async () => [h.read('s1')] })
+    expect(await c.resumeDeadlines()).toBe(1)
+    expect(h.scheduled).toHaveLength(1)
+    expect(h.scheduled[0]!.ms).toBeLessThanOrEqual(60_000)
+    h.scheduled[0]!.fn()
+    await vi.waitFor(() => expect(h.read('s1').stopRequest?.state).toBe('failed'))
   })
 
   it('a stop confirmed another way ends its retries without another send', async () => {

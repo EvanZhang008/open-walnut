@@ -3002,6 +3002,8 @@ export interface EngineSwitchState {
   error?: string;
   /** Who asked: 'human' or 'task:<id>'. */
   by?: string;
+  /** It ran over background work the old session's finished turn left running (engine-switch-watch.ts). */
+  background_cut?: boolean;
   /** Queue rows taken off the old session while switching (a restart mid-switch puts them back). */
   held_rows?: unknown[];
   /** While switching back by resuming an earlier session: that session and its first
@@ -3288,7 +3290,7 @@ export interface SessionRecord {
   /** Walnut moved this session out of a folder that was gone (sessions/folder-gone.ts). `told`
    *  once a message into the session has carried the notice saying so. */
   folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
-  stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed'; error?: string };
+  stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed' | 'failed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;
   /** Who triggered the last process_status change. */

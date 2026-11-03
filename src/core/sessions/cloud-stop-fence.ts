@@ -55,13 +55,14 @@ export interface ProjectedStop {
 
 /**
  * The newer of two reports of a session's stop. One stop seen twice: its
- * confirmed copy (a stop only moves from pending to confirmed). Two stops: the
- * later one, by the primary's own clock (both reports come from it).
+ * settled copy (a stop only moves from pending to confirmed or failed, never
+ * back). Two stops: the later one, by the primary's own clock (both reports
+ * come from it).
  */
 export function newerStop(a: ProjectedStop | null | undefined, b: ProjectedStop | null | undefined): ProjectedStop | null {
   if (!a) return b ?? null;
   if (!b) return a;
-  if (a.id === b.id) return a.state === 'confirmed' ? a : b;
+  if (a.id === b.id) return a.state !== 'pending' ? a : b;
   const ta = Date.parse(a.requestedAt ?? '');
   const tb = Date.parse(b.requestedAt ?? '');
   if (!Number.isFinite(ta)) return b;
