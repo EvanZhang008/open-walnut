@@ -184,6 +184,9 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watched { position: relative; margin: -2px 0 4px 25px; padding-left: 4px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); display: flex; flex-direction: column; }
 .org-watched-item { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 .org-watched-item:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+/* Open beside the page: the selected row's accent, lighter. No frame. */
+.org-watched-item[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.org-watched-item[data-open]:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .org-watched-open {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 3px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer;

@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { keptByRow, lockedTaskIds } from '@/components/org/org-task-tabs';
+import { keptByRow, lockedTaskIds, slotTaskIds } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
@@ -263,6 +263,9 @@ export function OrgPage() {
   const lockedIds = useMemo(() => lockedTaskIds([...pins, ...homeLocks], shownTasks), [pins, homeLocks, shownTasks]);
   const kept = useMemo(() => keptByRow(channels.main, channels.rows, shownTasks, lockedIds), [channels.main, channels.rows, shownTasks, lockedIds]);
   const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
+  // A kept row whose task is open beside this page wears a light tint (2026-11-03, the user: no frame,
+  // "if this page shows it, highlight its background a little ... very elegant").
+  const openTaskIds = useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]);
   // A phone shows one panel from the URL and never touches the desktop's saved strip.
   const [writeStrip] = useState(() => createStripWriter('orgColumns'));
   useEffect(() => { if (!phone) writeStrip(strip); }, [strip, phone, writeStrip]);
@@ -456,6 +459,7 @@ export function OrgPage() {
           onSelect={select}
           onOpenChart={() => openChart()}
           keptOf={keptOf}
+          openTaskIds={openTaskIds}
           onOpenTask={openTask}
           onUnwatch={unwatch}
           now={now}

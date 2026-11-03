@@ -102,7 +102,12 @@ function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
  * session fields. In the order the strips hold them; a placeholder or an unknown id names none.
  */
 export function lockedTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task[]): string[] {
-  if (!slots.some((s) => s.locked)) return [];
+  return slotTaskIds(slots.filter((s) => s.locked), tasks);
+}
+
+/** The tasks a strip's panels show, locked or not, in strip order (the same id rules as lockedTaskIds). */
+export function slotTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task[]): string[] {
+  if (!slots.length) return [];
   const bySession = new Map<string, string>();
   const ids = new Set<string>();
   for (const t of tasks) {
@@ -113,7 +118,7 @@ export function lockedTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task
   }
   const out: string[] = [];
   for (const s of slots) {
-    if (!s.locked || isPlaceholderColumnId(s.id)) continue;
+    if (isPlaceholderColumnId(s.id)) continue;
     const id = s.id.startsWith('task:') ? (ids.has(s.id.slice(5)) ? s.id.slice(5) : undefined)
       : bySession.get(s.id.startsWith('session:') ? s.id.slice(8) : s.id);
     if (id && !out.includes(id)) out.push(id);

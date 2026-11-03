@@ -13,7 +13,7 @@ import { ORG_MAIN_NODE, buildOrgTree, orgProjectNode } from '../../src/core/org/
 import { resolvePinNode, watchNodeOf } from '../../src/core/org/org-pins.js'
 import { USER_STATE_LABELS } from '../../src/core/user-status.js'
 import { MAIN_KEY, buildChannels, projectRowKey, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, keptByRow, lockedTaskIds } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, keptByRow, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -185,6 +185,11 @@ describe('a task whose session panel is locked hangs under its row too', () => {
     ])
     const inbox = rows.find((r) => r.project === '')
     expect(by.get(inbox?.key ?? main.key)?.map((x) => [x.task.id, x.watched, x.locked])).toEqual([['legacy', false, true]])
+  })
+
+  it('reads every panel of a strip as its task, locked or not, for the open tint', () => {
+    expect(slotTaskIds([{ id: 's-free', locked: false }, { id: 'task:org', locked: true }, { id: 'draft:1', locked: false }], tasks)).toEqual(['free', 'org'])
+    expect(slotTaskIds([], tasks)).toEqual([])
   })
 
   it('leaves the list once unlocked, unless still watched', () => {

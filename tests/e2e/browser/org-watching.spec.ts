@@ -222,6 +222,12 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await expect(kept).toHaveAttribute('data-locked', 'true')
   const why = kept.getByTestId('org-watched-why')
   await expect(why).toHaveAttribute('data-why', 'lock')
+  // Open beside the page: a light tint of the selected row's accent, and never a frame.
+  await expect(kept).toHaveAttribute('data-open', 'true')
+  const look = await kept.evaluate((e) => { const c = getComputedStyle(e); return { bg: c.backgroundColor, outline: c.outlineStyle, border: c.borderTopStyle } })
+  expect(look.bg).not.toBe('rgba(0, 0, 0, 0)')
+  expect(look.outline).toBe('none')
+  expect(look.border).toBe('none')
   // Only a watch has a ×: a lock is undone where it was made.
   await expect(kept.getByTestId('org-watched-stop')).toHaveCount(0)
   // The reason sits on the row's guide line, before the state dot, small and apart from it; the

@@ -131,7 +131,7 @@ function KeptWhy({ watched, locked }: { watched: boolean; locked: boolean }) {
  *  is an option of a group (all a listbox may hold): Enter opens it; on a watched one Delete stops
  *  watching it, and the × is the pointer's way to the same. A task only locked goes once its panel is
  *  unlocked, where it was locked. */
-function KeptChildren({ row, kept, onOpenTask, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; onOpenTask: (id: string) => void; onUnwatch: (taskId: string) => void }) {
+function KeptChildren({ row, kept, open, onOpenTask, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; open?: ReadonlySet<string>; onOpenTask: (id: string) => void; onUnwatch: (taskId: string) => void }) {
   if (!kept.length) return null;
   return (
     <div className="org-watched" role="group" aria-label={`Kept in view, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
@@ -140,11 +140,12 @@ function KeptChildren({ row, kept, onOpenTask, onUnwatch }: { row: ChannelRow; k
         const title = orgDisplayTitle(t);
         const why = [watched && 'watched', locked && 'locked'].filter(Boolean).join(' and ');
         return (
-          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined}>
+          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined} data-open={open?.has(t.id) || undefined}>
             <button
               type="button"
               role="option"
               aria-selected={false}
+              aria-current={open?.has(t.id) || undefined}
               aria-label={`${title}: ${USER_STATE_LABELS[st]}, ${why}${watched ? '. Delete stops watching it' : ''}`}
               aria-keyshortcuts={watched ? 'Delete' : undefined}
               className="org-watched-open"
@@ -228,12 +229,14 @@ interface Props {
   onOpenChart: () => void;
   /** The tasks kept in view under a row (keptByRow: watched or locked), shown under it. */
   keptOf?: (row: ChannelRow) => readonly KeptTask[];
+  /** The tasks open beside the page: their rows wear a light tint. */
+  openTaskIds?: ReadonlySet<string>;
   onOpenTask?: (taskId: string) => void;
   onUnwatch?: (taskId: string) => void;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, keptOf, onOpenTask, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, keptOf, openTaskIds, onOpenTask, onUnwatch, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -263,7 +266,7 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
   const shown = holdOrder(rows, held);
   const keys = [main.key, ...shown.map((r) => r.key)];
   const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
-    ? <KeptChildren row={r} kept={keptOf(r)} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
+    ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
     : null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
