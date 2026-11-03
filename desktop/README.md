@@ -233,6 +233,10 @@ with the test's environment. The copy needs its own bundle identifier: the helpe
 only restarts an app when exactly one with that identifier is running.
 `WALNUT_DESKTOP_E2E_SCRIPT=<file>` adds that script to the main window's console
 page, for a test's own steps (typing a draft, reading what the page shows).
+`WALNUT_DESKTOP_E2E_SNAPSHOTS=<dir>` (with the background knob) writes the console
+page's own pixels there once a second (`<epoch ms>.png`), for a test's video:
+WebKit paints the page as it is then (`createPDF`), so the window may be covered
+and the Mac locked.
 `scripts/desktop-smoke.mjs` uses them with a throwaway `HOME` and
 `CFFIXED_USER_HOME` (which `NSHomeDirectory()` follows) to launch a built app
 the way a new Mac would; CI's macOS release rehearsal runs it on every push.

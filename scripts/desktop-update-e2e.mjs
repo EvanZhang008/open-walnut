@@ -6,11 +6,26 @@
  * update" stops its server, quits, is swapped for the new app, and the new app
  * opens and serves the console again. T3 Code's flow (desktop/AppUpdater.swift).
  *
- *   bun scripts/desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> --source <dir> [--work <dir>] [--keep] [--read-only-folder]
+ *   bun scripts/desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> [--source <dir>] [--work <dir>] [--keep]
+ *                                      [--read-only-folder] [--auto] [--video <out.mp4>]
  *
  * Both apps must be signed with the same real identity (desktop/build.sh picks
  * one; WALNUT_APP_VERSION sets each one's version), since that is what the
- * updater checks. `--source` is a built checkout (dist/cli.js) the apps run.
+ * updater checks. `--source` is a built checkout (dist/cli.js) the apps run;
+ * without it an app that carries its release installs that on its first launch
+ * (with no network, as on a person's Mac) and the updated one installs the newer
+ * Walnut it carries, which is checked too. mac-app.yml runs it that way, from the
+ * previous release's DMG to the one it builds.
+ *
+ * By default the page's update item is clicked by the app's test hook and
+ * `updates.auto` is off, so only the clicks act. `--auto` is the update nobody
+ * clicks: `updates.auto` on, no hook; the page downloads by itself, and restarts
+ * into it once the server's idle gate says nobody used it for a while
+ * (WALNUT_UPDATE_IDLE_MS, short here) and nothing is unsaved.
+ *
+ * The app always opens behind every window and never takes focus
+ * (WALNUT_DESKTOP_E2E_BACKGROUND), so it runs beside a person using the Mac.
+ * `--video` films the test app's own window, never the screen (lib/app-window-video.mjs).
  *
  * Nothing touches the real Walnut: HOME, Application Support and the update
  * cache live under --work, the server gets its own port and daemon dir, the
@@ -23,11 +38,12 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { accountInfo } from '../src/lib/account.ts'
-import { machineArch } from './desktop-smoke.mjs'
+import { carriedFor, installedVersion, machineArch } from './desktop-smoke.mjs'
 import { freePort } from './lib/free-port.mjs'
+import { startAppWindowVideo, writesOwnSnapshots } from './lib/app-window-video.mjs'
 
 function parseArgs(argv) {
-  const out = { old: null, next: null, source: null, work: null, keep: false, readOnly: false }
+  const out = { old: null, next: null, source: null, work: null, keep: false, readOnly: false, auto: false, video: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--old') out.old = path.resolve(argv[++i])
@@ -36,10 +52,12 @@ function parseArgs(argv) {
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
     else if (a === '--read-only-folder') out.readOnly = true
+    else if (a === '--auto') out.auto = true
+    else if (a === '--video') out.video = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.old || !out.next || !out.source) {
-    throw new Error('usage: desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> --source <dir> [--work <dir>] [--keep]')
+  if (!out.old || !out.next || (!out.source && !carriedFor(out.old))) {
+    throw new Error('usage: desktop-update-e2e.mjs --old <Walnut.app> --new <Walnut.app> [--source <dir>] [--work <dir>] [--keep] [--auto] [--video <mp4>] (--source unless the old app carries its release)')
   }
   return out
 }
@@ -103,7 +121,7 @@ function serveFeed({ version, arch, dmg, breakFirstDownload }) {
  * (a standard user's /Applications): the install must say so and leave the old
  * app running and serving, never quit into nothing.
  */
-export async function runUpdateE2E({ old, next, source, work: made, keep = false, readOnly = false }) {
+export async function runUpdateE2E({ old, next, source, work: made, keep = false, readOnly = false, auto = false, video = null }) {
   fs.mkdirSync(made, { recursive: true })
   const work = fs.realpathSync(made)
   const arch = machineArch()
@@ -127,7 +145,12 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
   const support = path.join(home, 'Library', 'Application Support', 'Walnut')
   fs.mkdirSync(support, { recursive: true })
   fs.mkdirSync(path.join(home, '.open-walnut'), { recursive: true })
-  fs.writeFileSync(path.join(support, 'config.json'), JSON.stringify({ walnutHome: path.join(home, '.open-walnut'), walnutSourceDir: source }))
+  // With no source the first launch sets itself up from what the app carries, as a person's does.
+  if (source) fs.writeFileSync(path.join(support, 'config.json'), JSON.stringify({ walnutHome: path.join(home, '.open-walnut'), walnutSourceDir: source }))
+  // Clicked runs: a page that updates by itself (0.6.25 and later) must not act beside the clicks.
+  if (!auto) fs.writeFileSync(path.join(home, '.open-walnut', 'config.yaml'), 'updates:\n  auto: false\n')
+  const carriedNew = source ? null : carriedFor(next)?.version ?? null
+  const runtimeDir = path.join(home, '.local', 'share', 'open-walnut')
   const port = await freePort()
   // The swap opens the new app with `open`, which would start it with the user's
   // own environment; here it starts with this test's.
@@ -145,9 +168,39 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
     WALNUT_UPDATE_FEED_URL: `http://127.0.0.1:${feed.port}/releases`,
     WALNUT_UPDATE_STARTUP_DELAY_MS: '3000',
     WALNUT_UPDATE_POLL_MS: '600000',
-    WALNUT_DESKTOP_E2E_UPDATE_CLICKS: '1',
     WALNUT_APPLY_UPDATE_OPEN: opener,
+    // Opens behind every window and never takes focus from the person at this Mac.
+    WALNUT_DESKTOP_E2E_BACKGROUND: '1',
   }
+  if (auto) env.WALNUT_UPDATE_IDLE_MS = '20000'
+  else env.WALNUT_DESKTOP_E2E_UPDATE_CLICKS = '1'
+  if (!source) {
+    // Nothing to download Walnut from: what the apps carry is all there is.
+    env.OPEN_WALNUT_RELEASE_BASE_URL = 'http://127.0.0.1:9/no-network'
+    env.OPEN_WALNUT_RELEASES_API = 'http://127.0.0.1:9/no-network'
+  }
+  // The page's own lines (the server writes the forwarded browser log into its daemon dir).
+  const pageLog = () => {
+    try {
+      const dir = path.join(work, 'daemon')
+      return fs.readdirSync(dir).filter((f) => f.startsWith('open-walnut-') && f.endsWith('.log'))
+        .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n')
+    } catch { return '' }
+  }
+  const pageSaid = (text) => pageLog().includes(text)
+  // What the update item says, each time it changes, as the page itself reports it.
+  const pillScript = path.join(work, 'pill-watch.js')
+  fs.writeFileSync(pillScript, `(() => {
+    let last = null;
+    setInterval(() => {
+      const el = document.querySelector('.stale-build-pill');
+      const text = el ? (el.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+      if (text !== last) { last = text; console.log('[app-update-e2e] pill: ' + (text || '(none)')); }
+    }, 500);
+  })();\n`)
+  env.WALNUT_DESKTOP_E2E_SCRIPT = pillScript
+  const readsPageScript = fs.readFileSync(path.join(old, 'Contents', 'MacOS', 'Walnut')).includes('WALNUT_DESKTOP_E2E_SCRIPT')
+  const pillSeen = () => [...pageLog().matchAll(/"time":"([^"]+)"[^\n]*?\[app-update-e2e\] pill: ([^"]*)"/g)].map((m) => `${m[1].slice(11, 19)} ${m[2]}`)
   const desktopLog = () => { try { return fs.readFileSync(path.join(support, 'desktop.log'), 'utf8') } catch { return '' } }
   const events = (name) => desktopLog().split('\n').filter((l) => l.includes(`"${name}"`))
   const results = []
@@ -164,6 +217,15 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
     }
   }
 
+  const exe = path.join(target, 'Contents', 'MacOS', 'Walnut')
+  const snapshots = video ? writesOwnSnapshots(exe) : false
+  if (snapshots) env.WALNUT_DESKTOP_E2E_SNAPSHOTS = path.join(work, 'frames')
+  let recording = null
+  try {
+    recording = video ? startAppWindowVideo({ exe, dir: path.join(work, 'frames'), snapshots }) : null
+  } catch (err) {
+    console.log(`  video: none (${err?.message ?? err})`)
+  }
   const appLog = fs.openSync(path.join(work, 'app-1.log'), 'a')
   const app = spawn(path.join(target, 'Contents', 'MacOS', 'Walnut'), [], { env, stdio: ['ignore', appLog, appLog] })
   let exited = false
@@ -179,10 +241,18 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
       await until('app_update_available', 60_000, async () => events('app_update_available').length > 0)
       return feed.log.filter((l) => l.includes('/releases/')).slice(0, 2).join(', ')
     })
-    await step('the page clicks Download; the first download breaks off and the retry completes and verifies', async () => {
+    await step(auto
+      ? 'nobody clicks: the page downloads it by itself; the first download breaks off and its own retry completes and verifies'
+      : 'the page clicks Download; the first download breaks off and the retry completes and verifies', async () => {
       await until('a failed download', 120_000, async () => events('app_update_download_failed').length > 0)
-      await until('app_update_downloaded', 180_000, async () => events('app_update_downloaded').length > 0)
+      // The page tries a failed download again after a minute (app-auto-update.ts).
+      await until('app_update_downloaded', 300_000, async () => events('app_update_downloaded').length > 0)
       if (feed.downloads() !== 2) throw new Error(`expected 2 downloads, saw ${feed.downloads()}`)
+      if (auto && !pageSaid('downloading the app update by itself')) throw new Error('the page never said it downloaded by itself')
+      // The person sees it: the item counted the download up. Only an app that runs a test's
+      // page script (WALNUT_DESKTOP_E2E_SCRIPT) reports what the item said.
+      const seen = pillSeen()
+      if (readsPageScript && !seen.some((l) => /Downloading [1-9]\d?%/.test(l))) throw new Error(`the update item never showed the download's progress: ${seen.join(' | ')}`)
       return events('app_update_download_failed')[0].match(/"message":"([^"]*)"/)?.[1] ?? ''
     })
     if (readOnly) {
@@ -202,8 +272,13 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
       }
       return results
     }
-    await step('Restart to update stops the server, quits the app and hands the swap over', async () => {
-      await until('app_update_apply_started', 60_000, async () => events('app_update_apply_started').length > 0)
+    await step(auto
+      ? 'nobody clicks Restart: once nobody used it for a while and nothing is unsaved, it stops the server, quits and hands the swap over'
+      : 'Restart to update stops the server, quits the app and hands the swap over', async () => {
+      // The idle gate (20 s here) and the page's next look at it (a minute while it waits).
+      await until('app_update_apply_started', auto ? 240_000 : 60_000, async () => events('app_update_apply_started').length > 0)
+      // Only the page asks the app to install (its update item, or its own step): with no click hook, its own step.
+      if (auto && !events('app_update_installing').length) throw new Error('the app installed without the page asking')
       await until('the old app to quit', 30_000, async () => exited)
       return events('app_update_stopping_server').length ? 'server stopped first' : ''
     })
@@ -225,6 +300,12 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
       if (offered !== 1) throw new Error(`the new app was offered ${to} again`)
       return 'up to date'
     })
+    if (carriedNew) {
+      await step(`it installed the Walnut ${carriedNew} the new app carries`, async () => {
+        await until(`the installed Walnut to be ${carriedNew}`, 60_000, async () => installedVersion(runtimeDir) === carriedNew)
+        return `${runtimeDir}: ${carriedNew}`
+      })
+    }
   } finally {
     const newPid = (() => {
       // The relaunched app is the process whose EXECUTABLE is this run's own copy, an exact
@@ -249,6 +330,11 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
       if (dpid > 1) process.kill(dpid, 'SIGTERM')
     } catch { /* none started */ }
     feed.server.close()
+    console.log(`  the update item said: ${pillSeen().join(' | ') || '(nothing reported)'}`)
+    if (recording) {
+      const mp4 = await recording.stop(video).catch((err) => { console.log(`  video: ${err.message}`); return null })
+      console.log(`  video: ${mp4 ?? 'none'} (${recording.frames()} frames of the app's own window)`)
+    }
     if (!keep && results.every((r) => r.ok)) fs.rmSync(work, { recursive: true, force: true })
   }
   return results
@@ -257,7 +343,7 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = parseArgs(process.argv.slice(2))
   const work = args.work ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-update-e2e-'))
-  runUpdateE2E({ old: args.old, next: args.next, source: args.source, work, keep: args.keep, readOnly: args.readOnly })
+  runUpdateE2E({ old: args.old, next: args.next, source: args.source, work, keep: args.keep, readOnly: args.readOnly, auto: args.auto, video: args.video })
     .then(() => { console.log('PASS'); process.exit(0) })
     .catch((err) => { console.error(`FAIL: ${err?.message ?? err}\nwork dir kept: ${work}`); process.exit(1) })
 }

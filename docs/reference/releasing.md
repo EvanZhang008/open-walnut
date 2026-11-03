@@ -327,7 +327,11 @@ Release get is what the matrix ran. Both channels also publish only a commit who
   slower), writes a checksum of its own for it, and then signs the app over it
   (`desktop/Walnut.entitlements`), notarizes and staples the app and then its DMG, has Gatekeeper
   assess the DMG with a browser's quarantine mark on it, launches the mounted app on a fresh
-  `HOME`, and only then attaches `Walnut-arm64.dmg` and `Walnut-x64.dmg`. On the Apple silicon
+  `HOME`, has the previous release's own app (from its DMG on GitHub, the newest stable release
+  before this one that has one; `scripts/previous-mac-release.mjs`) update itself to the arm64
+  app it just built, through its own updater, a local releases page and a first download that
+  breaks off (`scripts/desktop-update-e2e.mjs`), and only then attaches `Walnut-arm64.dmg` and
+  `Walnut-x64.dmg`. On the Apple silicon
   runner the arm64 app must install what it carries with every release URL dead; the x64 app
   takes the path an Intel DMG takes on Apple silicon and downloads the arm64 build. The app comes
   from the tag; the smoke that launches it comes from the workflow's own commit (a second
@@ -355,9 +359,14 @@ Release get is what the matrix ran. Both channels also publish only a commit who
 - **Updates**: see "How an install updates" below. The Mac app updates itself as a whole, T3
   Code's flow (`desktop/AppUpdater.swift`, `desktop/README.md#updates`): it checks the releases
   page 15 seconds after launch and every 4 minutes, offers `Walnut-<arch>.dmg` once the release
-  has it, downloads it when the user says so, accepts it only when it satisfies the running app's
-  designated requirement, and on "Restart to update" swaps itself and relaunches; the new app then
-  installs the Walnut it carries over an older one. The cask says `auto_updates true` for it.
+  has it, downloads it (by itself with `updates.auto` on, the default; when the user says so with
+  it off), accepts it only when it satisfies the running app's designated requirement, and on
+  "Restart to update" swaps itself and relaunches; the new app then installs the Walnut it carries
+  over an older one. With `updates.auto` on the page restarts into it by itself once the server's
+  idle gate says nobody used Walnut for 10 minutes and no window holds unsaved work; a download
+  that failed is tried again after 1, 2, 4 and 8 minutes, five tries per version in all
+  (`web/src/components/layout/app-auto-update.ts`). `scripts/desktop-update-e2e.mjs --auto` runs
+  that on two real apps, opened behind every window. The cask says `auto_updates true` for it.
 
 `release-archives.yml` is what a stable gets after npm and its GitHub Release: job `files`
 asks the release whether it has the files, then `homebrew`, `mac-app` and the Node archives.

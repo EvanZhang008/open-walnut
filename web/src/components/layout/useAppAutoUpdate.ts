@@ -11,7 +11,7 @@ import { refreshUpdateStatus } from '@/hooks/useUpdateStatus';
 import { log } from '@/utils/log';
 import { draftsSettled, type HomeOpener } from '@/utils/unsaved-work';
 import { gatherUnsavedWork, hasAny } from '@/components/common/UnsavedWorkDialog';
-import { nextAutoStep, readClaim, readLastRestart, takeClaim, writeLastRestart } from './app-auto-update';
+import { downloadRetryAt, nextAutoStep, readClaim, readLastRestart, readTries, takeClaim, writeLastRestart, writeTries } from './app-auto-update';
 
 /** While a download waits for the idle gate, read the server's gate this often (one local GET). */
 const IDLE_POLL_MS = 60_000;
@@ -37,10 +37,12 @@ export function useAppAutoUpdate(
   openHomeRef.current = openHome;
 
   const store = localStore();
+  const tried = readTries(store);
   const step = nextAutoStep({
-    shell, live, done: done.current, claim: readClaim(store), lastRestart: readLastRestart(store), owner: owner.current, now: Date.now(),
+    shell, live, done: done.current, tried, claim: readClaim(store), lastRestart: readLastRestart(store), owner: owner.current, now: Date.now(),
   });
-  const stepKey = step ? `${step.step}:${step.version}` : null;
+  // A try counts in the key, so the same version's next try after a failure runs the effect again.
+  const stepKey = step ? `${step.step}:${step.version}:${tried?.version === step.version ? tried.tries : 0}` : null;
 
   useEffect(() => {
     if (!step || busy.current) return;
@@ -54,16 +56,20 @@ export function useAppAutoUpdate(
           const work = await gatherUnsavedWork('app', openHomeRef.current, -1);
           if (cancelled || hasAny(work)) return;
           if (!takeClaim(localStore(), step, owner.current, Date.now())) return;
-          done.current.add(stepKey!);
+          done.current.add(`restart:${step.version}`);
           writeLastRestart(localStore(), step.version, Date.now());
           log.info('app-update', 'restarting into the downloaded update by itself (idle, nothing unsaved)', { version: step.version });
           await draftsSettled(1_500, work.otherWindows > 0);
           await runRef.current({ checked: true, force: work.allChecked, auto: true });
         } else {
           if (!takeClaim(localStore(), step, owner.current, Date.now())) return;
-          done.current.add(stepKey!);
-          log.info('app-update', 'downloading the app update by itself (updates.auto on)', { version: step.version });
+          const before = readTries(localStore());
+          const tries = (before?.version === step.version ? before.tries : 0) + 1;
+          writeTries(localStore(), { version: step.version, tries, at: Date.now() });
+          log.info('app-update', 'downloading the app update by itself (updates.auto on)', { version: step.version, try: tries });
           await runRef.current({ auto: true });
+          // The backoff counts from when this try ended: a slow download that fails does not go again at once.
+          writeTries(localStore(), { version: step.version, tries, at: Date.now() });
         }
       } catch (err) {
         log.warn('app-update', 'automatic update step failed', { step: step.step, version: step.version, error: String(err) });
@@ -75,6 +81,17 @@ export function useAppAutoUpdate(
     // stepKey carries `step`; `tick` decides again after a hold.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepKey, tick]);
+
+  // A failed download waits its backoff (the shell is back on available, or on a download error);
+  // nothing else re-renders when it runs out, so a timer decides again.
+  const offered = shell?.enabled && live?.updatesAuto && shell.availableVersion
+    && (shell.status === 'available' || (shell.status === 'error' && shell.errorContext === 'download')) ? shell.availableVersion : null;
+  const retryAt = offered ? downloadRetryAt(tried, offered) : 0;
+  useEffect(() => {
+    if (!retryAt || !Number.isFinite(retryAt)) return;
+    const timer = window.setTimeout(() => setTick((n) => n + 1), Math.max(0, retryAt - Date.now()) + 50);
+    return () => window.clearTimeout(timer);
+  }, [retryAt]);
 
   // Downloaded, not restarted yet: the server pushes its own steps, not every idle tick, and
   // unsaved work that held the restart may be gone. Read the gate again now and then.

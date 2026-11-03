@@ -167,6 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // every window and never takes focus from the person using this Mac.
         if ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_BACKGROUND"] == "1" {
             window.orderBack(nil)
+            startE2ESnapshots()
         } else {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -204,6 +205,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // source checkout) are a click away on that screen, and Reset Setup...
             // brings back the choice.
             startFreshSetup()
+        }
+    }
+
+    /// WALNUT_DESKTOP_E2E_SNAPSHOTS=<dir> (a test knob, README.md; only with
+    /// WALNUT_DESKTOP_E2E_BACKGROUND): the console page's own pixels once a second,
+    /// as <epoch ms>.png, for a test's video. WebKit paints the page as it is now
+    /// (createPDF, not the last composited frame, which a locked Mac stops updating),
+    /// so the window may be covered and the Mac locked, and nothing else on the screen is in them.
+    func startE2ESnapshots() {
+        guard let dir = ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_SNAPSHOTS"], !dir.isEmpty else { return }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let web = self?.webView else { return }
+            let at = Int64(Date().timeIntervalSince1970 * 1000)
+            web.createPDF(configuration: WKPDFConfiguration()) { result in
+                guard case .success(let pdf) = result, let page = NSPDFImageRep(data: pdf) else { return }
+                let scale: CGFloat = 2
+                let size = NSSize(width: page.bounds.width * scale, height: page.bounds.height * scale)
+                guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+                page.draw(in: NSRect(origin: .zero, size: size))
+                NSGraphicsContext.restoreGraphicsState()
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { return }
+                try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(at).png"))
+            }
         }
     }
 

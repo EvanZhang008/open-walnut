@@ -1,15 +1,17 @@
 /**
  * The Mac app's automatic update, as the page decides it (web/src/components/layout/app-auto-update.ts),
- * driven with a fake shell state: download once per version when updates.auto is on, restart only
+ * driven with a fake shell state: download when updates.auto is on (a failed download again after a
+ * backoff that doubles per try, at most DOWNLOAD_MAX_TRIES times, counted in localStorage), restart only
  * when downloaded and the server's idle gate is ready, once, and from one window (the claim).
  * Unsaved work is the hook's check after this says `restart` (gatherUnsavedWork), pinned in the
- * browser spec; here: nothing is decided without `updatesAuto`, and an error is never retried.
+ * browser spec; here: nothing is decided without `updatesAuto`, and a failed install is never retried.
  */
 import { describe, it, expect } from 'vitest';
 import type { AppUpdateState } from '@/hooks/useAppUpdate';
 import type { LiveUpdate } from '@/api/update';
 import {
-  AUTO_CLAIM_KEY, AUTO_CLAIM_MS, RESTART_ONCE_MS, claimHeldByOther, nextAutoStep, parseClaim, readClaim, readLastRestart,
+  AUTO_CLAIM_KEY, AUTO_CLAIM_MS, AUTO_TRIES_KEY, DOWNLOAD_MAX_TRIES, DOWNLOAD_RETRY_FIRST_MS, RESTART_ONCE_MS, claimHeldByOther, downloadRetryAt, nextAutoStep,
+  readTries, writeTries, parseClaim, readClaim, readLastRestart,
   takeClaim, writeLastRestart, type AutoInput,
 } from '@/components/layout/app-auto-update';
 
@@ -84,9 +86,49 @@ describe('nextAutoStep', () => {
     expect(readLastRestart(store)).toEqual({ version: '1.1.0', at: NOW });
   });
 
-  it('a failed install or download is never retried by itself (the person retries)', () => {
+  it('a failed install is never retried by itself (the person retries)', () => {
     expect(nextAutoStep(input({ shell: shell({ status: 'error', errorContext: 'install', downloadedVersion: '1.1.0' }), live: live({}, true) }))).toBeNull();
-    expect(nextAutoStep(input({ shell: shell({ status: 'error', errorContext: 'download' }) }))).toBeNull();
+  });
+
+  it('a failed download goes again by itself once its backoff ran out, the wait doubling per try', () => {
+    // The shell goes back to available after a failed download (AppUpdateMachine.onDownloadFailure),
+    // or to an error with the download as its context: both wait the same backoff.
+    const failed = shell({ status: 'error', errorContext: 'download' });
+    const back = shell({ status: 'available', errorContext: 'download' });
+    const tried = (tries: number, ago: number, version = '1.1.0') => ({ version, tries, at: NOW - ago });
+    for (const s of [failed, back]) {
+      expect(nextAutoStep(input({ shell: s, tried: tried(1, DOWNLOAD_RETRY_FIRST_MS - 1) }))).toBeNull();
+      expect(nextAutoStep(input({ shell: s, tried: tried(1, DOWNLOAD_RETRY_FIRST_MS) }))).toEqual({ step: 'download', version: '1.1.0' });
+      expect(nextAutoStep(input({ shell: s, tried: tried(2, DOWNLOAD_RETRY_FIRST_MS) }))).toBeNull();
+      expect(nextAutoStep(input({ shell: s, tried: tried(2, 2 * DOWNLOAD_RETRY_FIRST_MS) }))).toEqual({ step: 'download', version: '1.1.0' });
+    }
+    expect(downloadRetryAt(null, '1.1.0')).toBe(0);
+    expect(downloadRetryAt(tried(3, 0), '1.1.0')).toBe(NOW + 4 * DOWNLOAD_RETRY_FIRST_MS);
+    // Tries of another version count nothing: a newer release starts at once.
+    expect(nextAutoStep(input({ tried: tried(3, 1_000, '1.0.9') }))).toEqual({ step: 'download', version: '1.1.0' });
+    expect(nextAutoStep(input({ tried: tried(3, 1_000), shell: shell({ availableVersion: '1.2.0' }) }))).toEqual({ step: 'download', version: '1.2.0' });
+    // Never without updates.auto.
+    expect(nextAutoStep(input({ shell: failed, live: live({ updatesAuto: false }) }))).toBeNull();
+  });
+
+  it('after DOWNLOAD_MAX_TRIES it stops for that version: a release the shell cannot verify is not downloaded for ever', () => {
+    const spent = { version: '1.1.0', tries: DOWNLOAD_MAX_TRIES, at: NOW - 365 * 24 * 3_600_000 };
+    expect(downloadRetryAt(spent, '1.1.0')).toBe(Infinity);
+    expect(nextAutoStep(input({ shell: shell({ status: 'available', errorContext: 'download' }), tried: spent }))).toBeNull();
+    expect(nextAutoStep(input({ shell: shell({ availableVersion: '1.2.0' }), tried: spent }))).toEqual({ step: 'download', version: '1.2.0' });
+  });
+
+  it('the tries are kept in localStorage, so every window and a reload count the same ones', () => {
+    const store = new MemStore();
+    expect(readTries(store)).toBeNull();
+    writeTries(store, { version: '1.1.0', tries: 2, at: NOW });
+    expect(readTries(store)).toEqual({ version: '1.1.0', tries: 2, at: NOW });
+    store.setItem(AUTO_TRIES_KEY, '{"version":"1.1.0","tries":"x"}');
+    expect(readTries(store)).toBeNull();
+    store.setItem(AUTO_TRIES_KEY, 'not json');
+    expect(readTries(store)).toBeNull();
+    expect(readTries(null)).toBeNull();
+
   });
 
   it('another window\'s fresh claim on the same step keeps this one out; a stale one, or another step, does not', () => {
