@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
+import { useCommittedRef } from './useCommittedRef';
 import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
@@ -467,9 +468,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // over a server echo: a drop's tier write is answered, and echoed, before its folder
   // write goes out, and that echo drew the card outside the folder for a moment.
   const localEdits = useRef(new Map<string, LocalEdit>());
-  // The list as last rendered, for a write that has to know a row's fields up front.
-  const tasksNow = useRef(tasks);
-  tasksNow.current = tasks;
+  // The list as last committed, for a write that has to know a row's fields up front.
+  const tasksNow = useCommittedRef(tasks);
   const noteLocalEdits = (patches: Record<string, Partial<Task>>, pending = false) => {
     const at = performance.now();
     for (const [id, fields] of Object.entries(patches)) {

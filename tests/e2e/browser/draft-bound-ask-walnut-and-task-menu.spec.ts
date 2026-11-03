@@ -188,12 +188,14 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   const menu = page.locator('.task-kebab-menu')
   await expect(menu).toBeVisible()
   await expect(page.locator('[data-testid="draft-task-menu"]')).toHaveCount(0)
-  // The pin row shows the task's CURRENT tier lit — this is the real task's menu.
-  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Satellite/)
+  // The Pin to group (one row per tier, 64a253e18) shows the task's CURRENT tier lit — this
+  // is the real task's menu.
+  const pin = await openKebabGroup(menu, 'kebab-group-pin')
+  await expect(pin.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Satellite/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/04-bound-draft-header.png` })
   await menu.screenshot({ path: `${SCREENSHOT_DIR}/04b-bound-draft-kebab-menu.png` })
 
-  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' }).click()
+  await pin.getByTestId('kebab-pin-wait').click()
   await expect(menu).toHaveCount(0)
   await expectTaskInTier(page, taskId, 'wait')
   // Nothing launched, nothing created: the ⋮ is task settings, not Start.
@@ -202,7 +204,8 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
 
   // Reopen: the menu reflects the write it just made.
   await kebab.click()
-  await expect(page.locator('.task-kebab-menu .task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Parked/)
+  const pinAgain = await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-pin')
+  await expect(pinAgain.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Parked/)
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
 

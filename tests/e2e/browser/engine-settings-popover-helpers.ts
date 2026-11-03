@@ -20,7 +20,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { fixtureHome, lockUserSettingsFile, readClaudeSettings } from './engine-settings-helpers'
 import { loadHome, seedColumns } from './draft-helpers'
 
-export const TEST_PORT = 3457
+export const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 export const SHOTS_DIR = '/tmp/engine-settings/ux-slice/shots'
 /** Route glob for the claude settings endpoint, every method and query. */
 export const CLAUDE_SETTINGS_API = '**/api/engines/claude/settings**'
@@ -106,6 +106,10 @@ export async function openPanels(page: Page, sids: readonly string[]): Promise<L
 }
 
 export async function openPlusMenu(panel: Locator): Promise<Locator> {
+  // Right after a viewport change across the phone width the column's composer is briefly
+  // drawn twice while the layout swaps (CI run 41604915386: a strict-mode click on two "+").
+  // Wait for the one composer that stays.
+  await expect(plusButton(panel)).toHaveCount(1, { timeout: 10_000 })
   await plusButton(panel).click()
   const menu = panel.locator('.chat-plus-menu[role=menu]')
   await expect(menu).toBeVisible()

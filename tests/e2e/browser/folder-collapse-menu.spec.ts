@@ -393,9 +393,12 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   const rowA = flat.locator(`.todo-panel-item[data-task-id="${a.id}"]`).first()
   const rowB = flat.locator(`.todo-panel-item[data-task-id="${b.id}"]`).first()
   // Folders sink below the loose tasks, and a long list draws in batches, so on the
-  // shared fixture the folder sits behind "Show more".
+  // shared fixture the folder sits behind "Show more". The batch counts rows, and the
+  // folder header rides on its first member's row, so the other member can still sit in
+  // the next batch on a dense fixture (CI): show more until both members are drawn.
   await expect(flat).toBeVisible({ timeout: 15_000 })
-  await showMoreUntil(flat, header)
+  await showMoreUntil(flat, rowA)
+  await showMoreUntil(flat, rowB)
   await expect(header).toBeVisible({ timeout: 15_000 })
   await expect(rowA).toBeVisible()
   await expect(rowB).toBeVisible()

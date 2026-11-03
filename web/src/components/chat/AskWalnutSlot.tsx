@@ -37,6 +37,7 @@ import { usePhoneLayerWithBar } from '@/components/sessions/phone-session-layer'
 import { phoneSessionLabel } from '@/utils/phone-session-label';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import type { SessionMode, Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import { fetchAskWalnutLaunch, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
@@ -232,8 +233,7 @@ export function AskWalnutSlot({
   // every selection change — DraftSessionPanel and the drawer take them as props).
   const selectedTaskIdRef = useRef(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
-  const askTasksRef = useRef(askTasks);
-  askTasksRef.current = askTasks;
+  const askTasksRef = useCommittedRef(askTasks);
   const mainSelected = isGeneral && (selectedTaskId === MAIN_PICK || (!!mainTask && selectedTaskId === mainTask.id));
 
   // ONE reconciler for the pair (agent, selection), with a fixed precedence,
@@ -466,8 +466,7 @@ export function AskWalnutSlot({
   // selection is re-pointed HERE, in the same act, so the follow-the-task effect
   // above has nothing to correct. A launch still in flight belongs to the agent
   // the user just left; its response must not pull them back.
-  const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
+  const tasksRef = useCommittedRef(tasks);
   const agentsRef = useRef(agents);
   agentsRef.current = agents;
   const selectAgent = useCallback((id: string) => {
@@ -497,8 +496,7 @@ export function AskWalnutSlot({
   const hideSlot = useCallback(() => onCloseChatRef.current(), []);
   // The composer's ×: back to the conversation it was opened over, or, when
   // there is none to go back to, away like the panel's.
-  const rowsRef = useRef(rows);
-  rowsRef.current = rows;
+  const rowsRef = useCommittedRef(rows);
   const closeDraft = useCallback(() => {
     if (rowsRef.current.length) setNewMode(false);
     else onCloseChatRef.current();

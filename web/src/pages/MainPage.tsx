@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import type { NavigateFunction } from 'react-router-dom';
 import type { SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -762,8 +763,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Task lookup map for resolving task IDs to names in tool call UI
   const taskMap = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
   // Ref for taskMap — allows callbacks to read the latest without re-creating
-  const taskMapRef = useRef(taskMap);
-  taskMapRef.current = taskMap;
+  const taskMapRef = useCommittedRef(taskMap);
 
   // Resizable panels
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
@@ -2310,8 +2310,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // A task the list does not carry (finished over a week ago, a plugin's own, an id prefix) opens
   // in its details popup over Home (OutsideTaskDetail): there is no task page to send it to.
   const [outsideTask, setOutsideTask] = useState<Task | null>(null);
-  const loadingRef = useRef(loading);
-  loadingRef.current = loading;
+  const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
   const revealOnHome = useCallback((task: Task, sessionId?: string, openDetail?: boolean) => {

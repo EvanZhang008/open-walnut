@@ -114,7 +114,13 @@ const answered = (page: Page, path: string) =>
 
 async function openColumnFromDetails(page: Page, sid: string): Promise<Locator> {
   const modal = await openDetails(page)
-  await modal.locator(`.todo-detail-session-item[data-session-id="${sid}"]`).click()
+  const item = modal.locator(`.todo-detail-session-item[data-session-id="${sid}"]`)
+  // One session per task: the task's own session is listed, the ones it held before sit in the
+  // folded "Earlier sessions (N)" (TaskSessionHistory.tsx, the details popup since 6b0d0b5cb).
+  const earlier = modal.getByTestId('earlier-sessions').locator('.tsh-toggle')
+  await expect(modal.locator('.todo-detail-session-item').first()).toBeVisible({ timeout: 15_000 })
+  if (!(await item.isVisible()) && (await earlier.count()) && (await earlier.getAttribute('aria-expanded')) !== 'true') await earlier.click()
+  await item.click()
   const col = column(page, sid)
   await expect(col).toBeVisible({ timeout: 30_000 })
   // Opening a session from the details leaves them open over its column; put them away.
@@ -257,6 +263,8 @@ test('the menu row pins the time to every session header, kept across a reload',
   await header.click({ button: 'right', position: { x: 6, y: 6 } })
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
+  // The Time row lives in Session info, inside the Session group (64a253e18), as openMenu reads it.
+  await openKebabGroup(menu, 'session-kebab-details')
   const pin = menu.getByTestId('session-fact-pin')
   await expect(pin).toHaveAttribute('aria-pressed', 'false', { timeout: 30_000 })
   await pin.click()
@@ -480,8 +488,10 @@ test('disabling the plugin takes both facts away without a reload', async ({ pag
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   const menu = await openMenu(page, col)
-  // The menu has rendered (its session half), so the absences below are real ones.
-  await expect(menu.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })).toBeVisible()
+  // The menu has rendered (its session half), so the absences below are real ones. Inbox is a
+  // row of the Open group since the menu redesign (64a253e18, it held the old Views group).
+  const open = await openKebabGroup(menu, 'session-kebab-open')
+  await expect(open.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })).toBeVisible()
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
   await expect(menu.locator('.task-kebab-fact')).toHaveCount(0)
   // The pin outlives the plugin (it is the user's choice), but there is nothing to draw.

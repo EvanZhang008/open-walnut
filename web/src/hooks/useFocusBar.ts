@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useCommittedRef } from './useCommittedRef';
 import { useEvent } from './useWebSocket';
 import { fetchWithRetry } from '@/utils/fetch-retry';
 import * as focusApi from '@/api/focus';
@@ -167,10 +168,8 @@ export function useFocusBar(): UseFocusBarReturn {
 
   // Refs for async closures (commitPin, event handlers) — always-current values
   // without re-creating the callbacks each render.
-  const tasksRef = useRef<Task[]>(tasks);
-  tasksRef.current = tasks;
-  const pinnedIdsRef = useRef<string[]>(pinnedIds);
-  pinnedIdsRef.current = pinnedIds;
+  const tasksRef = useCommittedRef<Task[]>(tasks);
+  const pinnedIdsRef = useCommittedRef<string[]>(pinnedIds);
 
   const setVisible = useCallback((v: boolean) => {
     setVisibleState(v);

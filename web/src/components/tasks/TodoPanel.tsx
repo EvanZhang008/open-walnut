@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useDraft } from '@/hooks/useDraft';
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { draftKey } from '@/utils/drafts';
@@ -2233,8 +2234,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // own nodes (Main, project leads: the chat slot and the org chart show them; their work stays here).
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata') && !isHiddenFromTaskLists(t)), [rawTasks]);
   // Always-current task list for drag closures (drag handlers freeze their deps).
-  const tasksRef = useRef<Task[]>(tasks);
-  tasksRef.current = tasks;
+  const tasksRef = useCommittedRef<Task[]>(tasks);
   const navigate = useNavigate();
   const prompt = usePrompt();
   const confirm = useConfirm();
@@ -6555,8 +6555,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // AI search rows carry only a taskId — resolve to the live Task and route
   // through handleTaskClick so a click behaves exactly like a normal result row.
-  const tasksForAgentClickRef = useRef(tasks);
-  tasksForAgentClickRef.current = tasks;
+  const tasksForAgentClickRef = useCommittedRef(tasks);
   const handleAgentResultClick = useCallback((taskId: string) => {
     const task = tasksForAgentClickRef.current.find((t) => t.id === taskId);
     if (task) handleTaskClick(task);

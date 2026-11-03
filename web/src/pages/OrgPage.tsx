@@ -18,6 +18,7 @@
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { keptByRow, lockedTaskIds, slotTaskIds } from '@/components/org/org-task-tabs';
@@ -112,8 +113,7 @@ export function OrgPage() {
   /** Answers that failed, by task: the row is back with the reason (OrgInlineAnswer); a new ask of the task drops it (OrgTaskRail). */
   const [failedAnswers, setFailedAnswers] = useState<ReadonlyMap<string, AnswerFailure>>(() => new Map());
   const allTasks = tasks;
-  const tasksNow = useRef(allTasks);
-  tasksNow.current = allTasks;
+  const tasksNow = useCommittedRef(allTasks);
   const answers = useMemo<OrgAnswers>(() => ({
     // The row goes on the click, before the server answers: the hold keeps what the task showed now.
     start: (taskId) => {
@@ -221,25 +221,24 @@ export function OrgPage() {
 
   // The side strip (desktop): the panel `open` names plus the pinned ones. A task and its
   // session are one panel, whichever id named it.
-  const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
+  // A closure over `tasks`, never a ref: the strip's memo calls it during render, where a ref
+  // holds the last committed list (useCommittedRef) and missed the tasks this render brought.
   const sameSession = useCallback<SameSession>((a, b) => {
     const sessionOf = (raw: string): string | null => {
       const t = parseSideTarget(raw);
       if (!t) return null;
       if (t.kind === 'session') return t.id;
-      const task = tasksRef.current.find((x) => x.id === t.id);
+      const task = tasks.find((x) => x.id === t.id);
       return task ? resolveTaskSessionId(task) ?? null : null;
     };
     const sa = sessionOf(a);
     return !!sa && sa === sessionOf(b);
-  }, []);
+  }, [tasks]);
   // Only the pins are state; the free panel is the URL's (orgStripView). A saved id this build
   // cannot read is dropped, never drawn as an empty panel.
   const [pins, setPins] = useState<SessionSlot[]>(() => readColumns('orgColumns').filter((s) => s.locked && !!parseSideTarget(s.id)));
-  // `tasks` too: a task's panel and its session's become one once the tasks are known.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession, tasks]);
+  // `sameSession` changes with `tasks`: a task's panel and its session's become one once the tasks are known.
+  const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession]);
   // Under each row of the list, the tasks the user keeps in view there: the watched ones (Home's
   // Watching) and the ones whose session panel is locked, on Home (this window's strip, read from the
   // saved layout: another window's lock arrives with `storage`, and coming back to the page reads it
