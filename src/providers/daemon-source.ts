@@ -1054,6 +1054,8 @@ function runWnMinimal(argv, stdinText) {
     errOut('walnut: peers was replaced: list tasks with: walnut tools call task_list, message one with: walnut tools call task_send (args: to, text)');
     return exitWn(2);
   }
+  // walnut approve needs the full CLI (wn-cli.ts); failing closed here never lets a step through.
+  if (argv[0] === 'approve') { errOut('walnut approve: this host runs the minimal walnut CLI, which cannot ask for approvals; not approved (the next Walnut connection upgrades this host)'); return exitWn(3); }
   if (argv[0] !== 'wait' && argv[0] !== 'tools' && argv[0] !== 'guide') { errOut('walnut: unknown command; ' + usage); return exitWn(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.

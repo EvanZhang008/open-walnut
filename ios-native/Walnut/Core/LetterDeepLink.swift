@@ -171,12 +171,23 @@ final class LetterDeepLink {
     /// the halves that need to exist and be proven for the moment it does.
     static func installNotificationRouting() {
         UNUserNotificationCenter.current().delegate = NotificationRouter.shared
+        // The banner buttons of an approval push (ApprovalCenter): its only categories.
+        UNUserNotificationCenter.current().setNotificationCategories(ApprovalCenter.categories())
     }
 
     /// Tiny `UNUserNotificationCenterDelegate` that only routes letters.
     /// Everything else falls through to the system default.
     final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         static let shared = NotificationRouter()
+
+        @MainActor private static func routeApproval(action: String, approvalId: String) async {
+            if await ApprovalCenter.shared.handleAction(action, approvalId: approvalId) { return }
+            await ApprovalCenter.shared.open(id: approvalId)
+        }
+
+        @MainActor private static func openApproval(_ approvalId: String) async {
+            await ApprovalCenter.shared.open(id: approvalId)
+        }
 
         func userNotificationCenter(
             _ center: UNUserNotificationCenter,
@@ -186,6 +197,12 @@ final class LetterDeepLink {
             // the main actor carrying only the id — the payload dictionary is
             // not Sendable and has no business crossing.
             let userInfo = response.notification.request.content.userInfo
+            // An approval a script waits on: a banner button answers it, a tap opens its sheet.
+            if let approvalId = ApprovalCenter.approvalId(fromPush: userInfo) {
+                let action = response.actionIdentifier
+                await Self.routeApproval(action: action, approvalId: approvalId)
+                return
+            }
             guard let letterId = LetterDeepLink.letterId(fromPush: userInfo) else { return }
             await MainActor.run {
                 LetterDeepLink.shared.arm(letterId: letterId, source: LetterDeepLink.tapSource)
@@ -199,7 +216,12 @@ final class LetterDeepLink {
             _ center: UNUserNotificationCenter,
             willPresent notification: UNNotification
         ) async -> UNNotificationPresentationOptions {
-            [.banner, .list, .badge]
+            // An approval arriving while the app is open goes straight to its sheet.
+            if let approvalId = ApprovalCenter.approvalId(fromPush: notification.request.content.userInfo) {
+                await Self.openApproval(approvalId)
+                return [.list]
+            }
+            return [.banner, .list, .badge]
         }
     }
 }
@@ -213,6 +235,13 @@ extension QuickActionDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        if ApprovalCenter.approvalId(fromPush: userInfo) != nil {
+            Task { @MainActor in
+                await ApprovalCenter.shared.refresh()
+                completionHandler(.newData)
+            }
+            return
+        }
         Task { @MainActor in
             let handled = LetterDeepLink.shared.handle(push: userInfo, source: "background")
             completionHandler(handled ? .newData : .noData)

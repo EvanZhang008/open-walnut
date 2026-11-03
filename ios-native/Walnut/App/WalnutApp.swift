@@ -268,6 +268,9 @@ struct MainTabView: View {
     @State private var selection: Tab = .chat
     @State private var quickAction = VoiceQuickAction.shared
     @State private var letterLink = LetterDeepLink.shared
+    /// Approvals a script waits on (`walnut approve`): their sheet opens over any tab.
+    @State private var approvals = ApprovalCenter.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView(selection: $selection) {
@@ -355,6 +358,18 @@ struct MainTabView: View {
             // rows for (the console clears them when its panel closes).
             if tab != .inbox { inbox.forgetKeptRows() }
         }
+        .sheet(item: Binding(get: { approvals.presented }, set: { approvals.presented = $0 })) { approval in
+            ApprovalSheet(approval: approval)
+                .interactiveDismissDisabled(approval.isPending)
+        }
+        // Coming forward: re-read what waits, and show the oldest one not closed yet.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task {
+                await approvals.refresh()
+                approvals.presentNextIfAny()
+            }
+        }
         .onChange(of: quickAction.pending) { _, request in
             if request != nil { selection = .chat }
         }
@@ -384,6 +399,8 @@ struct MainTabView: View {
                 await notes.initialize()
                 await tasks.initialize()
                 await inbox.initialize()
+                await approvals.refresh()
+                approvals.presentNextIfAny()
                 LaunchTrace.mark("store hydration done")
                 // Closes the launch timeline on the tape: process start →
                 // first frame (LaunchTrace) → stores ready. A field report of

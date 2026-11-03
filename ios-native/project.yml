@@ -58,6 +58,7 @@ targets:
         NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
+        NSFaceIDUsageDescription: Walnut uses Face ID to sign the approvals you give, so only you can say yes to a step a script or an agent waits on.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input. Your recording goes only to your own Walnut server, on your Mac or on a cloud machine you run, which turns it into text itself or with a speech service you set up on it.
         # Tasks-tab calendar view: device calendar events render read-only in
         # the day agenda next to your Walnut tasks. Read access only; nothing

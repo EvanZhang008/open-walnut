@@ -68,6 +68,35 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('approve [what...]')
+    .description('Ask a person to approve before going on: exit 0 on Approve, 1 on Deny, 2 when nobody answers in time')
+    .option('--biometric', 'Approve needs Face ID or Touch ID on a device that signs approvals')
+    .option('--face-id', 'The same as --biometric')
+    .option('--touch-id', 'The same as --biometric')
+    .option('--timeout <duration>', 'Give up after this long (10s to 24h, like 90s, 10m, 2h; default 10m)')
+    .option('--detail <file>', 'A file with the detail to show (- reads stdin)')
+    .option('--from <label>', 'A short name for the asking script, shown to the person')
+    .allowUnknownOption(false)
+    .action(async () => {
+      const { runApproveCommand } = await import('./approve.js');
+      // The shared parser reads the raw words, the same ones the remote hosts' CLI gets.
+      const at = process.argv.indexOf('approve');
+      await runApproveCommand(at >= 0 ? process.argv.slice(at + 1) : []);
+    });
+
+  const approvals = program
+    .command('approvals')
+    .description('Approvals waiting for you, and the devices that sign them');
+  approvals
+    .command('list')
+    .description('Pending approvals (--all adds the decided ones), and the signing devices')
+    .option('--all', 'Include approvals decided in the last 30 days')
+    .action(async (options: Record<string, unknown>, cmd: Command) => {
+      const { runApprovalsList } = await import('./approve.js');
+      await runApprovalsList(!!options.all, cmd.optsWithGlobals());
+    });
+
+  program
     .command('wait <ids...>')
     .description('Block until tasks settle (NEED_ACTION/COMPLETE) or reply requests (rq-…) resolve; several ids wait for all')
     .option('--any', 'With several ids, return when the first one settles')

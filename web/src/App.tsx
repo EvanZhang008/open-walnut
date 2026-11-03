@@ -15,6 +15,7 @@ import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { StaleBuildPill } from './components/common/StaleBuildPill';
 import { PageFind } from './components/common/PageFind';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
+import { ApprovalPrompts } from './components/approvals/ApprovalPrompts';
 import { PluginBoundary } from './components/common/PluginBoundary';
 import { PluginBounds } from './plugins/PluginBounds';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
@@ -165,6 +166,7 @@ export function App() {
       <AnywhereFileViewer />
       <PageFind />
       <UnpairedNotice />
+      <ApprovalPrompts />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <RouteShownContext.Provider value={isHome}>
           <StableMainPage visible={isHome} navigateRef={navigateRef} />

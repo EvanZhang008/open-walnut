@@ -154,6 +154,7 @@ import { transferV1Router } from './routes/transfer-v1.js'
 import { hostsFleetV1Router } from './routes/hosts-fleet-v1.js'
 import { hostExecV1Router } from './routes/host-exec-v1.js'
 import { secretsV1Router } from './routes/secrets-v1.js'
+import { approvalsV1Router } from './routes/approvals-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
@@ -2503,6 +2504,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', hostsFleetV1Router)
   app.use('/api/v1', hostExecV1Router)
   app.use('/api/v1', secretsV1Router)
+  app.use('/api/v1', approvalsV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.
@@ -2962,6 +2964,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // user's chosen mode). Primary only — letters live here, and a replica relays
   // every human-inbox route to this box.
   if (bootPolicy('letter-push')) initLetterPush()
+  // Approvals (core/approvals/): their phone pushes and key effects, and the clock that
+  // expires an unanswered one. Leader only: a replica forwards every approvals route here.
+  if (bootPolicy('approvals')) {
+    const { initApprovalNotify } = await import('../core/approvals/notify.js')
+    initApprovalNotify()
+    const { initApprovals } = await import('../core/approvals/store.js')
+    void initApprovals().catch((err) => log.web.warn('approvals: init failed', { error: String(err) }))
+  }
 
   // -- Forensic observability: register the incident sink so invariant violations
   //    at turn-completion become durable incidents (+ bundle + notification). The

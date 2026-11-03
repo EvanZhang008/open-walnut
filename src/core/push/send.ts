@@ -131,6 +131,10 @@ export interface PushContent {
    * not the payload — see apns.ts.
    */
   collapseId?: string
+  /** APNs category: the app's notification actions for this kind (e.g. an approval's Approve / Deny). */
+  category?: string
+  /** 'time-sensitive' breaks through a Focus that allows it (an approval someone's script waits on). */
+  interruptionLevel?: 'active' | 'time-sensitive'
 }
 
 /**
@@ -151,6 +155,8 @@ export function apnsPayload(content: PushContent): Record<string, unknown> {
       // the banner is never tapped.
       'content-available': 1,
       ...(content.badge !== undefined ? { badge: content.badge } : {}),
+      ...(content.category ? { category: content.category } : {}),
+      ...(content.interruptionLevel ? { 'interruption-level': content.interruptionLevel } : {}),
     },
     ...data,
     data,

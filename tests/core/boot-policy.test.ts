@@ -43,6 +43,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'setup-token-banner': cloudOnly,
   'terminal-sweep': leaderOnly,
   'letter-push': leaderOnly,
+  approvals: leaderOnly,
   'audio': leaderOnly,
   'git-pull': leaderOnly, // 4d: the companion reads its copies; git sync no longer writes its data dir
   'git-auto-commit': leaderOnly, // 4d: what the box writes for the Mac goes through its journal

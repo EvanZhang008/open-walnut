@@ -136,6 +136,7 @@ walnut recall "auth fixture"               # search tasks + memory
 walnut projects                            # projects with task counts
 walnut sessions                            # the user's other running work
 walnut wait 9f3a --timeout 600             # block until a task settles or an rq-… request resolves
+walnut approve "Deploy to prod" --biometric # block until the USER approves on their Mac or phone: exit 0 yes, 1 no, 2 no answer
 walnut mcp list                            # MCP servers Walnut runs for its plugins
 walnut mcp <server> tools list             # a server's tools (ro = read-only)
 walnut mcp <server> tools call <tool> '{json}'
@@ -150,6 +151,12 @@ Add `--json` to ANY command for machine-readable output — parse that instead o
 scraping the human table. `add` returns the created task; `done`
 returns the completed task (both include `id` and `title`). Priorities:
 `immediate | important | backlog | none`. Dates: `YYYY-MM-DD`.
+
+`walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>]` is for a step the
+user must allow before it runs (one of their own kinds: an outward send, spending, credentials,
+deleting data): put it in front of that step in a script, `walnut approve "…" && ./publish.sh`.
+Only a person answers; nothing you can call answers it, so never try, and never use it for a
+question you can decide yourself. Ops: `approval_request` then `approval_wait`.
 
 These human commands are not the ops: `walnut add` is a bookkeeping row and
 starts nothing, which is the `record_only: true` behaviour, not `task_create`'s
@@ -284,6 +291,10 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `host_mcp_result` | Read an MCP call's answer on another host (read, primary-only) | host (string): The host the call runs on; call_id (string): The callId the call returned; wait_ms? (integer): Wait up to this long for the answer |
 | `host_http` | Make a web request from another host (write, primary-only) | host (string): Host alias ("__local__" = the Mac) or a selector like "@ios"; url (string): The full address as that host sees it, e.g. http://localhost:3000/api/health; method? (string): GET (default), HEAD, POST, PUT, PATCH, DELETE or OPTIONS; headers? (object): Request headers; body? (string): A text body (POST, PUT, PATCH); body_base64? (string): Instead of body: the bytes, base64; timeout_ms? (integer): Deadline in ms (default 30000) |
 | `secret_list` | The secrets the user shared with hosts (read, primary-only) | host? (string): Only the secrets shared with this host |
+| `approval_request` | Ask a person to approve a step (write, primary-only) | what (string): What is to be approved, one line (shown as the title); detail? (string): The detail the person reads before answering (a diff summary, the command, the target); mode? (tap\|biometric): tap (default): a plain Approve; biometric: Face ID / Touch ID on a device that signs; timeout_ms? (integer): Unanswered after this long = expired (default 10 minutes); cwd? (string): The asking process's working directory, shown to the person; command? (string): A short name for the asking script or command, shown to the person |
+| `approval_wait` | Wait for an approval's answer (write, primary-only) | id (string): The approval id; token (string): The waitToken approval_request returned; wait_ms? (integer): How long to hold for an answer (default 12000) |
+| `approval_cancel` | Withdraw an approval you asked (write, primary-only) | id (string): The approval id; token (string): The waitToken approval_request returned; reason? (string): Why, in a few words |
+| `approval_list` | List approvals (read, primary-only) | status? (pending\|all): pending (default) or all |
 | `task_switch_engine` | Switch a task to another coding engine (write, primary-only) | id (string): Task id or unique prefix; engine (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): The engine to switch to; text (string): The message the new session starts with (what to do next); model? (string): Model for the new session; omit for the engine default; effort? (low\|medium\|high\|xhigh\|max): Reasoning effort for a new Claude Code session; permission_mode? (plan\|default\|dontAsk\|accept\|auto\|bypass): Permission mode the new session starts in; omit to keep the current one; confirm_move? (boolean): Ignored: a switch never moves the work (kept so older callers still switch); wait_ms? (integer): How long to wait for the new session before answering "switching" (default 25000) |
 | `task_sessions` | List the sessions a task held (read) | id (string): Task id or unique prefix |
 | `task_move` | Move a task to another host (write, primary-only) | id (string): Task id or unique prefix; host (string): Where it goes: a host alias, or "local" for this Mac; text? (string): The message the new session starts with; default: check the work is set up, then carry on; engine? (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): Engine on the new host; default the task's own; model? (string): Model for the new session; default the engine's; team? (boolean): Move every open task under this one too; user_request? (string): The user's words asking for the move, quoted (recorded with it); wait_ms? (integer): How long to wait for the move before answering "moving" (default 25000) |

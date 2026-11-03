@@ -258,9 +258,14 @@ async function handleToolsCall(
   // `origin` is the host's trust class: every loopback self-call the op makes
   // carries it, so a remote host never reads as this Mac (src/lib/caller-origin.ts).
   const { hostOrigin } = await import('../../lib/caller-origin.js');
-  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>, {
+  // A host's `WALNUT_TEST_RUN=<label> walnut ...` rides as `testRun` (wn-cli.ts), so a test or a
+  // demo from another host makes test objects here as it would from this Mac (core/test-run.ts).
+  const { parseTestRunLabel, testRunMarkingEnabled, withTestRun } = await import('../test-run.js');
+  const label = parseTestRunLabel(payload.testRun);
+  const testRun = label && await testRunMarkingEnabled() ? label : undefined;
+  const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
     callerSid, callerHost: host, origin: hostOrigin(host),
-  });
+  }));
   if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))

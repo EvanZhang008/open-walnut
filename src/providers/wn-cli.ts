@@ -57,6 +57,7 @@ export type WalnutCliParsed =
   | { kind: 'tools.help'; name: string }
   | { kind: 'tools.call'; name: string; rawJson: string | undefined }
   | { kind: 'trigger-check'; template: string; paramsJson: string | undefined }
+  | { kind: 'approve'; argv: string[] }
 
 /** `walnut wait` polling cadence + default budget. */
 export const WAIT_POLL_INTERVAL_MS = 5_000
@@ -78,6 +79,8 @@ export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
     return { kind: 'guide' }
   }
   if (head === 'tools') return parseToolsArgs(rest)
+  // Parsed in full by the shared core (core/approvals/cli-core.ts), the Mac CLI's too.
+  if (head === 'approve') return { kind: 'approve', argv: rest }
   if (head === 'trigger-check') {
     // The stored command of a plugin trigger template; the daemon runs it with the trigger input on stdin.
     if (!rest[0] || rest.length > 2) return { kind: 'usage-error', message: "trigger-check requires <template> ['{params}']" }
@@ -217,6 +220,7 @@ USAGE
   walnut mcp list | <server> tools ...      MCP servers Walnut runs (see \`walnut mcp --help\`)
   walnut mcp-server                         serve these same operations as an MCP stdio server
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
+  walnut approve "<what>" [--biometric] [--timeout 10m] [--detail file|-]   wait for a person's yes: exit 0 approve, 1 deny, 2 no answer
   walnut --help | walnut tools --help
 
 THE MODEL (one identity: the task)
@@ -643,6 +647,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   }
   const { socketPath, sid } = endpoint
   if (parsed.kind === 'trigger-check') return runTriggerCheckViaGateway(socketPath, sid, parsed)
+  if (parsed.kind === 'approve') return runApproveViaGateway(socketPath, sid, parsed.argv)
 
   // tools.call args: inline JSON, @file, - (stdin), or a piped stdin. A big
   // payload MUST use @file or stdin — one argv entry is capped at 128KB on
@@ -733,6 +738,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       ? {
         name: parsed.name,
         ...(argsFile !== undefined ? { argsFile } : { args: callArgs }),
+        ...testRunArg(),
       }
       : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
         // One-op catalog request: the hub answers with that op's full parameter
@@ -962,6 +968,63 @@ export function waitManyVerdict(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * `WALNUT_TEST_RUN=<label>` in the env makes this call part of a test run on the Mac, the same as
+ * the Mac's own CLI (ops/executor.ts): it rides the gateway as `testRun` and the hub applies it
+ * (core/peers/capability-router.ts). An older hub ignores the field.
+ */
+export function testRunArg(env: NodeJS.ProcessEnv = process.env): { testRun?: string } {
+  const label = (env.WALNUT_TEST_RUN ?? '').replace(/[^\x20-\x7e]/g, '').trim().slice(0, 60)
+  return label && label !== '0' && label.toLowerCase() !== 'false' ? { testRun: label } : {}
+}
+
+/** `walnut approve` on a host: the shared loop, its ops through this daemon's gateway to the Mac. */
+async function runApproveViaGateway(socketPath: string, sid: string, argv: string[]): Promise<number> {
+  const { APPROVE_EXIT, APPROVE_USAGE, parseApproveArgv, runApprove } = await import('../core/approvals/cli-core.js')
+  const parsed = parseApproveArgv(argv)
+  if (!parsed.ok) {
+    process.stderr.write(`walnut approve: ${parsed.error}\n${APPROVE_USAGE}\n`)
+    return APPROVE_EXIT.error
+  }
+  let detail: string | undefined
+  if (parsed.detailFrom) {
+    try {
+      detail = parsed.detailFrom === '-' ? await readStdin() : fs.readFileSync(parsed.detailFrom, 'utf-8')
+    } catch (err) {
+      process.stderr.write(`walnut approve: cannot read --detail ${parsed.detailFrom}: ${err instanceof Error ? err.message : String(err)}\n`)
+      return APPROVE_EXIT.error
+    }
+  }
+  return runApprove({
+    what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
+    cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
+  }, {
+    call: async (name, args) => {
+      let resp: GatewayResponse
+      try {
+        resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, ...testRunArg() } })
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : String(err) }
+      }
+      if (resp.ok) return { ok: true, result: resp.result }
+      const transient = resp.error.code === 'hub_timeout' || resp.error.code === 'hub_unreachable' || resp.error.code === 'throttled'
+      if (transient) return { ok: false, message: resp.error.message }
+      // A refusal the Mac gave (used already, bad token, bad request) is definite; anything else is the link.
+      const api = /Walnut API error \(([a-z][a-z0-9_]*)\)/.exec(resp.error.message)
+      if (api && api[1] !== 'leader_only') return { ok: false, message: resp.error.message, status: 400, code: api[1] }
+      if (resp.error.code === 'bad_request') return { ok: false, message: resp.error.message, status: 400, code: 'bad_request' }
+      return { ok: false, message: resp.error.message }
+    },
+    say: (line) => { process.stderr.write(line + '\n') },
+    out: (line) => { process.stdout.write(line + '\n') },
+    onInterrupt: (fn) => {
+      process.on('SIGINT', fn)
+      process.on('SIGTERM', fn)
+      return () => { process.off('SIGINT', fn); process.off('SIGTERM', fn) }
+    },
+  })
 }
 
 async function runWait(

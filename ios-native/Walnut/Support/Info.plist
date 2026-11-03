@@ -35,6 +35,8 @@
 	<string>Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Walnut uses Face ID to sign the approvals you give, so only you can say yes to a step a script or an agent waits on.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Walnut reads the Apple Health data you allow, so your AI can answer questions about your sleep, activity, heart and more. It goes only to your own Walnut server, on your Mac or on a cloud machine you run, and from there to the AI provider that server uses.</string>
 	<key>NSHealthUpdateUsageDescription</key>
