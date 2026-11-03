@@ -24,6 +24,8 @@ import { getConfig, _configRepairIdleForTest, _resetWriteLockForTest } from '../
 import { joinedTwins } from '../../../src/core/hosts/joined-twins.js'
 import { hostsNetRouter } from '../../../src/web/routes/hosts-net.js'
 import { noteWhere, whereOf } from '../../../src/core/net/net-where.js'
+import { computeLaunchOptions } from '../../../src/core/sessions/mobile-launch.js'
+import { recordDirectory } from '../../../src/core/frequent-dirs.js'
 
 const MAC = 'a'.repeat(64)
 const PC = 'b'.repeat(64)
@@ -36,6 +38,7 @@ const hosts = () => ({
 // `addrs`: every address the Mac reached or kept for the machine; `self`: what the machine
 // itself reported last time.
 const net = () => ({
+  enabled: true,
   where: {
     [MAC]: { addrs: ['10.20.30.40:62955', '192.168.1.10:5000', '203.0.113.69:62955'], self: ['[2001:db8::c54]:64142', '10.20.30.40:62955', '203.0.113.69:62955'] },
     [PC]: { addrs: ['203.0.113.69:59344', '172.18.0.9:53482'], self: ['203.0.113.69:59344', '172.18.0.9:53482'] },
@@ -66,9 +69,25 @@ describe('joinedTwins', () => {
     expect(joinedTwins(h, net()).map((t) => t.alias)).toEqual(['studio-mac'])
   })
 
-  it("an IPv6 address and a name whose first label is the machine's match too", () => {
-    const h = { ...hosts(), v6: { hostname: '2001:DB8::C54', discovered: true }, mdns: { hostname: 'Studio-MacBook.local', discovered: true } }
-    expect(joinedTwins(h, net()).map((t) => t.alias).sort()).toEqual(['mdns', 'studio-mac', 'v6'])
+  it("an IPv6 address and the machine's own name, bare or on the local network, match too", () => {
+    const h = {
+      ...hosts(), v6: { hostname: '2001:DB8::C54', discovered: true }, mdns: { hostname: 'Studio-MacBook.local', discovered: true },
+      bare: { hostname: 'studio-macbook', discovered: true }, lan: { hostname: 'Studio-MacBook.home.arpa', discovered: true },
+    }
+    expect(joinedTwins(h, net()).map((t) => t.alias).sort()).toEqual(['bare', 'lan', 'mdns', 'studio-mac', 'v6'])
+  })
+
+  it('a name under a domain is another machine, whatever its first label (a hidden host would be gone from every picker)', () => {
+    const h = { ...hosts(), work: { hostname: 'studio-macbook.corp.example.com', discovered: true }, ts: { hostname: 'studio-macbook.example.net', discovered: true } }
+    expect(joinedTwins(h, net()).map((t) => t.alias)).toEqual(['studio-mac'])
+  })
+
+  it('a joined row that cannot be used hides nothing: disabled, or the host network turned off', () => {
+    const h = hosts()
+    expect(joinedTwins({ ...h, 'Studio-MacBook': { ...h['Studio-MacBook'], enabled: false } }, net())).toEqual([])
+    expect(joinedTwins(h, { ...net(), enabled: false })).toEqual([])
+    const { enabled: _on, ...never } = net()
+    expect(joinedTwins(h, never)).toEqual([])
   })
 
   it('leaves a row the user added, and everything when no machine joined or none reported its addresses', () => {
@@ -106,6 +125,21 @@ describe('GET /api/hosts/net and the config', () => {
     // A sighting that does not say (the Mac's own dial) keeps the last report.
     await noteWhere(MAC, { addrs: ['192.168.50.4:1'] })
     expect(whereOf((await getConfig()).net)[MAC].self).toEqual(['192.168.50.4:62955'])
+  })
+
+  it('the launchers list the machine once: the phone and the transfer list', async () => {
+    const aliases = (await computeLaunchOptions()).hosts.map((h) => h.alias)
+    expect(aliases).toContain('Studio-MacBook')
+    expect(aliases).not.toContain('studio-mac')
+    expect(aliases).toContain('devbox')
+  })
+
+  it('a folder used on the found row before the join is offered on the joined machine, once', async () => {
+    await recordDirectory('/Users/sam/code/app', 'studio-mac')
+    await recordDirectory('/Users/sam/code/app', 'Studio-MacBook')
+    await recordDirectory('/Users/sam/notes', 'studio-mac')
+    const dirs = (await computeLaunchOptions()).dirs.map((d) => `${d.host}:${d.cwd}`).sort()
+    expect(dirs).toEqual(['Studio-MacBook:/Users/sam/code/app', 'Studio-MacBook:/Users/sam/notes'])
   })
 
   it('names the found row as the joined machine, and the config keeps it with its settings', async () => {

@@ -151,8 +151,12 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
       if (d.count > maxCount) maxCount = d.count
     }
 
+    // A folder used on a found twin's row is the joined machine's (hosts/joined-twins.ts).
+    const { joinedAliasOf, pickableHosts } = await import('../../core/hosts/joined-twins.js')
+    const asJoined = joinedAliasOf(hosts, config.net)
+
     // Compute score, hostLabel, resolved project at read time
-    const entries = dirs.map(d => {
+    const entries = dirs.map(d => ({ ...d, host: asJoined(d.host) })).map(d => {
       // Majority vote for project
       let bestProject = defaultProject
       let bestCount = 0
@@ -181,7 +185,11 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
     })
 
     entries.sort((a, b) => b.score - a.score)
-    const result = entries.map(({ score: _s, ...rest }) => rest)
+    // One row per folder: a twin's row and its joined machine's may hold the same one.
+    const seen = new Set<string>()
+    const result = entries
+      .filter((e) => { const k = `${e.host ?? ''}\0${e.cwd}`; if (seen.has(k)) return false; seen.add(k); return true })
+      .map(({ score: _s, ...rest }) => rest)
     // Configured hosts ride along so the session launcher can offer every host
     // from config.hosts — not just hosts that already have session history.
     // Without this, a freshly added remote host never appears in Quick Start
@@ -189,8 +197,7 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
     // Only include enabled hosts (enabled defaults to true when unset).
     // rawName marks auto-discovered FQDN-only entries (alias == hostname, no
     // human-chosen alias) so the launcher can nudge the user to name them.
-    const configuredHosts = Object.entries(hosts)
-      .filter(([_alias, h]) => h.enabled !== false)
+    const configuredHosts = pickableHosts(hosts, config.net)
       .map(([alias, h]) => ({
         alias,
         label: h.label ?? alias,

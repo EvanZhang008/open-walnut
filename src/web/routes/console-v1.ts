@@ -52,7 +52,11 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
   // docs/plan/walnut-companion-unified-replica.md). The box's own file is untouched.
   const config = await overlayConfigCopy(own, res)
   const hosts: Record<string, unknown> = {}
+  // Each machine once: a found twin of a joined machine is left out (hosts/joined-twins.ts).
+  const { joinedTwins } = await import('../../core/hosts/joined-twins.js')
+  const twins = new Set(joinedTwins(config.hosts ?? {}, config.net).map((t) => t.alias))
   for (const [alias, h] of Object.entries(config.hosts ?? {})) {
+    if (twins.has(alias)) continue
     hosts[alias] = {
       label: h.label ?? alias,
       enabled: h.enabled !== false,

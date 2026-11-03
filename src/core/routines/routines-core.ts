@@ -373,7 +373,9 @@ export async function listRoutineExecutors(): Promise<Record<string, unknown>> {
   const { listExecutors } = await import('./index.js');
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
-  const hosts = Object.entries(config.hosts ?? {}).map(([alias, def]) => ({
+  // Each machine once, enabled ones only; a routine already on another row keeps it (RoutineForm).
+  const { pickableHosts } = await import('../hosts/joined-twins.js');
+  const hosts = pickableHosts(config.hosts ?? {}, config.net).map(([alias, def]) => ({
     value: alias,
     label: (def as { label?: string })?.label ?? alias,
   }));
@@ -413,8 +415,9 @@ export async function draftRoutineFromText(text: unknown): Promise<{ draft: unkn
     const { getPluginTools } = await import('../plugins/plugin-tools.js');
     dataTools = [...getReadOnlyTools(), ...getPluginTools()].map((t) => t.name);
   } catch { /* degrade to no suggestions rather than failing the draft */ }
+  const { pickableHosts } = await import('../hosts/joined-twins.js');
   const result = await draftRoutine(text, {
-    hosts: Object.keys(config.hosts ?? {}),
+    hosts: pickableHosts(config.hosts ?? {}, config.net).map(([alias]) => alias),
     models: SESSION_MODELS.map((m) => m.id),
     dataTools,
   });

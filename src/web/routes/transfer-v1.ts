@@ -40,8 +40,9 @@ function sendError(res: Response, err: unknown, next: NextFunction): void {
 
 async function enabledHosts(): Promise<string[]> {
   const { getConfig } = await import('../../core/config-manager.js')
-  const hosts = (await getConfig()).hosts ?? {}
-  return Object.entries(hosts).filter(([, h]) => (h as { enabled?: boolean }).enabled !== false).map(([alias]) => alias)
+  const { pickableHosts } = await import('../../core/hosts/joined-twins.js')
+  const config = await getConfig()
+  return pickableHosts(config.hosts ?? {}, config.net).map(([alias]) => alias)
 }
 
 transferV1Router.get('/tasks/:id/transfer-options', async (req: Request, res: Response, next: NextFunction) => {

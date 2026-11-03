@@ -235,10 +235,11 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
   // The cloud box row is offered only while its companion can take sessions:
   // the phone has no greyed state, so an old or hosting-off companion is hidden.
   const { cloudBoxRefusal } = await import('../hosts/cloud-box-host.js');
+  const { joinedAliasOf, pickableHosts } = await import('../hosts/joined-twins.js');
   const hosts = [
     { alias: '', label: 'This Mac' },
-    ...Object.entries(hostsCfg)
-      .filter(([alias, h]) => h.enabled !== false && !reserved.has(alias) && !(h.cloud_box === true && cloudBoxRefusal()))
+    ...pickableHosts(hostsCfg, config.net)
+      .filter(([alias, h]) => !reserved.has(alias) && !(h.cloud_box === true && cloudBoxRefusal()))
       .map(([alias, h]) => ({ alias, label: h.label ?? alias })),
   ];
   // NOTE: the cloud companion's own host row is NOT added here. This function
@@ -249,7 +250,9 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
   // launch targeting it.
   const offeredAliases = new Set(hosts.map((h) => h.alias));
 
-  const raw = await getFrequentDirs();
+  // A folder used on a found twin's row is the joined machine's (hosts/joined-twins.ts).
+  const asJoined = joinedAliasOf(hostsCfg, config.net);
+  const raw = (await getFrequentDirs()).map((d) => ({ ...d, host: asJoined(d.host) }));
   const now = Date.now();
   let maxAgeMs = 1;
   let maxCount = 1;
@@ -276,6 +279,8 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
       score: scoreFrequentDir(d, now, maxAgeMs, maxCount),
     }))
     .sort((a, b) => b.score - a.score)
+    // One row per folder: a twin's row and its joined machine's may hold the same one.
+    .filter((d, i, all) => all.findIndex((o) => o.host === d.host && o.cwd === d.cwd) === i)
     .slice(0, MAX_SUGGESTED_DIRS)
     .map(({ score: _s, ...rest }) => rest);
 

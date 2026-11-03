@@ -230,6 +230,16 @@ function keptFrom(source: CreateRoutineInput | undefined): KeptRoutine {
   };
 }
 
+
+/**
+ * The choices, plus the value the routine holds when it is not one of them: a host the
+ * list no longer offers (a ~/.ssh/config row whose machine joined since) still shows as
+ * what the routine runs on, never as Local.
+ */
+function withCurrent(opts: Array<{ value: string; label: string }>, value: unknown): Array<{ value: string; label: string }> {
+  return typeof value === 'string' && value && !opts.some((o) => o.value === value) ? [...opts, { value, label: value }] : opts;
+}
+
 export function RoutineForm({ draft, routine, executors, options, onSave, onCancel }: RoutineFormProps) {
   const source: CreateRoutineInput | undefined = routine
     ? {
@@ -420,7 +430,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       );
     }
     if (f.kind === 'select') {
-      const opts = f.optionsKey === 'hosts' ? options.hosts : f.optionsKey === 'models' ? options.models : [];
+      const opts = withCurrent(f.optionsKey === 'hosts' ? options.hosts : f.optionsKey === 'models' ? options.models : [], value);
       const defaultLabel = f.optionsKey === 'hosts' ? 'Local' : 'Default';
       return (
         <select
@@ -685,7 +695,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                       onChange={(e) => setCheck({ ...check, host: e.target.value })}
                     >
                       <option value="">Local</option>
-                      {options.hosts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      {withCurrent(options.hosts, check.host).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
                   <div className="form-group">

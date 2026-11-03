@@ -14,13 +14,21 @@
  *    its own network interfaces, net-seen.ts): a private one or an IPv6 one, never a public
  *    IPv4 (the machines behind one home router share it), loopback or link-local, and never
  *    an address two machines reported;
- *  - or a name whose first label is one joined machine's name (`studio-mac.local`).
+ *  - or a name that is one joined machine's name, bare or with a local-network suffix
+ *    (`studio-mac`, `studio-mac.local`, `.lan`, `.home`, `.localdomain`, `.home.arpa`),
+ *    never a name under someone's domain: `dev.corp.example.com` is not the joined "dev".
+ * Only a joined row that can be used counts: enabled, while the host network is on
+ * (`net.enabled`). A user who turns it off, or disables the joined row, gets the found row
+ * back everywhere.
  * A found row whose alias is a joined machine's never got in (config-manager.ts).
  */
 import { isIP } from 'node:net'
 import { whereOf } from '../net/net-where.js'
 
-type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown } | undefined>
+type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown; enabled?: unknown } | undefined>
+
+/** What may follow a machine's own name and still name that machine on a home network. */
+const LOCAL_SUFFIX = /^(?:local|lan|home|localdomain|home\.arpa)$/
 
 /** The address of an `ip:port` or `[ip]:port`, lowercased. */
 function ipOf(socket: string): string {
@@ -37,7 +45,8 @@ function namesOneMachine(ip: string): boolean {
 
 /** Each found row that is a joined machine, with that machine's alias. */
 export function joinedTwins(hosts: HostRows, net: unknown): Array<{ alias: string; joined: string }> {
-  const joined = Object.entries(hosts).filter(([, h]) => h?.transport === 'net' && typeof h.endpoint === 'string') as Array<[string, NonNullable<HostRows[string]>]>
+  if (!net || typeof net !== 'object' || (net as { enabled?: unknown }).enabled !== true) return []
+  const joined = Object.entries(hosts).filter(([, h]) => h?.transport === 'net' && typeof h.endpoint === 'string' && h.enabled !== false) as Array<[string, NonNullable<HostRows[string]>]>
   if (joined.length === 0) return []
   const where = whereOf(net)
   // Each address and each name with the machines that have it; one held by two names neither.
@@ -55,8 +64,31 @@ export function joinedTwins(hosts: HostRows, net: unknown): Array<{ alias: strin
   for (const [alias, h] of Object.entries(hosts)) {
     if (!h || h.discovered !== true || h.transport === 'net' || typeof h.hostname !== 'string') continue
     const name = h.hostname.trim().toLowerCase().replace(/^\[|\]$/g, '')
-    const seen = isIP(name) ? at.get(name) : named.get(name.split('.')[0])
+    const dot = name.indexOf('.')
+    const local = dot < 0 || LOCAL_SUFFIX.test(name.slice(dot + 1))
+    const seen = isIP(name) ? at.get(name) : local ? named.get(dot < 0 ? name : name.slice(0, dot)) : undefined
     if (seen?.size === 1) out.push({ alias, joined: [...seen][0] })
   }
   return out
+}
+
+/**
+ * The hosts a person picks from (a session's host, Quick Start, the phone's launcher, a
+ * transfer): the enabled rows, each machine once (a found twin of a joined machine left
+ * out). Every place that lists hosts for a choice takes them from here; a new one that does
+ * not is caught by tests/core/hosts/joined-twins-pickers.test.ts.
+ */
+export function pickableHosts<T extends { enabled?: unknown }>(hosts: Record<string, T | undefined>, net: unknown): Array<[string, T]> {
+  const twins = new Set(joinedTwins(hosts as HostRows, net).map((t) => t.alias))
+  return Object.entries(hosts).filter((e): e is [string, T] => !!e[1] && e[1].enabled !== false && !twins.has(e[0]))
+}
+
+/**
+ * A found twin's alias read as its joined machine's, every other alias as it is: what was
+ * recorded under the ~/.ssh/config row (a folder used there) belongs to the machine the
+ * pickers list.
+ */
+export function joinedAliasOf(hosts: HostRows, net: unknown): <A extends string | null | undefined>(alias: A) => A | string {
+  const to = new Map(joinedTwins(hosts, net).map((t) => [t.alias, t.joined]))
+  return (alias) => (alias && to.get(alias)) || alias
 }

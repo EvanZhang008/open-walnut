@@ -180,7 +180,9 @@ export function judgeHost(
 export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLoadView[]> {
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
-  const entries = Object.entries(config.hosts ?? {}).filter(([, h]) => h.enabled !== false && !h.cloud_box);
+  // Each machine once (hosts/joined-twins.ts): the Move to host menu reads this list.
+  const { pickableHosts } = await import('./joined-twins.js');
+  const entries = pickableHosts(config.hosts ?? {}, config.net).filter(([, h]) => !h.cloud_box);
   const names = opts.hosts ?? [LOCAL, ...entries.map(([k]) => k)];
   const { getActiveSessionsByHost, activeSessionLimitFor } = await import('../session-tracker.js');
   const active = await getActiveSessionsByHost().catch(() => ({} as Record<string, import('../types.js').SessionRecord[]>));
@@ -234,8 +236,9 @@ export async function choosePlacement(input: {
   const pinned = macOnlyReason(input.text, input.cwd, input.tags);
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
-  const candidates = [LOCAL, ...Object.entries(config.hosts ?? {})
-    .filter(([k, h]) => h.enabled !== false && !h.cloud_box && placementWeight(k, config) > 0).map(([k]) => k)];
+  const { pickableHosts } = await import('./joined-twins.js');
+  const candidates = [LOCAL, ...pickableHosts(config.hosts ?? {}, config.net)
+    .filter(([k, h]) => !h.cloud_box && placementWeight(k, config) > 0).map(([k]) => k)];
   if (!candidates.includes(from)) candidates.push(from);
   if (candidates.length < 2) return null;
   const hosts = await hostLoads({ hosts: candidates });
