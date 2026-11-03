@@ -2306,8 +2306,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // where every ask lives, anything else in a session column.
   // `openSession` (a task link from the Inbox, `openTaskOnHome`): open the task's own session too, as a
   // click on its row does. `openDetail` (a "Details" off Home, `openTaskOnHome(..., { detail: true })`)
-  // opens the task's details popup over it too.
-  type PendingLocate = { taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; until: number; reading?: true };
+  // opens the task's details popup over it too. `detailOnly` (a session menu's Details on Home,
+  // handleOpenTaskDetailById): open the details popup and nothing else, no locate, no session.
+  type PendingLocate = { taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; detailOnly?: boolean; until: number; reading?: true };
   const pendingLocateRef = useRef<PendingLocate | null>(null);
   // A task the list does not carry (finished over a week ago, a plugin's own, an id prefix) opens
   // in its details popup over Home (OutsideTaskDetail): there is no task page to send it to.
@@ -2332,6 +2333,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // of a selection nobody can see.
     if (openDetail || task.status === 'done') setSuppressDetail(false);
   }, [handleLocateTaskById, openSessionOrToast]);
+  // The full-screen task detail for a listed task, touching neither the session columns nor the locate.
+  const openDetailOf = useCallback((task: Task) => {
+    setFocusScope('all');
+    setFocusedTask(task);
+    setFocusNonce(n => n + 1);
+    setSuppressDetail(false);
+  }, []);
+  const revealPending = useCallback((task: Task, pending: PendingLocate) => {
+    if (pending.detailOnly) openDetailOf(task);
+    else revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession), pending.openDetail);
+  }, [openDetailOf, revealOnHome]);
   // The list has loaded and does not carry the task: read it. The server resolves an id prefix, so
   // the list may carry it after all; a task seconds old (an ask started from Mail) may still be on
   // its way to the list, so it gets a short while to arrive before it opens on its own.
@@ -2345,7 +2357,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const listed = taskMapRef.current.get(full.id);
     if (listed) {
       pendingLocateRef.current = null;
-      revealOnHome(listed, sessionToOpen(listed, pending.sessionId, pending.openSession), pending.openDetail);
+      revealPending(listed, pending);
       return;
     }
     const showOutside = () => {
@@ -2360,7 +2372,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const waiting: PendingLocate = { ...reading, taskId: full.id, until: Date.now() + 3_000 };
     pendingLocateRef.current = waiting;
     setTimeout(() => { if (pendingLocateRef.current === waiting) showOutside(); }, 3_000);
-  }, [revealOnHome, showOperationError]);
+  }, [revealPending, showOperationError]);
+  const revealFetchedRef = useRef(revealFetched);
+  revealFetchedRef.current = revealFetched;
   useEffect(() => {
     const handleLocate = (e: Event) => {
       const { taskId, sessionId, openSession, openDetail } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string; openSession?: boolean; openDetail?: boolean };
@@ -2387,12 +2401,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const task = taskMap.get(pending.taskId);
     if (task) {
       pendingLocateRef.current = null;
-      revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession), pending.openDetail);
+      revealPending(task, pending);
       return;
     }
     // The list finished loading without it: read it, once.
     if (!loading && !pending.reading) void revealFetched(pending);
-  }, [taskMap, loading, revealOnHome, revealFetched]);
+  }, [taskMap, loading, revealPending, revealFetched]);
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);
@@ -2400,16 +2414,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Open the full-screen task detail modal for a taskId (used by the Session panel
-  // kebab "Task detail"). Unlike handleFocusTaskById this OPENS the detail (no
-  // suppressDetail) and does not touch the session panel rotation.
+  // kebab "Details"). Unlike handleFocusTaskById this OPENS the detail (no
+  // suppressDetail) and does not touch the session panel rotation. The menu reads the
+  // session's own task, so Details can be tapped before Home's list has it (a cold deep
+  // link on a slow link) or for a task the list never carries: held like a locate and
+  // opened when the list has it, else read by id into the details popup (OutsideTaskDetail).
   const handleOpenTaskDetailById = useCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
-    if (!task) return;
-    setFocusScope('all');
-    setFocusedTask(task);
-    setFocusNonce(n => n + 1);
-    setSuppressDetail(false);
-  }, []);
+    if (task) { openDetailOf(task); return; }
+    const pending: PendingLocate = { taskId, detailOnly: true, until: Date.now() + 60_000 };
+    pendingLocateRef.current = pending;
+    // Through a ref, so this stays stable for the memoized SessionPanel that takes it.
+    if (!loadingRef.current) void revealFetchedRef.current(pending);
+  }, [openDetailOf]);
 
   // Escape key unfocuses the current task (since clicking no longer toggles off)
   useEffect(() => {

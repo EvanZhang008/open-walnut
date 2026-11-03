@@ -21,3 +21,21 @@ export async function openKebabGroup(menu: Locator, id: KebabGroupId): Promise<L
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   return group.locator('.task-kebab-group-body')
 }
+
+/**
+ * Where a task comes from, in its open task menu. The source row (the badge and
+ * "Local", the service's name, or "Open in <service> ↗") lives inside Move & transfer
+ * (TaskMenuRows.tsx, 3a4de0c38); only a broken or pending sync keeps a first-level row,
+ * the sync warning ("<service> (unsynced)", "(sync error)").
+ */
+export async function openTaskSourceRow(menu: Locator): Promise<Locator> {
+  const move = await openKebabGroup(menu, 'kebab-group-move')
+  const row = move.locator('[data-testid="kebab-source-row"], [data-testid="kebab-source-link"]')
+  await expect(row).toBeVisible()
+  return row
+}
+
+/** The first-level sync warning row of an open task menu (count 0 when the sync is fine). */
+export function taskSyncWarning(menu: Locator): Locator {
+  return menu.getByTestId('kebab-sync-warning')
+}

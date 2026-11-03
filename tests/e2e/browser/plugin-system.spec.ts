@@ -16,8 +16,10 @@
  */
 import { test, expect } from '@playwright/test'
 import { showEverything } from './todo-panel-helpers'
+import { openTaskSourceRow, taskSyncWarning } from './kebab-group-helpers'
 
-const API = 'http://localhost:3457'
+// Relative: page.request resolves it against the config's baseURL (PW_TEST_PORT).
+const API = ''
 
 // ── Helpers ──
 
@@ -30,18 +32,31 @@ async function showAllTasksInTodoPanel(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
 }
 
-/**
- * The source row of a task's menu. The badge left the panel's rows for the menu
- * (TaskKebabMenu.tsx: the badge, then the integration's name and its sync state),
- * so the row-badge classes and tooltip these tests read are gone.
- */
-async function openSourceRow(page: import('@playwright/test').Page, taskTitle: string) {
+/** A task row's open menu. */
+async function openTaskMenu(page: import('@playwright/test').Page, taskTitle: string) {
   const todoItem = page.locator('.todo-panel-item', { hasText: taskTitle })
   await expect(todoItem).toBeVisible({ timeout: 5000 })
   await todoItem.getByRole('button', { name: 'More actions' }).click()
-  const sourceRow = page.locator('.task-kebab-menu .task-kebab-info')
-  await expect(sourceRow).toBeVisible()
-  return sourceRow
+  const menu = page.locator('.task-kebab-menu:visible')
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+/**
+ * The source row of a task's menu. The badge left the panel's rows for the menu, and
+ * the source row sits inside Move & transfer (TaskMenuRows.tsx: the badge, then the
+ * integration's name); a broken or pending sync has its own first-level row
+ * (syncWarningRow), so the row-badge classes and tooltip these tests read are gone.
+ */
+async function openSourceRow(page: import('@playwright/test').Page, taskTitle: string) {
+  return openTaskSourceRow(await openTaskMenu(page, taskTitle))
+}
+
+/** The first-level sync warning of a task's menu, which names the service and its state. */
+async function syncWarningRow(page: import('@playwright/test').Page, taskTitle: string) {
+  const row = taskSyncWarning(await openTaskMenu(page, taskTitle))
+  await expect(row).toBeVisible()
+  return row
 }
 
 /** /tasks, narrowed to the task the test reads: the table windows its rows, so a
@@ -283,18 +298,19 @@ test.describe('8. Task menu source row', () => {
     await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
     await expect(sourceRow).not.toContainText('(unsynced)')
     await expect(sourceRow).not.toContainText('(sync error)')
+    await expect(taskSyncWarning(page.locator('.task-kebab-menu:visible'))).toHaveCount(0)
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-synced-plugina.png' })
   })
 
   test('unsynced plugin-a task: says unsynced', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-    const sourceRow = await openSourceRow(page, 'PluginA unsynced task')
+    const sourceRow = await syncWarningRow(page, 'PluginA unsynced task')
     await expect(sourceRow).toContainText('(unsynced)')
   })
 
   test('sync error task: "!" and says sync error', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-    const sourceRow = await openSourceRow(page, 'Sync error task')
+    const sourceRow = await syncWarningRow(page, 'Sync error task')
     await expect(sourceRow.locator('.task-source-badge')).toHaveText('!')
     await expect(sourceRow).toContainText('(sync error)')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-sync-error.png' })
@@ -318,6 +334,7 @@ test.describe('8. Task menu source row', () => {
     const sourceRow = await openSourceRow(page, 'PluginB synced task')
     await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
     await expect(sourceRow).not.toContainText('(unsynced)')
+    await expect(taskSyncWarning(page.locator('.task-kebab-menu:visible'))).toHaveCount(0)
   })
 })
 

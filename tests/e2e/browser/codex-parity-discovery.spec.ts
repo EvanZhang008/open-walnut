@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -41,8 +42,9 @@ test('Homepage renders the persisted Codex session and blocks unsupported forks'
   const homePanel = page.locator('.main-page-session-column .session-panel')
   await expect(homePanel.locator('.session-panel-title')).toHaveText(TASK_TITLE)
   // Seeded as stopped; opening the panel may attach the mock ACP runtime and
-  // reconcile the badge to Idle — both are valid settled states for the fixture.
-  await expect(homePanel.getByText(/^(Stopped|Idle)$/).first()).toBeVisible()
+  // reconcile it to idle. Both are settled, not running. The header has no status
+  // badge (03136053b): a panel that is not running offers no Stop.
+  await expectPanelRunning(homePanel, false)
   // (The header's "N turns" badge was removed in 732b9196 — the transcript
   // check below is what proves the 2 parity + 2 mobile messages loaded.)
   // Pill shows the engine name ("Codex") for a cold record, or the resolved

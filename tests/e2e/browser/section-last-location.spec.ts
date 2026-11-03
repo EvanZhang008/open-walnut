@@ -83,12 +83,15 @@ test('a task detail page is not remembered as "the tasks list"', async ({ page, 
   await rail(page, 'tasks').click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.locator('[data-testid="tasks-table"]')).toBeVisible({ timeout: 30_000 })
-  // Open a task's detail page through its title. The table windows its rows
-  // (tasks-table-helpers.ts): narrow it to that task first.
+  // Open a task through its title. The table windows its rows (tasks-table-helpers.ts):
+  // narrow it to that task first. There is no task page any more (6b0d0b5cb): the click
+  // opens the task on Home, and the visit to it must not be kept as the Tasks section's
+  // last place either.
   await page.locator('.tp-search').fill('tq open recent unpinned')
   const title = page.locator('[data-testid="tasks-table"] .tp-row[data-task-id="pw-tq-open-recent"] .tp-row-title')
   await title.click()
-  await expect(page).toHaveURL(/\/tasks\/pw-tq-open-recent$/)
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  await expect(page.locator('#home-task-navigation [data-task-id="pw-tq-open-recent"]').first()).toBeVisible({ timeout: 30_000 })
 
   await gotoHome(page)
   // The Tasks icon still leads to the list, not back into that one task.

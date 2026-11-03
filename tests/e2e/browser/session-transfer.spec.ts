@@ -290,7 +290,9 @@ test('the task kebab has Transfer for a task with a session, and the dialog read
   await expect(row).toBeVisible({ timeout: 30_000 })
   await row.hover()
   await row.locator('.task-kebab-btn').click()
-  await page.locator('.task-kebab-menu:visible [data-testid="task-kebab-transfer"]').click()
+  // Transfer is one of the task's moves, inside Move & transfer (TaskMenuRows.tsx).
+  const move = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'kebab-group-move')
+  await move.getByTestId('task-kebab-transfer').click()
   const dialog = page.getByTestId('transfer-dialog')
   await expect(dialog).toBeVisible()
   // The real route: Claude Code on This Mac is the source and both are listed.

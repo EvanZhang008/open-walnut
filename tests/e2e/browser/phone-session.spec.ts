@@ -524,6 +524,28 @@ test('nested: session, then its task detail; back twice peels them in order (C24
 })
 
 /**
+ * The same Details, tapped while Home's task list is still on its way (a phone over a slow
+ * link, a loaded CI runner: 2026-11-02, C24 above failed there on every run). The menu reads
+ * the session's own task, so Details is there before the list; the tap must open the details
+ * once the list arrives, never be dropped.
+ */
+test('Details tapped before the task list arrives still opens the task detail (C24)', async ({ page }) => {
+  await stubSession(page, { history: longTurnHistory(2) })
+  let release!: () => void
+  const listHeld = new Promise<void>((resolve) => { release = resolve })
+  await page.route((url) => url.pathname === '/api/tasks' && !url.searchParams.has('ids'), async (route: Route) => {
+    await listHeld
+    await route.continue()
+  })
+  await openByDeepLink(page)
+  await topbar(page).getByRole('button', { name: 'More actions' }).click()
+  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  release()
+  await expect(page.locator('.task-detail-modal')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.task-detail-modal')).toContainText(TASK_TITLE)
+})
+
+/**
  * Two cold loads of the dense phone home, the walk down it and the restore:
  * about 20 s on an idle machine, so the default 30 s ran out on CI's loaded
  * runners (2026-11-01: 4 of 7 runs, mid-poll). Each C80 test gets 90 s.
