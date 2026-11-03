@@ -83,6 +83,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/side-thread-manager.ts': 2,   // a side-thread question; the digest is Walnut's (framed)
   'src/core/sessions/engine-switch.ts': 3,         // re-sends a held row as stored (an agent's kept its frame)
   'src/core/sessions/engine-switch-resume.ts': 1,
+  'src/core/sessions/engine-switch-watch.ts': 1,   // a pending switch whose wait ran out: walnut-notify
   'src/web/routes/chat-turn-relay.ts': 1,          // joins an existing lane; sends no first message
   'src/web/routes/conversations.ts': 1,
   'src/web/routes/personal-ai-v1.ts': 1,
