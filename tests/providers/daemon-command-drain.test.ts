@@ -299,6 +299,8 @@ describe.each([
     const daemonCommands = createDrain()
     const order: string[] = []
     const fixReplies: unknown[] = []
+    // The restart mark (daemon-restart-mark.ts): down with the pause, off when a handover does not happen.
+    const mark = { note: vi.fn(), clear: vi.fn() }
     let closing: Promise<void> | undefined
     const prepare = vi.fn(async () => {
       order.push('prepare')
@@ -321,6 +323,7 @@ describe.each([
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(), gatewayWaiting: new Set(),
         // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).
         hostExec: { running: () => 0 },
+        noteRestarting: mark.note, clearRestartMark: mark.clear,
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
         persistRegistry: (strict: boolean) => {
           expect(strict).toBe(true)
@@ -340,7 +343,7 @@ describe.each([
       },
     )
     return {
-      ...result, daemonCommands, order, prepare, fixReplies, closing: () => closing,
+      ...result, daemonCommands, order, prepare, fixReplies, mark, closing: () => closing,
       // As handleCommand sends every frame: admit(dispatchCommand).
       fixFrame: (action: string) => daemonCommands.admit(() => result.dispatch({}, 7, { cmd: 'host.fix', action })) as Promise<unknown>,
       request: () => daemonCommands.admit(() => daemonCommands.run(() => result.handle({}, 1, {
@@ -356,11 +359,14 @@ describe.each([
     const result = fixture.request()
     expect(fixture.daemonCommands.closed).toBe(true)
     expect(fixture.order).toEqual([])
+    // Paused: a call now is turned away as stopping, so the mark is down before the drain.
+    expect(fixture.mark.note).toHaveBeenCalledTimes(1)
     send.resolve()
     await result
     await fixture.closing()
     expect(fixture.order).toEqual(['persist', 'prepare', 'reply', 'receipt', 'shutdown'])
     expect(fixture.prepared()).toBe(true)
+    expect(fixture.mark.clear).not.toHaveBeenCalled()
   })
 
   it('does not wait for a Claude Code install in flight: the shutdown after the handover stops it', async () => {
@@ -387,6 +393,9 @@ describe.each([
     await expect(fixture.request()).rejects.toThrow('refused')
     expect(claude.fix.running).toBe('install-claude-native')
     expect(fixture.daemonCommands.admit(() => 'accepted')).toBe('accepted')
+    // This daemon carries on: nothing waits for another one.
+    expect(fixture.mark.note).toHaveBeenCalledTimes(1)
+    expect(fixture.mark.clear).toHaveBeenCalledTimes(1)
     // It runs on to its own end; a cancel (the next real shutdown) is what ends it here.
     claude.fix.cancel()
     await install
@@ -541,7 +550,7 @@ describe.each([
     const exit = vi.fn((code: number) => { order.push(`exit:${code}`); exited.resolve(code) })
     const hostFix = { cancel: vi.fn(() => false) }
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(),
       cronRuntime: { close: vi.fn(() => cron.promise) },
       netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') },
@@ -574,7 +583,7 @@ describe.each([
     const logMsg = vi.fn()
     const hostFix = throws ? { cancel: () => { throw new Error('cancel exploded') } } : claude.fix
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(),
+      daemonCommands, hostFix, releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
       persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
