@@ -73,10 +73,11 @@ final class ChatOrgModelTests: XCTestCase {
     }
 
     /// The CEO, then one row per VP: a project under another VP is in that VP's row, and the
-    /// Inbox (no VP) has no row.
+    /// Inbox (no VP) has no row. With no threads, a VP sorts by its own work (Working first),
+    /// never by its tasks' asks.
     func testOneRowPerVPWithLedProjectsFolded() throws {
         let rows = ChatOrgModel.rows(tree: try tree(), tasks: [])
-        XCTAssertEqual(rows.map(\.name), ["CEO", "Marina", "Personal", "Walnut", "Ops"])
+        XCTAssertEqual(rows.map(\.name), ["CEO", "Walnut", "Marina", "Ops", "Personal"])
         let marina = try XCTUnwrap(rows.first { $0.name == "Marina" })
         XCTAssertEqual(marina.ledProjects, ["Dock Team"])
         XCTAssertEqual(marina.open, 10)

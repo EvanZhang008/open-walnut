@@ -184,6 +184,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/session-reconcile.ts': 'the server-side fold of a stream tail',
   'src/core/session-snapshot-apply.ts': 'projects a snapshot to the process status and settles turns',
   'src/core/sessions/restart-loss.ts': 'what a restart interrupted, from the fold at death',
+  'src/core/sessions/endpoint-wait-takes.ts': 'a session:result: the endpoint wait takes only a real turn end',
   'src/core/human-inbox/item-status.ts': 'an inbox item\'s live status from a snapshot',
   'src/core/session-health-monitor.ts': 'the idle reap: a /loop gets the cron timeout',
   'src/core/sessions/session-lifecycle.ts': 'refuses to terminate a /loop owner (cron_owner)',

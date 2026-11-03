@@ -53,7 +53,7 @@ function hostWith(opts: { env?: Record<string, string>; user?: Record<string, st
   const facts = createHostFacts({
     fs, os, execFile: (() => ({})) as unknown as HostFactsDeps['execFile'],
     http: fakeHttp('http', asked, behave), https: fakeHttp('https', asked, behave),
-    env: { PATH: '/usr/bin', ...(opts.env ?? {}) }, home, platform: 'linux', arch: 'x64',
+    env: { ...(opts.env ?? {}) }, home, platform: 'linux', arch: 'x64',
     timeouts: { probeMs: opts.probeMs ?? 500 },
   })
   return { probe: () => facts.endpoint({ cwd }), asked }

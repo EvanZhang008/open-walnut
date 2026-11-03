@@ -166,4 +166,5 @@ export const TURN_END_OBSERVERS: Readonly<Record<string, string>> = {
   'src/web/routes/quick-main-follow.ts': 'streams a quick ask\'s follow-up to the open request; the request has its own HTTP deadline',
   'src/core/hints/hint-drift-live.ts': 'reads a turn\'s lines for the reply-language correction; ends with the turn',
   'src/core/sessions/turn-end-wait.ts': 'the shared wait itself',
+  'src/core/user-status-sync.ts': 'derives the user status from the session\'s status on each change; waits for nothing',
 };
