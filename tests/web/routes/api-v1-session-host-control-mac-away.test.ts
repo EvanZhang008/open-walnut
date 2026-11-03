@@ -114,6 +114,35 @@ afterEach(async () => {
 })
 
 describe('a permission prompt while the companion leads the session\'s host', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+  it('an answer\'s pictures are saved on that host and named in the answer itself', async () => {
+    hostAnswers({
+      'image.save': () => ({ ok: true, path: '/home/dev/.walnut/images/a1.png' }),
+      'control:permission': (p) => ({ ok: true, status: 'resolved', requestId: p.requestId, allow: p.allow }),
+    })
+    const res = await request(createApp()).post(`/api/v1/sessions/${B}/permission`)
+      .send({ requestId: 'perm-1', allow: true, answers: { 'Which one?': 'Like this' }, images: [{ data: PNG, mediaType: 'image/png' }] })
+    expect(res.status).toBe(200)
+    expect(res.body.pictures).toBe(1)
+    expect(hostCalls('devbox').map((c) => c[1])).toEqual(['image.save', 'leader.control'])
+    const sent = hostCalls('devbox').find((c) => c[1] === 'leader.control')![2] as { answers: Record<string, string>; images?: unknown }
+    expect(sent.answers['Which one?']).toBe('[Images attached \u2014 use the Read tool to view them]\n- /home/dev/.walnut/images/a1.png\n\nLike this')
+    expect(sent.images).toBeUndefined()
+  })
+
+  it('a picture the host cannot take fails the answer with the reason, and nothing is answered', async () => {
+    hostAnswers({
+      'image.save': () => ({ ok: false, error: 'unknown command: image.save' }),
+      'control:permission': () => { throw new Error('must not answer without the pictures') },
+    })
+    const res = await request(createApp()).post(`/api/v1/sessions/${B}/permission`)
+      .send({ requestId: 'perm-1', allow: true, answers: { q: 'a' }, images: [{ data: PNG, mediaType: 'image/png' }] })
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('images_need_daemon_upgrade')
+    expect(hostCalls('devbox').map((c) => c[1])).toEqual(['image.save'])
+  })
+
   it('the detail shows the prompt the host keeps, and the answer goes to that host at the lead\'s epoch', async () => {
     hostAnswers({
       status: () => ({ ok: true, exists: true, alive: true, pendingCtrl: { reqId: 'perm-1', toolName: 'Bash', receivedAt: 1, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls docs/' }, decision_reason: 'not allowed yet' } } }),

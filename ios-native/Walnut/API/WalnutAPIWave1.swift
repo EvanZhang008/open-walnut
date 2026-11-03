@@ -66,24 +66,31 @@ extension WalnutAPI {
     /// response's `updatedInput`, which the tool echoes back to the model as
     /// "User has answered your questions". An allow WITHOUT it tells the model
     /// the user answered nothing — so the question card must always send it.
+    /// `images` are the pictures put with an answer: they go in this same request,
+    /// and the server puts them in the same tool result as the words
+    /// (`core/answer-pictures.ts` withAnswerPictures), never as a message after it.
     func respondSessionPermission(
         id: String, requestId: String, allow: Bool, message: String? = nil,
-        answers: [String: String]? = nil
+        answers: [String: String]? = nil, images: [ImagePayload] = []
     ) async throws -> PermissionResolved {
         struct Body: Encodable {
             let requestId: String
             let allow: Bool
             let message: String?
             let answers: [String: String]?
+            let images: [ImagePayload]?
         }
+        let hasAnswers = !(answers?.isEmpty ?? true)
         return try await send(
             "POST", "/sessions/\(escape(id))/permission",
             body: Body(
                 requestId: requestId, allow: allow, message: message,
                 // Omit an empty map: the server treats {} as "no answers" anyway,
                 // and sending it would just be a confusing wire artifact.
-                answers: (answers?.isEmpty ?? true) ? nil : answers
-            )
+                answers: hasAnswers ? answers : nil,
+                images: allow && hasAnswers && !images.isEmpty ? images : nil
+            ),
+            timeout: images.isEmpty ? nil : 60
         )
     }
 

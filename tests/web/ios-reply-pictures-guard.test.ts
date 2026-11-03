@@ -93,10 +93,16 @@ describe('every iOS box that writes to an AI takes pictures', () => {
     expect(reader).toMatch(/replies\.beginSend\([\s\S]{0,120}images: pictures/)
     expect(read('Views/Sessions/PermissionRequestCard.swift')).toMatch(/ReplyPictureButton\(/)
     // Talk to CEO: the words and pictures go to Main, whose route takes inline images.
-    expect(read('Views/Inbox/CeoNoteSheet.swift')).toMatch(/onSend\(words, pictures\)/)
+    const ceo = read('Views/Inbox/CeoNoteSheet.swift')
+    expect(ceo).toMatch(/onSend\(words, pictures\.wrappedValue\)/)
+    // A failed send keeps the pictures as it keeps the words: both live in the draft store,
+    // cleared together only once the CEO has them.
+    expect(ceo).toMatch(/drafts\.images\(key\)/)
+    expect(ceo).not.toMatch(/@State private var pictures/)
+    expect(read('Views/Inbox/ContentActionButtons.swift')).toMatch(/if case \.sent = outcome \{ ComposerDrafts\.shared\.clear\(CeoNoteSheet\.draftKey\(item\)\) \}/)
     expect(read('API/WalnutAPIContent.swift')).toMatch(/"\/content\/ceo"[\s\S]{0,120}images: images\.isEmpty \? nil : images/)
-    // The answer is the question tool's result (words only): its pictures follow as a message.
-    expect(read('Views/Sessions/SessionConversationView.swift')).toMatch(/store\.send\("", images: pictures\)/)
+    // A question's answer and its pictures go in one request (question-answer-pictures-guard.test.ts).
+    expect(read('Views/Sessions/SessionConversationView.swift')).toMatch(/respondPermission\(request, allow: true, answers: answers, images: payloads\)/)
   })
 
   it('the wire carries them, inline as the chat sends them', () => {

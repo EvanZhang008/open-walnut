@@ -36,6 +36,10 @@ struct PendingPermissionStack: View {
     /// is in the content (`contentSpace`), and the scroll box on screen,
     /// measured after every layout.
     @State private var fieldFrames: [String: CGRect] = [:]
+    /// The last answer's tail by its field id: the pictures under it and the
+    /// Submit row, kept on screen with the field while it is typed in, so the
+    /// keyboard never hides them (2026-11-03 gate).
+    @State private var tailFrames: [String: CGRect] = [:]
     @State private var boxFrame: CGRect = .zero
     @State private var position = ScrollPosition(edge: .top)
     @State private var scroll = CardScrollGeometry()
@@ -69,6 +73,15 @@ struct PendingPermissionStack: View {
         return above < -0.5 ? above : 0
     }
 
+    /// What to keep on screen while `row` is typed in: the row with its card's
+    /// tail (the pictures and Submit below the last answer) when both fit the
+    /// band, else the row alone, since the cursor matters most. Pure, unit-tested.
+    nonisolated static func revealRegion(row: CGRect, tail: CGRect?, bandHeight: CGFloat, margin: CGFloat) -> CGRect {
+        guard let tail, tail.height > 0 else { return row }
+        let both = row.union(tail)
+        return both.height + 2 * margin <= bandHeight ? both : row
+    }
+
     /// The content coordinate space the cards' rows are measured in: scrolling
     /// never moves a row in it, only a layout change does.
     static let contentSpace = "session.permissionStack.content"
@@ -97,7 +110,25 @@ struct PendingPermissionStack: View {
         bandTop - insetTop
     }
 
-    private var cap: CGFloat { Self.maxHeight(pageHeight: pageHeight) }
+    /// The box's cap while the last answer is typed in: tall enough for the
+    /// field, its pictures and Submit together (`need`, insets included), never
+    /// past the page. The keyboard leaves the page short, and the usual share of
+    /// it held the field alone (2026-11-03 gate: the strip and Submit sat under
+    /// the keyboard). Pure, unit-tested.
+    nonisolated static func typingCap(base: CGFloat, pageHeight: CGFloat, need: CGFloat?) -> CGFloat {
+        guard let need, need > base else { return base }
+        return pageHeight > 0 ? min(need, pageHeight) : need
+    }
+
+    /// What the field being typed in needs with its card's tail, when it has one.
+    private var tailNeed: CGFloat? {
+        guard let field = focusedField, let row = fieldFrames[field], let tail = tailFrames[field] else { return nil }
+        return row.union(tail).height + 2 * voiceDictationRevealMargin + scroll.insetTop + scroll.insetBottom
+    }
+
+    private var cap: CGFloat {
+        Self.typingCap(base: Self.maxHeight(pageHeight: pageHeight), pageHeight: pageHeight, need: tailNeed)
+    }
 
     /// Scrolls the focused field's row into the box by exactly what is cut,
     /// measured on screen. A scroll to the field's id used to pin the bare field
@@ -111,9 +142,11 @@ struct PendingPermissionStack: View {
         guard !scrolling else { revealLog.debug("skip \(why, privacy: .public): scrolling"); return }
         guard let field = focusedField ?? (anyField ? lastField : nil) else { revealLog.debug("skip \(why, privacy: .public): no field"); return }
         guard let row = fieldFrames[field], boxFrame.height > 0 else { revealLog.debug("skip \(why, privacy: .public): no frame"); return }
+        let band = boxFrame.height - scroll.insetTop - scroll.insetBottom
+        let region = Self.revealRegion(row: row, tail: tailFrames[field], bandHeight: band, margin: voiceDictationRevealMargin)
         guard let y = Self.revealTarget(
-            row: row, visibleTop: scroll.offset + scroll.insetTop,
-            bandHeight: boxFrame.height - scroll.insetTop - scroll.insetBottom, margin: voiceDictationRevealMargin
+            row: region, visibleTop: scroll.offset + scroll.insetTop,
+            bandHeight: band, margin: voiceDictationRevealMargin
         ) else { return }
         revealLog.debug("reveal \(why, privacy: .public): y \(y) content \(scroll.contentHeight)")
         position.scrollTo(y: Self.scrollY(bandTop: y, insetTop: scroll.insetTop))
@@ -145,6 +178,17 @@ struct PendingPermissionStack: View {
                 // not taken the row's new height yet, and a scroll now is
                 // clamped to the old bottom (2026-10-28 v8 gate, 3 of 3).
                 DispatchQueue.main.async { reveal("row", anyField: true) }
+            },
+            onTailFrame: { id, frame in
+                let old = tailFrames[id]
+                tailFrames[id] = frame
+                // The tail moved under the field being typed in (a line wrapped,
+                // a picture came and its strip appeared): keep them in view with
+                // the field. A pick elsewhere on the card moves it too, and is not
+                // followed (`followsTyping`).
+                let picturesJustCame = picturesAddedAt.map { Date.now.timeIntervalSince($0) < 1 } ?? false
+                guard old != frame, id == focusedField, followsTyping || picturesJustCame else { return }
+                DispatchQueue.main.async { reveal("tail") }
             },
             onPicturesAdded: {
                 picturesAddedAt = .now
@@ -260,6 +304,9 @@ struct PermissionRequestCard: View {
     /// A free-text box (field and mic) by its field id, and its frame in the
     /// stack's content (`PendingPermissionStack.contentSpace`).
     var onFieldFrame: ((String, CGRect) -> Void)?
+    /// The last answer's tail (its pictures and the Submit row) by the last
+    /// field's id, in the stack's content.
+    var onTailFrame: ((String, CGRect) -> Void)?
     /// A picture was put with the answers.
     var onPicturesAdded: (() -> Void)?
 
@@ -272,6 +319,7 @@ struct PermissionRequestCard: View {
                 onFocusField: onFocusField,
                 onTypeInField: onTypeInField,
                 onFieldFrame: onFieldFrame,
+                onTailFrame: onTailFrame,
                 onPicturesAdded: onPicturesAdded,
                 onSubmit: { answers, pictures in
                     if let onAnswer { onAnswer(answers, pictures) } else { onRespond(true) }
@@ -374,11 +422,11 @@ struct AskUserQuestionCard: View {
     var onFocusField: ((String?) -> Void)?
     var onTypeInField: (() -> Void)?
     var onFieldFrame: ((String, CGRect) -> Void)?
+    var onTailFrame: ((String, CGRect) -> Void)?
     var onPicturesAdded: (() -> Void)?
-    /// The answers, and the pictures put with them. An answer to the agent's
-    /// question carries words only (it is the question tool's result), so the
-    /// pictures follow it as their own message (the web console's rule,
-    /// `permission-request-store.ts`).
+    /// The answers, and the pictures put with them, sent in one request: the
+    /// server puts the pictures in the question tool's result with the words
+    /// (`core/answer-pictures.ts` withAnswerPictures).
     var onSubmit: ([String: String], [SelectedImage]) -> Void
     var onDismiss: () -> Void
 
@@ -422,6 +470,12 @@ struct AskUserQuestionCard: View {
                 questionBlock(question)
             }
             actions
+                // With the strip above it, the tail the stack keeps in view while
+                // the last answer is typed in (the keyboard hid both).
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
+                    guard let last = questions.last else { return }
+                    onTailFrame?(fieldID(last), frame)
+                }
         }
         .padding(12)
         .background(Theme.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))

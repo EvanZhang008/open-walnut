@@ -145,6 +145,7 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Approve', dismis
         questions={detail.questions}
         disabled={!answerable || busy}
         resolved={!!resolved}
+        inFlight={busy}
         onSubmit={(answers, images) => go(true, { answers, ...(images?.length ? { images } : {}) })}
         onDismissQuestions={() => go(false, { message: 'User dismissed the questions' })}
         {...(dismissLabel ? { dismissLabel } : {})}

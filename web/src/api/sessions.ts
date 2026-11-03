@@ -1352,8 +1352,10 @@ export async function respondToPermission(
   message?: string,
   optionId?: string,
   answers?: Record<string, string>,
+  pictures?: { imageRefs?: unknown; images?: unknown },
 ): Promise<{ status: string; requestId: string; allow: boolean }> {
-  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message, optionId, answers });
+  // The answers' pictures go in the same request: the server puts them in the same tool result.
+  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message, optionId, answers, ...pictures });
 }
 
 export async function forkSessionInWalnut(

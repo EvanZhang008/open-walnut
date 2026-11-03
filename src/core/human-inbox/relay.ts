@@ -30,10 +30,10 @@ import {
   answeredByCaller,
   withUserWords,
   humanReplyAndDeliver,
+  savePicturesOnce,
   sendLetterAsCallerOnce,
 } from './letter-ops.js';
 import type { AgentReplyInput, NewLetter } from './types.js';
-import { saveAnswerPictures } from '../answer-pictures.js';
 
 export { LetterError };
 
@@ -161,7 +161,7 @@ export async function handleHumanInboxRelayAction(
       // A session's call through the replica names its caller, so the primary records the task
       // that answered and refuses it a plugin's letter (letter-ops.ts), as on this box.
       const by = withUserWords(await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined), p);
-      const pictures = await saveAnswerPictures(p);
+      const pictures = await savePicturesOnce(requireId(p), p, { kind: 'answer', by });
       return await answerLetterAndDeliver(requireId(p), {
         actionId: str(p.actionId),
         ...(typeof p.freeText === 'string' ? { freeText: p.freeText } : {}),
@@ -175,7 +175,7 @@ export async function handleHumanInboxRelayAction(
     }
     case 'human-reply': {
       const by = withUserWords(await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined), p);
-      const pictures = await saveAnswerPictures(p);
+      const pictures = await savePicturesOnce(requireId(p), p, { kind: 'reply' });
       return await humanReplyAndDeliver(requireId(p), {
         text: str(p.text),
         ...(pictures.length ? { images: pictures } : {}),

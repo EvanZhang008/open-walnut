@@ -116,12 +116,13 @@ final class SessionLifecycleController {
     ///
     /// `answers` / `message` are the AskUserQuestion path: answering IS the
     /// allow response, so the map rides along with allow=true; "Dismiss" is a
-    /// deny carrying the reason the model sees.
+    /// deny carrying the reason the model sees. `images` are an answer's
+    /// pictures, sent in the same request so the model reads them with the words.
     /// True once the server has the answer (or the prompt was already gone).
     @discardableResult
     func respondPermission(
         _ request: PendingPermission, allow: Bool,
-        answers: [String: String]? = nil, message: String? = nil
+        answers: [String: String]? = nil, message: String? = nil, images: [ImagePayload] = []
     ) async -> Bool {
         guard !answeringIds.contains(request.requestId) else { return false }
         answeringIds.insert(request.requestId)
@@ -129,13 +130,18 @@ final class SessionLifecycleController {
         pendingPermissions.removeAll { $0.requestId == request.requestId }
         defer { answeringIds.remove(request.requestId) }
         do {
-            _ = try await api.respondSessionPermission(
+            let resolved = try await api.respondSessionPermission(
                 id: sessionId, requestId: request.requestId, allow: allow,
-                message: message, answers: answers
+                message: message, answers: answers, images: images
             )
+            // Pictures sent and none counted back: the server dropped them. Said,
+            // never a silent loss (an older Walnut on the Mac takes the words only).
+            if let note = Self.droppedPicturesNote(sent: images.count, resolved: resolved) {
+                errorMessage = note
+            }
             AppLog.info("session-lifecycle", "permission answered", [
                 "sessionId": sessionId, "requestId": request.requestId, "allow": String(allow),
-                "answerCount": String(answers?.count ?? 0),
+                "answerCount": String(answers?.count ?? 0), "pictureCount": String(images.count),
             ])
             await refreshDetail()
             return true
@@ -147,6 +153,12 @@ final class SessionLifecycleController {
             errorMessage = Self.friendlyError(error)
             return false
         }
+    }
+
+    /// The line for an answer whose pictures the server did not take, or nil.
+    nonisolated static func droppedPicturesNote(sent: Int, resolved: PermissionResolved) -> String? {
+        guard sent > 0, resolved.allow, (resolved.pictures ?? 0) == 0 else { return nil }
+        return "Your answer went, but its pictures did not: the Walnut on your Mac is too old to take pictures with an answer."
     }
 
     // MARK: - Lifecycle actions

@@ -37,6 +37,10 @@ export interface HostControlDeps {
 }
 
 const CONTROL_TIMEOUT_MS = 20_000
+/** Per picture: up to ~14 MB of base64 over the bridge WS (cloud-images.ts). */
+const IMAGE_SAVE_TIMEOUT_MS = 30_000
+/** An answer takes the chat's limit (core/answer-pictures.ts). */
+const MAX_ANSWER_PICTURES = 5
 
 function answer(status: number, code: string, message: string): HostControlAnswer {
   return { status, body: { error: { code, message } } }
@@ -114,16 +118,57 @@ export function createHostSessionControl(deps: HostControlDeps) {
     return callLeadHost(deps, t, 'leader.control', { action, ...params })
   }
 
+  /**
+   * An answer's pictures (inline, as the route hands them over): saved on the host with
+   * `image.save`, as a phone send's are, and named at the head of the last answer, so the CLI
+   * reads them in the same tool result as the words. A picture the host cannot take fails the
+   * answer with the reason, never drops it: the card stays open to answer again.
+   */
+  async function withPictures(t: LeadHost, answers: Record<string, string>, images: unknown): Promise<{ ok: true; answers: Record<string, string>; pictures: number } | { ok: false; answer: HostControlAnswer }> {
+    const list = (Array.isArray(images) ? images : []).filter((i): i is { data: string; mediaType: string } =>
+      !!i && typeof (i as { data?: unknown }).data === 'string' && typeof (i as { mediaType?: unknown }).mediaType === 'string')
+    const keys = Object.keys(answers)
+    if (list.length === 0 || keys.length === 0) return { ok: true, answers, pictures: 0 }
+    const paths: string[] = []
+    for (const img of list.slice(0, MAX_ANSWER_PICTURES)) {
+      let saved: Record<string, unknown>
+      try {
+        saved = await deps.request(t.host, 'image.save', { data: img.data, mediaType: img.mediaType }, IMAGE_SAVE_TIMEOUT_MS)
+      } catch (err) {
+        return { ok: false, answer: answer(503, 'bridge_offline', `Could not reach ${t.host}: ${err instanceof Error ? err.message : String(err)}`) }
+      }
+      if (saved.ok === true && typeof saved.path === 'string') { paths.push(saved.path); continue }
+      const reason = String(saved.error ?? 'unknown')
+      return {
+        ok: false,
+        answer: reason.startsWith('unknown command')
+          ? answer(400, 'images_need_daemon_upgrade', `The daemon on ${t.host} predates image support; it upgrades on its next connect to your Mac.`)
+          : answer(502, 'image_upload_failed', `${t.host} could not save the picture (${reason}).`),
+      }
+    }
+    const { withImagePaths } = await import('../sessions/cloud-images.js')
+    const last = keys[keys.length - 1]!
+    return { ok: true, answers: { ...answers, [last]: withImagePaths(answers[last]!, paths) }, pictures: paths.length }
+  }
+
   /** POST /sessions/:id/permission. Same result shape as the Mac's. */
   async function permission(t: LeadHost, body: Record<string, unknown>): Promise<HostControlAnswer> {
+    let answers = body.answers
+    let pictures = 0
+    if (body.allow === true && answers && typeof answers === 'object' && !Array.isArray(answers) && body.images !== undefined) {
+      const staged = await withPictures(t, answers as Record<string, string>, body.images)
+      if (!staged.ok) return staged.answer
+      answers = staged.answers
+      pictures = staged.pictures
+    }
     const r = await control(t, 'permission', {
       requestId: body.requestId,
       allow: body.allow,
       ...(body.message !== undefined ? { message: body.message } : {}),
-      ...(body.answers !== undefined ? { answers: body.answers } : {}),
+      ...(answers !== undefined ? { answers } : {}),
     })
     if (!r.ok) return r.answer
-    return { status: 200, body: { status: 'resolved', requestId: r.reply.requestId, allow: r.reply.allow, viaCompanion: true } }
+    return { status: 200, body: { status: 'resolved', requestId: r.reply.requestId, allow: r.reply.allow, viaCompanion: true, ...(pictures > 0 ? { pictures } : {}) } }
   }
 
   /** A permission mode, for PATCH /sessions/:id and POST /sessions/:id/controls. */

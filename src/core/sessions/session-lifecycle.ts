@@ -1285,7 +1285,12 @@ export async function recheckSession(sessionId: string): Promise<RecheckResult> 
 
 // ── Permission response ──────────────────────────────────────────────────────
 
-export interface PermissionResult { status: 'resolved'; requestId: string; allow: boolean }
+export interface PermissionResult {
+  status: 'resolved'; requestId: string; allow: boolean
+  /** How many pictures went with the answers, when any did: a client that sent some and reads no
+   *  count here is talking to a server that dropped them, and says so. */
+  pictures?: number
+}
 
 /**
  * Resolve a pending permission request (approve/deny a CLI tool prompt).
@@ -1298,6 +1303,12 @@ export interface PermissionResult { status: 'resolved'; requestId: string; allow
  * option label. It is merged into the allow response's `updatedInput`, which the
  * AskUserQuestion tool echoes back to the model as "User has answered your
  * questions". Without it a bypass-mode session hands the model empty answers.
+ *
+ * `pictures` (the request body's inline `images` or uploaded `imageRefs`) are the pictures the
+ * person put with the answers. They ride the SAME tool result: saved where every session picture
+ * lives and named under the images header in front of the last question's answer, so the model
+ * reads the answer and its pictures together (2026-11-03: sent as a message after the answer, the
+ * model replied "no pictures came" before they did; answer-pictures.ts `withAnswerPictures`).
  */
 export async function respondSessionPermission(
   sessionId: string,
@@ -1306,6 +1317,7 @@ export async function respondSessionPermission(
   denyMessage?: unknown,
   optionId?: unknown,
   answers?: unknown,
+  pictures?: { images?: unknown; imageRefs?: unknown },
 ): Promise<PermissionResult> {
   if (typeof requestId !== 'string' || !requestId || typeof allow !== 'boolean') {
     throw new SessionControlError('requestId (string) and allow (boolean) are required', 400);
@@ -1329,7 +1341,7 @@ export async function respondSessionPermission(
       }
     }
   }
-  const answerPatch = answers !== undefined && Object.keys(answers as Record<string, string>).length > 0
+  let answerPatch = answers !== undefined && Object.keys(answers as Record<string, string>).length > 0
     ? { answers: answers as Record<string, string> }
     : undefined;
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
@@ -1350,11 +1362,19 @@ export async function respondSessionPermission(
   }
   const session = sessionRunner.findByClaudeId(sessionId);
   if (!session) throw new SessionControlError('Live session not found', 404);
-  const pending = session.getPendingPermissionRequests().some((request) => request.requestId === requestId);
-  if (!pending) throw new SessionControlError('Permission request not found or already resolved', 404);
+  const pendingRequest = session.getPendingPermissionRequests().find((request) => request.requestId === requestId);
+  if (!pendingRequest) throw new SessionControlError('Permission request not found or already resolved', 404);
+  let pictureCount = 0;
+  if (allow && answerPatch && pictures) {
+    const { withAnswerPictures } = await import('../answer-pictures.js');
+    const withPictures = await withAnswerPictures(answerPatch.answers, pendingRequest.input, pictures,
+      (text) => session.transport?.prepareOutbound(text) ?? Promise.resolve(text));
+    answerPatch = { answers: withPictures.answers };
+    pictureCount = withPictures.pictures;
+  }
   const resolved = await session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch).catch(() => false);
   if (!resolved) throw new SessionControlError('Permission answer was not confirmed by the session host; retry the same request', 503);
-  return { status: 'resolved', requestId, allow };
+  return { status: 'resolved', requestId, allow, ...(pictureCount > 0 ? { pictures: pictureCount } : {}) };
 }
 
 // ── Execute-continue ─────────────────────────────────────────────────────────

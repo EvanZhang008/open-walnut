@@ -32,6 +32,7 @@ import {
   humanReplyTurn,
   lettersOfSender,
   recordTurnDelivery,
+  repeatsRecordedTurn,
   sendLetterOnce,
   withdrawLetter,
   LetterError,
@@ -534,6 +535,27 @@ export function withUserWords(by: LetterAnsweredBy | undefined, body: Record<str
   const raw = typeof body.userWords === 'string' ? body.userWords : typeof body.user_words === 'string' ? body.user_words : '';
   const words = raw.trim().slice(0, WRAPPER_NOTE_MAX_CHARS);
   return words ? { ...by, userWords: words } : by;
+}
+
+/**
+ * The pictures of a reply or an answer, saved on this box only when the store will record them:
+ * a resend of a reply already on record, or an answer the store refuses, saves none
+ * (repeatsRecordedTurn), so a retry never keeps a second copy.
+ */
+export async function savePicturesOnce(
+  id: string,
+  body: Record<string, unknown>,
+  turn: { kind: 'reply' } | { kind: 'answer'; by?: LetterAnsweredBy },
+): Promise<string[]> {
+  if (!Array.isArray(body.images) && !Array.isArray(body.imageRefs)) return [];
+  const repeat = await repeatsRecordedTurn(id, turn.kind === 'reply' ? { kind: 'reply', clientId: body.clientId } : turn)
+    .catch(() => false);
+  if (repeat) {
+    log.notif.info('human-inbox: a resend\'s pictures not saved again', { letterId: id, kind: turn.kind });
+    return [];
+  }
+  const { saveAnswerPictures } = await import('../answer-pictures.js');
+  return saveAnswerPictures(body);
 }
 
 /** The task whose session `sid` is, as the record of who answered in the user's place. */

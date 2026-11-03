@@ -60,7 +60,10 @@ interface PermissionAnswerFormProps {
   disabled: boolean;
   /** Already settled — render nothing at all (the settled chip speaks instead). */
   resolved: boolean;
-  /** The answers, and the pictures that go with them (sent right after: RespondOptions.images). */
+  /** The answer is still on the wire: settled only optimistically, so the words and pictures are
+   *  kept until it lands (a failure rolls back to pending with both still there). */
+  inFlight?: boolean;
+  /** The answers, and the pictures that go with them (sent in the same request: RespondOptions.images). */
   onSubmit: (answers: Record<string, string>, images?: ImageAttachment[]) => void;
   /** Refuse the ask outright ("the user dismissed the questions"), i.e. a deny. */
   onDismissQuestions: () => void;
@@ -76,19 +79,20 @@ interface PermissionAnswerFormProps {
 }
 
 export function PermissionAnswerForm({
-  questions, disabled, resolved, onSubmit, onDismissQuestions, scrollable, dismissLabel = 'Dismiss', dismissTitle,
+  questions, disabled, resolved, inFlight = false, onSubmit, onDismissQuestions, scrollable, dismissLabel = 'Dismiss', dismissTitle,
 }: PermissionAnswerFormProps) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   // The own-words answers are a draft of this ask (the toast, the panel and the card share it).
   const otherDraft = useDraftValue<Record<string, string>>(askAnswerDraftKey(questions), {});
   const { value: otherText, setValue: setOtherText } = otherDraft;
-  // Settled (answered or dismissed, here or on another surface): the words are spent.
+  // Settled (answered or dismissed, here or on another surface) and landed: the words are spent.
+  const spent = resolved && !inFlight;
   const clearOther = otherDraft.clear;
-  useEffect(() => { if (resolved) clearOther(); }, [resolved, clearOther]);
-  // Pictures with the answers, sent right after them (RespondOptions.images); spent once it settles.
+  useEffect(() => { if (spent) clearOther(); }, [spent, clearOther]);
+  // Pictures with the answers, sent in the same request (RespondOptions.images); spent with the words.
   const pictures = useImageAttachments();
   const { clear: clearPictures } = pictures;
-  useEffect(() => { if (resolved) clearPictures(); }, [resolved, clearPictures]);
+  useEffect(() => { if (spent) clearPictures(); }, [spent, clearPictures]);
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
 
   // Each question's own-words mic, and all of them as the one control Submit waits on.

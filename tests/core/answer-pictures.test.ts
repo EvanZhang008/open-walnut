@@ -30,9 +30,9 @@ vi.mock('../../src/core/notifications/letter-bridge.js', () => ({
 }));
 
 import { IMAGES_DIR } from '../../src/constants.js';
-import { cleanPictureNames, picturesHeader, saveAnswerPictures } from '../../src/core/answer-pictures.js';
+import { cleanPictureNames, picturesHeader, saveAnswerPictures, withAnswerPictures } from '../../src/core/answer-pictures.js';
 import { IMAGES_ATTACHED_LINE } from '../../src/core/sessions/cloud-images.js';
-import { answerLetterAndDeliver, humanReplyAndDeliver } from '../../src/core/human-inbox/letter-ops.js';
+import { answerLetterAndDeliver, humanReplyAndDeliver, savePicturesOnce } from '../../src/core/human-inbox/letter-ops.js';
 import { getLetter, humanInboxPaths, sendLetter } from '../../src/core/human-inbox/store.js';
 import { userWordsOf } from '../../src/core/org/thread-capture.js';
 
@@ -139,5 +139,69 @@ describe('a decision note with pictures', () => {
     const delivered = String(sendMessageToSession.mock.calls[0]![1]);
     expect(delivered.startsWith(`${IMAGES_ATTACHED_LINE}\n- ${path.join(IMAGES_DIR, name)}\n\n`)).toBe(true);
     expect(delivered).toContain('choice: Layout B');
+  });
+});
+
+describe('a question answer with pictures is one tool result', () => {
+  const asked = { questions: [{ question: 'Which layout?' }, { question: 'Anything else?' }] };
+
+  it('names the pictures at the head of the last question\'s answer, the other answers untouched', async () => {
+    const name = picture('answer-1.png');
+    const { answers, pictures } = await withAnswerPictures(
+      { 'Which layout?': 'B', 'Anything else?': 'Make it like this' }, asked, { imageRefs: [{ filename: name }] }, async (t) => t,
+    );
+    expect(pictures).toBe(1);
+    expect(answers['Which layout?']).toBe('B');
+    expect(answers['Anything else?']).toBe(`${IMAGES_ATTACHED_LINE}\n- ${path.join(IMAGES_DIR, name)}\n\nMake it like this`);
+  });
+
+  it('inline pictures (the phone) are saved, and a remote host gets its own paths', async () => {
+    const { answers } = await withAnswerPictures(
+      { 'Which layout?': 'A' }, asked, { images: [{ data: PNG_1X1, mediaType: 'image/png' }] },
+      async (t) => t.replaceAll(IMAGES_DIR, '/remote/images'),
+    );
+    const [line, picturePath, blank, words] = answers['Which layout?']!.split('\n');
+    expect([line, blank, words]).toEqual([IMAGES_ATTACHED_LINE, '', 'A']);
+    expect(picturePath).toMatch(/^- \/remote\/images\/[^/]+$/);
+  });
+
+  it('no pictures, or none that can be saved, leaves the answers as they were', async () => {
+    const answers = { 'Which layout?': 'A' };
+    expect(await withAnswerPictures(answers, asked, {}, async (t) => t)).toEqual({ answers, pictures: 0 });
+    expect(await withAnswerPictures(answers, asked, { imageRefs: [{ filename: 'gone.png' }] }, async (t) => t)).toEqual({ answers, pictures: 0 });
+    expect(await withAnswerPictures({}, asked, { imageRefs: [{ filename: picture('x.png') }] }, async (t) => t)).toEqual({ answers: {}, pictures: 0 });
+  });
+});
+
+describe('a resend saves its pictures once', () => {
+  const pictureCount = () => (fs.existsSync(IMAGES_DIR) ? fs.readdirSync(IMAGES_DIR).length : 0);
+  const inline = { images: [{ data: PNG_1X1, mediaType: 'image/png' }] };
+
+  it('a reply resent under the same clientId saves no second copy', async () => {
+    const letter = await sendLetter({ subject: 'Resend', type: 'review', markdown: 'Send one?', sender: SENDER });
+    const body = { text: 'like this', clientId: 'phone-9', ...inline };
+    const first = await savePicturesOnce(letter.id, body, { kind: 'reply' });
+    expect(first).toHaveLength(1);
+    await humanReplyAndDeliver(letter.id, { text: 'like this', clientId: 'phone-9', images: first });
+    const before = pictureCount();
+    expect(await savePicturesOnce(letter.id, body, { kind: 'reply' })).toEqual([]);
+    expect(pictureCount()).toBe(before);
+    const again = await humanReplyAndDeliver(letter.id, { text: 'like this', clientId: 'phone-9' });
+    expect(again.letter.thread).toHaveLength(1);
+    expect(again.letter.thread[0]!.images).toEqual(first);
+    // A new reply (another clientId) saves its pictures.
+    expect(await savePicturesOnce(letter.id, { ...body, clientId: 'phone-10' }, { kind: 'reply' })).toHaveLength(1);
+  });
+
+  it('an answer to a letter already answered saves none', async () => {
+    const letter = await sendLetter({
+      subject: 'Pick', type: 'action_required', markdown: 'Which?', sender: SENDER,
+      actions: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    });
+    expect(await savePicturesOnce(letter.id, inline, { kind: 'answer' })).toHaveLength(1);
+    await answerLetterAndDeliver(letter.id, { actionId: 'a' });
+    const before = pictureCount();
+    expect(await savePicturesOnce(letter.id, inline, { kind: 'answer' })).toEqual([]);
+    expect(pictureCount()).toBe(before);
   });
 });

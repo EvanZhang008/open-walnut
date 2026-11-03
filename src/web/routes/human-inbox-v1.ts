@@ -463,9 +463,9 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
       await relayDelivering(res, 'server.human-inbox.answer', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { answerLetterAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
+    const { answerLetterAndDeliver, answeredByCaller, savePicturesOnce, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
     const by = withUserWords(await answeredByCaller(sid), b)
-    const images = await savePictures(b)
+    const images = await savePicturesOnce(id, b, { kind: 'answer', by })
     const result = await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
@@ -478,12 +478,6 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
     res.status(deliveringStatus(result)).json(result)
   })
 })
-
-/** The pictures of an answer, saved on this box (core/answer-pictures.ts). */
-async function savePictures(b: Record<string, unknown>): Promise<string[]> {
-  const { saveAnswerPictures } = await import('../../core/answer-pictures.js')
-  return saveAnswerPictures(b)
-}
 
 /** The companion's relay body: its own uploads go to the Mac inline, never as names of files here. */
 async function withInlinePictures(b: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -513,9 +507,9 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
       await relayDelivering(res, 'server.human-inbox.human-reply', { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { humanReplyAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
+    const { humanReplyAndDeliver, answeredByCaller, savePicturesOnce, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
     const by = withUserWords(await answeredByCaller(sid), b)
-    const images = await savePictures(b)
+    const images = await savePicturesOnce(id, b, { kind: 'reply' })
     // `clientId` (optional) makes a retry of the same reply idempotent; see humanReplyAndDeliver.
     const result = await humanReplyAndDeliver(id, {
       text: typeof b.text === 'string' ? b.text : '',

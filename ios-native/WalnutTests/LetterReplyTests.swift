@@ -988,6 +988,31 @@ final class LetterReplyPictureTests: XCTestCase {
         return picked
     }
 
+    /// A decision answer's turn shows the pictures this phone sent with it, found by the
+    /// names the server recorded; another turn's pictures never stand in for them.
+    func testADecisionAnswerTurnShowsItsOwnPictures() throws {
+        let store = LetterReplyStore(transport: ScriptedReplyTransport())
+        let datas = [picture().jpegData, picture(.systemRed).jpegData]
+        let json = """
+        { "letter": { "id": "lt-d", "subject": "S", "type": "action_required", "body": "b",
+                      "thread": [ { "from": "human", "text": "Layout B: like this", "at": 1800000000000,
+                                    "images": ["a1.jpg", "a2.jpg"] } ] },
+          "delivery": { "status": "queued" } }
+        """
+        let result = try JSONDecoder().decode(LetterActionResult.self, from: Data(json.utf8))
+        store.rememberAnswerPictures(datas, result: result)
+        let turn = try XCTUnwrap(result.letter?.thread?.first)
+        XCTAssertEqual(store.images(ofTurn: turn), datas)
+
+        let other = try JSONDecoder().decode(LetterThreadEntry.self, from: Data(#"{"from":"human","text":"x","at":1,"images":["b1.jpg"]}"#.utf8))
+        XCTAssertEqual(store.images(ofTurn: other), [], "a turn from the web shows only its line")
+
+        // The server kept fewer than were sent: no thumbnail stands for a missing picture.
+        let short = LetterReplyStore(transport: ScriptedReplyTransport())
+        short.rememberAnswerPictures(datas + [picture(.systemGreen).jpegData], result: result)
+        XCTAssertEqual(short.images(ofTurn: turn), [])
+    }
+
     func testAPictureAloneIsAReplyAndNothingAtAllIsNot() async {
         let transport = ScriptedReplyTransport()
         let store = LetterReplyStore(transport: transport)

@@ -25,7 +25,6 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { respondToPermission } from '@/api/sessions';
-import { wsClient } from '@/api/ws';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import type { ImageAttachment } from '@/api/chat';
 import { log } from '@/utils/log';
@@ -155,24 +154,11 @@ export interface RespondOptions {
   answers?: Record<string, string>;
   message?: string;
   /**
-   * Pictures with an own-words answer. An answer is the tool's result, which carries text only,
-   * so they follow it as the next message into the same session (sendAnswerPictures).
+   * Pictures with an own-words answer. They go in the same request as the answers, and the server
+   * puts them in the same tool result (core/answer-pictures.ts withAnswerPictures), so the model
+   * reads them together; never as a message after it (the model answered before they came).
    */
   images?: ImageAttachment[];
-}
-
-/**
- * The pictures of an answer, as the next message: the pictures alone, no words (nothing the person
- * did not type), exactly what the chat sends for a picture sent with an empty box.
- */
-async function sendAnswerPictures(sessionId: string, images: ImageAttachment[]): Promise<void> {
-  try {
-    const pictures = await buildImageRefsPayload(images);
-    await wsClient.sendRpc('session:send', { sessionId, message: '', ...pictures });
-    log.info('notifications', 'answer pictures sent', { sessionId, count: images.length });
-  } catch (err) {
-    log.warn('notifications', 'answer pictures failed', { sessionId, count: images.length, error: String(err) });
-  }
 }
 
 /**
@@ -207,8 +193,9 @@ export async function respondToPermissionRequest(
   });
 
   try {
-    await respondToPermission(sessionId, requestId, allow, opts.message, opts.optionId, opts.answers);
-    if (allow && opts.images?.length) await sendAnswerPictures(sessionId, opts.images);
+    const pictures = allow && opts.answers && opts.images?.length ? await buildImageRefsPayload(opts.images) : undefined;
+    await respondToPermission(sessionId, requestId, allow, opts.message, opts.optionId, opts.answers, pictures);
+    if (pictures) log.info('notifications', 'answer pictures sent with the answers', { sessionId, count: opts.images!.length });
     const settled = entries.get(requestId);
     // A server event may have landed while we waited (the resolution we just
     // caused, or a withdrawal) — it wins, so only clear the in-flight flag.

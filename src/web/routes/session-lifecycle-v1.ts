@@ -87,6 +87,14 @@ function modeOnlyRow(row: { id: string; process_status: string; title?: string }
   return { claudeSessionId: row.id, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode }
 }
 
+/** The answer's pictures for the Mac: this box's uploads cannot be read there, so all go inline. */
+async function relayedPictures(body: Record<string, unknown>): Promise<{ images?: Array<{ data: string; mediaType: string }> }> {
+  if (body.images === undefined && body.imageRefs === undefined) return {}
+  const { inlineAnswerPictures } = await import('../../core/answer-pictures.js')
+  const images = await inlineAnswerPictures(body)
+  return images.length > 0 ? { images } : {}
+}
+
 /**
  * Local-path runner: call a session-lifecycle core function, translate
  * SessionControlError into the frozen v1 shape, funnel the rest to next().
@@ -440,8 +448,9 @@ sessionLifecycleV1Router.post('/sessions/:id/recheck', async (req: Request, res:
   }
 })
 
-// POST /api/v1/sessions/:id/permission { requestId, allow, message? }
-// Answer a live CLI tool-permission prompt from the phone.
+// POST /api/v1/sessions/:id/permission { requestId, allow, message?, answers?, images? }
+// Answer a live CLI tool-permission prompt from the phone. `images` (inline, as the phone sends
+// a chat picture) ride the answers' tool result (core/answer-pictures.ts withAnswerPictures).
 sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = validSid(req, res)
@@ -451,7 +460,9 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
       // While this companion leads the session's host, that host answers the prompt.
       const lead = await (await import('./session-stop-v1.js')).leadHostOf(sessionId)
       if (lead) {
-        const a = await lead.control.permission(lead.target, body)
+        // The lead host cannot read this box's uploads either: its pictures go inline.
+        const { images: _images, imageRefs: _imageRefs, ...words } = body
+        const a = await lead.control.permission(lead.target, { ...words, ...(await relayedPictures(body)) })
         res.status(a.status).json(a.body)
         return
       }
@@ -461,11 +472,15 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
         ...(body.message !== undefined ? { message: body.message } : {}),
         ...(body.optionId !== undefined ? { optionId: body.optionId } : {}),
         ...(body.answers !== undefined ? { answers: body.answers } : {}),
+        ...(await relayedPictures(body)),
       }, 200)
       return
     }
     const { respondSessionPermission } = await import('../../core/sessions/session-lifecycle.js')
-    await runLocal(res, next, 200, () => respondSessionPermission(sessionId, body.requestId, body.allow, body.message, body.optionId, body.answers))
+    await runLocal(res, next, 200, () => respondSessionPermission(
+      sessionId, body.requestId, body.allow, body.message, body.optionId, body.answers,
+      { images: body.images, imageRefs: body.imageRefs },
+    ))
   } catch (err) {
     next(err)
   }

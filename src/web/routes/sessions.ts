@@ -2126,15 +2126,18 @@ sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response
     const sessionId = req.params.sessionId as string
     // `answers` carries an AskUserQuestion decision (question text → chosen label);
     // it becomes the tool's `answers` input so the model sees the real answers.
-    const { requestId, allow, message: denyMessage, optionId, answers } = req.body as {
+    // `images` / `imageRefs`: the pictures put with the answers, in the same tool result.
+    const { requestId, allow, message: denyMessage, optionId, answers, images, imageRefs } = req.body as {
       requestId?: unknown
       allow?: unknown
       message?: unknown
       optionId?: unknown
       answers?: unknown
+      images?: unknown
+      imageRefs?: unknown
     }
     try {
-      res.json(await respondSessionPermission(sessionId, requestId, allow, denyMessage, optionId, answers))
+      res.json(await respondSessionPermission(sessionId, requestId, allow, denyMessage, optionId, answers, { images, imageRefs }))
     } catch (err) {
       if (err instanceof SessionControlError) {
         res.status(err.statusCode).json({ error: err.message })

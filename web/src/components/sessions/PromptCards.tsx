@@ -77,11 +77,12 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
   // The own-words answers are a draft of this ask (the toast, the panel and the card share it).
   const otherDraft = useDraftValue<Record<string, string>>(askAnswerDraftKey(questions), {});
   const { value: otherText, setValue: setOtherText } = otherDraft;
-  // Settled (answered or dismissed, here or on another surface): the words are spent.
-  const settledNow = isSettledPermission(status);
+  // Settled (answered or dismissed, here or on another surface) and landed: the words are spent.
+  // Not while the answer is still on the wire: a failure rolls back to pending with them kept.
+  const settledNow = isSettledPermission(status) && !busy;
   const clearOther = otherDraft.clear;
   useEffect(() => { if (settledNow) clearOther(); }, [settledNow, clearOther]);
-  // Pictures with the answers, sent right after them (RespondOptions.images); spent once it settles.
+  // Pictures with the answers, sent in the same request (RespondOptions.images); spent once it settles.
   const pictures = useImageAttachments();
   const { clear: clearPictures } = pictures;
   useEffect(() => { if (settledNow) clearPictures(); }, [settledNow, clearPictures]);

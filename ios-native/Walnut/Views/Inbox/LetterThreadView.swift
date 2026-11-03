@@ -32,6 +32,9 @@ struct LetterThreadView: View {
     /// The pictures that went with a reply, by its `clientId`, when this phone
     /// still holds them (`LetterReplyStore.images(ofReply:)`).
     var pictures: (String) -> [Data] = { _ in [] }
+    /// The pictures a recorded human turn shows (`LetterReplyStore.images(ofTurn:)`):
+    /// a reply's by its `clientId`, a decision answer's by its recorded names.
+    var turnPictures: ((LetterThreadEntry) -> [Data])? = nil
 
     /// The gap between replies.
     static let rowSpacing: CGFloat = 10
@@ -172,7 +175,7 @@ struct LetterThreadView: View {
             }
             if entry.isHuman {
                 SentPictures(
-                    datas: entry.clientId.map(pictures) ?? [], count: entry.images?.count ?? 0,
+                    datas: turnPictures?(entry) ?? (entry.clientId.map(pictures) ?? []), count: entry.images?.count ?? 0,
                     identifier: "inbox.letter.humanTurnPictures"
                 )
             }

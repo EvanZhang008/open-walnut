@@ -3,7 +3,9 @@ import SwiftUI
 /// What the person says to the CEO about one piece of content, before anything is sent: Talk to
 /// CEO opens this first (2026-11-03, the user: "you at least give me an input box ... you can't
 /// just send it straight to the CEO"). The content rides along as an attachment; only Send sends.
-/// The words are kept per item in the composer draft store, so closing and reopening keeps them.
+/// The words and pictures are kept per item in the composer draft store, so closing and
+/// reopening keeps them, and a send that fails leaves both for the next try (the pictures in
+/// memory only, as the chat's are).
 struct CeoNoteSheet: View {
     let item: ContentItem
     /// Prefix of every accessibility identifier, e.g. `inbox.item.<id>`.
@@ -19,8 +21,6 @@ struct CeoNoteSheet: View {
     /// The box's height; the sheet scrolls, so at the large text sizes the keyboard never
     /// squeezes the attachment line or the box away.
     @ScaledMetric(relativeTo: .body) private var boxHeight: CGFloat = 150
-    /// Pictures for the CEO, like the chat composer's (the route takes up to 5).
-    @State private var pictures: [SelectedImage] = []
     @State private var pictureNotice: String?
 
     /// The server's cap on the note (`content-v1.ts`); longer words are refused, not cut.
@@ -45,6 +45,14 @@ struct CeoNoteSheet: View {
     private var note: Binding<String> {
         Binding(get: { drafts.draft(key) }, set: {
             drafts.setDraft($0, key: key)
+            drafts.trimDrafts(prefix: Self.draftPrefix, keeping: key, max: Self.keptNotes - 1)
+        })
+    }
+    /// Pictures for the CEO, like the chat composer's (the route takes up to 5). In the draft
+    /// store with the words: gone only once the send reached the CEO (ContentActionButtons).
+    private var pictures: Binding<[SelectedImage]> {
+        Binding(get: { drafts.images(key) }, set: {
+            drafts.setImages($0, key: key)
             drafts.trimDrafts(prefix: Self.draftPrefix, keeping: key, max: Self.keptNotes - 1)
         })
     }
@@ -77,14 +85,14 @@ struct CeoNoteSheet: View {
                     .frame(height: boxHeight)
                     HStack(spacing: 4) {
                         ReplyPictureButton(
-                            images: $pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote",
+                            images: pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote",
                             onWillPresent: { focused = false }
                         )
-                        Text(pictures.isEmpty ? "Add a picture" : "Pictures go with your message")
+                        Text(pictures.wrappedValue.isEmpty ? "Add a picture" : "Pictures go with your message")
                             .font(.caption)
                             .foregroundStyle(Theme.secondaryOnCard)
                     }
-                    ReplyPictureStrip(images: $pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote")
+                    ReplyPictureStrip(images: pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote")
                     if let over = overLimit {
                         Text(over)
                             .font(.caption)
@@ -106,7 +114,7 @@ struct CeoNoteSheet: View {
                     Button("Send") {
                         let words = note.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
                         dismiss()
-                        onSend(words, pictures)
+                        onSend(words, pictures.wrappedValue)
                     }
                     .fontWeight(.semibold)
                     .disabled(!Self.canSend(note.wrappedValue))

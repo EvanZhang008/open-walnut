@@ -322,6 +322,9 @@ struct PermissionResolved: Codable {
     let status: String // "resolved"
     let requestId: String
     let allow: Bool
+    /// How many pictures went with the answers. Absent when none did, and on a
+    /// server that predates pictures with an answer (it drops them).
+    var pictures: Int? = nil
 }
 
 /// PATCH /v1/sessions/:id → 200 { session }.

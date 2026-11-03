@@ -91,3 +91,29 @@ export async function picturesHeader(names: readonly string[] | undefined): Prom
   const { IMAGES_ATTACHED_LINE } = await import('./sessions/cloud-images.js');
   return `${IMAGES_ATTACHED_LINE}\n${paths.map((p) => `- ${p}`).join('\n')}\n\n`;
 }
+
+/**
+ * An AskUserQuestion answer set with its pictures in it: the pictures saved, and the images header
+ * naming them put in front of the LAST question's answer (the card offers its pictures beside that
+ * one), so they reach the model in the same tool result as the words. `prepare` makes the header
+ * right for the session's host: a remote host gets the files uploaded and the paths rewritten
+ * (SessionManager.prepareOutbound). No picture saved = the answers as they came.
+ */
+export async function withAnswerPictures(
+  answers: Record<string, string>,
+  toolInput: Record<string, unknown> | undefined,
+  pictures: { images?: unknown; imageRefs?: unknown },
+  prepare: (text: string) => Promise<string>,
+): Promise<{ answers: Record<string, string>; pictures: number }> {
+  const keys = Object.keys(answers);
+  if (keys.length === 0) return { answers, pictures: 0 };
+  const names = await saveAnswerPictures(pictures);
+  const header = await picturesHeader(names);
+  if (!header) return { answers, pictures: 0 };
+  const asked = Array.isArray(toolInput?.questions)
+    ? (toolInput!.questions as Array<{ question?: unknown }>).map((q) => q?.question).filter((q): q is string => typeof q === 'string')
+    : [];
+  const last = [...asked].reverse().find((q) => q in answers) ?? keys[keys.length - 1];
+  const shown = await prepare(header).catch(() => header);
+  return { answers: { ...answers, [last]: `${shown}${answers[last]}` }, pictures: header.split('\n').filter((l) => l.startsWith('- ')).length };
+}

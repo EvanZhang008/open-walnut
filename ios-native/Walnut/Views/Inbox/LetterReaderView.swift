@@ -702,7 +702,8 @@ struct LetterReaderView: View {
                 replyFocused = true
             },
             onOpenTask: openTask,
-            pictures: { clientId in replies.images(ofReply: clientId) }
+            pictures: { clientId in replies.images(ofReply: clientId) },
+            turnPictures: { entry in replies.images(ofTurn: entry) }
         )
     }
 
@@ -1091,6 +1092,8 @@ struct LetterReaderView: View {
             decisionPictureNotice = nil
             deliveryNote = nil
             replies.noteAnswerDelivery(result, letterId: letterId)
+            // Before the letter is adopted, so its answer turn draws the thumbnails at once.
+            replies.rememberAnswerPictures(pictures.map(\.jpegData), result: result)
             adopt(result)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .failure(let error):

@@ -1235,7 +1235,8 @@ export async function handleSessionControlRelay(
         const { respondSessionPermission } = await import('./session-lifecycle.js');
         // `answers` = AskUserQuestion decision relayed from the cloud replica /
         // phone; validated (plain object of strings) inside respondSessionPermission.
-        result = await respondSessionPermission(sessionId, p.requestId, p.allow, p.message, p.optionId, p.answers) as unknown as Record<string, unknown>;
+        result = await respondSessionPermission(sessionId, p.requestId, p.allow, p.message, p.optionId, p.answers,
+          { images: p.images, imageRefs: p.imageRefs }) as unknown as Record<string, unknown>;
         break;
       }
       case 'execute-continue': {

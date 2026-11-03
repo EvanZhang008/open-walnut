@@ -364,4 +364,38 @@ final class PendingPermissionStackCapTests: XCTestCase {
         // No bar, no shift.
         XCTAssertEqual(PendingPermissionStack.scrollY(bandTop: 20, insetTop: 0), 20)
     }
+
+    /// Typing in the last answer keeps its pictures and Submit on screen with it
+    /// when the keyboard leaves room for all three, and the field alone when not.
+    func testRevealRegionKeepsTheTailWithTheLastFieldWhenItFits() {
+        let row = CGRect(x: 0, y: 300, width: 300, height: 44)
+        let tail = CGRect(x: 0, y: 420, width: 300, height: 44)
+        let both = PendingPermissionStack.revealRegion(row: row, tail: tail, bandHeight: 260, margin: 8)
+        XCTAssertEqual(both, CGRect(x: 0, y: 300, width: 300, height: 164))
+        // The scroll then brings Submit's bottom inside the band, not just the field.
+        let y = PendingPermissionStack.revealTarget(row: both, visibleTop: 100, bandHeight: 260, margin: 8)
+        XCTAssertEqual(y, 212)
+        // Too short a band: the field (the cursor) wins.
+        XCTAssertEqual(PendingPermissionStack.revealRegion(row: row, tail: tail, bandHeight: 150, margin: 8), row)
+        XCTAssertEqual(PendingPermissionStack.revealRegion(row: row, tail: nil, bandHeight: 400, margin: 8), row)
+    }
+
+    /// Pictures sent with an answer and none counted back: the phone says the
+    /// server dropped them, never a silent loss.
+    func testAnAnswerWhosePicturesTheServerDroppedSaysSo() {
+        let old = PermissionResolved(status: "resolved", requestId: "r", allow: true)
+        XCTAssertNotNil(SessionLifecycleController.droppedPicturesNote(sent: 2, resolved: old))
+        let took = PermissionResolved(status: "resolved", requestId: "r", allow: true, pictures: 2)
+        XCTAssertNil(SessionLifecycleController.droppedPicturesNote(sent: 2, resolved: took))
+        XCTAssertNil(SessionLifecycleController.droppedPicturesNote(sent: 0, resolved: old))
+    }
+
+    /// Typing in the last answer grows the box to hold the field, its pictures
+    /// and Submit, never past the page; otherwise the usual cap holds.
+    func testTypingCapHoldsTheTailUpToThePage() {
+        XCTAssertEqual(PendingPermissionStack.typingCap(base: 180, pageHeight: 500, need: nil), 180)
+        XCTAssertEqual(PendingPermissionStack.typingCap(base: 180, pageHeight: 500, need: 150), 180)
+        XCTAssertEqual(PendingPermissionStack.typingCap(base: 180, pageHeight: 500, need: 240), 240)
+        XCTAssertEqual(PendingPermissionStack.typingCap(base: 180, pageHeight: 200, need: 240), 200)
+    }
 }

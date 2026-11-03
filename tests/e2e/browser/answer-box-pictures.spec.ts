@@ -5,7 +5,9 @@
  *     paste puts one back), Send threads the reply with the picture under it, the letter keeps the
  *     picture's name, and the letter's own session receives the file under the images header;
  *  2. an Org thread's Follow up takes a pasted screenshot and an attached one, Send files the
- *     follow-up with both pictures, and the lead's session receives them.
+ *     follow-up with both pictures, and the lead's session receives them;
+ *  3. a session's question card takes a screenshot under its own-words answer, and Submit sends
+ *     the answer and the picture in ONE request, which the session reads as one tool result.
  * The paste is a real paste event carrying a File in its clipboardData, drawn on a canvas in the
  * page, the way a screenshot from the clipboard arrives. The receipts are the server's records and
  * the session's own history, never a status the UI printed. Every object this file makes it removes.
@@ -205,3 +207,69 @@ test('an Org thread\'s Follow up takes a pasted and an attached screenshot, and 
   await expect(chat.locator('img.inline-image').first()).toBeVisible({ timeout: 30_000 })
   await beat(page, 2500)
 })
+
+test('a question card sends its answer and its picture as one message', async ({ page, request }) => {
+  const task = await request.post('/api/tasks', { data: { title: `PW question picture ${NONCE}`, project: 'Walnut', source: 'local' } })
+  expect(task.ok(), await task.text()).toBe(true)
+  const taskId = ((await task.json()) as { task: { id: string } }).task.id
+  made.push(taskId)
+  const started = await request.post('/api/sessions/quick-start', {
+    data: { cwd: `${fixtureRoot}/projects/walnut`, message: 'status-permission-test:AskUserQuestion', taskId, mode: 'default' },
+  })
+  expect(started.ok(), await started.text()).toBe(true)
+  const sid = ((await started.json()) as { sessionId: string }).sessionId
+  await expect.poll(async () => ((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? ''),
+    { timeout: 90_000 }).toBe('AskUserQuestion')
+
+  // Every request the page makes to the session after Submit: the answer, and nothing that
+  // carries the pictures on their own.
+  const permissionBodies: Array<Record<string, unknown>> = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith(`/api/sessions/${sid}/permission`)) permissionBodies.push(r.postDataJSON() as Record<string, unknown>)
+  })
+  const sent: string[] = []
+  page.on('websocket', (ws) => ws.on('framesent', (f) => {
+    const text = typeof f.payload === 'string' ? f.payload : ''
+    if (text.includes('session:send') && text.includes(sid)) sent.push(text)
+  }))
+
+  await isolateUiPrefs(page)
+  await page.goto(`/sessions?id=${sid}`)
+  const card = page.locator('.ask-user-question-card')
+  await expect(card).toBeVisible({ timeout: 30_000 })
+  const box = card.locator('.qp-input').last()
+  await box.fill(`Like this one (${NONCE})`)
+  await pasteScreenshot(box, `Badge mock ${NONCE}`)
+  await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
+  await beat(page, 1500)
+  await shot(card, 'question-before-submit')
+  // An upload that fails answers nothing and keeps the words and the picture for the next try.
+  await page.route('**/api/images/upload', (route) => route.fulfill({ status: 503, json: { error: 'test: upload refused' } }))
+  await card.locator('.permission-request-btn--allow').click()
+  await expect(card.locator('.permission-request-btn--allow')).toBeEnabled({ timeout: 20_000 })
+  expect(permissionBodies).toHaveLength(0)
+  await expect(box).toHaveValue(`Like this one (${NONCE})`)
+  await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
+  await page.unroute('**/api/images/upload')
+  await card.locator('.permission-request-btn--allow').click()
+
+  await expect.poll(() => permissionBodies.length, { timeout: 20_000 }).toBe(1)
+  const body = permissionBodies[0]!
+  expect(body.answers).toEqual({ 'Which validation target?': `Like this one (${NONCE})` })
+  expect(body.imageRefs).toHaveLength(1)
+  // The one tool result: the images header, the saved file, and the words, in the answer itself.
+  await expect.poll(() => historyText(request, sid), { timeout: 60_000 }).toContain('AskUserQuestion decision received: [Images attached')
+  const said = await historyText(request, sid)
+  const name = (body.imageRefs as Array<{ filename: string }>)[0]!.filename
+  expect(said).toContain(name)
+  expect(said).toContain(`Like this one (${NONCE})`)
+  await beat(page, 1500)
+  expect(sent, 'no message after the answer carries the pictures').toEqual([])
+})
+
+async function historyText(request: APIRequestContext, sid: string): Promise<string> {
+  const res = await request.get(`/api/v1/sessions/${sid}/history?tail=80`)
+  if (!res.ok()) return ''
+  const body = (await res.json()) as { messages?: Array<{ text?: string }> }
+  return (body.messages ?? []).map((m) => m.text ?? '').join('\n')
+}

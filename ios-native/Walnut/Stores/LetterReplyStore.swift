@@ -104,6 +104,12 @@ final class LetterReplyStore {
     @ObservationIgnored private var restoringImages: Task<Void, Never>?
     @ObservationIgnored private var sentOrder: [String] = []
     nonisolated static let maxSentImageReplies = 20
+    /// The pictures of decision answers this phone sent, by the file names the
+    /// server recorded on the answer's turn (an answer has no `clientId`), kept
+    /// like `sentImages` so the recorded turn shows them, not just their count.
+    /// Observed: the turn appears in the same update that stores them.
+    private(set) var answerImages: [String: [Data]] = [:]
+    @ObservationIgnored private var answerOrder: [String] = []
 
     init(transport: LetterReplyTransport? = nil, defaults: UserDefaults? = nil, now: Date = Date()) {
         self.transport = transport ?? WalnutAPI()
@@ -160,6 +166,34 @@ final class LetterReplyStore {
     /// The pictures that went (or go) with a reply, by its `clientId`, as its
     /// bubble shows them: pending, or recorded during this app session.
     func images(ofReply clientId: String) -> [Data] { pendingImages[clientId] ?? sentImages[clientId] ?? [] }
+
+    /// The pictures a recorded human turn shows: a reply's by its `clientId`, a
+    /// decision answer's by the names the server recorded for them.
+    func images(ofTurn entry: LetterThreadEntry) -> [Data] {
+        if let clientId = entry.clientId {
+            let datas = images(ofReply: clientId)
+            if !datas.isEmpty { return datas }
+        }
+        guard let names = entry.images, !names.isEmpty else { return [] }
+        return answerImages[Self.picturesKey(names)] ?? []
+    }
+
+    /// Keep a decision answer's pictures for its recorded turn: the answered
+    /// letter's newest human turn, when it carries pictures. Only when the
+    /// server kept them all, so a thumbnail never stands for a picture that did
+    /// not go, nor lands on an older turn.
+    func rememberAnswerPictures(_ datas: [Data], result: LetterActionResult) {
+        guard !datas.isEmpty,
+              let names = result.letter?.thread?.last(where: \.isHuman)?.images,
+              names.count == datas.count
+        else { return }
+        let key = Self.picturesKey(names)
+        answerImages[key] = datas
+        answerOrder.append(key)
+        while answerOrder.count > Self.maxSentImageReplies { answerImages[answerOrder.removeFirst()] = nil }
+    }
+
+    nonisolated static func picturesKey(_ names: [String]) -> String { names.joined(separator: "\n") }
 
     // MARK: - Sending
 
@@ -732,6 +766,8 @@ extension LetterReplyStore {
         pendingImages = [:]
         sentImages = [:]
         sentOrder = []
+        answerImages = [:]
+        answerOrder = []
         if storedDefaults != nil {
             for key in DurableStore.keys(withPrefix: Self.imageKeyPrefix) { DurableStore.remove(key: key) }
         }

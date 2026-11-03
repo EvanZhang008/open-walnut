@@ -1213,6 +1213,26 @@ export interface HumanReplyTurn {
 }
 
 /**
+ * True when the store would take nothing new from this reply or answer: a reply whose `clientId`
+ * is already on a human turn (humanReplyTurn returns that turn), or an answer to a letter already
+ * answered that answerLetter refuses. The caller then saves no pictures for it, so a resend never
+ * leaves a second copy of them on disk. A missing letter is not a repeat: its call fails anyway.
+ */
+export async function repeatsRecordedTurn(
+  id: string,
+  input: { kind: 'reply'; clientId?: unknown } | { kind: 'answer'; by?: LetterAnsweredBy },
+): Promise<boolean> {
+  if (typeof id !== 'string' || !LETTER_ID_RE.test(id)) return false;
+  const letter = (await readStore()).letters.find(l => l.id === id);
+  if (!letter) return false;
+  if (input.kind === 'reply') {
+    return typeof input.clientId === 'string'
+      && letter.thread.some(t => t.from === 'human' && t.clientId === input.clientId);
+  }
+  return !!letter.answered && !(letter.answered.by && !input.by);
+}
+
+/**
  * Append the human's free-text reply, once per `clientId`.
  *
  * The id is how a client retries safely. A reply whose response was lost (a

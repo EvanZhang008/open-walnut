@@ -164,8 +164,8 @@ struct ContentActionButtons: View {
                 let images = await SelectedImage.buildPayloads(pictures.map(\.jpegData))
                 let reply = try await WalnutAPI().contentCeo(item: item, note: note, images: images)
                 outcome = Self.outcome(of: reply)
-                // The words are gone from the box only once they reached the CEO; a held, a
-                // dropped or a failed send keeps them for the next try.
+                // The words and pictures are gone from the box only once they reached the CEO;
+                // a held, a dropped or a failed send keeps them for the next try.
                 if case .sent = outcome { ComposerDrafts.shared.clear(CeoNoteSheet.draftKey(item)) }
                 AppLog.info("content", "talk to ceo sent", ["taskId": reply.taskId, "sessionId": reply.sessionId ?? "", "held": reply.held == true ? "true" : "false"])
             } catch {

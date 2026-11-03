@@ -20,6 +20,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const respondToPermission = vi.hoisted(() => vi.fn());
 
 vi.mock('@/api/sessions', () => ({ respondToPermission }));
+const buildImageRefsPayload = vi.hoisted(() => vi.fn());
+vi.mock('@/api/image-upload', () => ({ buildImageRefsPayload }));
 
 import {
   getPermissionRequest, isSettledPermission, resetPermissionRequestStore,
@@ -46,6 +48,7 @@ beforeEach(() => {
   resetPermissionRequestStore();
   respondToPermission.mockReset();
   respondToPermission.mockResolvedValue({ status: 'resolved' });
+  buildImageRefsPayload.mockReset();
 });
 
 describe('the optimistic flip', () => {
@@ -73,8 +76,31 @@ describe('the optimistic flip', () => {
       status: 'allowed', answers, optionId: 'allow_once',
     });
     expect(respondToPermission).toHaveBeenCalledWith(
-      SESSION, REQUEST, true, undefined, 'allow_once', answers,
+      SESSION, REQUEST, true, undefined, 'allow_once', answers, undefined,
     );
+    expect(buildImageRefsPayload).not.toHaveBeenCalled();
+  });
+
+  it('an answer\'s pictures go in the answer request itself, never as a message after it', async () => {
+    const answers = { 'Which layout?': 'Like this' };
+    const images = [{ data: 'AAAA', mediaType: 'image/png' }];
+    buildImageRefsPayload.mockResolvedValue({ imageRefs: [{ filename: 'up-1.png' }] });
+    await respondToPermissionRequest(SESSION, REQUEST, true, { answers, images } as never);
+    expect(buildImageRefsPayload).toHaveBeenCalledWith(images);
+    expect(respondToPermission).toHaveBeenCalledTimes(1);
+    expect(respondToPermission).toHaveBeenCalledWith(
+      SESSION, REQUEST, true, undefined, undefined, answers, { imageRefs: [{ filename: 'up-1.png' }] },
+    );
+  });
+
+  it('an upload that fails leaves the question open to answer again, words and pictures together', async () => {
+    buildImageRefsPayload.mockRejectedValue(new Error('upload failed'));
+    const outcome = await respondToPermissionRequest(SESSION, REQUEST, true, {
+      answers: { 'Which layout?': 'Like this' }, images: [{ data: 'AAAA', mediaType: 'image/png' }],
+    } as never);
+    expect(outcome).toBe('failed');
+    expect(respondToPermission).not.toHaveBeenCalled();
+    expect(getPermissionRequest(REQUEST)).toMatchObject({ status: 'pending', failed: true, inFlight: false });
   });
 
   it('denies as denied, with the message that rode along', async () => {

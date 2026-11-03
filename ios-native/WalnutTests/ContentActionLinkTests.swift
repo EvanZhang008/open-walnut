@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Walnut
 
 /// Talk to CEO and New task on an email: the content the phone hands over (the web's
@@ -139,6 +140,36 @@ final class ContentActionLinkTests: XCTestCase {
         // Under the cap nothing goes.
         drafts.trimDrafts(prefix: "test-trim:", keeping: "test-trim:0", max: 2)
         XCTAssertEqual(keys.filter { !drafts.draft($0).isEmpty }.count, 3)
+    }
+
+    /// Talk to CEO keeps its pictures in the draft store with the words, so a failed send
+    /// leaves both; a note dropped by the cap takes its pictures with it.
+    func testCeoNotePicturesStayWithTheirWordsAndGoWithThem() throws {
+        let drafts = ComposerDrafts.shared
+        let keys = (0..<4).map { "test-ceo-pics:\($0)" }
+        defer { keys.forEach { drafts.clear($0) } }
+        let jpeg = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { ctx in
+            UIColor.red.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }.jpegData(compressionQuality: 0.8))
+        let picture = try XCTUnwrap(SelectedImage(jpegData: jpeg))
+        for key in keys {
+            drafts.setDraft("words", key: key)
+            drafts.setImages([picture], key: key)
+        }
+        XCTAssertEqual(drafts.images(keys[0]).count, 1)
+        drafts.trimDrafts(prefix: "test-ceo-pics:", keeping: keys[0], max: 1)
+        XCTAssertEqual(drafts.images(keys[0]).count, 1, "the open note keeps its pictures")
+        XCTAssertEqual(keys.dropFirst().filter { !drafts.images($0).isEmpty }.count, 1)
+        XCTAssertEqual(keys.dropFirst().filter { !drafts.draft($0).isEmpty }.count, 1)
+        // A note with pictures and no words yet counts toward the cap too.
+        let pictureOnly = (0..<3).map { "test-ceo-pics:only-\($0)" }
+        defer { pictureOnly.forEach { drafts.clear($0) } }
+        for key in pictureOnly { drafts.setImages([picture], key: key) }
+        drafts.trimDrafts(prefix: "test-ceo-pics:", keeping: keys[0], max: 1)
+        XCTAssertEqual((keys.dropFirst() + pictureOnly).filter { !drafts.images($0).isEmpty }.count, 1)
+        // Only a send that reached the CEO clears them.
+        drafts.clear(keys[0])
+        XCTAssertTrue(drafts.images(keys[0]).isEmpty)
     }
 
     func testDraftFocusIsTakenOnce() {
