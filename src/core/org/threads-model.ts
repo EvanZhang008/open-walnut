@@ -101,6 +101,13 @@ export interface ThreadAnswer {
   /** The tasks the reply is about (its `<walnut-about>` line, or the history parse). */
   about?: string[];
   clipped?: boolean;
+  /** Read from the letter's own thread (a letter note's answer, thread-answers.ts letterAnswerOf). */
+  from?: 'letter';
+}
+
+/** A letter note whose answer was not read from its letter (filed before 2026-11-03, taken from the chat). */
+export function letterAnswerMissing(m: Pick<ThreadMessage, 'via' | 'answer'>): boolean {
+  return m.via === 'letter' && m.answer?.from !== 'letter';
 }
 
 /** Where a thread the node opened came from. */
@@ -621,7 +628,8 @@ export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, Threa
     let hit = false;
     const messages = t.messages.map((m) => {
       const a = answers.get(m.id);
-      if (!a || m.answer) return m;
+      // A letter note's answer from its letter replaces one an older Walnut took from the chat.
+      if (!a || (m.answer && !(a.from === 'letter' && letterAnswerMissing(m)))) return m;
       hit = true;
       const clipped = a.text.length > THREAD_ANSWER_MAX;
       return { ...m, answer: { ...a, text: clipped ? `${a.text.slice(0, THREAD_ANSWER_MAX - 1)}…` : a.text, ...(clipped ? { clipped: true } : {}) } };

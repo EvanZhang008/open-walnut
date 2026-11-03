@@ -108,7 +108,7 @@ describe('the answer to each message', () => {
       { from: 'agent', text: 'Combining 1 and 10 now.', at: ms(6) },
       { from: 'human', text: 'and the colors of 3', at: ms(20) },
     ]
-    expect(letterAnswerOf(m('tm-1', 5, 'combine 1 and 10', { via: 'letter' }), turns)).toEqual({ text: 'Combining 1 and 10 now.', at: at(6) })
+    expect(letterAnswerOf(m('tm-1', 5, 'combine 1 and 10', { via: 'letter' }), turns)).toEqual({ text: 'Combining 1 and 10 now.', at: at(6), from: 'letter' })
     // His second note has no answer there yet: none, never the chat's.
     expect(letterAnswerOf(m('tm-2', 20, 'and the colors of 3', { via: 'letter' }), turns)).toBeNull()
     // A note far from every turn of his is not this letter's.

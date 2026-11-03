@@ -14,7 +14,7 @@
 import { log } from '../../logging/index.js';
 import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
-import type { OrgThread, ThreadAnswer, ThreadMessage } from './threads-model.js';
+import { letterAnswerMissing, type OrgThread, type ThreadAnswer, type ThreadMessage } from './threads-model.js';
 
 /** A transcript row as the projection gives it (session-projection.ts). */
 export interface AnswerRow {
@@ -161,7 +161,7 @@ export function letterAnswerOf(m: Pick<ThreadMessage, 'at' | 'text'>, turns: rea
   }
   if (his < 0) return null;
   const reply = turns.slice(his + 1).find((t) => t.from === 'agent' && t.text.trim());
-  return reply ? { text: reply.text, at: new Date(reply.at).toISOString() } : null;
+  return reply ? { text: reply.text, at: new Date(reply.at).toISOString(), from: 'letter' } : null;
 }
 
 /**
@@ -170,7 +170,7 @@ export function letterAnswerOf(m: Pick<ThreadMessage, 'at' | 'text'>, turns: rea
  */
 async function letterAnswers(taskId: string, messages: readonly ThreadMessage[]): Promise<Map<string, ThreadAnswer>> {
   const out = new Map<string, ThreadAnswer>();
-  const want = messages.filter((m) => m.via === 'letter' && !m.answer && !gaveUp(m.id));
+  const want = messages.filter((m) => letterAnswerMissing(m) && !gaveUp(m.id));
   if (!want.length) return out;
   const { getLetter, listLetters } = await import('../human-inbox/store.js');
   let mine: Array<{ id: string; thread: LetterTurn[] }> | null = null;
@@ -208,7 +208,7 @@ export function pendingBySession(threads: readonly OrgThread[], fallbackSid: str
       out.set(sid, [...(out.get(sid) ?? []), m]);
     }
   }
-  for (const [sid, ms] of out) if (!ms.some((m) => !m.answer && !gaveUp(m.id))) out.delete(sid);
+  for (const [sid, ms] of out) if (!ms.some((m) => (!m.answer || letterAnswerMissing(m)) && !gaveUp(m.id))) out.delete(sid);
   return out;
 }
 
@@ -287,7 +287,7 @@ async function resolveOnce(taskId: string, endedAt: string | null): Promise<numb
       for (const [id, a] of await answersIn(nodeSid, messages.filter((m) => m.answer || left.includes(m)), endedAt)) found.set(id, a);
     }
     for (const [id, a] of await letterAnswers(taskId, messages)) found.set(id, a);
-    for (const m of messages) if (!m.answer && !found.has(m.id)) tries.set(m.id, (tries.get(m.id) ?? 0) + 1);
+    for (const m of messages) if ((!m.answer || letterAnswerMissing(m)) && !found.has(m.id)) tries.set(m.id, (tries.get(m.id) ?? 0) + 1);
   }
   if (!found.size) return 0;
   const kept = await store.setThreadAnswers(taskId, found);

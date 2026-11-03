@@ -309,6 +309,23 @@ describe('the node\'s answers, and what he already knows', () => {
     expect(setAnswers(r.file, new Map([[m1.id, answer(30, 'other')]])).changed).toEqual([])
   })
 
+  it('a letter note\'s answer read from its letter replaces one taken from the chat, never one from the letter or a chat message\'s', () => {
+    let f = file('chat words')
+    const t = f.threads[0]
+    // A letter note an older Walnut answered with the node's next chat words (2026-11-03).
+    f = { ...f, threads: [{ ...t, messages: [{ ...t.messages[0], via: 'letter' as const, answer: answer(5, 'The task menu redesign is live.') }] }] }
+    const id = f.threads[0].messages[0].id
+    const fromLetter: ThreadAnswer = { text: 'Renamed it, as you asked.', at: at(6), from: 'letter' }
+    const r = setAnswers(f, new Map([[id, fromLetter]]))
+    expect(r.file.threads[0].messages[0].answer).toMatchObject({ text: 'Renamed it, as you asked.', from: 'letter' })
+    expect(setAnswers(r.file, new Map([[id, { ...fromLetter, text: 'later' }]])).changed).toEqual([])
+    // A chat message keeps its first answer whatever comes.
+    const chat = file('plain')
+    const cid = chat.threads[0].messages[0].id
+    const kept = setAnswers(chat, new Map([[cid, answer(5)]])).file
+    expect(setAnswers(kept, new Map([[cid, fromLetter]])).changed).toEqual([])
+  })
+
   it('the user\'s case: the node answers, he says nothing, the node cannot close or fold it (silence is not knowing)', () => {
     let f = file('what is the small model?')
     const t = f.threads[0]
