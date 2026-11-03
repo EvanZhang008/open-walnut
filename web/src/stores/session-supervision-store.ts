@@ -24,14 +24,27 @@ interface Entry {
   refreshAgain: boolean;
   actionError: string | null;
   timer: ReturnType<typeof setInterval> | null;
+  /** When the reads started failing after a good one (0: they do not). */
+  failingSince: number;
+  retry: ReturnType<typeof setTimeout> | null;
 }
+
+/**
+ * A read that fails right after a good one is most often the server restarting
+ * for a deploy: the last value stays shown and the read is asked again quickly,
+ * and only a failure that lasts this long reads as unavailable. 2026-11-03: every
+ * deploy flashed "Recovery status unavailable / Failed to fetch" on each open
+ * session for the few seconds the server was down.
+ */
+export const READ_FAILURE_GRACE_MS = 8_000;
+const READ_RETRY_MS = 1_500;
 
 const entries = new Map<string, Entry>();
 
 function entryFor(sid: string): Entry {
   let entry = entries.get(sid);
   if (!entry) {
-    entry = { snapshot: EMPTY, listeners: new Set(), revision: 0, read: null, refreshAgain: false, actionError: null, timer: null };
+    entry = { snapshot: EMPTY, listeners: new Set(), revision: 0, read: null, refreshAgain: false, actionError: null, timer: null, failingSince: 0, retry: null };
     entries.set(sid, entry);
   }
   return entry;
@@ -64,6 +77,8 @@ export function subscribeSessionSupervision(sid: string, listener: () => void): 
     if (!entry.listeners.size) {
       if (entry.timer) clearInterval(entry.timer);
       entry.timer = null;
+      if (entry.retry) clearTimeout(entry.retry);
+      entry.retry = null;
       release(sid, entry);
     }
   };
@@ -80,11 +95,21 @@ export function refreshSessionSupervision(sid: string): Promise<void> {
   entry.read = (async () => {
     try {
       const value = await fetchSessionSupervision(sid);
+      entry.failingSince = 0;
       if (entry.revision === revision) {
         publish(entry, { value, loading: false, unavailable: false, error: entry.actionError, stopPending: value.stopRequest?.state === 'pending' });
       }
     } catch (error) {
-      if (entry.revision === revision) publish(entry, { loading: false, unavailable: true, error: entry.actionError ?? (error instanceof Error ? error.message : String(error)) });
+      const now = Date.now();
+      if (!entry.failingSince) entry.failingSince = now;
+      const held = !!entry.snapshot.value && !entry.snapshot.unavailable && now - entry.failingSince < READ_FAILURE_GRACE_MS;
+      if (held) {
+        if (!entry.retry && entry.listeners.size) {
+          entry.retry = setTimeout(() => { entry.retry = null; void refreshSessionSupervision(sid); }, READ_RETRY_MS);
+        }
+      } else if (entry.revision === revision) {
+        publish(entry, { loading: false, unavailable: true, error: entry.actionError ?? (error instanceof Error ? error.message : String(error)) });
+      }
     } finally {
       entry.read = null;
       if (entry.refreshAgain && entry.listeners.size && !entry.snapshot.writing) void refreshSessionSupervision(sid);

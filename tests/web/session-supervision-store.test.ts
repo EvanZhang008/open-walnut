@@ -23,6 +23,7 @@ import {
   refreshSessionSupervision,
   changeSessionSupervision,
   stopSupervisedSession,
+  READ_FAILURE_GRACE_MS,
 } from '@/stores/session-supervision-store';
 
 type SupState = NonNullable<SessionSupervision['supervision']>['state'];
@@ -346,6 +347,10 @@ describe('session-supervision store — stop', () => {
     serveStop('pending', SID);
     api.fetchSessionSupervision.mockRejectedValue(new Error('daemon unreachable'));
     await stopSupervisedSession(SID);
+    // A failure right after a good read is held for the grace (a server restart), then shows.
+    expect(r.snap.unavailable).toBe(false);
+    await vi.advanceTimersByTimeAsync(READ_FAILURE_GRACE_MS + 2_000);
+    await flush();
 
     expect(r.snap.stopPending).toBe(true);
     expect(r.snap.stopping).toBe(false);
@@ -427,5 +432,43 @@ describe('session-supervision store — read failures', () => {
     expect(r.snap.error).toBeNull();
     expect(r.snap.value?.supervision?.enabled).toBe(true);
     expect(r.snap.value?.supervision?.generation).toBe(2);
+  });
+});
+
+describe('session-supervision store \u2014 a server restart', () => {
+  // 2026-11-03: every deploy flashed "Recovery status unavailable / Failed to fetch" on each open
+  // session while the server restarted. A failure right after a good read keeps the last value,
+  // asks again quickly, and only a failure that outlasts the grace shows.
+  it('a few seconds of failing reads after a good one show nothing, and the next good read lands', async () => {
+    const SID = 'sess-restart';
+    serveGet(sup({ enabled: true }));
+    const r = reader(SID);
+    await flush();
+    api.fetchSessionSupervision.mockRejectedValue(new TypeError('Failed to fetch'));
+    await refreshSessionSupervision(SID);
+    expect(r.snap.unavailable).toBe(false);
+    expect(r.snap.error).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_500);
+    await flush();
+    expect(r.snap.unavailable).toBe(false);
+    serveGet(sup({ enabled: true, generation: 3 }));
+    await vi.advanceTimersByTimeAsync(1_500);
+    await flush();
+    expect(r.snap.unavailable).toBe(false);
+    expect(r.snap.error).toBeNull();
+    expect(r.snap.value?.supervision?.generation).toBe(3);
+  });
+
+  it('a failure that lasts past the grace shows as unavailable', async () => {
+    const SID = 'sess-restart-long';
+    serveGet(sup({ enabled: true }));
+    const r = reader(SID);
+    await flush();
+    api.fetchSessionSupervision.mockRejectedValue(new TypeError('Failed to fetch'));
+    await refreshSessionSupervision(SID);
+    await vi.advanceTimersByTimeAsync(READ_FAILURE_GRACE_MS + 1_600);
+    await flush();
+    expect(r.snap.unavailable).toBe(true);
+    expect(r.snap.error).toBe('Failed to fetch');
   });
 });
