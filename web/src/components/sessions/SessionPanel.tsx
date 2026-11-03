@@ -15,6 +15,7 @@ import { stopSupervisedSession } from '@/stores/session-supervision-store';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
+import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
 import { SessionCommentsContext, type SessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { useSessionComments } from '@/hooks/useSessionComments';
@@ -1244,6 +1245,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   const revealChat = useCallback(() => collapseChat(false), [collapseChat]);
   const peek = usePeekTabs({ ownTaskId: session?.taskId, sessionId, enabled: !inset && isFullscreen, onReveal: revealChat });
   const peekShownId = session?.taskId ? peek.shownId : null;
+  // The chat stays mounted under a peek (visibility: hidden): its marks must not paint on the peek.
+  useHidesHighlights(!!peekShownId);
   const { open: peekOpen, close: peekClose, active: peekActive } = peek;
   const closeShownPeek = useCallback(() => { if (peekActive) peekClose(peekActive, 'close'); }, [peekActive, peekClose]);
   // Stable (the hook's callbacks are), so the memoized chat history does not re-render for it.

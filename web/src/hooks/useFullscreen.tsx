@@ -6,6 +6,7 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { PluginBoxContext } from '@/contexts/PluginBoxContext';
 import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
+import { useHidesHighlights } from './useHidesHighlights';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { log } from '@/utils/log';
@@ -131,6 +132,8 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   const isFullscreen = tab ? ownsTab : ownFlag;
   const { pathname } = useLocation();
   const away = isFullscreen && keepAcrossRoutes && !shown;
+  // An away sheet is portalled out of Home and hidden by visibility: its chat's marks must not paint on the page.
+  useHidesHighlights(away);
   const active = isFullscreen && !away;
   const leave = useCallback(() => { if (tab) releaseFullscreen(id, place); else setOwnFlag(false); }, [tab, id, place]);
 

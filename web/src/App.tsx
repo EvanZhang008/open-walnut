@@ -14,6 +14,7 @@ import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { StaleBuildPill } from './components/common/StaleBuildPill';
 import { PageFind } from './components/common/PageFind';
+import { useHidesHighlights } from './hooks/useHidesHighlights';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { ApprovalPrompts } from './components/approvals/ApprovalPrompts';
 import { PluginBoundary } from './components/common/PluginBoundary';
@@ -152,6 +153,8 @@ export function App() {
   // the previous render"). tests/web/hook-order-ratchet.test.ts pins this.
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
+  // Home stays mounted under visibility: hidden off its route; its chats' marks must not paint on this page.
+  useHidesHighlights(location.pathname !== '/');
 
   if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 
