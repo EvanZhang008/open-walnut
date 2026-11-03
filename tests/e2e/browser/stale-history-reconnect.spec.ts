@@ -53,6 +53,83 @@ async function mockSessionDetail(page: Page) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __staleRetryMs?: number }).__staleRetryMs = 500;
+    (window as unknown as { __staleBannerGraceMs?: number }).__staleBannerGraceMs = 0;
+  });
+});
+
+/**
+ * A deploy restarts the server, and its first dial to a remote host leaves the
+ * live read failing for a few seconds while the session runs on untouched
+ * (2026-11-03: every clouddev session flashed "Showing cached history.
+ * Reconnecting" for about 10 s on a deploy that changed nothing there). The
+ * banner waits STALE_BANNER_GRACE_MS (8 s) and the hook re-reads quickly in the
+ * first seconds, so a short drop never shows it; a real outage still does.
+ */
+test.describe('a short drop of the live read shows no banner', () => {
+  async function routeHistory(page: Page, isDown: () => boolean) {
+    const cached = [
+      { role: 'user', text: 'Old cached question', timestamp: '2026-01-01T00:00:00.000Z' },
+      { role: 'assistant', text: 'Old cached answer', timestamp: '2026-01-01T00:00:01.000Z' },
+    ];
+    const live = [...cached, { role: 'assistant', text: 'Fresh answer after the restart', timestamp: '2026-01-01T00:01:01.000Z' }];
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('source') === 'streams') return route.fulfill({ json: { messages: [], total: 0 } });
+      if (url.searchParams.get('since') !== null) {
+        if (isDown()) return route.fulfill({ status: 502, json: { error: 'Remote read failed' } });
+        return route.fulfill({ json: { messages: [], cursor: live.length, delta: true } });
+      }
+      if (isDown()) {
+        return route.fulfill({ json: { messages: cached, total: cached.length, stale: true, staleReason: 'Reconnecting to clouddev' } });
+      }
+      return route.fulfill({ json: { messages: live, cursor: live.length, delta: false } });
+    });
+    await mockSessionDetail(page);
+  }
+
+  test.beforeEach(async ({ page }) => {
+    // The real grace and the real steady retry: only the quick early re-reads can recover in time.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __staleRetryMs?: number; __staleBannerGraceMs?: number };
+      w.__staleRetryMs = 10_000;
+      delete w.__staleBannerGraceMs;
+    });
+  });
+
+  test('a read failing for 3 s (a server restart) never shows the banner, and the content catches up', async ({ page }) => {
+    // Down for 3 s from the first read the page makes.
+    let firstAt = 0;
+    await routeHistory(page, () => {
+      if (!firstAt) firstAt = Date.now();
+      return Date.now() - firstAt < 3_000;
+    });
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    const history = page.locator('.session-history');
+    const banner = page.locator('.session-history-stale-banner');
+    await expect.poll(() => firstAt, { timeout: 15_000 }).toBeGreaterThan(0);
+    const t0 = firstAt;
+    let shown = false;
+    while (Date.now() - t0 < 12_000) {
+      if (await banner.count()) shown = true;
+      if (await history.textContent().then((t) => t?.includes('Fresh answer after the restart'))) break;
+      await page.waitForTimeout(200);
+    }
+    expect(shown, 'a 3 s drop must not show the cached-history banner').toBe(false);
+    await expect(history).toContainText('Fresh answer after the restart', { timeout: 1_000 });
+    // Caught up by the quick re-reads, well before the 10 s steady retry.
+    expect(Date.now() - t0).toBeLessThan(9_000);
+  });
+
+  test('a read that keeps failing shows the banner after the grace', async ({ page }) => {
+    await routeHistory(page, () => true);
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    const history = page.locator('.session-history');
+    await expect(history).toContainText('Old cached answer', { timeout: 15_000 });
+    const t0 = Date.now();
+    const banner = page.locator('.session-history-stale-banner');
+    await expect(banner).toBeVisible({ timeout: 15_000 });
+    await expect(banner).toHaveText('Showing cached history. Reconnecting to clouddev...');
+    expect(Date.now() - t0).toBeGreaterThan(5_000);
   });
 });
 

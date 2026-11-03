@@ -12,7 +12,7 @@ import { idbGetHistory } from '@/cache/history-idb';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
 import { planDeltaMerge, foldFullPayload, prependOlderPage, mergeHistoryBackfill, sourceCountOf } from './history-merge';
 import { fillGap, gapIndex, liveGaps, type HistoryGap } from './history-gap';
-import { visibleInterval } from '@/utils/page-visibility';
+import { isPageHidden, visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
 
 
@@ -123,6 +123,11 @@ function diagnoseOrdering(phase: string, sid: string, msgs: SessionHistoryMessag
   );
 }
 
+/** How long a failing live read stays out of sight before the cached-history banner shows. */
+export const STALE_BANNER_GRACE_MS = 8_000;
+/** Quick re-reads in a failing read's first seconds, before the steady retry. */
+const STALE_EARLY_RETRY_MS = [1_500, 3_000, 4_500, 6_000, 7_500];
+
 /**
  * Two-phase session history loading:
  * Phase 1: Read local streams file (~1ms) — instant display
@@ -149,6 +154,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // daemon timeout). Content renders; caller shows a degraded banner. Distinct
   // from `error` (which blanks the view when there's nothing to show).
   const [stale, setStale] = useState<string | null>(null);
+  // What the banner shows: `stale` once it has lasted STALE_BANNER_GRACE_MS. A
+  // deploy restarts the server, and its first dial to a remote host leaves the
+  // live read failing for a few seconds while the session runs on untouched
+  // (2026-11-03: every clouddev session flashed "Reconnecting" for about 10 s
+  // on a deploy that changed nothing there). The content shown is the same.
+  const [staleBanner, setStaleBanner] = useState<string | null>(null);
+  const staleSinceRef = useRef(0);
   const [loadingFrom, setLoadingFrom] = useState<string | null>(null);
   const [forkBoundaryIndex, setForkBoundaryIndex] = useState<number | undefined>(undefined);
 
@@ -637,6 +649,18 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     return () => { cancelled = true; controller.abort(); };
   }, [sessionId, version, enabled]);
 
+  useEffect(() => {
+    if (!stale) { staleSinceRef.current = 0; setStaleBanner(null); return; }
+    if (!staleSinceRef.current) staleSinceRef.current = Date.now();
+    // Tests may set window.__staleBannerGraceMs (0: at once).
+    const override = typeof window !== 'undefined' ? (window as unknown as { __staleBannerGraceMs?: number }).__staleBannerGraceMs : undefined;
+    const grace = typeof override === 'number' ? override : STALE_BANNER_GRACE_MS;
+    const left = grace - (Date.now() - staleSinceRef.current);
+    if (left <= 0) { setStaleBanner(stale); return; }
+    const t = setTimeout(() => setStaleBanner(stale), left);
+    return () => clearTimeout(t);
+  }, [stale]);
+
   // Self-heal the "Showing cached history — Reconnecting…" banner.
   //
   // `stale` is set when a full fetch failed the live read (SSH/daemon down) and
@@ -664,7 +688,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // One retry at a time: a retry that is joining a read still arriving can
     // outlast the interval.
     let busy = false;
-    const cancel = visibleInterval(() => {
+    const tick = () => {
       if (busy) return;
       busy = true;
       fetchJoiningLoad(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal },
@@ -693,8 +717,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         })
         .catch(() => { /* transient: keep the banner, retry next tick */ })
         .finally(() => { busy = false; });
-    }, retryMs);
-    return () => { cancelled = true; controller.abort(); cancel(); };
+    };
+    // The first seconds of a failing read are most often a server restart or a
+    // daemon swap that is about to end: ask again quickly then, so the content
+    // catches up (and the banner never shows) as soon as the host is back.
+    const early = STALE_EARLY_RETRY_MS.filter((t) => t < retryMs)
+      .map((t) => setTimeout(() => { if (!isPageHidden()) tick(); }, t));
+    const cancel = visibleInterval(tick, retryMs);
+    return () => { cancelled = true; controller.abort(); cancel(); early.forEach(clearTimeout); };
   }, [sessionId, stale, enabled]);
 
   // History past the lazy tail is fetched only when the reader asks for it.
@@ -866,5 +896,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // Only the gaps still inside the rows, with their sides read from them.
   const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
 
-  return { messages, loading, phase2Pending, firstCheckPending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
+  return { messages, loading, phase2Pending, firstCheckPending, error, stale: staleBanner, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
 }

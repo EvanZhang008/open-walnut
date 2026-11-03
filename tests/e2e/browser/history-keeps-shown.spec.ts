@@ -113,6 +113,7 @@ async function endTurn(page: Page, sessionId: string) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as { __staleRetryMs?: number }).__staleRetryMs = 500;
+    (window as unknown as { __staleBannerGraceMs?: number }).__staleBannerGraceMs = 0;
   });
 });
 
