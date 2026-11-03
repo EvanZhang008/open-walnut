@@ -9,7 +9,7 @@ import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
-import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY, isTurnHead } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 
@@ -61,10 +61,10 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     const id = m.sourceUuid ?? m.msgId ?? m.walnutMessageId;
-    if (m.role !== 'user' || !id || !want.has(id)) continue;
+    if (!isTurnHead(m) || !id || !want.has(id)) continue;
     let last: M | undefined;
     let lastAt = -1;
-    for (let j = i + 1; j < messages.length && messages[j].role !== 'user'; j++) {
+    for (let j = i + 1; j < messages.length && !isTurnHead(messages[j]); j++) {
       const r = messages[j];
       if (r.role === 'assistant' && r.ownerId === undefined && hasWords(r.text)) { last = r; lastAt = j; }
     }

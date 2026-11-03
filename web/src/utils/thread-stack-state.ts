@@ -7,7 +7,7 @@
  */
 import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
-import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
+import { ROOT_THREAD_KEY, THREAD_HUES, isTurnHead, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { isMidTurn, rowOwnerOf } from '@/utils/tagged-reply-split';
 import { isStrictAskRow } from '@/utils/ask-answer';
@@ -410,6 +410,8 @@ export interface StatsRow {
   hints?: ReadonlyArray<{ kind: string; arg?: string; text?: string }>;
   /** Filed under this user row ('' = main) by the split, not by its place. */
   ownerId?: string;
+  /** A user row the CLI injected: part of the turn it sits in (isTurnHead). */
+  injected?: boolean;
 }
 
 export interface ThreadStats {
@@ -477,6 +479,8 @@ export function deriveThreadStats(
   };
   for (const r of rows) {
     const text = r.text ?? '';
+    // Injected context (a compaction's summary, a hook's) answers nothing and starts no turn.
+    if (r.role === 'user' && !isTurnHead(r)) continue;
     if (r.role === 'user') {
       if (INTERRUPT_RE.test(text.trim())) {
         if (turnHead && !out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'interrupted');

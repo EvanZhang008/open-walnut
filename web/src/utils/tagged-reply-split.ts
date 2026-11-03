@@ -33,6 +33,7 @@
  * Pure: unit tested in tests/web/tagged-reply-split.test.ts.
  */
 import { parseQuestionTag, questionSeqOfRow } from '@/utils/question-tag';
+import { isTurnHead } from '@/utils/thread-tree';
 import { askNameKey, mentionsAskAnswer, parseAskAnswers, strictAskOf } from '@/utils/ask-answer';
 
 export interface SplitRow {
@@ -129,7 +130,7 @@ function splitOldTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
   while (i < rows.length) {
     const first = rows[i];
     if (!sawTurn || asked(first) === null) {
-      if (first.role === 'user') {
+      if (isTurnHead(first)) {
         sawTurn = true;
         if (!isMidTurn(first)) turnSeq = questionSeqOfRow(first);
         else if (midTurnSeq(first) === null) turnSeq = null;
@@ -144,7 +145,7 @@ function splitOldTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
     // repeats (2026-10-31: a main line's answer opened with `[Q6]` and was filed
     // under question 6).
     let end = i + 1;
-    while (end < rows.length && !(rows[end].role === 'user' && asked(rows[end]) === null)) end++;
+    while (end < rows.length && !(isTurnHead(rows[end]) && asked(rows[end]) === null)) end++;
     const stretch = rows.slice(i, end);
     // Every row the stretch's questions were asked in, per number, in order.
     const questions = new Map<number, M[]>();
@@ -229,6 +230,7 @@ export function fileStrictAnswers<M extends SplitRow>(rows: M[]): M[] {
   let changed = false;
   const idOf = (m: M) => m.sourceUuid ?? m.msgId;
   for (const r of rows) {
+    if (r.role === 'user' && !isTurnHead(r)) { out.push(r); continue; }
     if (r.role === 'user') {
       const ask = strictAskOf(r);
       const id = idOf(r);

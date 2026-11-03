@@ -23,7 +23,7 @@ import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import { hasWords, questionBodyOf } from '@/utils/thread-card';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
-import type { ThreadTree } from '@/utils/thread-tree';
+import { isTurnHead, type ThreadTree } from '@/utils/thread-tree';
 import { plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
 import '@/styles/thread-review.css';
@@ -56,6 +56,7 @@ export function reviewTurnIndex(messages: readonly SessionHistoryMessage[]): Rea
   let open: TurnAt | undefined;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
+    if (m.role === 'user' && !isTurnHead(m)) continue;
     if (m.role === 'user') {
       const id = m.sourceUuid ?? m.msgId ?? m.walnutMessageId;
       open = id ? { at: i, user: m } : undefined;

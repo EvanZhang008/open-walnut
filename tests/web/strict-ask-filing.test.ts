@@ -123,8 +123,9 @@ describe('strict questions are answered by their tag alone', () => {
     expect(r.review.get('q6')?.reply?.text).toBe('Alpha means one.');
     expect(r.stats.answered.has('q6')).toBe(true);
     expect(r.stats.unanswered.size).toBe(0);
-    // The main turn keeps its own reply.
-    expect(r.review.get('u1')?.reply?.text).toBe('The refactor is done.');
+    // The main turn keeps its own words: the compaction's summary starts no turn
+    // (isTurnHead), so its last words are the ones after the summary.
+    expect(r.review.get('u1')?.reply?.text).toBe('Picking the question back up.');
   });
 
   it('a nested question (6.1) and a follow-up: each answer to its own thread and turn', () => {

@@ -20,7 +20,7 @@
  * Pure: unit tested in tests/web/question-tag.test.ts.
  */
 import type { SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
-import { ROOT_THREAD_KEY, threadIdOf, type ThreadTree, type ThreadTreeMessage } from '@/utils/thread-tree';
+import { ROOT_THREAD_KEY, isTurnHead, threadIdOf, type ThreadTree, type ThreadTreeMessage } from '@/utils/thread-tree';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { ASK_THREAD_RE, isStrictAskRow, stripAskAnswerTags } from '@/utils/ask-answer';
 
@@ -244,6 +244,7 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
   let decided = false;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
+    if (m.role === 'user' && !isTurnHead(m)) continue;
     if (m.role === 'user') {
       headId = threadIdOf(m);
       headSeq = questionSeqOfRow(m);

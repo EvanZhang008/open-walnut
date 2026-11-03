@@ -171,6 +171,19 @@ function rowIdOf(m: ThreadTreeMessage): string | undefined {
  * `queue-…` id lost its anchor, its number and its title (2026-10-08: its
  * follow-up went out as another question's number and was filed there).
  */
+/**
+ * Does this row start a turn? A user row the CLI injected (the summary a
+ * compaction writes, a hook's context, a skill's text) is no one's message: it
+ * belongs to the turn it sits in. 2026-11-03: question 6 was asked, the session
+ * compacted, and its answer came after the summary and the hook's context; both
+ * started turns of their own, so the card read "No answer" while the question
+ * read Answered. Every thread reader that cuts turns goes through this
+ * (tests/web/turn-head-guard.test.ts).
+ */
+export function isTurnHead(m: { role?: string; injected?: boolean }): boolean {
+  return m.role === 'user' && !m.injected;
+}
+
 export function threadIdOf(m: ThreadTreeMessage): string | undefined {
   return (m.role === 'user' ? m.sourceUuid : undefined) ?? rowIdOf(m);
 }
@@ -249,7 +262,7 @@ function computeThreadTree(
       if (id) owned.push({ id, owner: m.ownerId });
       continue;
     }
-    if (m.role === 'user') {
+    if (isTurnHead(m)) {
       const headId = threadIdOf(m) ?? '';
       turns.push({ headId, ...(id && id !== headId ? { rowId: id } : {}), start: i, text: m.text, memberIds: [] });
       continue;
