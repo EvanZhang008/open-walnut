@@ -89,4 +89,63 @@ final class ContentActionLinkTests: XCTestCase {
         XCTAssertFalse(ContentActionButtons.offersChat(.failed("x")))
         XCTAssertTrue(ContentActionButtons.isWarning(.timedOut))
     }
+
+    func testTheNoteNeedsWordsThatFit() {
+        XCTAssertFalse(CeoNoteSheet.canSend(""))
+        XCTAssertFalse(CeoNoteSheet.canSend("  \n\t "))
+        XCTAssertTrue(CeoNoteSheet.canSend("Please handle this"))
+        XCTAssertTrue(CeoNoteSheet.canSend(String(repeating: "a", count: CeoNoteSheet.noteLimit)))
+        XCTAssertFalse(CeoNoteSheet.canSend(String(repeating: "a", count: CeoNoteSheet.noteLimit + 1)))
+        // CJK test data (\u4F60\u597D): counted as characters, not bytes.
+        XCTAssertTrue(CeoNoteSheet.canSend(String(repeating: "\u{4F60}\u{597D}", count: CeoNoteSheet.noteLimit / 2)))
+    }
+
+    func testEachEmailKeepsItsOwnNote() throws {
+        let one = try XCTUnwrap(try item().contentItem)
+        let json = InboxItemContractTests.itemJSON.replacingOccurrences(of: #""message":"message-one""#, with: #""message":"message-two""#)
+        let two = try XCTUnwrap(try item(json).contentItem)
+        XCTAssertNotEqual(CeoNoteSheet.draftKey(one), CeoNoteSheet.draftKey(two))
+        XCTAssertEqual(CeoNoteSheet.draftKey(one), CeoNoteSheet.draftKey(one))
+    }
+
+    func testAReplyWithoutNotedSaysTheWordsWereLeftOut() {
+        let noted = ContentCeoReply(taskId: "t", sessionId: "s", started: true, held: nil, testRun: nil, noted: true)
+        XCTAssertEqual(ContentActionButtons.outcome(of: noted), .sent(noted))
+        // An older server ignores `note` and answers as before.
+        let old = ContentCeoReply(taskId: "t", sessionId: "s", started: true, held: nil, testRun: nil)
+        XCTAssertEqual(ContentActionButtons.outcome(of: old), .sentWithoutNote(old))
+        XCTAssertTrue(ContentActionButtons.isWarning(.sentWithoutNote(old)))
+        XCTAssertTrue(ContentActionButtons.offersChat(.sentWithoutNote(old)))
+        XCTAssertEqual(ContentActionButtons.statusText(.sentWithoutNote(old)), ContentActionButtons.sentWithoutNoteWords)
+        let held = ContentCeoReply(taskId: "t", sessionId: "s", started: false, held: true, testRun: nil, noted: true)
+        XCTAssertEqual(ContentActionButtons.outcome(of: held), .held(held))
+    }
+
+    func testNotedDecodesAndIsOptional() throws {
+        let with = try JSONDecoder().decode(ContentCeoReply.self, from: Data(#"{"taskId":"t","sessionId":"s","started":true,"noted":true}"#.utf8))
+        XCTAssertEqual(with.noted, true)
+        let without = try JSONDecoder().decode(ContentCeoReply.self, from: Data(#"{"taskId":"t","started":true}"#.utf8))
+        XCTAssertNil(without.noted)
+    }
+
+    func testUnsentNotesAreCappedButTheOpenOneStays() {
+        let drafts = ComposerDrafts.shared
+        let keys = (0..<6).map { "test-trim:\($0)" }
+        defer { keys.forEach { drafts.clear($0) } }
+        for key in keys { drafts.setDraft("words", key: key) }
+        drafts.trimDrafts(prefix: "test-trim:", keeping: "test-trim:0", max: 2)
+        XCTAssertEqual(drafts.draft("test-trim:0"), "words")
+        XCTAssertEqual(keys.dropFirst().filter { !drafts.draft($0).isEmpty }.count, 2)
+        // Under the cap nothing goes.
+        drafts.trimDrafts(prefix: "test-trim:", keeping: "test-trim:0", max: 2)
+        XCTAssertEqual(keys.filter { !drafts.draft($0).isEmpty }.count, 3)
+    }
+
+    func testDraftFocusIsTakenOnce() {
+        let link = ContentActionLink.shared
+        XCTAssertFalse(link.takeDraftFocus())
+        link.requestDraftFocus()
+        XCTAssertTrue(link.takeDraftFocus())
+        XCTAssertFalse(link.takeDraftFocus())
+    }
 }

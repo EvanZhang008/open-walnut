@@ -103,6 +103,8 @@ struct ComposerBar: View {
     /// around it. That is why the dock is told the SURFACE separately, and why a key
     /// change retracts the key it leaves behind (see the publishers on the body).
     var draftKey: String = "chat"
+    /// Each new value focuses the field, caret after the draft (New task's filled draft).
+    var focusRequest: Int = 0
     /// WHICH SCREEN this composer is on, for the file-preview dock's clearance. Left
     /// `.unattached` a composer answers for whatever surface is in front, which is the
     /// safe direction but not the true one — every composer the dock bar can be seen
@@ -764,6 +766,13 @@ struct ComposerBar: View {
         .onChange(of: useLongDraftEditor) { _, isLong in
             if isLong, focused { focused = false; longDraftFocused = true }
             if !isLong, longDraftFocused { longDraftFocused = false; focused = true }
+        }
+        // After a presenting sheet settles, or the keyboard does not come up with it.
+        .task(id: focusRequest) {
+            guard focusRequest > 0 else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            if useLongDraftEditor { longDraftFocused = true } else { focused = true }
         }
     }
 

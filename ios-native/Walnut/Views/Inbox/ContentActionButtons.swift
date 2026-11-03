@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// Walnut's two actions on one piece of content, the phone's twin of the web's
-/// `ContentActionButtons`: Talk to CEO sends it into the CEO's chat with its context, New task
-/// opens the new-session draft with it filled in. Nothing is made on the server until the person
-/// sends the draft (2026-11-02, the user: "talk to ceo, and create a new task ... I can put init
-/// prompt").
+/// `ContentActionButtons`: Talk to CEO opens a box for the person's own words (`CeoNoteSheet`)
+/// and sends them with the content attached, New task opens the new-session draft with it filled
+/// in. Nothing is sent or made on the server until the person sends (2026-11-02, the user: "talk
+/// to ceo, and create a new task ... I can put init prompt").
 struct ContentActionButtons: View {
     let item: ContentItem
     /// The phone's own rendering of `item.at`, for the draft's Sent line.
@@ -15,6 +15,8 @@ struct ContentActionButtons: View {
     enum Outcome: Equatable {
         case sending
         case sent(ContentCeoReply)
+        /// Sent, but the Mac's older Walnut left the person's words out (no `noted`).
+        case sentWithoutNote(ContentCeoReply)
         case held(ContentCeoReply)
         /// No answer in time: it may have reached the CEO, so the chat is offered to check first.
         case timedOut
@@ -24,17 +26,22 @@ struct ContentActionButtons: View {
     @State private var ceoBusy = false
     @State private var draftBusy = false
     @State private var outcome: Outcome?
+    @State private var writingNote = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var seatHeight: CGFloat = 44
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             button("Talk to CEO", id: "talkToCeo",
-                   hint: "Send this email to the CEO chat with its context.", busy: ceoBusy) { talkToCeo() }
+                   hint: "Write a message to the CEO with this email attached.", busy: ceoBusy) { writingNote = true }
             button(draftBusy ? "Opening draft…" : "New task", id: "newTask",
                    hint: "Open a new task draft with this email filled in. Nothing starts until you send it.",
                    busy: draftBusy) { newTask() }
             if outcome != nil { statusSeat }
+        }
+        .sheet(isPresented: $writingNote) {
+            CeoNoteSheet(item: item, identifier: identifier) { note in talkToCeo(note: note) }
+                .presentationDetents([.medium, .large])
         }
     }
 
@@ -89,6 +96,7 @@ struct ContentActionButtons: View {
         switch outcome {
         case .sending: return "Sending to the CEO…"
         case .sent(let reply): return reply.testRun == true ? "Sent to the CEO stand-in (test run)" : "Sent to the CEO"
+        case .sentWithoutNote: return sentWithoutNoteWords
         case .held: return "Not sent: the CEO is waiting on your answer. Answer it in the CEO chat, then send this again."
         case .timedOut: return timedOutWords
         case .failed(let words): return words
@@ -98,7 +106,7 @@ struct ContentActionButtons: View {
 
     static func isWarning(_ outcome: Outcome?) -> Bool {
         switch outcome {
-        case .held, .timedOut, .failed: return true
+        case .held, .timedOut, .failed, .sentWithoutNote: return true
         default: return false
         }
     }
@@ -106,16 +114,25 @@ struct ContentActionButtons: View {
     /// The CEO chat is offered once the send is done or may be done.
     static func offersChat(_ outcome: Outcome?) -> Bool {
         switch outcome {
-        case .sent, .held, .timedOut: return true
+        case .sent, .sentWithoutNote, .held, .timedOut: return true
         default: return false
         }
     }
+
+    /// The answer to a send with the person's words: an older server takes the email and drops
+    /// the words without a word, so a reply without `noted` must not read as a plain success.
+    static func outcome(of reply: ContentCeoReply) -> Outcome {
+        if reply.held == true { return .held(reply) }
+        return reply.noted == true ? .sent(reply) : .sentWithoutNote(reply)
+    }
+
+    static let sentWithoutNoteWords = "Sent the email only: your Mac runs an older Walnut, so your words were not included. They are still in Talk to CEO."
 
     static let timedOutWords = "No answer in time. It may have been sent: check the CEO chat before sending again."
 
     static func chatReply(_ outcome: Outcome?) -> ContentCeoReply? {
         switch outcome {
-        case .sent(let reply), .held(let reply): return reply
+        case .sent(let reply), .sentWithoutNote(let reply), .held(let reply): return reply
         default: return nil
         }
     }
@@ -137,15 +154,18 @@ struct ContentActionButtons: View {
         return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut
     }
 
-    private func talkToCeo() {
+    private func talkToCeo(note: String) {
         guard !ceoBusy else { return }
         ceoBusy = true
         outcome = .sending
         Task {
             defer { ceoBusy = false }
             do {
-                let reply = try await WalnutAPI().contentCeo(item: item)
-                outcome = reply.held == true ? .held(reply) : .sent(reply)
+                let reply = try await WalnutAPI().contentCeo(item: item, note: note)
+                outcome = Self.outcome(of: reply)
+                // The words are gone from the box only once they reached the CEO; a held, a
+                // dropped or a failed send keeps them for the next try.
+                if case .sent = outcome { ComposerDrafts.shared.clear(CeoNoteSheet.draftKey(item)) }
                 AppLog.info("content", "talk to ceo sent", ["taskId": reply.taskId, "sessionId": reply.sessionId ?? "", "held": reply.held == true ? "true" : "false"])
             } catch {
                 outcome = Self.timedOut(error) ? .timedOut : .failed(Self.failureWords("Talk to CEO", error))

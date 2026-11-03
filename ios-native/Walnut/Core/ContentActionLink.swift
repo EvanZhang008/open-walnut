@@ -85,6 +85,9 @@ final class ContentActionLink {
     private(set) var chat: ChatRequest?
     /// New task: the Tasks tab adds `text` to the draft and opens it.
     private(set) var draft: DraftRequest?
+    /// The draft New task filled is open: its composer takes the keyboard once, so the person
+    /// writes the opening prompt right after the email's context.
+    private(set) var draftFocusPending = false
 
     private init() {}
 
@@ -96,6 +99,15 @@ final class ContentActionLink {
     func openDraft(text: String, now: Date = Date()) {
         draft = DraftRequest(text: text, requestedAt: now)
         AppLog.info("content", "new task draft requested", ["chars": String(text.count)])
+    }
+
+    func requestDraftFocus() { draftFocusPending = true }
+
+    /// True once per request: the composer that takes it focuses, a later open does not.
+    func takeDraftFocus() -> Bool {
+        guard draftFocusPending else { return false }
+        draftFocusPending = false
+        return true
     }
 
     func consumeChat(now: Date = Date()) -> ChatRequest? {

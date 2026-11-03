@@ -1,13 +1,15 @@
 import Foundation
 
 /// `POST /api/v1/content/ceo`: the server sent the item into the CEO's chat as the person's
-/// message. `held`: nothing was sent, the CEO waits on the person's answer first.
+/// message. `held`: nothing was sent, the CEO waits on the person's answer first. `noted`: the
+/// person's own words led the message; an older server ignores `note` and leaves it out.
 struct ContentCeoReply: Decodable, Equatable {
     let taskId: String
     let sessionId: String?
     let started: Bool?
     let held: Bool?
     let testRun: Bool?
+    var noted: Bool? = nil
 }
 
 /// `POST /api/v1/content/draft`: the words New task fills the draft with (the web's own text).
@@ -16,10 +18,11 @@ struct ContentDraftReply: Decodable, Equatable {
 }
 
 extension WalnutAPI {
-    func contentCeo(item: ContentItem) async throws -> ContentCeoReply {
-        struct Body: Encodable { let item: ContentItem }
+    /// `note` is what the person wrote to the CEO; the server puts it first, the item after it.
+    func contentCeo(item: ContentItem, note: String) async throws -> ContentCeoReply {
+        struct Body: Encodable { let item: ContentItem; let note: String }
         // The server may start the CEO's session first; the web waits as long.
-        return try await inboxItemRequest("POST", "/content/ceo", body: Body(item: item), timeout: 30)
+        return try await inboxItemRequest("POST", "/content/ceo", body: Body(item: item, note: note), timeout: 30)
     }
 
     /// `sent` is the phone's own rendering of `item.at`, so the draft reads in the person's time zone.

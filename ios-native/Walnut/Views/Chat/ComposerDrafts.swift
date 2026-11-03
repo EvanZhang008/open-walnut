@@ -52,6 +52,16 @@ final class ComposerDrafts {
         schedulePersist()
     }
 
+    /// Keeps at most `max` text drafts under `prefix` besides `keeping`, which always stays: a
+    /// family of per-item drafts (one note per email) must not crowd the store's 40 out. Sorted
+    /// keys, as the persist trim, so the same ones go every time.
+    func trimDrafts(prefix: String, keeping: String, max: Int) {
+        let others = text.keys.filter { $0.hasPrefix(prefix) && $0 != keeping }.sorted()
+        guard others.count > max else { return }
+        for key in others.prefix(others.count - max) { text[key] = nil }
+        schedulePersist()
+    }
+
     func images(_ key: String) -> [SelectedImage] { images[key] ?? [] }
 
     func setImages(_ value: [SelectedImage], key: String) {

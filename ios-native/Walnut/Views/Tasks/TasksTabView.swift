@@ -131,6 +131,7 @@ struct TasksTabView: View {
         let drafts = ComposerDrafts.shared
         let key = ContentActionLink.newSessionDraftKey
         drafts.setDraft(ContentActionLink.merged(existing: drafts.draft(key), adding: request.text), key: key)
+        contentLink.requestDraftFocus()
         if router.draftSeed != BoardModel.BoardDraftSeed.unattached {
             router.draftSeed = BoardModel.BoardDraftSeed.unattached
         }

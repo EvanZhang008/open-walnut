@@ -70,6 +70,9 @@ struct NewSessionChatView: View {
     @State private var launchingMessage: String?
     @State private var createError: String?
     @State private var didPreselect = false
+    /// New task opened this draft with an email's context: the composer takes the keyboard.
+    @State private var contentLink = ContentActionLink.shared
+    @State private var composerFocus = 0
     /// The project the new task files under ("" = Inbox, where the server's organize
     /// pass may still offer a home). Only for a task-less draft: a draft about a task
     /// keeps that task's project.
@@ -134,6 +137,7 @@ struct NewSessionChatView: View {
                     // doesn't exist yet, so text typed before launching survives
                     // a path change and a backgrounding.
                     draftKey: ContentActionLink.newSessionDraftKey,
+                    focusRequest: composerFocus,
                     // No live model pill (`modelSource`): a draft has no session to
                     // switch. Its own model and mode pills take that seat, and both
                     // choices RIDE the create call. At the accessibility sizes they
@@ -171,6 +175,20 @@ struct NewSessionChatView: View {
             }
         }
         .task { await loadOptions() }
+        // At the accessibility sizes the box shows two lines, so a caret at the end would leave
+        // the email's context out of sight and the draft looking empty: it stays unfocused there.
+        .onAppear { if contentLink.takeDraftFocus(), !dynamicTypeSize.isAccessibilitySize { composerFocus += 1 } }
+        // One focus per request: back to 0 once the composer has taken it, so a rebuilt
+        // composer (a failed create, the launching row) does not pull the keyboard up again.
+        .task(id: composerFocus) {
+            guard composerFocus > 0 else { return }
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { composerFocus = 0 }
+        }
+        // New task again while this draft is already open.
+        .onChange(of: contentLink.draftFocusPending) { _, pending in
+            if pending, contentLink.takeDraftFocus(), !dynamicTypeSize.isAccessibilitySize { composerFocus += 1 }
+        }
     }
 
     // MARK: - Body content
