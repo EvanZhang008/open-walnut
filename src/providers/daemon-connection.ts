@@ -110,6 +110,12 @@ const SERVES_MARK = '__WALNUT_DAEMON_SERVES__'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
+/**
+ * This server process, named in every hello: a host's daemon sends a `walnut` call
+ * again only to the run it first went to, and a run answers a call it sees twice
+ * once (handleGatewayRequest). Another process may have run it already.
+ */
+const SERVER_RUN_ID = crypto.randomUUID()
 /** Source deploys before the binary fallback: the first over the shared master,
  *  the rest over fresh connections (deployDaemon). */
 const SOURCE_DEPLOY_ATTEMPTS = 3
@@ -482,6 +488,25 @@ export class DaemonConnection {
   private _missedPongs = 0
   /** The liveness probe running now (probeLiveness), shared by concurrent callers. */
   private _livenessProbe: Promise<boolean> | null = null
+  /** When the daemon last answered a command of ours (any socket): proof what this Mac sends gets there. */
+  private _lastReplyAt = 0
+  /** The check of a link whose answers stopped (checkUpstream), shared. */
+  private _upstreamCheck: Promise<void> | null = null
+  /**
+   * Relays from the host's `walnut` CLIs this run answers or answered lately, by
+   * daemon instance and relay id: a relay the daemon sends again (its socket
+   * closed, its answer did not come in time) gets the same answer, and its op runs once.
+   */
+  /**
+   * Relays answered lately, by (daemon instance, relayId). One map for every connection:
+   * a resend that comes in on another connection to the same daemon (a second host key
+   * for one machine, no shared local pool) still runs once.
+   */
+  private static gatewayRelays = new Map<string, { reply: Promise<Record<string, unknown>>; at: number }>()
+  /** Tests: forget the relays answered so far. */
+  static resetGatewayRelaysForTest(): void {
+    DaemonConnection.gatewayRelays.clear()
+  }
   /**
    * The progress clock: bytes heard from the daemon so far, on every socket this
    * connection has had (main and bulk), counted as they arrive rather than when
@@ -2441,6 +2466,144 @@ export class DaemonConnection {
       } catch { /* the daemon times the relay out */ }
       return
     }
+    // A relay sent again (its socket closed, or its answer was late): the same answer, run once.
+    // Relay ids count from 1 in each daemon process, so the key is the instance the relay
+    // itself names (read off the request, never this link's last hello, which can be a
+    // restarted daemon's or not in yet). An older daemon names none and never sends one twice.
+    const instanceId = (event as unknown as { instanceId?: unknown }).instanceId
+    const key = typeof instanceId === 'string' && instanceId ? `${instanceId.slice(0, 80)}:${relayId}` : null
+    const seen = key ? DaemonConnection.gatewayRelays.get(key) : undefined
+    if (seen) {
+      log.session.info('DaemonConnection: gateway relay asked again, answered once', { host: this.hostKey, relayId, capability, callerSid })
+      await this.sendGatewayResult(await seen.reply, relayId)
+      return
+    }
+    const reply = this.answerGatewayRequest(receivedAt, relayId, capability, callerSid, payload)
+      .catch((err: unknown): Record<string, unknown> => ({ relayId, error: err instanceof Error ? err.message : String(err), errorCode: 'internal' }))
+    if (key) this.rememberGatewayRelay(key, reply)
+    const acked = await this.sendGatewayResult(await reply, relayId)
+    // Taken: the daemon holds the relay no more, so a resend still on its way only needs a
+    // word it drops (stale), not the whole answer kept five minutes.
+    const kept = key ? DaemonConnection.gatewayRelays.get(key) : undefined
+    if (acked && kept) kept.reply = Promise.resolve({ relayId, error: 'this relay was answered already', errorCode: 'internal' })
+  }
+
+  /** Keep a relay's answer a while for a resend; at most GATEWAY_RELAYS_KEPT, none older than GATEWAY_RELAY_KEEP_MS. */
+  private rememberGatewayRelay(key: string, reply: Promise<Record<string, unknown>>): void {
+    const now = Date.now()
+    const kept = DaemonConnection.gatewayRelays
+    for (const [k, v] of kept) {
+      if (now - v.at < DaemonConnection.GATEWAY_RELAY_KEEP_MS && kept.size < DaemonConnection.GATEWAY_RELAYS_KEPT) break
+      kept.delete(k)
+    }
+    kept.set(key, { reply, at: now })
+  }
+
+  private static readonly GATEWAY_RELAY_KEEP_MS = 5 * 60_000
+  private static readonly GATEWAY_RELAYS_KEPT = 2_000
+
+  /**
+   * Send a relay's answer. The daemon acks one at once, so an ack this late, with
+   * nothing else answered meanwhile, says what this Mac sends no longer gets
+   * there: checkUpstream finds out and dials again (2026-11-03: answers to
+   * clouddev stopped arriving for two minutes while its events still came, so
+   * the ping loop, which counts any byte heard, never called the link dead).
+   */
+  private async sendGatewayResult(reply: Record<string, unknown>, relayId: number): Promise<boolean> {
+    const sentAt = Date.now()
+    const watch = setTimeout(() => { void this.checkUpstream(sentAt) }, DaemonConnection.UPSTREAM_CHECK_MS)
+    watch.unref?.()
+    try {
+      // Taken only when the daemon says ok (a refusal resolves too).
+      const ack = await this.send('gateway-result', reply) as { ok?: unknown } | undefined
+      return ack?.ok === true
+    } catch (err) {
+      log.session.warn('DaemonConnection: gateway-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    } finally {
+      clearTimeout(watch)
+    }
+  }
+
+  /** An answer unacked this long starts checkUpstream. */
+  static UPSTREAM_CHECK_MS = 8_000
+  /** With the host's bytes still coming, checkUpstream drops the link only once its answers stopped this long. */
+  static UPSTREAM_DEAD_MS = 45_000
+  /** At most one checkUpstream drop per link this often: a reconnect's own backlog never starts a storm. */
+  static UPSTREAM_DROP_GAP_MS = 5 * 60_000
+  /** Rounds of one check at most (each waits for a ping: 5 to 15 s, UPSTREAM_MIN_ROUND_MS at least). */
+  private static readonly UPSTREAM_MAX_ROUNDS = 60
+  /** The shortest round, so a ping refused at once never spins the loop. */
+  static UPSTREAM_MIN_ROUND_MS = 1_000
+  /** What this Mac pushed out in one round that says the link is busy sending (an upload), not dead. */
+  private static readonly UPSTREAM_BUSY_BYTES = 64 * 1024
+  private _upstreamDropAt = 0
+
+  /**
+   * Does what this Mac sends still reach the daemon? A small command must come back.
+   * One that does not, with nothing at all heard from the host, drops the link, so it
+   * dials again now instead of after the ping loop's 45 s of silence. While the host's
+   * bytes still come (its events, or a backlog the answer queues behind), it asks again,
+   * and drops the link only once UPSTREAM_DEAD_MS passed with nothing answered
+   * (2026-11-03: clouddev's answers stopped arriving for two minutes while its events
+   * still came, so the ping loop, which counts any byte heard, never called it dead).
+   * Never the Mac's own daemon (no link between them dies half way), never while this
+   * Mac is still sending (a bulk command, an upload: the ping waits behind it), and at
+   * most once per UPSTREAM_DROP_GAP_MS. A daemon that answers anything is fine.
+   */
+  checkUpstream(since: number): Promise<void> {
+    const ws = this.ws
+    if (this._upstreamCheck) return this._upstreamCheck
+    if (this.hostKey === '__local__') return Promise.resolve()
+    if (!ws || !this._connected || ws.readyState !== WebSocket.OPEN || this._lastReplyAt >= since) return Promise.resolve()
+    const check = (async () => {
+      for (let round = 1; round <= DaemonConnection.UPSTREAM_MAX_ROUNDS; round++) {
+        const startedAt = Date.now()
+        const readAt = socketBytesRead(ws) + socketBytesRead(this.bulkWs)
+        const wroteAt = socketBytesWritten(ws) + socketBytesWritten(this.bulkWs)
+        const deadlineMs = Math.min(15_000, Math.max(5_000, 2 * this.roundTripMs + 500))
+        try {
+          await this.send('ping', {}, deadlineMs)
+          return
+        } catch { /* no answer in time */ }
+        if (this.ws !== ws || !this._connected || this._lastReplyAt >= startedAt) return
+        // A ping refused at once (not timed out) never spins the loop: each round takes a second at least.
+        const roundMs = Date.now() - startedAt
+        if (roundMs < DaemonConnection.UPSTREAM_MIN_ROUND_MS) await new Promise((r) => setTimeout(r, DaemonConnection.UPSTREAM_MIN_ROUND_MS - roundMs))
+        if (this.ws !== ws || !this._connected || this._lastReplyAt >= startedAt) return
+        const spent = Date.now() - since >= DaemonConnection.UPSTREAM_DEAD_MS
+        const sending = [...this.pendingCommands.values()].some((p) => p.bulk)
+          || socketBytesWritten(ws) + socketBytesWritten(this.bulkWs) - wroteAt >= DaemonConnection.UPSTREAM_BUSY_BYTES
+        if (sending) {
+          if (spent) return
+          continue
+        }
+        const heard = socketBytesRead(ws) + socketBytesRead(this.bulkWs) !== readAt
+        if (heard && !spent) continue
+        if (Date.now() - this._upstreamDropAt < DaemonConnection.UPSTREAM_DROP_GAP_MS) {
+          log.session.warn('DaemonConnection: answers to the daemon still go unacked; the link was dialed again lately, so it stays', {
+            host: this.hostKey, round, sinceMs: Date.now() - since,
+          })
+          return
+        }
+        log.session.warn('DaemonConnection: what this Mac sends no longer reaches the daemon; dialing again', {
+          host: this.hostKey, round, heard, deadlineMs, sinceMs: Date.now() - since, roundTripMs: this.roundTripMs,
+        })
+        this._upstreamDropAt = Date.now()
+        this.dropSilentLink(ws)
+        return
+      }
+    })().finally(() => { if (this._upstreamCheck === check) this._upstreamCheck = null })
+    this._upstreamCheck = check
+    return check
+  }
+
+  /** Run one relayed call (the journal first) and build its gateway-result. Never throws. */
+  private async answerGatewayRequest(
+    receivedAt: number, relayId: number, capability: string, callerSid: string, payload: unknown,
+  ): Promise<Record<string, unknown>> {
     // The host delivers messages between its own sessions itself and journals
     // them; its nudge reaches us before this request (one socket, in order).
     // Take the journal first, so a request id it names is already ours.
@@ -2475,13 +2638,7 @@ export class DaemonConnection {
       log.session.warn('DaemonConnection: gateway relay failed', { host: this.hostKey, relayId, message })
       reply = { relayId, error: message, errorCode: 'internal' }
     }
-    try {
-      await this.send('gateway-result', reply)
-    } catch (err) {
-      log.session.warn('DaemonConnection: gateway-result send failed', {
-        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
-      })
-    }
+    return reply
   }
 
   /**
@@ -4034,7 +4191,7 @@ export class DaemonConnection {
   private async verifyCapabilities(): Promise<boolean> {
     try {
       const helloAt = Date.now()
-      const res = await this._sendHandshake('hello', {})
+      const res = await this._sendHandshake('hello', { run: SERVER_RUN_ID })
       this.recordRoundTrip(Date.now() - helloAt)
       if (!res.ok) {
         log.session.warn('DaemonConnection: hello returned !ok', {
@@ -5441,6 +5598,7 @@ export class DaemonConnection {
     if (pending) {
       clearTimeout(pending.timer)
       this.pendingCommands.delete(msg.id)
+      this._lastReplyAt = Date.now()
       // Per-command round-trip RTT — paired with the `DaemonConnection: send`
       // dispatch log by traceId. This is the SSH-tunnel/daemon hop that the
       // enqueue→delivered `deliveryMs` field omits; on a slow tunnel a `send`
@@ -5689,7 +5847,7 @@ export class DaemonConnection {
           reject(new Error('bulk hello timeout'))
         }, 10_000)
         this.pendingCommands.set(id, { resolve, reject, timer, cmd: 'hello', socket: ws })
-        ws.send(JSON.stringify({ id, cmd: 'hello' }))
+        ws.send(JSON.stringify({ id, cmd: 'hello', run: SERVER_RUN_ID }))
       })
       hello.then((res) => {
         if (!isCurrent()) { try { ws.terminate() } catch {}; return }
@@ -6917,6 +7075,12 @@ export class DaemonConnection {
 function socketBytesRead(ws: WebSocket | null | undefined): number {
   const socket = (ws as unknown as { _socket?: { bytesRead?: unknown } } | null | undefined)?._socket
   return typeof socket?.bytesRead === 'number' ? socket.bytesRead : -1
+}
+
+/** Bytes this end handed to the socket's kernel side so far (0 when unknown). */
+function socketBytesWritten(ws: WebSocket | null | undefined): number {
+  const socket = (ws as unknown as { _socket?: { bytesWritten?: unknown } } | null | undefined)?._socket
+  return typeof socket?.bytesWritten === 'number' ? socket.bytesWritten : 0
 }
 
 /** A ping carries its send time (`t<ms>`): the far end echoes it in the pong (RFC 6455). */

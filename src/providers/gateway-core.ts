@@ -88,6 +88,42 @@ export const GATEWAY_MAX_LINE_BYTES = 28 * 1024 * 1024;
 /** Default wait for the Mac hub to answer a relayed gateway request. */
 export const GATEWAY_HUB_TIMEOUT_MS = 20_000;
 
+/** The longest `waitMs` a CLI may ask for. */
+export const GATEWAY_WAIT_MAX_MS = 180_000;
+/** Waiting for a server to come back stops this long before the call's end: a relay gets at least this. */
+export const GATEWAY_MIN_RELAY_MS = 8_000;
+
+/**
+ * When a call ends, and whether it may wait for a server to come back. A CLI
+ * that names its `waitMs` (a newer `walnut`) gets that time (clamped), waits
+ * while no server is there, and is sent again within it. A caller that names
+ * none (an older `walnut`, the Mac's own CLI, which falls back to HTTP) is
+ * answered as before: no server is hub_unreachable at once, and one relay has
+ * the hub timeout (a socket that closes inside it still sends it again).
+ */
+export function gatewayCallPlan(waitMs: number | undefined, hubTimeoutMs: number, now: number): { deadline: number; waits: boolean } {
+  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return { deadline: now + hubTimeoutMs, waits: false };
+  return { deadline: now + Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs))), waits: true };
+}
+
+/**
+ * May a relay that went to a server of run `sentRun` be sent again to a socket of
+ * run `targetRun`? A server dedupes a relay it sees twice (by daemon instance and
+ * relay id) within its own run only, so a call that may change something goes
+ * again only to the run it first went to; one this host could answer from its
+ * copy (a read) may go anywhere. An older server names no run: nothing is sent
+ * to it twice.
+ */
+export function relayMayResendTo(relay: { run?: string; readable: boolean }, targetRun: string | undefined): boolean {
+  if (relay.readable) return true;
+  return typeof relay.run === 'string' && relay.run.length > 0 && relay.run === targetRun;
+}
+
+/** One attempt's wait: the hub timeout, or what is left of the call when that is less. */
+export function relayAttemptMs(deadline: number, now: number, hubTimeoutMs: number): number {
+  return Math.max(0, Math.min(hubTimeoutMs, deadline - now));
+}
+
 /** Effective hub timeout — WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only). */
 export function gatewayHubTimeoutMs(): number {
   const raw = typeof process !== 'undefined' ? process.env?.WALNUT_GATEWAY_TIMEOUT_MS : undefined;
@@ -139,6 +175,8 @@ export interface GatewayRequest {
   /** The caller's $WALNUT_SESSION_ID — a lookup key only; daemon resolves the real sid. */
   sid: string;
   args: Record<string, unknown>;
+  /** How long the CLI waits for this answer in all (a newer `walnut`); the daemon queues and resends within it. */
+  waitMs?: number;
 }
 
 /** One response line on the unix socket (daemon → walnut CLI). */
@@ -190,7 +228,8 @@ export function parseGatewayLine(line: string): ParseGatewayResult {
     }
     args = obj.args as Record<string, unknown>;
   }
-  return { ok: true, request: { v: 1, op: obj.op as GatewayOp, sid: obj.sid, args } };
+  const waitMs = typeof obj.waitMs === 'number' && Number.isFinite(obj.waitMs) && obj.waitMs > 0 ? obj.waitMs : undefined;
+  return { ok: true, request: { v: 1, op: obj.op as GatewayOp, sid: obj.sid, args, ...(waitMs !== undefined ? { waitMs } : {}) } };
 }
 
 const MAX_ALIAS_HOPS = 5;

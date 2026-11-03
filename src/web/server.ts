@@ -4398,9 +4398,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // A host mid-connect (picker click, its own reconnect loop) is left alone.
         isConnecting: (key) => CONNECT_IN_FLIGHT_PHASES.has(getDaemonConnectState(key).phase),
         onChange: (host) => emitHostStatus(host),
+        clearFailure: (key) => clearDaemonFailureCache(key),
       })
       setHostWarmup(hostWarmup)
       hostWarmup.start()
+      // A connect that failed, whoever dialled it, is dialled again soon (HostWarmup.connectFailed).
+      const warmupAfterFailure = hostWarmup
+      const offFailedConnect = addOnDaemonPhaseChange((state) => {
+        if (state.phase === 'failed' && state.error && warmable(state.host)) warmupAfterFailure.connectFailed(state.host, state.error)
+        else if (state.phase === 'connected') warmupAfterFailure.connected(state.host)
+      })
       // A tunnel provider (a plugin) registers after the startup sweep: the host it places this
       // computer's tunnel on is dialled then, not at the next resweep.
       const offProviders = onExposeProvidersChanged(() => {
@@ -4411,7 +4418,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }).catch(() => { /* the next resweep looks again */ })
       })
       const offBefore = unsubscribeHostPhase
-      unsubscribeHostPhase = () => { offBefore?.(); offProviders() }
+      unsubscribeHostPhase = () => { offBefore?.(); offProviders(); offFailedConnect() }
     }
     // The machines that run plugin jobs, this computer included, are dialled now, so the
     // jobs start without waiting for a session to open a link (core/plugin-jobs/).

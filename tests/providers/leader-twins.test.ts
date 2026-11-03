@@ -86,8 +86,10 @@ describe('leader protocol: both twins', () => {
     })
 
     it(`${name}: while the companion leads, a silent primary socket is no target, and what the host cannot answer goes to the companion`, () => {
+      // The target rules live in gatewayTargetFor (a resend asks them again); every call asks them first.
+      expect(fnBody(src, 'gatewayTargetFor')).toMatch(/if \(home && leaderBook\.backupLead\(home\)\) target = null/)
       const send = fnBody(src, 'sendGatewayRequest')
-      expect(send).toMatch(/if \(home && leaderBook\.backupLead\(home\)\) target = null/)
+      expect(send).toMatch(/gatewayTargetFor\(home, \{ callerSid(: callerSid)?, op: payload\.name \}\)/)
       expect(send).toMatch(/r\.error\.code === 'hub_unreachable' && !target\s*&& forwardToBackup\(home, capability, callerSid, payload, respond\)/)
       const fwd = fnBody(src, 'forwardToBackup')
       expect(fwd).toMatch(/leaderBook\.backupLead\(home\)/)
@@ -237,7 +239,7 @@ describe('leader protocol: both twins', () => {
       expect(src).toMatch(/origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS\.has\(cmd\.cmd( as string)?\)\) \{/)
       // Every pick of "the" server skips followers: relays, gateway calls, triggers, cron notes.
       expect(fnBody(src, 'pickTrustedClient')).toMatch(/if \(!isServerClient\(client\)\) continue/)
-      expect(fnBody(src, 'sendGatewayRequest')).toMatch(/if \(!isServerClient\(client\) \|\| isQuietTrustedClient\(client\)\) continue/)
+      expect(fnBody(src, 'gatewayTargetFor')).toMatch(/if \(!isServerClient\(client\) \|\| isQuietTrustedClient\(client\)\) continue/)
       expect(fnBody(src, 'sendTriggerEvent')).toMatch(/if \(isServerClient\(client\) && \(everyone \|\| triggerClientOf\(client, home\)\)\) \{/)
       expect(src).toMatch(/if \(isServerClient\(client\)\) sendEvent\(client, 'cron-metadata'/)
       // Only the socket the leader's configure tagged may say what server runs here.
@@ -364,13 +366,15 @@ describe('one quiet window, LEADER_QUIET_MS (replica plan C4, WP2)', () => {
       expect(fnBody(src, 'followerView')).toMatch(/quietMs: LEADER_QUIET_MS/)
       // Gateway routing: a home with a linked follower calls a quiet primary away by the same window.
       expect(fnBody(src, 'primaryQuietWithFollower')).toMatch(/followerSockets\.has\(home\) && leaderBook\.primaryAgeMs\(home\) >= LEADER_QUIET_MS/)
-      const send = fnBody(src, 'sendGatewayRequest')
-      const silent = send.indexOf('gateway: primary silent, answering here')
-      const quiet = send.indexOf('if (target && home && primaryQuietWithFollower(home))')
+      const pick = fnBody(src, 'gatewayTargetFor')
+      const silent = pick.indexOf('gateway: primary silent, answering here')
+      const quiet = pick.indexOf('if (target && home && primaryQuietWithFollower(home))')
       expect(silent).toBeGreaterThan(-1)
       expect(quiet).toBeGreaterThan(silent)
       // Before the offline host decides who answers.
-      expect(quiet).toBeLessThan(send.indexOf('offlineHost.hasHome(home)'))
+      const send = fnBody(src, 'sendGatewayRequest')
+      expect(send.indexOf('gatewayTargetFor(home')).toBeGreaterThan(-1)
+      expect(send.indexOf('gatewayTargetFor(home')).toBeLessThan(send.indexOf('offlineHost.hasHome(home)'))
       // The offline host's "a primary answers" check honours it too.
       expect(src).toMatch(/GATEWAY_SILENT_BEATS\) return !primaryQuietWithFollower\(home\)/)
     })

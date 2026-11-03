@@ -219,3 +219,50 @@ describe('constants', () => {
     expect(GATEWAY_SOCKET_FILENAME).toBe('agent-gateway.sock');
   });
 });
+
+// 2026-11-03: a deploy and an SSH link that kept breaking failed every `walnut` call on a
+// host for 8 minutes. A call now has a time budget its CLI names, and a relay may go again.
+import {
+  gatewayCallPlan,
+  relayAttemptMs,
+  relayMayResendTo,
+  GATEWAY_MIN_RELAY_MS,
+  GATEWAY_WAIT_MAX_MS,
+} from '../../../src/providers/gateway-core.js';
+
+describe('a call\'s time budget and resends', () => {
+  it('parses the CLI\'s waitMs, and leaves it out when it is not a positive number', () => {
+    const base = { v: 1, op: 'tools.call', sid: 's', args: { name: 'walnut_status' } };
+    const ok = parseGatewayLine(JSON.stringify({ ...base, waitMs: 90000 }));
+    expect(ok.ok && ok.request.waitMs).toBe(90000);
+    for (const bad of [0, -5, 'soon', null]) {
+      const res = parseGatewayLine(JSON.stringify({ ...base, waitMs: bad }));
+      expect(res.ok && 'waitMs' in res.request).toBe(false);
+    }
+  });
+
+  it('a caller that names no waitMs is answered as before; a newer CLI gets what it asks, clamped, and may wait', () => {
+    expect(gatewayCallPlan(undefined, 20_000, 1_000)).toEqual({ deadline: 21_000, waits: false });
+    expect(gatewayCallPlan(90_000, 20_000, 1_000)).toEqual({ deadline: 91_000, waits: true });
+    expect(gatewayCallPlan(10 * 60_000, 20_000, 0)).toEqual({ deadline: GATEWAY_WAIT_MAX_MS, waits: true });
+    expect(gatewayCallPlan(1, 20_000, 0)).toEqual({ deadline: GATEWAY_MIN_RELAY_MS, waits: true });
+  });
+
+  it('a call that may change something goes again only to the server run it went to', () => {
+    expect(relayMayResendTo({ run: 'r1', readable: false }, 'r1')).toBe(true);
+    expect(relayMayResendTo({ run: 'r1', readable: false }, 'r2')).toBe(false);
+    expect(relayMayResendTo({ run: 'r1', readable: false }, undefined)).toBe(false);
+    // An older server names no run: it never sees a call twice.
+    expect(relayMayResendTo({ run: undefined, readable: false }, undefined)).toBe(false);
+    expect(relayMayResendTo({ run: '', readable: false }, '')).toBe(false);
+    // A read the host could answer from its copy may go anywhere.
+    expect(relayMayResendTo({ run: 'r1', readable: true }, 'r2')).toBe(true);
+    expect(relayMayResendTo({ run: undefined, readable: true }, undefined)).toBe(true);
+  });
+
+  it('an attempt waits the hub timeout, or what is left of the call', () => {
+    expect(relayAttemptMs(100_000, 0, 20_000)).toBe(20_000);
+    expect(relayAttemptMs(100_000, 92_000, 20_000)).toBe(8_000);
+    expect(relayAttemptMs(100_000, 120_000, 20_000)).toBe(0);
+  });
+});

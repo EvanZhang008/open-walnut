@@ -31,6 +31,12 @@
  *     by it (plus a login seen on disk, host-credential-signal.ts): the periodic
  *     resweep skips them, or every failure would advance the clock twice. A host
  *     known only from ~/.ssh/config (one Retry dialled it) stops after a day.
+ *   - DIALS AGAIN SOON after a connect that failed for another reason, by
+ *     anyone (connectFailed): 10, 30, then 60 s later, then the resweep backoff.
+ *     2026-11-03: clouddev's first dial after a deploy timed out while its link
+ *     was settling, and nothing dialled it again for 1m45s (the failure cache
+ *     held every caller off for 60 s, the resweep comes every 10 minutes), so
+ *     every `walnut` call there failed meanwhile.
  */
 
 import { bus, EventNames } from '../event-bus.js'
@@ -101,6 +107,8 @@ export interface HostWarmupDeps {
   onChange?: (key: string, state: HostWarmupState) => void
   /** Error kind of a failed connect; default classifyHostConnectError. */
   classify?: (message: string, host: HostWarmupCandidate) => HostConnectErrorKind
+  /** Forget a host's cached connect failure before a deliberate re-dial (connectFailed). */
+  clearFailure?: (key: string) => void
   log?: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string, meta?: Record<string, unknown>) => void }
 }
 
@@ -113,7 +121,7 @@ const DEFAULTS = {
 } as const
 
 /** Why a sweep is running — decides which hosts it may touch. */
-type SweepReason = 'startup' | 'resweep' | 'config' | 'explicit' | 'credential'
+type SweepReason = 'startup' | 'resweep' | 'config' | 'explicit' | 'credential' | 'soon'
 
 /** Bus subscriber names are the unsubscribe key, so each instance needs its own. */
 let instanceSeq = 0
@@ -149,6 +157,8 @@ export function hostWarmupGateReason(opts: {
 export class HostWarmup {
   /** How long a host known only from ~/.ssh/config keeps its credential re-dials. */
   static readonly DISCOVERED_CREDENTIAL_WAIT_MS = 24 * 60 * 60_000
+  /** The re-dials after a failed connect (connectFailed), in order; then the resweep backoff. */
+  static SOON_REDIAL_MS: readonly number[] = [10_000, 30_000, 60_000]
   private readonly deps: HostWarmupDeps
   private readonly startupDelayMs: number
   private readonly paceMs: number
@@ -169,6 +179,10 @@ export class HostWarmup {
   /** Hosts waiting on a credential fix: how many re-dials so far, and the armed timer. */
   private credentialWaits = new Map<string, { attempts: number; timer: ReturnType<typeof setTimeout>; at: number; since: number }>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
+  /** Re-dials soon after a failed connect: how many so far, and the armed one. */
+  private soonRedials = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>()
+  /** Hosts queued by a soon re-dial: a failure of one does not lengthen the resweep backoff. */
+  private soonDials = new Set<string>()
   /** Resolvers of in-flight pace sleeps, so stop() can release the drain loop. */
   private sleepResolvers = new Set<() => void>()
   private resweepTimer: ReturnType<typeof setInterval> | null = null
@@ -231,6 +245,41 @@ export class HostWarmup {
     this.queue = []
     this.queued.clear()
     this.credentialWaits.clear()
+    this.soonRedials.clear()
+    this.soonDials.clear()
+  }
+
+  /**
+   * A connect of `hostKey` failed, whoever dialled it: dial it again soon
+   * (SOON_REDIAL_MS), unless its sign-in is what failed (the credential clock
+   * owns that) or the soon re-dials are spent. Only hosts the warmup would
+   * dial anyway (sweep 'soon' applies the same rules as a resweep).
+   */
+  connectFailed(hostKey: string, error: string): void {
+    if (this.stopped || hostKey === '__local__' || this.credentialWaits.has(hostKey)) return
+    const kind = this.classify(error, { key: hostKey, sshTarget: { hostname: hostKey } })
+    if (CREDENTIAL_WAIT_KINDS.has(kind)) return
+    const soon = this.soonRedials.get(hostKey) ?? { count: 0 }
+    if (soon.timer || soon.count >= HostWarmup.SOON_REDIAL_MS.length) return
+    const delay = HostWarmup.SOON_REDIAL_MS[soon.count]
+    const t = setTimeout(() => {
+      this.timers.delete(t)
+      const entry = this.soonRedials.get(hostKey)
+      if (this.stopped || entry?.timer !== t) return
+      entry.timer = undefined
+      entry.count += 1
+      if (this.isConnected(hostKey) || this.isConnecting(hostKey)) return
+      // The sweep decides whether the warmup dials it at all, and only then clears its failure.
+      void this.sweep('soon', hostKey)
+    }, delay)
+    unref(t)
+    this.timers.add(t)
+    this.soonRedials.set(hostKey, { count: soon.count, timer: t })
+  }
+
+  /** A host connected, whoever dialled it: its next failure is re-dialled soon again from the first step. */
+  connected(hostKey: string): void {
+    this.clearSoonRedial(hostKey)
   }
 
   /**
@@ -281,6 +330,8 @@ export class HostWarmup {
     }
     if (this.stopped) return
     if (reason === 'config') this.failures.clear()
+    // Connected since, by any dial: its soon re-dials start over next time.
+    for (const key of [...this.soonRedials.keys()]) if (this.isConnected(key)) this.clearSoonRedial(key)
 
     for (const host of hosts) {
       if (hostKey && host.key !== hostKey) continue
@@ -300,11 +351,16 @@ export class HostWarmup {
       // Somebody else is already connecting it: theirs to finish.
       if (this.isConnecting(host.key)) continue
       // The credential clock alone re-dials a waiting host (else each tier advances twice).
-      if (reason === 'resweep' && this.credentialWaits.has(host.key)) continue
+      if ((reason === 'resweep' || reason === 'soon') && this.credentialWaits.has(host.key)) continue
       if (reason === 'resweep' && !this.dueForResweep(host.key)) continue
       if (reason === 'explicit' || reason === 'config') this.clearCredentialWait(host.key, true)
       if (reason === 'explicit') this.failures.delete(host.key)
-      this.push(host)
+      // Already queued (a startup or resweep dial): that dial stands, counted as it is.
+      if (!this.push(host) || reason !== 'soon') continue
+      // The failure cache would answer this dial with the failure it re-dials for.
+      this.logger.info('host warmup: dialing again after a failed connect', { host: host.key, attempt: this.soonRedials.get(host.key)?.count })
+      try { this.deps.clearFailure?.(host.key) } catch { /* the dial reports it */ }
+      this.soonDials.add(host.key)
     }
     this.drainSoon()
   }
@@ -336,11 +392,13 @@ export class HostWarmup {
     return this.now() - f.at >= wait
   }
 
-  private push(host: HostWarmupCandidate): void {
-    if (this.queued.has(host.key)) return
+  /** Queue a dial; false when it was queued already. */
+  private push(host: HostWarmupCandidate): boolean {
+    if (this.queued.has(host.key)) return false
     this.queued.add(host.key)
     this.queue.push(host)
     this.record(host.key, 'queued')
+    return true
   }
 
   private record(key: string, state: HostWarmupState, error?: string, notify = true, retryAt?: number): void {
@@ -369,6 +427,7 @@ export class HostWarmup {
       const host = this.queue.shift()
       if (!host) return
       this.queued.delete(host.key)
+      const soonDial = this.soonDials.delete(host.key)
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
       if (this.isConnecting(host.key)) {
         // Queued behind a long connect, and meanwhile somebody else took this
@@ -394,13 +453,18 @@ export class HostWarmup {
         }
         this.failures.delete(host.key)
         this.clearCredentialWait(host.key, true)
+        this.clearSoonRedial(host.key)
         this.record(host.key, 'done')
         this.logger.info('host warmup: connected', { host: host.key, elapsedMs: this.now() - started })
         if (hadCredentialWait) this.redialCredentialPeers(host.key)
       } catch (err) {
         const message = errText(err)
         const prior = this.failures.get(host.key)
-        this.failures.set(host.key, { count: (prior?.count ?? 0) + 1, at: this.now() })
+        // A soon re-dial is the same outage dialled again, not one more: it keeps the
+        // backoff where it was (three of them once made the next resweep an hour away).
+        this.failures.set(host.key, soonDial
+          ? { count: Math.max(prior?.count ?? 0, 1), at: prior?.at ?? this.now() }
+          : { count: (prior?.count ?? 0) + 1, at: this.now() })
         const kind = this.classify(message, host)
         const retryAt = CREDENTIAL_WAIT_KINDS.has(kind) ? this.armCredentialWait(host) : undefined
         if (retryAt === undefined) this.clearCredentialWait(host.key, true)
@@ -408,7 +472,7 @@ export class HostWarmup {
         // Expected at startup (host asleep, VPN down) — warn, never throw.
         this.logger.warn('host warmup: connect failed', {
           host: host.key, elapsedMs: this.now() - started, error: message,
-          consecutiveFailures: (prior?.count ?? 0) + 1, kind,
+          consecutiveFailures: this.failures.get(host.key)?.count, kind,
           ...(retryAt !== undefined ? { credentialRetryInMs: retryAt - this.now() } : {}),
         })
       } finally {
@@ -458,6 +522,14 @@ export class HostWarmup {
     const at = this.now() + delay
     this.credentialWaits.set(host.key, { attempts: attempts + 1, timer: t, at, since })
     return at
+  }
+
+  /** Forget a host's soon re-dials (it connected). */
+  private clearSoonRedial(key: string): void {
+    const soon = this.soonRedials.get(key)
+    if (!soon) return
+    if (soon.timer) { clearTimeout(soon.timer); this.timers.delete(soon.timer) }
+    this.soonRedials.delete(key)
   }
 
   /** Forget a host's credential wait (connected, a different failure, a human retry, a config edit). */

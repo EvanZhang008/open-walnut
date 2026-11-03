@@ -1341,11 +1341,18 @@ function runWnMinimal(argv, stdinText) {
   var finished = false;
   // Whether the request was written: a socket that fails before that never carried the call.
   var sent = false;
-  var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); sock.destroy(); fn(); };
+  // A call may wait out a server restart (twin of wn-cli.ts cliWaitMs); a list of ops does not.
+  var wnWaitEnv = Number(process.env.WALNUT_CLI_WAIT_MS || '');
+  var waitMs = op === 'tools.call' ? (Number.isFinite(wnWaitEnv) && wnWaitEnv > 0 ? Math.min(Math.floor(wnWaitEnv), 180000) : 90000) : 0;
+  var socketTimeoutMs = waitMs ? waitMs + 10000 : 30000;
+  var waitNotice = waitMs ? setTimeout(function () {
+    errOut("walnut: still waiting for the Walnut server's answer; up to " + Math.round(waitMs / 1000) + "s");
+  }, 10000) : null;
+  var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); clearTimeout(waitNotice); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
-    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within 30s'); wnLostRun(); exitWn(5); });
-  }, 30000);
-  sock.on('connect', function () { sent = true; sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
+    finish(function () { errOut('walnut: hub_timeout: no reply from the Walnut daemon within ' + Math.round(socketTimeoutMs / 1000) + 's'); wnLostRun(); exitWn(5); });
+  }, socketTimeoutMs);
+  sock.on('connect', function () { sent = true; sock.write(JSON.stringify(waitMs ? { v: 1, op: op, sid: sid, args: args, waitMs: waitMs } : { v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
     finish(function () { errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
   });
@@ -3315,6 +3322,7 @@ const wsClients = new Set();
 // (envTimerMs).
 var TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15000, 100);
 function heardFrom(client) {
+  var wasSilent = (client.missedBeats || 0) > 0;
   client.lastHeardAt = Date.now();
   client.missedBeats = 0;
   if (!isServerClient(client)) return;
@@ -3322,6 +3330,9 @@ function heardFrom(client) {
   // host is a witness of whether it is still there (leader-core.ts).
   var home = gatewayClientHomes.get(client);
   leaderBook.noteHeard(home);
+  // A primary that missed beats is a target again (heard first, so it no longer reads
+  // quiet): the calls waiting for one go now.
+  if (wasSilent) wakeGatewayCalls();
   // A socket that outlived the primary's sleep speaks again while the companion
   // leads: tell the primary, which takes the lead back after its handover.
   if (home && leaderBook.backupLead(home) && Date.now() - (client.leaderNudgedAt || 0) > LEADER_NUDGE_MS) {
@@ -4255,7 +4266,10 @@ function dispatchCommand(ws, id, cmd) {
     case 'bridge.peer': return cmdBridgePeer(ws, id, cmd);
     case 'bridge.status': return cmdBridgeStatus(ws, id, cmd);
     case 'service.handover': case 'service.update': return daemonCommands.run(function () { return cmdServiceHandover(ws, id, cmd); });
-    case 'hello': return sendOk(ws, id, {
+    case 'hello': {
+      // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
+      if (typeof cmd.run === 'string' && cmd.run) ws.serverRun = cmd.run.slice(0, 80);
+      sendOk(ws, id, {
       version: DAEMON_VERSION,
       capabilities: daemonCapabilities(),
       // The Walnuts this daemon served lately (served-walnuts-core.ts).
@@ -4272,7 +4286,11 @@ function dispatchCommand(ws, id, cmd) {
       ...(TASK_DIR_ROOT ? { taskDirRoot: TASK_DIR_ROOT } : {}),
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       ...(hostExec ? { execRunning: hostExec.running() } : {}),
-    });
+      });
+      // A server is here: the calls waiting for one go now.
+      if (isServerClient(ws)) setTimeout(wakeGatewayCalls, 0);
+      return;
+    }
     case 'logs.tail': return cmdLogsTail(ws, id, cmd);
     default: return sendError(ws, id, 'unknown command: ' + cmd.cmd);
   }
@@ -4284,7 +4302,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation');
   }
-  if ((acp && acp.workers.size) || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some(function (pending) { return pending.size; })) {
+  if ((acp && acp.workers.size) || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some(function (pending) { return pending.size; })) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
@@ -4804,6 +4822,21 @@ var GATEWAY_HUB_TIMEOUT_MS = (function () {
   var n = Number(process.env.WALNUT_GATEWAY_TIMEOUT_MS || '');
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20000;
 })();
+// Mirror of gateway-core.ts: a call's time in all, and when a relay may go again.
+var GATEWAY_WAIT_MAX_MS = 180000;
+var GATEWAY_MIN_RELAY_MS = 8000;
+var GATEWAY_RESEND_MIN_MS = 2000;
+function gatewayCallPlan(waitMs, hubTimeoutMs, now) {
+  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return { deadline: now + hubTimeoutMs, waits: false };
+  return { deadline: now + Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs))), waits: true };
+}
+function relayMayResendTo(relay, targetRun) {
+  if (relay.readable) return true;
+  return typeof relay.run === 'string' && relay.run.length > 0 && relay.run === targetRun;
+}
+function relayAttemptMs(deadline, now, hubTimeoutMs) {
+  return Math.max(0, Math.min(hubTimeoutMs, deadline - now));
+}
 
 // oldSid → newSid, maintained by cmdRename (a CLI's WALNUT_SESSION_ID env is
 // frozen at spawn; fresh spawns use a tmp sid that rename re-keys).
@@ -4844,7 +4877,9 @@ function parseGatewayLine(line) {
     }
     args = parsed.args;
   }
-  return { ok: true, request: { v: 1, op: parsed.op, sid: parsed.sid, args: args } };
+  var request = { v: 1, op: parsed.op, sid: parsed.sid, args: args };
+  if (typeof parsed.waitMs === 'number' && Number.isFinite(parsed.waitMs) && parsed.waitMs > 0) request.waitMs = parsed.waitMs;
+  return { ok: true, request: request };
 }
 
 // Mirror of gateway-core.ts EXTERNAL_CALLER_SID: an env-less walnut (hand-started
@@ -4875,9 +4910,12 @@ function resolveCallerSid(sid) {
 // journal is drained with offline.drain / offline.ack.
 var gatewayClientHomes = new WeakMap();
 function bindGatewayClientHome(ws, home) {
-  if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws));
+  var fresh = gatewayClientHomes.get(ws) !== home;
+  if (fresh) featureRelay.disconnect(featureSocket(ws));
   gatewayClientHomes.set(ws, home);
   if (isServerClient(ws)) servedWalnuts.note(home);
+  // This Walnut's primary is here: its calls waiting for one go now.
+  if (fresh) setTimeout(wakeGatewayCalls, 0);
 }
 // A command that names another Walnut than the one its socket speaks for is refused
 // (walnut-scope-core.ts). An unbound socket may name any. Mirror daemon-standalone.ts.
@@ -6149,11 +6187,11 @@ function followerScope(ws, id, cmd) {
   return true;
 }
 
-function sendGatewayRequest(capability, callerSid, payload, respond) {
-  // The server of the caller's Walnut when one pushed a copy; else any trusted
-  // client that never identified itself (an older server), never the bridge
-  // adapter (twin of daemon-standalone.ts).
-  var home = offlineHost.ownerOf(callerSid);
+// The server socket a relay for 'home' goes to now (null: none may take it): the
+// server of the caller's Walnut when one pushed a copy; else any trusted client
+// that never identified itself (an older server), never the bridge adapter.
+// 'say' logs why a primary is passed over (twin of daemon-standalone.ts).
+function gatewayTargetFor(home, say) {
   var target = null;
   var untagged = null;
   for (const client of wsClients) {
@@ -6172,14 +6210,24 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
   // itself is done here at once, the rest is not left to time out), and a relayed
   // read the copy answers does not end in a timeout (twin of daemon-standalone.ts).
   if (target && (target.missedBeats || 0) >= GATEWAY_SILENT_BEATS) {
-    logMsg('info', 'gateway: primary silent, answering here', { callerSid: callerSid, op: payload.name, missedBeats: target.missedBeats });
+    if (say) logMsg('info', 'gateway: primary silent, answering here', { callerSid: say.callerSid, op: say.op, missedBeats: target.missedBeats });
     target = null;
   }
   // A follower is linked: the same quiet window as its writes (primaryQuietWithFollower).
   if (target && home && primaryQuietWithFollower(home)) {
-    logMsg('info', 'gateway: primary quiet, answering here', { callerSid: callerSid, home: home, op: payload.name, quietMs: LEADER_QUIET_MS });
+    if (say) logMsg('info', 'gateway: primary quiet, answering here', { callerSid: say.callerSid, home: home, op: say.op, quietMs: LEADER_QUIET_MS });
     target = null;
   }
+  return target;
+}
+
+function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
+  if (!plan) plan = gatewayCallPlan(undefined, GATEWAY_HUB_TIMEOUT_MS, Date.now());
+  var deadline = plan.deadline;
+  var home = offlineHost.ownerOf(callerSid);
+  var target = gatewayTargetFor(home, { callerSid: callerSid, op: payload.name });
+  // No server now and nothing sent: a call that may wait does, while it has time.
+  var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, plan); }, respond); };
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
   if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
     // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
@@ -6195,11 +6243,17 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
       // What this host cannot answer itself goes to the companion while it leads.
       if (!r.ok && r.error.code === 'hub_unreachable' && !target
         && forwardToBackup(home, capability, callerSid, payload, respond)) return;
+      // Not this host's to answer, and no server now: wait for one while the call has time.
+      if (!r.ok && r.error.code === 'hub_unreachable' && !target && waitHere()) return;
       respond(r);
     });
     return;
   }
   if (!target) {
+    if (waitHere()) {
+      logMsg('info', 'gateway: no server connected, waiting for one', { capability: capability, callerSid: callerSid, leftMs: deadline - Date.now() });
+      return;
+    }
     logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
     return respond(gatewayError('hub_unreachable', 'no primary server connected'));
   }
@@ -6212,31 +6266,113 @@ function sendGatewayRequest(capability, callerSid, payload, respond) {
         logMsg('info', 'gateway: delivered on this host', { capability: capability, callerSid: callerSid, op: payload.name, ok: r.ok });
         return respond(r);
       }
-      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable);
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline);
     }, function () {
       // Nothing was delivered here (a delivery failure is caught inside): the server's.
-      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable);
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline);
     });
     return;
   }
-  relayToPrimary(target, home, capability, callerSid, payload, respond, readable);
+  relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline);
 }
 
-function relayToPrimary(target, home, capability, callerSid, payload, respond, readable) {
+// Calls waiting for a server of their Walnut (nothing of them was sent yet); twin
+// of daemon-standalone.ts waitForPrimary / wakeGatewayCalls.
+var gatewayWaiting = new Set();
+function waitForPrimary(deadline, retry, respond) {
+  var left = deadline - GATEWAY_MIN_RELAY_MS - Date.now();
+  if (left <= 0 || daemonCommands.closed) return false;
+  var w = { retry: retry, respond: respond, timer: undefined };
+  w.timer = setTimeout(function () { if (gatewayWaiting.delete(w)) retry(); }, left);
+  gatewayWaiting.add(w);
+  return true;
+}
+// The daemon stops: the waiting calls are told now (nothing of them was sent) rather than cut off.
+function releaseGatewayWaiters() {
+  var waiting = Array.from(gatewayWaiting);
+  for (var i = 0; i < waiting.length; i++) {
+    gatewayWaiting.delete(waiting[i]);
+    clearTimeout(waiting[i].timer);
+    waiting[i].respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again'));
+  }
+}
+function wakeGatewayCalls() {
+  var waiting = Array.from(gatewayWaiting);
+  for (var i = 0; i < waiting.length; i++) {
+    gatewayWaiting.delete(waiting[i]);
+    clearTimeout(waiting[i].timer);
+    waiting[i].retry();
+  }
+  for (const [relayId, entry] of gatewayRelayPending) {
+    if (!entry.call || entry.call.sentOn) continue;
+    var next = relayResendTarget(entry.call);
+    if (next) sendRelayAttempt(relayId, next);
+  }
+}
+function relayResendTarget(call) {
+  var target = gatewayTargetFor(call.home);
+  return target && relayMayResendTo(call, target.serverRun) ? target : null;
+}
+// The socket a relay went out on closed: it goes again at once where it may, else when a server says hello.
+function gatewayRelaysSocketGone(ws) {
+  for (const [relayId, entry] of gatewayRelayPending) {
+    if (!entry.call || entry.call.sentOn !== ws) continue;
+    entry.call.sentOn = null;
+    var next = relayResendTarget(entry.call);
+    if (next) sendRelayAttempt(relayId, next);
+  }
+}
+
+function relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline) {
+  if (typeof deadline !== 'number') deadline = Date.now() + GATEWAY_HUB_TIMEOUT_MS;
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
-  var timer = setTimeout(function () {
-    gatewayRelayPending.delete(relayId);
-    if (readable && home) {
-      logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId: relayId, callerSid: callerSid, op: payload.name });
-      offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); });
-      return;
-    }
-    respond(gatewayError('hub_timeout', 'primary server timed out'));
-  }, GATEWAY_HUB_TIMEOUT_MS);
-  gatewayRelayPending.set(relayId, { respond: respond, timer: timer });
-  logMsg('info', 'gateway: relaying to primary server', { relayId: relayId, capability: capability, callerSid: callerSid });
-  sendEvent(target, 'gateway-request', { relayId: relayId, capability: capability, callerSid: callerSid, payload: payload });
+  var call = { home: home, capability: capability, callerSid: callerSid, payload: payload, readable: readable, deadline: deadline, sentOn: null, run: undefined, attempts: 0 };
+  gatewayRelayPending.set(relayId, { respond: respond, timer: undefined, call: call });
+  sendRelayAttempt(relayId, target);
+}
+
+// Send relay 'relayId' to 'target' and time this attempt (twin of daemon-standalone.ts).
+function sendRelayAttempt(relayId, target) {
+  var entry = gatewayRelayPending.get(relayId);
+  var call = entry && entry.call;
+  if (!entry || !call) return;
+  clearTimeout(entry.timer);
+  if (call.attempts === 0) {
+    call.run = target.serverRun;
+    // A server that names no run (an older one) is never sent a relay twice: its call ends
+    // when it always did, not at the end of the time the CLI gave it.
+    if (!call.run && !call.readable) call.deadline = Math.min(call.deadline, Date.now() + GATEWAY_HUB_TIMEOUT_MS);
+  }
+  call.sentOn = target;
+  call.attempts += 1;
+  entry.timer = setTimeout(function () { relayAttemptEnded(relayId); }, relayAttemptMs(call.deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS));
+  logMsg('info', call.attempts === 1 ? 'gateway: relaying to primary server' : 'gateway: relaying to primary server again', { relayId: relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts });
+  // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
+  sendEvent(target, 'gateway-request', { relayId: relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload });
+}
+
+// An attempt had no answer in time: again where it may with time left, else as before.
+function relayAttemptEnded(relayId) {
+  var entry = gatewayRelayPending.get(relayId);
+  var call = entry && entry.call;
+  if (!entry || !call) return;
+  var left = call.deadline - Date.now();
+  if (left >= GATEWAY_RESEND_MIN_MS) {
+    var next = relayResendTarget(call);
+    if (next) return sendRelayAttempt(relayId, next);
+    call.sentOn = null;
+    entry.timer = setTimeout(function () { relayAttemptEnded(relayId); }, left);
+    return;
+  }
+  gatewayRelayPending.delete(relayId);
+  if (call.readable && call.home) {
+    logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts });
+    offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then(function (r) { entry.respond(r); });
+    return;
+  }
+  logMsg('info', 'gateway: primary timed out', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts });
+  entry.respond(gatewayError('hub_timeout', 'primary server timed out'));
 }
 
 // A relay is answered by whom it went to: the trusted walnut client, or, for a
@@ -6281,7 +6417,7 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond) {
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home: home, op: payload.name });
     return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'));
   }
-  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false);
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, Date.now() + GATEWAY_HUB_TIMEOUT_MS);
 }
 
 // One parsed NDJSON line from the agent socket → local reject or hub relay.
@@ -6306,7 +6442,7 @@ function handleGatewayLine(line, respond) {
   if (callerSid === EXTERNAL_CALLER_SID) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op });
   }
-  sendGatewayRequest(req.op, callerSid, req.args, respond);
+  sendGatewayRequest(req.op, callerSid, req.args, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
 }
 
 // Second listener: owner-only unix socket, raw NDJSON, one request per conn.
@@ -15297,6 +15433,8 @@ async function startDaemon() {
 
       // Phone sends handed to it and not answered move to the next client now.
       rerouteMessageRelays(ws);
+      // So do 'walnut' calls relayed on it, where they may go (gatewayRelaysSocketGone).
+      gatewayRelaysSocketGone(ws);
       logMsg('info', 'client disconnected', { clients: wsClients.size });
     });
 
@@ -15449,6 +15587,7 @@ async function startDaemon() {
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel(); } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }); }
+      releaseGatewayWaiters();
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
       const failed = drained.find(function (result) { return result.status === 'rejected'; });
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });

@@ -634,3 +634,154 @@ describe('HostWarmup: one credential fix redials every waiting host (C59)', () =
     expect(dials.filter((d) => d.key === 'certb')).toHaveLength(2);
   });
 });
+
+// 2026-11-03: clouddev's first dial after a deploy timed out while its link settled, and
+// nothing dialled it again for 1m45s (the failure cache held callers off for 60 s, the
+// resweep comes every 10 minutes): every `walnut` call there failed meanwhile.
+describe('HostWarmup: a failed connect is dialled again soon', () => {
+  let warmup: HostWarmup | null = null;
+  const TIMEOUT = 'daemon dir check on devbox did not finish (Remote command timed out after 15000ms)';
+  const CERT_EXPIRED = 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-14 08:00)';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    warmup?.stop();
+    warmup = null;
+    vi.useRealTimers();
+  });
+
+  /** A warmup whose connect fails while `fail()` says so, and reports each failure the way the pool does. */
+  function soonWarmup(fail: () => string | null, opts: { discovered?: boolean; enabled?: boolean; connected?: () => boolean; resweepIntervalMs?: number } = {}) {
+    const calls: number[] = [];
+    const cleared: number[] = [];
+    let w: HostWarmup;
+    const connect = vi.fn(async (key: string) => {
+      calls.push(Date.now() - NOW);
+      const err = fail();
+      if (err) { w.connectFailed(key, err); throw new Error(err); }
+    });
+    w = new HostWarmup({
+      startupDelayMs: 0, paceMs: 0, resweepIntervalMs: opts.resweepIntervalMs ?? 0, log: silent,
+      listHosts: async () => [host('devbox', { ...(opts.discovered ? { discovered: true } : {}), ...(opts.enabled === false ? { enabled: false } : {}) })],
+      connect, isConnected: opts.connected ?? (() => false), now: () => Date.now(),
+      clearFailure: () => { cleared.push(Date.now() - NOW); },
+    });
+    warmup = w;
+    return { calls, cleared, warmup: w };
+  }
+
+  it('re-dials 10, 30 and 60 s after each failure, clearing the cached failure first, then leaves it to the resweep', async () => {
+    const { calls, cleared, warmup: w } = soonWarmup(() => TIMEOUT);
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([0, 10_000]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).toEqual([0, 10_000, 40_000]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toEqual([0, 10_000, 40_000, 100_000]);
+    expect(cleared).toEqual([10_000, 40_000, 100_000]);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls.length).toBe(4);
+  });
+
+  it('a failure someone else\'s dial met (a page read) is re-dialled the same way', async () => {
+    const { calls, warmup: w } = soonWarmup(() => null);
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([0]);
+    // It dropped later and a caller's connect failed: the pool tells the warmup.
+    const failedAt = Date.now() - NOW;
+    w.connectFailed('devbox', TIMEOUT);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([0, failedAt + 10_000]);
+  });
+
+  it('a refused sign-in is the credential clock\'s, never re-dialled soon', async () => {
+    const { calls, warmup: w } = soonWarmup(() => null);
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    w.connectFailed('devbox', CERT_EXPIRED);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(calls).toEqual([0]);
+  });
+
+  it('a host connected by then, or one Walnut does not manage, is not dialled', async () => {
+    let up = false;
+    const managed = soonWarmup(() => null, { connected: () => up });
+    managed.warmup.start();
+    await vi.advanceTimersByTimeAsync(1);
+    managed.warmup.connectFailed('devbox', TIMEOUT);
+    up = true;
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(managed.calls).toEqual([0]);
+    managed.warmup.stop();
+
+    for (const opts of [{ discovered: true }, { enabled: false }]) {
+      const found = soonWarmup(() => null, opts);
+      found.warmup.start();
+      await vi.advanceTimersByTimeAsync(1);
+      found.warmup.connectFailed('devbox', TIMEOUT);
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(found.calls, JSON.stringify(opts)).toEqual([]);
+      // Its cached failure stays too: every caller's dial would otherwise go out again at once.
+      expect(found.cleared, JSON.stringify(opts)).toEqual([]);
+      found.warmup.stop();
+    }
+  });
+
+  it('the soon re-dials of one outage keep the resweep backoff where it was', async () => {
+    const { calls, warmup: w } = soonWarmup(() => TIMEOUT, { resweepIntervalMs: 10 * 60_000 });
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(calls).toEqual([0, 10_000, 40_000, 100_000]);
+    // One failure's backoff (10 min from the first failure), not four failures' hour.
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(calls.length).toBe(5);
+    expect(calls[4]).toBeLessThanOrEqual(10 * 60_000 + 1_000);
+  });
+
+  it('a host already queued by another sweep is dialled once, counted as that dial', async () => {
+    const { calls, cleared, warmup: w } = soonWarmup(() => TIMEOUT, { resweepIntervalMs: 10 * 60_000 });
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([0]);
+    // Its soon re-dial comes while a config sweep has it queued already: one dial, no early clear.
+    const internals = w as unknown as { queued: Set<string>; sweep: (r: string, k?: string) => Promise<void> };
+    internals.queued.add('devbox');
+    await internals.sweep('soon', 'devbox');
+    expect(cleared).toEqual([]);
+    internals.queued.delete('devbox');
+  });
+
+  it('a host someone else connected starts its soon re-dials over', async () => {
+    const { calls, warmup: w } = soonWarmup(() => TIMEOUT);
+    w.start();
+    await vi.advanceTimersByTimeAsync(101_000);
+    expect(calls.length).toBe(4);
+    // Spent; then a page read connects it, and it fails again later.
+    w.connected('devbox');
+    w.connectFailed('devbox', TIMEOUT);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls.length).toBe(5);
+  });
+
+  it('a host that connected starts over at 10 s the next time it fails', async () => {
+    let failing = true;
+    const { calls, warmup: w } = soonWarmup(() => (failing ? TIMEOUT : null));
+    w.start();
+    await vi.advanceTimersByTimeAsync(1);
+    failing = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([0, 10_000]);
+    const failedAt = Date.now() - NOW;
+    w.connectFailed('devbox', TIMEOUT);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([0, 10_000, failedAt + 10_000]);
+  });
+});

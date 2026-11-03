@@ -46,6 +46,20 @@ export type { ToolRow }
 /** Client-side wait for the daemon's single response line. */
 export const WALNUT_CLI_TIMEOUT_MS = 30_000
 
+/**
+ * How long a `walnut tools call` gives the daemon in all (`waitMs`): while the
+ * Walnut server restarts or its link to this host dials again, the daemon holds
+ * the call and sends it again instead of failing it at once (2026-11-03: a deploy
+ * and a link that kept breaking failed every call on clouddev for 8 minutes).
+ * WALNUT_CLI_WAIT_MS sets it (tests); an older daemon answers within 30 s anyway.
+ */
+export function cliWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.WALNUT_CLI_WAIT_MS ?? '')
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 180_000) : 90_000
+}
+/** Past this with no answer, the call says on stderr that it waits for the server. */
+export const CLI_WAIT_NOTICE_MS = 10_000
+
 // ── argv parsing (pure) ──
 
 export type WalnutCliParsed =
@@ -761,17 +775,24 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
           : {}
 
   let resp: GatewayResponse
+  // A call may wait out a server restart (cliWaitMs); a list of ops does not.
+  const waitMs = op === 'tools.call' ? cliWaitMs() : undefined
+  const waitNotice = waitMs ? setTimeout(() => {
+    process.stderr.write(`walnut: still waiting for the Walnut server's answer; up to ${Math.round(waitMs / 1000)}s\n`)
+  }, CLI_WAIT_NOTICE_MS) : undefined
+  waitNotice?.unref?.()
+  const socketTimeoutMs = waitMs ? waitMs + 10_000 : WALNUT_CLI_TIMEOUT_MS
   try {
-    resp = await requestOverSocket(socketPath, { v: 1, op, sid, args })
+    resp = await requestOverSocket(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!resp.ok && runId && parsed.kind === 'tools.call' && refusedRunId(parsed.name, resp.error.message)) {
       dropRunId(parsed.name, callArgs)
       runId = null
-      resp = await requestOverSocket(socketPath, { v: 1, op, sid, args })
+      resp = await requestOverSocket(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     }
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
-      process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
+      process.stderr.write(`walnut: hub_timeout: no reply from the Walnut daemon within ${Math.round(socketTimeoutMs / 1000)}s\n`)
       lostRun()
       return 5
     }
@@ -785,6 +806,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     }
     return 6
   } finally {
+    clearTimeout(waitNotice)
     // Only OUR spill is removed. A path the user passed with @ is theirs, and
     // the hub has finished reading by the time the response lands either way.
     if (spilledArgsFile) { try { fs.unlinkSync(spilledArgsFile) } catch { /* already gone */ } }

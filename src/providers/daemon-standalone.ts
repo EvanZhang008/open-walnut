@@ -200,8 +200,12 @@ import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer,
 import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
+  gatewayCallPlan,
   gatewayHubTimeoutMs,
   gatewayShimScript,
+  GATEWAY_MIN_RELAY_MS,
+  relayAttemptMs,
+  relayMayResendTo,
   EXTERNAL_CALLER_SID,
   isDaemonCliKeyword,
   isExternalCallerSid,
@@ -843,6 +847,8 @@ interface WsData {
   leaderNudgedAt?: number
   /** Keepalive beats in a row this trusted socket stayed silent (0 once heard again). */
   missedBeats?: number
+  /** The server process behind this socket, from its hello (`run`): a relay goes again only to the run it went to. */
+  serverRun?: string
 }
 
 /** Bridge commands that name a session by `sid` (checked against the link's Walnut). */
@@ -1402,12 +1408,16 @@ const wsClients = new Set<ServerWebSocket<WsData>>()
 // floor every daemon timer knob has (envTimerMs).
 const TRUSTED_CLIENT_BEAT_MS = envTimerMs(process.env.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15_000, 100)
 function heardFrom(ws: ServerWebSocket<WsData>): void {
+  const wasSilent = (ws.data?.missedBeats ?? 0) > 0
   if (ws.data) { ws.data.lastHeardAt = Date.now(); ws.data.missedBeats = 0 }
   if (!isServerClient(ws)) return
   // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
   // host is a witness of whether it is still there (leader-core.ts).
   const home = gatewayClientHomes.get(ws)
   leaderBook.noteHeard(home)
+  // A primary that missed beats is a target again (heard first, so it no longer reads
+  // quiet): the calls waiting for one go now.
+  if (wasSilent) wakeGatewayCalls()
   // A socket that outlived the primary's sleep speaks again while the companion
   // leads: tell the primary, which takes the lead back after its handover.
   if (home && ws.data && leaderBook.backupLead(home) && Date.now() - (ws.data.leaderNudgedAt ?? 0) > LEADER_NUDGE_MS) {
@@ -2840,7 +2850,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'bridge.peer': return cmdBridgePeer(ws, id as number, cmd)
     case 'bridge.status': return cmdBridgeStatus(ws, id as number, cmd)
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
-    case 'hello': return sendOk(ws, id as number, {
+    case 'hello': {
+      // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
+      if (typeof cmd.run === 'string' && cmd.run && ws.data) ws.data.serverRun = cmd.run.slice(0, 80)
+      sendOk(ws, id as number, {
       version: DAEMON_VERSION,
       capabilities: helloCapabilities(),
       // The Walnuts this daemon served lately (served-walnuts-core.ts).
@@ -2854,7 +2867,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       taskDirRoot: TASK_DIR_ROOT,
       // host_exec runs a stop would end: every update path waits for them (exec-runs-hold.ts).
       execRunning: hostExec.running(),
-    })
+      })
+      // A server is here: the calls waiting for one go now.
+      if (isServerClient(ws)) setTimeout(wakeGatewayCalls, 0)
+      return
+    }
     case 'logs.tail': return cmdLogsTail(ws, id as number, cmd)
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
   }
@@ -2865,7 +2882,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   if (updating !== SERVICE_MODE || !requestDaemonShutdown || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation')
   }
-  if (acp.workers.size || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some((pending) => pending.size)) {
+  if (acp.workers.size || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some((pending) => pending.size)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
@@ -3735,12 +3752,29 @@ const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
 const gatewaySidAliases = new Map<string, string>()
 
 let gatewayRelayCounter = 0
+/**
+ * A relay to the primary, kept so it can go again (2026-11-03: a deploy and an SSH
+ * link that broke six times in eight minutes failed every call on clouddev, each
+ * after waiting 20 s, because a reply lost with its socket was never asked for again).
+ */
+type GatewayRelayCall = {
+  home: string | undefined; capability: string; callerSid: string; payload: Record<string, unknown>
+  readable: boolean
+  /** When the caller stops listening (its `waitMs`, else the legacy budget). */
+  deadline: number
+  /** The socket the last attempt went out on (null once it closed), and the server run of the first. */
+  sentOn: ServerWebSocket<WsData> | null
+  run?: string
+  attempts: number
+}
 const gatewayRelayPending = new Map<number, {
-  respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout>
+  respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined
   /** Sent to the cloud bridge (the companion leads): only the bridge may answer it. */
   via?: 'bridge'
   /** The link it went out on: another Walnut's link may not answer it. */
   bridge?: ServerWebSocket<WsData>
+  /** A relay to the primary (relayToPrimary); absent for the bridge's. */
+  call?: GatewayRelayCall
 }>()
 
 function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse {
@@ -3756,9 +3790,12 @@ function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse 
 /** Trusted socket → the Walnut data dir it pushed a copy for. */
 const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
 function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
-  if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws))
+  const fresh = gatewayClientHomes.get(ws) !== home
+  if (fresh) featureRelay.disconnect(featureSocket(ws))
   gatewayClientHomes.set(ws, home)
   if (isServerClient(ws)) servedWalnuts.note(home)
+  // This Walnut's primary is here: its calls waiting for one go now.
+  if (fresh) setTimeout(wakeGatewayCalls, 0)
 }
 /**
  * A command that names another Walnut than the one its socket speaks for is refused:
@@ -5070,17 +5107,15 @@ function followerScope(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   return true
 }
 
-function sendGatewayRequest(
-  capability: string,
-  callerSid: string,
-  payload: Record<string, unknown>,
-  respond: (resp: GatewayResponse) => void,
-) {
-  // The server of the caller's Walnut when one pushed a copy; else any trusted
-  // client that never identified itself (an older server), never the bridge
-  // adapter. Picking "any trusted client" for a caller whose Walnut is known
-  // would hand the real Walnut's calls to a test server on a shared host.
-  const home = gatewayOwnerHome(callerSid)
+/**
+ * The server socket a relay for `home` goes to now (null: none may take it). The
+ * server of the caller's Walnut when one pushed a copy; else any trusted client
+ * that never identified itself (an older server), never the bridge adapter.
+ * Picking "any trusted client" for a caller whose Walnut is known would hand the
+ * real Walnut's calls to a test server on a shared host. `say` logs why a primary
+ * is passed over (the first look at a call, not a resend's).
+ */
+function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; op: unknown }): ServerWebSocket<WsData> | null {
   let target: ServerWebSocket<WsData> | null = null
   let untagged: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
@@ -5102,14 +5137,30 @@ function sendGatewayRequest(
   // is refused at once, never after a timeout. Nothing was sent to it, so nothing
   // is applied twice; its first pong makes it the target again.
   if (target && (target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS) {
-    logMsg('info', 'gateway: primary silent, answering here', { callerSid, op: payload.name, missedBeats: target.data?.missedBeats })
+    if (say) logMsg('info', 'gateway: primary silent, answering here', { callerSid: say.callerSid, op: say.op, missedBeats: target.data?.missedBeats })
     target = null
   }
   // A follower is linked: the same quiet window as its writes (primaryQuietWithFollower).
   if (target && home && primaryQuietWithFollower(home)) {
-    logMsg('info', 'gateway: primary quiet, answering here', { callerSid, home, op: payload.name, quietMs: LEADER_QUIET_MS })
+    if (say) logMsg('info', 'gateway: primary quiet, answering here', { callerSid: say.callerSid, home, op: say.op, quietMs: LEADER_QUIET_MS })
     target = null
   }
+  return target
+}
+
+function sendGatewayRequest(
+  capability: string,
+  callerSid: string,
+  payload: Record<string, unknown>,
+  respond: (resp: GatewayResponse) => void,
+  plan: { deadline: number; waits: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+) {
+  const home = gatewayOwnerHome(callerSid)
+  const target = gatewayTargetFor(home, { callerSid, op: payload.name })
+  const deadline = plan.deadline
+  // No server now and nothing sent: a call that may wait does, while it has time
+  // (a deploy's restart, a link dialing again), then goes as if it had just come.
+  const waitHere = () => plan.waits && waitForPrimary(deadline, () => sendGatewayRequest(capability, callerSid, payload, respond, plan), respond)
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
   const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
@@ -5131,11 +5182,17 @@ function sendGatewayRequest(
       // leads (a message to another host, a task outside the copy).
       if (!r.ok && r.error.code === 'hub_unreachable' && !target
         && forwardToBackup(home, capability, callerSid, payload, respond)) return
+      // Not this host's to answer, and no server now: wait for one while the call has time.
+      if (!r.ok && r.error.code === 'hub_unreachable' && !target && waitHere()) return
       respond(r as GatewayResponse)
     })
     return
   }
   if (!target) {
+    if (waitHere()) {
+      logMsg('info', 'gateway: no server connected, waiting for one', { capability, callerSid, leftMs: deadline - Date.now() })
+      return
+    }
     logMsg('info', 'gateway: no server connected', { capability, callerSid })
     return respond(gatewayError('hub_unreachable', 'no primary server connected'))
   }
@@ -5149,14 +5206,70 @@ function sendGatewayRequest(
         logMsg('info', 'gateway: delivered on this host', { capability, callerSid, op: payload.name, ok: r.ok })
         return respond(r as GatewayResponse)
       }
-      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable)
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
     }, () => {
       // Nothing was delivered here (a delivery failure is caught inside): the server's.
-      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable)
+      relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
     })
     return
   }
-  relayToPrimary(target, home, capability, callerSid, payload, respond, readable)
+  relayToPrimary(target, home, capability, callerSid, payload, respond, readable, deadline)
+}
+
+/** Calls waiting for a server of their Walnut (nothing of them was sent yet). */
+const gatewayWaiting = new Set<{ retry: () => void; respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined }>()
+
+/**
+ * Park a call until a server says hello, names its Walnut or speaks again after
+ * missed beats (wakeGatewayCalls), or until it must go anyway: a relay still gets
+ * GATEWAY_MIN_RELAY_MS of the call's time. False when there is no time to wait.
+ */
+function waitForPrimary(deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void): boolean {
+  const left = deadline - GATEWAY_MIN_RELAY_MS - Date.now()
+  if (left <= 0 || daemonCommands.closed) return false
+  const w: { retry: () => void; respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined } = { retry, respond, timer: undefined }
+  w.timer = setTimeout(() => { if (gatewayWaiting.delete(w)) retry() }, left)
+  gatewayWaiting.add(w)
+  return true
+}
+
+/** The daemon stops: the waiting calls are told now (nothing of them was sent) rather than cut off. */
+function releaseGatewayWaiters(): void {
+  for (const w of [...gatewayWaiting]) {
+    gatewayWaiting.delete(w)
+    clearTimeout(w.timer)
+    w.respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again'))
+  }
+}
+
+/** A server may take calls now: the waiting ones go, and relays whose socket closed go again. */
+function wakeGatewayCalls(): void {
+  for (const w of [...gatewayWaiting]) {
+    gatewayWaiting.delete(w)
+    clearTimeout(w.timer)
+    w.retry()
+  }
+  for (const [relayId, entry] of gatewayRelayPending) {
+    if (!entry.call || entry.call.sentOn) continue
+    const next = relayResendTarget(entry.call)
+    if (next) sendRelayAttempt(relayId, next)
+  }
+}
+
+/** Where a relay may go again now: the primary of its Walnut, when relayMayResendTo allows it. */
+function relayResendTarget(call: GatewayRelayCall): ServerWebSocket<WsData> | null {
+  const target = gatewayTargetFor(call.home)
+  return target && relayMayResendTo(call, target.data?.serverRun) ? target : null
+}
+
+/** The socket a relay went out on closed: it goes again at once where it may, else when a server says hello. */
+function gatewayRelaysSocketGone(ws: ServerWebSocket<WsData>): void {
+  for (const [relayId, entry] of gatewayRelayPending) {
+    if (!entry.call || entry.call.sentOn !== ws) continue
+    entry.call.sentOn = null
+    const next = relayResendTarget(entry.call)
+    if (next) sendRelayAttempt(relayId, next)
+  }
 }
 
 function relayToPrimary(
@@ -5167,20 +5280,65 @@ function relayToPrimary(
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
   readable: boolean,
+  deadline: number = Date.now() + gatewayHubTimeoutMs(),
 ) {
   const relayId = ++gatewayRelayCounter
-  const timer = setTimeout(() => {
-    gatewayRelayPending.delete(relayId)
-    if (readable && home) {
-      logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid, op: payload.name })
-      void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
-      return
-    }
-    respond(gatewayError('hub_timeout', 'primary server timed out'))
-  }, gatewayHubTimeoutMs())
-  gatewayRelayPending.set(relayId, { respond, timer })
-  logMsg('info', 'gateway: relaying to primary server', { relayId, capability, callerSid })
-  sendEvent(target, 'gateway-request', { relayId, capability, callerSid, payload })
+  const call: GatewayRelayCall = { home, capability, callerSid, payload, readable, deadline, sentOn: null, attempts: 0 }
+  gatewayRelayPending.set(relayId, { respond, timer: undefined, call })
+  sendRelayAttempt(relayId, target)
+}
+
+/** Send relay `relayId` to `target` and time this attempt (relayAttemptEnded). */
+function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): void {
+  const entry = gatewayRelayPending.get(relayId)
+  const call = entry?.call
+  if (!entry || !call) return
+  clearTimeout(entry.timer)
+  if (call.attempts === 0) {
+    call.run = target.data?.serverRun
+    // A server that names no run (an older one) is never sent a relay twice: its call ends
+    // when it always did, not at the end of the time the CLI gave it.
+    if (!call.run && !call.readable) call.deadline = Math.min(call.deadline, Date.now() + gatewayHubTimeoutMs())
+  }
+  call.sentOn = target
+  call.attempts += 1
+  entry.timer = setTimeout(() => relayAttemptEnded(relayId), relayAttemptMs(call.deadline, Date.now(), gatewayHubTimeoutMs()))
+  logMsg('info', call.attempts === 1 ? 'gateway: relaying to primary server' : 'gateway: relaying to primary server again', {
+    relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts, to: wsId(target),
+  })
+  // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
+  sendEvent(target, 'gateway-request', { relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload })
+}
+
+/** Less time left than this, a relay is not sent again. */
+const GATEWAY_RESEND_MIN_MS = 2_000
+
+/**
+ * An attempt had no answer in time. With time left the relay goes again where it
+ * may (the same server run, which answers it once), or waits for a server to say
+ * hello; at the call's end it is answered as before: from the copy for a read,
+ * else hub_timeout.
+ */
+function relayAttemptEnded(relayId: number): void {
+  const entry = gatewayRelayPending.get(relayId)
+  const call = entry?.call
+  if (!entry || !call) return
+  const left = call.deadline - Date.now()
+  if (left >= GATEWAY_RESEND_MIN_MS) {
+    const next = relayResendTarget(call)
+    if (next) return sendRelayAttempt(relayId, next)
+    call.sentOn = null
+    entry.timer = setTimeout(() => relayAttemptEnded(relayId), left)
+    return
+  }
+  gatewayRelayPending.delete(relayId)
+  if (call.readable && call.home) {
+    logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts })
+    void offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then((r) => entry.respond(r as GatewayResponse))
+    return
+  }
+  logMsg('info', 'gateway: primary timed out', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts })
+  entry.respond(gatewayError('hub_timeout', 'primary server timed out'))
 }
 
 // A relay is answered by whom it went to: the trusted walnut client, or, for a
@@ -5239,7 +5397,7 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name })
     return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'))
   }
-  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false)
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, Date.now() + gatewayHubTimeoutMs())
 }
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
@@ -5270,7 +5428,7 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (isExternalCallerSid(callerSid)) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op })
   }
-  sendGatewayRequest(req.op, callerSid, req.args, respond)
+  sendGatewayRequest(req.op, callerSid, req.args, respond, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
 }
 
 /** Second listener: owner-only unix socket, raw NDJSON, one request per conn. */
@@ -12006,6 +12164,8 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   if (followed && followerSockets.get(followed) === ws) followerSockets.delete(followed)
   // Phone sends handed to it and not answered move to the next client now.
   rerouteMessageRelays(ws)
+  // So do `walnut` calls relayed on it, where they may go (gatewayRelaysSocketGone).
+  gatewayRelaysSocketGone(ws)
 
   // DUP-DEBUG: count subscriber entries removed across all sessions for this
   // ws. If a subscriber leak shows up, this number tells us how many sids
@@ -13200,6 +13360,7 @@ if (action === '--start' || SERVICE_MODE) {
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel() } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }) }
+      releaseGatewayWaiters()
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
       const failed = drained.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })

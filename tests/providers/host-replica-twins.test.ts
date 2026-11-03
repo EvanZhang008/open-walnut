@@ -71,16 +71,21 @@ describe('host copy: both twins', () => {
     it(`${name}: a primary that missed 3 beats is away for every call; a relayed read that timed out reads the copy`, () => {
       const gw = fnBody(src, 'sendGatewayRequest')
       expect(gw).toMatch(/offlineHost\.answersRead\(payload\.name, home\)/)
-      // Not only for reads: the silence check comes first and asks nothing about the op.
-      expect(gw).toMatch(/if \(target && \(target\.(data\?\.)?missedBeats( \?\? 0| \|\| 0)\) >= GATEWAY_SILENT_BEATS\) \{/)
-      expect(gw.indexOf('>= GATEWAY_SILENT_BEATS')).toBeLessThan(gw.indexOf('const readable') === -1 ? gw.indexOf('var readable') : gw.indexOf('const readable'))
-      // Only reads: a write is never answered twice. The relay itself (and its
-      // timer) is relayToPrimary, which every relaying branch of the gateway calls.
+      // Not only for reads: the silence check (gatewayTargetFor, which picks the
+      // target) comes first and asks nothing about the op.
+      const pick = fnBody(src, 'gatewayTargetFor')
+      expect(pick).toMatch(/if \(target && \(target\.(data\?\.)?missedBeats( \?\? 0| \|\| 0)\) >= GATEWAY_SILENT_BEATS\) \{/)
+      expect(gw.indexOf('gatewayTargetFor(')).toBeGreaterThan(-1)
+      expect(gw.indexOf('gatewayTargetFor(')).toBeLessThan(gw.indexOf('const readable') === -1 ? gw.indexOf('var readable') : gw.indexOf('const readable'))
+      // Only reads: a write is never answered twice. The relay is relayToPrimary, which
+      // every relaying branch of the gateway calls; each attempt's timer ends in
+      // relayAttemptEnded, where only a read goes to the copy, before any hub_timeout.
       expect(gw).toMatch(/relayToPrimary\(/)
-      const relay = fnBody(src, 'relayToPrimary')
-      const timeout = relay.slice(relay.indexOf('setTimeout('))
-      expect(timeout.indexOf('if (readable && home)')).toBeGreaterThan(-1)
-      expect(timeout.indexOf('if (readable && home)')).toBeLessThan(timeout.indexOf("'hub_timeout'"))
+      expect(fnBody(src, 'relayToPrimary')).toMatch(/sendRelayAttempt\(relayId, target\)/)
+      expect(fnBody(src, 'sendRelayAttempt')).toMatch(/setTimeout\((\(\) => |function \(\) \{ )relayAttemptEnded\(relayId\)/)
+      const ended = fnBody(src, 'relayAttemptEnded')
+      expect(ended.indexOf('if (call.readable && call.home)')).toBeGreaterThan(-1)
+      expect(ended.indexOf('if (call.readable && call.home)')).toBeLessThan(ended.indexOf("'hub_timeout'"))
       expect(src).toMatch(/GATEWAY_SILENT_BEATS = 3/)
       // Beats, not wall time: heard resets them, the keepalive counts them.
       expect(fnBody(src, 'heardFrom')).toMatch(/missedBeats = 0/)
