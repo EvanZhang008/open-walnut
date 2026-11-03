@@ -25,6 +25,7 @@ import { test, expect, type Locator, type Page, type Response } from '@playwrigh
 import fs from 'node:fs/promises'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
 import { headerPill } from './session-header-labels-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 /** The Leader pill on a session header's title row, beside the title. */
 const LEADER_PILL = '[data-testid="leader-pill"]'
@@ -55,6 +56,8 @@ const litter: string[] = []
 
 // Both tests count the same leader's workers: one at a time per engine.
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 // deviceScaleFactor 1: evidence shots stay 1280px wide in WebKit too.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.setTimeout(180_000)

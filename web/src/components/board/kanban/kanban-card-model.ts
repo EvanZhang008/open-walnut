@@ -237,7 +237,11 @@ export function redReasonOf(
     const label = NEEDS_CATEGORY_LABELS[line.category];
     const text = line.text ? `${label}: ${line.text}` : label;
     const kind: KanbanStatusKind = storedUserState(us) === 'read' ? 'to-read' : 'needs';
-    return { text, tone: 'red', kind, tooltip: text };
+    // An ask that is a choice on this Board opens the Page at it, as the signal's own line does:
+    // the line is the derived one once the status sync names the choice, the signal's before
+    // (2026-11-03, CI: "Decide: …" read as plain text and the click opened nothing).
+    const onBoard = us.source === 'choice' && us.choice ? signals.some((s) => s.id === us.choice!.id) : false;
+    return { text, tone: 'red', kind, tooltip: text, ...(onBoard ? { signalTarget: { kind: 'choice' as const, id: us.choice!.id } } : {}) };
   }
   const handedBack = card?.handed_back_at;
   // Without a derived status (an older server) a hand back still reads as needing the user.

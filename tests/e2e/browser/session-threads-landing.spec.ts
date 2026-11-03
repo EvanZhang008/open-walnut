@@ -17,6 +17,7 @@ import {
 } from './threads-helpers'
 import { seedColumns, setPanelMode } from './draft-helpers'
 import { buildDenseSession, densePassage, seededThreadState } from './threads-fixture'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const DENSE_TASK = 'pw-task-threads-dense'
 const REWRITTEN_TASK = 'pw-task-threads-rewritten'
@@ -135,6 +136,8 @@ async function flashText(page: Page): Promise<string> {
 
 test.describe('Question stack landing', () => {
   test.describe.configure({ mode: 'serial' })
+  // The panel count is one value the whole fixture shares: hold it while this file runs.
+  holdPanelCountLock('file')
   test.setTimeout(240_000)
 
   test.beforeEach(async ({ request }) => {

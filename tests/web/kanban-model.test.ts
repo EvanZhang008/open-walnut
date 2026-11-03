@@ -85,6 +85,18 @@ describe('status line (C15, C57)', () => {
     expect([open.status.text, open.status.tone, open.lane]).toEqual(['Task still open', 'amber', 'resolved']);
   });
 
+  it('a Board choice opens the Page at it, before and after the status sync names it (C95)', () => {
+    // 2026-11-03, CI: once the derived "Decide: <title>" replaced the signal's line, the click opened nothing.
+    const t = withSession({ phase: 'NEED_ACTION' });
+    const signals = [{ kind: 'choice' as const, id: 'c95', title: 'Ship the retry fix', taskId: t.id, count: 1 }];
+    const asked = { state: 'needs', source: 'choice', ask: 'Ship the retry fix', choice: { board: 'owner-task-id', id: 'c95' } } as Task['user_status'];
+    expect(vm(t, { process_status: 'idle' }, { signals }).status.signalTarget).toEqual({ kind: 'choice', id: 'c95' });
+    const derived = vm({ ...t, user_status: asked }, { process_status: 'idle' }, { signals }).status;
+    expect(derived).toMatchObject({ text: 'Decide: Ship the retry fix', tone: 'red', signalTarget: { kind: 'choice', id: 'c95' } });
+    // A choice this Board does not show (another team's page) is no place this click can open.
+    expect(vm({ ...t, user_status: asked }, { process_status: 'idle' }).status.signalTarget).toBeUndefined();
+  });
+
   it('the one user status words a card once the server derived it (src/core/user-status.ts)', () => {
     const ended = { phase: 'NEED_ACTION' as const };
     expect(vm(mkTask({ ...ended, user_status: { state: 'needs', ask: 'Approve the real iPhone test?' } })).status)

@@ -54,6 +54,11 @@ async function take(key: string): Promise<Held> {
   const info = base.info()
   const owner = JSON.stringify({ pid: process.pid, at: Date.now(), test: info.titlePath.join(' > ') })
   const start = Date.now()
+  // Room to wait first, the budget plus the wait after: extended only once the lease came, a
+  // queue longer than the time the test had left timed it out inside the wait (2026-11-03, CI:
+  // session-threads-views "Test timeout of 240000ms exceeded while running beforeEach").
+  const budget = info.timeout
+  if (budget > 0) info.setTimeout(budget + WAIT_LIMIT_MS)
   while (!tryTake(file, owner)) {
     if (Date.now() - start > WAIT_LIMIT_MS) {
       const holder = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return 'gone' } })()
@@ -61,8 +66,7 @@ async function take(key: string): Promise<Held> {
     }
     await new Promise((r) => setTimeout(r, 150))
   }
-  const waited = Date.now() - start
-  if (waited > 50 && info.timeout > 0) info.setTimeout(info.timeout + waited)
+  if (budget > 0) info.setTimeout(budget + (Date.now() - start))
   return { file, key }
 }
 

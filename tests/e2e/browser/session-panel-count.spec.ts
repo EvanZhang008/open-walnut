@@ -29,6 +29,7 @@
  * dragged individually, and Auto is checked at two viewports straddling a breakpoint.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const SCREENSHOT_DIR = '/tmp/session-panel-count'
 
@@ -155,6 +156,8 @@ async function setPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5' | 'Au
 }
 
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 
 // Above the 30s default: several steps wait on config round-trips that queue behind
 // the fixture's session health monitor, which can block the event loop for ~20s on

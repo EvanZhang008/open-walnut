@@ -59,6 +59,7 @@ import {
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 /** Artifacts of the v4-layout run (the re-arranged column). Per-run overridable
  *  so a later revision's artifacts don't overwrite this one's. */
@@ -93,6 +94,8 @@ test.setTimeout(180_000)
 // setting, and running them concurrently would have each observing the other's
 // column budget.
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 
 // ── 1. "+" opens instantly, with zero network ───────────────────────────────
 

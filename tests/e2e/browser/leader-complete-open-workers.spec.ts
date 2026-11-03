@@ -14,6 +14,7 @@ import { test, expect, type Page, type Response } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
 import { headerPill } from './session-header-labels-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -46,6 +47,8 @@ let ownLeader = ''
 // Panel count goes through Settings and the first fixture load is cold: on a
 // busy machine that alone is most of the default 30s.
 test.setTimeout(180_000)
+// The panel count is one value the whole fixture shares: hold it while this test runs.
+holdPanelCountLock('test')
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })

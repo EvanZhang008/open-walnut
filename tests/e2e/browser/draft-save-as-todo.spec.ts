@@ -11,6 +11,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { draftComposer, draftSend, homeColumns, loadHome, openDraft, seedColumns, setPanelMode } from './draft-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const SHOTS = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-save-as-todo'
 const LABEL = 'Save as todo'
@@ -23,6 +24,8 @@ const SIDS = ['pw-normal-session', 'pw-plan-session-completed'] as const
 
 // Serial: the narrow case drives the app-wide `ui.session_panels` setting.
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 
 /** What the pill shows at this width: the words, "Todo", or the glyph alone. */
 type Tier = 'words' | 'short' | 'glyph'

@@ -26,6 +26,10 @@ import {
   PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage,
   requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
+
+// The panel count is one value the whole fixture shares: hold it while this test runs.
+holdPanelCountLock('test')
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 

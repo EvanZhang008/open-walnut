@@ -24,6 +24,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const SCREENSHOT_DIR = process.env.LOCK_GRANT_SHOT_DIR ?? '/tmp/session-panel-lock-grant'
 
@@ -122,6 +123,8 @@ async function growToFour(page: Page) {
 test.setTimeout(180_000)
 // Serial: every scenario drives the app-wide `ui.session_panels` setting.
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 
 test('three pinned panels: the next session opens a 4th column and the count becomes 4; lowering it is the user\'s pick', async ({ page }) => {
   await page.setViewportSize({ width: 2400, height: 1000 })

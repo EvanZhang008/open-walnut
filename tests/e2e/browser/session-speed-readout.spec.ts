@@ -26,6 +26,7 @@ import { test, expect, type Page, type APIRequestContext, type Locator } from '@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const SPEED_MESSAGE = 'chunk-delay:300 stream-partial-speed'
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
@@ -283,6 +284,8 @@ async function assertFinalReadout(page: Page, model: string): Promise<number> {
 // One worker, in order: each test spawns real mock CLIs, and the box is loaded.
 test.describe.configure({ mode: 'default' })
 test.setTimeout(240_000)
+// The panel count is one value the whole fixture shares: hold it while this test runs.
+holdPanelCountLock('test')
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })

@@ -27,6 +27,7 @@ import { expect, test, type APIRequestContext, type Browser, type BrowserContext
 import { discoverBrowserFixture } from './codex-test-audit'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
 import { openTasksBy } from './org-view-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.LAYOUT_RECORD_SHOT_DIR ?? '/tmp/layout-record-restart'
@@ -38,6 +39,8 @@ const made: string[] = []
 const ids = { alpha: '', alphaSid: '', beta: '' }
 
 test.describe.configure({ mode: 'serial' })
+// The panel count is one value the whole fixture shares: hold it while this file runs.
+holdPanelCountLock('file')
 test.setTimeout(240_000)
 
 async function optIn(target: Page | BrowserContext): Promise<void> {

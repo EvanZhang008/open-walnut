@@ -14,6 +14,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { closeViewMenu, openHome, openViewMenu } from './home-navigation-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const SHOTS = '/tmp/filterbar/shots'
 const SIDS = ['pw-normal-session', 'pw-plan-session-completed', 'pw-vscode-session'] as const
@@ -81,6 +82,9 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   try { await writeMode(page, original) } finally { await page.close() }
 })
+// The panel count is one value the whole fixture shares: hold it while this file runs. Declared
+// after the afterAll above (hooks run in declaration order), so the count is back before it is let go.
+holdPanelCountLock('file')
 
 test('the Display menu shows the column count and a pick moves the strip at once', async ({ page, baseURL }) => {
   const errors: string[] = []

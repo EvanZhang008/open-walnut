@@ -15,6 +15,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -128,6 +129,8 @@ async function openThree(page: Page) {
 // Setting the panel count goes through Settings and the config lock, and the first load of the
 // fixture is cold: on a busy machine that alone is most of the default 30s.
 test.setTimeout(180_000)
+// The panel count is one value the whole fixture shares: hold it while this test runs.
+holdPanelCountLock('test')
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 })
