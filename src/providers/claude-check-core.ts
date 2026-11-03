@@ -6,7 +6,8 @@
  * How each twin gets it: daemon-standalone.ts imports it; daemon-source.ts
  * inlines `createClaudeCheck.toString()` through the `__CREATE_CLAUDE_CHECK__`
  * placeholder, like createHostRuntime. So the factory body references NOTHING
- * at module scope (the type import below is erased), and constructing it has
+ * at module scope (the type import below is erased; node:crypto serves only
+ * sha256Hex, for callers that import this module), and constructing it has
  * no side effects.
  *
  * Sign-in rule. Read from the CLI's own `claude auth status` handler, and run
@@ -34,12 +35,32 @@
  *      merges them), an `apiKeyHelper`, or <config dir>/.credentials.json reads
  *      'ok'. Anything else is 'unknown', never 'not-logged-in': on macOS the
  *      token lives in the keychain, which this rule does not read.
+ *   On macOS, rule 1 runs only when the keychain holds none of the CLI's items.
+ *      `claude auth status` reads its token with `security find-generic-password
+ *      -w`, and when the login keychain is locked (its password out of step with
+ *      the login password, say) that read pops "security wants to use the login
+ *      keychain" on the person's screen: every reconnect of the server to a
+ *      fleet Mac did (2026-11-03, ten prompts in four hours on one machine). So
+ *      a Mac first takes the presence rule's env and settings answer, then asks
+ *      the keychain whether `Claude Code-credentials` (the OAuth token) or
+ *      `Claude Code` (an API key) EXISTS, with no -w: a search reads only item
+ *      attributes, which a locked keychain answers without unlocking. An item
+ *      that exists reads 'ok'; a keychain that does not answer reads 'unknown'
+ *      and the CLI is not asked; only with neither item does the CLI run, and
+ *      then it has no secret in the keychain to read. The rc file is asked only
+ *      what it sets (config dir, user, provider switches, whether a key is set,
+ *      never its value), the item names are worked out again from that, and the
+ *      CLI never runs through the shell: there it could read an item under a
+ *      name only the rc file gives. The background fixes that start the whole
+ *      CLI (`claude update`, the installer) wait for an unlocked keychain the
+ *      same way (host-fix-core.ts keychainLocked).
  * No token or key value is ever read into a result: of the CLI's JSON only
  * loggedIn / authMethod / apiProvider are looked at (its email and org fields
  * are dropped), and variables are only tested for presence.
  */
 
 import type fsType from 'node:fs'
+import { createHash } from 'node:crypto'
 
 export type ClaudeAuthState = 'ok' | 'not-logged-in' | 'unknown'
 /** How the claude a session would start was installed; only 'native' updates itself with `claude update`. */
@@ -76,6 +97,10 @@ export interface ClaudeCheckDeps {
   /** Live reference (process.env). */
   env: Record<string, string | undefined>
   now?: () => number
+  /** process.platform by default; 'darwin' turns on the keychain rule (file comment). */
+  platform?: string
+  /** sha256 hex of a string: names the keychain items under a custom CLAUDE_CONFIG_DIR. */
+  sha256Hex?: (s: string) => string
 }
 
 /** Self-contained factory: see the file comment before adding any reference outside it. */
@@ -221,10 +246,11 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
   }
 
   /** Rule 2: presence of a provider switch, a key, a key helper, or the credentials file. */
-  function presenceRule(why: string): Answer {
-    var dir = (deps.env.CLAUDE_CONFIG_DIR || home() + '/.claude').replace(/\/$/, '')
+  function presenceRule(why: string, env?: Record<string, string | undefined>): Answer {
+    var e = env || deps.env
+    var dir = (e.CLAUDE_CONFIG_DIR || home() + '/.claude').replace(/\/$/, '')
     var settings = readSettings(dir)
-    var merged: Record<string, unknown> = Object.assign({}, deps.env, settings.env)
+    var merged: Record<string, unknown> = Object.assign({}, e, settings.env)
     for (var i = 0; i < SWITCHES.length; i++) if (truthy(merged[SWITCHES[i][0]])) return { state: 'ok', detail: SWITCHES[i][1] }
     for (var k = 0; k < KEYS.length; k++) {
       var v = merged[KEYS[k][0]]
@@ -235,7 +261,118 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
     return { state: 'unknown', detail: why }
   }
 
+  function isMac(): boolean { return (deps.platform || process.platform) === 'darwin' }
+
+  /**
+   * The CLI's keychain item names under `env` (with settings.json `env` over it,
+   * as the CLI merges them): `Claude Code` + the OAuth suffix + `-credentials`
+   * for the token, without `-credentials` for an API key, and a custom config
+   * dir adds `-` + the first 8 hex of its sha256. null = cannot be worked out.
+   */
+  function keychainNames(env: Record<string, string | undefined>): { oauth: string; key: string; user: string } | null {
+    var e: Record<string, unknown> = Object.assign({}, env, readSettings((env.CLAUDE_CONFIG_DIR || home() + '/.claude').replace(/\/$/, '')).env)
+    // An internal build picks its own suffixes from more than the env shows.
+    if (e.USER_TYPE === 'ant') return null
+    var suffix = typeof e.CLAUDE_CODE_CUSTOM_OAUTH_URL === 'string' && e.CLAUDE_CODE_CUSTOM_OAUTH_URL ? '-custom-oauth' : ''
+    var dir = env.CLAUDE_CONFIG_DIR
+    var tail = ''
+    if (dir) {
+      if (!deps.sha256Hex) return null
+      try { tail = '-' + deps.sha256Hex(String(dir).normalize('NFC')).slice(0, 8) } catch { return null }
+    }
+    return { oauth: 'Claude Code' + suffix + '-credentials' + tail, key: 'Claude Code' + suffix + tail, user: env.USER || '' }
+  }
+
+  /** Does the keychain hold this item: true, false, or null for no answer. No -w: its secret is never read. */
+  async function keychainHas(service: string, user: string, deadline: number): Promise<boolean | null> {
+    var left = Math.min(3000, deadline - now())
+    if (left < 300) return null
+    var args = ['find-generic-password']
+    if (user) args.push('-a', user)
+    args.push('-s', service)
+    var r = await run('/usr/bin/security', args, left)
+    if (r.timedOut) return null
+    if (r.code === 0) return true
+    // errSecItemNotFound: `security` exits 44.
+    return r.code === 44 ? false : null
+  }
+
+  /**
+   * macOS, under one env: an answer that never reads a keychain secret (file
+   * comment), or null when the keychain holds none of the CLI's items.
+   */
+  async function keychainRule(input: ClaudeCheckInput, env: Record<string, string | undefined>): Promise<Answer | null> {
+    var p = presenceRule('', env)
+    if (p.state === 'ok') return p
+    var names = keychainNames(env)
+    if (!names) return { state: 'unknown', detail: 'the keychain item name Claude Code uses here could not be worked out, so the keychain was not asked' }
+    var oauth = await keychainHas(names.oauth, names.user, input.deadline)
+    if (oauth) return { state: 'ok', detail: 'a Claude account' }
+    var key = oauth === null ? null : await keychainHas(names.key, names.user, input.deadline)
+    if (key) return { state: 'ok', detail: 'an Anthropic API key' }
+    if (oauth === null || key === null) return { state: 'unknown', detail: 'the keychain did not say whether Claude Code is signed in' }
+    return null
+  }
+
+  /** What a session's rc file sets of the names the keychain rule reads; key values only as "1". null = no answer. */
+  async function rcEnv(input: ClaudeCheckInput): Promise<Record<string, string | undefined> | null> {
+    var shell = deps.env.SHELL || ''
+    var rc = sessionRc()
+    var left = Math.min(6000, input.deadline - now())
+    if (!rc || !isExecutable(shell) || left < 300) return null
+    var lines = ['"__walnut_env__"', '"CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-}"', '"USER=${USER-}"', '"USER_TYPE=${USER_TYPE-}"',
+      '"CLAUDE_CODE_CUSTOM_OAUTH_URL=${CLAUDE_CODE_CUSTOM_OAUTH_URL:+1}"']
+    for (var i = 0; i < SWITCHES.length; i++) lines.push('"' + SWITCHES[i][0] + '=${' + SWITCHES[i][0] + '-}"')
+    for (var k = 0; k < KEYS.length; k++) lines.push('"' + KEYS[k][0] + '=${' + KEYS[k][0] + ':+1}"')
+    // Then the NAMES (never values) of every provider or key variable it exports, to tell one this rule does not know.
+    var script = '[ -f "$HOME/' + rc + '" ] && . "$HOME/' + rc + '" >/dev/null 2>&1; printf \'%s\\n\' ' + lines.join(' ')
+      + '; env | awk -F= \'/^(ANTHROPIC_|CLAUDE_CODE_USE_)[A-Z0-9_]*=/ { print "name:" $1 }\''
+    var r = await run(shell, ['-c', script], left)
+    var out = r.timedOut ? '' : r.stdout
+    var at = out.lastIndexOf('__walnut_env__\n')
+    if (at < 0) return null
+    var env: Record<string, string | undefined> = {}
+    var known = SWITCHES.concat(KEYS).map(function (p) { return p[0] })
+    var unlisted = false
+    out.slice(at + 15).split('\n').forEach(function (l) {
+      if (l.indexOf('name:') === 0) {
+        var n = l.slice(5)
+        if (known.indexOf(n) < 0 && !deps.env[n]) unlisted = true
+        return
+      }
+      var eq = l.indexOf('=')
+      if (eq > 0) env[l.slice(0, eq)] = l.slice(eq + 1) || undefined
+    })
+    if (unlisted) env.__unlisted = '1'
+    return env
+  }
+
+  /**
+   * macOS: the keychain rule under the daemon's env, then under the env a
+   * session's rc file makes (a config dir or provider exported only there).
+   * `answer` null = no item either way, so `auth status` has no secret to read;
+   * `doubt` = a "not logged in" from it proves nothing (the rc file did not
+   * answer, or exports a provider or key variable this rule does not know).
+   */
+  async function macAuth(input: ClaudeCheckInput): Promise<{ answer: Answer | null; doubt?: string }> {
+    var a = await keychainRule(input, deps.env)
+    if (a || !sessionRc()) return { answer: a }
+    var fromRc = await rcEnv(input)
+    if (!fromRc) return { answer: null, doubt: 'the login shell did not say what ~/' + sessionRc() + ' sets' }
+    var doubt = fromRc.__unlisted ? '~/' + sessionRc() + ' exports a provider or key variable this check does not know' : undefined
+    delete fromRc.__unlisted
+    var merged: Record<string, string | undefined> = Object.assign({}, deps.env, fromRc)
+    var changed = Object.keys(fromRc).some(function (n) { return (merged[n] || '') !== (deps.env[n] || '') })
+    return { answer: changed ? await keychainRule(input, merged) : null, doubt: doubt }
+  }
+
   async function authState(input: ClaudeCheckInput): Promise<Answer> {
+    var doubt: string | undefined
+    if (isMac()) {
+      var mac = await macAuth(input)
+      if (mac.answer) return mac.answer
+      doubt = mac.doubt
+    }
     var hasCommand = versionAtLeast(input.version, AUTH_STATUS_SINCE)
     if (hasCommand !== true) {
       return presenceRule(hasCommand === false
@@ -247,6 +384,9 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
     if (direct.state !== 'not-logged-in') return direct
     // Sessions source no rc file under this $SHELL, so they see what the daemon saw.
     if (!sessionRc()) return direct
+    // On a Mac, macAuth already read what the rc file sets, and the CLI run through
+    // it could read a keychain item under a name only the rc file gives.
+    if (isMac()) return doubt ? { state: 'unknown', detail: 'claude auth status read signed out, but ' + doubt } : direct
     // Only a second explicit "no" is 'not-logged-in'. A shell pass that timed
     // out or had no time left proves nothing, and a false "not signed in" sends
     // the user to sign in again (and keeps the setup banner polling).
@@ -293,3 +433,8 @@ export function createClaudeCheck(deps: ClaudeCheckDeps) {
 }
 
 export type ClaudeCheck = ReturnType<typeof createClaudeCheck>
+
+/** ClaudeCheckDeps.sha256Hex for callers that import this module (not used inside the factory). */
+export function sha256Hex(s: string): string {
+  return createHash('sha256').update(s).digest('hex')
+}

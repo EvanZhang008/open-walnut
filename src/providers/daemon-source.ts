@@ -1363,7 +1363,7 @@ function runWnMinimal(argv, stdinText) {
 // the daemon PATH, so the daemon PATH is the whole answer here.
 const hostRuntime = (__CREATE_HOST_RUNTIME__)({
   fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env, platform: process.platform, arch: process.arch,
-  claudeCheck: (__CREATE_CLAUDE_CHECK__)({ fs: fs, execFile: execFile, env: process.env }),
+  claudeCheck: (__CREATE_CLAUDE_CHECK__)({ fs: fs, execFile: execFile, env: process.env, sha256Hex: function (s) { return crypto.createHash('sha256').update(s).digest('hex'); } }),
 });
 const bootPath = hostRuntime.computeDaemonPath();
 process.env.PATH = bootPath.path;

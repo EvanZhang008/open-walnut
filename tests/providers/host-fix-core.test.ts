@@ -275,6 +275,17 @@ describe('install-claude-native', () => {
     expect(r.skipped).toBeUndefined()
   })
 
+  it('on a Mac whose login keychain is locked it never runs the installer (its `claude install` reads the keychain)', async () => {
+    const h = fakeHost({
+      platform: 'darwin',
+      bins: { curl: '/usr/bin/curl', bash: '/bin/bash', claude: BIN },
+      claude: { [BIN]: { ...NPM, path: BIN } },
+      script: (file) => (file === '/usr/bin/osascript' ? { code: 0, stdout: 'status 2\n' } : { code: 0 }),
+    })
+    expect(await h.fix.run('install-claude-native')).toMatchObject({ ok: false, error: 'keychain-locked', manualCommand: 'curl -fsSL https://claude.ai/install.sh | bash' })
+    expect(nonProbe(h.calls).map((c) => c.file)).toEqual(['/usr/bin/osascript'])
+  })
+
   it('falls back to wget when curl is missing', async () => {
     const h = fakeHost({
       bins: { wget: '/usr/bin/wget', bash: '/bin/bash' },
@@ -334,9 +345,10 @@ describe('install-claude-native', () => {
 describe('update-claude', () => {
   const VERSIONS = `${HOME}/.local/share/claude/versions`
   /** A native-installer host whose `claude update` moves ~/.local/bin/claude from `from` to `to`. */
-  function nativeHost(opts: { from?: string; to?: string; updateCode?: number; updateOut?: string; env?: Record<string, string>; realpath?: string } = {}) {
+  function nativeHost(opts: { from?: string; to?: string; updateCode?: number; updateOut?: string; env?: Record<string, string>; realpath?: string; platform?: string; keychain?: string } = {}) {
     let version = opts.from ?? '2.1.258'
     const h = fakeHost({
+      platform: opts.platform,
       bins: { claude: BIN, curl: '/usr/bin/curl', bash: '/bin/bash' },
       claude: { [BIN]: { ...NATIVE, path: BIN } },
       script: (file, args) => {
@@ -346,6 +358,7 @@ describe('update-claude', () => {
           return { code: opts.updateCode ?? 0, stdout: opts.updateOut ?? `Current version: 2.1.258\nSuccessfully updated from 2.1.258 to ${opts.to ?? '2.1.280'}\n` }
         }
         if (file === '/bin/bash') { version = opts.to ?? '2.1.280'; return { code: 0 } }
+        if (file === '/usr/bin/osascript') return opts.keychain === 'fail' ? { code: 1, stderr: 'execution error' } : { code: 0, stdout: `status ${opts.keychain ?? '7'}\n` }
         return { code: 0 }
       },
     })
@@ -360,6 +373,29 @@ describe('update-claude', () => {
     expect(nonProbe(h.calls).map(cmdLine)).toEqual([`${BIN} --version`, `${BIN} update`, `${BIN} --version`])
     expect(r).toMatchObject({ action: 'update-claude', ok: true, claude: { path: BIN, kind: 'native', version: '2.1.280' } })
     expect(r.skipped).toBeUndefined()
+  })
+
+  // 2026-11-03: `claude update` starts the whole CLI, which reads its token from the
+  // keychain; a locked login keychain then asks for its password on that Mac's screen.
+  it('on a Mac whose login keychain is locked it never runs `claude update`, and says how to run it by hand', async () => {
+    const h = nativeHost({ platform: 'darwin', keychain: '2' })
+    const r = await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })
+    expect(r).toMatchObject({ ok: false, error: 'keychain-locked', manualCommand: 'claude update' })
+    expect(nonProbe(h.calls).map((c) => c.file)).toEqual([BIN, '/usr/bin/osascript'])
+    // The status check asks SecKeychainGetStatus, which never unlocks.
+    expect(nonProbe(h.calls)[1].args.slice(0, 2)).toEqual(['-l', 'JavaScript'])
+    expect(nonProbe(h.calls)[1].args[3]).toContain('SecKeychainGetStatus')
+  })
+
+  it('an unlocked keychain (or no answer from it) updates as before, and Linux never asks', async () => {
+    for (const keychain of ['7', '3', 'fail']) {
+      const h = nativeHost({ platform: 'darwin', keychain })
+      expect(await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: true, claude: { version: '2.1.280' } })
+      expect(nonProbe(h.calls).map(cmdLine)).toContain(`${BIN} update`)
+    }
+    const linux = nativeHost()
+    await linux.fix.run('update-claude', { minClaudeVersion: '2.1.280' })
+    expect(linux.calls.some((c) => c.file === '/usr/bin/osascript')).toBe(false)
   })
 
   it('already new enough: nothing runs but the version check', async () => {

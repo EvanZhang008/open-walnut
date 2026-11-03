@@ -634,7 +634,7 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // daemon-source.ts passes none: it spawns claude directly on the daemon PATH.
 const hostRuntime = createHostRuntime({
   fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch,
-  claudeCheck: createClaudeCheck({ fs, execFile, env: process.env }),
+  claudeCheck: createClaudeCheck({ fs, execFile, env: process.env, sha256Hex: (s) => crypto.createHash('sha256').update(s).digest('hex') }),
   spawnPreamble: () => buildSpawnPreamble(),
 })
 const bootPath = hostRuntime.computeDaemonPath()

@@ -287,12 +287,32 @@ export function createHostFix(deps: HostFixDeps) {
     return skipped ? { ok: true, skipped: true, claude: claude } : { ok: true, claude: claude }
   }
 
+  /**
+   * Is this Mac's login keychain locked: true, false (or not a Mac), null for
+   * no answer. `claude update` and the installer's `claude install` start the
+   * whole CLI, which reads its token from the keychain at start, and with the
+   * keychain locked that read asks for its password on the person's screen
+   * (2026-11-03, a fleet Mac whose login keychain stayed locked).
+   * SecKeychainGetStatus never unlocks; JXA reaches it with no compiler.
+   */
+  async function keychainLocked(deadline: number): Promise<boolean | null> {
+    if (deps.os.platform() !== 'darwin') return false
+    // ObjC["import"]: the source twin's injection check refuses any `import(` in this text.
+    var js = 'ObjC["import"]("Security"); var kc = Ref(); var st = Ref(); var c = $.SecKeychainCopyDefault(kc);'
+      + ' var r = c === 0 ? $.SecKeychainGetStatus(kc[0], st) : c; r === 0 ? "status " + st[0] : "error " + r'
+    var r = await run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', js], { timeoutMs: Math.max(1, Math.min(5000, deadline - now())) })
+    var m = /^status (\d+)\s*$/.exec(r.timedOut || r.code !== 0 ? '' : String(r.stdout))
+    // kSecUnlockStateStatus = 1.
+    return m ? (Number(m[1]) & 1) === 0 : null
+  }
+
   async function installClaudeNative(deadline: number, logs: string[]): Promise<Result> {
     var bin = home() + '/.local/bin/claude'
     var current = await deps.runtime.probeClaude('claude', pathStr(), deadline)
     if (current.found && current.kind === 'native' && current.path) return reportClaude(current.path, deadline, logs, true)
     var local = await deps.runtime.probeClaude(bin, pathStr(), deadline)
     if (local.found && local.kind === 'native') return reportClaude(bin, deadline, logs, true)
+    if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: INSTALL_LINE }
     var failed = await runInstaller(deadline, logs)
     return failed || reportClaude(bin, deadline, logs, false)
   }
@@ -367,6 +387,7 @@ export function createHostFix(deps: HostFixDeps) {
     var before = await claudeVersion(bin, undefined, deadline, logs)
     if (before && need && atLeast(before, need)) return { ok: true, skipped: true, claude: { path: bin, kind: 'native', version: before } }
     if (truthy(deps.env.DISABLE_UPDATES)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
+    if (await keychainLocked(deadline) === true) return { ok: false, error: 'keychain-locked', manualCommand: 'claude update' }
     var up = await run(bin, ['update'], { timeoutMs: Math.max(1, Math.min(180000, deadline - now())) })
     transcript(logs, [bin, 'update'], up)
     if (up.timedOut) return { ok: false, error: 'timeout', manualCommand: 'claude update' }

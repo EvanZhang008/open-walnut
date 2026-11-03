@@ -9,8 +9,11 @@
  * what the source-deployed daemon twin runs.
  */
 import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import childProcess from 'node:child_process'
 import { describe, it, expect } from 'vitest'
-import { createClaudeCheck, type ClaudeCheckDeps, type ClaudeCheckInput } from '../../src/providers/claude-check-core.js'
+import { createClaudeCheck, sha256Hex, type ClaudeCheckDeps, type ClaudeCheckInput } from '../../src/providers/claude-check-core.js'
 import { getDaemonSource, validateFoldInjection } from '../../src/providers/daemon-source.js'
 import { foldLine, initialFoldState, assembleSnapshot } from '../../src/providers/daemon-fold.js'
 
@@ -23,7 +26,7 @@ const ACCOUNT = '{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "f
 /** `hang: true` = the child never answers (a grandchild holding stdout open). */
 type Script = (file: string, args: string[]) => { code: number; stdout?: string; killed?: boolean; hang?: boolean }
 
-function fake(opts: { files?: Record<string, string>; links?: Record<string, string>; env?: Record<string, string>; script?: Script; pid?: number; now?: () => number } = {}) {
+function fake(opts: { files?: Record<string, string>; links?: Record<string, string>; env?: Record<string, string>; script?: Script; pid?: number; now?: () => number; platform?: string; sha256Hex?: (s: string) => string } = {}) {
   const files = opts.files ?? {}
   const calls: Array<{ file: string; args: string[]; env: Record<string, unknown>; detached: unknown }> = []
   const kills: Array<[number, string]> = []
@@ -47,6 +50,9 @@ function fake(opts: { files?: Record<string, string>; links?: Record<string, str
     fs: fakeFs as unknown as ClaudeCheckDeps['fs'], execFile, env: { HOME, PATH: '/usr/bin', ...opts.env },
     kill: (pid, signal) => { kills.push([pid, signal]) },
     ...(opts.now ? { now: opts.now } : {}),
+    // Pinned, so a run on a Mac checks the same rule as one on Linux.
+    platform: opts.platform ?? 'linux',
+    ...(opts.sha256Hex ? { sha256Hex: opts.sha256Hex } : {}),
   }
   return { deps, calls, kills }
 }
@@ -226,6 +232,229 @@ describe('sign-in: presence rule (older CLI or no answer)', () => {
     const { deps, calls } = fake()
     expect(await createClaudeCheck(deps).check(input({ version: undefined }))).toMatchObject({ auth: 'unknown', authDetail: expect.stringContaining('version is unknown') })
     expect(calls).toEqual([])
+  })
+})
+
+/**
+ * macOS: `claude auth status` reads its token with `security find-generic-password -w`,
+ * and with the login keychain locked that read pops an unlock prompt on the person's
+ * screen (2026-11-03: every server reconnect to a fleet Mac did). The check must never
+ * cause a keychain secret read while the keychain holds one of the CLI's items.
+ */
+describe('sign-in on macOS: the keychain is asked whether an item exists, never for its secret', () => {
+  const SECURITY = '/usr/bin/security'
+  /** `items`: services the fake keychain holds; `keychain: 'hang'` = security never answers. */
+  /** `rc`: what the login shell prints after sourcing ~/.zshrc (undefined = no zsh; 'hang' = no answer). */
+  const mac = (o: { items?: string[]; keychain?: 'hang' | 'error'; env?: Record<string, string>; sha?: boolean; files?: Record<string, string>; rc?: Record<string, string> | 'hang'; rcNames?: string[]; cli?: string } = {}) => fake({
+    platform: 'darwin', env: { USER: 'dev', ...(o.rc ? { SHELL: '/bin/zsh' } : {}), ...o.env }, files: { ...(o.rc ? { '/bin/zsh': '' } : {}), ...o.files },
+    ...(o.sha ? { sha256Hex } : {}),
+    script: (file, args) => {
+      if (file === '/bin/zsh') {
+        if (o.rc === 'hang') return { code: 0, hang: true }
+        // Run the script's printf for real names only: each "NAME=${...}" line, filled from o.rc.
+        const names = [...String(args[1]).matchAll(/"([A-Z_]+)=\$\{/g)].map((m) => m[1])
+        const rc = o.rc as Record<string, string>
+        const exported = (o.rcNames ?? []).map((n) => `name:${n}\n`).join('')
+        return { code: 0, stdout: 'rc noise\n__walnut_env__\n' + names.map((n) => `${n}=${rc[n] ?? ''}`).join('\n') + '\n' + exported }
+      }
+      if (file === SECURITY) {
+        if (o.keychain === 'hang') return { code: 0, hang: true }
+        if (o.keychain === 'error') return { code: 51 }
+        const svc = args[args.indexOf('-s') + 1]
+        return (o.items ?? []).includes(svc) ? { code: 0, stdout: 'keychain: "login.keychain-db"\nclass: "genp"\n' } : { code: 44 }
+      }
+      return { code: 0, stdout: o.cli ?? ACCOUNT }
+    },
+  })
+  const noSecretRead = (calls: Array<{ file: string; args: string[] }>) => {
+    for (const c of calls) {
+      expect(c.args).not.toContain('-w')
+      if (c.file === SECURITY) expect(c.args[0]).toBe('find-generic-password')
+    }
+  }
+  const ranCli = (calls: Array<{ args: string[] }>) => calls.some((c) => c.args.includes('auth'))
+
+  it('the OAuth item exists: a Claude account, and the CLI is never asked', async () => {
+    const { deps, calls } = mac({ items: ['Claude Code-credentials'] })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'a Claude account' })
+    expect(ranCli(calls)).toBe(false)
+    expect(calls[0]).toMatchObject({ file: SECURITY, args: ['find-generic-password', '-a', 'dev', '-s', 'Claude Code-credentials'], detached: true })
+    noSecretRead(calls)
+  })
+
+  it('only an API key item: ok, the CLI is never asked', async () => {
+    const { deps, calls } = mac({ items: ['Claude Code'] })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'an Anthropic API key' })
+    expect(ranCli(calls)).toBe(false)
+    noSecretRead(calls)
+  })
+
+  it('a provider switch or the credentials file answers before the keychain is touched at all', async () => {
+    const env = mac({ env: { CLAUDE_CODE_USE_BEDROCK: '1' } })
+    expect(await createClaudeCheck(env.deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'Bedrock' })
+    expect(env.calls).toHaveLength(0)
+    const file = mac({ files: { [`${HOME}/.claude/.credentials.json`]: '{}' } })
+    expect(await createClaudeCheck(file.deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(file.calls).toHaveLength(0)
+  })
+
+  it('neither item: the CLI is asked, since the keychain then holds no secret for it to read', async () => {
+    const { deps, calls } = mac()
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'a Claude account' })
+    expect(calls.filter((c) => c.file === SECURITY)).toHaveLength(2)
+    expect(ranCli(calls)).toBe(true)
+    noSecretRead(calls)
+  })
+
+  it('a keychain that hangs or errs reads unknown, and the CLI is never asked', async () => {
+    for (const keychain of ['hang', 'error'] as const) {
+      const { deps, calls } = mac({ keychain })
+      const r = await createClaudeCheck(deps).check(input({ deadline: Date.now() + 4000 }))
+      expect(r.auth).toBe('unknown')
+      expect(ranCli(calls)).toBe(false)
+    }
+  })
+
+  it('a custom CLAUDE_CONFIG_DIR names the items the way the CLI does, and with no hash function nothing is asked', async () => {
+    const dir = '/Users/dev/.claude-work'
+    const svc = 'Claude Code-credentials-' + sha256Hex(dir).slice(0, 8)
+    const named = mac({ env: { CLAUDE_CONFIG_DIR: dir }, sha: true, items: [svc] })
+    expect(await createClaudeCheck(named.deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(named.calls[0].args).toContain(svc)
+    const blind = mac({ env: { CLAUDE_CONFIG_DIR: dir } })
+    expect((await createClaudeCheck(blind.deps).check(input())).auth).toBe('unknown')
+    expect(blind.calls).toHaveLength(0)
+  })
+
+  it('an older CLI on a Mac also reads the keychain item instead of guessing', async () => {
+    const { deps, calls } = mac({ items: ['Claude Code-credentials'] })
+    expect(await createClaudeCheck(deps).check(input({ version: '2.1.30' }))).toMatchObject({ auth: 'ok' })
+    expect(ranCli(calls)).toBe(false)
+  })
+
+  it('a config dir exported only in ~/.zshrc: its item is found under the hashed name, and the CLI never runs', async () => {
+    const dir = '/Users/dev/.claude-work'
+    const svc = 'Claude Code-credentials-' + sha256Hex(dir).slice(0, 8)
+    const { deps, calls } = mac({ rc: { CLAUDE_CONFIG_DIR: dir, USER: 'dev' }, sha: true, items: [svc] })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'a Claude account' })
+    expect(ranCli(calls)).toBe(false)
+    expect(calls.some((c) => c.file === SECURITY && c.args.includes(svc))).toBe(true)
+    // The rc pass prints key variables only as "set", never their values.
+    expect(String(calls.find((c) => c.file === '/bin/zsh')!.args[1])).toMatch(/ANTHROPIC_API_KEY=\$\{ANTHROPIC_API_KEY:\+1\}/)
+    noSecretRead(calls)
+  })
+
+  it('a provider switch exported only in ~/.zshrc reads ok with no keychain read and no CLI', async () => {
+    const { deps, calls } = mac({ rc: { CLAUDE_CODE_USE_BEDROCK: '1', USER: 'dev' } })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'Bedrock' })
+    expect(ranCli(calls)).toBe(false)
+  })
+
+  it('no item under either env: the CLI runs once, directly, never through the rc shell', async () => {
+    const { deps, calls } = mac({ rc: { USER: 'dev' }, cli: SIGNED_OUT })
+    expect((await createClaudeCheck(deps).check(input())).auth).toBe('not-logged-in')
+    expect(calls.filter((c) => c.args.includes('auth'))).toHaveLength(1)
+    expect(calls.filter((c) => c.file === '/bin/zsh' && String(c.args[1]).includes('auth status'))).toHaveLength(0)
+  })
+
+  it('a login shell that does not answer: the CLI runs directly (no item to read), and its "signed out" reads unknown', async () => {
+    const out = mac({ rc: 'hang', cli: SIGNED_OUT })
+    expect((await createClaudeCheck(out.deps).check(input({ deadline: Date.now() + 12_000 }))).auth).toBe('unknown')
+    expect(out.calls.filter((c) => c.args.includes('auth'))).toHaveLength(1)
+    const ok = mac({ rc: 'hang' })
+    expect(await createClaudeCheck(ok.deps).check(input({ deadline: Date.now() + 12_000 }))).toMatchObject({ auth: 'ok' })
+    noSecretRead(ok.calls)
+  })
+
+  it('an rc file exporting a provider variable this check does not know turns "signed out" into unknown', async () => {
+    const { deps } = mac({ rc: { USER: 'dev' }, rcNames: ['CLAUDE_CODE_USE_SOMETHING_NEW'], cli: SIGNED_OUT })
+    expect((await createClaudeCheck(deps).check(input())).auth).toBe('unknown')
+    const known = mac({ rc: { USER: 'dev' }, rcNames: ['ANTHROPIC_API_KEY'], cli: SIGNED_OUT })
+    // A name the rule already reads adds no doubt: the direct answer stands.
+    expect(await createClaudeCheck(known.deps).check(input())).toMatchObject({ auth: 'not-logged-in' })
+  })
+
+  it('the rc pass, run in a real bash, reports what the rc file sets and never a key value', async () => {
+    const bash = ['/bin/bash', '/usr/bin/bash'].find((b) => fs.existsSync(b))
+    if (!bash) return
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-check-rc-'))
+    try {
+      fs.writeFileSync(path.join(home, '.bashrc'), 'echo rc noise\nexport CLAUDE_CONFIG_DIR="/x/a b=c"\nexport ANTHROPIC_API_KEY=sk-not-a-real-value\nexport CLAUDE_CODE_USE_SOMETHING_NEW=1\n')
+      const calls: string[][] = []
+      const execFile: ClaudeCheckDeps['execFile'] = (file, args, o, cb) => {
+        calls.push([file, ...args])
+        if (file === '/usr/bin/security') { queueMicrotask(() => cb(Object.assign(new Error('x'), { code: 44 }), '', '')); return {} }
+        if (file === bash) {
+          return childProcess.execFile(file, args, { env: o.env as NodeJS.ProcessEnv, encoding: 'utf-8' }, (err, stdout) => {
+            outputs.push(String(stdout)); cb(err, stdout, '')
+          })
+        }
+        queueMicrotask(() => cb(null, SIGNED_OUT, '')); return {}
+      }
+      const outputs: string[] = []
+      const ck = createClaudeCheck({ fs, execFile, env: { HOME: home, SHELL: bash, USER: 'dev', PATH: process.env.PATH }, platform: 'darwin', sha256Hex })
+      const r = await ck.check(input())
+      const out = outputs.join('')
+      expect(out).toContain('CLAUDE_CONFIG_DIR=/x/a b=c\n')
+      expect(out).toContain('ANTHROPIC_API_KEY=1\n')
+      expect(out).toContain('name:CLAUDE_CODE_USE_SOMETHING_NEW\n')
+      expect(out).not.toContain('sk-not-a-real-value')
+      // The rc key reads ok by presence: no keychain read under the rc names was needed, and the CLI never ran.
+      expect(r).toMatchObject({ auth: 'ok', authDetail: 'an Anthropic API key' })
+      expect(calls.some((c) => c.includes('auth'))).toBe(false)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('a custom OAuth endpoint names the items with the CLI suffix', async () => {
+    const { deps, calls } = mac({ env: { CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://auth.example.test' }, items: ['Claude Code-custom-oauth-credentials'] })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(calls[0].args).toContain('Claude Code-custom-oauth-credentials')
+    expect(ranCli(calls)).toBe(false)
+  })
+
+  it('no USER: the item is looked up by service alone', async () => {
+    const { deps, calls } = mac({ env: { USER: '' }, items: ['Claude Code-credentials'] })
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'ok' })
+    expect(calls[0].args).toEqual(['find-generic-password', '-s', 'Claude Code-credentials'])
+  })
+
+  it('the re-materialized copy the source daemon twin runs applies the same rule', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const copy = new Function('"use strict"; return ' + createClaudeCheck.toString())() as typeof createClaudeCheck
+    const { deps, calls } = mac({ items: ['Claude Code-credentials'] })
+    expect(await copy(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'a Claude account' })
+    expect(ranCli(calls)).toBe(false)
+  })
+
+  it('class guard: no Walnut code reads a keychain secret, and only this gated check runs `claude auth status`', () => {
+    const root = path.resolve(__dirname, '../..')
+    const files: string[] = []
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|tsx|js|mjs|cjs|sh)$/.test(e.name)) files.push(p)
+      }
+    }
+    for (const d of ['src', 'scripts', 'packages']) if (fs.existsSync(path.join(root, d))) walk(path.join(root, d))
+    const secretReads: string[] = []
+    const authStatus: string[] = []
+    for (const f of files) {
+      if (f.includes(`${path.sep}node_modules${path.sep}`)) continue
+      const text = fs.readFileSync(f, 'utf8')
+      text.split('\n').forEach((line, i) => {
+        const at = `${path.relative(root, f)}:${i + 1}`
+        // A secret read: find-*-password with -w / -g, or the dump that prints secrets.
+        if (/find-(generic|internet)-password/.test(line) && /['"\s]-[wg]['"\s]/.test(line)) secretReads.push(at)
+        if (/dump-keychain[^\n]*-d\b/.test(line)) secretReads.push(at)
+        if (/['"]auth['"]\s*,\s*['"]status['"]|exec "\$0" auth status/.test(line)) authStatus.push(at)
+      })
+    }
+    expect(secretReads).toEqual([])
+    expect(authStatus.every((at) => at.startsWith('src/providers/claude-check-core.ts:'))).toBe(true)
+    expect(authStatus.length).toBeGreaterThan(0)
   })
 })
 

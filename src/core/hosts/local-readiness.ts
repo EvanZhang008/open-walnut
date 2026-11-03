@@ -23,7 +23,7 @@ import { execFile } from 'node:child_process'
 import { log } from '../../logging/index.js'
 import { createHostRuntime, type HostPreflightResult, type HostRuntimeDeps } from '../../providers/host-runtime-core.js'
 import { createHostFix, type HostFixAction } from '../../providers/host-fix-core.js'
-import { createClaudeCheck } from '../../providers/claude-check-core.js'
+import { createClaudeCheck, sha256Hex } from '../../providers/claude-check-core.js'
 import {
   describeFixOutcome, fixActionFor, fixingText, sendHostFix, withFixState,
   type FixOutcome, type HostFixing, type HostFixRecord,
@@ -97,7 +97,7 @@ function notify(): void {
 async function inProcessRuntime(parts: LocalMachineParts) {
   const env: Env = { ...parts.env, PATH: sessionPath(await parts.loginShellPath(), parts.env) }
   const exec = execFile as unknown as NonNullable<HostRuntimeDeps['execFile']>
-  const runtime = createHostRuntime({ fs, execFile: exec, env, platform: process.platform, arch: process.arch, claudeCheck: createClaudeCheck({ fs, execFile: exec, env }) })
+  const runtime = createHostRuntime({ fs, execFile: exec, env, platform: process.platform, arch: process.arch, claudeCheck: createClaudeCheck({ fs, execFile: exec, env, sha256Hex }) })
   return { env, exec, runtime }
 }
 

@@ -112,6 +112,7 @@ const REASONS: Record<string, string> = {
   'connection-lost': 'the connection to the host dropped',
   'unmanaged-install': 'it was not installed by the native installer',
   'updates-disabled': 'updates are turned off with DISABLE_UPDATES',
+  'keychain-locked': 'the Mac\'s login keychain is locked, and Claude Code would ask for its password on the screen',
   'still-outdated': 'the newest release it could reach is still too old',
   'unknown-action': 'the session daemon there is too old for this fix',
 }

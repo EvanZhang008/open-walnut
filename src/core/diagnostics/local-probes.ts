@@ -31,7 +31,7 @@ import {
   type HostPreflightResult,
   type HostRuntimeDeps,
 } from '../../providers/host-runtime-core.js'
-import { createClaudeCheck } from '../../providers/claude-check-core.js'
+import { createClaudeCheck, sha256Hex } from '../../providers/claude-check-core.js'
 import { resolveClaudeCliExecutable } from '../claude-cli-detect.js'
 import type { ConfigDiagnostics, LocalDiagnostics, PathSummary } from './types.js'
 import type { Config } from '../types.js'
@@ -142,7 +142,7 @@ export function localPreflight(pathStr: string, env: Env, minVersion?: string): 
   const runEnv = { ...env, PATH: pathStr }
   const runtime = createHostRuntime({
     fs, execFile: trackedExecFile, env: runEnv, platform: process.platform, arch: process.arch,
-    claudeCheck: createClaudeCheck({ fs, execFile: trackedExecFile, env: runEnv }),
+    claudeCheck: createClaudeCheck({ fs, execFile: trackedExecFile, env: runEnv, sha256Hex }),
   })
   return runtime.preflight(minVersion ? { minClaudeVersion: minVersion } : {})
 }
