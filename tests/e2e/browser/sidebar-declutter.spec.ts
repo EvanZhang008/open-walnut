@@ -40,7 +40,8 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   await expandSidebar(page)
 
   // Org is a page of its own, right under the Home group (not one of Home's panel toggles).
-  const CORE_PREFIX = ['Home', 'Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad', 'Org', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines']
+  // Passwords is a built-in app of its own (309a0ecbb, web/src/apps/core-apps.tsx order 60).
+  const CORE_PREFIX = ['Home', 'Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad', 'Org', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Passwords']
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
 
   // The core entries come first, in this exact order, and Apps then Settings always close it.
@@ -49,7 +50,7 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   expect(labels.slice(-CORE_SUFFIX.length)).toEqual(CORE_SUFFIX)
   await expect(page.getByTestId('sidebar-core-app-apps')).toHaveAttribute('href', '/apps')
 
-  // Anything between Routines and Apps must be a plugin app entry, i.e. a link
+  // Anything between Passwords and Apps must be a plugin app entry, i.e. a link
   // into /apps/… carrying a sidebar-app-<id> test id. This is what keeps a new
   // core page from being smuggled into the column via this allowance.
   const middle = labels.slice(CORE_PREFIX.length, labels.length - CORE_SUFFIX.length)

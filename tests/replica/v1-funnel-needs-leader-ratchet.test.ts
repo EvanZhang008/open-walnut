@@ -37,8 +37,16 @@ describe('the v1 error funnels and needs_leader', () => {
   })
 
   it('each one hands a NeedsLeaderError on before it answers anything itself', () => {
-    const missing = funnels.filter((f) => !new RegExp(`if \\(isNeedsLeaderError\\(err\\)[^)]*\\) \\{ ${f.next}\\(err\\); return \\}`).test(f.head))
+    // Directly, or through handsToAppErrorHandler, which also hands on a host link failure
+    // (5ab7ecf8a, middleware/link-failure-answer.ts) and is pinned below to cover this one.
+    const missing = funnels.filter((f) => !new RegExp(`if \\((isNeedsLeaderError|handsToAppErrorHandler)\\(err\\)[^)]*\\) \\{ ${f.next}\\(err\\); return \\}`).test(f.head))
       .map((f) => f.file)
     expect(missing).toEqual([])
+  })
+
+  it('handsToAppErrorHandler hands every NeedsLeaderError on', () => {
+    const src = readFileSync(path.resolve(ROUTES, '../middleware/link-failure-answer.ts'), 'utf8')
+    const body = /export function handsToAppErrorHandler\(err: unknown\): boolean \{\n\s*return ([^\n]+)\n/.exec(src)?.[1] ?? ''
+    expect(body, 'handsToAppErrorHandler must start with isNeedsLeaderError(err) ||').toMatch(/^isNeedsLeaderError\(err\) \|\|/)
   })
 })

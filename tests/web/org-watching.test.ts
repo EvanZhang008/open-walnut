@@ -209,6 +209,9 @@ describe('the Org page keeps one list, the watch', () => {
   it.each(files.map((f) => [path.relative(process.cwd(), f), f]))('%s', (_rel, file) => {
     const src = fs.readFileSync(file, 'utf8')
     expect(src).not.toMatch(/org_pins|setOrgPin|nodePins|isPinnedTo|pinnedNodesOf|\borg-pin(?!s\.ts)/)
+    // A task is watched on this page, never pinned (6ca3a4a00). A thread is pinned to the top
+    // of the Threads view (1c262e635): that pin is the thread's own, so its words stay there.
+    if (path.basename(file) === 'OrgThreads.tsx') return
     expect(src).not.toMatch(/['">`]\s*(Pin|Unpin|Pinned)\b(?! on top)/)
   })
 })
