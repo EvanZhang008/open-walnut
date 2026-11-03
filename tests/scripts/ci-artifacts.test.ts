@@ -22,6 +22,7 @@ const VETTED: Record<string, string> = {
   'remote-host-logs': 'the remote host leg\'s daemon and server logs',
   'rehearsal-logs-${{ matrix.os }}': 'the release rehearsal logs',
   'field-logs-${{ matrix.os }}': 'the field update logs',
+  'live-logs-${{ matrix.os }}': 'the live update logs (isolated homes, a mock claude, test tasks only)',
   'archive-logs-${{ matrix.target }}': 'the archive build logs',
   'browser-report-${{ matrix.shard }}': 'the Playwright JSON report the browser baseline reads',
   // Never the result bundle: ios-native/tests/ui-failure-evidence.py copies out only PNG/JPEG

@@ -37,6 +37,7 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
     field: 'the npm channel: the releases on npm today, installed and updated with npm 12',
+    live: 'npm pack: the versions it updates through are packed as a release publishes them',
     'archive-targets': 'the npm channel: the archive is built from the npm package',
     'old-node': 'the npm launcher on the oldest Node npm installs it with (8 and 10), and npm for its real-npm test',
   },
