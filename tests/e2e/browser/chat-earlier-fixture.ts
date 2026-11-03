@@ -8,7 +8,10 @@
  *    own. The earlier part goes above that turn, never after it.
  *
  * Lane sessions are not listed anywhere (isListableSession) and no ask task is
- * seeded (the spec adds the asks to its own page), so no other spec sees these.
+ * seeded (the spec adds the asks to its own page). The server's boot pass
+ * (linkLaneAsks, 20 s after boot) still files both chats as asks, pushed live to
+ * every open page: a spec that counts asks filters its live frames too (rewriteAsks in
+ * ask-drawer-order.spec.ts).
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'

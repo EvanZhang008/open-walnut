@@ -32,7 +32,7 @@
  * are \u escapes (U+7814 U+7A76 "research", U+90E8 U+7F72 "deploy").
  */
 import fs from 'node:fs/promises'
-import { expect, test, type Locator, type Page, type Request, type WebSocket } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Request } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import {
   ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, buildAskList, matchesAskQuery,
@@ -101,8 +101,6 @@ async function rewriteAsks(
     let body: { tasks?: Array<{ id?: string; walnut_agent?: boolean; project?: string }> }
     try { body = await response.json() } catch { await route.fulfill({ response }); return }
     if (!Array.isArray(body.tasks)) { await route.fulfill({ response }); return }
-    const isAsk = (t: { walnut_agent?: boolean; project?: string }) =>
-      t.walnut_agent === true || (t.project ?? '').trim().toLowerCase().startsWith('ask ')
     const kept = body.tasks.filter((t) => !isAsk(t) || keep(t))
     const reshape = opts.reshape
     body.tasks = [...(reshape ? kept.map((t) => reshape(t as AskTaskLike)) : kept), ...(extra() as never[])]
@@ -111,6 +109,43 @@ async function rewriteAsks(
     delete headers['content-encoding']
     await route.fulfill({ status: response.status(), headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) })
   })
+  // The same rule for the live frames. The store also takes a task from a
+  // task:created or task:updated frame (an unknown id is upserted), so an ask
+  // this test did not make still reached the drawer that way: the fixture's two
+  // phone chats, filed as asks by the boot pass 20 s after boot (a dense board
+  // read 69 rows for 67), and an earlier test's asks, whose status writes go on
+  // after it ends (four extra rows on a reopen). Frames for the asks kept pass
+  // untouched: their real stamps are what the held rows are checked against.
+  const frames = framesOf(page)
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((message) => server.send(message))
+    server.onMessage((message) => {
+      const text = typeof message === 'string' ? message : message.toString('utf8')
+      if (dropsFrame(text, (t) => isAsk(t) && !keep(t))) return
+      frames.push(text)
+      ws.send(message)
+    })
+  })
+}
+
+const isAsk = (t: { walnut_agent?: boolean; project?: string }) =>
+  t.walnut_agent === true || (t.project ?? '').trim().toLowerCase().startsWith('ask ')
+
+/** Whether a server frame is an event about one task that `drop` names. */
+function dropsFrame(text: string, drop: (task: { id?: string; walnut_agent?: boolean; project?: string }) => boolean): boolean {
+  let frame: { type?: string; data?: { task?: { id?: string } } }
+  try { frame = JSON.parse(text) } catch { return false }
+  const task = frame.type === 'event' ? frame.data?.task : undefined
+  return !!task && typeof task === 'object' && drop(task)
+}
+
+/** Every server frame the page was given, per page (the proxy in rewriteAsks fills it). */
+const pageFrames = new WeakMap<Page, string[]>()
+function framesOf(page: Page): string[] {
+  let frames = pageFrames.get(page)
+  if (!frames) { frames = []; pageFrames.set(page, frames) }
+  return frames
 }
 
 /** 64+ invented asks built against `now`, every stamp half a unit away from a
@@ -260,14 +295,10 @@ async function endpointOrder(page: Page, ids: ReadonlySet<string>): Promise<Arra
   return body.asks.filter((r) => ids.has(r.id)).map(({ id, title, state }) => ({ id, title, state }))
 }
 
-/** Every WS frame the page receives, as text. Attach BEFORE the page loads:
- *  `websocket` fires only for sockets opened after the listener. */
+/** Every WS frame the page receives, as text: the record rewriteAsks's socket
+ *  proxy keeps, so call rewriteAsks BEFORE the page loads. */
 function collectFrames(page: Page): string[] {
-  const frames: string[] = []
-  page.on('websocket', (ws: WebSocket) => ws.on('framereceived', (f) => {
-    frames.push(typeof f.payload === 'string' ? f.payload : f.payload.toString('utf8'))
-  }))
-  return frames
+  return framesOf(page)
 }
 
 /** Whether a received frame carries this task with a `last_session_update` newer than `after`. */
