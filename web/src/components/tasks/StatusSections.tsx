@@ -19,11 +19,12 @@ import * as ICONS from '../common/Icons';
 import { NavigationChevron } from './NavigationSections';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
+import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { AwaySyncMark } from './AwaySyncMark';
 import { PhoneRowExtras } from './PhoneRowExtras';
-import { phonePhaseAttrs } from './phone-row-behavior';
+import { isPhoneLayout, phonePhaseAttrs } from './phone-row-behavior';
 import { formatWaitUntil } from './TaskStatusControl';
 import { formatStartDateDisplay } from '../common/DatePicker';
 import { recentActivityTime, recentActivityTitle } from './recent-activity-time';
@@ -92,6 +93,8 @@ export interface SectionRowHandlers {
   isVanishing: (task: Task) => boolean;
   onClick: (task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
   onSetPhase?: (id: string, phase: string) => void;
+  /** Rename from the row (double-click the title), as on every other task row. */
+  onUpdateTitle?: (id: string, title: string) => void;
   onSetPriority?: (id: string, priority: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
@@ -110,6 +113,8 @@ export interface SectionRowHandlers {
 
 const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean }) {
   const circleClass = useTaskCircle(task);
+  // On a phone a title tap opens the row, as on a list row (phone-row-behavior.ts).
+  const edit = useInlineTitleEdit(task, handlers.onUpdateTitle, { doubleClick: !isPhoneLayout() });
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);
@@ -154,7 +159,15 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
   ) : null;
   const projectName = task.project || 'Inbox';
-  const title = <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>;
+  // The same rename as every task row: double-click the title (useInlineTitleEdit).
+  const title = (
+    <span
+      {...edit.titleProps}
+      className={`todo-pinned-title${edit.isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
+      title={task.title}
+      onClick={edit.isEditing ? (e) => e.stopPropagation() : undefined}
+    >{task.title}</span>
+  );
   const pills = (
     <>
       <SubtaskPill task={task} />
@@ -181,12 +194,13 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       data-task-id={task.id}
       className={`todo-pinned-card status-section-card${twoLine ? ' status-card-two-line' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
+        if (edit.isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         handlers.onClick(task, e);
       }}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handlers.onClick(task); } }}
+      onKeyDown={(e) => { if (e.key === 'Enter' && !edit.isEditing) { e.preventDefault(); handlers.onClick(task); } }}
     >
       {tier && tier !== handlers.viewSection && (
         <span

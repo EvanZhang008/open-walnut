@@ -13,7 +13,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
-import { phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
+import { isPhoneLayout, phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
 import { PhoneNeedsYouStrip } from './PhoneNeedsYouStrip';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhoneRowExtras } from './PhoneRowExtras';
@@ -155,6 +155,7 @@ import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionT
 import { DEFAULT_HIDDEN_TABS, allViews } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
+import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskOnHome } from '@/utils/open-session';
 
@@ -1043,81 +1044,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
   const startDeferred = Number.isFinite(startMs) && startMs > Date.now();
   const startDateLabel = startDeferred ? formatDateDisplay(task.start_date) : '';
 
-  // Inline title editing via contentEditable (preserves wrapping/layout)
-  const [isEditing, setIsEditing] = useState(false);
-  const titleRef = useRef<HTMLSpanElement>(null);
-  const clickPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isCommittingRef = useRef(false); // one-shot guard against double-fire (pointerdown + blur)
-
-  // Sync DOM text when task.title changes externally (e.g. WS push) while not editing
-  useEffect(() => {
-    if (!isEditing && titleRef.current) {
-      if (titleRef.current.textContent !== task.title) {
-        titleRef.current.textContent = task.title;
-      }
-      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
-      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
-      titleRef.current.scrollLeft = 0;
-    }
-  }, [task.title, isEditing]);
-
-  useEffect(() => {
-    if (isEditing && titleRef.current) {
-      titleRef.current.focus();
-      // Place cursor at click position (not select-all)
-      if (clickPosRef.current) {
-        const { x, y } = clickPosRef.current;
-        clickPosRef.current = null;
-        // Use caretRangeFromPoint (WebKit/Blink) or caretPositionFromPoint (Firefox)
-        if (document.caretRangeFromPoint) {
-          const range = document.caretRangeFromPoint(x, y);
-          if (range) {
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-            return;
-          }
-        } else if ((document as unknown as { caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint) {
-          const pos = (document as unknown as { caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint(x, y);
-          if (pos) {
-            const range = document.createRange();
-            range.setStart(pos.offsetNode, pos.offset);
-            range.collapse(true);
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-            return;
-          }
-        }
-      }
-      // Fallback: place cursor at end
-      const range = document.createRange();
-      range.selectNodeContents(titleRef.current);
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    }
-  }, [isEditing]);
-
-  const commitEdit = useCallback(() => {
-    if (!isEditing || isCommittingRef.current) return;
-    isCommittingRef.current = true;
-    setIsEditing(false);
-    const trimmed = (titleRef.current?.textContent ?? '').trim();
-    if (trimmed && trimmed !== task.title && onUpdateTitle) {
-      onUpdateTitle(task.id, trimmed);
-    } else if (titleRef.current) {
-      // Revert to original if title is empty or unchanged
-      titleRef.current.textContent = task.title;
-    }
-    isCommittingRef.current = false;
-  }, [isEditing, task.title, task.id, onUpdateTitle]);
-
-  const cancelEdit = useCallback(() => {
-    setIsEditing(false);
-    if (titleRef.current) titleRef.current.textContent = task.title;
-  }, [task.title]);
+  // Inline title editing: the one rename every task row shares (useInlineTitleEdit); here a
+  // click on the title of the focused row starts it too.
+  const { isEditing, titleProps, startEdit } = useInlineTitleEdit(task, onUpdateTitle, { doubleClick: !selectMode && !isPhoneLayout() });
 
   // Deps hold `task` itself, not `task.id`: the click hands the task on, and a
   // copy from before its session started opens nothing
@@ -1140,23 +1069,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
       onClick(task);
       return;
     }
-    if (!onUpdateTitle) return;
-    clickPosRef.current = { x: e.clientX, y: e.clientY };
-    setIsEditing(true);
-  }, [isFocused, onClick, onUpdateTitle, selectMode, onSelectToggle, task]);
+    startEdit(e);
+  }, [isFocused, onClick, startEdit, selectMode, onSelectToggle, task]);
 
-  // Click-outside handler: exits editing when clicking outside the title span.
-  // Also serves as a fallback when blur doesn't fire (e.g. click on non-focusable element).
-  useEffect(() => {
-    if (!isEditing) return;
-    const handleOutsidePointerDown = (e: PointerEvent) => {
-      if (titleRef.current && !titleRef.current.contains(e.target as Node)) {
-        commitEdit();
-      }
-    };
-    document.addEventListener('pointerdown', handleOutsidePointerDown);
-    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown);
-  }, [isEditing, commitEdit]);
 
   // Disable DnD listeners & sortable attributes while editing to prevent
   // drag from hijacking text selection and focus inside the contentEditable
@@ -1277,18 +1192,10 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
           </button>
-          <span data-no-draft="rename"
-            ref={titleRef}
+          <span
+            {...titleProps}
             className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-            contentEditable={isEditing}
-            suppressContentEditableWarning
             onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
-            onBlur={isEditing ? commitEdit : undefined}
-            onKeyDown={isEditing ? (e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-              if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-              if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-            } : undefined}
           >
             {task.title}
           </span>
@@ -2189,70 +2096,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
     isDragging,
   } = useSortable({ id: isStatic ? `recent-static:${task.id}` : task.id, data: { source: 'recent' }, disabled: isStatic });
 
-  // Editable title state
-  const [isEditing, setIsEditing] = useState(false);
-  const titleRef = useRef<HTMLSpanElement>(null);
-  const isCommittingRef = useRef(false);
-  const clickPosRef = useRef<{ x: number; y: number } | null>(null);
-  const titleClickedRef = useRef(false);
-
-  useEffect(() => {
-    if (!isEditing && titleRef.current) {
-      if (titleRef.current.textContent !== task.title) {
-        titleRef.current.textContent = task.title;
-      }
-      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
-      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
-      titleRef.current.scrollLeft = 0;
-    }
-  }, [task.title, isEditing]);
-
-  useEffect(() => {
-    if (isEditing && titleRef.current) {
-      titleRef.current.focus();
-      if (clickPosRef.current) {
-        const { x, y } = clickPosRef.current;
-        clickPosRef.current = null;
-        if (document.caretRangeFromPoint) {
-          const range = document.caretRangeFromPoint(x, y);
-          if (range) { const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(range); return; }
-        }
-      }
-      const range = document.createRange();
-      range.selectNodeContents(titleRef.current);
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    }
-  }, [isEditing]);
-
-  const commitEdit = useCallback(() => {
-    if (!isEditing || isCommittingRef.current) return;
-    isCommittingRef.current = true;
-    setIsEditing(false);
-    const trimmed = (titleRef.current?.textContent ?? '').trim();
-    if (trimmed && trimmed !== task.title && onUpdateTitle) {
-      onUpdateTitle(task.id, trimmed);
-    } else if (titleRef.current) {
-      titleRef.current.textContent = task.title;
-    }
-    isCommittingRef.current = false;
-  }, [isEditing, task.title, task.id, onUpdateTitle]);
-
-  const cancelEdit = useCallback(() => {
-    setIsEditing(false);
-    if (titleRef.current) titleRef.current.textContent = task.title;
-  }, [task.title]);
-
-  // Rename is DOUBLE-click only (2026-08-31, matches SortableTierCard): a single
-  // click opens the card; click-to-edit popped the outlined editor over the
-  // title on every open, which read as a glitch.
-  const handleTitleDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (!onUpdateTitle) return;
-    clickPosRef.current = { x: e.clientX, y: e.clientY };
-    setIsEditing(true);
-  }, [onUpdateTitle]);
+  // Editable title: the one rename every task row shares (useInlineTitleEdit).
+  const { isEditing, titleProps } = useInlineTitleEdit(task, onUpdateTitle);
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   // Two red affordances (2026-08-14): the row TINT follows the phase — a task at
@@ -2323,20 +2168,11 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
       {/* Editable title */}
-      <span data-no-draft="rename"
-        ref={titleRef}
+      <span
+        {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        contentEditable={isEditing}
-        suppressContentEditableWarning
         title={task.title}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
-        onDoubleClick={isEditing ? undefined : handleTitleDoubleClick}
-        onBlur={isEditing ? commitEdit : undefined}
-        onKeyDown={isEditing ? (e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-        } : undefined}
       >
         {task.title}
       </span>
@@ -7085,6 +6921,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onLoadMore: askArchive,
     onClick: handleTaskClick,
     onSetPhase: setPhaseOrComplete,
+    onUpdateTitle: onUpdate ? handleUpdateTitle : undefined,
     onSetPriority,
     onSetDate,
     onSetStartDate,
@@ -7097,7 +6934,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onStartSession,
     onMoveToProject: onMoveTask ? handleMoveToProject : undefined,
     onDelete,
-  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete]);
+  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).

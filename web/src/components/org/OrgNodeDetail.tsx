@@ -349,7 +349,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const approvals = useMemo(() => {
     const ids = new Set<string>();
     // Its own work: the open tasks under it, the ones it just finished, and the node's own task.
-    for (const t of [...tabs.watching, ...tabs.read, ...tabs.working, ...tabs.waiting, ...tabs.done]) ids.add(t.id);
+    for (const t of [...tabs.watching, ...tabs.working, ...tabs.waiting, ...tabs.done]) ids.add(t.id);
     for (const a of tabs.needs) ids.add(a.taskId);
     if (row.contactId) ids.add(row.contactId);
     return approvalsForNode(pendingApprovals, row.kind, ids);

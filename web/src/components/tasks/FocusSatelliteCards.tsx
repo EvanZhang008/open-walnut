@@ -2,7 +2,7 @@
  * Tier card components and drop zone for Focus / Satellite / Parked / custom tiers.
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
-import { Fragment, useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useCallback, memo, type CSSProperties, type ReactNode } from 'react';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
@@ -14,6 +14,7 @@ import { groupSortableId, intoFolderId } from './tier-group-sentinels';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
+import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
@@ -350,77 +351,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     },
   });
 
-  // Editable title state
-  const [isEditing, setIsEditing] = useState(false);
-  const titleRef = useRef<HTMLSpanElement>(null);
-  const isCommittingRef = useRef(false);
-  const clickPosRef = useRef<{ x: number; y: number } | null>(null);
-  const titleClickedRef = useRef(false);
-
-  // Sync title text when task.title changes externally while not editing
-  useEffect(() => {
-    if (!isEditing && titleRef.current) {
-      if (titleRef.current.textContent !== task.title) {
-        titleRef.current.textContent = task.title;
-      }
-      // Editing auto-scrolls the overflow:hidden span to keep the caret visible;
-      // a leftover scrollLeft on a nowrap+ellipsis span paints as a BLANK title.
-      titleRef.current.scrollLeft = 0;
-    }
-  }, [task.title, isEditing]);
-
-  // Focus + cursor placement when entering edit mode
-  useEffect(() => {
-    if (isEditing && titleRef.current) {
-      titleRef.current.focus();
-      if (clickPosRef.current) {
-        const { x, y } = clickPosRef.current;
-        clickPosRef.current = null;
-        if (document.caretRangeFromPoint) {
-          const range = document.caretRangeFromPoint(x, y);
-          if (range) {
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-            return;
-          }
-        }
-      }
-      const range = document.createRange();
-      range.selectNodeContents(titleRef.current);
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    }
-  }, [isEditing]);
-
-  const commitEdit = useCallback(() => {
-    if (!isEditing || isCommittingRef.current) return;
-    isCommittingRef.current = true;
-    setIsEditing(false);
-    const trimmed = (titleRef.current?.textContent ?? '').trim();
-    if (trimmed && trimmed !== task.title && onUpdateTitle) {
-      onUpdateTitle(task.id, trimmed);
-    } else if (titleRef.current) {
-      titleRef.current.textContent = task.title;
-    }
-    isCommittingRef.current = false;
-  }, [isEditing, task.title, task.id, onUpdateTitle]);
-
-  const cancelEdit = useCallback(() => {
-    setIsEditing(false);
-    if (titleRef.current) titleRef.current.textContent = task.title;
-  }, [task.title]);
-
-  // Rename is DOUBLE-click only (2026-08-31): a single click opens the session,
-  // and the old click-to-edit meant every open also popped the white outlined
-  // contentEditable box over the title — read as a rendering glitch.
-  const handleTitleDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (!onUpdateTitle) return;
-    clickPosRef.current = { x: e.clientX, y: e.clientY };
-    setIsEditing(true);
-  }, [onUpdateTitle]);
+  // Editable title: the one rename every task row shares (useInlineTitleEdit).
+  const { isEditing, titleProps } = useInlineTitleEdit(task, onUpdateTitle);
 
   const landing = landingDepth !== undefined;
   const depth = landing ? landingDepth : groupInfo?.depth;
@@ -508,20 +440,11 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
       {/* Editable title */}
-      <span data-no-draft="rename"
-        ref={titleRef}
+      <span
+        {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        contentEditable={isEditing}
-        suppressContentEditableWarning
         title={task.title}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
-        onDoubleClick={isEditing ? undefined : handleTitleDoubleClick}
-        onBlur={isEditing ? commitEdit : undefined}
-        onKeyDown={isEditing ? (e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-        } : undefined}
       >
         {task.title}
       </span>
