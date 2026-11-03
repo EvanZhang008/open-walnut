@@ -36,6 +36,27 @@ export interface TaskResultReport extends StructuredReply {
   by?: string;
   /** The not-done items were taken up or dropped (task_update not_done_settled): no longer Partial. */
   settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
+  /**
+   * What a session's close left for the user (sessions/owed-to-user.ts): the items, also listed in
+   * `not_done` while open, and the Needs you ask they make. Open (no `settled`) = the task is held
+   * in Needs you whatever its later turns report; a forced close or the not-done settle ends it.
+   */
+  owed?: TaskOwed;
+}
+
+export interface TaskOwed {
+  items: string[];
+  ask: string;
+  at: string;
+  by: string;
+  /** The tasks whose close was refused with these items named: only they may force it closed. */
+  told?: string[];
+  settled?: { at: string; by?: string; how: 'taken' | 'dropped'; note?: string };
+}
+
+/** The open hold a session's close left for the user, if any. */
+export function openOwed(r: { owed?: TaskOwed } | null | undefined): TaskOwed | undefined {
+  return r?.owed?.items?.length && !r.owed.settled ? r.owed : undefined;
 }
 
 export const REPLY_RESULT_MAX = 600;
@@ -69,8 +90,8 @@ export function hasStructuredFields(args: Record<string, unknown>): boolean {
   return args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined;
 }
 
-export function isPartial(r: (StructuredReply & { settled?: unknown }) | null | undefined): boolean {
-  return !!r?.not_done?.length && !r.settled;
+export function isPartial(r: (StructuredReply & { settled?: unknown; owed?: TaskOwed }) | null | undefined): boolean {
+  return (!!r?.not_done?.length && !r.settled) || !!openOwed(r);
 }
 
 /**
@@ -90,5 +111,5 @@ export function composeReplyText(text: string | undefined, r: StructuredReply | 
 
 /** The "Partial" line a surface shows: "Partial: iOS not tested; the docs". */
 export function partialLine(r: (StructuredReply & { settled?: unknown }) | null | undefined): string | undefined {
-  return isPartial(r) ? `Partial: ${r!.not_done!.join('; ')}` : undefined;
+  return isPartial(r) ? `Partial: ${(r!.not_done?.length ? r!.not_done : openOwed(r as { owed?: TaskOwed })?.items ?? []).join('; ')}` : undefined;
 }

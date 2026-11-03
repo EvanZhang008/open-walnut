@@ -1060,22 +1060,27 @@ defineOp({
     '(a person wrote in it this week, its session was open in a terminal, it holds an org role or an armed trigger), ' +
     'or whose work is unfinished (a Partial result nobody settled, a request to it still unanswered, a turn running now), ' +
     'gets 409 task_in_use with the reasons: leave it open, or pass force:true with a reason. Open subtasks never block it. ' +
-    'Its unanswered decision letters to the user are settled as no longer needed (they leave the inbox with that reason); ' +
-    'one that must still reach the user goes back with human_inbox_mark archived:false.',
+    'A session closing a task (its own or another) that still holds something for the user (an open Progress item for them, ' +
+    'its Needs you ask, an unanswered decision letter it sent, an unanswered Board choice about it) gets 409 owed_to_user: ' +
+    'the task stays open as Partial and Needs you, with those items named. Tell the user. Once named, close it again with ' +
+    'force:true and a reason when they are done or no longer needed; the reason is kept as how they were settled. ' +
+    'A person\'s close is never held. On a close that goes through, its unanswered decision letters to the user are settled ' +
+    'as no longer needed (they leave the inbox with that reason); one that must still reach the user goes back with ' +
+    'human_inbox_mark archived:false.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),
     evidence: z.union([z.string(), z.array(z.string())]).optional().describe('Paths or links that show the result (a list, or one per line)'),
     not_done: z.union([z.string(), z.array(z.string())]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
-    force: z.boolean().optional().describe('Complete another task even though it is still in use (409 task_in_use). Needs `reason`'),
-    reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use'),
+    force: z.boolean().optional().describe('Complete another task still in use (409 task_in_use), or a task whose items for the user were named by a 409 owed_to_user. Needs `reason`'),
+    reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use, or how the user\'s items were handled'),
   },
   // POST /complete, NOT PATCH {status:'done'}: only completeTask() semantics
   // surface a sync-push failure (the v1 PATCH swallows it via asyncPush).
   // Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => {
-    const b = body as { task?: unknown; open_subtasks?: Array<{ id: string; title: string; phase: string }>; more_open_subtasks?: number } | undefined
+    const b = body as { task?: unknown; open_subtasks?: Array<{ id: string; title: string; phase: string }>; more_open_subtasks?: number; owed_settled?: string[] } | undefined
     const task = b?.task
     const open = Array.isArray(b?.open_subtasks) ? b.open_subtasks : []
     const total = open.length + (typeof b?.more_open_subtasks === 'number' ? b.more_open_subtasks : 0)
@@ -1085,14 +1090,16 @@ defineOp({
         + `${open.slice(0, 5).map((t) => `"${t.title}" (${t.id}, ${t.phase})`).join('; ')}${total > 5 ? '; …' : ''}. `
         + 'This task hears nothing more from them until it is reopened.'
       : ''
-    const notDone = (task as { result_report?: { not_done?: string[] } } | undefined)?.result_report?.not_done ?? []
+    const report = (task as { result_report?: { not_done?: string[]; settled?: unknown } } | undefined)?.result_report
+    const notDone = report && !report.settled ? report.not_done ?? [] : []
     const partialLine = notDone.length > 0 ? ` Marked Partial (not done: ${notDone.join('; ')}); it stays on its leader's open items until taken up or dropped.` : ''
+    const owedLine = b?.owed_settled?.length ? ` Settled as handled for the user, with your reason: ${b.owed_settled.join('; ')}.` : ''
     return withOutcome(
       withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, {
         completed: true,
         ...(open.length > 0 ? { open_subtasks: open } : {}),
       }),
-      COMPLETED_OUTCOME + openLine + partialLine,
+      COMPLETED_OUTCOME + openLine + partialLine + owedLine,
       'No further action is required.',
     )
   },
@@ -1109,7 +1116,9 @@ defineOp({
   description:
     'A task whose last result (a reply or task_complete) listed `not_done` reads as Partial on the Board, in the Brief ' +
     'and in its leader\'s open items. Once someone takes those items up (a new task, a follow-up) or decides they are not ' +
-    'needed, call this so it stops reading Partial: how="taken" or "dropped", with a short note (where it went, or why not).',
+    'needed, call this so it stops reading Partial: how="taken" or "dropped", with a short note (where it went, or why not). ' +
+    'Items a close left for the user (409 owed_to_user) are settled with them, and then a session must give a note of 10+ ' +
+    'characters saying how the user\'s items were handled.',
   input: {
     id: z.string().min(1).describe('The Partial task (id or unique prefix)'),
     how: z.enum(['taken', 'dropped']).describe('"taken": the items are someone\'s work now; "dropped": they are not needed'),

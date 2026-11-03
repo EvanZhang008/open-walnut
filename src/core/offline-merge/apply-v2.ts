@@ -121,7 +121,38 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
     const admit = await admitSessionPark(taskId, record.actor.sid, undefined);
     if (!admit.ok) throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
   }
-  const outcome = await applyFields(ctx, record, taskId, fields, opKeyOf(ctx, record));
+  // A session's queued close meets the online gate too: a task that still holds something for the
+  // user stays open as Partial and Needs you (sessions/owed-to-user.ts). A queued write carries no
+  // force, so a replayed close is only ever held, never forced: the session closes it again online.
+  const closing = (fields.phase as FieldWrite | undefined)?.value === 'COMPLETE' || (fields.status as FieldWrite | undefined)?.value === 'done';
+  let settle: import('../sessions/owed-to-user.js').CloseSettle | undefined;
+  if (closing) {
+    const { admitSessionClose } = await import('../sessions/owed-to-user.js');
+    // A session's close is checked; a person's (their device) settles a hold; a trigger's does neither.
+    if (record.actor?.kind === 'session' || record.actor?.kind === 'device') {
+      const admit = await admitSessionClose(taskId, record.actor.kind === 'session' ? record.actor.sid : undefined);
+      if (!admit.ok) throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
+      settle = admit.settle;
+    }
+  }
+  // A person's queued close of a held task settles the hold with it, put back if it did not land.
+  const { closeWithSettle } = await import('../sessions/owed-to-user.js');
+  const landed = Symbol('not-applied');
+  let outcome: Awaited<ReturnType<typeof applyFields>>;
+  try {
+    outcome = await closeWithSettle(settle, null, async () => {
+      const o = await applyFields(ctx, record, taskId, fields, opKeyOf(ctx, record));
+      // Another field may land while the phase lost its conflict: the settle stays only on a close.
+      const closed = settle && o === 'applied'
+        ? (await (await import('../task-manager.js')).getTask(settle.taskId).catch(() => null))?.phase === 'COMPLETE'
+        : !settle;
+      if (!closed) throw Object.assign(new Error('close not applied'), { [landed]: o });
+      return o;
+    });
+  } catch (err) {
+    if (err && typeof err === 'object' && landed in err) outcome = (err as Record<symbol, typeof outcome>)[landed];
+    else throw err;
+  }
   if (outcome === 'gone') {
     // Delete wins: listed when the write carried a value.
     const entries = Object.entries(fields).filter(([, w]) => w && w.value !== undefined)

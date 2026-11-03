@@ -261,6 +261,9 @@ export interface UserStatusInput {
   markedByPerson?: boolean;
   /** A lead (org_role 'lead'): like Main, never closed. */
   isLead?: boolean;
+  /** A session's close left these for the user (result_report.owed, sessions/owed-to-user.ts):
+   *  Needs you until they are settled, whatever its later turns report. */
+  owedHold?: { ask: string; at: string } | null;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
    *  before the latest turn and only lends its words, never the state. */
   phaseChangedAt?: string | null;
@@ -843,6 +846,12 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // 他现在必须正在 working"), or its own work going on without one (ownWork, 2026-11-02, the user:
   // "if it is runnig it shoud be i progress right?"), read below once nothing asks the user.
   if (running) return strip({ state: 'working', ...w });
+  // A close its session tried left something for the user (2026-11-02: a task closed with the user's
+  // own resubmit step still in its Progress read Done). Its own later ask, when it has one, speaks.
+  if (input.owedHold && !input.isMain && !input.isLead && !none(input.owedHold.ask)) {
+    const heldAsk = report?.state === 'needs' && !none(report.ask) ? clean(report.ask) : clean(input.owedHold.ask);
+    return strip({ state: 'needs', source: 'session', ask: heldAsk, ...w });
+  }
   const own = ownWork(input, report, w, nowMs);
 
   // The state is the task's own phase (2026-10-26, the user: "this status need to be self updated

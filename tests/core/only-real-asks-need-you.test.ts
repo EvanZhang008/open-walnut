@@ -102,6 +102,7 @@ describe('nothing asked is never Needs you', () => {
       { phase: 'IN_PROGRESS', pendingPermissionTool: 'Bash' },
       { processStatus: 'error', errorMessage: 'The CLI exited' },
       { hasSession: false },
+      { report: { state: 'done', at }, owedHold: { ask: 'Left for you when this task was closed: 1) You: resubmit the form', at } },
     ]
     for (const a of asks) expect(deriveUserStatus({ ...base, ...a }, NOW).state, JSON.stringify(a)).toBe('needs')
   })
@@ -113,6 +114,8 @@ describe('guard: every Needs you the derive returns is a real ask', () => {
     /source: 'prompt'/, /source: 'letter'/, /source: 'choice'/, /source: 'error'/,
     /ask: clean\(report\.ask\)/, /ask: clean\(report!\.waiting_on\)/, /ask: reported\b/, /ask: MARKED_ASK/,
     /heading: 'Needs you'/,
+    // What a session's close left for the user (sessions/owed-to-user.ts).
+    /ask: heldAsk\b/,
   ]
   it('no other site', async () => {
     const src = await fs.readFile(path.join(__dirname, '../../src/core/user-status.ts'), 'utf8')

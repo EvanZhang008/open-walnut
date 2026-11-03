@@ -235,7 +235,10 @@ describe('native-copy to another host: stage, fork, confirm', () => {
     expect(fork.args[1]).toMatchObject({ resumeFile: STAGED_ABS, transferAttemptId: XF, placeOverride: { cwd: '/home/dev/repo', host: 'box' } });
 
     const made = newTask()!;
-    expect(made).toMatchObject({ transferred_from: 'src-task', transfer_state: 'done', transfer: { id: XF, stage: { host: 'box', path: STAGE_PATH } } });
+    expect(made).toMatchObject({ transferred_from: 'src-task', transfer_state: 'done', transfer: { id: XF } });
+    // The stage was recorded on the new task; the confirm's cleanup (not awaited) may already have removed it.
+    expect(st.ops.some((o) => o.id === made.id && (o.patch as { transfer?: { stage?: unknown } } | undefined)?.transfer?.stage !== undefined
+      && expect.objectContaining({ host: 'box', path: STAGE_PATH }).asymmetricMatch((o.patch as { transfer: { stage: unknown } }).transfer.stage))).toBe(true);
     expect(st.tasks.get('src-task')).toMatchObject({ phase: 'COMPLETE', transferred_to: made.id });
     // The task was pending while the stage and the fork ran; done came before the source completed.
     const order = st.ops.map((o) => `${o.id === 'src-task' ? 'src' : 'new'}:${JSON.stringify(o.patch)}`);

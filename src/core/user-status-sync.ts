@@ -337,6 +337,12 @@ function choiceInput(task: Task, facts: StatusFacts): Pick<UserStatusInput, 'ope
 const UNDELIVERED_SLACK_MS = 60_000;
 
 /** The input deriveUserStatus takes for one task, from the facts. Exported for tests. */
+/** What a session's close left for the user, still open (sessions/owed-to-user.ts). */
+function openOwedHold(task: Task): { ask: string; at: string } | null {
+  const o = task.result_report?.owed;
+  return o?.items?.length && !o.settled ? { ask: o.ask, at: o.at } : null;
+}
+
 export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()): UserStatusInput {
   const own = (facts.sessionsOf.get(task.id) ?? [])
     .map((sid) => [sid, facts.sessions.get(sid)] as const)
@@ -385,6 +391,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     openWorkers: facts.openWorkers?.get(task.id) ?? 0,
     isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
+    owedHold: openOwedHold(task),
     report: task.status_report ?? null,
     lastWords: currentLastWords(task),
     markedByPerson: personMarkedNeeds(task),

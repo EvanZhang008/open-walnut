@@ -3349,6 +3349,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     }
     // A phase write to COMPLETE closes the task as surely as POST /complete does: a session closing
     // ANOTHER task meets the same in-use and unfinished-work check (core/sessions/complete-in-use.ts).
+    let owedSettle: import('../../core/sessions/owed-to-user.js').CloseSettle | undefined
     if (phase === 'COMPLETE' || status === 'done') {
       const rawSid = req.headers['x-walnut-caller-sid']
       const actor = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim() || undefined
@@ -3358,10 +3359,17 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const admit = await admitCompleteOfOther(id, actor, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined })
         if (!admit.ok) { sendError(res, 409, 'task_in_use', admit.message, { reasons: admit.reasons }); return }
       }
+      // A session's close of a task that still holds something for the user keeps it open
+      // (core/sessions/owed-to-user.ts).
+      const { admitSessionClose } = await import('../../core/sessions/owed-to-user.js')
+      const closeBody = (req.body ?? {}) as Record<string, unknown>
+      const owed = await admitSessionClose(id, actor, { force: closeBody.force === true, reason: typeof closeBody.reason === 'string' ? closeBody.reason : undefined })
+      if (!owed.ok) { sendError(res, 409, owed.code, owed.message, { items: owed.items }); return }
+      owedSettle = owed.settle
       // COMPLETE is verified: a standing Partial ends with it, as on POST /complete.
       const { isPartial } = await import('../../core/peers/structured-reply.js')
       const before = await tm.getTask(id).catch(() => null)
-      if (before && before.phase !== 'COMPLETE' && isPartial(before.result_report)) {
+      if (!owed.settle && before && before.phase !== 'COMPLETE' && isPartial(before.result_report)) {
         const { noteResultReport } = await import('../../core/sessions/session-send-core.js')
         const raw = req.headers['x-walnut-caller-sid']
         const actorSid = (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
@@ -3418,7 +3426,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         // causes can skip its own author (a leader completing its worker).
         const rawActor = req.headers['x-walnut-caller-sid']
         const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
-        const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) })
+        // A settle of the user's items rides with the close and is put back if it fails (owed-to-user.ts).
+        const { closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
+        const result = await closeWithSettle(owedSettle, null, () => tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) }))
         updated = result.task
         if (patch.phase === 'NEED_ACTION') {
           // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).

@@ -358,14 +358,17 @@ export async function noteResultReport(
 ): Promise<import('../peers/structured-reply.js').TaskResultReport | undefined> {
   try {
     const { updateTaskRaw } = await import('../task-manager.js');
-    const report = { ...head, at: new Date().toISOString(), ...(fields ?? {}) };
-    const { isPartial } = await import('../peers/structured-reply.js');
+    let report: import('../peers/structured-reply.js').TaskResultReport = { ...head, at: new Date().toISOString(), ...(fields ?? {}) };
+    const { isPartial, openOwed } = await import('../peers/structured-reply.js');
     // One read-modify-write under the row lock: a settle racing this write is never lost to it.
     const { task, changed } = await updateTaskRaw(taskId, (cur) => {
       const was = cur.result_report;
       // A plain reply carries no result: it only ends a Partial it answers itself (the same
       // request), and never erases a result written before (a completion's, another reply's).
       if (!fields && head.via === 'reply' && !(isPartial(was) && was?.request_id === head.request_id)) return null;
+      // A reply never ends what a close left for the user (sessions/owed-to-user.ts): the hold rides on.
+      const held = head.via === 'reply' ? openOwed(was) : undefined;
+      if (held) report = { ...report, owed: held, not_done: [...new Set([...(report.not_done ?? []), ...held.items])] };
       return { result_report: report };
     }, { source: 'result-report', push: false });
     if (!changed) return undefined;

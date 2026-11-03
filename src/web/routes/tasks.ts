@@ -1053,9 +1053,13 @@ tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextF
     // A session parks only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
     const { splitSessionParks, callerSidOf } = await import('../../core/sessions/outside-wait.js')
     const gate = await splitSessionParks(taskIds, phase, callerSidOf(req.headers))
-    const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as Task['phase']) : { changed: [], failed: [], syncFailed: [] }
+    // ...and closes no task that still holds something for the user (core/sessions/owed-to-user.ts).
+    const { splitSessionCloses } = await import('../../core/sessions/owed-to-user.js')
+    const closes = await splitSessionCloses(gate.ids, phase, callerSidOf(req.headers))
+    const { settleBatch } = await import('../../core/sessions/owed-to-user.js')
+    const bulk = closes.ids.length ? await settleBatch(closes.settles, () => setPhaseBulk(closes.ids, phase as Task['phase'])) : { changed: [], failed: [], syncFailed: [] }
     const { changed, syncFailed } = bulk
-    const failed = [...bulk.failed, ...gate.refused]
+    const failed = [...bulk.failed, ...gate.refused, ...closes.refused]
     // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
     const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
     await markPersonNeeds(changed.map((t) => t.id), phase, callerSidOf(req.headers))
@@ -1498,6 +1502,16 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // here before anything is written: they used to be dropped with a 200.
     const pinParse = parsePinPatch(req.body)
     if (!pinParse.ok) { res.status(pinParse.status).json({ error: pinParse.error }); return }
+    let owedSettle: import('../../core/sessions/owed-to-user.js').CloseSettle | undefined
+    // Once the patch is valid: a session's close of a task that still holds something for the user
+    // keeps it open (core/sessions/owed-to-user.ts).
+    if (req.body.phase === 'COMPLETE' || req.body.status === 'done') {
+      const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
+      const { admitSessionClose } = await import('../../core/sessions/owed-to-user.js')
+      const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body.force === true, reason: typeof req.body.reason === 'string' ? req.body.reason : undefined })
+      if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
+      owedSettle = owed.settle
+    }
     const { pinned: _pinned, focus_tier: _focusTier, user_words: userWords, ...fields } = (req.body ?? {}) as Record<string, unknown>
     const pinPatch = pinParse.patch
     // A session moving a worker out of its lead's project needs the user's words naming
@@ -1530,7 +1544,9 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // inside updateTask — no inline executor.
     let result: { task: Task } | undefined
     if (!pinPatch || Object.keys(fields).length > 0) {
-      result = await updateTask(id, fields, { source: 'api', asyncPush: true })
+      // A settle of the user's items rides with the close and is put back if it fails (owed-to-user.ts).
+      const { closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
+      result = await closeWithSettle(owedSettle, null, () => updateTask(id, fields, { source: 'api', asyncPush: true }))
       if (fields.phase === 'NEED_ACTION') {
         // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
         const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
@@ -1570,7 +1586,12 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
 tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = param(req.params.id)
-    const result = await completeTask(id)
+    // A session's close of a task that still holds something for the user keeps it open (core/sessions/owed-to-user.ts).
+    const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
+    const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
+    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined })
+    if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
+    const result = await closeWithSettle(owed.settle, null, () => completeTask(id))
     log.web.info('task completed via REST', { taskId: id })
     bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui'], { source: 'api' })
     res.json(result)
@@ -1677,7 +1698,12 @@ tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFun
 tasksRouter.post('/:id/toggle-complete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = param(req.params.id)
-    const result = await toggleComplete(id)
+    // A session's close of a task that still holds something for the user keeps it open (core/sessions/owed-to-user.ts).
+    const { callerSidOf } = await import('../../core/sessions/outside-wait.js')
+    const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
+    const owed = await admitSessionClose(id, callerSidOf(req.headers), { force: req.body?.force === true, reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined })
+    if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
+    const result = await closeWithSettle(owed.settle, null, () => toggleComplete(id))
     res.json(result)
   } catch (err) {
     next(err)

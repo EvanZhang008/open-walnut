@@ -29,6 +29,7 @@
 import { log } from '../../logging/index.js';
 import type { Task, TaskPhase } from '../types.js';
 import type { StatusReport } from '../user-status.js';
+import { openOwed } from '../peers/structured-reply.js';
 import { OUTSIDE_WAIT_KINDS, outsideWaitEvidence, reportNamesOutsideWait, waitWordsNameUser } from './outside-wait.js';
 
 /** Clock slack between the turn's end (this process) and the phase write (the same process, later). */
@@ -43,7 +44,7 @@ const STORED_REPORT_WINDOW_MS = 10 * 60_000;
  * writing (applyReportPhase).
  */
 export function phaseForReport(
-  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on' | 'answered_person'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on' | 'answered_person'>, task: Pick<Task, 'parent_task_id' | 'org_role'> & Partial<Pick<Task, 'result_report'>>, alive: boolean,
   armed: boolean | 'unknown' = false,
 ): TaskPhase | null {
   const onUser = report.state === 'needs' || (report.state === 'waiting' && (report.waiting_kind === 'you'
@@ -52,6 +53,9 @@ export function phaseForReport(
   // the user something keeps its question in its chat and waits on its teams; it never moves to
   // NEED_ACTION. Main's turn ends on the user's next message as a rule: nothing else moves it.
   if (task.org_role === 'main') return null;
+  // A close its session tried left something for the user (owed-to-user.ts): it stays on their
+  // list until that is settled, whatever a later turn says, except while its own work runs.
+  if (!task.org_role && openOwed(task.result_report)) return report.state === 'working' && alive ? 'IN_PROGRESS' : 'NEED_ACTION';
   const phase = individualPhase(report, task, alive, armed, onUser);
   return task.org_role && phase === 'NEED_ACTION' ? null : phase;
 }

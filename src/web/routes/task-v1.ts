@@ -254,18 +254,28 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
         sendError(res, 409, 'task_in_use', admit.message, { reasons: admit.reasons })
         return
       }
+      // A session's close of a task that still holds something for the user keeps it open as
+      // Partial and Needs you (core/sessions/owed-to-user.ts).
+      const { admitSessionClose, closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
+      const owed = await admitSessionClose(id, actorSid, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined, fields })
+      if (!owed.ok) {
+        sendError(res, 409, owed.code, owed.message, { items: owed.items })
+        return
+      }
       // What came of it, and what is not done (core/peers/structured-reply.ts): the Board, the
       // Brief and its parent's open items read Partial from a non-empty not_done. Written BEFORE
       // the completion, so the parent's completed notice and the completion event carry it; a
       // completion that says nothing more still ends an earlier Partial (COMPLETE is verified).
       const { isPartial } = await import('../../core/peers/structured-reply.js')
       const before = await tm.getTask(id).catch(() => null)
-      let wroteReport = false
-      if (before && before.phase !== 'COMPLETE' && (fields || isPartial(before.result_report))) {
+      let wroteReport = !!owed.settle
+      // A settle of the user's items (a forced close, a person's close of a held task) is written
+      // with the close and put back if the close fails (owed-to-user.ts closeWithSettle).
+      if (!owed.settle && before && before.phase !== 'COMPLETE' && (fields || isPartial(before.result_report))) {
         const { noteResultReport } = await import('../../core/sessions/session-send-core.js')
         wroteReport = !!(await noteResultReport(before.id, { via: 'complete', by: admit.callerTaskId ? `task:${admit.callerTaskId}` : 'human' }, fields, { emit: false }))
       }
-      const result = await tm.completeTask(id, actorSid ? { actorSid } : undefined)
+      const result = await closeWithSettle(owed.settle, fields, () => tm.completeTask(id, actorSid ? { actorSid } : undefined))
       log.web.info('task completed via api-v1', { taskId: result.task.id, ...(actorSid ? { actorSid } : {}) })
       // fields (additive): scopes the replica outbox op to what completion
       // actually changes (auto-unpin was removed 2026-08-26 — pins persist).
@@ -277,9 +287,11 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       // keep running without it (additive, present only when there are any).
       const { listOpenSubtasks } = await import('../../core/sessions/open-items.js')
       const open = await listOpenSubtasks(result.task.id).catch(() => ({ subtasks: [], more: 0 }))
+      // A forced close names what it settled for the user, so the closer can tell them (additive).
+      const settledOwed = owed.settle && !owed.settle.person ? { owed_settled: owed.settle.items.map((i) => i.text) } : {}
       res.json(open.subtasks.length > 0
-        ? { ...result, open_subtasks: open.subtasks, ...(open.more > 0 ? { more_open_subtasks: open.more } : {}) }
-        : result)
+        ? { ...result, ...settledOwed, open_subtasks: open.subtasks, ...(open.more > 0 ? { more_open_subtasks: open.more } : {}) }
+        : { ...result, ...settledOwed })
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
       throw err
@@ -325,12 +337,21 @@ taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, nex
         sendError(res, 409, 'not_partial', `"${task.title}" (${task.id}) has no not-done items to settle`)
         return
       }
+      // What a close left for the user is settled by a session only with a note saying how, as a
+      // forced close needs a reason (core/sessions/owed-to-user.ts).
+      const { openOwed } = await import('../../core/peers/structured-reply.js')
+      if (by !== 'human' && openOwed(report) && (note ?? '').length < 10) {
+        sendError(res, 409, 'owed_to_user', `"${task.title}" (${task.id}) still holds what a close left for the user: ${openOwed(report)!.items.join('; ')}. Settle them with a note (10+ characters) saying how they were handled.`)
+        return
+      }
       const settled = { at: new Date().toISOString(), by, how: b.how as 'taken' | 'dropped', ...(note ? { note } : {}) }
       // Against the stored row: a new result written meanwhile is not overwritten with the old one.
-      const updated = await tm.updateTaskRaw(task.id, (cur) => (cur.result_report?.at === report.at ? { result_report: { ...cur.result_report, settled } } : null), { source: 'result-report', push: false })
+      // What a close left for the user (sessions/owed-to-user.ts) is settled with it: its Needs you ends.
+      const withOwed = (r: NonNullable<typeof report>) => ({ ...r, settled, ...(r.owed && !r.owed.settled ? { owed: { ...r.owed, settled } } : {}) })
+      const updated = await tm.updateTaskRaw(task.id, (cur) => (cur.result_report?.at === report.at ? { result_report: withOwed(cur.result_report) } : null), { source: 'result-report', push: false })
       log.web.info('not-done items settled', { taskId: task.id, how: b.how, by })
       if (updated?.task) bus.emit(EventNames.TASK_UPDATED, { task: updated.task }, ['web-ui'], { source: 'result-report' })
-      res.json({ task: updated?.task ?? { ...task, result_report: { ...report, settled } } })
+      res.json({ task: updated?.task ?? { ...task, result_report: withOwed(report) } })
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
       throw err
@@ -693,9 +714,13 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
     // A session parks only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
     const { splitSessionParks, callerSidOf } = await import('../../core/sessions/outside-wait.js')
     const gate = await splitSessionParks(taskIds, phase, callerSidOf(req.headers))
-    const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as TaskPhase) : { changed: [], failed: [], syncFailed: [] }
+    // ...and closes no task that still holds something for the user (core/sessions/owed-to-user.ts).
+    const { splitSessionCloses } = await import('../../core/sessions/owed-to-user.js')
+    const closes = await splitSessionCloses(gate.ids, phase, callerSidOf(req.headers))
+    const { settleBatch } = await import('../../core/sessions/owed-to-user.js')
+    const bulk = closes.ids.length ? await settleBatch(closes.settles, () => setPhaseBulk(closes.ids, phase as TaskPhase)) : { changed: [], failed: [], syncFailed: [] }
     const { changed, syncFailed } = bulk
-    const failed = [...bulk.failed, ...gate.refused]
+    const failed = [...bulk.failed, ...gate.refused, ...closes.refused]
     // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
     const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
     await markPersonNeeds(changed.map((t) => t.id), phase, callerSidOf(req.headers))
