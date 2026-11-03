@@ -9,8 +9,9 @@
 #   3. run ios-native/tests/fleet/remote-run.sh there through host_exec, in the
 #      background, printing its output as it comes;
 #   4. bring out.tgz back with host_copy into $WALNUT_TASK_DIR/ios-fleet/<run>/ and
-#      unpack it: summary.json (xcresulttool's summary), attachments/ (screenshots the
-#      tests attached), run.mp4 (with --video), and Test.xcresult (with --keep-xcresult).
+#      unpack it into <run>/out/: summary.json (xcresulttool's summary), attachments/
+#      (screenshots the tests attached), run.mp4 (with --video), and Test.xcresult (with
+#      --keep-xcresult). <run>/run.log is the whole run log.
 #
 # Usage:
 #   scripts/ios-fleet-test.sh [options] unit [-- XCODEBUILD ARGS]     # WalnutTests
@@ -20,7 +21,8 @@
 #                                                                     # with WALNUT_SIM_UDID set
 # Options:
 #   --host H         a host alias or selector (default: pick among the `ios` Macs)
-#   --video          record the simulator's screen while the tests run (run.mp4)
+#   --video          record the simulator's screen while the tests run (run.mp4); for ui:
+#                    unit tests do not drive the screen, so a unit video shows the app idle
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
 #   --max-load N     refuse a Mac whose load per CPU is over N (default 0.75)
 #   --udid U         drive that simulator on the Mac instead of the run's own one
@@ -62,6 +64,7 @@ shift
 [ "${1:-}" = "--" ] && shift
 ARGS=("$@")
 [ "$MODE" != run ] || [ ${#ARGS[@]} -gt 0 ] || die "run needs a command after --" 64
+case " ${FLAGS[*]-} " in *" --video "*) [ "$MODE" != unit ] || say "--video with unit records the app idle (unit tests do not drive the screen); use it with ui to see a run" ;; esac
 
 command -v walnut >/dev/null || die "the walnut command is not on PATH (this runs from a Walnut task session)"
 [ -n "${WALNUT_TASK_DIR:-}" ] || die "WALNUT_TASK_DIR is not set (this runs from a Walnut task session)"
@@ -83,13 +86,16 @@ op() { # $1 = op, $2 = JSON args
 }
 js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
 # A call Walnut may drop while the Mac it runs on is loaded (hub_timeout, hub_unreachable,
-# throttled) is asked again, six times 10 s apart; any other refusal is final.
+# throttled), or that found no Walnut to take it (the server or this host's daemon
+# restarting: a deploy), is asked again, nine times 10 s apart; any other refusal is final.
+# (2026-11-03: a deploy restarted the server just as a passed run's results were fetched.)
+OP_AGAIN_WHY='hub_timeout|hub_unreachable|throttled|server not running|not reachable|socket unreachable|is restarting'
 op_again() { # $1 = op, $2 = JSON args
   local out i why
-  for i in 1 2 3 4 5 6; do
+  for i in 1 2 3 4 5 6 7 8 9; do
     out=$(op "$1" "$2" 2>&1) && { printf '%s' "$out"; return 0; }
-    why=$(printf '%s' "$out" | grep -oE 'hub_timeout|hub_unreachable|throttled' | head -1)
-    [ -n "$why" ] && [ "$i" -lt 6 ] || { printf '%s\n' "$out" >&2; return 1; }
+    why=$(printf '%s' "$out" | grep -oE "$OP_AGAIN_WHY" | head -1)
+    [ -n "$why" ] && [ "$i" -lt 9 ] || { printf '%s\n' "$out" >&2; return 1; }
     say "$1: Walnut did not answer ($why); asking again in ${IOS_FLEET_RETRY_SECS:-10} s"
     sleep "${IOS_FLEET_RETRY_SECS:-10}"
   done
@@ -232,7 +238,7 @@ while IFS=$'\t' read -r H NOTE; do
   if [ "$(printf '%s' "$RES" | js 'print(d.get("bytes", 0))')" != 0 ]; then
     if ! { copy "$FETCH" >/dev/null && tar -xzf "$LOCAL/out.tgz" -C "$LOCAL"; }; then
       FETCHED=0
-      say "could not bring the results back from $H; they stay there until fetched: walnut tools call host_copy '$FETCH'"
+      say "could not bring the results back from $H; they stay there until fetched: walnut tools call host_copy '$FETCH' && tar -xzf '$LOCAL/out.tgz' -C '$LOCAL'"
     fi
   fi
   # The run's folder on the Mac goes only once its results are here.
@@ -244,7 +250,7 @@ while IFS=$'\t' read -r H NOTE; do
   break
 done <<< "$PICKS"
 
-rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json"
+rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.read-err"
 if [ -f "$LOCAL/out/summary.json" ]; then
   python3 - "$LOCAL/out/summary.json" <<'PY' >&2
 import json, sys

@@ -215,6 +215,28 @@ describe('ios-fleet-test.sh', () => {
     expect((clean[0].args.argv as string[])[2]).toMatch(/^rm -rf /)
   })
 
+  // 2026-11-03: a passed run's fetch met the server's restart ("server not running") and the
+  // script stopped with exit 74; the same call by hand a few seconds later worked.
+  it.each([
+    'Walnut server not running at http://127.0.0.1:3456',
+    'Walnut daemon socket unreachable at /tmp/open-walnut/agent-gateway.sock: connect ENOENT',
+  ])('a deploy restarting Walnut as the results come back is asked again, not given up: %s', (why) => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, fetchFails: 3, fetchError: why, result: { exit: 0, state: 'passed' } }], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(4)
+    expect(r.stderr).toContain('Passed: 41 passed')
+  })
+
+  it('--video with unit says what the video will show; the scratch files are gone at the end', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, result: { exit: 0, state: 'passed' } }], outTgz())
+    const r = run(['--video', 'unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('--video with unit records the app idle')
+    const runs = fs.readdirSync(path.join(taskDir, 'ios-fleet')).filter((n) => n !== 'DerivedData')
+    for (const n of runs) expect(fs.existsSync(path.join(taskDir, 'ios-fleet', n, '.read-err'))).toBe(false)
+  })
+
   it('results that never come back stay on the Mac, with the call that fetches them', () => {
     const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, fetchFails: 99, result: { exit: 0, state: 'passed' } }], outTgz())
     const r = run(['unit'], bin)
@@ -222,7 +244,9 @@ describe('ios-fleet-test.sh', () => {
     expect(r.status).toBe(74)
     expect(r.stderr).toContain('the run ended with exit 0 on mac-mini, but its results are still there')
     expect(r.stderr).not.toContain('results: ')
-    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(6)
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host)).toHaveLength(9)
+    // The line it prints fetches AND unpacks, so a hand-run of it leaves the run as the script would.
+    expect(r.stderr).toMatch(/out\.tgz"\}' && tar -xzf '[^']+\/out\.tgz' -C '[^']+'/)
     expect(r.stderr).toMatch(/could not bring the results back from mac-mini; they stay there until fetched: walnut tools call host_copy '\{"from_host": "mac-mini", "from": "~\/\.local\/state\/open-walnut\/tasks\/task-1\/ios-fleet\/[^"]+\/out\.tgz"/)
     // Nothing removed on the Mac.
     expect(r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)).toHaveLength(0)
