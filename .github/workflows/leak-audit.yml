@@ -14,7 +14,7 @@ name: Leak audit
 
 on:
   workflow_run:
-    workflows: [CI, Release, Components, Mac app, Release archives, Binary matrix, Speech runtime, Flake hunt, Update star history]
+    workflows: [CI, Release, Components, Mac app, Release archives, Binary matrix, Speech runtime, Host network connector, Flake hunt, Update star history, Fresh Mac join, Windows join, Windows app]
     types: [completed]
   release:
     types: [published, prereleased]
@@ -73,7 +73,7 @@ jobs:
     if: >-
       github.repository == 'EvanZhang008/open-walnut' && (
         github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'workflow_run' && contains(fromJSON('["Release", "Release archives", "Mac app", "Components", "Speech runtime"]'), github.event.workflow_run.name)))
+        (github.event_name == 'workflow_run' && contains(fromJSON('["Release", "Release archives", "Mac app", "Components", "Speech runtime", "Host network connector"]'), github.event.workflow_run.name)))
     # macOS, so the scan can mount the Mac app's .dmg
     runs-on: macos-latest
     timeout-minutes: 60

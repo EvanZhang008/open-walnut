@@ -237,7 +237,7 @@ jobs:
           LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
         run: |
           bun scripts/release-notes.mjs "$VERSION" > "$RUNNER_TEMP/gate-notes.md"
-          sh scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/gate-notes.md" scripts/install.sh
+          sh scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/gate-notes.md" scripts/install.sh $(test -f scripts/join.sh && echo scripts/join.sh) $(test -f scripts/join.ps1 && echo scripts/join.ps1)
       - name: Publish to npm (the platform packages, then open-walnut)
         run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
       - name: Draft the GitHub Release with this version's CHANGELOG section
@@ -699,7 +699,7 @@ jobs:
       - name: No leak in what this release publishes
         env:
           LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
-        run: sh harness/scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/notes.md" scripts/install.sh
+        run: sh harness/scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/notes.md" scripts/install.sh $(test -f scripts/join.sh && echo scripts/join.sh) $(test -f scripts/join.ps1 && echo scripts/join.ps1)
       # npm-packages.mjs skips each package npm already has. npm holds a version it
       # accepted for minutes before it serves it, so that check misses a publish still
       # in that state: one this job made before it stopped, or (before the wait step
