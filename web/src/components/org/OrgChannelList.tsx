@@ -14,6 +14,7 @@
  * click opens it beside the page, × stops watching it.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
@@ -62,7 +63,9 @@ type OnMenu = (e: MouseEvent, target: ChannelMenuTarget) => void;
 
 function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: OnMenu }) {
   // What opening this row lets the user answer: on Main its own asks, not every team's again.
-  const own = row.alerts.length;
+  // Main answers for the person, so the approvals a script waits on count on its row too.
+  const approvals = usePendingApprovals().length;
+  const own = row.alerts.length + (row.kind === 'main' ? approvals : 0);
   const badge = own > 0
     ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>
     : row.kind === 'project' && row.counts.running > 0

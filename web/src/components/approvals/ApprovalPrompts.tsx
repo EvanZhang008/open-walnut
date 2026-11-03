@@ -1,6 +1,12 @@
 /**
- * ApprovalPrompts: the approvals a script is blocked on (`walnut approve`), as cards at the
- * bottom right of every console window, answered here.
+ * ApprovalPrompts: the approvals a script is blocked on (`walnut approve`), everywhere the
+ * console shows them. Mounted once in App, it feeds the store (approvals-store.ts) and draws
+ * the window-wide parts:
+ *
+ *  - the cards at the bottom right of every console window;
+ *  - the dialog a Needs you row (ApprovalRow, on Home and the Org page) or a click on the
+ *    system notification (approval-notify.ts) opens;
+ *  - the system notification itself, raised by the store when a new approval arrives.
  *
  *  - tap: Approve / Deny;
  *  - biometric: Approve needs a device signature. In the Mac app that is Touch ID here
@@ -11,15 +17,19 @@
  * device is trusted on first use, a later one waits for an existing device's approval).
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useEvent } from '@/hooks/useWebSocket';
-import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type ApprovalKey } from '@/api/approvals';
-import { hasTouchIdBridge, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
-import { log } from '@/utils/log';
-import { testRunLabel } from '@/api/test-run';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import type { Approval } from '@/api/approvals';
+import {
+  applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
+  startTouchId, useApprovals, type ApprovalsState,
+} from './approvals-store';
+import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
 import './approvals.css';
 
-function useNow(ms: number): number {
+export function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), ms);
@@ -34,167 +44,177 @@ export function timeLeft(expiresAt: string, now: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function requesterText(a: Approval): string {
+/** Who asks, on which host: `hostName` is the host's display name (useHostDisplayLabel), never its alias. */
+export function requesterText(a: Approval, hostName: string): string {
   const r = a.requester;
   const who = r.taskTitle ? `Task "${r.taskTitle}"` : r.command ? r.command : 'A script';
-  return `${who} on ${r.host}`;
+  return `${who} on ${hostName}`;
 }
 
-function notifyBrowser(a: Approval): void {
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !document.hidden) return;
-  try {
-    const n = new Notification(`Approve? ${a.what}`, { body: requesterText(a), tag: a.id, requireInteraction: true });
-    n.onclick = () => { window.focus(); n.close(); };
-  } catch { /* a browser that refuses notifications here */ }
+export function settledWord(a: Approval): string {
+  return a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn';
+}
+
+/** Deny and the Approve this window offers, with their busy words. */
+export function ApprovalButtons({ a, s, compact = false }: { a: Approval; s: ApprovalsState; compact?: boolean }) {
+  const working = s.busy[a.id];
+  const kind = approveKind(s, a);
+  return (
+    <div className={`approval-actions${compact ? ' approval-actions-compact' : ''}`}>
+      <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
+        onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny', false); }}>
+        {working === 'deny' ? 'Denying…' : 'Deny'}
+      </button>
+      {kind && (
+        <button type="button" className="approval-btn approval-btn-approve" disabled={!!working}
+          onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve', kind === 'touch-id'); }}>
+          {working === 'approve' ? (kind === 'touch-id' ? 'Touch ID…' : 'Approving…') : kind === 'touch-id' ? 'Approve with Touch ID' : 'Approve'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
+function ApprovalBody({ a, s, now, detailOpen = false }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean }) {
+  const biometric = a.mode === 'biometric';
+  const hostName = useHostDisplayLabel(a.requester.host);
+  return (
+    <>
+      <div className="approval-head">
+        <span className="approval-kicker">{biometric ? 'Approval · Face ID / Touch ID' : 'Approval'}</span>
+        <span className="approval-clock" title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>{timeLeft(a.expiresAt, now)}</span>
+      </div>
+      <div className="approval-what">{a.what}</div>
+      <div className="approval-who">{requesterText(a, hostName)}{a.requester.cwd ? <span className="approval-cwd"> · {a.requester.cwd}</span> : null}</div>
+      {a.detail ? (
+        <details className="approval-detail" open={detailOpen}>
+          <summary>Detail</summary>
+          <pre>{a.detail}</pre>
+        </details>
+      ) : null}
+      {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
+      {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
+      {biometric && !approveKind(s, a) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
+      <ApprovalButtons a={a} s={s} />
+    </>
+  );
+}
+
+/** A line offering the system notification where this window cannot raise one yet. */
+function NoticeOffer() {
+  const [access, setAccess] = useState<NoticeAccess>(() => noticeAccess());
+  const [nativeOff, setNativeOff] = useState(false);
+  useEffect(() => {
+    if (access !== 'native') return;
+    let live = true;
+    void nativeNoticeStatus().then((st) => { if (live) setNativeOff(st === 'off'); });
+    return () => { live = false; };
+  }, [access]);
+  if (access === 'native') {
+    if (!nativeOff) return null;
+    return (
+      <div className="approval-notice-offer" data-testid="approval-notice-offer">
+        Notifications are off for Walnut, so approvals do not pop up on this Mac.{' '}
+        <button type="button" className="approval-link" onClick={openNoticeSettings}>Turn them on</button>
+      </div>
+    );
+  }
+  if (access !== 'ask') return null;
+  return (
+    <div className="approval-notice-offer" data-testid="approval-notice-offer">
+      <button type="button" className="approval-link" onClick={() => { void askNoticePermission().then(setAccess); }}>
+        Notify me on this computer
+      </button>{' '}when a script waits for an approval.
+    </div>
+  );
+}
+
+function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
+  const id = s.openId;
+  useEffect(() => {
+    if (!id) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeApproval(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [id]);
+  if (!id) return null;
+  const a = s.items.get(id);
+  const settled = s.done[id];
+  const live = a && Date.parse(a.expiresAt) > now ? a : null;
+  return createPortal(
+    <div className="app-modal-overlay approval-dialog-overlay" role="dialog" aria-modal="true" aria-label="Approval" data-testid="approval-dialog" onMouseDown={closeApproval}>
+      <div className={`app-modal approval-dialog${live?.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
+        <button type="button" className="approval-dialog-close" aria-label="Close" onClick={closeApproval}>×</button>
+        {live ? (
+          <ApprovalBody a={live} s={s} now={now} detailOpen />
+        ) : settled ? (
+          <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
+            {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
+          </div>
+        ) : (
+          <div className="approval-note" data-testid="approval-dialog-gone">This request is no longer waiting: it was answered, withdrawn or ran out of time.</div>
+        )}
+        {live && <NoticeOffer />}
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 export function ApprovalPrompts() {
-  const [items, setItems] = useState<Map<string, Approval>>(new Map());
-  const [keys, setKeys] = useState<ApprovalKey[]>([]);
-  const [touchId, setTouchId] = useState<TouchIdStatus | null>(null);
-  const [busy, setBusy] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [done, setDone] = useState<Record<string, Approval>>({});
-  const enrolled = useRef(false);
+  const s = useApprovals();
 
-  const refresh = useCallback(async () => {
-    try {
-      const r = await listApprovals('pending');
-      setItems(new Map(r.approvals.map((a) => [a.id, a])));
-      setKeys(r.keys);
-    } catch {
-      // 404/503: an older server or a replica whose Mac is away; nothing to show.
-    }
-  }, []);
-
-  useEffect(() => { void refresh(); }, [refresh]);
-  useEvent('_ws:reconnected', () => { void refresh(); });
-  useEvent('approval-keys:changed', () => { void refresh(); });
+  useEffect(() => { void refreshApprovals(); }, []);
+  useEvent('_ws:reconnected', () => { void refreshApprovals(); });
+  useEvent('approval-keys:changed', () => { void refreshApprovals(); });
   useEvent('approval:changed', (data) => {
     const a = (data as { approval?: Approval }).approval;
-    if (!a) return;
-    // A test run's approvals show only in that test window, and a test window sees no real one.
-    // The server's list is the judge (a throwaway server marks nothing, so an automated window
-    // there sees every approval): a person's window drops a marked one, a test window re-reads.
-    const label = testRunLabel();
-    if ((a.testRun ?? null) !== label) {
-      if (label) void refresh();
-      return;
-    }
-    setItems((prev) => {
-      const next = new Map(prev);
-      if (a.status === 'pending') {
-        if (!prev.has(a.id)) notifyBrowser(a);
-        next.set(a.id, a);
-      } else next.delete(a.id);
-      return next;
-    });
-    if (a.status !== 'pending') {
-      setDone((prev) => ({ ...prev, [a.id]: a }));
-      setTimeout(() => setDone((prev) => { const { [a.id]: _gone, ...rest } = prev; return rest; }), 2500);
-    }
+    if (a) applyApprovalEvent(a);
   });
-
   // The Mac app: learn whether Touch ID can sign here, and enroll its key once.
+  useEffect(() => { void startTouchId(); }, []);
+  // A click on the Mac app's system notification (desktop/NotificationBridge.swift), also one
+  // made before this page was listening (the app opened from it, or the page was reloading).
   useEffect(() => {
-    if (!hasTouchIdBridge()) return;
-    void touchIdStatus().then(setTouchId);
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string }>).detail?.id;
+      if (typeof id === 'string' && id) openApproval(id);
+      void takeClickedApproval();
+    };
+    window.addEventListener(OPEN_APPROVAL_EVENT, onOpen);
+    void takeClickedApproval().then((id) => { if (id) openApproval(id); });
+    return () => window.removeEventListener(OPEN_APPROVAL_EVENT, onOpen);
   }, []);
-  useEffect(() => {
-    if (!touchId?.available || !touchId.publicKey || enrolled.current) return;
-    if (keys.some((k) => k.id === touchId.keyId)) { enrolled.current = true; return; }
-    enrolled.current = true;
-    void enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' })
-      .then((r) => { log.info('approvals', 'Mac app key enrolled', { keyId: r.key.id, status: r.key.status }); void refresh(); })
-      .catch((err) => log.warn('approvals', 'Mac app key enroll failed', { error: String(err) }));
-  }, [touchId, keys, refresh]);
-
-  const myKey = useMemo(() => keys.find((k) => k.id === touchId?.keyId), [keys, touchId]);
-  const canSign = !!touchId?.available && myKey?.status === 'active';
-
-  const decide = useCallback(async (a: Approval, decision: 'approve' | 'deny', signed: boolean) => {
-    setBusy((b) => ({ ...b, [a.id]: decision }));
-    setErrors((e) => { const { [a.id]: _old, ...rest } = e; return rest; });
-    try {
-      const sig = signed ? await touchIdSign(a, decision) : undefined;
-      const r = await answerApproval(a.id, {
-        decision,
-        ...(sig ? { keyId: sig.keyId, signature: sig.signature } : {}),
-        device: { name: hasTouchIdBridge() ? (touchId?.name ?? 'Mac app') : 'Web console', kind: hasTouchIdBridge() ? 'mac-app' : 'web' },
-      });
-      setItems((prev) => { const next = new Map(prev); next.delete(a.id); return next; });
-      setDone((prev) => ({ ...prev, [a.id]: r.approval }));
-      setTimeout(() => setDone((prev) => { const { [a.id]: _gone, ...rest } = prev; return rest; }), 2500);
-    } catch (err) {
-      setErrors((e) => ({ ...e, [a.id]: err instanceof Error ? err.message : String(err) }));
-    } finally {
-      setBusy((b) => { const { [a.id]: _old, ...rest } = b; return rest; });
-    }
-  }, [touchId]);
+  // The end of quiet mode raises the notices it held back (the page's quiet state settles first).
+  useEvent('quiet:changed', () => { setTimeout(noticePending, 500); });
 
   const now = useNow(1000);
-  const pending = [...items.values()].filter((a) => Date.parse(a.expiresAt) > now).sort((x, y) => x.createdAt.localeCompare(y.createdAt));
-  const settled = Object.values(done).filter((a) => !items.has(a.id));
-  if (pending.length === 0 && settled.length === 0) return null;
+  // The dialog shows its approval, so the card stack leaves that one out while it is open.
+  const pending = pendingAt(s, now).filter((a) => a.id !== s.openId);
+  const settled = Object.values(s.done).filter((a) => !s.items.has(a.id) && a.id !== s.openId);
 
   return (
-    <div className="approval-stack" role="region" aria-label="Approvals">
-      {settled.map((a) => (
-        <div key={a.id} className={`approval-card approval-card-settled approval-${a.status}`} data-approval-id={a.id}>
-          <div className="approval-settled-line">
-            {a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn'}
-            <span className="approval-settled-what">{a.what}</span>
-          </div>
-        </div>
-      ))}
-      {pending.map((a) => {
-        const biometric = a.mode === 'biometric';
-        const ownEnrollment = !!a.enrollsKey && a.enrollsKey === touchId?.keyId;
-        const working = busy[a.id];
-        return (
-          <div key={a.id} className={`approval-card${biometric ? ' approval-card-biometric' : ''}`} data-approval-id={a.id} data-testid="approval-card">
-            <div className="approval-head">
-              <span className="approval-kicker">{biometric ? 'Approval · Face ID / Touch ID' : 'Approval'}</span>
-              <span className="approval-clock" title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>{timeLeft(a.expiresAt, now)}</span>
-            </div>
-            <div className="approval-what">{a.what}</div>
-            <div className="approval-who">{requesterText(a)}{a.requester.cwd ? <span className="approval-cwd"> · {a.requester.cwd}</span> : null}</div>
-            {a.detail ? (
-              <details className="approval-detail">
-                <summary>Detail</summary>
-                <pre>{a.detail}</pre>
-              </details>
-            ) : null}
-            {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
-            {errors[a.id] ? <div className="approval-error" role="alert">{errors[a.id]}</div> : null}
-            {biometric && !canSign ? (
-              <div className="approval-note">
-                {ownEnrollment
-                  ? 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).'
-                  : touchId && !touchId.available && touchId.reason
-                    ? `${touchId.reason} Approve it on your iPhone with Face ID.`
-                    : myKey?.status === 'pending'
-                      ? 'This Mac is waiting to be allowed to sign approvals. Approve it on your iPhone with Face ID.'
-                      : 'Approve it on your iPhone with Face ID (or in the Walnut Mac app with Touch ID).'}
+    <>
+      <ApprovalDialog s={s} now={now} />
+      {(pending.length > 0 || settled.length > 0) && (
+        <div className="approval-stack" role="region" aria-label="Approvals">
+          {settled.map((a) => (
+            <div key={a.id} className={`approval-card approval-card-settled approval-${a.status}`} data-approval-id={a.id}>
+              <div className="approval-settled-line">
+                {settledWord(a)}
+                <span className="approval-settled-what">{a.what}</span>
               </div>
-            ) : null}
-            <div className="approval-actions">
-              <button type="button" className="approval-btn approval-btn-deny" disabled={!!working} onClick={() => void decide(a, 'deny', false)}>
-                {working === 'deny' ? 'Denying…' : 'Deny'}
-              </button>
-              {!biometric ? (
-                <button type="button" className="approval-btn approval-btn-approve" disabled={!!working} onClick={() => void decide(a, 'approve', false)}>
-                  {working === 'approve' ? 'Approving…' : 'Approve'}
-                </button>
-              ) : canSign && !ownEnrollment ? (
-                <button type="button" className="approval-btn approval-btn-approve" disabled={!!working} onClick={() => void decide(a, 'approve', true)}>
-                  {working === 'approve' ? 'Touch ID…' : 'Approve with Touch ID'}
-                </button>
-              ) : null}
             </div>
-          </div>
-        );
-      })}
-    </div>
+          ))}
+          {pending.map((a, i) => (
+            <div key={a.id} className={`approval-card${a.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={a.id} data-testid="approval-card">
+              <ApprovalBody a={a} s={s} now={now} />
+              {i === pending.length - 1 && <NoticeOffer />}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }

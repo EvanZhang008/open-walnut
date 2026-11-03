@@ -25,7 +25,7 @@ SOURCES=(
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
 )
 source "$SCRIPT_DIR/app-intents.sh"
@@ -36,7 +36,7 @@ while IFS= read -r flag; do INTENTS_FLAGS+=("$flag"); done < <(app_intents_swift
 # The release runs on macOS 12 too: the same target here catches an API that is newer.
 TRIPLE="$(uname -m)-apple-macos12.0"
 swiftc -O -o "$MACOS/$APP_NAME" "${SOURCES[@]}" -D WALNUT_APP "${INTENTS_FLAGS[@]}" -target "$TRIPLE" \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -Xlinker -weak_framework -Xlinker AppIntents
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -framework UserNotifications -Xlinker -weak_framework -Xlinker AppIntents
 
 # The installer a first launch runs (BundledRuntime.swift): the same install.sh
 # every release attaches, so the app and `curl … | sh` install the same way.

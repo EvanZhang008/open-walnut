@@ -152,3 +152,111 @@
   white-space: nowrap;
   min-width: 0;
 }
+
+/* The notification offer under a card or in the dialog. */
+.approval-notice-offer {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.approval-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* The dialog a Needs you row or the system notification opens. */
+.approval-dialog-overlay { z-index: 10001; }
+
+.approval-dialog {
+  position: relative;
+  width: min(480px, calc(100vw - 48px));
+  font-size: 13px;
+}
+
+.approval-dialog .approval-what { font-size: 17px; padding-right: 24px; }
+
+.approval-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* A Needs you row, on Home and the Org page. */
+.approval-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 6px;
+}
+
+.approval-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--error) 6%, var(--card-bg));
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.approval-row:hover { background: color-mix(in srgb, var(--error) 10%, var(--card-bg)); }
+.approval-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.approval-row-icon { color: var(--error); display: inline-flex; flex: none; }
+
+.approval-row-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.approval-row-kicker {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--error);
+}
+
+.approval-row-what {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-row-who,
+.approval-row-note {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-actions-compact { margin-top: 0; flex: none; gap: 6px; }
+.approval-actions-compact .approval-btn { padding: 4px 10px; font-size: 12px; }
+
+/* A narrow column: the buttons wrap under the words instead of squeezing them. */
+.approval-row { flex-wrap: wrap; }
+.approval-row-mid { min-width: 150px; }
+.approval-row .approval-actions-compact { margin-left: auto; }
+.approval-row-org { margin: 0 0 2px; }

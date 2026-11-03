@@ -1,8 +1,9 @@
 /**
  * What follows an approval's change, on the leader:
- *  - a new pending approval pushes to every paired phone (always, quiet mode or not: a
- *    script is blocked on it, like a permission prompt), with the category that gives the
- *    banner its Approve / Deny actions (tap) or only Open (biometric: Face ID in the app);
+ *  - a new pending approval pushes to every paired phone like a permission prompt: a script
+ *    is blocked on it, so it passes quiet mode while quiet allows permissions
+ *    (allowPermissions), with the category that gives the banner its Approve / Deny actions
+ *    (tap) or only Open (biometric: Face ID in the app);
  *  - a decided key enrollment activates or drops its key (keys.ts).
  * The web console hears the same change on the `approval:changed` event (store.ts).
  */
@@ -16,17 +17,18 @@ export const APPROVAL_PUSH_TYPE = 'approval_request'
 export const APPROVAL_CATEGORY_TAP = 'WALNUT_APPROVAL'
 export const APPROVAL_CATEGORY_BIOMETRIC = 'WALNUT_APPROVAL_BIOMETRIC'
 
-export function requesterLine(a: Pick<ApprovalView, 'requester'>): string {
+/** Who asks, on which host: `hostName` is the host's display name (never a raw alias such as `__cloudbox__`). */
+export function requesterLine(a: Pick<ApprovalView, 'requester'>, hostName: string = a.requester.host): string {
   const r = a.requester
   const who = r.taskTitle ? `task "${r.taskTitle}"` : r.command ? r.command : 'a script'
-  return `${who} on ${r.host}`
+  return `${who} on ${hostName}`
 }
 
-export function approvalPushContent(a: ApprovalView) {
+export function approvalPushContent(a: ApprovalView, hostName?: string) {
   const biometric = a.mode === 'biometric'
   return {
     title: `Approve? ${a.what}`.slice(0, 120),
-    body: `${requesterLine(a)}${biometric ? ' · Face ID needed' : ''}`.slice(0, 240),
+    body: `${requesterLine(a, hostName)}${biometric ? ' · Face ID needed' : ''}`.slice(0, 240),
     data: { type: APPROVAL_PUSH_TYPE, approvalId: a.id, mode: a.mode },
     priority: 10,
     collapseId: a.id,
@@ -40,12 +42,19 @@ async function pushNew(a: ApprovalView): Promise<void> {
   if (a.testRun) return
   const { getConfig } = await import('../config-manager.js')
   const { deliverPush } = await import('../push/deliver.js')
+  const { getQuiet, quietSuppresses, logQuietSkipOnce } = await import('../quiet/quiet-state.js')
+  const { hostDisplayNameFor } = await import('../hosts/host-display-name.js')
   const tokens = (await getConfig()).push_tokens ?? []
   if (tokens.length === 0) {
     log.notif.info('approval push: no phone registered', { approvalId: a.id })
     return
   }
-  const out = await deliverPush(tokens, approvalPushContent(a))
+  const quiet = await getQuiet()
+  if (quietSuppresses(quiet, { permission: true })) {
+    logQuietSkipOnce('push', quiet)
+    return
+  }
+  const out = await deliverPush(tokens, approvalPushContent(a, await hostDisplayNameFor(a.requester.host)))
   log.notif.info('approval push', { approvalId: a.id, attempted: out.attempted, sent: out.sent, failed: out.failed, ...(out.reason ? { reason: out.reason } : {}) })
 }
 

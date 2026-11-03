@@ -36,6 +36,7 @@ import {
   readReason,
   waitingReason,
 } from './status-sections';
+import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
 import '@/styles/status-sections.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
@@ -317,18 +318,37 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
   }
 }
 
+/**
+ * Approvals a script waits on (`walnut approve`) are drawn first in Needs you: they need the
+ * person as much as any task there. 'with-needs': the section the panel already draws; 'alone':
+ * the panel does not draw Needs you (By project keeps those tasks in its list), so a Needs you
+ * section holding only the approvals joins the run while one waits.
+ */
+export type NeedsApprovals = 'with-needs' | 'alone';
+
 /** A run of sections the panel draws itself; an empty one draws nothing. */
-export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
+export function StatusSectionGroup({ keys, model, open, onToggle, handlers, approvals }: {
   keys: readonly StatusSectionKey[];
   model: StatusSectionsModel;
   open: Record<StatusSectionKey, boolean>;
   onToggle: (key: StatusSectionKey) => void;
   handlers: SectionRowHandlers;
+  approvals?: NeedsApprovals;
 }) {
+  const pending = usePendingApprovals();
+  const waiting = approvals ? pending : [];
+  const alone = approvals === 'alone' && !keys.includes('needs');
+  const shownKeys: readonly StatusSectionKey[] = alone && waiting.length > 0
+    ? (keys[0] === 'watching' ? ['watching', 'needs', ...keys.slice(1)] : ['needs', ...keys])
+    : keys;
   return (
     <>
-      {keys.map((key) => {
-        const { tasks, count } = sectionRowsOf(model, key);
+      {shownKeys.map((key) => {
+        const rows = sectionRowsOf(model, key);
+        const extra = key === 'needs' && waiting.length > 0;
+        const tasks = extra && alone ? [] : rows.tasks;
+        const taskCount = extra && alone ? 0 : rows.count;
+        const count = taskCount + (extra ? waiting.length : 0);
         // Every section has its heading, Needs you included (2026-10-31: its rows ran on
         // under Watching's heading and read as Watching's).
         // Completed with older tasks still unloaded stays reachable, even at 0 loaded.
@@ -337,7 +357,8 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]}>
             <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft} />
-            {open[key] && <SectionRows sectionKey={key} tasks={tasks} total={count} handlers={handlers} archiveLeft={archiveLeft} />}
+            {open[key] && extra && <ApprovalRows list={waiting} variant="home" />}
+            {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft} />}
           </section>
         );
       })}

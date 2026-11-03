@@ -7990,7 +7990,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
       {flatSections && filterOverrideNode}
       {!isSearchMode && !phoneFirstLoad && (
-        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
+        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
       )}
       {!flatSections && (
       <NavigationSections storageKey="walnut-todo-navigation-order">

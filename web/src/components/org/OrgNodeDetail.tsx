@@ -13,6 +13,8 @@
  *   A node no one answers for (the Inbox) has no chat: its teams fill the page instead.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
+import { approvalsForNode } from '@/components/approvals/approvals-store';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { oneOf } from '@/hooks/usePersistentState';
@@ -92,7 +94,7 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
 
 /** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
  *  counted from the same lists as the Task view's tabs; each pill opens its tab. */
-function CountPills({ row, tabs, onOpen }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void }) {
+function CountPills({ row, tabs, onOpen, approvals }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number }) {
   const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{stateCountLabel(tab, n)}
@@ -100,7 +102,7 @@ function CountPills({ row, tabs, onOpen }: { row: ChannelRow; tabs: OrgTaskTabs;
   );
   return (
     <span className="org-pills" data-testid="org-detail-counts">
-      {tabs.needs.length > 0 && pill('needs', tabs.needs.length)}
+      {tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
       {tabs.read.length > 0 && pill('read', tabs.read.length)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
@@ -338,6 +340,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // Every ask the Needs you count holds is a row, the node's own first (2026-10-31: a count with
   // "Its ask is in the chat." under it left the user hunting for it).
   const alertsShown = useMemo(() => ownAskFirst(tabs.needs, row.contactId), [tabs.needs, row.contactId]);
+  // Approvals a script waits on: Main lists every one, any other node those its own work asked for.
+  const pendingApprovals = usePendingApprovals();
+  const approvals = useMemo(() => {
+    const ids = new Set<string>();
+    // Its own work: the open tasks under it, the ones it just finished, and the node's own task.
+    for (const t of [...tabs.watching, ...tabs.read, ...tabs.working, ...tabs.waiting, ...tabs.done]) ids.add(t.id);
+    for (const a of tabs.needs) ids.add(a.taskId);
+    if (row.contactId) ids.add(row.contactId);
+    return approvalsForNode(pendingApprovals, row.kind, ids);
+  }, [pendingApprovals, row.kind, row.contactId, tabs]);
 
   /** The node's teams by the user's status, each with its line. */
   const renderTeam = () => (
@@ -363,7 +375,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
 
   const rail = (
     <OrgTaskRail
-      row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
+      row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} approvals={approvals} tab={taskTab} onTab={setTaskTab}
       view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
       mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
@@ -381,7 +393,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         <div className="org-detail-who">
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
-            <CountPills row={row} tabs={tabs} onOpen={openTab} />
+            <CountPills row={row} tabs={tabs} onOpen={openTab} approvals={approvals.length} />
             {!!row.led?.length && (
               <span className="org-detail-led org-muted" data-testid="org-detail-led">
                 {/* A VP made only to put projects under leads no work of its own while its home has none. */}

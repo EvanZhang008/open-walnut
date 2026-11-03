@@ -13,8 +13,9 @@
  *     `.badge`) is classified: on the rail (outside a page) or inside a page. A new
  *     file fails until it is classified; a rail file's badge must sit behind a gated
  *     value, and its raw `app.badge` may only go through `railBadge`;
- *  B. every system attention call in web/src (a browser Notification, a chime, an app
- *     icon badge) runs in a function that consults the quiet gate;
+ *  B. every system attention call in web/src (a browser Notification, the Mac app's own
+ *     notification through `walnutNotify`, a chime, an app icon badge) runs in a function
+ *     that consults the quiet gate;
  *  C. every server path that sends a phone push checks `quietSuppresses`, and the Mac
  *     app sets no dock badge or attention bounce that ignores quiet.
  */
@@ -147,7 +148,9 @@ function ungatedCallers(file: string, text: string): Finding[] {
   return findings
 }
 
-const SYSTEM_CALLS = /\bnew Notification\(|\bplayChime\(|\bsetAppBadge\(|\brequestUserAttention\b/g
+// `walnutNotify`: the Mac app's own macOS notification (desktop/NotificationBridge.swift), posted
+// by the page with `postMessage({ op: 'post', ... })` on that handler.
+const SYSTEM_CALLS = /\bnew Notification\(|\bplayChime\(|\bsetAppBadge\(|\brequestUserAttention\b|\bwalnutNotify\b/g
 const QUIET_GATE = /\b(quietAllowsToast|attentionHeld|quietSuppresses|currentQuiet)\(/
 
 /** System attention calls whose enclosing function never consults quiet. */
@@ -157,6 +160,8 @@ export function ungatedSystemCalls(file: string, text: string): Finding[] {
   walk(sf, (node) => {
     const isCall = (ts.isNewExpression(node) && node.expression.getText(sf) === 'Notification')
       || (ts.isCallExpression(node) && /(^|\.)(playChime|setAppBadge)$/.test(node.expression.getText(sf)))
+      || (ts.isCallExpression(node) && text.includes('walnutNotify') && /(^|\.)postMessage$/.test(node.expression.getText(sf))
+        && /\bop:\s*['"`]post['"`]/.test(node.arguments[0]?.getText(sf) ?? ''))
     if (!isCall) return
     let fn: ts.Node | undefined = node.parent
     while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
@@ -241,6 +246,9 @@ describe('quiet attention ratchet: outside a page, quiet means no count, dot, so
     expect(ungatedRailBadges('a.tsx', raw).map((f) => f.what)).toEqual(expect.arrayContaining([expect.stringContaining('raw app.badge')]))
     expect(ungatedSystemCalls('b.ts', `function f() { new Notification('x') }`)).toHaveLength(1)
     expect(ungatedSystemCalls('b.ts', `function f() { if (quietAllowsToast(currentQuiet(), 'permission')) new Notification('x') }`)).toEqual([])
+    const native = `const h = () => window.webkit.messageHandlers.walnutNotify; function f() { h().postMessage({ op: 'post', id: 'a' }) }`
+    expect(ungatedSystemCalls('n.ts', native)).toHaveLength(1)
+    expect(ungatedSystemCalls('n.ts', native.replace('function f() {', "function f() { if (!quietAllowsToast(currentQuiet(), 'permission')) return;"))).toEqual([])
     expect(drawsAttention('<span className="phone-bell-count" />')).toBe(true)
   })
 })

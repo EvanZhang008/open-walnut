@@ -46,6 +46,8 @@ import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
 import { cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
+import type { Approval } from '@/api/approvals';
+import { ApprovalRows } from '@/components/approvals/ApprovalRow';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -87,7 +89,7 @@ const ICON_COLLAPSE = (
   </svg>
 );
 
-function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgRailTab; onPick: (tab: OrgRailTab) => void }) {
+function TaskTabBar({ tabs, tab, onPick, approvals }: { tabs: OrgTaskTabs; tab: OrgRailTab; onPick: (tab: OrgRailTab) => void; approvals: number }) {
   return (
     <div className="org-task-tabs" role="tablist" aria-label="Tasks by status" data-testid="org-task-tabs">
       {ORG_RAIL_TABS.map((t) => (
@@ -102,7 +104,7 @@ function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgRailTab;
           onClick={() => onPick(t)}
         >
           {t === 'watching' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_EYE}</span> : <i style={{ background: TAB_DOT[t] }} />}
-          {ORG_RAIL_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length}</span>
+          {ORG_RAIL_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length + (t === 'needs' ? approvals : 0)}</span>
         </button>
       ))}
     </div>
@@ -269,13 +271,15 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
   tabs: OrgTaskTabs;
   /** The asks, the node's own first. */
   alerts: readonly OrgAlertView[];
+  /** Approvals a script waits on that this node lists (approvalsForNode): first in Needs you. */
+  approvals: readonly Approval[];
   tab: OrgRailTab;
   onTab: (tab: OrgRailTab) => void;
   view: OrgTopView;
@@ -378,12 +382,13 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
           ) : shownMode === 'board' && renderBoard ? (
             <div className="org-rail-board" data-testid="org-rail-board">{renderBoard()}</div>
           ) : (<>
-          <TaskTabBar tabs={tabs} tab={tab} onPick={onTab} />
+          <TaskTabBar tabs={tabs} tab={tab} onPick={onTab} approvals={approvals.length} />
           <div className="org-rail-body">
             {tab === 'needs' ? (<>
+              <ApprovalRows list={approvals} variant="org" />
               {alerts.length > 0
                 ? <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />
-                : <p className="org-task-empty" data-testid="org-task-empty">{EMPTY.needs}</p>}
+                : approvals.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">{EMPTY.needs}</p>}
             </>) : (
               <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} />
             )}

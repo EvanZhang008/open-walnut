@@ -24,9 +24,20 @@ that host's daemon to your Mac, so the request shows which host asked.
 
 ## Where the ask shows up
 
-- **The web console and the Mac app**: a card at the bottom right of every window, with what is
-  asked, who asked (the task, or the script and its host and folder), the detail, the time left,
-  and Approve / Deny. A hidden tab also gets a browser notification when you allowed those.
+- **The web console and the Mac app**, in three places that answer together:
+  - **Needs you**: a row first in Home's Needs you section (counted there), and in the Org page's
+    Needs you, on Main for every approval and on a project's lead for one its own work asked for.
+    Deny and Approve are in the row; a click on the row opens the request.
+  - **A system notification**, `Approve? <what>`: in the Mac app a macOS notification (allow it
+    once when macOS asks; System Settings, Notifications, Walnut turns it back on), in a browser a
+    web notification once you allowed those ("Notify me on this computer" under a card). It shows
+    whether or not Walnut is in front, and a click brings Walnut forward with the request open.
+    Quiet mode holds it back unless quiet lets permission prompts through, and an answer anywhere
+    takes it back.
+  - **A card** at the bottom right of every window, with what is asked, who asked (the task, or
+    the script and its host and folder), the detail, the time left, and Approve / Deny.
+  The web side is `web/src/components/approvals/` (one store, `approvals-store.ts`, for all of
+  them); the Mac app's notification is `desktop/NotificationBridge.swift`.
 - **The iPhone app**: a push with Approve and Deny on the banner for a plain
   approval; a tap opens the full request. The app also opens it when you bring it forward.
   Pushes need an APNs key on your Mac (see [iOS push notifications](ios-push-notifications.md)).

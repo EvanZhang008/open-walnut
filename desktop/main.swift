@@ -130,6 +130,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMainMenu()
         startAppUpdater()
+        // Approval notices (NotificationBridge.swift): a click opens the request in the window.
+        NotificationBridge.shared.fallbackWebView = { [weak self] in self?.activeWebView ?? self?.webView }
+        NotificationBridge.shared.install()
 
         if WebContentPolicy.isEnabled(UserDefaults.standard) {
             webContentWatchdog = WebContentWatchdog(
@@ -1406,6 +1409,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "walnutUpdate")
         // Approvals (ApprovalBridge.swift): Touch ID signs the person's answer.
         config.userContentController.addScriptMessageHandler(ApprovalBridge.shared, contentWorld: .page, name: ApprovalBridge.handlerName)
+        // ...and the macOS notification that says one waits (NotificationBridge.swift).
+        config.userContentController.addScriptMessageHandler(NotificationBridge.shared, contentWorld: .page, name: NotificationBridge.handlerName)
         addAppUpdateTestScript(to: config.userContentController)
         let reportChrome = """
         (() => {
@@ -2107,6 +2112,7 @@ extension AppDelegate: WKNavigationDelegate {
             controller.add(self, name: "walnutChrome")
             controller.addScriptMessageHandler(self, contentWorld: .page, name: "walnutUpdate")
             controller.addScriptMessageHandler(ApprovalBridge.shared, contentWorld: .page, name: ApprovalBridge.handlerName)
+            controller.addScriptMessageHandler(NotificationBridge.shared, contentWorld: .page, name: NotificationBridge.handlerName)
             let child = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 760), configuration: childConfig)
             child.navigationDelegate = self
             child.uiDelegate = self

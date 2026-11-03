@@ -56,10 +56,10 @@ SOURCES=(
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
+    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/ApprovalBridge.swift" "$SCRIPT_DIR/NotificationBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
     "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
 )
-FRAMEWORKS=(-framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -Xlinker -weak_framework -Xlinker AppIntents)
+FRAMEWORKS=(-framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -framework UserNotifications -Xlinker -weak_framework -Xlinker AppIntents)
 # The Spotlight and Shortcuts actions are listed from the arm64 compile's constants (app-intents.sh);
 # the list describes Swift types, the same for both architectures.
 source "$SCRIPT_DIR/app-intents.sh"
