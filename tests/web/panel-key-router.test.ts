@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  escapeIsFree, isDrawerChord, keyTargetClaimsEscape, keyTargetThreadDepth, pickKeyTarget, registerPanel,
+  escapeIsFree, isDrawerChord, keyTargetClaimsEscape, keyTargetThreadDepth, pairKeyAllowed, pickKeyTarget, registerPanel,
   registeredPanelCount, type PanelKeyHandlers,
 } from '@/hooks/usePanelKeyRouter';
 
@@ -100,7 +100,7 @@ describe('the window dispatcher: exactly one panel per key (C19, C62)', () => {
   let doc: { activeElement: unknown; body: unknown; elementFromPoint: (x: number, y: number) => unknown };
   let unregister: Array<() => void> = [];
   const cols = [col(11), col(12), col(13)];
-  const calls = { esc: [0, 0, 0], chord: [0, 0, 0] };
+  const calls = { esc: [0, 0, 0], chord: [0, 0, 0], pair: [0, 0, 0] };
   const navDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
 
   const key = (init: Record<string, unknown>) => {
@@ -121,12 +121,14 @@ describe('the window dispatcher: exactly one panel per key (C19, C62)', () => {
     Object.defineProperty(globalThis, 'navigator', { value: { platform: 'MacIntel', userAgent: 'test' }, configurable: true, writable: true });
     calls.esc = [0, 0, 0];
     calls.chord = [0, 0, 0];
+    calls.pair = [0, 0, 0];
     unregister = cols.map((c, i) => {
       const h: { current: PanelKeyHandlers } = {
         current: {
           sessionId: `s${i}`,
           onEscape: () => { calls.esc[i] += 1; return c.stack.getAttribute('data-thread-depth') !== '0'; },
           onToggleDrawer: () => { calls.chord[i] += 1; return true; },
+          onPairMove: () => { calls.pair[i] += 1; return true; },
         },
       };
       return registerPanel(c.panel as unknown as HTMLElement, h);
@@ -202,7 +204,47 @@ describe('the window dispatcher: exactly one panel per key (C19, C62)', () => {
     cols[1].stack.attrs.set('data-thread-depth', '0');
   });
 
+  it('Cmd+[ goes to the panel holding focus, or under the pointer with focus on body', () => {
+    doc.activeElement = cols[0].composer;
+    const a = key({ key: '[', code: 'BracketLeft', metaKey: true });
+    expect(calls.pair).toEqual([1, 0, 0]);
+    expect(a.defaultPrevented).toBe(true);
+    doc.activeElement = body;
+    win.dispatchEvent(Object.assign(new Event('pointermove'), { clientX: 500, clientY: 10 }));
+    doc.elementFromPoint = () => cols[1].text;
+    key({ key: ']', code: 'BracketRight', metaKey: true });
+    expect(calls.pair).toEqual([1, 1, 0]);
+  });
+
+  it('Cmd+[ with focus in a field outside every panel stays the browser\'s back, the pointer on a panel notwithstanding', () => {
+    const outside = new FakeEl('search-field', body);
+    doc.activeElement = outside;
+    win.dispatchEvent(Object.assign(new Event('pointermove'), { clientX: 500, clientY: 10 }));
+    doc.elementFromPoint = () => cols[1].text;
+    const e = key({ key: '[', code: 'BracketLeft', metaKey: true });
+    expect(calls.pair).toEqual([0, 0, 0]);
+    expect(e.defaultPrevented).toBe(false);
+  });
+
   it('registers exactly one entry per panel', () => {
     expect(registeredPanelCount()).toBe(3);
+  });
+});
+
+describe('pairKeyAllowed (pure)', () => {
+  const editorIn = (sel: string) => ({ closest: (q: string) => (q.split(', ').includes(sel) ? {} : null) });
+  const panel = new FakeEl('panelP');
+  const inside = new FakeEl('insideP', panel);
+  const elsewhere = new FakeEl('elsewhereP');
+  it('takes focus in the panel or on body, not focus elsewhere', () => {
+    expect(pairKeyAllowed(inside as unknown as Node, body as unknown as Node, panel, inside)).toBe(true);
+    expect(pairKeyAllowed(body as unknown as Node, body as unknown as Node, panel, body)).toBe(true);
+    expect(pairKeyAllowed(null, body as unknown as Node, panel, null)).toBe(true);
+    expect(pairKeyAllowed(elsewhere as unknown as Node, body as unknown as Node, panel, elsewhere)).toBe(false);
+  });
+  it('never from a code editor, a terminal or a rich editor, even inside the panel', () => {
+    for (const sel of ['.cm-editor', '.xterm', '[contenteditable="true"]']) {
+      expect(pairKeyAllowed(inside as unknown as Node, body as unknown as Node, panel, editorIn(sel)), sel).toBe(false);
+    }
   });
 });

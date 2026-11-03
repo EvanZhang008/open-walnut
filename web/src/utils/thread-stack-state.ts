@@ -132,6 +132,16 @@ export function escapeDecision(s: { depth: number; composerFocused: boolean; com
 
 /** Where a page was left: its scrollTop and, when it was left for a question,
  *  where that question's passage sat in the scroll box. */
+/** Where each page was left, as the stack shares it: read and written by key
+ *  only (the split's left half gets a read-only view, readOnlyLandings). */
+/** What a page's landings are read and written through: a Map, or a narrower view of one. */
+export interface PageLandings {
+  get(key: string): PageLanding | undefined;
+  has(key: string): boolean;
+  set(key: string, value: PageLanding): unknown;
+  delete(key: string): boolean;
+}
+
 export interface PageLanding {
   scrollTop: number;
   sentenceTop?: number;

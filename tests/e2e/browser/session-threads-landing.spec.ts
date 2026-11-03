@@ -52,7 +52,8 @@ async function passageTop(panel: Locator, phrase: string): Promise<number> {
 }
 
 /** Put the passage mid-box with a wheel, then click it: the mark pushes. Returns
- *  where it sat at that moment. */
+ *  where it sat on SCREEN at that moment (a pop puts it back there: landingTarget,
+ *  also when Tree Mode's path bar above the timeline came in between). */
 async function clickMark(page: Page, panel: Locator, phrase: string, depth: number): Promise<number> {
   const row = panel.locator('.session-history [data-message-id] .session-msg-content', { hasText: phrase }).first()
   await expect(row).toBeVisible()
@@ -106,7 +107,7 @@ async function clickMark(page: Page, panel: Locator, phrase: string, depth: numb
     console.log('mark miss', JSON.stringify({ r, box, seen }))
   }
   await expect(hover).toHaveCount(1)
-  const at = r.top - box.y
+  const at = r.top
   await page.mouse.click(r.left + 12, r.top + r.height / 2)
   await expectDepth(panel, depth)
   return at
@@ -159,7 +160,7 @@ test.describe('Question stack landing', () => {
       const settled = tops.slice(2)
       expect(new Set(settled).size, `scrollTop per frame: ${tops.join(',')}`).toBe(1)
       const phrase = densePassage(chain[i])
-      const top = await passageTop(panel, phrase)
+      const top = (await passageRects(panel, phrase))[0].top
       expect(Math.abs(top - asked[i]), `landing drift for ${chain[i]}`).toBeLessThanOrEqual(8)
       await expect.poll(() => flashText(page)).toContain(phrase.slice(0, 20))
       // The question map (always open in this session) never offers Back for a pop.
@@ -184,11 +185,15 @@ test.describe('Question stack landing', () => {
     await expect(panel.locator('.thread-toast')).toContainText(PASSAGE_GONE)
     const answer = panel.locator('.session-history [data-message-id="0199f401-2222-4aaa-8bbb-000000000001"]')
     await expect(answer).toHaveClass(/user-messages-highlight/)
-    // The root page runs under the glass header (as a session without questions
-    // does): the answer lands just below the header, never under it.
+    // The answer lands just below what sits above the timeline, never under it:
+    // the glass header, and Tree Mode's path bar while it shows (it stays after
+    // the pop, holding the level just left).
     const { top, headerBottom } = await answer.evaluate((el) => {
-      const header = el.closest('.session-panel')!.querySelector('.session-panel-header')!
-      return { top: el.getBoundingClientRect().top, headerBottom: header.getBoundingClientRect().bottom }
+      const panelEl = el.closest('.session-panel')!
+      const header = panelEl.querySelector('.session-panel-header')!
+      const bar = panelEl.querySelector('.tree-path-bar')
+      const bottom = Math.max(header.getBoundingClientRect().bottom, bar ? bar.getBoundingClientRect().bottom : 0)
+      return { top: el.getBoundingClientRect().top, headerBottom: bottom }
     })
     expect(top - headerBottom, `answer top ${top}, header bottom ${headerBottom}`).toBeGreaterThanOrEqual(-1)
     expect(top - headerBottom, `answer top ${top}, header bottom ${headerBottom}`).toBeLessThanOrEqual(16)

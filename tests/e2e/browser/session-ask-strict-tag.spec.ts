@@ -18,7 +18,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test } from './threads-helpers'
+import { centreInHistory, mainComposer, mainPage, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test } from './threads-helpers'
 import { MIDTURN_PASSAGES, MIDTURN_READY, STRICT_SESSION, STRICT_TASK } from './threads-fixture'
 
 async function shot(page: Page, name: string, target?: Locator): Promise<void> {
@@ -100,8 +100,9 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
   test('a stored strict question: its page holds only the words inside its tag', async ({ page }) => {
     const panel = await open(page, 'stack')
     await panel.locator('.thread-map-row[data-kind="thread"]').filter({ hasText: 'Account lists' }).first().click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
-    const history = panel.locator('.session-history')
+    await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+    // The panel's own page (the right half once an Ask splits the pane).
+    const history = mainPage(panel).locator('.session-history')
     await expect(history).toContainText('No, each cluster keeps its own.')
     await expect(history).not.toContainText('Looking at the cluster setup first.')
     await noTagShown(panel)
@@ -150,8 +151,9 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
     await switchView(panel, 'stack')
     // Its row in the question map opens its page.
     await panel.locator('.thread-map-row[data-kind="thread"]').filter({ hasText: MIDTURN_PASSAGES.ASK.slice(0, 12) }).first().click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
-    const history = panel.locator('.session-history')
+    await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+    // The panel's own page (the right half once an Ask splits the pane).
+    const history = mainPage(panel).locator('.session-history')
     await expect(history).toContainText(ANSWER)
     await expect(history).toContainText(`processed your message: ${FOLLOW}`)
     await expect(history).not.toContainText(MIDTURN_READY)
@@ -160,10 +162,12 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
 
     // A question about a passage of that answer: one level down, id `<thread>.1`.
     const NESTED = 'Why does that hold?'
-    await selectPassage(page, panel, `processed your message: ${QUESTION}`, '[data-message-id][data-msg-role="assistant"]')
+    await selectPassage(page, mainPage(panel), `processed your message: ${QUESTION}`, '[data-message-id][data-msg-role="assistant"]')
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2', { timeout: 15_000 })
-    const composer = panel.locator('.chat-input-textarea').first()
+    await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2', { timeout: 15_000 })
+    // 1100px splits: the question it was asked on on the left, the new one with its composer on the right.
+    await expect(panel.locator('.tree-split-left')).toBeVisible()
+    const composer = mainComposer(panel)
     await composer.click()
     await composer.fill(`MOCK_ASK_ECHO_THREAD ${NESTED}`)
     await composer.press('Enter')
@@ -179,6 +183,14 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
       return (rec.threadMeta ?? []).find((x) => typeof x.question === 'string' && (x.question as string).includes(NESTED))?.seq
     })()
     expect(String(seq)).not.toBe(nested)
+    // The path bar names it.
+    const pathNums = panel.locator('.tree-path-num')
+    await expect(pathNums.filter({ hasText: new RegExp(`^${nested.replace('.', '\\.')}$`) }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(pathNums.filter({ hasText: new RegExp(`^${seq}$`) })).toHaveCount(0)
+    // So does the question map, which a split half draws as the thin rail
+    // without numbers: one pane again shows the map's own numbers.
+    await panel.locator('.tree-split-left').getByRole('button', { name: 'Close the left half' }).click()
+    await expect(panel.locator('.tree-split-left')).toHaveCount(0)
     const badges = panel.locator('.thread-map-num')
     await expect(badges.filter({ hasText: new RegExp(`^${nested.replace('.', '\\.')}$`) }).first()).toBeVisible({ timeout: 15_000 })
     await expect(badges.filter({ hasText: new RegExp(`^${seq}$`) })).toHaveCount(0)

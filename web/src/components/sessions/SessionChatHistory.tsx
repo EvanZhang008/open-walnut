@@ -8,6 +8,7 @@ import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
+import { shareStoreArgs, type TimelineShare } from './timeline-share';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
@@ -60,6 +61,7 @@ import { ThreadStackFrame, ThreadMarkTipLayer } from './ThreadStackFrame';
 import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
+import { useTreeHalf } from './tree-half-context';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { envelopeSteps, foldStepsPhrase, type FoldStep } from './fold-steps';
@@ -258,6 +260,9 @@ function OptimisticImagePreviews({ images }: { images?: ImageAttachment[] }) {
   );
 }
 
+/** A reader's stream is the publisher's: it never removes blocks. */
+const NEVER_RESET = () => false;
+
 interface SessionChatHistoryProps {
   sessionId: string;
   /** Coding agent backing this session. Legacy records without one are Claude Code. */
@@ -322,6 +327,11 @@ interface SessionChatHistoryProps {
   earlierSessionsTaskId?: string;
   /** Open one of those earlier sessions in its own panel. */
   onOpenEarlierSession?: (sessionId: string) => void;
+  /** The panel's own timeline publishes its history and stream here. */
+  publishTimeline?: TimelineShare;
+  /** A second view of the session (the split's left half) reads them from here
+   *  and fetches nothing itself (timeline-share.ts). */
+  readTimeline?: TimelineShare;
 }
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
@@ -559,7 +569,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -585,6 +595,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   });
   const [historyVersion, setHistoryVersion] = useState(0);
+  // Instance uid: two mounts of the same session (second tab, dock card,
+  // popout, the split's left half) each keep their own deferred jobs and log
+  // lines (see sid8 below).
+  const instanceUid = useRef(Math.random().toString(36).slice(2, 6));
+  // A reader (the split's left half) never refetches: the publisher's history is its.
+  const readingRef = useRef(!!readTimeline);
+  readingRef.current = !!readTimeline;
+  const bumpHistory = useCallback(() => { if (!readingRef.current) setHistoryVersion((v) => v + 1); }, []);
+  const shared = useSyncExternalStore(...shareStoreArgs(readTimeline));
   // Who the assistant bubbles are attributed to — the engine's own label from
   // the catalog, so a newly registered engine names itself in the transcript.
   const engineCatalog = useEngineCatalog();
@@ -674,7 +693,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages: historyRows, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const ownHistory = useSessionHistory(readTimeline ? null : sessionId, historyVersion);
+  // A reader shows the publisher's history; until the publisher's first commit it
+  // is still loading (never an empty session).
+  const history = readTimeline ? (shared?.history ?? { ...ownHistory, loading: true, firstCheckPending: true }) : ownHistory;
+  const { messages: historyRows, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = history;
   // Rows still in Claude Code's queue have no place yet (stream/chat-order.ts):
   // the bubbles show them, after the live output, until the CLI takes them.
   const { rows: loadedMessages, queued: queuedRows } = useMemo(() => splitQueuedTail(historyRows), [historyRows]);
@@ -701,7 +724,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return gap ? <HistoryGapDivider state={gapStatus[gap.afterKey]} onLoad={() => fillHistoryGap(gap.afterKey)} /> : null;
   };
   const historyUnavailableRaw = parseHistoryUnavailable(error);
-  const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
+  const ownStream = useSessionStream(readTimeline ? null : sessionId);
+  const { blocks, isStreaming, completedLen } = readTimeline && shared ? shared.stream : ownStream;
+  // Only the stream's owner removes absorbed blocks.
+  const resetIfAbsorbed = readTimeline ? NEVER_RESET : ownStream.resetIfAbsorbed;
+  // The panel's timeline: what a second view of the session reads (timeline-share.ts).
+  const published = useMemo(() => (publishTimeline
+    ? { history: ownHistory, stream: { blocks: ownStream.blocks, isStreaming: ownStream.isStreaming, completedLen: ownStream.completedLen } }
+    : null),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the fields, not the hook's fresh object
+  [publishTimeline, ownHistory.messages, ownHistory.loading, ownHistory.phase2Pending, ownHistory.firstCheckPending, ownHistory.error,
+    ownHistory.stale, ownHistory.loadingFrom, ownHistory.forkBoundaryIndex, ownHistory.olderHidden, ownHistory.olderWindowed,
+    ownHistory.olderUnavailable, ownHistory.olderUnavailableWhy, ownHistory.olderPageSeq, ownHistory.gaps, ownHistory.gapStatus,
+    ownStream.blocks, ownStream.isStreaming, ownStream.completedLen]);
+  useLayoutEffect(() => { if (published && publishTimeline) publishTimeline.set(published); }, [published, publishTimeline]);
   // Replies this view watched arrive as stream blocks (their msgIds). The turn
   // that ends in one keeps the shape it streamed in until a later turn starts,
   // so its persisted rows take over without folding the steps the reader just
@@ -826,7 +862,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // it coalesces with the batch-completed bump via the same historyVersion state,
     // and a redundant refetch can only ADD evidence — it can never remove a bubble.
     if (!isStreaming && prevIsStreaming.current) {
-      setHistoryVersion((v) => v + 1);
+      bumpHistory();
       // Turn over: re-arm the turn-start prompt refetch for the next turn and
       // drop its pending retries (the refetch above already covers them).
       promptRefetchFired.current = false;
@@ -845,6 +881,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // System blocks don't count — they stream before the line lands. Details and
   // the predicate: turn-prompt-refetch.ts.
   useEffect(() => {
+    if (readTimeline) return;
     if (!shouldRefetchForTurnPrompt({
       blocks, completedLen, messages: loadedMessages,
       watermark: turnWatermark.current,
@@ -855,7 +892,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     log.info('session-history', 'turn prompt missing at first model output — refetching history', {
       sessionId, messages: loadedMessages.length, blocks: blocks.length, completedLen,
     });
-    setHistoryVersion((v) => v + 1);
+    bumpHistory();
     // Bounded safety net: if the refetch still shows no prompt (remote stat
     // lag), try again; a finished turn hands over to the turn-end refetch.
     clearPromptRefetchRetries();
@@ -864,10 +901,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (!isStreamingRefForPrompt.current) return;
         if (!turnPromptMissing(messagesRef.current, turnWatermark.current, optimisticCountRef.current)) return;
         log.info('session-history', `turn prompt still missing after ${delay}ms — refetching again`, { sessionId });
-        setHistoryVersion((v) => v + 1);
+        bumpHistory();
       }, delay));
     }
-  }, [blocks, completedLen, loadedMessages, optimisticMessages, sessionId, clearPromptRefetchRetries]);
+  }, [blocks, completedLen, loadedMessages, optimisticMessages, sessionId, clearPromptRefetchRetries, readTimeline]);
   useEffect(() => () => clearPromptRefetchRetries(), [clearPromptRefetchRetries]);
 
   // ── Non-destructive absorption (the single-timeline core) ──
@@ -1149,13 +1186,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (d.sessionId === sessionId) {
       log.info('stream', `batch-completed count=${d.count ?? 1} ids=${d.messageIds?.length ?? 0} blocks=${blocks.length} isStreaming=${isStreaming}`, { sessionId });
       releaseHeld(d.messageIds);
-      setHistoryVersion((v) => v + 1);
+      bumpHistory();
     }
   });
 
   useEvent('session:system-event', (data) => {
     const d = data as { sessionId?: string; replacesMsgId?: string };
-    if (d.sessionId === sessionId && d.replacesMsgId) setHistoryVersion((v) => v + 1);
+    if (d.sessionId === sessionId && d.replacesMsgId) bumpHistory();
   });
 
   // Batch delivery failed (e.g. SSH/daemon down): mark the matching optimistic
@@ -1177,7 +1214,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useEvent('session:error', (data) => {
     const d = data as { sessionId?: string; errorKind?: string };
     if (d.sessionId === sessionId && d.errorKind !== 'delivery_failed') {
-      setHistoryVersion((v) => v + 1);
+      bumpHistory();
     }
   });
 
@@ -1186,9 +1223,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The absorption filter reconciles blocks against whatever arrives — no flag.
   // Hidden tabs defer until shown: a server restart reconnects every open tab,
   // and N hidden tabs × M session columns each firing a history fetch is the
-  // burst that saturates the shared 6-connection pool.
+  // burst that saturates the shared 6-connection pool. Keyed per mount: with one
+  // key per session, a second mount's job replaced this one's and only one of
+  // them caught up.
   useEvent('_ws:reconnected', () => {
-    runWhenVisible(`sch:reconnect:${sessionId}`, () => setHistoryVersion((v) => v + 1));
+    runWhenVisible(`sch:reconnect:${sessionId}#${instanceUid.current}`, () => bumpHistory());
   });
 
   // Agent-sent messages: create synthetic optimistic message so it appears in the queue.
@@ -1287,7 +1326,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // popout) log interleaved lines that read as ONE container flip-flopping
   // (inc-1786553756848 showed two monotonic sh series interleaved). The uid
   // separates the series so forensics can attribute each line to a mount.
-  const instanceUid = useRef(Math.random().toString(36).slice(2, 6));
   const sid8 = `${sessionId.substring(0, 8)}#${instanceUid.current}`;
   // Render-state mirror for the always-on scroll tripwires below (they live in
   // event closures that must read CURRENT values without re-subscribing).
@@ -1503,6 +1541,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  questions (or an Ask pending) has a stack; one without renders exactly as
    *  before. */
   const stack = threadsApi.stack;
+  /** Tree Mode's split screen: `L` is the second timeline the panel mounts for
+   *  the left half (its own page, no panel-wide chrome of its own). */
+  const treeHalf = useTreeHalf();
+  const inTreeHalf = !!treeHalf && treeHalf.side !== 'only';
+  const leftHalf = treeHalf?.side === 'L';
   const hasQuestions = threadTree.threads.length > 1 || !!stack.pending || stack.draftPages.length > 0;
   const stackMode = threadsApi.viewMode === 'stack' && hasQuestions;
   /** Conversation Mode with questions: every turn in order, each question's
@@ -1755,12 +1798,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [stack.pending, threadTree, threadsApi.metaIndex]);
 
   /** The sliver: one bar per ancestor page, root first. */
-  const sliver = useMemo(() => (stackMode
+  // A half of Tree Mode's split screen: the path bar above both halves is the
+  // way back, so a half draws no sliver (tree-half-context.ts).
+  const sliver = useMemo(() => (stackMode && !inTreeHalf
     ? sliverBars(stack.path.slice(0, -1).map((key) => {
       const node = threadTree.byKey.get(key);
       return { key, ...(node && node.depth > 0 ? { hue: node.hue } : {}), title: titleOfKey(key) };
     }))
-    : []), [stackMode, stack.path, threadTree, titleOfKey]);
+    : []), [stackMode, inTreeHalf, stack.path, threadTree, titleOfKey]);
 
   // ── Outline (pinned messages + thread heads) ───────────────────────────────
   // Entries are ordered by TRANSCRIPT position, not by when they were pinned: the
@@ -5454,7 +5499,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     <RowDisclosureScope.Provider value={sessionId}>
     <ReaderOpenedFolds.Provider value={readerOpened}>
       {/* Team tab bar — shown when session has team(s) */}
-      {teams.length > 0 && (
+      {teams.length > 0 && !leftHalf && (
         <div className="team-tab-bar">
           <button
             className={`team-tab-bar-item ${activeTeamTab === null ? 'team-tab-bar-item-active' : ''}`}
@@ -5479,7 +5524,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       )}
 
       {/* Team view — shown when a team tab is active */}
-      {activeTeamTab && sessionId && (
+      {activeTeamTab && sessionId && !leftHalf && (
         <TeamCard
           sessionId={sessionId}
           teamName={activeTeamTab}
@@ -5492,8 +5537,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           key={sessionId} forces a fresh remount on session switch so the panel's
           local UI state (expanded agent, open transcript modal, collapse override)
           can't leak from one session into the next. */}
-      {!activeTeamTab && sessionId && <WorkflowProgress key={sessionId} sessionId={sessionId} />}
-      <BackgroundTasksPanelHost sessionId={sessionId} />
+      {!activeTeamTab && sessionId && !leftHalf && <WorkflowProgress key={sessionId} sessionId={sessionId} />}
+      {!leftHalf && <BackgroundTasksPanelHost sessionId={sessionId} />}
 
       {/* Main conversation, hidden when a team tab is active. The stack frame
           wraps the ONE scroll container at every depth (display: contents for a
@@ -5504,7 +5549,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         bars={sliver}
         containerRef={containerRef}
         header={(panelWidth) => {
-          if (!stackMode || stack.depth === 0 || !threadsApi.actions) return null;
+          if (!stackMode || !threadsApi.actions) return null;
+          // A half has its row at every depth (the left one may be Main).
+          if (stack.depth === 0 && !inTreeHalf) return null;
           return (
             <ThreadStackHeader
               sessionId={sessionId}
@@ -5539,8 +5586,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             are); one without shows the pinned-message outline, collapsed to
             ticks until hovered, self-hiding with no pins. Both live INSIDE the
             scroll container (like the ↓ button) so they can't stack over the
-            panel header or the composer. */}
-        {threadMap.shape && mapCounts ? (
+            panel header or the composer. The split's left half shows neither:
+            the path bar above both halves is where the reader goes. */}
+        {leftHalf ? null : threadMap.shape && mapCounts ? (
           <ThreadMap
             shape={threadMap.shape}
             roomy={threadMap.roomy}

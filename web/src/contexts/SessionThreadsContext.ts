@@ -6,7 +6,7 @@ import type { SessionViewMode } from '@/hooks/useSessionThreads';
 import type {
   ThreadActions, ThreadDraftRow, ThreadDrawerFilter, ThreadLiveState, ThreadMetaIndex, ThreadNavVia, ThreadPendingPage,
 } from '@/components/sessions/thread-ui-contract';
-import type { PageLanding } from '@/utils/thread-stack-state';
+import type { PageLandings } from '@/utils/thread-stack-state';
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 
@@ -42,10 +42,13 @@ export interface ThreadStackApi {
   /** One level up (the back button, Esc). */
   back: (via: ThreadNavVia) => void;
   /** Ask on a passage: a pending page, or the question already about it.
-   *  `focusComposer: false` leaves focus where it is (the comment card takes it). */
-  ask: (target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean }) => void;
+   *  `focusComposer: false` leaves focus where it is (the comment card takes it).
+   *  `onScreenKey`: the page the passage is on when the tree does not know its row
+   *  yet (an answer still streaming), for a timeline that is not the stack's top
+   *  page (Tree Mode's split left half). */
+  ask: (target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string }) => void;
   /** Where each page was left (page key), shared with the timeline's landing. */
-  landings: Map<string, PageLanding>;
+  landings: PageLandings;
   /** The timeline records the page it is leaving (scrollTop + passage top)
    *  right before a navigation changes the rows. */
   setCapture: (fn: ((from: string, to: string, pending?: ThreadPendingPage) => void) | null) => void;

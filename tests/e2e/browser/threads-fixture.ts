@@ -761,10 +761,73 @@ export function buildStrictSession(): ThreadsFixtureSession {
   };
 }
 
+/** Its own session for Tree Mode's split screen (session-tree-split.spec.ts): three
+ *  levels below the main conversation (1 > 1.1 > 1.1.1) with a sibling at each
+ *  level (2, 1.2), and a passage on every page to ask a new question from. Its
+ *  sends are written into its transcript (MOCK_CLAUDE_PERSIST_SESSIONS). */
+export const SPLIT_SESSION = 'pw-threads-split-session';
+export const SPLIT_TASK = 'pw-task-threads-split';
+export const SPLIT_READY = 'Explain how the access rules fit together.';
+export const SPLIT_PASSAGES = {
+  Q1: 'Each namespace keeps its own role bindings.',
+  Q2: 'A cluster role applies wherever it is bound.',
+  Q11: 'Only someone allowed to edit role bindings there can add one.',
+  Q12: 'The binding names its subjects by kind and name.',
+  Q111: 'An edit role in that namespace already grants impersonation.',
+  /** A passage on each page that has no question yet. */
+  ASK_ROOT: 'The audit log records every binding change.',
+  ASK_Q1: 'Bindings are read again on every request.',
+  ASK_Q11: 'A denied request names the rule it missed.',
+  ASK_Q111: 'Service accounts follow the same rules as people.',
+} as const;
+export const SPLIT_TITLES = {
+  Q1: 'Who can bind a role', Q2: 'Cluster roles', Q11: 'Editing role bindings', Q12: 'Binding subjects', Q111: 'Edit grants impersonation',
+} as const;
+
+export function buildSplitSession(): ThreadsFixtureSession {
+  const P = 'a7b8c9';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), Q1: t(2), Q2: t(3), Q11: t(4), Q12: t(5), Q111: t(6) };
+  const S = SPLIT_PASSAGES;
+  const body = (seed: number, ...passages: string[]) => passages.map((x, k) => `${x} ${filler(seed + k, 70)}`).join('\n\n');
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: SPLIT_READY },
+    { role: 'assistant', uuid: ids.R1.a, text: body(601, S.Q1, S.Q2, S.ASK_ROOT) },
+    { role: 'user', uuid: ids.Q1.u, text: `> ${S.Q1}\n\nWho can bind a role in a namespace?` },
+    { role: 'assistant', uuid: ids.Q1.a, text: body(611, S.Q11, S.Q12, S.ASK_Q1) },
+    { role: 'user', uuid: ids.Q2.u, text: `> ${S.Q2}\n\nWhere does a cluster role apply?` },
+    { role: 'assistant', uuid: ids.Q2.a, text: body(621, 'Wherever a binding points at it.') },
+    { role: 'user', uuid: ids.Q11.u, text: `> ${S.Q11}\n\nWho is allowed to edit them?` },
+    { role: 'assistant', uuid: ids.Q11.a, text: body(631, S.Q111, S.ASK_Q11) },
+    { role: 'user', uuid: ids.Q12.u, text: `> ${S.Q12}\n\nWhat kinds of subjects are there?` },
+    { role: 'assistant', uuid: ids.Q12.a, text: body(641, 'Users, groups and service accounts.') },
+    { role: 'user', uuid: ids.Q111.u, text: `> ${S.Q111}\n\nDoes edit really allow impersonation?` },
+    { role: 'assistant', uuid: ids.Q111.a, text: body(651, 'Yes, inside that namespace only.', S.ASK_Q111) },
+  ];
+  const at = '2026-11-03T02:00:00.000Z';
+  const q = (key: keyof typeof SPLIT_TITLES, parent: string, seq: number, thread: string, question: string) => ({
+    anchor: { msgId: ids[key].u, parent, quote: { exact: S[key] }, source: 'selection' as const, at },
+    meta: { headId: ids[key].u, status: 'open' as const, title: SPLIT_TITLES[key], titleSource: 'ai' as const, titleState: 'done' as const, question, seq, thread, updatedAt: at },
+  });
+  const qs = [
+    q('Q1', ids.R1.a, 1, '1', 'Who can bind a role in a namespace?'),
+    q('Q2', ids.R1.a, 2, '2', 'Where does a cluster role apply?'),
+    q('Q11', ids.Q1.a, 3, '1.1', 'Who is allowed to edit them?'),
+    q('Q12', ids.Q1.a, 4, '1.2', 'What kinds of subjects are there?'),
+    q('Q111', ids.Q11.a, 5, '1.1.1', 'Does edit really allow impersonation?'),
+  ];
+  return {
+    sessionId: SPLIT_SESSION, taskId: SPLIT_TASK, title: 'Threads split screen fixture session',
+    rows, parked: [], pinnedMessages: [],
+    threadAnchors: qs.map((x) => x.anchor),
+    threadMeta: qs.map((x) => x.meta),
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(), buildSplitSession(),
     buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];
 }

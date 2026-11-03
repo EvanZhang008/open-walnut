@@ -46,7 +46,7 @@ export type {
   StreamingThinkingBlock,
 } from '@/stream/stream-reducer';
 
-interface UseSessionStreamReturn {
+export interface UseSessionStreamReturn {
   /** Blocks accumulated during the current streaming session. APPEND-ONLY:
    *  reconciliation never deletes from this array — the render filter
    *  (stream/render-filter.ts) HIDES blocks proven absorbed by history.

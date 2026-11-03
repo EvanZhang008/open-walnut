@@ -310,6 +310,10 @@ export interface UsePanelThreadsArgs {
   send: Dispatch;
   interruptSend: Dispatch;
   composer: ComposerProbe;
+  /** Esc's composer when Tree Mode's split has a second one (useThreadStack). */
+  escapeProbe?: ComposerProbe;
+  /** Cmd+[ / Cmd+] on the panel (useTreeSplit fills it). */
+  onPairMove?: (dir: -1 | 1) => boolean;
   focusComposer: () => void;
 }
 
@@ -418,6 +422,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     sessionId, tree, anchors: store.anchors, hiddenKeys, metaIndex: meta.index, panelRef: args.panelRef,
     stackView: viewMode === 'stack', composer: args.composer, toast, focusComposer: args.focusComposer,
     historyComplete, keepPending, answeredAtOf,
+    ...(args.escapeProbe ? { escapeProbe: args.escapeProbe } : {}),
+    ...(args.onPairMove ? { onPairMove: args.onPairMove } : {}),
   });
   const actions = useThreadActions({
     sessionId, tree, meta, toast, nav: stack.bridge,

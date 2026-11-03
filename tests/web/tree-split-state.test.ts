@@ -1,0 +1,239 @@
+/**
+ * Tree Mode's split screen (design 4, the path bar): the pure rules in
+ * web/src/utils/tree-split-state.ts and the path bar's model
+ * (web/src/components/sessions/tree-path-model.ts). The pair is (left, right) =
+ * (trail[k-1], trail[k]); Cmd+[ / Cmd+] move it one level, a segment click puts
+ * that segment on the right, a pick from a level's list switches it and cuts
+ * the levels right of it, a close leaves one page, a narrow pane never splits.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, barShown, closeHalfTarget, isPrefix, isTreeSplitRecord, levelHeading, levelKeys,
+  levelPickMoves, pairChordDir, pairMoveTarget, readOnlyLandings, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf,
+} from '@/utils/tree-split-state';
+import { pathBarHeading, pathBarLevelItems, pathBarSegments } from '@/components/sessions/tree-path-model';
+import { panelHistoryOf } from '@/utils/find-scope';
+import { ROOT_THREAD_KEY, type ThreadNode, type ThreadTree } from '@/utils/thread-tree';
+import type { ThreadMetaIndex } from '@/utils/thread-meta';
+
+/** Main > 6 > 6.1 > 6.1.2, with siblings 4 (beside 6), 6.2 (beside 6.1), 6.1.1 (beside 6.1.2). */
+function fixtureTree(): ThreadTree {
+  const spec: Array<{ key: string; parentKey?: string; head: string; label: string }> = [
+    { key: 'k4', parentKey: ROOT_THREAD_KEY, head: 'h4', label: 'Pod creation implies access' },
+    { key: 'k6', parentKey: ROOT_THREAD_KEY, head: 'h6', label: 'Who may impersonate' },
+    { key: 'k61', parentKey: 'k6', head: 'h61', label: 'Same namespace' },
+    { key: 'k62', parentKey: 'k6', head: 'h62', label: 'Cross namespace' },
+    { key: 'k611', parentKey: 'k61', head: 'h611', label: 'Edit role' },
+    { key: 'k612', parentKey: 'k61', head: 'h612', label: 'Binding as resource policy' },
+  ];
+  const root: ThreadNode = {
+    key: ROOT_THREAD_KEY, parent: '', depth: 0, hue: 0, topIndex: -1, headId: '', at: 0, label: '', turnIds: [], childKeys: [],
+  };
+  const byKey = new Map<string, ThreadNode>([[ROOT_THREAD_KEY, root]]);
+  spec.forEach((s, i) => {
+    const parent = byKey.get(s.parentKey!)!;
+    const node: ThreadNode = {
+      key: s.key, parent: `m-${s.key}`, parentKey: s.parentKey, depth: parent.depth + 1, hue: 152, topIndex: 0,
+      headId: s.head, at: i + 1, label: s.label, turnIds: [s.head], childKeys: [],
+    };
+    byKey.set(s.key, node);
+    parent.childKeys.push(s.key);
+  });
+  return { threads: [...byKey.values()], byKey } as unknown as ThreadTree;
+}
+
+const tree = fixtureTree();
+const NONE: ReadonlySet<string> = new Set();
+const labels = new Map([['k4', '4'], ['k6', '6'], ['k61', '6.1'], ['k62', '6.2'], ['k611', '6.1.1'], ['k612', '6.1.2']]);
+const FULL = [ROOT_THREAD_KEY, 'k6', 'k61', 'k612'];
+
+describe('the trail the path bar shows', () => {
+  it('keeps the deeper levels while the page path is the start of it', () => {
+    expect(trailFor(FULL, [ROOT_THREAD_KEY, 'k6'])).toEqual(FULL);
+    expect(trailFor(FULL, FULL)).toEqual(FULL);
+    expect(trailFor(FULL, [ROOT_THREAD_KEY])).toEqual(FULL);
+  });
+  it('is cut back to the path once the reader goes somewhere else', () => {
+    expect(trailFor(FULL, [ROOT_THREAD_KEY, 'k6', 'k62'])).toEqual([ROOT_THREAD_KEY, 'k6', 'k62']);
+    expect(trailFor(FULL, [ROOT_THREAD_KEY, 'k6', 'k61', 'k612', 'pending:x'])).toEqual([...FULL, 'pending:x']);
+    expect(isPrefix(['a'], ['a', 'b'])).toBe(true);
+    expect(isPrefix(['a', 'b'], ['a'])).toBe(false);
+  });
+  it('round-trips through head ids, stopping at a page the tree does not hold', () => {
+    expect(trailHeadsOf(tree, FULL)).toEqual(['h6', 'h61', 'h612']);
+    expect(trailHeadsOf(tree, [...FULL, 'pending:x'])).toEqual(['h6', 'h61', 'h612']);
+    expect(trailKeysOf(tree, ['h6', 'h61', 'h612'], NONE)).toEqual(FULL);
+  });
+  it('stops at a head that is gone, hidden, or not a child of the level before', () => {
+    expect(trailKeysOf(tree, ['h6', 'gone', 'h612'], NONE)).toEqual([ROOT_THREAD_KEY, 'k6']);
+    expect(trailKeysOf(tree, ['h6', 'h61', 'h612'], new Set(['k61']))).toEqual([ROOT_THREAD_KEY, 'k6']);
+    expect(trailKeysOf(tree, ['h6', 'h611x'], NONE)).toEqual([ROOT_THREAD_KEY, 'k6']);
+    expect(trailKeysOf(tree, ['h4', 'h61'], NONE)).toEqual([ROOT_THREAD_KEY, 'k4']);
+    // Before the tree is known (a reload), nothing resolves: Main alone, nothing written.
+    expect(trailKeysOf({ threads: [], byKey: new Map() } as unknown as ThreadTree, ['h6'], NONE)).toEqual([ROOT_THREAD_KEY]);
+  });
+});
+
+describe('split or single', () => {
+  it('splits only when chosen, with room for two halves, below Main', () => {
+    expect(splitShown({ split: true, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
+    expect(splitShown({ split: true, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
+    expect(splitShown({ split: true, width: 0, depth: 3 })).toBe(false);
+    expect(splitShown({ split: true, width: 1400, depth: 0 })).toBe(false);
+    expect(splitShown({ split: false, width: 1400, depth: 2 })).toBe(false);
+  });
+  it('shows the bar in Tree Mode once there is a level besides Main', () => {
+    expect(barShown({ stackMode: true, trailLength: 2 })).toBe(true);
+    expect(barShown({ stackMode: true, trailLength: 1 })).toBe(false);
+    expect(barShown({ stackMode: false, trailLength: 4 })).toBe(false);
+  });
+  it('marks the pair L and R, or the single page only', () => {
+    expect(segmentRoles(4, 3, true)).toEqual([null, null, 'L', 'R']);
+    expect(segmentRoles(4, 1, true)).toEqual(['L', 'R', null, null]);
+    expect(segmentRoles(4, 3, false)).toEqual([null, null, null, 'only']);
+    expect(segmentRoles(4, 0, false)).toEqual(['only', null, null, null]);
+  });
+});
+
+describe('moving the pair', () => {
+  it('Cmd+[ / Cmd+] move one level and stop at the ends (Main is at most the left half)', () => {
+    expect(pairMoveTarget(4, 3, -1, true)).toBe(2);
+    expect(pairMoveTarget(4, 2, 1, true)).toBe(3);
+    expect(pairMoveTarget(4, 3, 1, true)).toBeNull();
+    expect(pairMoveTarget(4, 1, -1, true)).toBeNull();
+    // Single: the page itself moves, down to Main.
+    expect(pairMoveTarget(4, 1, -1, false)).toBe(0);
+    expect(pairMoveTarget(4, 0, -1, false)).toBeNull();
+  });
+  it('a segment click puts that segment on the right, Main pairs with level 1', () => {
+    expect(segmentTarget(4, 2, true)).toBe(2);
+    expect(segmentTarget(4, 0, true)).toBe(1);
+    expect(segmentTarget(4, 0, false)).toBe(0);
+    expect(segmentTarget(4, 3, false)).toBe(3);
+    expect(segmentTarget(4, 9, true)).toBe(3);
+  });
+  it('closing the left half keeps the right page, closing the right shows its parent', () => {
+    expect(closeHalfTarget('L', 3)).toBe(3);
+    expect(closeHalfTarget('R', 3)).toBe(2);
+    expect(closeHalfTarget('R', 1)).toBe(0);
+  });
+  it('reads Cmd+[ / Cmd+] on a Mac and Ctrl elsewhere, and nothing else', () => {
+    const k = (key: string, m: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) => ({
+      key, code: key === '[' ? 'BracketLeft' : key === ']' ? 'BracketRight' : 'KeyA', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...m,
+    });
+    expect(pairChordDir(k('[', { metaKey: true }), true)).toBe(-1);
+    expect(pairChordDir(k(']', { metaKey: true }), true)).toBe(1);
+    expect(pairChordDir(k('[', { ctrlKey: true }), true)).toBe(0);
+    expect(pairChordDir(k('[', { ctrlKey: true }), false)).toBe(-1);
+    expect(pairChordDir(k(']', { metaKey: true, shiftKey: true }), true)).toBe(0);
+    expect(pairChordDir(k('[', { metaKey: true, altKey: true }), true)).toBe(0);
+    expect(pairChordDir(k('[', {}), true)).toBe(0);
+    expect(pairChordDir(k('a', { metaKey: true }), true)).toBe(0);
+  });
+});
+
+describe('a level\'s list', () => {
+  it('lists the siblings under the same parent; Main\'s and level 1\'s are the questions on Main', () => {
+    expect(levelKeys(tree, FULL, 0, NONE)).toEqual(['k4', 'k6']);
+    expect(levelKeys(tree, FULL, 1, NONE)).toEqual(['k4', 'k6']);
+    expect(levelKeys(tree, FULL, 2, NONE)).toEqual(['k61', 'k62']);
+    expect(levelKeys(tree, FULL, 3, NONE)).toEqual(['k611', 'k612']);
+    expect(levelKeys(tree, FULL, 2, new Set(['k62']))).toEqual(['k61']);
+  });
+  it('a pick cuts the levels right of it back to it (the path to the pick is the new trail)', () => {
+    // Picking 4 at level 1 from (6 | 6.1): the stack goes to Main > 4; the trail follows.
+    expect(trailFor(FULL, [ROOT_THREAD_KEY, 'k4'])).toEqual([ROOT_THREAD_KEY, 'k4']);
+    // Picking the segment's own question again changes nothing.
+    expect(trailFor(FULL, [ROOT_THREAD_KEY, 'k6', 'k61'])).toEqual(FULL);
+  });
+  it('picking the question a segment already shows moves nothing, in any segment, not only the right one', () => {
+    expect(levelPickMoves(FULL, 1, 'k6')).toBe(false);
+    expect(levelPickMoves(FULL, 2, 'k61')).toBe(false);
+    expect(levelPickMoves(FULL, 3, 'k612')).toBe(false);
+    expect(levelPickMoves(FULL, 1, 'k4')).toBe(true);
+    expect(levelPickMoves(FULL, 3, 'k611')).toBe(true);
+  });
+  it('names its level', () => {
+    expect(levelHeading(0, undefined)).toBe('Level 1 \u00b7 questions on Main');
+    expect(levelHeading(1, undefined)).toBe('Level 1 \u00b7 questions on Main');
+    expect(levelHeading(3, '6.1')).toBe('Level 3 \u00b7 questions on 6.1');
+    expect(pathBarHeading(FULL, 2, labels)).toBe('Level 2 \u00b7 questions on 6');
+  });
+});
+
+describe('the path bar model', () => {
+  const index: ThreadMetaIndex = new Map();
+  it('draws one segment per level with its number, title and role', () => {
+    const segs = pathBarSegments([...FULL, 'pending:x'], segmentRoles(5, 4, true), tree, index, labels);
+    expect(segs.map((s) => [s.number ?? '', s.title, s.role])).toEqual([
+      ['', 'Main conversation', null],
+      ['6', 'Who may impersonate', null],
+      ['6.1', 'Same namespace', null],
+      ['6.1.2', 'Binding as resource policy', 'L'],
+      ['', 'New question', 'R'],
+    ]);
+  });
+  it('lists a level with numbers and status, the segment\'s own question current', () => {
+    const items = pathBarLevelItems(tree, FULL, 2, { hidden: NONE, index, live: new Map([['k62', 'answering']]), unread: new Set(['k61']), labels });
+    expect(items.map((i) => [i.number, i.status, i.current, i.unread])).toEqual([
+      ['6.1', 'older', true, true],
+      ['6.2', 'answering', false, false],
+    ]);
+    // Main's list marks the level-1 question open below it.
+    expect(pathBarLevelItems(tree, FULL, 0, { hidden: NONE, index, live: new Map(), unread: NONE, labels }).find((i) => i.current)?.key).toBe('k6');
+  });
+});
+
+describe('the kept record', () => {
+  it('accepts its own shape only, and compares by value', () => {
+    expect(isTreeSplitRecord({ split: true, trail: ['h6'] })).toBe(true);
+    expect(isTreeSplitRecord({ split: 'yes', trail: [] })).toBe(false);
+    expect(isTreeSplitRecord({ split: true, trail: [1] })).toBe(false);
+    expect(isTreeSplitRecord(null)).toBe(false);
+    expect(sameTreeSplit(NO_TREE_SPLIT, { split: false, trail: [] })).toBe(true);
+    expect(sameTreeSplit({ split: true, trail: ['a'] }, { split: true, trail: ['b'] })).toBe(false);
+  });
+});
+
+describe('the left half never writes the panel\'s page landings', () => {
+  it('reads the panel\'s record and ignores its own writes (Esc back kept landing a third down the box)', () => {
+    const base = new Map([['k61', { scrollTop: 121, boxTop: 161, sentenceTop: 246 }]]);
+    const view = readOnlyLandings(base);
+    expect(view.get('k61')).toEqual({ scrollTop: 121, boxTop: 161, sentenceTop: 246 });
+    expect(view.has('k61')).toBe(true);
+    // The half's scroll memory saves a bare scrollTop under the page it shows.
+    view.set('k61', { scrollTop: 93 });
+    view.delete('k61');
+    expect(base.get('k61')).toEqual({ scrollTop: 121, boxTop: 161, sentenceTop: 246 });
+    expect(view.has('missing')).toBe(false);
+  });
+});
+
+describe('an Ask from a passage the tree does not know yet (an answer still streaming)', () => {
+  const path = [ROOT_THREAD_KEY, 'k6', 'k61'];
+  it('hangs on the page on screen: the right page by default', () => {
+    expect(askPlacement({ path })).toEqual({ parentKey: 'k61', base: path });
+  });
+  it('hangs on the page the passage is on when it names one: the split\'s left page', () => {
+    expect(askPlacement({ path, onScreenKey: 'k6' })).toEqual({ parentKey: 'k6', base: [ROOT_THREAD_KEY, 'k6'] });
+    expect(askPlacement({ path, onScreenKey: ROOT_THREAD_KEY })).toEqual({ parentKey: ROOT_THREAD_KEY, base: [ROOT_THREAD_KEY] });
+  });
+  it('a passage the tree knows keeps its own question', () => {
+    expect(askPlacement({ path, onScreenKey: 'k6', known: 'k4' }).parentKey).toBe('k4');
+  });
+  it('a pending page on top stands for the page on screen (no named page)', () => {
+    expect(askPlacement({ path: [...path, 'pending'], pendingParentKey: 'k61' })).toEqual({ parentKey: 'k61', base: path });
+  });
+});
+
+describe('a find from no chat of a split panel searches the main stack', () => {
+  const el = (name: string, inLeft: boolean) => ({ name, closest: (sel: string) => (sel === '.tree-split-left' && inLeft ? {} : null) });
+  it('skips the left half, which comes first in the DOM', () => {
+    const left = el('left', true);
+    const right = el('right', false);
+    const panel = { querySelectorAll: () => [left, right] } as unknown as Element;
+    expect(panelHistoryOf(panel)).toBe(right);
+    expect(panelHistoryOf({ querySelectorAll: () => [right] } as unknown as Element)).toBe(right);
+    expect(panelHistoryOf({ querySelectorAll: () => [left] } as unknown as Element)).toBeNull();
+  });
+});

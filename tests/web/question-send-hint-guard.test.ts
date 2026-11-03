@@ -85,5 +85,16 @@ describe('guard: every send filed under a question names the question', () => {
     // The panel's composer: every send is sendAnchored's.
     const panel = files.find((f) => f.rel === 'web/src/components/sessions/SessionPanel.tsx')!.src;
     expect(panel).toMatch(/const threadSend = threads\.sendAnchored;/);
+    // Tree Mode's split: the left half's composer posts through the panel's one
+    // composer send (engine switch, pending comments, then sendAnchored with
+    // the left page as its question), and its comment card through sendToQuestion.
+    expect(panel).toMatch(/const leftComposerSend = useMemo\(\(\) => withComments\(\(message, images\) => sendFor\(message, images, leftKeyRef\.current \?\? undefined\)\)/);
+    expect(panel).toMatch(/return sendAnchored\(message, images, false, targetKey\);/);
+    expect(panel).toMatch(/return threadSend\(message, images, interrupt, targetKey\);/);
+    expect(panel).toMatch(/onSend=\{leftComposerSend\}/);
+    const left = files.find((f) => f.rel === 'web/src/components/sessions/TreeSplitLeft.tsx')!.src;
+    expect(left).toMatch(/const ok = await onSend\(text, images\);/);
+    expect(left).toMatch(/sendToTarget: \(text: string, images\?: ImageAttachment\[\]\) => base\.sendToQuestion\(leftKey, text, images\)/);
+    expect(left).toMatch(/<ChatInput\s+onSend=\{send\}/);
   });
 });

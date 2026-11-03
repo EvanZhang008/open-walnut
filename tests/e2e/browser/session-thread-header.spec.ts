@@ -84,22 +84,27 @@ const headOf = (q: string) => buildDenseSession(Date.now()).ids.head[q]
 test.describe('stack chrome', () => {
   test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, DENSE_SESSION) })
 
-  test('depth 1 shows only back to Main; deeper pages put the path in the same row (C21)', async ({ page }) => {
+  test('the row is back + title at every depth; the path is Tree Mode\'s path bar above it (C21)', async ({ page }) => {
     const panel = await openDense(page)
     let header = await goTo(panel, 'point 1 change', 'Buffer flush order')
     const back = header.locator('.thread-stack-back')
     await expect(back).toHaveText('Main')
     await expect(back).toHaveAttribute('title', 'Back to Main conversation (Esc)')
+    // The path is never in the row: it is the path bar above the page.
     await expect(header.locator('nav[aria-label="Question path"]')).toHaveCount(0)
+    const bar = panel.locator('nav[aria-label="Question path"]')
+    await expect(bar.locator('.tree-path-title')).toHaveText(['Main conversation', 'Buffer flush order'])
     expect((await rect(header.locator('.thread-stack-row'))).h).toBe(36)
     header = await goTo(panel, 'point 21 change', /^Point 21:/)
-    const nav = header.locator('nav[aria-label="Question path"]')
-    await expect(nav).toBeVisible()
-    await expect(nav.locator('.thread-stack-crumb')).toHaveText(['Main', 'Buffer flush order', /^Point 11:/])
-    expect((await rect(nav)).y).toBeGreaterThanOrEqual((await rect(header.locator('.thread-stack-row'))).y)
+    await expect(header.locator('.thread-stack-back-text')).toHaveText(/^Point 11:/)
+    await expect(bar.locator('.tree-path-title')).toHaveText(['Main conversation', 'Buffer flush order', /^Point 11:/, /^Point 21:/])
+    await expect(bar.locator('.tree-path-seg').last()).toHaveAttribute('data-role', 'only')
+    expect((await rect(bar)).y + (await rect(bar)).h).toBeLessThanOrEqual((await rect(header.locator('.thread-stack-row'))).y + 1)
     expect((await rect(header.locator('.thread-stack-row'))).h).toBe(36)
-    await nav.locator('.thread-stack-crumb', { hasText: 'Buffer flush order' }).click()
+    await bar.locator('.tree-path-seg', { hasText: 'Buffer flush order' }).locator('.tree-path-seg-main').click()
     await expect(header.locator('.thread-stack-title')).toHaveText('Buffer flush order')
+    // The deeper levels stay on the path until the reader goes elsewhere.
+    await expect(bar.locator('.tree-path-title')).toHaveText(['Main conversation', 'Buffer flush order', /^Point 11:/, /^Point 21:/])
     await header.locator('.thread-stack-back').click()
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
   })
@@ -129,15 +134,14 @@ test.describe('stack chrome', () => {
     await expect(header.locator('.thread-stack-title')).toHaveText(/^Point 26:/)
     await menu.locator('[role="menuitem"]', { hasText: 'Buffer flush order' }).click()
     await expect(header.locator('.thread-stack-title')).toHaveText('Buffer flush order')
-    // 560 to 719px with a long path: the middle folds into `…`.
+    // 560 to 719px with a long path: the path bar keeps every level, the ones
+    // off screen down to their numbers, inside the column.
     panel = await openDense(page, 640)
-    const mid = await goTo(panel, 'point 26 change', /^Point 26:/)
-    const fold = mid.locator('.thread-stack-crumb--fold')
-    await expect(fold).toHaveText('…')
-    await fold.click()
-    const folded = page.locator('.thread-path-menu')
-    await expect(folded.locator('[role="menuitem"]')).toHaveText(['Buffer flush order', /^Point 11:/])
-    await fitsViewport(page, folded)
+    await goTo(panel, 'point 26 change', /^Point 26:/)
+    const bar = panel.locator('nav[aria-label="Question path"]')
+    await expect(bar).toHaveAttribute('data-narrow', 'true')
+    await expect(bar.locator('.tree-path-seg')).toHaveCount(5)
+    expect(await bar.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), 'path bar overflows').toBe(true)
   })
 
   test('rename is inline: double-click or `Rename…`, Enter saves, Esc cancels, empty restores (C24)', async ({ page, request }) => {
@@ -313,8 +317,8 @@ test.describe('stack chrome', () => {
       const block = await rect(header.locator('.thread-stack-title-block'))
       // The floor: a third of the row or 200px, whichever is smaller.
       expect(block.w).toBeGreaterThanOrEqual(Math.min(row.w * 0.34, 200) - 1)
-      const crumbs = header.locator('.thread-stack-crumbs')
-      if (await crumbs.count()) expect((await rect(crumbs)).w).toBeLessThanOrEqual(block.w)
+      const bar = panel.locator('nav[aria-label="Question path"]')
+      expect(await bar.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), 'path bar overflows').toBe(true)
       // A suggested page keeps its verdict label at every width (N12).
       header = await goTo(panel, 'late flush', 'Late flush risk')
       // N42: the same words as the drawer and Asked-from at every width, whole;

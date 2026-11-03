@@ -15,7 +15,7 @@ import {
 import { buildDenseSession, DENSE_EXPECTED_COUNTS } from '../e2e/browser/threads-fixture';
 import { shouldArmEdge } from '@/hooks/useDrawerEdgePeek';
 import { insidePeekRegion } from '@/hooks/useDrawerPeekClose';
-import { foldCrumbs, pathItems } from '@/components/sessions/ThreadStackCrumbs';
+import { pathItems } from '@/components/sessions/ThreadStackCrumbs';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
 import { lazyNameCandidates } from '@/components/sessions/ThreadTreeDrawer';
 import { pathToRoot } from '@/utils/thread-tree';
@@ -370,14 +370,6 @@ describe('drawer and stack chrome rules', () => {
     expect(insidePeekRegion(730, 100, r)).toBe(false);
     expect(insidePeekRegion(500, 33, r)).toBe(true);
     expect(insidePeekRegion(500, 770, r)).toBe(false);
-  });
-
-  it('the path folds its middle under 720px or past 3 segments (C22)', () => {
-    const items = ['Main', 'a', 'b', 'c'].map((label, i) => ({ key: String(i), label }));
-    expect(foldCrumbs(items.slice(0, 3), 900).folded).toEqual([]);
-    expect(foldCrumbs(items.slice(0, 3), 700).folded.map((i) => i.label)).toEqual(['a']);
-    expect(foldCrumbs(items, 1400).shown.map((i) => i.label)).toEqual(['Main', 'c']);
-    expect(foldCrumbs(items.slice(0, 2), 500).folded).toEqual([]);
   });
 
   it('path items name root Main and exclude the page itself (C21)', () => {

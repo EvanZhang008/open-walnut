@@ -21,7 +21,7 @@
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, mainComposer, mainPage, openThreadsSession, pinColumnWidth, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -48,7 +48,7 @@ async function boot(page: Page): Promise<void> {
 }
 
 async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
+  await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 async function resetSend(request: APIRequestContext): Promise<void> {
@@ -58,9 +58,9 @@ async function resetSend(request: APIRequestContext): Promise<void> {
 
 /** Wheel the paragraph into the middle of the box. */
 async function centreParagraph(page: Page, panel: Locator): Promise<void> {
-  const target = panel.locator(`[data-message-id="${PARAGRAPH_ROW}"]`)
+  const target = mainPage(panel).locator(`[data-message-id="${PARAGRAPH_ROW}"]`)
   await expect(target).toBeVisible()
-  await centreInHistory(page, panel, target, { maxStep: 600 })
+  await centreInHistory(page, mainPage(panel), target, { maxStep: 600 })
 }
 
 /** Wheel the message text holding `phrase` into the middle of the box. */
@@ -73,7 +73,7 @@ async function centreText(page: Page, panel: Locator, phrase: string): Promise<v
  *  own box focused. */
 async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
   await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  await expect(mainPage(panel).locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
   await expect(card).toBeVisible()
   await expect(card.locator('.thread-card-input')).toBeFocused()
@@ -96,12 +96,12 @@ async function backToPage(panel: Locator): Promise<void> {
  *  (2026-11-03), with no card. */
 async function askAbout(page: Page, panel: Locator, phrase: string, first?: string): Promise<void> {
   await centreParagraph(page, panel)
-  await passageRects(panel, phrase)
-  await selectPassage(page, panel, phrase)
+  await passageRects(mainPage(panel), phrase)
+  await selectPassage(page, mainPage(panel), phrase)
   if (first === undefined) {
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expectDepth(panel, 1)
-    await expect(panel.locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
+    await expect(mainPage(panel).locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
     await expect(panel.locator('.thread-card')).toHaveCount(0)
     await composer(panel).click()
     return
@@ -116,7 +116,7 @@ async function askAbout(page: Page, panel: Locator, phrase: string, first?: stri
 }
 
 function composer(panel: Locator): Locator {
-  return panel.locator('.chat-input-textarea').first()
+  return mainComposer(panel)
 }
 
 async function send(panel: Locator, text: string): Promise<void> {
@@ -169,7 +169,7 @@ test.describe('Question stack: asking and sending', () => {
   test('the first send writes the question once; its answer lands on its page, also after Esc mid-answer', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
-    const history = panel.locator('.session-history')
+    const history = mainPage(panel).locator('.session-history')
     await centreParagraph(page, panel)
     await passageRects(panel, PHRASE)
     await selectPassage(page, panel, PHRASE)
@@ -251,7 +251,7 @@ test.describe('Question stack: asking and sending', () => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     await askAbout(page, panel, PHRASE, 'is the rewrite atomic')
-    await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
+    await expect(mainPage(panel).locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
     const anchors = (await readRecord(request, SEND_SESSION)).threadAnchors ?? []
@@ -259,12 +259,13 @@ test.describe('Question stack: asking and sending', () => {
 
     // C59: the same words, selected again, open the existing page.
     await askAbout(page, panel, PHRASE)
-    await expect(panel.locator('.thread-same-passage')).toHaveText('You already asked about this passage.')
+    await expect(mainPage(panel).locator('.thread-same-passage')).toHaveText('You already asked about this passage.')
     // N35: the composer names the question it posts into.
     await expect(composer(panel)).toHaveAttribute('placeholder', /^Reply in “.+”…$/)
-    const pageTitle = (await panel.locator('.thread-stack-header .thread-stack-title').textContent()) ?? ''
+    // The page's title is the path bar's segment on screen (the split's right half has no title row).
+    const pageTitle = (await panel.locator('.tree-path-seg:is([data-role="R"], [data-role="only"]) .tree-path-title').textContent()) ?? ''
     expect(await composer(panel).getAttribute('placeholder')).toContain(pageTitle.slice(0, 20))
-    await expect(panel.locator('.session-history')).toContainText('is the rewrite atomic')
+    await expect(mainPage(panel).locator('.session-history')).toContainText('is the rewrite atomic')
     await send(panel, 'and if it fails halfway')
     await expect.poll(async () => ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(2)
     await page.keyboard.press('Escape')
@@ -274,8 +275,8 @@ test.describe('Question stack: asking and sending', () => {
 
     // A selection that only overlaps opens a new, unwritten page.
     await askAbout(page, panel, 'rewrites the index')
-    await expect(panel.locator('.thread-same-passage')).toHaveCount(0)
-    await expect(panel.locator('.thread-quote-head')).toContainText('rewrites the index')
+    await expect(mainPage(panel).locator('.thread-same-passage')).toHaveCount(0)
+    await expect(mainPage(panel).locator('.thread-quote-head')).toContainText('rewrites the index')
     await expect(composer(panel)).toHaveAttribute('placeholder', 'Ask about this passage…')
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
@@ -285,7 +286,7 @@ test.describe('Question stack: asking and sending', () => {
   test('a send names where it goes back to, right after the previous send, before history catches up (C58)', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
-    const history = panel.locator('.session-history')
+    const history = mainPage(panel).locator('.session-history')
     await askAbout(page, panel, PHRASE, 'orientation question one')
     await expect(history).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
@@ -313,6 +314,8 @@ test.describe('Question stack: asking and sending', () => {
     // Drafts never touch the server, so the dense fixture (with a real drawer) is safe here.
     await boot(page)
     let panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    // One page at a time, with its back button (a split's halves have none).
+    await pinColumnWidth(page, DENSE_SESSION, 860)
     await composer(panel).click()
     await composer(panel).fill('half a root thought')
     // Part of an asked passage: a partial overlap opens a new, unwritten page.
@@ -341,13 +344,14 @@ test.describe('Question stack: asking and sending', () => {
     await page.reload()
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    await pinColumnWidth(page, DENSE_SESSION, 860)
     await expect(composer(panel)).toHaveValue('half a root thought')
     const row = panel.locator('.thread-asked-row.is-draft')
     await expect(row).toBeVisible()
     await centreText(page, panel, phrase)
     await row.click()
     await expectDepth(panel, 1)
-    await expect(panel.locator('.thread-quote-head')).toContainText(phrase)
+    await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(phrase)
     await expect(composer(panel)).toHaveValue('a pending question draft')
     // Cleared, the page leaves nothing behind.
     await composer(panel).fill('')
@@ -361,7 +365,7 @@ test.describe('Question stack: asking and sending', () => {
   test('a parked follow-up files under its question, which reads failed; each failed page offers one Retry (N3, N4, N41, C68)', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, FAILED_SESSION, FAILED_TASK, FAILED_PASSAGES[1])
-    const history = panel.locator('.session-history')
+    const history = mainPage(panel).locator('.session-history')
     const rows = askedRows(panel)
     await expect(rows).toHaveCount(2)
     // N3: the parked row is the second question's follow-up, so root never shows
@@ -421,8 +425,8 @@ test.describe('Question stack: asking and sending', () => {
     await expect(rows.first()).not.toHaveAttribute('data-status', 'failed', { timeout: 60_000 })
     await rows.first().click()
     await expectDepth(panel, 1)
-    await expect(panel.locator('.thread-quote-head')).toContainText(FAILED_PASSAGES[0])
-    await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
+    await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(FAILED_PASSAGES[0])
+    await expect(mainPage(panel).locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     await shot(page, 'c68-retried')
   })
 
@@ -431,7 +435,7 @@ test.describe('Question stack: asking and sending', () => {
   async function askThreeDuringRoot(page: Page, request: APIRequestContext, tag: string): Promise<{ panel: Locator; history: Locator }> {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
-    const history = panel.locator('.session-history')
+    const history = mainPage(panel).locator('.session-history')
     // C49: a root turn the mock answers after 35s; three questions go out meanwhile.
     // (15s was not enough under machine load: the three Asks took 17s, so the root
     // answer ended first and the questions never met a running turn.) The long-turn

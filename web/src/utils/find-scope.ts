@@ -44,3 +44,16 @@ export function pointerOwnedElsewhere(el: Element): boolean {
   const panel = p.closest('.session-panel');
   return !!panel && panel !== el.closest('.session-panel');
 }
+
+/**
+ * The chat a find searches when the reader is in a session panel but not in one
+ * of its chats (focus on <body>, the last press on the panel's header or path
+ * bar): the panel's own timeline. Tree Mode's split left half comes first in
+ * the DOM, and a reader who pressed nowhere in it is reading the main stack.
+ */
+export function panelHistoryOf(panel: Pick<Element, 'querySelectorAll'>): Element | null {
+  for (const h of Array.from(panel.querySelectorAll('.session-history'))) {
+    if (!h.closest('.tree-split-left')) return h;
+  }
+  return null;
+}

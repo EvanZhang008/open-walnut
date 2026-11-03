@@ -1,26 +1,20 @@
 /**
- * The question path in the stack row (spec 5.3, depth >= 2): `Main / t1 / … /
- * parent`, in the SAME 36px row as the back button (it never adds a line).
- * Each segment is capped at 180px (120px in a narrow column) and ellipsized.
- * Narrower than 720px, or more than 3 segments: the middle ones fold into a
- * `…` button whose portalled menu lists them. Under 560px the header hides the
- * path and opens `ThreadPathMenu` (all ancestors, nearest first) from a long
- * press or right click on the back button instead.
+ * The question path as a menu: every ancestor of the page, nearest first. The
+ * stack row's back button opens it from a long press or a right click in a
+ * narrow column. The path itself is drawn by Tree Mode's path bar
+ * (ThreadPathBar.tsx), which replaced the crumbs that used to sit in this row.
  *
  * Menus follow web/src/AGENTS.md: portal to body, useMenuPlacement,
  * pointerdown stops at the portal, outside click exempts the other thread
  * portals.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import { ROOT_THREAD_KEY, type ThreadNode } from '@/utils/thread-tree';
 
-export const CRUMB_FOLD_WIDTH = 720;
-export const CRUMB_NARROW_SEGMENT = 120;
-export const CRUMB_SEGMENT = 180;
 const MENU_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .thread-drawer`;
 
 export interface PathItem {
@@ -34,13 +28,6 @@ export function pathItems(path: readonly ThreadNode[], index: ThreadMetaIndex): 
     key: n.key,
     label: n.key === ROOT_THREAD_KEY ? 'Main' : displayTitleOf(n, index).title,
   }));
-}
-
-/** Pure fold rule: which segments stay and which go into `…`. */
-export function foldCrumbs(items: readonly PathItem[], panelWidth: number): { shown: PathItem[]; folded: PathItem[]; foldAt: number } {
-  const fold = items.length > 2 && (panelWidth < CRUMB_FOLD_WIDTH || items.length > 3);
-  if (!fold) return { shown: [...items], folded: [], foldAt: -1 };
-  return { shown: [items[0], items[items.length - 1]], folded: items.slice(1, -1), foldAt: 1 };
 }
 
 export interface ThreadPathMenuProps {
@@ -101,49 +88,5 @@ export function ThreadPathMenu({ anchorEl, items, label, onPick, onClose }: Thre
       ))}
     </div>,
     document.body,
-  );
-}
-
-export interface ThreadStackCrumbsProps {
-  path: readonly ThreadNode[];
-  index: ThreadMetaIndex;
-  panelWidth: number;
-  onPopTo: (key: string) => void;
-}
-
-export function ThreadStackCrumbs({ path, index, panelWidth, onPopTo }: ThreadStackCrumbsProps) {
-  const items = useMemo(() => pathItems(path, index), [path, index]);
-  const { shown, folded, foldAt } = foldCrumbs(items, panelWidth);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const foldRef = useRef<HTMLButtonElement | null>(null);
-  const maxW = panelWidth < CRUMB_FOLD_WIDTH ? CRUMB_NARROW_SEGMENT : CRUMB_SEGMENT;
-
-  const segs = shown.map((it) => (
-    <button key={it.key || 'root'} type="button" className="thread-stack-crumb" style={{ maxWidth: maxW }}
-      title={it.key === ROOT_THREAD_KEY ? 'Main conversation' : it.label} onClick={() => onPopTo(it.key)}>
-      <span className="thread-stack-crumb-text">{it.label}</span>
-    </button>
-  ));
-  if (foldAt >= 0) {
-    segs.splice(foldAt, 0, (
-      <button key="fold" ref={foldRef} type="button" className="thread-stack-crumb thread-stack-crumb--fold"
-        aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`${folded.length} more`} title={folded.map((f) => f.label).join(' / ')}
-        onClick={() => setMenuOpen((o) => !o)}>
-        …
-      </button>
-    ));
-  }
-  return (
-    <nav className="thread-stack-crumbs" aria-label="Question path">
-      {segs.map((s, i) => (
-        <span key={i} className="thread-stack-crumb-slot">
-          {i > 0 && <span className="thread-stack-crumb-sep" aria-hidden="true">/</span>}
-          {s}
-        </span>
-      ))}
-      {menuOpen && (
-        <ThreadPathMenu anchorEl={foldRef.current} items={folded} label="Question path" onPick={onPopTo} onClose={() => setMenuOpen(false)} />
-      )}
-    </nav>
   );
 }

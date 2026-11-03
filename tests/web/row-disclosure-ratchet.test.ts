@@ -48,7 +48,6 @@ const NOT_ROW_STATE: Record<string, string> = {
   'components/sessions/SessionPinnedToc.tsx:open': 'the pinned-messages menu',
   'components/sessions/ThreadCommentCard.tsx:expanded': 'a comment card in the side thread, not a chat row',
   'components/sessions/ThreadMap.tsx:open': 'the thread map menu',
-  'components/sessions/ThreadStackCrumbs.tsx:menuOpen': 'the thread stack menu',
   'components/sessions/ThreadStackMenu.tsx:open': 'the thread stack menu',
 }
 

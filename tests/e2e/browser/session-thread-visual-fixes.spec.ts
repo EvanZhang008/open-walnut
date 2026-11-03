@@ -11,7 +11,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList, test,
+  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, pinColumnWidth, resetThreadsFixture, selectPassage, modePill, openQuestionList, test,
 } from './threads-helpers'
 
 const TASK = 'pw-task-threads-dense'
@@ -70,6 +70,8 @@ test.describe('question stack visual fixes', () => {
 
   test('a new question keeps its subtitle under its title; the Archive toast stays under the session header', async ({ page }) => {
     const panel = await openDense(page)
+    // The single page's title row (a split's half row has no title or subtitle).
+    await pinColumnWidth(page, DENSE_SESSION, 860)
     const phrase = await panel.evaluate((root) => {
       const rows = Array.from(root.querySelectorAll('.session-history .session-msg-assistant .markdown-body p'))
       const words = (rows[rows.length - 1]?.textContent ?? '').split(/\s+/).filter(Boolean)

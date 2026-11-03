@@ -40,7 +40,7 @@ async function fetchJoiningLoad(
   }
 }
 
-interface UseSessionHistoryReturn {
+export interface UseSessionHistoryReturn {
   messages: SessionHistoryMessage[];
   loading: boolean;
   /** Phase 2 (SSH/full fetch) still in progress — true between Phase 1 completion and Phase 2 completion */

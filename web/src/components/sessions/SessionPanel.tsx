@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { useNavigate } from 'react-router-dom';
@@ -153,6 +153,12 @@ import '@/styles/session-header-fit.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
 import { dropSavedColumn } from '@/utils/layout-record';
+import { useTreeSplit } from '@/hooks/useTreeSplit';
+import { ThreadPathBar } from './ThreadPathBar';
+import { TreeSplitLeft } from './TreeSplitLeft';
+import { TreeHalfContext, type TreeHalf } from './tree-half-context';
+import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
+import { createTimelineShare } from './timeline-share';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -848,6 +854,25 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
     },
   }), []);
   const handleComposerValue = useCallback((text: string) => { composerTextRef.current = text; }, []);
+  // Tree Mode's split screen has a second composer (the left half's): Esc reads
+  // the one that holds the focus, so words typed there keep the page too.
+  const leftComposerWrapRef = useRef<HTMLDivElement>(null);
+  const escapeProbe = useMemo(() => ({
+    focused: () => {
+      const el = document.activeElement;
+      return composerProbe.focused() || (!!el && el.tagName === 'TEXTAREA' && !!leftComposerWrapRef.current?.contains(el));
+    },
+    text: () => {
+      const el = document.activeElement;
+      if (el instanceof HTMLTextAreaElement && leftComposerWrapRef.current?.contains(el)) return el.value;
+      return composerProbe.text();
+    },
+  }), [composerProbe]);
+  /** Cmd+[ / Cmd+]: filled by useTreeSplit below (the stack registers the keys first). */
+  const pairMoveRef = useRef<((dir: -1 | 1) => boolean) | null>(null);
+  // The split's left page, read by the left composer's send (set below).
+  const leftKeyRef = useRef<string | null>(null);
+  const onPairMove = useCallback((dir: -1 | 1) => pairMoveRef.current?.(dir) ?? false, []);
   // Focus-only composer request (Ask about a passage / Ask here). Separate from
   // prefillNonce on purpose: the quote must NOT be written into the draft — it
   // rides the chip and is composed at send time — so the user's typed text stays.
@@ -889,10 +914,55 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
     send,
     interruptSend,
     composer: composerProbe,
+    escapeProbe,
+    onPairMove,
     focusComposer: focusComposerKeep,
   });
   const threadsApi = threads.api;
   const threadTree = threadsApi.tree;
+  // Tree Mode's split screen (design 4, the path bar): useTreeSplit.
+  const chatColRef = useRef<HTMLDivElement | null>(null);
+  const derivedAnswered = threadsApi.derived.answeredAt;
+  const answeredAtOf = useCallback((key: string) => derivedAnswered.get(key), [derivedAnswered]);
+  const treeSplit = useTreeSplit({
+    sessionId,
+    tree: threadTree,
+    hiddenKeys: threadsApi.hiddenKeys,
+    metaIndex: threadsApi.metaIndex,
+    stack: threads.stack.api,
+    stackMode: threads.stack.enabled,
+    record: panelView.treeSplit,
+    setRecord: panelView.setTreeSplit,
+    panelRef,
+    chatColRef,
+    markViewed: threadsApi.markViewed,
+    answeredAtOf,
+  });
+  pairMoveRef.current = treeSplit.moveBy;
+  leftKeyRef.current = treeSplit.leftKey;
+  // The panel's timeline publishes, the left half reads (timeline-share.ts).
+  const timelineShare = useMemo(() => createTimelineShare(), [sessionId]);
+  const treeLeftShown = treeSplit.splitShown && treeSplit.leftKey !== null;
+  const pathSegments = useMemo(
+    () => pathBarSegments(treeSplit.trail, treeSplit.roles, threadTree, threadsApi.metaIndex, treeSplit.labels),
+    [treeSplit.trail, treeSplit.roles, threadTree, threadsApi.metaIndex, treeSplit.labels],
+  );
+  const pathLevelItems = useCallback((j: number) => pathBarLevelItems(threadTree, treeSplit.trail, j, {
+    hidden: threadsApi.hiddenKeys, index: threadsApi.metaIndex, live: threadsApi.derived.live,
+    unread: threadsApi.unreadKeys, labels: treeSplit.labels,
+  }), [threadTree, treeSplit.trail, treeSplit.labels, threadsApi.hiddenKeys, threadsApi.metaIndex, threadsApi.derived.live, threadsApi.unreadKeys]);
+  const pathHeading = useCallback((j: number) => pathBarHeading(treeSplit.trail, j, treeSplit.labels), [treeSplit.trail, treeSplit.labels]);
+  const { closeHalf: closeTreeHalf, openSplit: openTreeSplit } = treeSplit;
+  const closeLeftHalf = useCallback(() => closeTreeHalf('L'), [closeTreeHalf]);
+  const closeRightHalf = useCallback(() => closeTreeHalf('R'), [closeTreeHalf]);
+  const rightNumber = treeSplit.labels.get(treeSplit.rightKey);
+  // What the panel's own timeline is in the split: the right half, or (single,
+  // with room for two) the page whose row offers Split.
+  const rightHalf = useMemo<TreeHalf | null>(() => {
+    if (treeLeftShown) return { side: 'R', ...(rightNumber ? { number: rightNumber } : {}), onClose: closeRightHalf };
+    if (treeSplit.barShown && treeSplit.wide && treeSplit.shownIndex >= 1) return { side: 'only', onSplit: openTreeSplit };
+    return null;
+  }, [treeLeftShown, rightNumber, closeRightHalf, treeSplit.barShown, treeSplit.wide, treeSplit.shownIndex, openTreeSplit]);
   const openComposerTarget = useCallback((key: string) => threadsApi.requestCard(key, 'composer-chip'), [threadsApi]);
   // × lets go of the quoted question only: an open card stays (opening one never set it).
   const clearQuote = threadsApi.clearQuote;
@@ -1148,6 +1218,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // Fresh storage key (v3): re-baseline everyone at the new default. The middle
   // content pane (file preview / diff) is the priority — chat is a side column.
   const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right');
+  // The chat column: the resizable width measures it while a view sits beside it,
+  // Tree Mode's split measures it always (useTreeSplit).
+  const chatPanelRef = chatPanel.panelRef as MutableRefObject<HTMLDivElement | null>;
+  const chatColCallbackRef = useCallback((el: HTMLDivElement | null) => {
+    chatColRef.current = el;
+    if (splitOpen) chatPanelRef.current = el;
+  }, [splitOpen, chatPanelRef]);
   // A chat the user hid comes back hidden (panelView.chatHidden); one the window hid does not.
   const [chatCollapsed, setChatCollapsed] = useState(() => panelView.chatHidden);
   // Was the collapse the WINDOW's decision (too narrow for both columns) or the
@@ -1771,27 +1848,30 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
    *  anchor + meta in ONE PATCH, the orientation line) is usePanelThreads'. */
   const threadSend = threads.sendAnchored;
   const sendAnchored = useCallback(async (
-    message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string,
   ): Promise<boolean> => {
     // A passage the quote pill held through dictation has served its purpose once
     // the user sends.
     releaseSelectionHold(panelRef.current);
-    return threadSend(message, images, interrupt);
+    return threadSend(message, images, interrupt, targetKey);
   }, [threadSend]);
 
   // Every send goes to THIS session. An "@" reference in the text is a pill the
   // agent receives (plus a server-appended reference card); the composer never
   // routes a message to another session — that is the agent's call.
-  const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
-    // An engine is picked for this message: it starts the task's new session on it.
+  // ONE send for a composer, the panel's or the split's left half (`targetKey`,
+  // its question): an engine picked for this message starts the task's new
+  // session on it, else the question wiring (usePanelThreads' sendAnchored).
+  const sendFor = useCallback(async (message: string, images: ImageAttachment[] | undefined, targetKey?: string) => {
     const switchOpts = engineSwitch.sendOptions;
     if (switchOpts) {
       const ok = await send(sessionId, message, images, switchOpts);
       if (ok) { engineSwitch.markSent(); engineSwitch.clear(); }
       return ok;
     }
-    return sendAnchored(message, images, false);
+    return sendAnchored(message, images, false, targetKey);
   }, [sendAnchored, send, sessionId, engineSwitch.sendOptions, engineSwitch.clear, engineSwitch.markSent]);
+  const handleSend = useCallback((message: string, images?: ImageAttachment[]) => sendFor(message, images), [sendFor]);
 
   // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
   // Waiting = deriveDisplayStatus's rule (a live process holds the prompt); a stopped
@@ -1844,6 +1924,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   }, [sessionId, claimComments, settleComments]);
   const handleComposerSend = useMemo(() => withComments(handleSend), [withComments, handleSend]);
   const handleInterruptSend = useMemo(() => withComments(handleInterruptSendRaw), [withComments, handleInterruptSendRaw]);
+  // The split's left half: the same rules into ITS question (useTreeSplit's leftKey).
+  const leftComposerSend = useMemo(() => withComments((message, images) => sendFor(message, images, leftKeyRef.current ?? undefined)), [withComments, sendFor]);
+  const leftInterruptSend = useMemo(() => withComments((message, images) => sendAnchored(message, images, true, leftKeyRef.current ?? undefined)), [withComments, sendAnchored]);
 
   const handleStopTurn = useCallback(() => {
     void stopTurn(sessionId);
@@ -1865,6 +1948,30 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // Phase is forwarded to SessionChatHistory for resume detection logic,
   // not for UI display in this panel.
   const taskPhase = (sessionTask?.phase ?? 'TODO') as TaskPhase;
+
+  // The split's left half's timeline props: one object while they hold (TreeSplitLeft is memo).
+  const leftHistory = useMemo(() => ({
+    sessionId,
+    engine: session?.engine,
+    phase: taskPhase,
+    initialPrompt: initialPromptText,
+    sessionCwd: session?.cwd,
+    sessionHost: session?.host,
+    chatLane: !!session?.lane?.startsWith('chat:'),
+    optimisticMessages: optimisticMsgs,
+    onEditQueued: handleEdit,
+    onDeleteQueued: handleDelete,
+    onRetryFailed: handleRetry,
+    folderGoneHistory: session?.cwdGone?.history,
+    onDismissFailed: dismissFailed,
+    onTaskClick: chatTaskClick,
+    onSessionClick,
+    onFileOpen: handleFileOpen,
+    onQuoteInChat: quoteInChat,
+    readTimeline: timelineShare,
+  }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs,
+    handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, chatTaskClick, onSessionClick,
+    handleFileOpen, quoteInChat, timelineShare]);
 
   // Header content — prefer the linked task title; fall back to session metadata.
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
@@ -2983,10 +3090,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}`}
+            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeLeftShown ? ' is-tree-split' : ''}`}
             data-time-view="chat"
             onClick={handleServiceLinkClick}
-            ref={splitOpen ? chatPanel.panelRef : undefined}
+            ref={chatColCallbackRef}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
             {/* The chat's own segment of the full-width bar: the left view's
@@ -3011,6 +3118,40 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
               );
             })()}
             {peekBarAlone && <PeekTabBar peek={peek} />}
+            {treeSplit.barShown && (
+              <ThreadPathBar
+                segments={pathSegments}
+                split={treeLeftShown}
+                narrow={treeSplit.narrowBar}
+                onSegment={treeSplit.goToSegment}
+                levelItems={pathLevelItems}
+                levelHeading={pathHeading}
+                onPick={treeSplit.pickAtLevel}
+              />
+            )}
+            {treeLeftShown && treeSplit.leftKey !== null && (
+              <IslandHostContext.Provider value={islandHost}>
+              <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
+              <TreeSplitLeft
+                historyKey={`${sessionId}:${rewindEpoch}:left`}
+                history={leftHistory}
+                leftKey={treeSplit.leftKey}
+                rightKey={treeSplit.rightKey}
+                {...(treeSplit.labels.get(treeSplit.leftKey) ? { number: treeSplit.labels.get(treeSplit.leftKey) } : {})}
+                onClose={closeLeftHalf}
+                composerWrapRef={leftComposerWrapRef}
+                mentionCwd={session?.cwd}
+                mentionHost={session?.host}
+                onSend={leftComposerSend}
+                onInterruptSend={leftInterruptSend}
+                onStop={handleStopTurn}
+                isStreaming={isStreaming}
+                sendBlocked={macSessionAway}
+                allowEmptySend={commentsStore.pending.length > 0}
+              />
+              </MessageAboutContext.Provider>
+              </IslandHostContext.Provider>
+            )}
         <div className="session-panel-body" ref={bodyRef}>
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} onOpenTask={chatTaskClick} className="xfer-links-panel" testId="session-transfer-links" />
@@ -3021,9 +3162,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
           <IslandHostContext.Provider value={islandHost}>
           <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
+          <TreeHalfContext.Provider value={rightHalf}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
+            publishTimeline={treeLeftShown ? timelineShare : undefined}
             engine={session?.engine}
             phase={taskPhase}
             initialPrompt={initialPromptText}
@@ -3059,6 +3202,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             onRequestComposerFocus={requestComposerFocus}
             onQuoteInChat={quoteInChat}
           />
+          </TreeHalfContext.Provider>
           </MessageAboutContext.Provider>
           </IslandHostContext.Provider>
         </div>

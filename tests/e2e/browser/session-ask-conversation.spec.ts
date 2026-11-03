@@ -27,7 +27,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  askInline, centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage, sessionPanel, switchView, test,
+  askInline, centreInHistory, mainComposer, mainPage, openThreadsSession, resetThreadsFixture, selectPassage, sessionPanel, switchView, test,
 } from './threads-helpers'
 import { buildTaggedSession, filler, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 
@@ -45,7 +45,7 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${dir}/${name}.png` })
 }
 
-const history = (panel: Locator) => panel.locator('.session-history')
+const history = (panel: Locator) => mainPage(panel).locator('.session-history')
 const card = (panel: Locator) => panel.locator('.thread-card')
 const foldLines = (panel: Locator) => history(panel).locator('[data-thread-fold]')
 /** The question's own bubble in the main timeline (not the card's copy). */
@@ -70,17 +70,17 @@ async function openInTree(page: Page): Promise<Locator> {
   // helper's default: take the pill to Tree Mode.
   await switchView(panel, 'stack')
   await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
-  await centreInHistory(page, panel, PHRASE, { tolerance: 20 })
+  await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
   return panel
 }
 
 const pill = (page: Page) => page.locator('[data-testid="quote-pin-pill"]')
-const stackDepth = (panel: Locator) => panel.locator('.thread-stack')
-const composer = (panel: Locator) => panel.locator('.session-panel-input .chat-input-textarea').first()
+const stackDepth = (panel: Locator) => mainPage(panel).locator('.thread-stack')
+const composer = (panel: Locator) => mainComposer(panel)
 
 /** "Ask inline" from Tree Mode: the column goes to Conversation Mode, the card opens. */
 async function askInlineFromTree(page: Page, panel: Locator): Promise<number> {
-  await selectPassage(page, panel, PHRASE)
+  await selectPassage(page, mainPage(panel), PHRASE)
   const before = (await place(panel)).top
   await askInline(page)
   await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
@@ -94,7 +94,7 @@ async function expectTreeAsk(page: Page, panel: Locator, depth: number, phrase: 
   await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
   await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
   await expect(card(panel)).toHaveCount(0)
-  await expect(panel.locator('.thread-quote-head')).toContainText(phrase)
+  await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(phrase)
   await expect(composer(panel)).toBeFocused()
 }
 
@@ -158,12 +158,12 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await card(panel).locator('.thread-card-close').click()
     await expect(card(panel)).toHaveCount(0)
     const line = foldLines(panel).last()
-    await centreInHistory(page, panel, line, { capRow: true })
+    await centreInHistory(page, mainPage(panel), line, { capRow: true })
     await line.locator('.thread-turn-fold').click()
     await expect(askedBubble(panel, QUESTION).first()).toBeVisible()
     await shot(page, '4-shown')
     const head = history(panel).locator('.thread-turn-head .thread-turn-fold[aria-expanded="true"]').first()
-    await centreInHistory(page, panel, head, { capRow: true })
+    await centreInHistory(page, mainPage(panel), head, { capRow: true })
     await head.click()
     await expect(askedBubble(panel, QUESTION)).toHaveCount(0)
     await expect(foldLines(panel)).toHaveCount(lines0 + 1)
@@ -188,8 +188,8 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await card(panel).locator('.thread-card-close').click()
     await expect(card(panel)).toHaveCount(0)
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
-    await centreInHistory(page, panel, PHRASE, { tolerance: 20 })
-    await selectPassage(page, panel, PHRASE)
+    await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
+    await selectPassage(page, mainPage(panel), PHRASE)
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expect(card(panel)).toBeVisible()
     await expect(card(panel).locator('.thread-card-input')).toHaveValue('half a question')
@@ -199,7 +199,7 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
   test('Ask here in Tree Mode goes one level down and stays in Tree Mode; asked again on that page\'s answer, one more level, never the main conversation', async ({ page }) => {
     const panel = await openInTree(page)
     // The pill names the view on screen as the current choice.
-    await selectPassage(page, panel, PHRASE)
+    await selectPassage(page, mainPage(panel), PHRASE)
     await pill(page).locator('[data-testid="quote-ask-mode-btn"]').click()
     await expect(pill(page).locator('[data-testid="quote-ask-tree"]')).toHaveClass(/is-current/)
     await expect(pill(page).locator('[data-testid="quote-ask-inline"]')).not.toHaveClass(/is-current/)
@@ -209,9 +209,9 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await expect(pill(page).locator('[data-testid="quote-ask-mode-btn"]')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(pill(page)).toHaveCount(0)
-    await centreInHistory(page, panel, PHRASE, { tolerance: 20 })
+    await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
     // On the main conversation: a page one level down, its composer focused.
-    await selectPassage(page, panel, PHRASE)
+    await selectPassage(page, mainPage(panel), PHRASE)
     await expectTreeAsk(page, panel, 1, PHRASE)
     await shot(page, '6-tree-ask-root')
     // Sent from that page and answered there, then asked again on a passage of
@@ -221,13 +221,13 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await composer(panel).press('Enter')
     const answer = `processed your message: ${QUESTION}`
     const answerRow = '[data-message-id][data-msg-role="assistant"]'
-    await expect(panel.locator(`.session-history ${answerRow}`, { hasText: answer })).toBeVisible({ timeout: 60_000 })
+    await expect(mainPage(panel).locator(`.session-history ${answerRow}`, { hasText: answer })).toBeVisible({ timeout: 60_000 })
     await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', '1')
-    await centreInHistory(page, panel, 'processed your message', { tolerance: 40 })
-    await selectPassage(page, panel, 'processed your message', answerRow)
+    await centreInHistory(page, mainPage(panel), 'processed your message', { tolerance: 40 })
+    await selectPassage(page, mainPage(panel), 'processed your message', answerRow)
     await expectTreeAsk(page, panel, 2, 'processed your message')
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
-    await expect(panel.locator('.thread-sliver-bar')).toHaveCount(2)
+    await expect(panel.locator('.tree-path-seg')).toHaveCount(3)
     await shot(page, '7-tree-ask-again')
     // Esc lets the unsent one go: back on the page it was asked from.
     await page.keyboard.press('Escape')
@@ -238,18 +238,18 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     const panel = await openInTree(page)
     await panel.locator('.thread-asked-row:not(.is-draft)', { hasText: TAGGED_TITLES.Q1 }).first().click()
     await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
-    await centreInHistory(page, panel, Q1_PHRASE, { tolerance: 20 })
-    await selectPassage(page, panel, Q1_PHRASE)
+    await centreInHistory(page, mainPage(panel), Q1_PHRASE, { tolerance: 20 })
+    await selectPassage(page, mainPage(panel), Q1_PHRASE)
     await expectTreeAsk(page, panel, 2, Q1_PHRASE)
-    await expect(panel.locator('.thread-sliver-bar')).toHaveCount(2)
+    await expect(panel.locator('.tree-path-seg')).toHaveCount(3)
   })
 
   test('Ask inline from a question\'s page in Tree Mode: the passage in its answer stays on screen beside the card', async ({ page }) => {
     const panel = await openInTree(page)
     await panel.locator('.thread-asked-row:not(.is-draft)', { hasText: TAGGED_TITLES.Q1 }).first().click()
     await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
-    await centreInHistory(page, panel, Q1_PHRASE, { tolerance: 20 })
-    await selectPassage(page, panel, Q1_PHRASE)
+    await centreInHistory(page, mainPage(panel), Q1_PHRASE, { tolerance: 20 })
+    await selectPassage(page, mainPage(panel), Q1_PHRASE)
     const before = (await place(panel, Q1_ROW)).top
     expect(Number.isFinite(before)).toBe(true)
     await askInline(page)
@@ -267,9 +267,9 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     const panel = await openInTree(page)
     await switchView(panel, 'linear')
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
-    await centreInHistory(page, panel, PHRASE, { tolerance: 20 })
+    await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
     // A plain Ask asks in the view on screen: the card.
-    await selectPassage(page, panel, PHRASE)
+    await selectPassage(page, mainPage(panel), PHRASE)
     await pill(page).locator('[data-testid="quote-ask-btn"]').click()
     await expect(card(panel)).toBeVisible()
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
@@ -277,15 +277,15 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await card(panel).locator('.thread-card-close').click()
     await expect(card(panel)).toHaveCount(0)
     // The caret's other choice: Tree Mode, a page one level below the main conversation.
-    await centreInHistory(page, panel, PHRASE, { tolerance: 20 })
-    await selectPassage(page, panel, PHRASE)
+    await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
+    await selectPassage(page, mainPage(panel), PHRASE)
     await pill(page).locator('[data-testid="quote-ask-mode-btn"]').click()
     await expect(pill(page).locator('[data-testid="quote-ask-inline"]')).toHaveClass(/is-current/)
     await pill(page).locator('[data-testid="quote-ask-tree"]').click()
     await expect(stackDepth(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
     await expect(card(panel)).toHaveCount(0)
-    await expect(panel.locator('.thread-quote-head')).toContainText(PHRASE)
+    await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(PHRASE)
     await shot(page, '9-ask-in-tree')
   })
 })

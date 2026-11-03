@@ -18,6 +18,25 @@ export function sessionPanel(page: Page, sessionId: string): Locator {
   return page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
 }
 
+/** The panel's own page: the whole timeline, or the RIGHT half of Tree Mode's
+ *  split screen (an Ask in a pane 900px or wider splits; the left half is the
+ *  page it was asked on, with its own timeline and composer). */
+export function mainPage(panel: Locator): Locator {
+  return panel.locator('.session-panel-body')
+}
+
+/** The panel's own composer (never the split's left half). */
+export function mainComposer(panel: Locator): Locator {
+  return panel.locator('.session-panel-input:not(.tree-split-input) .chat-input-textarea')
+}
+
+/** Pin a session's home column to `width` px. Under 900px Tree Mode never splits,
+ *  so a spec about the single page (its title row, its subtitle) keeps one. */
+export async function pinColumnWidth(page: Page, sessionId: string, width: number): Promise<void> {
+  await page.addStyleTag({ content: `.main-page-session-column:has(.session-panel[data-session-id="${sessionId}"]) {
+    flex: 0 0 ${width}px !important; width: ${width}px !important; min-width: ${width}px !important; max-width: ${width}px !important; }` })
+}
+
 /** The localStorage key the panel falls back to when a session has no saved view. */
 export const VIEW_MODE_DEFAULT_KEY = 'walnut:session-view.default'
 
@@ -340,8 +359,8 @@ export async function unfoldQuestions(panel: Locator): Promise<void> {
  *  user: in Tree Mode an Ask "should directly go to next level"). */
 export async function askHereThenTree(page: Page, panel: Locator, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
   await pill.locator('[data-testid="quote-ask-btn"]').click()
-  await expect(panel.locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+  await expect(mainPage(panel).locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
+  await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
 }
 
 /** Ask here inline (the card beside the passage, in Conversation Mode) from any

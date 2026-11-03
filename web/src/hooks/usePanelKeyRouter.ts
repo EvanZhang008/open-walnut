@@ -1,8 +1,9 @@
 /**
  * ONE window-level keydown dispatcher for every session panel (spec 5.5).
  *
- * Esc (pop a question page) and Cmd+Shift+E (toggle the question drawer) must
- * reach exactly ONE panel, with three or more side by side. Per-panel document
+ * Esc (pop a question page), Cmd+Shift+E (toggle the question drawer) and
+ * Cmd+[ / Cmd+] (move Tree Mode's pair along the path bar) must reach exactly
+ * ONE panel, with three or more side by side. Per-panel document
  * listeners would each fire; so every panel registers here and a single listener
  * picks the target:
  *   1. the registered panel containing document.activeElement;
@@ -20,12 +21,16 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { hasActiveModalOverlay } from './useModalOverlay';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { log } from '@/utils/log';
+import { pairChordDir } from '@/utils/tree-split-state';
 
 export interface PanelKeyHandlers {
   sessionId: string;
   /** Return true when the key was used (the router then prevents and stops it). */
   onEscape: (e: KeyboardEvent) => boolean;
   onToggleDrawer: (e: KeyboardEvent) => boolean;
+  /** Cmd+[ (-1) / Cmd+] (+1): true only while Tree Mode's path bar is on screen,
+   *  so the browser keeps Back / Forward everywhere else. */
+  onPairMove?: (dir: -1 | 1, e: KeyboardEvent) => boolean;
   /** Something in the panel would close on Esc (drawer, menu) even at the
    *  root page: fullscreen then leaves Esc to the panel. */
   hasEscapeLayer?: () => boolean;
@@ -155,10 +160,47 @@ function onFocusIn() {
   pressed = null;
 }
 
+/** A code editor, a terminal or a rich editor reads Cmd+[ itself (outdent, the
+ *  shell's own keys): the pair keys leave it alone. */
+const PAIR_KEY_EDITORS = '.cm-editor, .xterm, [contenteditable=""], [contenteditable="true"]';
+function inEditor(n: unknown): boolean {
+  const el = n as { closest?: (sel: string) => unknown } | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest(PAIR_KEY_EDITORS);
+}
+
+/**
+ * May the pair keys (Cmd+[ / Cmd+]) go to this panel? Only with focus inside it
+ * or on <body> (then the panel under the pointer); never from a code editor, a
+ * terminal or a rich editor, and never while focus is in a field outside every
+ * panel: there Cmd+[ is the browser's back, and the pointer resting on a panel
+ * must not take it.
+ */
+export function pairKeyAllowed(active: Node | null, body: Node | null, panel: ContainsLike, eventTarget: unknown): boolean {
+  if (inEditor(eventTarget) || inEditor(active)) return false;
+  if (!active || active === body) return true;
+  return panel.contains(active);
+}
+
+function onPairKey(e: KeyboardEvent, dir: -1 | 1) {
+  if (isImeKey(e) || e.defaultPrevented || hasActiveModalOverlay()) return;
+  const target = currentTarget();
+  if (!target) return;
+  if (!pairKeyAllowed(document.activeElement, document.body, target.el, e.target)) return;
+  const h = target.reg.handlers.current;
+  if (!h.onPairMove?.(dir, e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  log.info('threads', 'key routed', { sessionId: h.sessionId, key: dir < 0 ? 'pair-left' : 'pair-right' });
+}
+
 function onKeyDown(e: KeyboardEvent) {
   const isEsc = e.key === 'Escape';
   const isChord = !isEsc && isDrawerChord(e, isMacPlatform());
-  if (!isEsc && !isChord) return;
+  if (!isEsc && !isChord) {
+    const dir = pairChordDir(e, isMacPlatform());
+    if (dir !== 0) onPairKey(e, dir);
+    return;
+  }
   // The beep guard's own preventDefault (Mac app) is not a consumer: ask it.
   if (isEsc && !escapeIsFree({ defaultPrevented: escapeWasConsumedByOthers(e), isComposing: e.isComposing, keyCode: e.keyCode }, hasActiveModalOverlay())) return;
   if (isChord && (isImeKey(e) || e.defaultPrevented)) return;

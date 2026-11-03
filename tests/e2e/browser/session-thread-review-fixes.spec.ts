@@ -106,14 +106,16 @@ test.describe('Question stack review fixes', () => {
     // Push into Q9 (a mark on R5, far from the pin), then Esc back to root.
     const phrase = densePassage('Q9')
     const r = await hoverMark(page, panel, phrase)
-    const askedAt = r.top - (await panel.locator('.session-history').boundingBox())!.y
+    // On screen: a pop keeps the sentence where it was (landingTarget), also with
+    // Tree Mode's path bar now above the timeline.
+    const askedAt = r.top
     await page.mouse.click(r.left + 12, r.top + r.height / 2)
     await expectDepth(panel, 1)
     await page.waitForTimeout(500)
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
     await page.waitForTimeout(1200)
-    const landed = await passageTop(panel, phrase)
+    const landed = (await passageRects(panel, phrase))[0].top
     await shot(page, 'r1-esc-back-after-pin-jump')
     expect(Math.abs(landed - askedAt), `landing drift: asked ${askedAt}, landed ${landed}`).toBeLessThanOrEqual(8)
   })

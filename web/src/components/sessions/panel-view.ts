@@ -4,8 +4,9 @@
  * walnut no matter where include plugin, remember the state, like full store, file tab, tab
  * location"): the split view open beside the chat (Changed, Files, Terminal, Inbox, Web, Code,
  * Board), the file a click opened in Files, the service open in Web, the letter open in Inbox,
- * and whether the user hid the chat beside it. A panel that mounts again (a plugin reloaded, a
- * page reload, another page and back, the app restarted) shows it as it was left. The file the
+ * whether the user hid the chat beside it, and Tree Mode's split (tree-split-state.ts). A panel
+ * that mounts again (a plugin reloaded, a page reload, another page and back, the app
+ * restarted) shows it as it was left. The file the
  * explorer shows after browsing, its tree and its history are the explorer's own
  * (utils/file-view-state.ts); full screen is the tab's one state (hooks/fullscreen-owner.ts).
  *
@@ -17,6 +18,7 @@ import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react'
 import { usePageViewOf } from '@/utils/view-memory';
 import type { SessionSplitView } from './sessionSplitView';
 import type { WebViewRequest } from './SessionWebView';
+import { NO_TREE_SPLIT, isTreeSplitRecord, sameTreeSplit, type TreeSplitRecord } from '@/utils/tree-split-state';
 
 export const PANEL_VIEWS: readonly SessionSplitView[] = ['changed', 'files', 'terminal', 'code', 'inbox', 'web', 'board'];
 
@@ -39,6 +41,8 @@ export interface PanelViewRecord {
   web?: WebViewRequest | null;
   letter?: string | null;
   chatHidden?: boolean;
+  /** Tree Mode's split screen: split or single, and the path bar's levels (tree-split-state.ts). */
+  tree?: TreeSplitRecord;
 }
 
 const EMPTY: PanelViewRecord = { view: null };
@@ -68,10 +72,11 @@ export function isPanelView(v: unknown): v is PanelViewRecord {
     && (r.file === undefined || r.file === null || isFileTarget(r.file))
     && (r.web === undefined || r.web === null || isWebRequest(r.web))
     && (r.letter === undefined || r.letter === null || isStr(r.letter))
-    && (r.chatHidden === undefined || typeof r.chatHidden === 'boolean');
+    && (r.chatHidden === undefined || typeof r.chatHidden === 'boolean')
+    && (r.tree === undefined || isTreeSplitRecord(r.tree));
 }
 
-type Field = Exclude<keyof PanelViewRecord, 'chatHidden'>;
+type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree'>;
 
 /** One field's setter over the record, `useState` style (a value or an updater). */
 function fieldSetter<K extends Field>(set: Dispatch<SetStateAction<PanelViewRecord>>, key: K): Dispatch<SetStateAction<NonNullable<PanelViewRecord[K]> | null>> {
@@ -94,6 +99,13 @@ export function usePanelView(place: string) {
   const setChatHidden = useCallback((hidden: boolean) => {
     setRecord((prev) => ((prev.chatHidden ?? false) === hidden ? prev : { ...prev, chatHidden: hidden }));
   }, [setRecord]);
+  const setTreeSplit = useCallback((update: (prev: TreeSplitRecord) => TreeSplitRecord) => {
+    setRecord((prev) => {
+      const cur = prev.tree ?? NO_TREE_SPLIT;
+      const next = update(cur);
+      return sameTreeSplit(cur, next) ? prev : { ...prev, tree: next };
+    });
+  }, [setRecord]);
   return {
     activeView: record.view,
     fileViewTarget: record.file ?? null,
@@ -101,6 +113,8 @@ export function usePanelView(place: string) {
     inboxLetterId: record.letter ?? null,
     chatHidden: record.chatHidden === true,
     setChatHidden,
+    treeSplit: record.tree ?? NO_TREE_SPLIT,
+    setTreeSplit,
     ...setters,
   };
 }

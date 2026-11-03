@@ -1,7 +1,7 @@
 /* owner P3 */
 /*
  * Tree drawer + stack chrome (P4): the left-edge band, the
- * drawer overlay, tree rows, the stack row (back, crumbs, title, Done, More),
+ * drawer overlay, tree rows, the stack row (back, title, Done, More),
  * the thread menus and the resolved / suggested strip. Imported by
  * thread-stack.css; tokens from globals.css and the --thread-* foundation.
  * Contrast: titles use --fg (resolved: --fg-secondary) over the OPAQUE
@@ -256,19 +256,9 @@
 .thread-stack-back[data-icon-only="true"] { flex: none; justify-content: center; width: 26px; padding: 0; }
 /* Narrow: a short iOS style back label (N7), never wider than 28% or 110px. */
 .thread-stack-back[data-narrow="true"] { max-width: min(28%, 110px); padding: 0 5px 0 3px; }
-.thread-stack-back-text, .thread-stack-crumb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-stack-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-icon--back { transform: rotate(180deg); flex: none; }
 .thread-icon--down { transform: rotate(90deg); }
-/* The page's own title answers "where am I" and wins (N6): the path shrinks
-   first (a huge flex-shrink) and the title block keeps a readable floor. */
-.thread-stack-crumbs { display: flex; align-items: center; flex: 0 1000 auto; min-width: 0; max-width: 46%; overflow: hidden; }
-.thread-stack-crumb-slot { display: inline-flex; align-items: center; min-width: 0; }
-.thread-stack-crumb {
-  display: inline-flex; min-width: 0; padding: 2px 4px; border: 0; border-radius: 5px;
-  background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12.5px; cursor: pointer;
-}
-.thread-stack-crumb--fold { flex: none; }
-.thread-stack-crumb-sep { flex: none; padding: 0 1px; color: var(--fg-muted); }
 .thread-stack-title-block { flex: 1 1 0; min-width: min(34%, 200px); }
 .thread-stack-title-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .thread-stack-title {
@@ -290,7 +280,7 @@
 .thread-stack-done-split[data-split="true"] .thread-stack-done { border-radius: 7px 0 0 7px; }
 .thread-stack-done-caret { width: 20px; padding: 0; justify-content: center; border-left: 0; border-radius: 0 7px 7px 0; color: var(--fg-secondary); }
 .thread-stack-done:hover, .thread-stack-reopen:hover, .thread-stack-not-yet:hover, .thread-stack-done-caret:hover,
-.thread-stack-back:hover, .thread-stack-crumb:hover, .thread-stack-more:hover { background: var(--bg-hover); }
+.thread-stack-back:hover, .thread-stack-more:hover { background: var(--bg-hover); }
 .thread-stack-more {
   display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border: 0;
   border-radius: 7px; background: transparent; color: var(--fg-secondary); cursor: pointer;
@@ -303,12 +293,12 @@
 .session-panel-title-meta > :is(.thread-stack-more, .thread-stack-more-slot) { margin-block: -4px; }
 .thread-stack-more[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent-text); }
 .thread-stack-title-input { height: 24px; font-weight: 600; }
-:is(.thread-stack-back, .thread-stack-crumb, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
+:is(.thread-stack-back, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
   .thread-stack-done-caret, .thread-stack-more):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-:is(.thread-stack-back, .thread-stack-crumb, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
+:is(.thread-stack-back, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
   .thread-stack-done-caret, .thread-stack-more):focus:not(:focus-visible) { outline: none; }
 
-/* ── Thread menus (More, crumb fold, path, Done options): portalled, fixed,
+/* ── Thread menus (More, path, Done options, the path bar's levels): portalled, fixed,
    placed by useMenuPlacement (inline top/right/maxHeight). ── */
 .thread-menu {
   min-width: 190px; max-width: 320px; padding: 4px; overflow-y: auto; border: 1px solid var(--border);

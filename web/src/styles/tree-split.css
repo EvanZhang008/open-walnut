@@ -1,0 +1,256 @@
+/*
+ * Tree Mode's split screen (design 4, the path bar): the arrow-shaped path
+ * bar, the two halves and their rows. Tokens from globals.css.
+ *
+ * Layout: the bar is a flow sibling right under the panel's glass header (it
+ * clears it the way the panel's first flow child does), so nothing below it
+ * scrolls under the header: the bodies below take no header room
+ * (--sp-header-h: 0 for them). Split, the chat column is a grid:
+ *
+ *   [ chat bar (a view open beside the chat)    ]
+ *   [ path bar                                  ]
+ *   [ left half (timeline + composer) | body    ]
+ *   [                                 | composer]
+ *
+ * Single, the chat column stays `display: contents` and the bar is one more
+ * flex row of the panel.
+ */
+
+/* The path bar */
+.tree-path-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  margin-top: var(--sp-first-flow-top, calc(var(--sp-header-h, 76px) + 2px));
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: relative;
+  z-index: 2;
+}
+.session-panel-split.is-changed-open .tree-path-bar { margin-top: 0; }
+/* A column with the task tabs alone already starts below the header
+   (task-board.css, has-peek-bar): the bar under the tabs adds nothing. */
+.session-panel-chat-col.has-peek-bar > .tree-path-bar { margin-top: 0; }
+/* Nothing below the bar runs under the glass header any more. */
+.session-panel-chat-col.has-tree-bar > :is(.session-panel-body, .tree-split-left) {
+  --sp-header-h: 0px;
+  --sp-first-flow-top: 0px;
+}
+
+.tree-path-segs {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+.tree-path-seg {
+  --seg-bg: color-mix(in srgb, var(--fg) 5%, var(--bg));
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 44px;
+  height: 30px;
+  margin-left: -6px;
+  padding: 0 14px 0 18px;
+  background: var(--seg-bg);
+  color: var(--fg-secondary);
+  font-size: 13px;
+  clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%, 11px 50%);
+}
+.tree-path-seg[data-first] {
+  margin-left: 0;
+  padding-left: 8px;
+  border-radius: 8px 0 0 8px;
+  clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%);
+}
+/* The pages on screen keep their words longest; the others give way first. */
+.tree-path-seg[data-shown] {
+  --seg-bg: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  flex-shrink: 0.25;
+  color: var(--fg);
+  font-weight: 600;
+}
+.tree-path-seg-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tree-path-num {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent-text);
+  font: 600 11.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.tree-path-title {
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-path-bar[data-narrow] .tree-path-seg:not([data-shown]):not([data-first]) .tree-path-title { display: none; }
+.tree-path-bar[data-narrow] .tree-path-seg[data-first]:not([data-shown]) .tree-path-title { max-width: 44px; }
+.tree-path-role {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font: 700 10px/15px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+}
+.tree-path-role[data-role="only"] { padding: 0 5px; }
+.tree-path-caret {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.tree-path-caret[aria-expanded="true"] { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+:is(.tree-path-seg-main, .tree-path-caret):hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+:is(.tree-path-seg-main, .tree-path-caret, .thread-half-close, .thread-half-split):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tree-path-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tree-path-hint kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font: 500 10.5px/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+}
+.tree-path-hint span { margin-left: 3px; }
+
+/* A level's list (portalled, placed by useMenuPlacement) */
+.tree-path-menu { width: 340px; max-width: min(360px, calc(100vw - 16px)); }
+.tree-path-menu-heading { padding: 6px 8px 4px; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; }
+.tree-path-menu-empty { padding: 6px 8px 8px; color: var(--fg-muted); font-size: 12.5px; }
+.tree-path-menu-item[data-current] { background: var(--accent-subtle); }
+.tree-path-menu-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  min-width: 46px;
+  color: var(--fg-secondary);
+  font: 600 11.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.tree-path-menu-title { flex: 1 1 auto; }
+.tree-path-menu-status { flex: none; color: var(--fg-muted); }
+
+/* The split */
+.session-panel-chat-col.is-tree-split {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+/* Every child has its place: a child left to auto placement would open an
+   implicit row under the composer. Anything besides the five rows below (the
+   task peek, a later overlay) covers the whole column, as it does unsplit. */
+.session-panel-chat-col.is-tree-split > * { grid-area: 1 / 1 / -1 / -1; }
+.session-panel-chat-col.is-tree-split > .session-chat-bar { grid-area: 1 / 1 / 2 / -1; }
+.session-panel-chat-col.is-tree-split > .tree-path-bar { grid-area: 2 / 1 / 3 / -1; }
+.session-panel-chat-col.is-tree-split > .tree-split-left { grid-row: 3 / 5; grid-column: 1; }
+.session-panel-chat-col.is-tree-split > .session-panel-body { grid-row: 3; grid-column: 2; min-height: 0; }
+.session-panel-chat-col.is-tree-split > .session-panel-input { grid-row: 4; grid-column: 2; }
+
+.tree-split-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+.tree-split-left-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.tree-split-left-body .session-history { flex: 1; overflow-y: auto; padding-top: 8px; }
+.tree-split-left > .session-panel-input { flex: none; }
+
+/* A half's row: [L|R] 6.1 Answered ... [Archive] [More] [close] */
+.thread-half-row { gap: 8px; padding-left: 4px; }
+.thread-half-badge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font: 700 10.5px/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+}
+.thread-half-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font: 600 12.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.thread-half-status { flex: none; }
+.thread-half-gap { flex: 1 1 auto; min-width: 4px; }
+.thread-half-close, .thread-half-split {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.thread-half-close:hover, .thread-half-split:hover { background: var(--bg-hover); color: var(--fg); }
+.thread-stack-header[data-half] { box-shadow: inset 0 -1px 0 var(--border), inset 0 -2px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* Words for a screen reader only (the L / R badges' names). */
+.tree-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

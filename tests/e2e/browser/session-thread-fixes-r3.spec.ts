@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, installHighlightRules, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
+  centreInHistory, DENSE_SESSION, installHighlightRules, mainPage, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
@@ -191,33 +191,36 @@ test.describe('Slice 1 fixes, round 3', () => {
     const panel = await openDense(page, 720)
     await panel.locator('button[title="Expand to full screen"]').click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
-    const history = panel.locator('.session-history')
-    const topOf = async (phrase: string) => {
-      const r = (await passageRects(panel, phrase))[0]
-      return r.top - (await history.boundingBox())!.y
-    }
-    const note = panel.locator('.thread-same-passage')
+    // The sheet is wide enough for two halves, so each Ask splits it: the page
+    // asked on goes left, the new question is the panel's own page on the right.
+    const right = mainPage(panel)
+    const history = right.locator('.session-history')
+    // Where the sentence sits on SCREEN: a pop keeps it there (landingTarget),
+    // also when the path bar above the timeline came or went in between.
+    const topOf = async (phrase: string) => (await passageRects(right, phrase))[0].top
+    const note = right.locator('.thread-same-passage')
     const chain = ['Q6', 'Q17', 'Q24']
     const asked: number[] = []
     for (let i = 0; i < chain.length; i++) {
       const phrase = densePassage(chain[i])
-      await hoverMark(page, panel, phrase)
+      await hoverMark(page, right, phrase)
       await page.waitForTimeout(300)
       asked.push(await topOf(phrase))
-      await selectPassage(page, panel, phrase)
+      await selectPassage(page, right, phrase)
       // In Tree Mode, Ask here pushes the question as a page one level below the
       // page the passage is on: no detour through Conversation Mode, no card.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-      await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i + 1))
+      await expect(right.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i + 1))
       await expect(history).toHaveAttribute('data-view-mode', 'stack')
       await expect(panel.locator('.thread-card')).toHaveCount(0)
+      await expect(panel.locator('.tree-split-left')).toBeVisible()
       await expect(note).toHaveCount(1)
       await page.mouse.move(10, 10)
     }
     for (let i = chain.length - 1; i >= 0; i--) {
       await history.click({ position: { x: 5, y: 5 } }).catch(() => {})
       await page.keyboard.press('Escape')
-      await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i))
+      await expect(right.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i))
       await page.waitForTimeout(400)
       // The page it returns to looks as it was left: its note too (root has none).
       await expect(note).toHaveCount(i > 0 ? 1 : 0)

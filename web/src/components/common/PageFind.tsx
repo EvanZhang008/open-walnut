@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { READER_SCROLL_EVENT } from '@/components/sessions/phone-session-layer';
-import { installFindPointerTracking, isFindChord, lastPointerTarget } from '@/utils/find-scope';
+import { installFindPointerTracking, isFindChord, lastPointerTarget, panelHistoryOf } from '@/utils/find-scope';
 import { echoVisible, paintSelectionMatches, subscribeEcho } from '@/utils/selection-echo';
 import {
   PageFindController, buildFindIndex, makeRepaintScheduler, selectionNeedle,
@@ -39,7 +39,9 @@ function resolveScope(): Scope {
   const from = active && active !== document.body && !active.closest('.page-find') ? active : lastPointerTarget();
   // The chat the reader is in first: a panel can hold two (the side-question
   // drawer renders its own history before the main one).
-  const history = from?.closest('.session-history') ?? from?.closest('.session-panel')?.querySelector('.session-history');
+  // Pressed in no chat of a panel: its own timeline, never the split's left half.
+  const panel = from?.closest('.session-panel');
+  const history = from?.closest('.session-history') ?? (panel ? panelHistoryOf(panel) : null);
   if (history && visible(history)) return { root: history, kind: 'session' };
   return { root: document.body, kind: 'page' };
 }

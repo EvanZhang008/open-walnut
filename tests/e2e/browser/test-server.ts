@@ -16,7 +16,7 @@ import fsSync from 'node:fs'
 import zlib from 'node:zlib'
 // Question stack + tree drawer fixtures (slice 1): pure data, see threads-fixture.ts.
 import {
-  allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, MIDTURN_SESSION, STRICT_SESSION, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
+  allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, MIDTURN_SESSION, STRICT_SESSION, SPLIT_SESSION, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
 } from './threads-fixture'
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-seed'
@@ -2786,7 +2786,7 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION}`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session,${MIDTURN_SESSION},${STRICT_SESSION},${SPLIT_SESSION}`
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),

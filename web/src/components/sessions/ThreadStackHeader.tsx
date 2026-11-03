@@ -3,11 +3,15 @@
  * header, plus a 20px subtitle line only when the panel is >= 600px, so the
  * stack's own chrome stays <= 56px at every depth (C70).
  *
- *   [back] [path at depth >= 2] [title · Naming…] [Archive | caret] [More]
+ *   [back] [title, Naming...] [Archive | caret] [More] [Split]
  *
  * - back: `Main` or the parent title (max 34%, a short label under 560px, like an
  *   iOS back label), where a 500ms long press or a right click opens every
- *   ancestor, nearest first. At depth >= 2 (wide) the path replaces the label.
+ *   ancestor, nearest first. The path itself is Tree Mode's path bar
+ *   (ThreadPathBar), above the page.
+ * - a half of Tree Mode's split screen (tree-half-context.ts) gets the half row
+ *   instead: `[L|R] 6.1 Answered ... [Archive] [More] [close]`, the title being the
+ *   path bar's; a wide single page keeps this row and adds Split.
  * - subtitle: the question, indented to the title block's left edge (N16).
  * - title: `Naming…` is a flex:none sibling OUTSIDE the ellipsis span, so a
  *   long title is cut and `Naming…` never is (C74). Double-click renames inline.
@@ -16,15 +20,17 @@
  *   (or Alt+click) offers `Archive, back to start`. The word is never Done
  *   (2026-10-08, the user: "let's not have it done, just archived").
  */
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useSubtitleIndent } from '@/hooks/useSubtitleIndent';
 import type { ThreadStackHeaderProps } from '@/components/sessions/thread-ui-contract';
 import { ThreadConfirm } from '@/components/sessions/ThreadConfirm';
-import { ThreadArchiveIcon, ThreadChevronIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
+import { ThreadArchiveIcon, ThreadChevronIcon, ThreadCloseIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
 import { ThreadInlineRename } from '@/components/sessions/ThreadInlineRename';
-import { ThreadPathMenu, ThreadStackCrumbs, pathItems } from '@/components/sessions/ThreadStackCrumbs';
+import { ThreadPathMenu, pathItems } from '@/components/sessions/ThreadStackCrumbs';
+import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
+import { useTreeHalf, type TreeHalf } from '@/components/sessions/tree-half-context';
 import { ThreadStackMenu } from '@/components/sessions/ThreadStackMenu';
-import { displayTitleOf, metaOf, pluralFollowUps, TITLE_MAX, viewStatusOf } from '@/utils/thread-meta';
+import { displayTitleOf, metaOf, pluralFollowUps, TITLE_MAX, viewStatusOf, type ThreadViewStatus } from '@/utils/thread-meta';
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { PENDING_ROW_LABEL } from '@/utils/thread-stack-state';
 import '@/styles/thread-stack.css';
@@ -33,6 +39,7 @@ export const BACK_ICON_ONLY_WIDTH = 560;
 /** The subtitle shows at every width (N7): 36px row + 20px line keeps C70's 56px. */
 export const SUBTITLE_MIN_WIDTH = 0;
 const LONG_PRESS_MS = 500;
+type ThreadStackHeaderStatus = ThreadViewStatus;
 export const alsoDoneTitle = (n: number): string => `Also archive ${pluralFollowUps(n)}?`;
 
 type PathMenu = { kind: 'path' } | { kind: 'done' } | null;
@@ -43,7 +50,8 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
   const parent = pending ? path[path.length - 1] : path[path.length - 2];
   const depth = pending ? path.length : path.length - 1;
   const narrow = panelWidth > 0 && panelWidth < BACK_ICON_ONLY_WIDTH;
-  const showCrumbs = depth >= 2 && !narrow;
+  const half = useTreeHalf();
+  const inHalf = half && half.side !== 'only' ? half as HalfOnScreen : null;
   const [renaming, setRenaming] = useState(false);
   const [confirmDone, setConfirmDone] = useState<number>(0);
   const [menu, setMenu] = useState<PathMenu>(null);
@@ -63,7 +71,13 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
   }, [p.renameNonce, node]);
   useEffect(() => () => { if (press.current.timer) clearTimeout(press.current.timer); }, []);
 
-  if (!parent) return null;
+  if (!parent) {
+    return inHalf ? (
+      <div className="thread-stack-header" data-depth={0} data-half={inHalf.side}>
+        <HalfRow half={inHalf} label="Main conversation" />
+      </div>
+    ) : null;
+  }
   const parentIsRoot = parent.key === ROOT_THREAD_KEY;
   const parentTitle = parentIsRoot ? 'Main conversation' : displayTitleOf(parent, index).title;
   const backText = parentIsRoot ? 'Main' : parentTitle;
@@ -146,8 +160,59 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
   // Narrow with the three verdict controls: the back label would be cut to one
   // letter (N42), so the chevron stands alone; its aria-label and tooltip name
   // the parent, and a long press or right click still opens the path.
-  const backIconOnly = showCrumbs || (narrow && !!key && status === 'suggested');
+  const backIconOnly = narrow && !!key && status === 'suggested';
   const subtitle = panelWidth >= SUBTITLE_MIN_WIDTH && question ? question.split('\n').find((l) => l.trim()) : undefined;
+  const overlays = (
+    <>
+      {menu?.kind === 'path' && (
+        <ThreadPathMenu anchorEl={backRef.current} label="Question path" items={pathItems(pending ? [...path, path[0]] : path, index).reverse()}
+          onPick={p.onPopTo} onClose={() => setMenu(null)} />
+      )}
+      {menu?.kind === 'done' && key && (
+        <ThreadPathMenu anchorEl={caretRef.current} label="Archive options" items={[{ key: 'chain', label: 'Archive, back to start' }]}
+          onPick={() => { void actions.doneChain(key); }} onClose={() => setMenu(null)} />
+      )}
+      {confirmDone > 0 && key && (
+        <ThreadConfirm
+          anchorEl={doneRef.current}
+          title={alsoDoneTitle(confirmDone)}
+          confirmLabel="Archive all"
+          cancelLabel="Only this one"
+          neutral
+          onConfirm={() => { setConfirmDone(0); void actions.doneWithFollowUps(key); }}
+          onCancel={() => { setConfirmDone(0); void actions.done(key); }}
+          onDismiss={() => setConfirmDone(0)}
+        />
+      )}
+    </>
+  );
+  const menuButton = key ? (
+    <ThreadStackMenu
+      variant="page" threadKey={key} visibleDescendants={actions.visibleDescendantCount(key)} hiddenCount={0}
+      viewMode="stack" actions={actions} resolved={status === 'resolved'} onDone={() => runDone()}
+      onShowInTree={p.onShowInTree} onShowAllInOrder={p.onShowAllInOrder}
+      onBackToQuestions={() => {}} onShowHidden={() => {}} onRename={() => setRenaming(true)}
+    />
+  ) : null;
+  if (inHalf) {
+    // The half row: the title is the path bar's; it shows here only while renamed.
+    const rename = renaming && key ? (
+      <ThreadInlineRename initial={shown.title} max={TITLE_MAX} ariaLabel="Rename question" className="thread-stack-title-input"
+        onSave={(t) => { setRenaming(false); void actions.rename(key, t); }} onCancel={() => setRenaming(false)} />
+    ) : null;
+    // An Archive that only shows its icon: the row stays one line in half a sheet.
+    if (key && status !== 'resolved' && status !== 'suggested') action = doneButton('Archive', true);
+    return (
+      <div ref={headerRef} className="thread-stack-header" data-depth={depth} data-half={inHalf.side}>
+        <HalfRow half={inHalf} label={node ? undefined : PENDING_ROW_LABEL} title={shown.title}
+          status={node ? status : undefined} rename={rename}>
+          {action}
+          {menuButton}
+        </HalfRow>
+        {overlays}
+      </div>
+    );
+  }
   return (
     <div ref={headerRef} className="thread-stack-header" data-depth={depth} data-narrow={narrow ? 'true' : undefined} data-subtitle={subtitle ? 'true' : undefined}>
       <div className="thread-stack-row">
@@ -168,7 +233,6 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
           <ThreadChevronIcon size={12} className="thread-icon--back" />
           {!backIconOnly && <span className="thread-stack-back-text">{backText}</span>}
         </button>
-        {showCrumbs && <ThreadStackCrumbs path={pending ? [...path, path[path.length - 1]] : path} index={index} panelWidth={panelWidth} onPopTo={p.onPopTo} />}
         <div ref={titleRef} className="thread-stack-title-block" title={question}>
           {renaming && key ? (
             <ThreadInlineRename initial={shown.title} max={TITLE_MAX} ariaLabel="Rename question" className="thread-stack-title-input"
@@ -181,35 +245,56 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
           )}
         </div>
         {action}
-        {key && (
-          <ThreadStackMenu
-            variant="page" threadKey={key} visibleDescendants={actions.visibleDescendantCount(key)} hiddenCount={0}
-            viewMode="stack" actions={actions} resolved={status === 'resolved'} onDone={() => runDone()}
-            onShowInTree={p.onShowInTree} onShowAllInOrder={p.onShowAllInOrder}
-            onBackToQuestions={() => {}} onShowHidden={() => {}} onRename={() => setRenaming(true)}
-          />
+        {menuButton}
+        {half?.onSplit && (
+          <button type="button" className="thread-half-split" title="Split: the question it was asked from beside it"
+            aria-label="Split" onClick={half.onSplit}>
+            <SplitIcon />
+          </button>
         )}
       </div>
       {subtitle && <div className="thread-stack-subtitle" title={question} style={subPad !== null ? { paddingLeft: subPad } : undefined}>{subtitle}</div>}
-      {menu?.kind === 'path' && (
-        <ThreadPathMenu anchorEl={backRef.current} label="Question path" items={pathItems(pending ? [...path, path[0]] : path, index).reverse()}
-          onPick={p.onPopTo} onClose={() => setMenu(null)} />
-      )}
-      {menu?.kind === 'done' && key && (
-        <ThreadPathMenu anchorEl={caretRef.current} label="Archive options" items={[{ key: 'chain', label: 'Archive, back to start' }]}
-          onPick={() => { void actions.doneChain(key); }} onClose={() => setMenu(null)} />
-      )}
-      {confirmDone > 0 && key && (
-        <ThreadConfirm
-          anchorEl={doneRef.current}
-          title={alsoDoneTitle(confirmDone)}
-          confirmLabel="Archive all"
-          cancelLabel="Only this one"
-          neutral
-          onConfirm={() => { setConfirmDone(0); void actions.doneWithFollowUps(key); }}
-          onCancel={() => { setConfirmDone(0); void actions.done(key); }}
-          onDismiss={() => setConfirmDone(0)}
-        />
+      {overlays}
+    </div>
+  );
+}
+
+function SplitIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="2" y="3" width="12" height="10" rx="2" /><path d="M8 3v10" />
+    </svg>
+  );
+}
+
+type HalfOnScreen = TreeHalf & { side: 'L' | 'R' };
+
+const SIDE_NAME: Record<'L' | 'R', string> = { L: 'Left half', R: 'Right half' };
+
+/** One half's row: its badge, the question's label (or what the page is), its
+ *  status word, the page's own actions, and a close button back to one pane. */
+function HalfRow({ half, label, title, status, rename, children }: {
+  half: HalfOnScreen;
+  /** What the page is when it has no label: `Main conversation`, `New question`. */
+  label?: string;
+  title?: string;
+  status?: ThreadStackHeaderStatus;
+  rename?: ReactNode;
+  children?: ReactNode;
+}) {
+  const name = label ?? half.number ?? '';
+  return (
+    <div className="thread-stack-row thread-half-row" data-half={half.side}>
+      <span className="thread-half-badge" title={SIDE_NAME[half.side]} aria-hidden="true">{half.side}</span>
+      <span className="tree-sr-only">{SIDE_NAME[half.side]}: </span>
+      {rename ?? <span className="thread-half-name" title={title ?? name}>{name}</span>}
+      {status && <ThreadStatusWord status={status} className="thread-half-status" />}
+      <span className="thread-half-gap" />
+      {children}
+      {half.onClose && (
+        <button type="button" className="thread-half-close" title="Close this half" aria-label={`Close the ${SIDE_NAME[half.side].toLowerCase()}`} onClick={half.onClose}>
+          <ThreadCloseIcon size={12} />
+        </button>
       )}
     </div>
   );

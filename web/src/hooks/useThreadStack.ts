@@ -9,6 +9,7 @@
  * ONE row pipeline by `currentKey`. The pure rules live in thread-stack-state.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { askPlacement } from '@/utils/tree-split-state';
 import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
 import type { ThreadStackApi, ThreadStackNav } from '@/contexts/SessionThreadsContext';
 import type {
@@ -55,6 +56,12 @@ export interface UseThreadStackArgs {
    *  this holds AND the session has questions (or a pending page). */
   stackView: boolean;
   composer: ComposerProbe;
+  /** What Esc reads instead of `composer` when a second composer can hold the
+   *  focus (Tree Mode's split: the left half's). The draft flush on a navigation
+   *  always reads `composer`, the one that writes into the page on screen. */
+  escapeProbe?: ComposerProbe;
+  /** Cmd+[ / Cmd+] (Tree Mode's path bar, useTreeSplit): true when used. */
+  onPairMove?: (dir: -1 | 1) => boolean;
   toast: ThreadToastApi;
   /** Focus the composer without moving the timeline. */
   focusComposer: () => void;
@@ -368,7 +375,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Ask on a passage (spec 5.4): the question already about this exact passage,
    *  or a pending page on top of the page the passage is on. Nothing is written. */
-  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean }) => {
+  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean; onScreenKey?: string }) => {
     const a = argsRef.current;
     const focus = opts?.focusComposer !== false;
     const same = findSamePassageThread(a.tree, a.anchors, a.hiddenKeys, { parent: target.msgId, quote: target.quote });
@@ -380,11 +387,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     // A passage in an answer that is still streaming (or not refetched yet) is
     // not in the tree: it is on the page on screen, so the question goes on top
     // of THAT page, never under Main (C4). A passage of a FILE hangs off root.
+    // The split's left half names its own page (`onScreenKey`): a passage there
+    // is on the right page's parent, not on the right page.
     const s = stateRef.current;
     const isFile = fileOfParent(target.msgId) !== null;
-    const onScreen = s.pending ? s.pending.parentKey : (s.path[s.path.length - 1] ?? ROOT_THREAD_KEY);
     const known = isFile ? ROOT_THREAD_KEY : a.tree.byRow.get(target.msgId)?.key;
-    const parentKey = known ?? onScreen;
+    const place = askPlacement({ path: s.path, pendingParentKey: s.pending?.parentKey, known, onScreenKey: opts?.onScreenKey });
+    const parentKey = place.parentKey;
     const pending: ThreadPendingPage = {
       pageKey: pendingPageKey(target.msgId, target.quote.exact),
       parentKey,
@@ -393,7 +402,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       ...(isFile && target.line ? { line: target.line } : {}),
       title: fallbackTitle(target.quote.exact),
     };
-    const base = known !== undefined ? stackPathOf(a.tree, parentKey) : (s.pending ? s.path.slice(0, -1) : s.path);
+    const base = known !== undefined ? stackPathOf(a.tree, parentKey) : place.base;
     navigate([...(base.length ? base : [ROOT_THREAD_KEY]), pending.pageKey], 'ask', pending);
     if (focus) a.focusComposer();
   }, [navigate]);
@@ -565,7 +574,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       // the panel: once the card is closed, the next Esc leaves fullscreen
       // (2026-10-03: it took three, the second one silently moving the target).
       if (!argsRef.current.stackView) return false;
-      const c = argsRef.current.composer;
+      const c = argsRef.current.escapeProbe ?? argsRef.current.composer;
       const decision = escapeDecision({ depth: stateRef.current.path.length - 1, composerFocused: c.focused(), composerText: c.text() });
       if (decision !== 'pop') return false;
       back('esc');
@@ -577,6 +586,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       return true;
     },
     hasEscapeLayer: () => activeRef.current && drawerModeRef.current !== 'closed',
+    onPairMove: (dir) => !!argsRef.current.onPairMove?.(dir),
   });
 
   const depth = state.path.length - 1;
