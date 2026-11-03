@@ -44,6 +44,13 @@ export interface UseThreadLandingArgs {
   jumpToPlace: (msgId: string, quote: SessionPinnedQuote | undefined, via: string, opts?: { armBack?: boolean }) => void;
   toast: ThreadToastApi;
   isAtBottom: MutableRefObject<boolean>;
+  /**
+   * Settles whatever of the page's layout follows the box's width a render late
+   * (the question map's gutter), called before any landing measures. A landing
+   * is exact only against the layout the reader will see: one measured under a
+   * gutter that changes a frame later is off by the rewrap (C4).
+   */
+  settleLayout?: () => void;
 }
 
 function prefersReducedMotion(): boolean {
@@ -206,13 +213,19 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     // Mode does not replay it) and otherwise ignored.
     if (targetOnly) return;
     if (!enabled && !fresh) return;
+    // Every landing below measures or restores against the final layout. Only a
+    // path that lands settles it: one that returns leaves a gutter change to the
+    // map's own hold, which keeps the reading position.
+    const settle = () => argsRef.current.settleLayout?.();
     if (!fresh || !nav) {
       const rec = reenabled ? stack.landings.get(stack.currentKey) : undefined;
       if (!rec) return;
+      settle();
       argsRef.current.isAtBottom.current = false;
       el.scrollTop = rec.scrollTop;
       return holdScroll(el, rec.scrollTop);
     }
+    settle();
     argsRef.current.isAtBottom.current = false;
     if (nav.direction !== 'none') slide(el, nav.direction);
     if (nav.direction === 'pop') {

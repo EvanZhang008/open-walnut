@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useThreadMapCollapsed } from '@/hooks/useThreadMapCollapsed';
 import {
   MAP_PANEL_MIN_BOX, mapHasContent, mapPanelWidth, mapRows, mapShapeFor, type MapRowsInput, type ThreadMapShape,
@@ -16,6 +16,14 @@ export interface ThreadMapLayout {
   /** The box could hold the panel. */
   roomy: boolean;
   setCollapsed: (collapsed: boolean) => void;
+  /**
+   * Bring the gutter to the box's width NOW, before a landing measures the page.
+   * The width is state, fed by a ResizeObserver one render late; a commit that
+   * also resizes the box (the split's left half closing on a pop to the root)
+   * would otherwise land the passage under the old gutter, and the gutter that
+   * follows rewraps every row and moves it (C4: 22px in the full-screen sheet).
+   */
+  settle: () => void;
 }
 
 const NO_ROWS: TreeRow[] = [];
@@ -81,6 +89,8 @@ export function useThreadMapLayout(
   // the first frame cannot flash a padding it then takes back.
   const shape = visible ? mapShapeFor(width, collapsed) : null;
   const panelWidth = mapPanelWidth(width);
+  const now = useRef({ visible, collapsed, width });
+  now.current = { visible, collapsed, width };
 
   // Hold the reading position across a gutter change. The new gutter is already
   // in the DOM here, so the old one is put back for one measure, then removed.
@@ -111,6 +121,22 @@ export function useThreadMapLayout(
     if (Math.abs(after - before.top) >= 1) el.scrollTop += after - before.top;
   }, [containerRef, shape, panelWidth, width]);
 
+  // The gutter the next render will set, put in the DOM at once and recorded as
+  // what the DOM holds, so the hold above sees no move when that render comes.
+  const settle = useCallback(() => {
+    const el = containerRef.current;
+    const cur = now.current;
+    if (!el || !cur.visible) return;
+    const w = el.offsetWidth;
+    if (w === cur.width || w === 0) return;
+    const nextShape = mapShapeFor(w, cur.collapsed);
+    const nextWidth = mapPanelWidth(w);
+    applyGutter(el, nextShape, nextWidth);
+    last.current = { shape: nextShape, width: nextWidth, measured: true };
+    now.current = { ...cur, width: w };
+    setWidth(w);
+  }, [containerRef]);
+
   return {
     rows,
     shape,
@@ -118,5 +144,6 @@ export function useThreadMapLayout(
     boxWidth: width,
     roomy: width >= MAP_PANEL_MIN_BOX,
     setCollapsed,
+    settle,
   };
 }

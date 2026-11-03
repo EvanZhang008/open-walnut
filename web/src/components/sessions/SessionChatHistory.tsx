@@ -4142,7 +4142,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   });
   useThreadLanding({
     sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', containerRef, stack, tree: threadTree,
-    locatePassage, jumpToPlace, toast, isAtBottom,
+    locatePassage, jumpToPlace, toast, isAtBottom, settleLayout: threadMap.settle,
   });
 
   /** Conversation Mode: the label above a question's user row (the turn head)
