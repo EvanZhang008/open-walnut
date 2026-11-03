@@ -130,8 +130,29 @@ describe('Walnut\'s own words on a letter\'s record follow the letter language t
     }
   })
 
+  it('a mail item receipt has every sentence in every letter language; an error that came back stays as it came', async () => {
+    const { RECEIPT_WORDS } = await import('../../src/core/human-inbox/walnut-letters/receipt-words.js')
+    expect(Object.keys(RECEIPT_WORDS).sort()).toEqual([...LETTER_LANGUAGES].sort())
+    const keys = Object.keys(RECEIPT_WORDS.en).sort()
+    for (const lang of LETTER_LANGUAGES) expect(Object.keys(RECEIPT_WORDS[lang]).sort(), lang).toEqual(keys)
+    const render = (v: unknown) => typeof v === 'function' ? (v as (a: string) => string)('2026-11-02 05:00') : String(v)
+    for (const key of keys) {
+      const zh = render((RECEIPT_WORDS.zh as unknown as Record<string, unknown>)[key])
+      expect(languageDrift('Talk to the user in Chinese', zh, 8), `${key}: ${zh}`).not.toBe(true)
+      expect(han(zh), key).toBeGreaterThan(0)
+      expect(han(render((RECEIPT_WORDS.en as unknown as Record<string, unknown>)[key])), key).toBe(0)
+    }
+    // The original error is kept whole, after Walnut's words.
+    const raw = 'ECONNRESET: socket hang up'
+    expect(RECEIPT_WORDS.en.raw(raw)).toBe(raw)
+    expect(RECEIPT_WORDS.zh.raw(raw).endsWith(raw)).toBe(true)
+  })
+
   it('every phrase table has every letter language, and its Chinese is Chinese', async () => {
-    const words = await import('../../src/core/human-inbox/walnut-letters/thread-words.js')
+    const words = {
+      ...await import('../../src/core/human-inbox/walnut-letters/thread-words.js'),
+      ...await import('../../src/core/human-inbox/walnut-letters/receipt-words.js'),
+    }
     // The phrase functions (a label table such as USER_KIND_LABELS has its own test above).
     const tables = (Object.entries(words) as Array<[string, Record<string, unknown>]>)
       .filter(([, t]) => typeof t.en === 'function') as Array<[string, Record<string, (...a: string[]) => string>]>
@@ -230,6 +251,34 @@ describe('(e) Walnut words written onto a letter come from the phrase tables', (
       const text = files.find((x) => x.f === f)!.text
       expect(text, `${f} wraps a letter body: its words must come from walnut-letters`).toMatch(/walnut-letters\/(thread-words|languages)\.js/)
     }
+  })
+
+  it('a mail item receipt\'s reason is never English of its own', () => {
+    // item-execution.ts writes receipts; any file in the inbox code that sets a receipt reason counts.
+    const REASON = /\breason:\s*(['"`])((?:\\.|(?!\1).)*)\1/g
+    const hits: string[] = []
+    for (const { f, text } of outside.filter(({ f }) => f.startsWith('src/core/human-inbox/'))) {
+      for (const m of text.matchAll(REASON)) if (PROSE.test(own(m[2]!))) hits.push(`${f}: ${m[0].slice(0, 140)}`)
+    }
+    expect(hits, 'put the sentence in walnut-letters/receipt-words.ts; keep a returned error as raw(...)').toEqual([])
+  })
+
+  it('a receipt reason taken from an error goes through raw(), after Walnut\'s words', () => {
+    const text = files.find((x) => x.f === 'src/core/human-inbox/item-execution.ts')!.text
+    // An error text written straight into a receipt: `reason: outcome.message`, `reason: String(error)`.
+    const values = [...text.matchAll(/\breason:\s*([^,}\n]*)/g)].map((m) => m[1]!.trim())
+    // Allowed: Walnut's words (a phrase or raw(...)), and the parameter's type.
+    expect(values.filter((v) => !/\bwords\(\)/.test(v) && !/^(string|undefined)\b/.test(v)), 'wrap it: (await words()).raw(...)').toEqual([])
+  })
+
+  it('a stand-in title of an org thread is not English of its own', () => {
+    const FALLBACK = /(\|\||\?\?)\s*(['"`])([A-Za-z][a-z]*(?: [a-z]+)*)\2/g
+    const hits: string[] = []
+    for (const { f, text } of files.filter(({ f }) => /^src\/core\/org\/thread/.test(f))) {
+      // Words, not a state or a code ('needs'): capitalized or more than one word.
+      for (const m of text.matchAll(FALLBACK)) if (/^[A-Z]|\s/.test(m[3]!)) hits.push(`${f}: ${m[0]}`)
+    }
+    expect(hits, 'put the words in walnut-letters/receipt-words.ts (PICTURE_TITLE_WORDS)').toEqual([])
   })
 
   it('a thread turn Walnut writes onto a letter is not English of its own', () => {

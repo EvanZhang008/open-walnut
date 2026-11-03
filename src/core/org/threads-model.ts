@@ -39,6 +39,8 @@
  * store (threads-store.ts) runs them under the file lock.
  */
 import { userKindVerdict } from './user-kind.js';
+import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
+import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
 import crypto from 'node:crypto';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
@@ -191,10 +193,10 @@ function clip(s: string, max: number): string {
   return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
-/** Walnut's stand-in title: the first line with words in it, cut to a readable length. */
-export function fallbackTitle(text: string): string {
+/** Walnut's stand-in title: the first line with words in it, cut to a readable length; a picture alone is named in the letter language. */
+export function fallbackTitle(text: string, lang: LetterLang = 'en'): string {
   const line = text.split('\n').map((l) => l.replace(/^[>#*\-\s]+/, '').trim()).find(Boolean) ?? '';
-  return clip(line || 'A picture', 80);
+  return clip(line || PICTURE_TITLE_WORDS[lang](), 80);
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -291,6 +293,8 @@ export interface FileMessageInput {
   /** The node session it goes to (its answer is read there). */
   sid?: string;
   at: string;
+  /** The letter language, for Walnut's stand-in title (threads-store fills it). */
+  lang?: LetterLang;
 }
 
 export interface FileMessageResult {
@@ -334,7 +338,7 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   }
   const thread: OrgThread = {
     id: input.newThreadId && THREAD_ID_RE.test(input.newThreadId) ? input.newThreadId : newThreadId(),
-    title: fallbackTitle(text),
+    title: fallbackTitle(text, input.lang),
     state: 'new', messages: [message], createdAt: input.at, updatedAt: input.at, by: 'human',
     ...(target ? { follows: target.id } : {}),
   };
@@ -549,7 +553,7 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
 }
 
 /** Take one message out of a thread into a thread of its own (a wrong merge undone). */
-export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string): { file: ThreadsFile; thread: OrgThread; from: OrgThread } {
+export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string, lang: LetterLang = 'en'): { file: ThreadsFile; thread: OrgThread; from: OrgThread } {
   const cur = find(file, threadId);
   const msg = cur.messages.find((m) => m.id === messageId);
   if (!msg) throw new ThreadError('no_message', 404, `No message ${messageId} in thread ${threadId}.`);
@@ -562,10 +566,10 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
     if (prev) from.known = { ...from.known, through: prev.id }; else delete from.known;
   }
   // The first message names a thread Walnut titled: it follows the message that is now first.
-  if (!from.titled && from.messages.length) from.title = fallbackTitle(from.messages[0].text);
+  if (!from.titled && from.messages.length) from.title = fallbackTitle(from.messages[0].text, lang);
   const thread: OrgThread = {
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
-    title: fallbackTitle(msg.text), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
+    title: fallbackTitle(msg.text, lang), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
   };
   return { file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? from : t)), thread] }, thread, from };
 }

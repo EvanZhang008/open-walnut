@@ -33,7 +33,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
-import { LIVE_LATE_LINE, _setRewriteForTest, _settledForTest, liveCorrectionText, quoteLine, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
+import { LIVE_LATE_LINE, _setRewriteForTest, acceptRewrite, _settledForTest, liveCorrectionText, quoteLine, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 
 // The real turn's lines, in order; '' = a message that was only a tool call.
@@ -222,3 +222,23 @@ describe('the turn end after a live correction', () => {
     expect(await takeLiveCorrection('w6')).toBeUndefined();
   });
 });
+
+describe('the rewrite shown as the example is the line itself, in the rule language', () => {
+  const RULE = 'Talk to the user in Chinese.'
+  const LINE = 'The three new scans all fail on the old code and pass on the new code. Next I\'m running the related tests: mail items and threads.'
+  it('refuses the fast model\'s own reasoning (2026-11-03: it passed the old check)', () => {
+    // Simplified Chinese test data: "I am rewriting a progress line, turning the user's words into Chinese."
+    const reasoning = '我正在改写一行进度说明，把用户的话转成中文。 Wait, I should be careful: the instruction is to rewrite "the progress line the user gives" as one short line in Chinese.'
+    expect(acceptRewrite(RULE, LINE, reasoning)).toBeNull()
+    expect(acceptRewrite(RULE, LINE, `${reasoning.split(' Wait')[0]}\nsecond line`)).toBeNull()
+  })
+  it('takes a plain translation that keeps the line\'s own names', () => {
+    // "The three new scans all fail on the old code and pass on the new code; next I run the related tests: mail items and threads."
+    const good = '三条新扫描在旧代码上都失败、在新代码上通过；接下来跑相关测试：邮件条目和 threads。'
+    expect(acceptRewrite(RULE, LINE, `「${good}」`)).toBe(good)
+  })
+  it('refuses one still in the wrong language, or far longer than the line', () => {
+    expect(acceptRewrite(RULE, LINE, LINE)).toBeNull()
+    expect(acceptRewrite(RULE, 'Done.', '好的'.repeat(40))).toBeNull()
+  })
+})

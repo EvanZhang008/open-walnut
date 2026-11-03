@@ -13,6 +13,7 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
+import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
   emptyThreads, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadsFile, type ThreadWriter,
@@ -53,8 +54,9 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
 }
 
 export async function fileThreadMessage(taskId: string, input: FileMessageInput): Promise<FileMessageResult> {
+  const lang = input.lang ?? await letterLang();
   const res = await mutateThreads(taskId, (cur) => {
-    const r = fileMessage(cur, input);
+    const r = fileMessage(cur, { ...input, lang });
     return { file: r.file, out: r };
   });
   if (!res.duplicate) emit({ taskId, kind: 'filed', threadId: res.thread.id });
@@ -94,8 +96,9 @@ export async function mergeThread(taskId: string, fromId: string, intoId: string
 
 export async function splitThread(taskId: string, threadId: string, messageId: string, by: ThreadWriter): Promise<{ thread: OrgThread; from: OrgThread }> {
   const at = new Date().toISOString();
+  const lang = await letterLang();
   const res = await mutateThreads(taskId, (cur) => {
-    const r = splitThreadMessage(cur, threadId, messageId, by, at);
+    const r = splitThreadMessage(cur, threadId, messageId, by, at, undefined, lang);
     return { file: r.file, out: { thread: r.thread, from: r.from } };
   });
   emit({ taskId, kind: 'split', threadId: res.thread.id });

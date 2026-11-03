@@ -12,6 +12,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
+import { walnutLetterLanguage } from '../human-inbox/walnut-letters/languages.js';
 import { stripReferenceCards } from '../sessions/reference-cards.js';
 import {
   fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
@@ -129,6 +130,8 @@ export async function prepareThreadCapture(input: {
     ...(input.key ? { key: input.key } : {}),
     ...(input.sid ? { sid: input.sid } : {}),
     newThreadId: newThreadId(), messageId: newThreadMessageId(), at,
+    // The title the store will give a picture alone, in the letter language.
+    lang: await walnutLetterLanguage(),
   };
   // The same pure step the store runs, on the copy read now: the node is told what will be.
   const planned = fileMessage(cur, draft);

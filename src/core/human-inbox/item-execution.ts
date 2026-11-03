@@ -11,6 +11,11 @@ import { resolveTaskLaunchReadOnly } from '../sessions/task-launch-plan.js';
 import { humanActionRefusal } from '../../ops/human-action-policy.js';
 import { executeOp, getOp } from '../../ops/index.js';
 import { deliverLetterToOrigin } from './letter-ops.js';
+import { walnutLetterLanguage } from './walnut-letters/languages.js';
+import { RECEIPT_WORDS, type ReceiptWords } from './walnut-letters/receipt-words.js';
+
+/** Walnut's words on a receipt, in the letter language; an error that came back is kept as `raw`. */
+async function words(): Promise<ReceiptWords> { return RECEIPT_WORDS[await walnutLetterLanguage()]; }
 
 const active = new Map<string, Promise<InboxItemReceipt>>();
 /** A registry self-call rechecks the frozen task inside the actual start mutation. */
@@ -135,7 +140,7 @@ async function reconcileStart(saved: SavedItemPlan, requestId: string, observed?
     const dead = await itemWorkerDead(requestId);
     if (dead && attempt?.state === 'failed' && saved.plan.input.retryStart && saved.previousStartId === attempt.id) {
       return persistObservedStart(saved, observed, attempt, { status: 'failure', stage: 'finished', taskCreated: true,
-        execution: 'not_started', reason: 'The server stopped before recording this retry. Review the same task before confirming another start.',
+        execution: 'not_started', reason: (await words()).retryNotRecorded,
         recovery: ['retry_start', 'open_task'] });
     }
     if (dead && attempt && saved.plan.input.retryStart && saved.previousStartId === attempt.id && ['starting', 'unconfirmed'].includes(attempt.state)) {
@@ -144,18 +149,18 @@ async function reconcileStart(saved: SavedItemPlan, requestId: string, observed?
         && ledger.plans[r.planId]?.sourceKey === saved.sourceKey && r.intent === saved.plan.intent && r.input.goal === saved.plan.input.goal);
       const current = ledger.receipts[requestId];
       if (previous && current) {
-        const recovered = await persistStartRecoveryRefusal(saved, current, 'The server stopped before the recovery start outcome was recorded', observed, task);
+        const recovered = await persistStartRecoveryRefusal(saved, current, (await words()).recoveryOutcomeNotRecorded, observed, task);
         if (recovered) return recovered;
       }
     }
     return persistObservedStart(saved, observed, attempt, { status: dead && !attempt ? 'failure' : 'pending', execution: dead && !attempt ? 'not_started' : 'unconfirmed',
-      ...(dead && !attempt ? { stage: 'finished', taskCreated: true, reason: 'The server stopped before recording this start. Review the same task before confirming a retry.' } : {}),
+      ...(dead && !attempt ? { stage: 'finished', taskCreated: true, reason: (await words()).startNotRecorded } : {}),
       recovery: dead && !attempt ? ['retry_start', 'open_task'] : ['check_status', 'open_task'] });
   }
   if (['starting', 'unconfirmed'].includes(attempt.state) && await itemWorkerDead(requestId)) {
     return persistObservedStart(saved, observed, attempt, { status: 'failure', stage: 'finished', taskCreated: true, startAttemptId: attempt.id,
       execution: 'unconfirmed', code: 'start_recovery_required',
-      reason: 'The previous start outcome is unconfirmed. Nothing will be resent automatically. Only confirming a reviewed retry cancels the previous pending start before starting this same task again.',
+      reason: (await words()).startUnconfirmed,
       recovery: ['retry_start', 'check_status', 'open_task'] });
   }
   const started = attempt.state === 'started';
@@ -163,7 +168,7 @@ async function reconcileStart(saved: SavedItemPlan, requestId: string, observed?
   return persistObservedStart(saved, observed, attempt, { status: started ? 'success' : failed ? 'failure' : 'pending', taskCreated: true,
     stage: started || failed ? 'finished' : 'starting', startAttemptId: attempt.id,
     execution: started ? 'running' : failed ? 'not_started' : attempt.state === 'starting' ? 'starting' : 'unconfirmed',
-    ...(started ? { startedAt: attempt.at } : {}), reason: attempt.error?.slice(0, 500),
+    ...(started ? { startedAt: attempt.at } : {}), reason: attempt.error ? (await words()).raw(attempt.error.slice(0, 500)) : undefined,
     recovery: started ? ['open_task'] : failed ? ['retry_start', 'open_task'] : ['check_status', 'open_task'],
   });
 }
@@ -174,7 +179,7 @@ async function reconcileLateStart(saved: SavedItemPlan, observed: InboxItemRecei
   if (!attempt || attempt.id !== planned || observed.startAttemptId !== planned || !['started', 'failed'].includes(attempt.state)) return observed;
   const started = attempt.state === 'started';
   return persist(saved, observed.requestId, { status: started ? 'success' : 'failure', execution: started ? 'running' : 'not_started',
-    stage: 'finished', code: undefined, reason: attempt.error?.slice(0, 500), ...(started ? { startedAt: attempt.at } : {}),
+    stage: 'finished', code: undefined, reason: attempt.error ? (await words()).raw(attempt.error.slice(0, 500)) : undefined, ...(started ? { startedAt: attempt.at } : {}),
     recovery: started ? ['open_task'] : ['retry_start', 'open_task'] }, async current => {
     if (current.status !== 'failure' || current.code !== 'start_recovery_required' || current.revision !== observed.revision) return false;
     const fresh = await exactItemTask(task.id).catch(() => undefined);
@@ -199,27 +204,27 @@ export async function queryInboxItem(letterId: string, itemId: string, origin: s
     const saved = await getItemPlan(receipt.planId);
     if (!saved) continue;
     if (receipt.stage === 'accepted') {
-      const recovery = await persistStartRecoveryRefusal(saved, receipt, 'The server stopped before the reviewed recovery was dispatched', receipt);
+      const recovery = await persistStartRecoveryRefusal(saved, receipt, (await words()).recoveryNotDispatched, receipt);
       if (recovery) { Object.assign(receipt, recovery); continue; }
       Object.assign(receipt, await persistObservedReceipt(saved, receipt, { status: 'failure', stage: 'finished', code: 'not_dispatched',
-        reason: 'The server stopped before this action was dispatched. No operation was sent.',
+        reason: (await words()).notDispatched,
         ...(receipt.taskId ? { execution: 'not_started' } : {}),
         recovery: saved.plan.ops.some(op => op.tool === 'task_create') ? ['retry_create'] : saved.plan.ops.some(op => op.tool === 'task_start') ? ['retry_start', 'open_task'] : receipt.taskId ? ['check_status', 'open_task'] : receipt.intent === 'mark_read' ? ['retry_mark_read'] : ['check_status'],
       }));
     } else if (receipt.stage === 'marking_read' && await itemWorkerDead(receipt.requestId)) {
       Object.assign(receipt, await persistObservedReceipt(saved, receipt, { status: 'failure', stage: 'finished', code: 'read_unconfirmed',
-        reason: 'The server stopped before the mail provider confirmed this email as read. Check it or confirm setting it to read again.', recovery: ['check_status', 'retry_mark_read'] }));
+        reason: (await words()).readInterrupted, recovery: ['check_status', 'retry_mark_read'] }));
     } else if (receipt.taskId && receipt.stage === 'starting') {
       try { Object.assign(receipt, await reconcileStart(saved, receipt.requestId, receipt)); } catch { /* No proof, no resend. */ }
     } else if (receipt.taskId && receipt.stage === 'creating') {
       try {
         await exactItemTask(receipt.taskId);
         await markSourceTaskCreated(saved.sourceKey, receipt.taskId);
-        Object.assign(receipt, await persistObservedReceipt(saved, receipt, { status: 'failure', stage: 'finished', taskCreated: true, execution: 'not_started', reason: 'Task saved. The server stopped before its start was dispatched.', recovery: ['retry_start', 'open_task'] }));
+        Object.assign(receipt, await persistObservedReceipt(saved, receipt, { status: 'failure', stage: 'finished', taskCreated: true, execution: 'not_started', reason: (await words()).taskSavedNotStarted, recovery: ['retry_start', 'open_task'] }));
       } catch (error) {
         if (error instanceof ItemActionError && error.code === 'target_deleted') {
           Object.assign(receipt, await persistObservedReceipt(saved, receipt, { status: 'failure', stage: 'finished', taskCreated: false, execution: 'not_started',
-            code: 'create_unconfirmed', reason: 'The previous create result was not confirmed and the reserved task is not present. Confirm retrying the same task ID and payload.', recovery: ['retry_create'] }));
+            code: 'create_unconfirmed', reason: (await words()).createUnconfirmed, recovery: ['retry_create'] }));
         }
       }
     } else if (receipt.messageId && (receipt.stage === 'sending' || receipt.stage === 'delivering')) {
@@ -258,7 +263,7 @@ async function persistStartRecoveryRefusal(saved: SavedItemPlan, receipt: InboxI
   if (!previous) return;
   return persistObservedStart(saved, observed, task.last_start, { status: 'failure', stage: 'finished', taskCreated: true,
     execution: 'unconfirmed', code: 'start_recovery_required',
-    reason: `Recovery did not confirm cancelling the previous pending start: ${reason.slice(0, 250)}. The previous outcome remains unconfirmed; no replacement start is confirmed. Check status or review another retry. Cancellation happens only after confirmation.`,
+    reason: (await words()).recoveryRefused(reason),
     recovery: ['retry_start', 'check_status', 'open_task'] });
 }
 async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, origin: string, apiBase: string): Promise<InboxItemReceipt> {
@@ -277,7 +282,7 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
       const delivery = await deliverLetterToOrigin(letter, { choice: action.label, text: action.question }, { messageId });
       const uncertain = delivery.status === 'pending' || delivery.reason === 'timeout';
       return await persist(saved, receipt.requestId, { status: uncertain ? 'pending' : delivery.status === 'failed' ? 'failure' : 'success', stage: uncertain ? 'delivering' : 'finished',
-        delivery: uncertain ? 'unconfirmed' : delivery.status as 'queued' | 'deferred' | 'skipped' | 'failed', reason: delivery.reason, recovery: uncertain || delivery.status === 'failed' ? ['check_status'] : [] });
+        delivery: uncertain ? 'unconfirmed' : delivery.status as 'queued' | 'deferred' | 'skipped' | 'failed', reason: delivery.reason ? (await words()).raw(delivery.reason) : undefined, recovery: uncertain || delivery.status === 'failed' ? ['check_status'] : [] });
     }
     if (plan.taskId) {
       if (!plan.ops.some(op => op.tool === 'task_create')) taskCreated = true;
@@ -307,18 +312,18 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
       } });
       if (!outcome.ok) {
         if (operation.tool === 'task_start') {
-          const recovery = await persistStartRecoveryRefusal(saved, receipt, outcome.message);
+          const recovery = await persistStartRecoveryRefusal(saved, receipt, (await words()).raw(outcome.message));
           if (recovery) return recovery;
         }
         const unknown = /timeout|timed out|request failed|unreachable|not running at/i.test(outcome.message);
-        return await persist(saved, receipt.requestId, { status: unknown ? 'pending' : 'failure', stage: unknown ? stage : 'finished', reason: outcome.message.slice(0, 500),
+        return await persist(saved, receipt.requestId, { status: unknown ? 'pending' : 'failure', stage: unknown ? stage : 'finished', reason: (await words()).raw(outcome.message.slice(0, 500)),
           ...(plan.taskId && (operation.tool === 'task_start' || operation.tool === 'task_create') ? { execution: unknown ? 'unconfirmed' : 'not_started', taskCreated } : {}),
           ...(operation.tool === 'task_send' ? { delivery: unknown ? 'unconfirmed' : 'failed' } : {}),
           recovery: unknown ? ['check_status'] : operation.tool === 'mail_mark_read' ? ['retry_mark_read'] : operation.tool === 'task_create' ? ['retry_create'] : operation.tool === 'task_start' ? ['retry_start', 'open_task'] : ['check_status', 'open_task'],
         });
       }
       if (operation.tool === 'mail_mark_read' && !confirmedMailRead(outcome.result, plan.source.account)) {
-        return await persist(saved, receipt.requestId, { status: 'failure', stage: 'finished', code: 'read_not_confirmed', reason: 'The mail provider did not confirm this exact email as read', recovery: ['retry_mark_read'] });
+        return await persist(saved, receipt.requestId, { status: 'failure', stage: 'finished', code: 'read_not_confirmed', reason: (await words()).readNotConfirmed, recovery: ['retry_mark_read'] });
       }
       if (operation.tool === 'task_create') {
         const result = outcome.result as Record<string, unknown>;
@@ -336,9 +341,9 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
     }
     return await persist(saved, receipt.requestId, { status: 'success', stage: 'finished', recovery: plan.intent === 'mark_read' ? ['mark_read_again'] : [] });
   } catch (error) {
-    const recovery = await persistStartRecoveryRefusal(saved, receipt, String(error));
+    const recovery = await persistStartRecoveryRefusal(saved, receipt, (await words()).raw(String(error)));
     if (recovery) return recovery;
-    return await persist(saved, receipt.requestId, { status: dispatched ? 'pending' : 'failure', reason: String(error).slice(0, 500),
+    return await persist(saved, receipt.requestId, { status: dispatched ? 'pending' : 'failure', reason: (await words()).raw(String(error).slice(0, 500)),
       ...(plan.taskId ? { execution: dispatched ? 'unconfirmed' : 'not_started' } : {}), recovery: ['check_status'] });
   }
 }
