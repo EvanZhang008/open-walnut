@@ -86,7 +86,7 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/providers/daemon-workspace-twins-e2e.test.ts': 1,
   'tests/providers/git-commit-core.test.ts': 1,
   'tests/providers/host-fix-core.test.ts': 1,
-  'tests/providers/host-runtime-core.test.ts': 22,
+  'tests/providers/host-runtime-core.test.ts': 19,
   'tests/providers/host-runtime-preflight-shell.test.ts': 5,
   'tests/providers/local-daemon-platform.test.ts': 1,
   'tests/providers/remote-daemon-dir.test.ts': 2,

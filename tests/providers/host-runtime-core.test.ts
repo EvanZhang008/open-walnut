@@ -26,6 +26,9 @@ import { claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hos
 import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
 
+/** A plain Linux PATH for a fake host (fakeHost runs nothing for real). */
+const usrBinEnv = () => ({ HOME, PATH: '/usr/bin' })
+
 // C5: the spawn gate's sentences are the readiness builders' words for "this host".
 const NEEDS_NODE = claudeNeedsNodeMessage({ hostLabel: 'this host' })
 const MISSING = claudeMissingMessage({ hostLabel: 'this host' })
@@ -240,7 +243,7 @@ describe('ensureClaude', () => {
   })
 
   it('claude absent: the exact not-installed sentence; a custom command is named', async () => {
-    const { deps } = fakeHost({}, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const { deps } = fakeHost({}, () => ({ code: 0 }), usrBinEnv())
     const rt = createHostRuntime(deps)
     expect(await rt.ensureClaude('claude', '/usr/bin')).toEqual({ ok: false, code: 'claude_missing', message: MISSING })
     expect(await rt.ensureClaude('/opt/tools/claude-fork', '/usr/bin')).toMatchObject({ ok: false, code: 'claude_missing', message: 'The Claude Code command "/opt/tools/claude-fork" was not found on this host.' })
@@ -356,30 +359,30 @@ describe('preflight', () => {
     const { deps, calls } = fakeHost(files, (file, args) => {
       if (file === '/bin/sh') return { code: 0, stdout: 'noise\n__WALNUT_LOGIN_PATH__=/opt/newclaude/bin:/usr/bin\n' }
       return args[0] === '--version' ? { code: 0, stdout: '2.1.281 (Claude Code)\n' } : { code: 1 }
-    }, { HOME, PATH: '/usr/bin' })
+    }, usrBinEnv())
     const out = await createHostRuntime(deps).preflight({ shellSetup: 'export PATH=/opt/newclaude/bin:$PATH' })
     expect(out.claude).toMatchObject({ found: true, path: '/opt/newclaude/bin/claude', version: '2.1.281' })
     const sh = calls.find((c) => c.file === '/bin/sh')!
     expect(sh.args[1]).toContain('{ export PATH=/opt/newclaude/bin:$PATH; } >/dev/null 2>&1 || true;')
     // Without shell_setup nothing extra runs and the daemon PATH answers.
-    const plain = fakeHost(files, () => ({ code: 1 }), { HOME, PATH: '/usr/bin' })
+    const plain = fakeHost(files, () => ({ code: 1 }), usrBinEnv())
     expect((await createHostRuntime(plain.deps).preflight()).claude.found).toBe(false)
     expect(plain.calls.some((c) => c.file === '/bin/sh')).toBe(false)
   })
 
   it('no compiler: names the package manager that would install one (an Ubuntu host has apt-get)', async () => {
-    const ubuntu = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const ubuntu = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv())
     expect((await createHostRuntime(ubuntu.deps).preflight()).packageManager).toBe('apt-get')
     // A host with both answers the way the automatic fix looks (dnf before yum before apt-get).
-    const both = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true }, '/usr/bin/yum': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const both = fakeHost({ '/usr/bin/apt-get': { content: ELF, exec: true }, '/usr/bin/yum': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv())
     expect((await createHostRuntime(both.deps).preflight()).packageManager).toBe('yum')
     // With a compiler there is nothing to install: no field.
-    const ready = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const ready = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true }, '/usr/bin/apt-get': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv())
     expect((await createHostRuntime(ready.deps).preflight()).packageManager).toBeUndefined()
   })
 
   it('claude missing entirely', async () => {
-    const { deps } = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
+    const { deps } = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true } }, () => ({ code: 0 }), usrBinEnv())
     const out = await createHostRuntime(deps).preflight()
     expect(out.claude).toEqual({ found: false, error: MISSING })
     expect(out.compiler).toEqual({ found: true, name: 'cc' })

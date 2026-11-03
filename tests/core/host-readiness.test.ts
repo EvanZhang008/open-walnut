@@ -22,6 +22,7 @@ import {
 } from '../../src/core/hosts/host-readiness.js'
 import { applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { claudeCliFloorFor, claudeVersionAtLeast } from '../../src/core/hosts/claude-version-floor.js'
+import { compilerInstallCommands } from '../../src/core/hosts/compiler-install.js'
 
 const INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
 
@@ -51,7 +52,7 @@ describe('parsePreflight + readinessProblems', () => {
     const p = parsePreflight(NPM_NO_NODE)!
     expect(readinessProblems(p)).toEqual([
       { kind: 'claude_needs_node', message: expect.stringContaining('npm build'), commands: [INSTALL] },
-      { kind: 'compiler_missing', message: expect.stringContaining('will not survive a disconnect'), commands: ['sudo yum install -y gcc', 'sudo apt-get install -y gcc'] },
+      { kind: 'compiler_missing', message: expect.stringContaining('will not survive a disconnect'), commands: compilerInstallCommands({}) },
     ])
   })
 
