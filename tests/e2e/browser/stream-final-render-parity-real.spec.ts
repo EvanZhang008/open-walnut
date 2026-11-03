@@ -93,10 +93,14 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
     await route.continue();
   });
 
-  await startRealSession(page, 'chunk-delay:40 stream-partial-markdown-reply', taskId);
+  // The column must open while the reply still streams: one that opens after the turn ended reads
+  // the persisted row from its first history read, before the hold below. 120ms between the ~55
+  // deltas gives the open about 7s (at 40ms a loaded CI runner opened it after the turn, both tries).
+  await startRealSession(page, 'chunk-delay:120 stream-partial-markdown-reply', taskId);
   const sid = await waitForSessionId(request, taskId);
   const history = await openFromTaskRow(page, taskId, sid);
-  await expect(history).toContainText('Findings PARITYREAL', { timeout: 20_000 });
+  await expect(history.locator('[data-stream-reply]', { hasText: 'Findings PARITYREAL' }), 'the column opened while the reply streamed')
+    .toBeVisible({ timeout: 20_000 });
   holding = true;
   await expect(history).toContainText('Closing sentence PARITYREAL.', { timeout: 30_000 });
   // The turn is over (no working indicator) and still on screen as stream blocks.

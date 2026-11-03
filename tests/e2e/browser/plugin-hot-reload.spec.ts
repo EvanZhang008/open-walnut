@@ -102,21 +102,28 @@ test('reloads real plugin generations and recovers without a page reload', async
       await commitAll(publisher, 'Publish a failing fixture update')
       await page.getByTestId('update-chip-walnut-demo').click()
       await expect(page.getByTestId('plugin-update-walnut-demo')).toBeVisible()
-      expect((await update()).failed).toHaveLength(1)
+      const failedUpdate = await update()
+      expect(failedUpdate.failed).toHaveLength(1)
+      // A new commit whose plugin does not load is put back on the commit that ran
+      // (src/core/plugins/source-update-run.ts, 2026-11-02): the files on disk match the code
+      // that still runs, so nothing waits on a restart, and the row says so.
+      expect(failedUpdate.rolledBack).toMatchObject({ to: expect.any(String), sha: expect.any(String) })
+      expect(failedUpdate.restartRequired).toBe(false)
       const feedback = page.getByTestId('plugin-update-feedback-walnut-demo')
       await expect(feedback).toHaveClass(/--error/)
-      await expect(feedback).toContainText('new code is not running')
-      // The new files are on disk but the old code still runs: the header says so (the badge
-      // read "update not active" before it became the Restart to activate tag).
-      await expect(page.getByTestId('plugin-row-walnut-demo').locator('.settings-tag').filter({ hasText: /^restart to activate$/i })).toBeVisible()
+      await expect(feedback).toContainText(/did not load at \w+\W+went back to \w+, which still runs/)
+      await expect(page.getByTestId('plugin-row-walnut-demo').locator('.settings-tag').filter({ hasText: /^restart to activate$/i })).toHaveCount(0)
       await page.getByTestId('sidebar-app-walnut-demo:main').click()
       await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
       await openPlugins(page)
       await openPluginDetail(page, 'walnut-demo')
       await expect(page.getByTestId('plugin-update-walnut-demo')).toBeVisible()
+      // Update again pulls the same commit (only the automatic clock skips a rolled-back one),
+      // and it is rolled back the same way.
       const retried = await update()
-      expect(retried.updated).toBe(false)
+      expect(retried.updated).toBe(true)
       expect(retried.failed).toHaveLength(1)
+      expect(retried.rolledBack?.sha).toBe(failedUpdate.rolledBack.sha)
       await expect(feedback).toHaveClass(/--error/)
       await fs.writeFile(publishedServer, goodServer)
       await commitAll(publisher, 'Repair the fixture update')

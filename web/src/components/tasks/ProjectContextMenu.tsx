@@ -71,9 +71,9 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
             busy,
             rename: (project) => { void rename(project); },
             remove: (project) => { void remove(project); },
-            pickSort: (project, current) => sortPicker.open({ project, current }, open.point),
-            pickProject: (project) => projectPicker.open(project, open.point),
-          }, settings.rows({ kind: 'project', project: open.payload.project }, open.point))}
+            pickSort: (project, current) => sortPicker.open({ project, current }, open.point, open.origin),
+            pickProject: (project) => projectPicker.open(project, open.point, open.origin),
+          }, settings.rows({ kind: 'project', project: open.payload.project }, open.point, open.origin))}
           onClose={menu.close}
           returnFocus={open.origin}
           ariaLabel={`Project actions for ${open.payload.project || 'Inbox'}`}

@@ -172,6 +172,23 @@ async function openMenu(page: Page, row: Locator, testId: string, anItem: RegExp
 
 const pill = (menu: Locator, name: string) => menu.getByRole('menuitemradio', { name, exact: true })
 
+/** A pane that holds none of the list's rows scrolls by itself, two frames after the menu opened. */
+async function scrollAnUnrelatedPane(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)))
+    await frame(); await frame()
+    const pane = document.createElement('div')
+    pane.style.cssText = 'position:fixed;left:0;bottom:0;width:40px;height:40px;overflow:auto'
+    pane.innerHTML = '<div style="height:400px"></div>'
+    document.body.appendChild(pane)
+    const scrolled = new Promise((r) => pane.addEventListener('scroll', () => r(null), { once: true }))
+    pane.scrollTop = 200
+    await scrolled
+    await frame()
+    pane.remove()
+  })
+}
+
 test('folder Pinned pins every open task of the folder and its subfolder, and the lit pill unpins them', async ({ page }) => {
   const s = stamp()
   const project = `GroupPinFolder${s}`
@@ -261,6 +278,12 @@ test('Sprint on a folder writes one batch naming exactly its open tasks', async 
   await sprintRow.click()
   const flyout = page.locator('.plugin-field-flyout')
   await expect(flyout).toBeVisible()
+  await expect(flyout.locator('.task-kebab-project-opt', { hasText: /^S7$/ })).toBeVisible()
+  // Another pane scrolling on its own (a session following its tail) leaves the picker open: only a
+  // scroll that moves the folder row closes it. On a busy fixture such a scroll took the picker away
+  // under the click, and the reopened menu with it (CI, 2026-11-03).
+  await scrollAnUnrelatedPane(page)
+  await expect(flyout.locator('.task-kebab-project-opt', { hasText: /^S7$/ })).toBeVisible()
   await page.screenshot({ path: '/tmp/group-menu-settings/sprint-flyout.png' })
   await flyout.locator('.task-kebab-project-opt', { hasText: /^S7$/ }).click()
   await expect(flyout).toHaveCount(0)
@@ -270,8 +293,9 @@ test('Sprint on a folder writes one batch naming exactly its open tasks', async 
   expect([...body.task_ids].sort()).toEqual([a, b].sort())
   expect({ pluginId: body.pluginId, key: body.key, value: body.value }).toEqual({ pluginId: 'demo-tracker', key: 'sprint', value: 'S7' })
 
-  // The row reads the value the tasks now share.
+  // The row reads the value the tasks now share; the menu, too, stays open while another pane scrolls.
   menu = await openMenu(page, row, 'folder-ctx-menu', /^Sprint/)
+  await scrollAnUnrelatedPane(page)
   await expect(menu.getByRole('menuitem', { name: /^Sprint/ })).toContainText('S7')
   await page.keyboard.press('Escape')
 })

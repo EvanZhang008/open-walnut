@@ -386,13 +386,13 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   await row.getByTestId('kanban-prompt-allow').click()
   await expect(row.getByTestId('kanban-prompt-allow')).toHaveCount(0, { timeout: 30_000 })
   // The turn the allow finished ended asking nothing: only a real ask reaches Needs you
-  // (2026-11-02, src/core/user-status.ts), so the leader reads Waiting with its turn to read and
-  // leaves the count. Read the server's settled status first: it is stored a debounce after the
+  // (2026-11-02, src/core/user-status.ts), so the leader reads To read (state `read`) with its
+  // turn to read and leaves the count. Read the server's settled status first: it is stored a debounce after the
   // answer (src/core/user-status-sync.ts) and a hand back HANDBACK_SETTLE_MS after the turn's end,
   // and until then the board still reads the answered prompt's stored Needs you, the window this
   // test used to pass in locally and missed in CI (run 41483544703).
   await pollUntil('leader status settled', async () => (await call<{ task: { user_status?: { state?: string; toRead?: string } } }>(
-    api, 'GET', `/api/tasks/${team.leader}`)).task.user_status ?? {}, (s) => s.state === 'waiting' && s.toRead === 'turn', 90_000)
+    api, 'GET', `/api/tasks/${team.leader}`)).task.user_status ?? {}, (s) => s.state === 'read' && s.toRead === 'turn', 90_000)
   await expect(lead).toHaveCount(0, { timeout: 30_000 })
   await expect.poll(() => chipCount(chip(pane, 'needs')), { timeout: 30_000 }).toBe(before)
 })

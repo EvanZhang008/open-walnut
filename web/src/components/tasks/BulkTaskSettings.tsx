@@ -29,8 +29,10 @@ import {
 export type BulkScope = { kind: 'folder'; groupId: string } | { kind: 'project'; project: string };
 
 export interface BulkTaskSettingsHandle {
-  /** The menu's rows for this scope, read when the menu opens. `point` anchors the field picker. */
-  rows: (scope: BulkScope, point: CursorPoint) => { pinned: ContextMenuItem[]; fields: ContextMenuItem[] };
+  /** The menu's rows for this scope, read when the menu opens. `point` anchors the field picker;
+   *  `origin` is the row the menu was opened on, so only a scroll that moves that row closes the
+   *  picker (useCursorFlyout), never a pane that scrolls on its own. */
+  rows: (scope: BulkScope, point: CursorPoint, origin?: HTMLElement | null) => { pinned: ContextMenuItem[]; fields: ContextMenuItem[] };
   /** The field picker; render it beside the menu. */
   node: ReactNode;
 }
@@ -61,7 +63,7 @@ export function useBulkTaskSettings(): BulkTaskSettingsHandle {
   const asked = async (copy: ReturnType<typeof bulkConfirmCopy>): Promise<boolean> =>
     copy === null || await confirm(copy);
 
-  const rows: BulkTaskSettingsHandle['rows'] = (scope, point) => {
+  const rows: BulkTaskSettingsHandle['rows'] = (scope, point, origin) => {
     const members = membersOf(scope);
     const ids = members.map((t) => t.id);
     const noun: BulkNoun = scope.kind;
@@ -91,7 +93,7 @@ export function useBulkTaskSettings(): BulkTaskSettingsHandle {
         onOpen: (id) => {
           const field = fields.find((f) => fieldId(f) === id);
           if (!field) return;
-          picker.open({ field, ids, common: commonValue(members, (t) => readPluginFieldValue(t, field)) }, point);
+          picker.open({ field, ids, common: commonValue(members, (t) => readPluginFieldValue(t, field)) }, point, origin);
         },
       })
       : [];

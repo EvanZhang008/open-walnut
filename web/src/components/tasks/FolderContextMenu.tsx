@@ -59,10 +59,11 @@ export function useFolderContextMenu(actions: FolderMenuActions): FolderContextM
           items={buildFolderMenuItems(
             open.payload,
             actions,
-            (target) => picker.open(target, open.point),
-            settings.rows({ kind: 'folder', groupId: open.payload.groupId }, open.point),
+            (target) => picker.open(target, open.point, open.origin),
+            settings.rows({ kind: 'folder', groupId: open.payload.groupId }, open.point, open.origin),
           )}
           onClose={menu.close}
+          returnFocus={open.origin}
           ariaLabel={`Folder actions for ${open.payload.label || 'folder'}`}
           testId="folder-ctx-menu"
         />
