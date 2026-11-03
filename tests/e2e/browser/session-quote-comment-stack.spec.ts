@@ -149,8 +149,10 @@ test.describe('Selection pill: Quote and Comment stay on the passage and go with
     const c2 = 'Compare this with the second answer.\nThey disagree on the order.'
 
     await select(page, panel, p1)
-    const labels = (await pill(page).locator('button').allInnerTexts()).map((t) => t.trim())
+    const labels = (await pill(page).locator('button:not([data-testid="quote-ask-mode-btn"])').allInnerTexts()).map((t) => t.trim())
     expect(labels).toEqual(['Pin', 'Ask here', 'Quote', 'Comment', 'Copy'])
+    // Beside Ask here, its caret picks Ask inline or Ask in Tree (an icon, no words).
+    await expect(pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' })).toHaveCount(1)
     await page.keyboard.press('Escape')
     await expect(pill(page)).toHaveCount(0)
 

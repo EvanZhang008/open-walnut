@@ -80,8 +80,10 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await centreInHistory(page, panel, phrase, { tolerance: 20 })
     await selectPassage(page, panel, phrase)
     await expect(pill(page)).toBeVisible()
-    const labels = (await pill(page).locator('button').allInnerTexts()).map((t) => t.trim())
+    const labels = (await pill(page).locator('button:not([data-testid="quote-ask-mode-btn"])').allInnerTexts()).map((t) => t.trim())
     expect(labels).toEqual(['Pin', 'Ask here', 'Quote', 'Comment', 'Copy'])
+    // Beside Ask here, its caret picks Ask inline or Ask in Tree (an icon, no words).
+    await expect(pill(page).getByRole('button', { name: 'Choose how to ask: inline or in Tree' })).toHaveCount(1)
     await shot(page, 'pill')
 
     const before = (await readRecord(request, AI_SESSION)).threadAnchors?.length ?? 0
