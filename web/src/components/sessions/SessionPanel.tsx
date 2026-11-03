@@ -115,7 +115,7 @@ import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionRetryButton } from './SessionRetryButton';
-import type { SessionRecord, SessionThreadMeta, SessionTurnTitle, TaskPhase } from '@/types/session';
+import type { SessionRecord, SessionThreadMeta, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
@@ -359,9 +359,6 @@ interface SessionPanelProps {
   /** With headerSlot: the kebab's Board row opens the host's Board instead of this panel's own. */
   onHostBoard?: () => void;
 }
-
-/** A loaded record with no section titles yet (one identity for the memo). */
-const NO_TURN_TITLES: SessionTurnTitle[] = [];
 
 export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
@@ -719,7 +716,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   useEvent('task:completed', followTaskEvent);
 
   useEvent('session:status-changed', (data) => {
-    const d = data as { sessionId?: string; threadMeta?: SessionThreadMeta[]; turnTitles?: SessionTurnTitle[] };
+    const d = data as { sessionId?: string; threadMeta?: SessionThreadMeta[] };
     if (d.sessionId === sessionId) {
       // The background AI named a question, judged it answered or wrote its
       // takeaway: the event carries the stored list, adopt it in place (the
@@ -727,11 +724,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
       if (Array.isArray(d.threadMeta)) {
         const meta = d.threadMeta;
         setSession(prev => prev ? { ...prev, threadMeta: meta } : prev);
-      }
-      // The same for the outline's section titles (core/sessions/turn-titles.ts).
-      if (Array.isArray(d.turnTitles)) {
-        const titles = d.turnTitles;
-        setSession(prev => prev ? { ...prev, turnTitles: titles } : prev);
       }
       // Model backfill for idle launches (todo-launcher quick start): quick-start
       // pre-seeds the record model-less (Auto) and returns before the CLI's init
@@ -3058,7 +3050,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             scrollToBottomNonce={prefillNonce + composerScrollNonce}
             onRequestComposerFocus={requestComposerFocus}
             onQuoteInChat={quoteInChat}
-            turnTitles={session ? (session.turnTitles ?? NO_TURN_TITLES) : undefined}
           />
           </MessageAboutContext.Provider>
           </IslandHostContext.Provider>

@@ -41,8 +41,6 @@ import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
-import { mergeOutline, outlineSections, SECTIONS_GROUP_KEY, sectionMsgIdOf, untitledSectionIds } from '@/utils/outline-sections';
-import { useTurnTitleRequest } from '@/hooks/useTurnTitleRequest';
 import { ThreadMap } from './ThreadMap';
 import type { MapArchiveApi } from './ThreadMapArchive';
 import { placePins } from './outline-order';
@@ -111,7 +109,7 @@ import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
 import type {
-  SessionEngine, SessionHistoryMessage, SessionHistoryTool, SessionPinnedQuote, SessionThreadAnchor, SessionTurnTitle,
+  SessionEngine, SessionHistoryMessage, SessionHistoryTool, SessionPinnedQuote, SessionThreadAnchor,
 } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
@@ -300,11 +298,6 @@ interface SessionChatHistoryProps {
    * follow-bottom paths respect. 0/undefined = no-op (initial mount).
    */
   scrollToBottomNonce?: number;
-  /** AI titles of the main conversation's messages: the outline's sections
-   *  (SessionRecord.turnTitles; utils/outline-sections.ts). A host that passes
-   *  it (an empty list included) follows the record, so the timeline asks the
-   *  server to name what is untitled; without it the labels stay first lines. */
-  turnTitles?: SessionTurnTitle[];
   /**
    * The user asked about something (a passage, or a thread picked in the outline):
    * reveal the composer and focus it. The panel owns both, so the timeline only
@@ -565,7 +558,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, turnTitles }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1783,24 +1776,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * the drawer on Pinned. Questions are not outline rows any more: the drawer is
    * their overview.
    */
-  // A long conversation's sections (one per message sent in the main
-  // conversation, named by the AI) read in the outline beside the pins. The
-  // array keeps its identity while no section changed, so a streaming delta
-  // that only grows a reply rebuilds neither the outline nor the map.
-  const sectionsNow = useMemo(
-    () => outlineSections(messages, (id) => rowThreadKey(id) === ROOT_THREAD_KEY, turnTitles),
-    [messages, rowThreadKey, turnTitles],
-  );
-  const sectionsSig = sectionsNow.map((x) => `${x.msgId}\u0001${x.at}\u0001${x.label}`).join('\u0002');
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature is the identity
-  const sections = useMemo(() => sectionsNow, [sectionsSig]);
-  const mapSections = useMemo(() => sections.map((x) => ({ msgId: x.msgId, label: x.label })), [sections]);
-  // Asked only by a host that follows the record's titles (the session panel);
-  // elsewhere the sections keep their first-line labels.
-  useTurnTitleRequest(sessionId, useMemo(() => (turnTitles ? untitledSectionIds(sections) : []), [sections, turnTitles]));
-
   const pagePins = useMemo(() => {
-    if (!stackMode) return { entries: mergeOutline(pinTocEntries, sections), other: 0 };
+    if (!stackMode) return { entries: pinTocEntries, other: 0 };
     const entries: typeof pinTocEntries = [];
     let other = 0;
     for (const e of pinTocEntries) {
@@ -1808,9 +1785,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (key === currentKey) entries.push(e);
       else if (!threadsApi.hiddenKeys.has(key)) other += 1;
     }
-    // The sections are the main conversation's: they read on its page only.
-    return { entries: currentKey === ROOT_THREAD_KEY ? mergeOutline(entries, sections) : entries, other };
-  }, [stackMode, pinTocEntries, rowThreadKey, currentKey, threadsApi.hiddenKeys, sections]);
+    return { entries, other };
+  }, [stackMode, pinTocEntries, rowThreadKey, currentKey, threadsApi.hiddenKeys]);
   const tocEntries = useMemo<TocEntry[]>(
     () => pagePins.entries.map(({ at: _at, quoteExact: _q, ...entry }) => entry),
     [pagePins],
@@ -1989,17 +1965,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * effect below), instead of jumping to a row that is filtered out.
    */
   const handleTocJump = useCallback((pinKey: string) => {
-    // A section: its message, no passage. From a question page (Tree Mode) it
-    // goes through the main conversation's page first, as a pin there would.
-    const sectionMsg = sectionMsgIdOf(pinKey);
-    if (sectionMsg) {
-      if (stackMode && currentKeyRef.current !== ROOT_THREAD_KEY) {
-        threadsApi.requestPinJump(pinKey, ROOT_THREAD_KEY);
-        return;
-      }
-      jumpToPlace(sectionMsg, undefined, 'outline-section');
-      return;
-    }
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
     if (stackMode && pin) {
       const key = rowThreadKey(pin.msgId);
@@ -2019,13 +1984,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const pinJumpLandedRef = useRef<typeof pinJump>(null);
   useEffect(() => {
     if (!pinJump || pinJump === pinJumpLandedRef.current) return;
-    const sectionMsg = sectionMsgIdOf(pinJump.pinKey);
-    if (sectionMsg) {
-      if (stackMode && currentKey !== ROOT_THREAD_KEY) return;
-      pinJumpLandedRef.current = pinJump;
-      jumpToPlace(sectionMsg, undefined, 'outline-section', { armBack: false });
-      return;
-    }
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinJump.pinKey);
     if (!pin) return;
     if (stackMode && rowThreadKey(pin.msgId) !== currentKey) return;
@@ -3849,7 +3807,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     drafts: stack.drafts,
     currentKey: hasQuestions ? targetKey : null,
     doneGroupsOpen: mapDoneOpen,
-    sections: mapSections,
   }, () => isAtBottom.current);
   const mapCounts = useMemo(
     () => (threadMap.shape ? threadCounts(threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys) : null),
@@ -3952,15 +3909,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           return next;
         });
         return;
-      case 'pin': case 'section':
+      case 'pin':
         if (row.pinKey) handleTocJump(row.pinKey);
-        return;
-      case 'section-group':
-        setMapDoneOpen((prev) => {
-          const next = new Set(prev);
-          if (next.has(SECTIONS_GROUP_KEY)) next.delete(SECTIONS_GROUP_KEY); else next.add(SECTIONS_GROUP_KEY);
-          return next;
-        });
         return;
       case 'root': case 'thread': case 'pending': case 'draft':
         // Conversation Mode: the row is the composer's target, and its card

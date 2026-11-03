@@ -56,10 +56,10 @@ export function useThreadMapLayout(
   isFollowingBottom?: () => boolean,
 ): ThreadMapLayout {
   const [collapsed, setCollapsed] = useThreadMapCollapsed();
-  const { tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen, sections } = input;
+  const { tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen } = input;
   const rows = useMemo(
-    () => (enabled ? mapRows({ tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen, sections }) : NO_ROWS),
-    [enabled, tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen, sections],
+    () => (enabled ? mapRows({ tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen }) : NO_ROWS),
+    [enabled, tree, index, pins, live, pending, drafts, currentKey, doneGroupsOpen],
   );
   const visible = enabled && mapHasContent(rows);
 

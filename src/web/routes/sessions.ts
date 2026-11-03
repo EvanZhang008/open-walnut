@@ -2091,20 +2091,6 @@ sessionsRouter.post('/:sessionId/execute-continue', async (req: Request, res: Re
   }
 })
 
-// POST /api/sessions/:sessionId/turn-titles: name the untitled sections of a
-// long conversation (the outline's entries; core/sessions/turn-titles.ts). The
-// work runs in the background: the answer only says whether it was queued, and
-// the titles arrive on `session:status-changed`.
-sessionsRouter.post('/:sessionId/turn-titles', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { requestTurnTitles } = await import('../../core/sessions/turn-titles.js')
-    const result = await requestTurnTitles(req.params.sessionId as string)
-    res.status(result.reason === 'session-not-found' ? 404 : 202).json(result)
-  } catch (err) {
-    next(err)
-  }
-})
-
 // POST /api/sessions/:sessionId/interrupt — stop the running turn (no message,
 // no queue drain). Same contract as the WS RPC session:interrupt; REST parity
 // so scripts/API users can interrupt without a WS client (gap found during the

@@ -29,7 +29,6 @@
  */
 
 import { buildReviewOldSession, buildReviewSession } from './threads-review-fixture';
-import { buildSectionsMapSession, buildSectionsSession } from './sections-fixture';
 
 export const DENSE_SESSION = 'pw-threads-dense-session';
 export const AI_SESSION = 'pw-threads-ai-session';
@@ -728,7 +727,7 @@ export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
     buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(),
-    buildReviewSession(nowMs), buildReviewOldSession(nowMs), buildSectionsSession(nowMs), buildSectionsMapSession(nowMs),
+    buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];
 }
 

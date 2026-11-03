@@ -649,8 +649,7 @@ test.describe('Question map', () => {
     await selectPassage(page, panel, phrase)
     const top = async () => Math.round((await passageRects(panel, phrase))[0].top)
     const asked = await top()
-    // No question yet, so the column reads as Conversation Mode and Ask here
-    // opens the card beside the passage.
+    // Ask here asks in Conversation Mode: the card opens beside the passage.
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
     await expect(panel.locator('.thread-card .thread-card-input')).toBeFocused()

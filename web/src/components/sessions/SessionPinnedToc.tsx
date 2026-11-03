@@ -1,11 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { outlineTimeLabel } from './outline-order';
-import { railTicks } from '@/utils/outline-sections';
 
 /**
- * The transcript outline: one tick per pinned message (and, in a long
- * conversation, per section: each message you sent, named by the AI), parked in
- * the timeline's top-left corner.
+ * The transcript outline: one tick per pinned message, parked in the timeline's
+ * top-left corner.
  *
  * Collapsed it is a stack of short dashes — enough to say "this conversation has
  * marked places, and roughly where they are" while costing almost no pixels of a
@@ -35,9 +33,6 @@ export interface TocEntry {
   /** A pinned PASSAGE rather than the whole message (labelled with a ❝ glyph, and
    *  its tick reads lighter so the rail still says which kind is where). */
   isQuote?: boolean;
-  /** A section of a long conversation (one of its user messages, named by the
-   *  AI; utils/outline-sections.ts): no pin behind it, so nothing to unpin. */
-  isSection?: boolean;
 }
 
 interface SessionPinnedTocProps {
@@ -87,11 +82,6 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
   // Nothing pinned here and nowhere else: no outline at all. The feature
   // announces itself by appearing with the first mark.
   if (entries.length === 0 && moreCount === 0) return null;
-  const sections = entries.filter((e) => e.isSection).length;
-  const pins = entries.length - sections;
-  const what = sections > 0
-    ? `${sections} ${sections === 1 ? 'section' : 'sections'}${pins > 0 ? `, ${pins} marked ${pins === 1 ? 'place' : 'places'}` : ''}`
-    : `${entries.length} marked ${entries.length === 1 ? 'place' : 'places'}`;
 
   return (
     <div
@@ -105,50 +95,47 @@ export const SessionPinnedToc = memo(function SessionPinnedToc({
         type="button"
         className="session-toc-rail"
         aria-expanded={open}
-        aria-label={`Outline — ${what}`}
+        aria-label={`Outline — ${entries.length} marked ${entries.length === 1 ? 'place' : 'places'}`}
         onClick={() => setOpen((p) => !p)}
       >
-        {railTicks(entries).map((entry) => (
+        {entries.map((entry) => (
           <span
             key={entry.key || 'top'}
-            className={`session-toc-tick session-toc-tick--${entry.role}${entry.isQuote ? ' session-toc-tick--quote' : ''}${entry.isSection ? ' session-toc-tick--section' : ''}`}
+            className={`session-toc-tick session-toc-tick--${entry.role}${entry.isQuote ? ' session-toc-tick--quote' : ''}`}
           />
         ))}
         {moreCount > 0 && <span className="session-toc-tick session-toc-tick--more" />}
       </button>
       {open && (
         <div className="session-toc-panel" role="menu">
-          {/* The entries scroll inside the list; Back and the more row stay in view under it. */}
-          <div className="session-toc-list">
-            {entries.map((entry) => (
-              <div key={entry.key || 'top'} className="session-toc-row" {...(entry.isSection ? { 'data-section': '' } : {})}>
+          {entries.map((entry) => (
+            <div key={entry.key || 'top'} className="session-toc-row">
+              <button
+                type="button"
+                className="session-toc-item"
+                role="menuitem"
+                onClick={(e) => jump(e, entry.key)}
+                title={entry.label}
+              >
+                <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}`} />
+                <span className="session-toc-label">{entry.label}</span>
+                {timeLabel(entry.timestamp) && (
+                  <span className="session-toc-time">{timeLabel(entry.timestamp)}</span>
+                )}
+              </button>
+              {onUnpin && entry.key && (
                 <button
                   type="button"
-                  className="session-toc-item"
-                  role="menuitem"
-                  onClick={(e) => jump(e, entry.key)}
-                  title={entry.label}
+                  className="session-toc-unpin"
+                  title="Remove from the outline"
+                  aria-label={`Unpin ${entry.label}`}
+                  onClick={(e) => { e.stopPropagation(); onUnpin(entry.key); }}
                 >
-                  <span className={`session-toc-dash session-toc-dash--${entry.role}${entry.isQuote ? ' session-toc-dash--quote' : ''}${entry.isSection ? ' session-toc-dash--section' : ''}`} />
-                  <span className="session-toc-label">{entry.label}</span>
-                  {timeLabel(entry.timestamp) && (
-                    <span className="session-toc-time">{timeLabel(entry.timestamp)}</span>
-                  )}
+                  ×
                 </button>
-                {onUnpin && entry.key && !entry.isSection && (
-                  <button
-                    type="button"
-                    className="session-toc-unpin"
-                    title="Remove from the outline"
-                    aria-label={`Unpin ${entry.label}`}
-                    onClick={(e) => { e.stopPropagation(); onUnpin(entry.key); }}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          ))}
           {moreCount > 0 && onMore && (
             <button
               type="button"

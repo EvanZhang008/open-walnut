@@ -24,11 +24,6 @@
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 
-/** The outline's PIN entries: a long conversation also lists its sections (one
- *  per message you sent, utils/outline-sections.ts), which these checks are not about. */
-const PIN_TICK = '.session-toc-tick:not(.session-toc-tick--section)'
-const PIN_ROW = '.session-toc-row:not([data-section])'
-
 /** Own fixture record (test-server.ts): the outline transcript under a second
  *  session id, so this spec's pins never land on the record the outline spec counts
  *  ticks on (both files run in parallel workers). */
@@ -266,9 +261,9 @@ test.describe('Quote pins', () => {
 
     // 3. The outline gains a ❝ row (and the collapsed rail a tick).
     const toc = panel.locator('.session-toc')
-    await expect(toc.locator(PIN_TICK)).toHaveCount(1)
+    await expect(toc.locator('.session-toc-tick')).toHaveCount(1)
     await toc.locator('.session-toc-rail').hover()
-    const item = toc.locator(`${PIN_ROW} .session-toc-item`).first()
+    const item = toc.locator('.session-toc-item').first()
     await expect(item).toContainText('❝')
     await expect(item).toContainText('index in place')
 
@@ -301,7 +296,7 @@ test.describe('Quote pins', () => {
     //    passage highlight lights up, and the row highlight never does.
     await wheel(page, panel, -1400) // scroll the passage away so the jump has work
     await toc.locator('.session-toc-rail').hover()
-    await toc.locator(`${PIN_ROW} .session-toc-item`).first().click()
+    await toc.locator('.session-toc-item').first().click()
     await expect.poll(() => flashCount(page), { timeout: 3000 }).toBe(1)
     expect(await panel.locator('.user-messages-highlight').count()).toBe(0)
     await expect.poll(() => flashCount(page), { timeout: 5000 }).toBe(0) // and it fades
@@ -322,7 +317,7 @@ test.describe('Quote pins', () => {
     await page.waitForLoadState('networkidle')
     panel = await openSession(page)
 
-    await expect(panel.locator(PIN_TICK)).toHaveCount(1)
+    await expect(panel.locator('.session-toc-tick')).toHaveCount(1)
     // The row has to be rendered for its passage to be painted — it is in the
     // initial window, but the paint is re-derived after the body renders.
     await expect.poll(() => paintedCount(page), { timeout: 15000 }).toBeGreaterThanOrEqual(1)
@@ -366,7 +361,7 @@ test.describe('Quote pins', () => {
     await expect(popover).toHaveCount(0)
     // Paint, outline row and record all go together.
     await expect.poll(() => paintedCount(page)).toBe(0)
-    await expect(panel.locator(PIN_TICK)).toHaveCount(0)
+    await expect(panel.locator('.session-toc')).toHaveCount(0)
     expect(await storedPins(page)).toHaveLength(0)
   })
 
@@ -384,23 +379,20 @@ test.describe('Quote pins', () => {
     await expect(button).toHaveAttribute('aria-pressed', 'true')
 
     const toc = panel.locator('.session-toc')
-    await expect(toc.locator(PIN_TICK)).toHaveCount(1)
+    await expect(toc.locator('.session-toc-tick')).toHaveCount(1)
     await toc.locator('.session-toc-rail').hover()
     // A whole-message row carries NO quote glyph — the two kinds stay tellable apart.
-    await expect(toc.locator(`${PIN_ROW} .session-toc-item`).first()).not.toContainText('❝')
-    await expect(toc.locator(`${PIN_ROW} .session-toc-item`).first()).toContainText(USER_ASK)
+    await expect(toc.locator('.session-toc-item').first()).not.toContainText('❝')
+    await expect(toc.locator('.session-toc-item').first()).toContainText(USER_ASK)
 
     const pins = await storedPins(page)
     expect(pins).toHaveLength(1)
     expect(pins[0].quote).toBeUndefined()
 
-    // Off the outline first: its open list (long here, with the sections) would
-    // stay open under the pointer and cover the row.
-    await page.mouse.move(2, 2)
     await row.hover()
     await button.click()
     await expect(button).not.toHaveClass(/is-pinned/)
-    await expect(panel.locator(PIN_TICK)).toHaveCount(0)
+    await expect(panel.locator('.session-toc')).toHaveCount(0)
   })
 
   test('the pill appears where the mouse let go, also on a backwards drag', async ({ page }) => {
