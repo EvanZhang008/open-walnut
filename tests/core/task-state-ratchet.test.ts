@@ -115,6 +115,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/restart-loss.ts': 2,
   'src/core/sessions/session-request-notify.ts': 1,
   'src/core/sessions/team-stop.ts': 3,
+  // the one wake about an ask the task owes the user skips a task that parked itself (WAITING), like request-progress
+  'src/core/sessions/user-asks.ts': 1,
   // whether a turn end settled a request: a parked task (WAITING) or a handed-back one (NEED_ACTION) after the report
   'src/core/sessions/request-progress.ts': 2,
   'src/core/status-consistency.ts': 2,

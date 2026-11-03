@@ -29,9 +29,9 @@ describe('the user\'s own words in a message', () => {
     expect(userWordsOf('微信的 org 非常乱', { inChat: true })?.text).toBe('微信的 org 非常乱')
   })
 
-  it('a letter answer with a note: the note, about the letter', () => {
+  it('a letter answer with a note: the note, about the letter, with the letter\'s id (its answer is read there)', () => {
     const msg = buildLetterDeliveryText({ id: 'lt-1', subject: 'Website: pick one of ten' }, { choice: 'Pick', text: 'combine 1 and 10' })
-    expect(userWordsOf(msg, { inChat: false })).toEqual({ text: 'combine 1 and 10', images: [], via: 'letter', about: 'Website: pick one of ten' })
+    expect(userWordsOf(msg, { inChat: false })).toEqual({ text: 'combine 1 and 10', images: [], via: 'letter', about: 'Website: pick one of ten', letter: 'lt-1' })
   })
 
   it('a multi-line note keeps every line', () => {

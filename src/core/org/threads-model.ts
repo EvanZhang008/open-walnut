@@ -84,6 +84,8 @@ export interface ThreadMessage {
   via: ThreadVia;
   /** A letter answer: the letter's subject, so the words read in context. */
   about?: string;
+  /** A letter answer: the letter's id, whose own thread holds the node's answer (thread-answers.ts). */
+  letter?: string;
   /** The send's own id (the phone's qm- id): the same send again is the same message. */
   key?: string;
   /** The node session it was sent to, where its answer is read. */
@@ -283,6 +285,7 @@ export interface FileMessageInput {
   images?: string[];
   via: ThreadVia;
   about?: string;
+  letter?: string;
   /** Put it under this thread (the Follow up button). A closed one opens a new thread that follows it. */
   threadId?: string;
   /** Ids chosen ahead (the send path tells the node the id before the message is stored). */
@@ -322,6 +325,7 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     at: input.at, text, via: input.via,
     ...(images.length ? { images } : {}),
     ...(input.about ? { about: clip(input.about, THREAD_TITLE_MAX) } : {}),
+    ...(input.letter ? { letter: input.letter.slice(0, 80) } : {}),
     ...(input.key ? { key: input.key.slice(0, 80) } : {}),
     ...(input.sid ? { sid: input.sid.slice(0, 80) } : {}),
   };

@@ -253,6 +253,7 @@ defineOp({
   title: 'What is still open for your task',
   description:
     'Unfinished subtasks of your task, replies you are still waiting for, requests to you that you have not answered, ' +
+    'the user\'s messages in your chat you have not answered yet, ' +
     'and where your task stands now (project, folder, leader). Walnut also puts this into your context after every compaction.',
   input: {
     hook: z.enum(['compact', 'stop']).optional().describe(
@@ -279,7 +280,7 @@ defineOp({
     }
     return withOutcome(
       { ...open },
-      ['subtasks', 'waitingOn', 'askedOfYou'].some((k) => Array.isArray(open[k]) && (open[k] as unknown[]).length > 0) || open.board
+      ['subtasks', 'waitingOn', 'askedOfYou', 'owedUser'].some((k) => Array.isArray(open[k]) && (open[k] as unknown[]).length > 0) || open.board
         ? 'These are still open for your task.' : 'Nothing is open for your task.',
       'Read one with task_get; answer a request with task_send in_reply_to.',
     );

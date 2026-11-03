@@ -1161,8 +1161,16 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
    *  with no text; its `remove` and its `queued_command` attachment carry the text.
    *  Walk the CLI's queue (FIFO for a dequeue) to learn which enqueue a remove took. */
   const textOfBlocksEnqueue = new Map<number, string>();
+  /** A remove with no text to the text its attachment carries. An older CLI (2.1.284) logs a
+   *  picture line taken mid-turn as a text-less enqueue AND a text-less remove (reason
+   *  `absorbed_mid_turn`); only its `queued_command` attachment holds the blocks. Without this,
+   *  every picture sent mid-turn had no row at all (2026-11-03: the VP's chat, 26 of 26). */
+  const textOfTextlessRemove = new Map<number, string>();
+  /** A remove with no text to the text-less enqueue the walk gave it (the still-queued count reads it). */
+  const enqueueOfTextlessRemove = new Map<number, number>();
   {
     const queue: number[] = [];
+    const takenAttachments = new Set<number>();
     for (let i = 0; i < rawMessages.length; i++) {
       const raw = rawMessages[i];
       if (raw.type !== 'queue-operation') continue;
@@ -1179,37 +1187,60 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
           if (at >= 0) textOfBlocksEnqueue.set(queue[at], raw.content);
         }
         if (at >= 0) queue.splice(at, 1);
+      } else if (raw.operation === 'remove') {
+        // No text: the oldest text-less enqueue it took, and the picture line's own attachment
+        // nearest the remove (after that enqueue). None found: a line dropped unrun, still hidden.
+        const at = queue.findIndex(j => !rawMessages[j].content);
+        if (at < 0) continue;
+        const j = queue[at];
+        queue.splice(at, 1);
+        enqueueOfTextlessRemove.set(i, j);
+        let best = -1;
+        const lo = Math.max(j + 1, i - PATTERN_A_LOOKAHEAD);
+        const hi = Math.min(rawMessages.length - 1, i + PATTERN_A_LOOKAHEAD);
+        for (let k = lo; k <= hi; k++) {
+          const e = rawMessages[k];
+          if (takenAttachments.has(k) || e.type !== 'attachment' || e.attachment?.type !== 'queued_command' || !Array.isArray(e.attachment.prompt)) continue;
+          if (best < 0 || Math.abs(k - i) < Math.abs(best - i)) best = k;
+        }
+        const text = best >= 0 ? queuedCommandText(rawMessages[best].attachment!.prompt) : undefined;
+        if (!text) continue;
+        takenAttachments.add(best);
+        textOfBlocksEnqueue.set(j, text);
+        textOfTextlessRemove.set(i, text);
       }
     }
   }
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
-    if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
+    if (raw.type !== 'queue-operation' || raw.operation !== 'remove') continue;
+    const content = raw.content || textOfTextlessRemove.get(i);
+    if (!content) continue;
     let j = i - 1;
     for (; j >= 0; j--) {
       const e = rawMessages[j];
-      if (e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content
+      if (e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === content
         && !pairedEnqueues.has(j)) break;
     }
     // A line of blocks: its text-less enqueue, which the queue walk above gave this text.
     let blocksText: string | undefined;
     if (j < 0) {
       for (let k = i - 1; k >= 0; k--) {
-        if (textOfBlocksEnqueue.get(k) === raw.content && !pairedEnqueues.has(k)) { j = k; break; }
+        if (textOfBlocksEnqueue.get(k) === content && !pairedEnqueues.has(k)) { j = k; break; }
       }
       if (j < 0) continue;
-      blocksText = raw.content;
+      blocksText = content;
     }
     pairedEnqueues.add(j);
     // The attachment usually precedes the remove, but the two writes race (15 of
     // 1084 land after it), so look a window past it too, never past a later enqueue
     // of the same text: that is a resend with its own fate.
-    const wanted = raw.content.trim();
+    const wanted = content.trim();
     const end = Math.min(rawMessages.length, i + 1 + PATTERN_A_LOOKAHEAD);
     let ran = false;
     for (let k = j + 1; k < end; k++) {
       const e = rawMessages[k];
-      if (k > i && e.type === 'queue-operation' && e.operation === 'enqueue' && blocksText === undefined && e.content === raw.content) break;
+      if (k > i && e.type === 'queue-operation' && e.operation === 'enqueue' && blocksText === undefined && e.content === content) break;
       if (claimedAttachments.has(k) || e.type !== 'attachment' || e.attachment?.type !== 'queued_command') continue;
       if (queuedCommandText(e.attachment.prompt)?.trim() === wanted) {
         claimedAttachments.add(k);
@@ -1299,6 +1330,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         let at = raw.content ? queue.findIndex(j => rawMessages[j].content === raw.content) : -1;
         // A line of blocks was enqueued with no text (see textOfBlocksEnqueue).
         if (at < 0 && raw.content) at = queue.findIndex(j => textOfBlocksEnqueue.get(j) === raw.content);
+        // A remove with no text took the text-less enqueue the first walk paired it with, never the head.
+        if (at < 0 && !raw.content && enqueueOfTextlessRemove.has(i)) at = queue.indexOf(enqueueOfTextlessRemove.get(i)!);
         queue.splice(at >= 0 ? at : 0, 1);
       }
     }

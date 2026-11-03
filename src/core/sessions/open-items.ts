@@ -50,6 +50,8 @@ export function fitHookContext(text: string): string {
 export interface OpenItems extends OpenItemsInput {
   /** The block the session reads; '' when nothing is open and there is no place to state. */
   text: string;
+  /** The user's messages in this task's chat it has not answered yet (user-asks.ts), oldest first. */
+  owedUser?: Array<{ id: string; at: string; text: string }>;
 }
 
 const EMPTY: OpenItems = { subtasks: [], moreSubtasks: 0, waitingOn: [], askedOfYou: [], text: '' };
@@ -193,6 +195,15 @@ export async function collectOpenItems(
       };
     }
     items.text = formatOpenItems(items, now);
+    // The user's unanswered messages lead, always: they are what a summary dropped before (user-asks-model.ts).
+    const { owedReadbackFor, readUserAsks } = await import('./user-asks.js');
+    const owed = await owedReadbackFor(task, now);
+    if (owed) {
+      const { openAsks } = await import('./user-asks-model.js');
+      items.owedUser = openAsks(await readUserAsks(task.id)).map((a) => ({ id: a.id, at: a.at, text: a.text }));
+      // Outside a compaction's restatement it leads here; that one puts it ahead of everything (head below).
+      if (!opts.afterCompaction) items.text = [owed, items.text].filter(Boolean).join('\n\n');
+    }
     // The summary does not keep the message hints (rich output, reply language,
     // any with an after-compaction trigger). Restated here, server-side only (the
     // formatter is shared with the daemon), so a compaction in the middle of a
@@ -223,7 +234,8 @@ export async function collectOpenItems(
       const core = (task.org_role === 'main' || task.org_role === 'lead') && task.phase !== 'COMPLETE'
         ? await import('./session-context.js').then((m) => m.coreInstructionsBlock(task)) : '';
       const lead = core ? `Restated after the compaction, first because they are your role's first rules.\n${core}` : '';
-      const head = (text: string) => [lead, text].filter(Boolean).join('\n\n');
+      // His unanswered messages stay first, ahead of the role's rules too (a cut never takes them).
+      const head = (text: string) => [owed, lead, text].filter(Boolean).join('\n\n');
       if (changed && (opts.full || changed.length + head(items.text).length + 2 <= HOOK_CONTEXT_MAX)) {
         items.text = head([changed, items.text].filter(Boolean).join('\n\n'));
         // A full read reaches the model as a tool result Claude Code may cut too: it tells nothing.

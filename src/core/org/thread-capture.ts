@@ -32,6 +32,8 @@ export interface UserWords {
   via: ThreadVia;
   /** A letter answer: the letter's subject. */
   about?: string;
+  /** A letter answer: the letter's id. */
+  letter?: string;
 }
 
 const ATTACHMENT_HEADER_RE = /^\[(?:Images|Files) attached[^\]\n]*\]\n((?:- [^\n]+\n?)*)\n?/;
@@ -71,7 +73,8 @@ function letterWords(raw: string, images: string[]): UserWords | null {
   const note = /(?:^|\n)note: ([\s\S]*)$/.exec(body)?.[1]?.replace(/\nuser's words: [\s\S]*$/, '').trim() ?? '';
   if (!note && !images.length) return null;
   const about = /(?:^|\n)subject: ([^\n]*)/.exec(body)?.[1]?.trim();
-  return { text: note, images, via: 'letter', ...(about ? { about } : {}) };
+  const letter = /(?:^|\n)letter: (lt-[A-Za-z0-9-]+)/.exec(body)?.[1];
+  return { text: note, images, via: 'letter', ...(about ? { about } : {}), ...(letter ? { letter } : {}) };
 }
 
 export interface ThreadHintState {
@@ -127,6 +130,7 @@ export async function prepareThreadCapture(input: {
   const draft: FileMessageInput = {
     text: words.text, images: words.images, via: input.threadId ? 'follow-up' : words.via,
     ...(words.about ? { about: words.about } : {}),
+    ...(words.letter ? { letter: words.letter } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(input.key ? { key: input.key } : {}),
     ...(input.sid ? { sid: input.sid } : {}),

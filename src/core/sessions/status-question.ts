@@ -115,9 +115,13 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     const { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } = await import('../ui-language.js');
     const lang = nonEnglishUiLanguage(await configuredUiLanguage().catch(() => undefined));
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    // The user's messages it may still owe an answer: the same question judges them (user-asks.ts).
+    const { owedQuestionFor, applyOwedAnswer } = await import('./user-asks.js');
+    const owed = await owedQuestionFor(taskId, Date.now(), why === 'watch' ? Date.now() : turnEndedMs);
     const answer = (await sessionRunner.requestTurnCompleteSelfReport(
-      sessionId, buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined), STATUS_TIMEOUT_MS,
+      sessionId, buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + owed.block, STATUS_TIMEOUT_MS,
     )).trim();
+    if (owed.listed.length) await applyOwedAnswer(taskId, owed.listed, answer);
     const report = readStatusReport(answer);
     if (!report) {
       log.session.warn('status question: no status in the answer', { sessionId, taskId, why, head: answer.slice(0, 200) });

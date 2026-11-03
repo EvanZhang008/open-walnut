@@ -93,7 +93,7 @@ describe('a letter reply with pictures', () => {
     expect(delivered).toContain('The pictures named above');
     // The Org thread files his words with the picture, as a letter answer.
     expect(userWordsOf(delivered, { inChat: false })).toEqual({
-      text: 'Not quite, see this', images: [path.join(IMAGES_DIR, name)], via: 'letter', about: 'Layout check',
+      text: 'Not quite, see this', images: [path.join(IMAGES_DIR, name)], via: 'letter', about: 'Layout check', letter: letter.id,
     });
   });
 

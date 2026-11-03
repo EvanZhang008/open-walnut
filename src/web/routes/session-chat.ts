@@ -989,14 +989,20 @@ function startRemoteTeamAgentPolling(sessionId: string, agentName: string, opts:
   })
 }
 
-/** A message that switches the engine skips the hinted send: an Org node still files it. Never throws. */
+/** A message that switches the engine skips the hinted send: it is still filed (an Org node's thread, any other task's ask). Never throws. */
 async function fileSwitchedRequest(taskId: string, message: string): Promise<void> {
   try {
     const [{ getTask }, { prepareThreadCapture }] = await Promise.all([
       import('../../core/task-manager.js'), import('../../core/org/thread-capture.js'),
     ])
-    const capture = await prepareThreadCapture({ task: await getTask(taskId), message, inChat: true })
+    const task = await getTask(taskId)
+    const capture = await prepareThreadCapture({ task, message, inChat: true })
     await capture?.commit({ told: false })
+    // Any other task keeps the user's words as an ask it owes an answer (core/sessions/user-asks.ts).
+    if (!capture) {
+      const { prepareUserAskCapture } = await import('../../core/sessions/user-asks.js')
+      await (await prepareUserAskCapture({ task, message, inChat: true }))?.commit()
+    }
   } catch (err) {
     log.web.warn('org threads: switched request not filed', { taskId, error: err instanceof Error ? err.message : String(err) })
   }

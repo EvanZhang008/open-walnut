@@ -3577,12 +3577,17 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
       const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
       const { unansweredAtStop } = await import('../../core/sessions/unanswered-at-stop.js')
       const { askUnansweredAtStop } = await import('../../core/sessions/ask-unanswered.js')
-      const [requests, asks] = await Promise.all([
+      // And the user's messages in the task's own chat it has owed a while (user-asks.ts).
+      const { owedAtStop } = await import('../../core/sessions/user-asks.js')
+      const [requests, asks, owed] = await Promise.all([
         unansweredAtStop(sid),
         askUnansweredAtStop(sid, { asked: req.query.asked, answered: req.query.answered }),
+        owedAtStop(sid),
       ])
-      const reason = [requests?.reason, asks?.reason].filter(Boolean).join('\n\n')
-      res.json({ stop: reason ? { reason, ...(requests ? { requests: requests.requests } : {}), ...(asks ? { asks: asks.asks } : {}) } : null })
+      const reason = [requests?.reason, asks?.reason, owed?.reason].filter(Boolean).join('\n\n')
+      res.json({ stop: reason ? {
+        reason, ...(requests ? { requests: requests.requests } : {}), ...(asks ? { asks: asks.asks } : {}), ...(owed ? { owedUser: owed.asks } : {}),
+      } : null })
       return
     }
     const { collectOpenItems } = await import('../../core/sessions/open-items.js')

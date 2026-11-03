@@ -27,6 +27,7 @@ import { withAskSent } from '../sessions/ask-unanswered.js';
 import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
 import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/thread-capture.js';
+import type { UserAskCapture } from '../sessions/user-asks.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId' | 'threadMeta' | 'asksSent'>>;
@@ -252,6 +253,28 @@ async function captureThread(record: HintRecord | null | undefined, task: Task |
   }
 }
 
+/** The user's message to a task that is no Org node, filed as an ask it owes an answer (sessions/user-asks.ts). Never throws. */
+async function captureUserAsk(record: HintRecord | null | undefined, task: Task | undefined, message: string, opts: HintSendOptions): Promise<UserAskCapture | null> {
+  if (!record?.taskId) return null;
+  try {
+    let node: Task | undefined = task;
+    if (!node) {
+      const { listTasksByIds } = await import('../task-manager.js');
+      node = (await listTasksByIds([record.taskId]))[0];
+    }
+    const { prepareUserAskCapture } = await import('../sessions/user-asks.js');
+    return await prepareUserAskCapture({
+      task: node, message, inChat: opts.inChat ?? opts.sentBy === 'person',
+      ...(opts.threadKey ? { key: opts.threadKey } : {}),
+      ...(record.claudeSessionId ? { sid: record.claudeSessionId } : {}),
+      ...(opts.now ? { now: opts.now() } : {}),
+    });
+  } catch (err) {
+    log.session.warn('user asks: message not planned', { sessionId: record.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 /** Main's or a lead's Brief state, for the `brief` hint (sessions/brief-hint.ts); null elsewhere. */
 async function briefFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<BriefHintState | null> {
   if (!task || (target.role !== 'main' && target.role !== 'lead') || !hints.some((h) => h.kind === 'brief' && h.enabled)) return null;
@@ -356,6 +379,8 @@ export async function prepareHintedSend(
     const words = upstream ? upstream.text : message;
     // The user's words to an Org node become one of its Threads, whether or not its hint is on.
     const thread = opts.sentBy === 'person' && opts.threads !== false ? await captureThread(record, task, words, opts) : null;
+    // Any other task's chat: the user's words are kept until its turn-end status says they are answered.
+    const userAsk = opts.sentBy === 'person' && opts.threads !== false && !thread ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
       hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(opts.requested ? { requested: opts.requested } : {}),
@@ -378,6 +403,8 @@ export async function prepareHintedSend(
         const sid = intoSessionId ?? sessionId;
         const at = now();
         if (thread) await thread.commit({ told: !!plan.told.threads });
+        // Not awaited: the send's own bookkeeping goes first; the ask's write is locked and deduped.
+        if (userAsk) void userAsk.commit();
         // An Ask here question is kept for the Stop hook (sessions/ask-unanswered.ts) under the
         // name its hint gave it, which a follow-up in its thread repeats.
         const ask = plan.carried.find((h) => h.kind === 'question' && h.arg);

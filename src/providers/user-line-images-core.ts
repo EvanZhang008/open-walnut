@@ -28,6 +28,8 @@
  * The whole message stays ONE text block: the history reader takes a mid-turn
  * line's text from the first text block of its `queued_command` attachment, and
  * the CLI's `remove` record joins every text block, so both read the same words.
+ * An older CLI (2.1.284) writes that `remove` with no text at all; the reader then
+ * takes the attachment's text (core/session-history.ts textOfTextlessRemove).
  */
 
 export interface UserLinePicture { path: string; mediaType: string; bytes: number }

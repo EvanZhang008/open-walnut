@@ -1971,6 +1971,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A "needs you" nobody checks by script is checked again every few hours (src/core/sessions/needs-recheck.ts).
     const { startNeedsRecheck } = await import('../core/sessions/needs-recheck.js')
     startNeedsRecheck({ ephemeral: IS_EPHEMERAL })
+    const { startUserAsks } = await import('../core/sessions/user-asks.js')
+    void startUserAsks({ ephemeral: IS_EPHEMERAL }).catch(() => {})
     // Every open task's stored status against its facts, hourly (src/core/status-consistency.ts).
     const { startStatusCheck } = await import('../core/status-consistency.js')
     startStatusCheck({ ephemeral: IS_EPHEMERAL })

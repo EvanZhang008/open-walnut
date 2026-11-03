@@ -180,6 +180,74 @@ describe('mid-turn sends the CLI consumed as queued_command attachments', () => 
     expect(rows.filter((t) => t?.includes('task-notification'))).toHaveLength(0);
   });
 
+  // CLI 2.1.284 shapes, read from the VP's chat on 2026-11-03: the picture line's remove has NO
+  // text either (reason absorbed_mid_turn); only its attachment holds the blocks. All 26 such sends
+  // in that chat had no row at all.
+  const textlessRemove = (s: number) => ({ type: 'queue-operation', operation: 'remove', timestamp: T(s), sessionId: 's', reason: 'absorbed_mid_turn' })
+
+  it('a picture line whose enqueue and remove both have no text shows once at its attachment', () => {
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      textless(3),
+      queuedCommand('q1', 'a1', picBlocks, 4),
+      user('tr1', 'q1', toolResult('toolu_1'), 5),
+      textlessRemove(6),
+      assistant('a2', 'tr1', 'msg_2', [{ type: 'text', text: 'The right edge is clipped.' }], 7),
+    ]
+    expect(timeline(lines)).toEqual([`user:${A}`, 'assistant:[tool]', `user:${picLine}`, 'assistant:The right edge is clipped.'])
+  })
+
+  it('two such picture lines in one turn each take their own attachment', () => {
+    const second = picBlocks.map((b) => (b.type === 'text' ? { ...b, text: b.text.replace('Why is this cut off?', 'And this one?') } : b))
+    const rows = timeline([
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      textless(3),
+      queuedCommand('q1', 'a1', picBlocks, 4),
+      textlessRemove(5),
+      assistant('a2', 'q1', 'msg_2', [toolUse('toolu_2')], 6),
+      textless(7),
+      user('tr2', 'a2', toolResult('toolu_2'), 8),
+      queuedCommand('q2', 'tr2', second, 8),
+      textlessRemove(9),
+      assistant('a3', 'q2', 'msg_3', [{ type: 'text', text: 'Both are clipped.' }], 10),
+    ])
+    expect(rows.filter((r) => r === `user:${picLine}`)).toHaveLength(1)
+    expect(rows.filter((r) => r.includes('And this one?'))).toHaveLength(1)
+    expect(rows.indexOf(`user:${picLine}`)).toBeLessThan(rows.findIndex((r) => r.includes('And this one?')))
+  })
+
+  it('a text-less remove takes its own picture line out of the queue, not a notice queued before it', () => {
+    const notice = '<task-notification>\n<task-id>b1</task-id>\n</task-notification>'
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      enqueue(notice, 3),
+      textless(4),
+      queuedCommand('q1', 'a1', picBlocks, 5),
+      user('tr1', 'q1', toolResult('toolu_1'), 6),
+      textlessRemove(6),
+      assistant('a2', 'tr1', 'msg_2', [{ type: 'text', text: 'The right edge is clipped.' }], 7),
+    ]
+    const row = parse(lines).find((m) => m.text === picLine)!
+    expect(row).toBeTruthy()
+    expect(row.unsettled).toBeFalsy()
+    expect(row.queued).toBeFalsy()
+  })
+
+  it('a text-less picture line dropped unrun (remove, no attachment) stays hidden', () => {
+    const rows = timeline([
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      textless(3),
+      textlessRemove(4),
+      user('tr1', 'a1', toolResult('toolu_1'), 5),
+      assistant('a2', 'tr1', 'msg_2', [{ type: 'text', text: 'Done.' }], 6),
+    ])
+    expect(rows).toEqual([`user:${A}`, 'assistant:[tool]', 'assistant:Done.'])
+  })
+
   it('a picture line dropped unrun (remove, no attachment) stays hidden', () => {
     const rows = timeline([
       user('u1', null, A, 1),

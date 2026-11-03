@@ -53,6 +53,15 @@ export interface TeamNoteState {
   led?: string[];
   /** The fingerprint's form (TEAM_NOTE_FORM); absent when an older Walnut wrote it (words were in it). */
   form?: number;
+  /** The user's unanswered messages (sessions/user-asks.ts) the lead was told of, by ask id. */
+  owedTold?: string[];
+}
+
+/** A team task that still owes the user an answer to his message in its own chat (sessions/user-asks.ts). */
+export interface TeamOwed {
+  taskId: string;
+  title: string;
+  asks: Array<{ id: string; at: string; text: string }>;
 }
 
 /** The fingerprint's form: 2 = without the session's progress words. */
@@ -180,6 +189,9 @@ export interface TeamNotePlan {
   moved: TeamNewsItem[];
   done: string[];
   asks: TeamAskLine[];
+  /** Team tasks that owe the user an answer; `owedNew` counts the asks the lead was not told of yet. */
+  owed?: TeamOwed[];
+  owedNew?: number;
   /** The projects the lead leads now; and, against the last note, the ones it took over or let go. */
   led: string[];
   ledAdded: string[];
@@ -189,12 +201,12 @@ export interface TeamNotePlan {
 
 /** A later note that may wait for the gap: nothing in it is the lead's to act on now (a task
  *  waiting on it, or stuck). */
-export function canWait(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved'>): boolean {
-  return plan.kind === 'moved' && plan.waits.length === 0 && plan.moved.length === 0;
+export function canWait(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved' | 'owedNew'>): boolean {
+  return plan.kind === 'moved' && plan.waits.length === 0 && plan.moved.length === 0 && !plan.owedNew;
 }
 
 /** The note may go now: the first one, one the lead must act on, or the gap since the last has passed. */
-export function noteDue(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved'>, prevAt: string | undefined, nowMs: number, gapMs = TEAM_NOTE_GAP_MS): boolean {
+export function noteDue(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved' | 'owedNew'>, prevAt: string | undefined, nowMs: number, gapMs = TEAM_NOTE_GAP_MS): boolean {
   if (!canWait(plan)) return true;
   const last = Date.parse(prevAt ?? '');
   // A last note "after" now (the clock went back) never holds one.
@@ -214,6 +226,8 @@ export interface TeamNoteContext {
   /** Tasks whose own notice the lead already reads (sessions/status-riding.ts noticeKeysSince):
    *  the note does not tell their move again, and records them as told. */
   told?: ReadonlySet<string>;
+  /** Team tasks that still owe the user an answer (sessions/user-asks.ts staleOwedOf). */
+  owed?: readonly TeamOwed[];
 }
 
 /** The task's own status says it waits on its leader, and its leader is this lead. */
@@ -303,7 +317,12 @@ export function planTeamNote(
     prev = { ...prev, seen: rebased, form: TEAM_NOTE_FORM };
   }
   const led = [...new Set(ctx.led ?? [])].sort((a, b) => a.localeCompare(b));
-  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM };
+  const owed = (ctx.owed ?? []).filter((o) => o.asks.length);
+  const owedIds = owed.flatMap((o) => o.asks.map((a) => a.id));
+  const toldBefore = new Set(prev?.owedTold ?? []);
+  const owedNew = owedIds.filter((id) => !toldBefore.has(id)).length;
+  const owedPart = owed.length ? { owed, owedNew } : {};
+  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM, ...(owedIds.length ? { owedTold: owedIds } : {}) };
   // A task whose own notice the lead reads (its edge, org-follow.ts) is told there, not here again.
   const news = teamNews(open).filter((i) => !ctx.told?.has(i.taskId));
   const byId = new Map(open.map((t) => [t.id, t] as const));
@@ -317,8 +336,8 @@ export function planTeamNote(
     const waits = news.filter((i) => i.state !== 'needs' && waiting(i)).map(waitOf);
     const machine = news.filter((i) => i.state !== 'needs' && !waiting(i) && stopped(i)).map(waitOf);
     const moved = news.filter((i) => i.state !== 'needs' && !waiting(i) && !stopped(i) && i.reported).slice(0, 5);
-    const any = needs.length + waits.length + machine.length + moved.length + asks.length > 0;
-    return { kind: any ? 'now' : 'none', needs, waits, machine, moved, asks, led, ...none, next };
+    const any = needs.length + waits.length + machine.length + moved.length + asks.length + owed.length > 0;
+    return { kind: any ? 'now' : 'none', needs, waits, machine, moved, asks, led, ...none, ...owedPart, next };
   }
   const key = (names: readonly string[]) => new Set(names.map(projectKey));
   const ledBefore = prev.led;
@@ -348,13 +367,14 @@ export function planTeamNote(
     else if (was !== is && isStuck(t) && !(before === undefined && fresh.has(projectKey(t.project || 'Inbox')))) moved.push(item);
   }
   const done = completed.filter((t) => prev!.seen[t.id] !== undefined && !ctx.told?.has(t.id)).map((t) => t.title);
+  // Owed asks ride every note while they are open; a new one is news by itself.
   const any = needs.length + waits.length + machine.length + moved.length + done.length + asks.length
-    + ledAdded.length + ledRemoved.length > 0;
-  return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, done, asks, led, ledAdded, ledRemoved, next };
+    + ledAdded.length + ledRemoved.length + owedNew > 0;
+  return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, done, asks, led, ledAdded, ledRemoved, ...owedPart, next };
 }
 
 /** Most lines a section carries; the rest are counted. */
-export const TEAM_NOTE_MAX = { needs: 6, waits: 8, machine: 8, asks: 6, moved: 8, done: 6 } as const;
+export const TEAM_NOTE_MAX = { needs: 6, waits: 8, machine: 8, asks: 6, owed: 6, moved: 8, done: 6 } as const;
 const WORDS_MAX = 240;
 
 function ago(at: number, nowMs: number): string {
@@ -415,6 +435,13 @@ export function buildTeamNoteText(
     ? `Asked of your teams by others:\n${askTasks.slice(-TEAM_NOTE_MAX.asks).map((g) => `- ${askLine(g)}`).join('\n')}`
       + `${askTasks.length > TEAM_NOTE_MAX.asks ? `\n- and ${askTasks.length - TEAM_NOTE_MAX.asks} more tasks, in the next note` : ''}\n`
     : '';
+  const owedSection = plan.owed?.length
+    ? 'Owes the user an answer (he wrote in the task\'s own chat; its own status says it has not answered yet). See that it answers him: '
+      + 'task_send it to answer now, or tell him where it stands:\n'
+      + plan.owed.slice(0, TEAM_NOTE_MAX.owed).map((o) => `- ${label({ taskId: o.taskId, title: o.title } as TeamNewsItem)}: `
+        + o.asks.slice(-3).map((a) => `${quoted(a.text)} (${ago(Date.parse(a.at), nowMs) || 'just now'})`).join(', ')).join('\n')
+      + `${plan.owed.length > TEAM_NOTE_MAX.owed ? `\n- and ${plan.owed.length - TEAM_NOTE_MAX.owed} more tasks` : ''}\n`
+    : '';
   const doneLine = plan.done.length
     ? `Done: ${plan.done.slice(0, TEAM_NOTE_MAX.done).map((t) => `"${shortTitle(t, 80)}"`).join(', ')}${plan.done.length > TEAM_NOTE_MAX.done ? ` and ${plan.done.length - TEAM_NOTE_MAX.done} more` : ''}\n`
     : '';
@@ -422,6 +449,7 @@ export function buildTeamNoteText(
     + section('Needs the user:', plan.needs, TEAM_NOTE_MAX.needs, (i) => `${label(i)}${words(i)}`)
     + section('Waiting on you:', plan.waits, TEAM_NOTE_MAX.waits, (i) => waitLine(i as LeadWait))
     + section('Stopped by the machine, not the work (Walnut resumes these once the cause clears):', plan.machine ?? [], TEAM_NOTE_MAX.machine, (i) => waitLine(i as LeadWait))
+    + owedSection
     + asksSection
     + section(plan.kind === 'now' ? 'Latest:' : 'Stuck (nothing will wake it):', plan.moved, TEAM_NOTE_MAX.moved, (i) => `${label(i)} (${when(i)})${words(i)}`)
     + doneLine
@@ -503,6 +531,18 @@ export interface PendingTeamNote {
   release(): void;
 }
 
+/** The team tasks that owe the user an answer a while now (sessions/user-asks.ts). Never throws. */
+async function owedOfTeam(open: readonly Task[], nowMs: number): Promise<TeamOwed[]> {
+  try {
+    const { staleOwedOf } = await import('../sessions/user-asks.js');
+    const byTask = await staleOwedOf(open, nowMs);
+    return open.filter((t) => byTask.has(t.id))
+      .map((t) => ({ taskId: t.id, title: t.title, asks: byTask.get(t.id)!.map((a) => ({ id: a.id, at: a.at, text: a.text })) }));
+  } catch {
+    return [];
+  }
+}
+
 /** The note the next message into this lead's session carries, or null. Never throws. */
 export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Date.now()): Promise<PendingTeamNote | null> {
   const claimedAt = claims.get(lead.id);
@@ -539,8 +579,9 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
     // What its notices already tell (riding this message or told since the last note) is not said again.
     const { noticeKeysSince } = await import('../sessions/status-riding.js');
     const told = noticeKeysSince(sessionId, Date.parse(prev?.at ?? '') || 0);
+    const owed = await owedOfTeam(open, nowMs);
     const plan = planTeamNote(prev, open, completed, now, {
-      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks, toldLead: (id) => workerToldLead(id, lead.id), told,
+      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks, toldLead: (id) => workerToldLead(id, lead.id), told, owed,
     });
     // Held: the next message after the gap carries it, with whatever moved meanwhile. Nothing is
     // recorded, so the next plan still starts from what the lead was last told.
@@ -606,6 +647,7 @@ export async function teamSnapshotText(lead: Task, nowMs = Date.now()): Promise<
     const gone = new Set(answeredUserAsks(tasks, pending).map((a) => a.id));
     const plan = planTeamNote(undefined, open, [], new Date(nowMs).toISOString(), {
       leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks: pending.filter((a) => !gone.has(a.id)),
+      owed: await owedOfTeam(open, nowMs),
     });
     if (!plan.led.length && plan.kind === 'none') return '';
     const named = led.length > 1;

@@ -96,7 +96,10 @@ export function answersFromRows(
     if (i < 0) continue;
     // One row is one message: "yes" twice is two rows, each answered on its own.
     used.add(i);
-    if (m.answer) continue;
+    // A letter answer is answered in the letter's own thread (letterAnswerOf), never by the chat:
+    // the node's next chat words may be about anything else (2026-11-03: both of his letter notes
+    // in one thread wore a reply about a task menu).
+    if (m.answer || m.via === 'letter') continue;
     const answer = answerAfter(rows, i, opts.wholeUntil);
     if (answer) out.set(m.id, answer);
   }
@@ -135,6 +138,60 @@ function answerAfter(rows: readonly AnswerRow[], i: number, wholeUntil: string |
   const row = rows[last];
   const about = row.about?.length ? row.about : readAboutTag(row.text).ids;
   return { text: row.text, at: row.timestamp, ...(about.length ? { about: [...about] } : {}) };
+}
+
+/** A letter's thread as the inbox keeps it (human-inbox/types.ts ThreadEntry, `at` in ms). */
+export interface LetterTurn { from: 'agent' | 'human'; text: string; at: number }
+
+/** How far a letter turn of his may sit from the message's filing time. */
+const LETTER_TURN_SLACK_MS = 2 * 60_000;
+
+/**
+ * Pure: the node's answer to his letter note `m` in that letter's thread: the first turn of the
+ * node after his turn closest to the message's time. Null while it has not answered there.
+ */
+export function letterAnswerOf(m: Pick<ThreadMessage, 'at' | 'text'>, turns: readonly LetterTurn[]): ThreadAnswer | null {
+  const at = Date.parse(m.at);
+  let his = -1;
+  let best = Infinity;
+  for (const [i, t] of turns.entries()) {
+    if (t.from !== 'human') continue;
+    const d = Math.abs(t.at - at);
+    if (d <= LETTER_TURN_SLACK_MS && d < best) { best = d; his = i; }
+  }
+  if (his < 0) return null;
+  const reply = turns.slice(his + 1).find((t) => t.from === 'agent' && t.text.trim());
+  return reply ? { text: reply.text, at: new Date(reply.at).toISOString() } : null;
+}
+
+/**
+ * The letter a note answered: its id when filed with one, else (filed before Walnut kept the id)
+ * the node's letter whose thread holds a turn of his with these words at that time.
+ */
+async function letterAnswers(taskId: string, messages: readonly ThreadMessage[]): Promise<Map<string, ThreadAnswer>> {
+  const out = new Map<string, ThreadAnswer>();
+  const want = messages.filter((m) => m.via === 'letter' && !m.answer && !gaveUp(m.id));
+  if (!want.length) return out;
+  const { getLetter, listLetters } = await import('../human-inbox/store.js');
+  let mine: Array<{ id: string; thread: LetterTurn[] }> | null = null;
+  for (const m of want) {
+    let turns: LetterTurn[] | undefined;
+    // Only its thread is read: no letter body.
+    if (m.letter) turns = (await getLetter(m.letter, { deferBodies: true }).catch(() => null))?.thread as LetterTurn[] | undefined;
+    if (!turns) {
+      if (!mine) {
+        const lists = await Promise.all([listLetters(), listLetters({ archived: true })].map((p) => p.catch(() => ({ letters: [] }))));
+        mine = lists.flatMap((l) => l.letters).filter((l) => l.sender?.taskId === taskId)
+          .map((l) => ({ id: l.id, thread: (l.thread ?? []) as LetterTurn[] }));
+      }
+      const words = norm(m.text);
+      turns = mine.find((l) => l.thread.some((t) => t.from === 'human' && Math.abs(t.at - Date.parse(m.at)) <= LETTER_TURN_SLACK_MS
+        && (!words || norm(t.text) === words)))?.thread;
+    }
+    const answer = turns ? letterAnswerOf(m, turns) : null;
+    if (answer) out.set(m.id, answer);
+  }
+  return out;
 }
 
 /**
@@ -229,6 +286,7 @@ async function resolveOnce(taskId: string, endedAt: string | null): Promise<numb
     if (left.length && nodeSid && nodeSid !== sid) {
       for (const [id, a] of await answersIn(nodeSid, messages.filter((m) => m.answer || left.includes(m)), endedAt)) found.set(id, a);
     }
+    for (const [id, a] of await letterAnswers(taskId, messages)) found.set(id, a);
     for (const m of messages) if (!m.answer && !found.has(m.id)) tries.set(m.id, (tries.get(m.id) ?? 0) + 1);
   }
   if (!found.size) return 0;

@@ -6,7 +6,7 @@
  * messages answered by one reply, a reply still being written.
  */
 import { describe, it, expect } from 'vitest'
-import { answersFromRows, pendingBySession, type AnswerRow } from '../../../src/core/org/thread-answers.js'
+import { answersFromRows, letterAnswerOf, pendingBySession, type AnswerRow, type LetterTurn } from '../../../src/core/org/thread-answers.js'
 import type { OrgThread, ThreadMessage } from '../../../src/core/org/threads-model.js'
 import { buildLetterDeliveryText } from '../../../src/core/human-inbox/letter-ops.js'
 
@@ -84,17 +84,35 @@ describe('the answer to each message', () => {
     expect(got.get('tm-d')?.text).toBe('Second yes noted.')
   })
 
-  it('pictures and a picture alone match by their path; a letter answer by its note', () => {
+  it('pictures and a picture alone match by their path; a letter answer holds its row but takes no chat words', () => {
     const header = '[Images attached — use the Read tool to view them]\n- /tmp/open-walnut/images/1-a.jpg\n\n'
     const letter = buildLetterDeliveryText({ id: 'lt-1', subject: 'Website: ten designs' }, { choice: 'Pick', text: 'combine 1 and 10' })
     const r = [person(1, `${header}it should say which is built in`), says(2, 'Labels added.'), person(3, header), says(4, 'Got the picture.'),
-      { role: 'user', sentBy: 'agent', text: letter, timestamp: at(5) }, says(6, 'Combining them.')]
+      { role: 'user', sentBy: 'agent', text: letter, timestamp: at(5) }, says(6, 'The task menu redesign is live.'),
+      { role: 'user', sentBy: 'agent', text: letter, timestamp: at(7) }, says(8, 'Combining them.')]
     const got = answersFromRows([
       m('tm-1', 1, 'it should say which is built in', { images: ['/tmp/open-walnut/images/1-a.jpg'] }),
       m('tm-2', 3, '', { images: ['/tmp/open-walnut/images/1-a.jpg'] }),
-      m('tm-3', 5, 'combine 1 and 10', { via: 'letter', about: 'Website: ten designs' }),
+      // 2026-11-03: the node answered his letter note in the letter's own thread; its next chat words
+      // were about another task, and both notes wore them.
+      m('tm-3', 5, 'combine 1 and 10', { via: 'letter', about: 'Website: ten designs', letter: 'lt-1' }),
     ], r, { wholeUntil: END })
-    expect([...got.values()].map((a) => a.text)).toEqual(['Labels added.', 'Got the picture.', 'Combining them.'])
+    expect([...got.entries()].map(([id, a]) => `${id}:${a.text}`)).toEqual(['tm-1:Labels added.', 'tm-2:Got the picture.'])
+  })
+
+  it('a letter note is answered by the node\'s next turn in that letter\'s thread, near his own turn', () => {
+    const ms = (min: number) => Date.parse(at(min))
+    const turns: LetterTurn[] = [
+      { from: 'agent', text: 'Ten designs: which?', at: ms(0) },
+      { from: 'human', text: 'combine 1 and 10', at: ms(5) },
+      { from: 'agent', text: 'Combining 1 and 10 now.', at: ms(6) },
+      { from: 'human', text: 'and the colors of 3', at: ms(20) },
+    ]
+    expect(letterAnswerOf(m('tm-1', 5, 'combine 1 and 10', { via: 'letter' }), turns)).toEqual({ text: 'Combining 1 and 10 now.', at: at(6) })
+    // His second note has no answer there yet: none, never the chat's.
+    expect(letterAnswerOf(m('tm-2', 20, 'and the colors of 3', { via: 'letter' }), turns)).toBeNull()
+    // A note far from every turn of his is not this letter's.
+    expect(letterAnswerOf(m('tm-3', 40, 'x', { via: 'letter' }), turns)).toBeNull()
   })
 
   it('a message with no row (or no reply after it) gets nothing; a row far off in time is not his', () => {

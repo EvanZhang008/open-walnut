@@ -120,6 +120,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/subtask-notices.ts': 1,
   'src/core/sessions/task-session-claim.ts': 1,
   'src/core/sessions/task-start.ts': 2,            // frameStartText; a continued conversation passes the start's source
+  // The one wake of a session that owes the user an answer: a Walnut envelope, source wait-until like needs-recheck.
+  'src/core/sessions/user-asks.ts': 1,
   'src/core/sessions/worker-question.ts': 1,       // a worker's question: its own session is the caller
   'src/core/status-consistency.ts': 1,
   'src/core/task-wait-until.ts': 1,
