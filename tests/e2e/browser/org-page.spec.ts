@@ -221,6 +221,15 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
     below = now
     return steady
   }, { timeout: 30_000, intervals: [1_000] }).toBe(true)
+  // Work that comes in now joins the bottom: the pointer rests on the list, which has held its
+  // order since the reload drew it under the pointer before its rows arrived (2026-11-03: in a
+  // full CI shard another spec's new project took the top here and Down picked it).
+  const late = `Org page late ${STAMP}`
+  const lateId = await createTask(request, `Late ${STAMP}`, late)
+  const lateAsks = await request.patch(`/api/tasks/${lateId}`, { data: { phase: 'NEED_ACTION' } })
+  expect(lateAsks.ok(), await lateAsks.text()).toBe(true)
+  await expect(row(page, late)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('org-channel').first()).toHaveAttribute('data-key', below!)
   await page.getByTestId('org-channel-main').press('ArrowDown')
   await expect(page.locator(`[data-testid="org-channel"][data-key="${below}"]`)).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('[data-testid="org-channel"]:focus')).toHaveAttribute('aria-selected', 'true')

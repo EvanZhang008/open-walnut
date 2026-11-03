@@ -24,7 +24,7 @@ import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
-import { holdOrder } from './hold-order';
+import { usePointerHold } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
@@ -270,8 +270,8 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
   };
   // Live work re-sorts the rows all the time; one that moved under the pointer would take a
   // click meant for another. The new order shows once the pointer leaves.
-  const [held, setHeld] = useState<string[] | null>(null);
-  const shown = holdOrder(rows, held);
+  const hold = usePointerHold(rows);
+  const shown = hold.shown;
   const keys = [main.key, ...shown.map((r) => r.key)];
   const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
     ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
@@ -314,8 +314,8 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         aria-label="The CEO and the VPs"
         onKeyDown={onKeyDown}
         onScroll={onScroll}
-        onPointerEnter={() => setHeld(rows.map((r) => r.key))}
-        onPointerLeave={() => setHeld(null)}
+        onPointerEnter={hold.onPointerEnter}
+        onPointerLeave={hold.onPointerLeave}
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
         {keptUnder(main)}

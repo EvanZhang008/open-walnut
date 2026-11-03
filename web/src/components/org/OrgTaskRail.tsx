@@ -38,7 +38,7 @@ import { OrgThreads } from './OrgThreads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from './OrgInlineAnswer';
 import { OrgAlertSnooze } from './OrgAlertSnooze';
-import { holdOrder } from './hold-order';
+import { usePointerHold } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, stateTab, taskTabNote, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
@@ -279,11 +279,12 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   answers: OrgAnswers;
 }) {
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
-  const [held, setHeld] = useState<string[] | null>(null);
-  const shown = useMemo(() => holdOrder(alerts.map((a) => ({ key: a.taskId, a })), held).map((x) => x.a), [alerts, held]);
+  const keyed = useMemo(() => alerts.map((a) => ({ key: a.taskId, a })), [alerts]);
+  const hold = usePointerHold(keyed);
+  const shown = hold.shown.map((x) => x.a);
   return (
     <div className="org-alerts" data-testid="org-alerts" role="region" aria-label="Needs you"
-      onPointerEnter={() => setHeld(alerts.map((a) => a.taskId))} onPointerLeave={() => setHeld(null)}>
+      onPointerEnter={hold.onPointerEnter} onPointerLeave={hold.onPointerLeave}>
       {shown.map((a) => (
         <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={a.taskId === ownId ? undefined : vpOf(a.taskId)} own={a.taskId === ownId ? ownName : undefined} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} />
       ))}
