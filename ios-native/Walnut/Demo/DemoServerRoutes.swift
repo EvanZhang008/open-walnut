@@ -544,7 +544,9 @@ extension DemoServer {
 
     private func replyToLetter(_ id: String, _ r: DemoRequest) -> DemoReply {
         let text = (r.string("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .error(400, "bad_request", "A reply needs some text.") }
+        // A picture alone is a reply, as on the real server.
+        let pictures = (r.json["images"] as? [Any])?.count ?? 0
+        guard !text.isEmpty || pictures > 0 else { return .error(400, "bad_request", "A reply needs some text.") }
         let letter = withState { state -> Letter in
             let i = state.letterIndex(id)!
             let old = state.letters[i]

@@ -7,7 +7,10 @@ import XCTest
 /// outcome per call, and a gate that holds a call open so a test can act while
 /// it is genuinely in flight.
 final class ScriptedReplyTransport: LetterReplyTransport, @unchecked Sendable {
-    struct Call: Equatable { let letterId: String; let text: String; let clientId: String }
+    struct Call: Equatable {
+        let letterId: String; let text: String; let clientId: String
+        var imageCount: Int = 0
+    }
 
     private let lock = NSLock()
     private var outcomes: [Error?] = []
@@ -20,9 +23,11 @@ final class ScriptedReplyTransport: LetterReplyTransport, @unchecked Sendable {
     func script(_ next: [Error?]) { lock.withLock { outcomes += next } }
     var calls: [Call] { lock.withLock { recorded } }
 
-    func replyToLetter(id: String, text: String, clientId: String) async throws -> LetterActionResult {
+    func replyToLetter(
+        id: String, text: String, clientId: String, images: [ImagePayload]
+    ) async throws -> LetterActionResult {
         let (outcome, gate): (Error?, CheckedContinuationGate?) = lock.withLock {
-            recorded.append(Call(letterId: id, text: text, clientId: clientId))
+            recorded.append(Call(letterId: id, text: text, clientId: clientId, imageCount: images.count))
             return (outcomes.isEmpty ? nil : outcomes.removeFirst(), self.gate)
         }
         await gate?.wait()
@@ -963,5 +968,74 @@ final class LetterReplyFieldSessionTests: XCTestCase {
         sessionWrote("a second thought", into: view)
         XCTAssertEqual(view.text, "a second thought")
         XCTAssertEqual(box.text, "a second thought")
+    }
+}
+
+/// Pictures in the letter reply box (2026-11-03: every box that writes to an AI
+/// takes pictures): a picture alone is a reply, a refused one keeps its pictures
+/// for Retry and Edit, and the recorded turn still shows them.
+@MainActor
+final class LetterReplyPictureTests: XCTestCase {
+    private func picture(_ color: UIColor = .systemBlue) -> SelectedImage {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 30)).image { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        }
+        guard case .ok(let picked) = SelectedImage.make(from: image) else {
+            XCTFail("test picture did not encode")
+            fatalError()
+        }
+        return picked
+    }
+
+    func testAPictureAloneIsAReplyAndNothingAtAllIsNot() async {
+        let transport = ScriptedReplyTransport()
+        let store = LetterReplyStore(transport: transport)
+        XCTAssertNil(store.beginSend(letterId: "lt-1", text: "  "))
+        store.setImages([picture()], for: "lt-1")
+        let clientId = store.beginSend(letterId: "lt-1", text: "", images: store.images(for: "lt-1"))
+        XCTAssertNotNil(clientId)
+        XCTAssertTrue(store.images(for: "lt-1").isEmpty, "the box empties of its pictures on send")
+        XCTAssertEqual(store.pendingReplies(for: "lt-1").first?.imageCount, 1)
+        _ = await store.deliver(letterId: "lt-1", clientId: clientId!)
+        XCTAssertEqual(transport.calls, [.init(letterId: "lt-1", text: "", clientId: clientId!, imageCount: 1)])
+        XCTAssertTrue(store.pendingReplies(for: "lt-1").isEmpty)
+        // The recorded turn (same clientId) still shows its pictures in this app session.
+        XCTAssertEqual(store.images(ofReply: clientId!).count, 1)
+    }
+
+    func testARefusedReplyKeepsItsPicturesForRetryAndEditGivesThemBack() async {
+        let transport = ScriptedReplyTransport()
+        transport.script([serverError(503, "unavailable", "Mac asleep")])
+        let store = LetterReplyStore(transport: transport)
+        let clientId = store.beginSend(letterId: "lt-2", text: "see this", images: [picture(), picture(.red)])!
+        _ = await store.deliver(letterId: "lt-2", clientId: clientId)
+        XCTAssertEqual(store.images(ofReply: clientId).count, 2, "a refused reply keeps its pictures")
+
+        transport.script([serverError(503, "unavailable", "Mac asleep")])
+        _ = await store.retry(letterId: "lt-2", clientId: clientId)
+        XCTAssertEqual(transport.calls.map(\.imageCount), [2, 2], "Retry sends the same pictures again")
+
+        store.setImages([picture(.green)], for: "lt-2")
+        store.edit(letterId: "lt-2", clientId: clientId)
+        XCTAssertEqual(store.draft(for: "lt-2"), "see this")
+        XCTAssertEqual(store.images(for: "lt-2").count, 3, "Edit puts the pictures back after the ones picked since")
+        XCTAssertTrue(store.pendingReplies(for: "lt-2").isEmpty)
+    }
+
+    func testAPictureOnlyRecordedTurnCanBeRetriedByItsId() async throws {
+        let transport = ScriptedReplyTransport()
+        let store = LetterReplyStore(transport: transport)
+        let json = #"{ "from": "human", "text": "", "at": 1800000000000, "clientId": "rp-1", "images": ["a.jpg"], "delivery": { "status": "failed", "at": 1800000000500 } }"#
+        let entry = try JSONDecoder().decode(LetterThreadEntry.self, from: Data(json.utf8))
+        XCTAssertEqual(entry.images, ["a.jpg"])
+        _ = await store.retryRecordedTurn(letterId: "lt-3", entry: entry)
+        XCTAssertEqual(transport.calls, [.init(letterId: "lt-3", text: "", clientId: "rp-1")])
+    }
+
+    func testTheSentLineCountsThePictures() {
+        XCTAssertNil(ReplyPictures.sentLine(0))
+        XCTAssertEqual(ReplyPictures.sentLine(1), "With a picture")
+        XCTAssertEqual(ReplyPictures.sentLine(3), "With 3 pictures")
     }
 }

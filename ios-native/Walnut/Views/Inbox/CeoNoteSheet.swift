@@ -8,8 +8,9 @@ struct CeoNoteSheet: View {
     let item: ContentItem
     /// Prefix of every accessibility identifier, e.g. `inbox.item.<id>`.
     let identifier: String
-    /// Called with the trimmed words when the person taps Send; the sheet closes itself.
-    let onSend: (String) -> Void
+    /// Called with the trimmed words and the pictures put with them when the person taps Send;
+    /// the sheet closes itself.
+    let onSend: (String, [SelectedImage]) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -18,6 +19,9 @@ struct CeoNoteSheet: View {
     /// The box's height; the sheet scrolls, so at the large text sizes the keyboard never
     /// squeezes the attachment line or the box away.
     @ScaledMetric(relativeTo: .body) private var boxHeight: CGFloat = 150
+    /// Pictures for the CEO, like the chat composer's (the route takes up to 5).
+    @State private var pictures: [SelectedImage] = []
+    @State private var pictureNotice: String?
 
     /// The server's cap on the note (`content-v1.ts`); longer words are refused, not cut.
     nonisolated static let noteLimit = 8_000
@@ -71,6 +75,16 @@ struct CeoNoteSheet: View {
                         }
                     }
                     .frame(height: boxHeight)
+                    HStack(spacing: 4) {
+                        ReplyPictureButton(
+                            images: $pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote",
+                            onWillPresent: { focused = false }
+                        )
+                        Text(pictures.isEmpty ? "Add a picture" : "Pictures go with your message")
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondaryOnCard)
+                    }
+                    ReplyPictureStrip(images: $pictures, notice: $pictureNotice, idPrefix: "\(identifier).ceoNote")
                     if let over = overLimit {
                         Text(over)
                             .font(.caption)
@@ -92,7 +106,7 @@ struct CeoNoteSheet: View {
                     Button("Send") {
                         let words = note.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
                         dismiss()
-                        onSend(words)
+                        onSend(words, pictures)
                     }
                     .fontWeight(.semibold)
                     .disabled(!Self.canSend(note.wrappedValue))

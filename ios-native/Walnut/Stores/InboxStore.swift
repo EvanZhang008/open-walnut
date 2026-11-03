@@ -509,9 +509,12 @@ final class InboxStore {
     /// Click one action button. Returns the result so the reader can render the
     /// answered record and the delivery line; nil means the call failed and
     /// `error` carries why (the caller shows it, the buttons stay armed).
-    func answer(id: String, actionId: String, freeText: String?) async -> Result<LetterActionResult, Error> {
+    func answer(
+        id: String, actionId: String, freeText: String?, images: [SelectedImage] = []
+    ) async -> Result<LetterActionResult, Error> {
         do {
-            let result = try await api.answerLetter(id: id, actionId: actionId, freeText: freeText)
+            let payloads = await SelectedImage.buildPayloads(images.map(\.jpegData))
+            let result = try await api.answerLetter(id: id, actionId: actionId, freeText: freeText, images: payloads)
             adopt(result)
             return .success(result)
         } catch {

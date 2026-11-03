@@ -117,11 +117,13 @@ final class SessionLifecycleController {
     /// `answers` / `message` are the AskUserQuestion path: answering IS the
     /// allow response, so the map rides along with allow=true; "Dismiss" is a
     /// deny carrying the reason the model sees.
+    /// True once the server has the answer (or the prompt was already gone).
+    @discardableResult
     func respondPermission(
         _ request: PendingPermission, allow: Bool,
         answers: [String: String]? = nil, message: String? = nil
-    ) async {
-        guard !answeringIds.contains(request.requestId) else { return }
+    ) async -> Bool {
+        guard !answeringIds.contains(request.requestId) else { return false }
         answeringIds.insert(request.requestId)
         let original = pendingPermissions
         pendingPermissions.removeAll { $0.requestId == request.requestId }
@@ -136,12 +138,14 @@ final class SessionLifecycleController {
                 "answerCount": String(answers?.count ?? 0),
             ])
             await refreshDetail()
+            return true
         } catch {
             // "Gone/already resolved" is success-shaped: the prompt no longer
             // exists server-side, so keep it dismissed.
-            if let apiError = error as? APIError, apiError.code == "not_found" { return }
+            if let apiError = error as? APIError, apiError.code == "not_found" { return true }
             pendingPermissions = original
             errorMessage = Self.friendlyError(error)
+            return false
         }
     }
 

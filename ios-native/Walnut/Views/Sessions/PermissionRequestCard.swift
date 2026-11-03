@@ -15,7 +15,8 @@ struct PendingPermissionStack: View {
     let pageHeight: CGFloat
     var isAnswering: (PendingPermission) -> Bool
     var onRespond: (PendingPermission, Bool) -> Void
-    var onAnswer: (PendingPermission, [String: String]) -> Void
+    /// The answers, and the pictures the person put with the last answer.
+    var onAnswer: (PendingPermission, [String: String], [SelectedImage]) -> Void
     var onDismissQuestions: (PendingPermission) -> Void
 
     @State private var naturalHeight: CGFloat = 0
@@ -41,6 +42,9 @@ struct PendingPermissionStack: View {
     /// A finger is on the cards (or they still glide from its flick): no
     /// reveal then, so a drag is never fought.
     @State private var scrolling = false
+    /// When a picture was last put under the last answer: the box shows its
+    /// bottom (Submit) once the content takes the new height.
+    @State private var picturesAddedAt: Date?
 
     /// Share of the page the cards may take before they scroll.
     static let pageShare: CGFloat = 0.6
@@ -115,6 +119,47 @@ struct PendingPermissionStack: View {
         position.scrollTo(y: Self.scrollY(bandTop: y, insetTop: scroll.insetTop))
     }
 
+    private func card(_ request: PendingPermission) -> some View {
+        PermissionRequestCard(
+            request: request,
+            answering: isAnswering(request),
+            onRespond: { onRespond(request, $0) },
+            onAnswer: { onAnswer(request, $0, $1) },
+            onDismissQuestions: { onDismissQuestions(request) },
+            onFocusField: { id in
+                focusedField = id
+                if let id { lastField = id }
+            },
+            onTypeInField: { typedAt = .now },
+            onFieldFrame: { id, frame in
+                let old = fieldFrames[id]
+                fieldFrames[id] = frame
+                guard old != frame, id == (focusedField ?? lastField) else { return }
+                // A row whose height changed is its text changing (a
+                // pick elsewhere only moves it): followed whatever made
+                // it, typing, Return or a mic insert with no field
+                // focused for a moment (2026-10-28 v9 gate, 6 of 6).
+                if let old, abs(old.height - frame.height) > 0.5 { grewAt = .now }
+                guard followsTyping else { return }
+                // On the next turn of the run loop: the scroll content has
+                // not taken the row's new height yet, and a scroll now is
+                // clamped to the old bottom (2026-10-28 v8 gate, 3 of 3).
+                DispatchQueue.main.async { reveal("row", anyField: true) }
+            },
+            onPicturesAdded: {
+                picturesAddedAt = .now
+                DispatchQueue.main.async { showSubmit() }
+            }
+        )
+    }
+
+    /// A picture put under the last answer grows the card past the box's
+    /// fold; the person's next step is Submit, so the box shows its bottom.
+    private func showSubmit() {
+        guard let picturesAddedAt, Date.now.timeIntervalSince(picturesAddedAt) < 1, !scrolling else { return }
+        position.scrollTo(edge: .bottom)
+    }
+
     /// A row that moved right after typing (a wrapped line) or while the box
     /// itself changed size (the keyboard) is followed; one moved by a pick
     /// elsewhere on the card is not, so choosing an option never yanks the
@@ -130,33 +175,7 @@ struct PendingPermissionStack: View {
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(requests) { request in
-                        PermissionRequestCard(
-                            request: request,
-                            answering: isAnswering(request),
-                            onRespond: { onRespond(request, $0) },
-                            onAnswer: { onAnswer(request, $0) },
-                            onDismissQuestions: { onDismissQuestions(request) },
-                            onFocusField: { id in
-                                focusedField = id
-                                if let id { lastField = id }
-                            },
-                            onTypeInField: { typedAt = .now },
-                            onFieldFrame: { id, frame in
-                                let old = fieldFrames[id]
-                                fieldFrames[id] = frame
-                                guard old != frame, id == (focusedField ?? lastField) else { return }
-                                // A row whose height changed is its text changing (a
-                                // pick elsewhere only moves it): followed whatever made
-                                // it, typing, Return or a mic insert with no field
-                                // focused for a moment (2026-10-28 v9 gate, 6 of 6).
-                                if let old, abs(old.height - frame.height) > 0.5 { grewAt = .now }
-                                guard followsTyping else { return }
-                                // On the next turn of the run loop: the scroll content has
-                                // not taken the row's new height yet, and a scroll now is
-                                // clamped to the old bottom (2026-10-28 v8 gate, 3 of 3).
-                                DispatchQueue.main.async { reveal("row", anyField: true) }
-                            }
-                        )
+                        card(request)
                     }
                 }
                 .padding(.bottom, 6)
@@ -177,6 +196,7 @@ struct PendingPermissionStack: View {
                 if g.contentHeight != old.contentHeight, followsTyping {
                     DispatchQueue.main.async { reveal("content", anyField: true) }
                 }
+                if g.contentHeight > old.contentHeight { DispatchQueue.main.async { showSubmit() } }
             }
             .onScrollPhaseChange { _, phase in scrolling = phase != .idle && phase != .animating }
             .onChange(of: focusedField) { DispatchQueue.main.async { reveal("focus") } }
@@ -231,7 +251,7 @@ struct PermissionRequestCard: View {
     var onRespond: (Bool) -> Void
     /// AskUserQuestion answer submit (answers map) / dismiss (deny + reason).
     /// Optional so existing call sites and previews stay valid.
-    var onAnswer: (([String: String]) -> Void)?
+    var onAnswer: (([String: String], [SelectedImage]) -> Void)?
     var onDismissQuestions: (() -> Void)?
     /// The scroll id of the free-text field gaining focus, nil when it loses it.
     var onFocusField: ((String?) -> Void)?
@@ -240,6 +260,8 @@ struct PermissionRequestCard: View {
     /// A free-text box (field and mic) by its field id, and its frame in the
     /// stack's content (`PendingPermissionStack.contentSpace`).
     var onFieldFrame: ((String, CGRect) -> Void)?
+    /// A picture was put with the answers.
+    var onPicturesAdded: (() -> Void)?
 
     var body: some View {
         if let questions = request.askQuestions {
@@ -250,8 +272,9 @@ struct PermissionRequestCard: View {
                 onFocusField: onFocusField,
                 onTypeInField: onTypeInField,
                 onFieldFrame: onFieldFrame,
-                onSubmit: { answers in
-                    if let onAnswer { onAnswer(answers) } else { onRespond(true) }
+                onPicturesAdded: onPicturesAdded,
+                onSubmit: { answers, pictures in
+                    if let onAnswer { onAnswer(answers, pictures) } else { onRespond(true) }
                 },
                 onDismiss: {
                     if let onDismissQuestions { onDismissQuestions() } else { onRespond(false) }
@@ -351,7 +374,12 @@ struct AskUserQuestionCard: View {
     var onFocusField: ((String?) -> Void)?
     var onTypeInField: (() -> Void)?
     var onFieldFrame: ((String, CGRect) -> Void)?
-    var onSubmit: ([String: String]) -> Void
+    var onPicturesAdded: (() -> Void)?
+    /// The answers, and the pictures put with them. An answer to the agent's
+    /// question carries words only (it is the question tool's result), so the
+    /// pictures follow it as their own message (the web console's rule,
+    /// `permission-request-store.ts`).
+    var onSubmit: ([String: String], [SelectedImage]) -> Void
     var onDismiss: () -> Void
 
     /// question text → picked option labels (multi-select keeps several).
@@ -362,6 +390,10 @@ struct AskUserQuestionCard: View {
     /// Submit waits for words still being spoken or transcribed into an answer
     /// (`DictationSendGate`).
     @State private var sendGate = DictationSendGate()
+    /// One set of pictures per card, offered beside the LAST question's answer
+    /// (the web form's rule): they go with the answers as a whole.
+    @State private var pictures: [SelectedImage] = []
+    @State private var pictureNotice: String?
 
     private func fieldID(_ question: AskQuestion) -> String { "\(fieldScope)|\(question.question)" }
 
@@ -412,6 +444,9 @@ struct AskUserQuestionCard: View {
         .onChange(of: otherText) { old, new in
             if let focusedQuestion, old[focusedQuestion] != new[focusedQuestion] { onTypeInField?() }
         }
+        .onChange(of: pictures.count) { old, new in
+            if new > old { onPicturesAdded?() }
+        }
     }
 
     @ViewBuilder
@@ -448,24 +483,38 @@ struct AskUserQuestionCard: View {
                 box: "ask-question", blocked: answering,
                 refocus: { focusedQuestion = question.question }
             ) {
-                TextField(
-                    question.options.isEmpty ? "Type your answer…" : "Other…",
-                    text: otherBinding(question),
-                    axis: .vertical
-                )
-                .font(.callout)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .disabled(answering)
-                .focused($focusedQuestion, equals: question.question)
-                .accessibilityIdentifier("session.askQuestion.other")
+                HStack(alignment: .center, spacing: 2) {
+                    TextField(
+                        question.options.isEmpty ? "Type your answer…" : "Other…",
+                        text: otherBinding(question),
+                        axis: .vertical
+                    )
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .disabled(answering)
+                    .focused($focusedQuestion, equals: question.question)
+                    .accessibilityIdentifier("session.askQuestion.other")
+                    // Beside the last answer's field, as on a decision letter's note:
+                    // a row of its own pushed a one-question card's Submit below the
+                    // card box's fold.
+                    if question.question == questions.last?.question {
+                        ReplyPictureButton(
+                            images: $pictures, notice: $pictureNotice, idPrefix: "session.askQuestion",
+                            disabled: answering, onWillPresent: { focusedQuestion = nil }
+                        )
+                    }
+                }
             }
             // The whole box (the field and its mic) on screen, so the stack can
             // keep it, with room for the recording outline, inside its box.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PendingPermissionStack.contentSpace)) } action: { frame in
                 onFieldFrame?(fieldID(question), frame)
+            }
+            if question.question == questions.last?.question {
+                ReplyPictureStrip(images: $pictures, notice: $pictureNotice, idPrefix: "session.askQuestion")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -534,7 +583,7 @@ struct AskUserQuestionCard: View {
                     guard complete else { return }
                     onSubmit(AskUserQuestion.buildAnswers(
                         questions: questions, selections: selections, otherText: otherText
-                    ))
+                    ), pictures)
                 }
             } label: {
                 DictationSendLabel(gate: sendGate, title: "Submit")

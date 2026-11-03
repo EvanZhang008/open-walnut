@@ -105,6 +105,19 @@ describe('a letter reply with pictures', () => {
     await expect(humanReplyAndDeliver(letter.id, { text: '  ' })).rejects.toThrow(/text is required/);
   });
 
+  it('a retry of a picture-only reply names it by clientId alone, and its pictures go again from the record', async () => {
+    const name = picture('reply-3.png');
+    const letter = await sendLetter({ subject: 'Retry', type: 'review', markdown: 'Send one?', sender: SENDER });
+    await humanReplyAndDeliver(letter.id, { text: '', images: [name], clientId: 'phone-1' });
+    sendMessageToSession.mockClear();
+    // The phone keeps no recorded turn's pictures: its Retry sends the id and nothing else.
+    const retried = await humanReplyAndDeliver(letter.id, { text: '', clientId: 'phone-1' });
+    expect(retried.letter.thread).toHaveLength(1);
+    // An empty send under an id nothing holds is still refused.
+    await expect(humanReplyAndDeliver(letter.id, { text: '', clientId: 'phone-2' })).rejects.toThrow(/text is required/);
+    expect((await getLetter(letter.id))!.thread).toHaveLength(1);
+  });
+
   it('a reply without pictures is delivered exactly as before', async () => {
     const letter = await sendLetter({ subject: 'Plain', type: 'review', markdown: 'ok?', sender: SENDER });
     await humanReplyAndDeliver(letter.id, { text: 'ok' });

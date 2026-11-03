@@ -49,6 +49,10 @@ final class LetterReplyStore {
         /// sent again): its slot in the thread is right after them. nil for a
         /// reply saved before this existed. See `LetterThreadItem.ordered`.
         var afterTurns: Int?
+        /// How many pictures go with it (their bytes are in `pendingImages`, and
+        /// on disk under `imageKey`). nil = none, and for a reply saved before
+        /// replies took pictures.
+        var imageCount: Int?
     }
 
     /// Why a request failed, and whether the server may have it anyway.
@@ -82,6 +86,24 @@ final class LetterReplyStore {
     /// Recorded turns whose delivery never reported back while the reader kept
     /// re-reading the letter (`LetterDeliveryWatch`), keyed by `turnKey`.
     private(set) var unconfirmedTurns: Set<String> = []
+    /// Pictures picked for a letter's reply and not sent yet. Memory only, as
+    /// the chat composer keeps its picked pictures (`ComposerDrafts`): large,
+    /// and picked again in a tap.
+    private(set) var draftImages: [String: [SelectedImage]] = [:]
+    /// The JPEG bytes of each pending reply's pictures, by `clientId`. Saved to
+    /// disk too (`imageKey`), so a refused reply keeps them for Retry across
+    /// the app closing, as the chat's send queue keeps a message's images.
+    private(set) var pendingImages: [String: [Data]] = [:]
+    /// The pictures of replies the server now holds, kept for this app session
+    /// so the recorded turn still shows them (the phone cannot read them back
+    /// from the server). Memory only, the newest `maxSentImageReplies`.
+    @ObservationIgnored private var sentImages: [String: [Data]] = [:]
+    /// Set while a relaunch reads the pending replies' pictures back from disk:
+    /// a Retry waits for it, and Edit holds off, so neither sends or hands back
+    /// a reply without the pictures it had (`restoreImages`).
+    @ObservationIgnored private var restoringImages: Task<Void, Never>?
+    @ObservationIgnored private var sentOrder: [String] = []
+    nonisolated static let maxSentImageReplies = 20
 
     init(transport: LetterReplyTransport? = nil, defaults: UserDefaults? = nil, now: Date = Date()) {
         self.transport = transport ?? WalnutAPI()
@@ -127,30 +149,60 @@ final class LetterReplyStore {
         return existing + " " + addition
     }
 
+    // MARK: - Pictures
+
+    func images(for letterId: String) -> [SelectedImage] { draftImages[letterId] ?? [] }
+
+    func setImages(_ images: [SelectedImage], for letterId: String) {
+        draftImages[letterId] = images.isEmpty ? nil : images
+    }
+
+    /// The pictures that went (or go) with a reply, by its `clientId`, as its
+    /// bubble shows them: pending, or recorded during this app session.
+    func images(ofReply clientId: String) -> [Data] { pendingImages[clientId] ?? sentImages[clientId] ?? [] }
+
     // MARK: - Sending
 
     /// Hand a reply over: record it as pending, empty the letter's draft, send.
     /// Returns the result so the caller can adopt the server's letter. `text`
     /// must be exactly what the field showed, already committed.
     @discardableResult
-    func send(letterId: String, text: String, afterTurns: Int? = nil) async -> LetterActionResult? {
-        guard let clientId = beginSend(letterId: letterId, text: text, afterTurns: afterTurns) else { return nil }
+    func send(
+        letterId: String, text: String, images: [SelectedImage] = [], afterTurns: Int? = nil
+    ) async -> LetterActionResult? {
+        guard let clientId = beginSend(letterId: letterId, text: text, images: images, afterTurns: afterTurns)
+        else { return nil }
         return await deliver(letterId: letterId, clientId: clientId)
     }
 
     /// The synchronous half of `send`: the pending reply is in the thread and the
     /// draft is empty when this returns, in the same run-loop turn as the tap
-    /// that cleared the field. Returns the reply's `clientId`, nil for no words.
-    /// `afterTurns`: how many turns the letter shows on record right now.
-    func beginSend(letterId: String, text: String, afterTurns: Int? = nil) -> String? {
+    /// that cleared the field. Returns the reply's `clientId`, nil for nothing
+    /// to send (no words and no pictures; a picture alone is a reply, as in the
+    /// chat). `afterTurns`: how many turns the letter shows on record right now.
+    func beginSend(
+        letterId: String, text: String, images: [SelectedImage] = [], afterTurns: Int? = nil
+    ) -> String? {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !words.isEmpty else { return nil }
+        let pictures = Array(images.prefix(ComposerBar.maxImages)).map(\.jpegData)
+        guard !words.isEmpty || !pictures.isEmpty else { return nil }
         let reply = PendingReply(
-            id: Self.newClientId(), text: words, createdAt: Date(), state: .sending, afterTurns: afterTurns
+            id: Self.newClientId(), text: words, createdAt: Date(), state: .sending, afterTurns: afterTurns,
+            imageCount: pictures.isEmpty ? nil : pictures.count
         )
+        if !pictures.isEmpty {
+            pendingImages[reply.id] = pictures
+            if storedDefaults != nil, !DurableStore.save(pictures, key: Self.imageKey(reply.id)) {
+                // Still sent from memory; only a relaunch before the answer would miss them.
+                AppLog.warn("inbox", "letter reply pictures not saved to disk", [
+                    "clientId": reply.id, "count": String(pictures.count),
+                ])
+            }
+        }
         pending[letterId, default: []].append(reply)
         drafts[letterId] = nil
         draftTimes[letterId] = nil
+        draftImages[letterId] = nil
         persistNow()
         return reply.id
     }
@@ -203,6 +255,19 @@ final class LetterReplyStore {
     func edit(letterId: String, clientId: String) {
         guard let reply = pendingReply(letterId, clientId), case .failed = reply.state,
               !reply.mayHaveArrived else { return }
+        // Pictures still being read back after a relaunch: Edit waits for them
+        // rather than handing back the words alone.
+        if (reply.imageCount ?? 0) > 0, pendingImages[clientId] == nil, restoringImages != nil { return }
+        // Its pictures go back beside the field too, after any picked since.
+        let pictures = (pendingImages[clientId] ?? []).compactMap { SelectedImage(jpegData: $0) }
+        if !pictures.isEmpty {
+            let outcome = ComposerBar.attach(pictures.map { .ok($0) }, to: images(for: letterId))
+            setImages(outcome.images, for: letterId)
+            if let notice = outcome.notice {
+                AppLog.warn("inbox", "letter reply pictures not all given back on edit", ["clientId": clientId, "notice": notice])
+            }
+        }
+        discardImages(of: [clientId])
         removePending(letterId, clientId)
         appendToDraft(reply.text, for: letterId)
         persistNow()
@@ -217,13 +282,17 @@ final class LetterReplyStore {
     /// replaced only then.
     @discardableResult
     func retryRecordedTurn(letterId: String, entry: LetterThreadEntry) async -> LetterActionResult? {
-        guard let clientId = entry.clientId, let text = entry.text, !text.isEmpty else { return nil }
+        // A picture-only turn has no words: the server names it by `clientId`
+        // and delivers its pictures again from its own record.
+        guard let clientId = entry.clientId else { return nil }
+        let text = entry.text ?? ""
+        guard !text.isEmpty || !(entry.images ?? []).isEmpty else { return nil }
         let key = Self.turnKey(letterId, entry)
         guard !retryingTurns.contains(key) else { return nil }
         retryingTurns.insert(key)
         defer { retryingTurns.remove(key) }
         do {
-            let result = try await transport.replyToLetter(id: letterId, text: text, clientId: clientId)
+            let result = try await transport.replyToLetter(id: letterId, text: text, clientId: clientId, images: [])
             turnRetryErrors[key] = nil
             unconfirmedTurns.remove(key)
             noteResponseDelivery(result, letterId: letterId, clientId: clientId, text: text)
@@ -240,13 +309,19 @@ final class LetterReplyStore {
     }
 
     private func attempt(letterId: String, clientId: String) async -> LetterActionResult? {
+        // A relaunch may still be reading this reply's pictures back.
+        if let restoring = restoringImages { await restoring.value }
         guard let reply = pendingReply(letterId, clientId) else { return nil }
         if reply.state == .sending, isAttempting(clientId) { return nil }
         setState(letterId, clientId, .sending)
         attempting.insert(clientId)
         defer { attempting.remove(clientId) }
         do {
-            let result = try await transport.replyToLetter(id: letterId, text: reply.text, clientId: clientId)
+            // Sequential and under the total budget, off the main actor (`buildPayloads`).
+            let images = await SelectedImage.buildPayloads(pendingImages[clientId] ?? [])
+            let result = try await transport.replyToLetter(
+                id: letterId, text: reply.text, clientId: clientId, images: images
+            )
             noteResponseDelivery(result, letterId: letterId, clientId: clientId, text: reply.text)
             removePending(letterId, clientId)
             persistNow()
@@ -402,6 +477,8 @@ final class LetterReplyStore {
     func forget(letterId: String) {
         let prefix = letterId + "#"
         unconfirmedTurns = unconfirmedTurns.filter { !$0.hasPrefix(prefix) }
+        draftImages[letterId] = nil
+        discardImages(of: (pending[letterId] ?? []).map(\.id))
         guard drafts[letterId] != nil || pending[letterId] != nil else { return }
         drafts[letterId] = nil
         draftTimes[letterId] = nil
@@ -470,7 +547,7 @@ final class LetterReplyStore {
                     ? PendingReply(id: reply.id, text: String(reply.text.prefix(maxTextLength)),
                                    createdAt: reply.createdAt, state: reply.state,
                                    mayHaveArrived: reply.mayHaveArrived, uncertainSince: reply.uncertainSince,
-                                   afterTurns: reply.afterTurns)
+                                   afterTurns: reply.afterTurns, imageCount: reply.imageCount)
                     : reply
             }
         }
@@ -521,6 +598,71 @@ final class LetterReplyStore {
         AppLog.info("inbox", "letter replies restored", [
             "drafts": "\(drafts.count)", "pendingLetters": "\(pending.count)",
         ])
+        restoreImages()
+    }
+
+    /// Re-attach each restored reply's pictures, then sweep picture files no
+    /// pending reply names (a reply settled while the app was closing). A reply
+    /// whose file is gone goes as its words, and says so in the log.
+    private func restoreImages() {
+        let wanted = pending.values.flatMap { $0 }.filter { ($0.imageCount ?? 0) > 0 }.map(\.id)
+        guard !wanted.isEmpty else { sweepImageFiles(); return }
+        restoringImages = Task { @MainActor [weak self] in
+            for id in wanted {
+                let datas = await DurableStore.loadAsync([Data].self, key: Self.imageKey(id)) ?? []
+                guard let self else { return }
+                if !datas.isEmpty {
+                    self.pendingImages[id] = datas
+                } else if let letterId = self.pending.first(where: { $0.value.contains { $0.id == id } })?.key {
+                    // The file is gone: the reply says so, rather than going as words alone unannounced.
+                    AppLog.warn("inbox", "letter reply pictures missing on restore", ["clientId": id])
+                    self.update(letterId, id) { reply in
+                        reply.imageCount = nil
+                        reply.state = .failed("Its pictures could not be read back. Edit to add them again.")
+                    }
+                }
+            }
+            guard let self else { return }
+            self.restoringImages = nil
+            self.sweepImageFiles()
+            self.persistNow()
+        }
+    }
+
+    /// Pictures of replies that were NOT sent (edited back, forgotten): gone
+    /// from memory and disk, never kept as a recorded turn's.
+    private func discardImages(of ids: [String]) {
+        for id in ids where pendingImages[id] != nil {
+            pendingImages[id] = nil
+            if storedDefaults != nil { DurableStore.remove(key: Self.imageKey(id)) }
+        }
+    }
+
+    nonisolated static let imageKeyPrefix = "letter-reply-images-"
+    nonisolated static func imageKey(_ clientId: String) -> String { imageKeyPrefix + clientId }
+
+    /// Pictures of replies no longer pending (sent, edited back, settled by a
+    /// read, forgotten) go, from memory and from disk.
+    private func dropSettledImages() {
+        let live = Set(pending.values.flatMap { $0 }.map(\.id))
+        for id in pendingImages.keys where !live.contains(id) {
+            if let datas = pendingImages[id] {
+                sentImages[id] = datas
+                sentOrder.append(id)
+                while sentOrder.count > Self.maxSentImageReplies { sentImages[sentOrder.removeFirst()] = nil }
+            }
+            pendingImages[id] = nil
+            if storedDefaults != nil { DurableStore.remove(key: Self.imageKey(id)) }
+        }
+    }
+
+    private func sweepImageFiles() {
+        guard storedDefaults != nil else { return }
+        let live = Set(pending.values.flatMap { $0 }.map(\.id))
+        for key in DurableStore.keys(withPrefix: Self.imageKeyPrefix)
+        where !live.contains(String(key.dropFirst(Self.imageKeyPrefix.count))) {
+            DurableStore.remove(key: key)
+        }
     }
 
     // Typing writes through a short debounce (the chat composer's measured
@@ -542,6 +684,9 @@ final class LetterReplyStore {
     private func persistNow() {
         persistTask?.cancel()
         persistTask = nil
+        // After the index is written: a file goes only once no saved reply names it
+        // (an index naming a missing file would restore a reply without its pictures).
+        defer { dropSettledImages() }
         guard let defaults else { return }
         let saved = Self.saved(drafts: drafts, draftTimes: draftTimes, pending: pending, now: Date())
         if saved.drafts.isEmpty, saved.pending.isEmpty {
@@ -583,6 +728,13 @@ extension LetterReplyStore {
         turnRetryErrors = [:]
         rechecking = []
         unconfirmedTurns = []
+        draftImages = [:]
+        pendingImages = [:]
+        sentImages = [:]
+        sentOrder = []
+        if storedDefaults != nil {
+            for key in DurableStore.keys(withPrefix: Self.imageKeyPrefix) { DurableStore.remove(key: key) }
+        }
         persistTask?.cancel()
         persistTask = nil
         defaults?.removeObject(forKey: Self.storageKey)

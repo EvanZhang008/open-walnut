@@ -20,10 +20,21 @@ protocol InboxTransport {
     func setLetterPinned(id: String, pinned: Bool) async throws -> Letter
     func setLetterArchived(id: String, archived: Bool) async throws -> Letter
     func answerLetter(id: String, actionId: String, freeText: String?) async throws -> LetterActionResult
+    /// The same answer with pictures beside the note.
+    func answerLetter(
+        id: String, actionId: String, freeText: String?, images: [ImagePayload]
+    ) async throws -> LetterActionResult
     func replyToLetter(id: String, text: String) async throws -> LetterActionResult
     func inboxLetterResponse(id: String) async throws -> LetterResponse
 }
 extension InboxTransport {
+    /// A transport that takes no pictures (the unit-test fakes) answers with the words.
+    func answerLetter(
+        id: String, actionId: String, freeText: String?, images: [ImagePayload]
+    ) async throws -> LetterActionResult {
+        try await answerLetter(id: id, actionId: actionId, freeText: freeText)
+    }
+
     func inboxLetterResponse(id: String) async throws -> LetterResponse {
         LetterResponse(letter: try await letter(id: id))
     }
@@ -78,14 +89,26 @@ extension WalnutAPI {
     /// Long timeout: the server's own route deadline is 12s and a cloud
     /// REPLICA adds a bridge hop on top.
     func answerLetter(id: String, actionId: String, freeText: String? = nil) async throws -> LetterActionResult {
+        try await answerLetter(id: id, actionId: actionId, freeText: freeText, images: [])
+    }
+
+    /// `images` ride inline, as the chat's do; a server that predates them on
+    /// this route ignores the field and keeps the choice and the note.
+    func answerLetter(
+        id: String, actionId: String, freeText: String?, images: [ImagePayload]
+    ) async throws -> LetterActionResult {
         struct Body: Encodable {
             let actionId: String
             let freeText: String?
+            let images: [ImagePayload]?
         }
         let trimmed = freeText?.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await send(
             "POST", "/human-inbox/\(escape(id))/answer",
-            body: Body(actionId: actionId, freeText: (trimmed?.isEmpty ?? true) ? nil : trimmed),
+            body: Body(
+                actionId: actionId, freeText: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+                images: images.isEmpty ? nil : images
+            ),
             timeout: 45
         )
     }

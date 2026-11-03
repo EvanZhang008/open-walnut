@@ -118,6 +118,9 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     @LossyInboxItems var items: [InboxEmailItem]? = nil
     /// Human turns only: a task wrote this turn in the user's place.
     var by: LetterAnsweredBy? = nil
+    /// Human turns only: the file names of the pictures that went with it.
+    /// Absent on servers that predate pictures on letters.
+    var images: [String]? = nil
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }

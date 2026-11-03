@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The letter's conversation: the human's answers and replies, and whatever the
 /// origin agent wrote back, oldest first. The reader shows it in a box with its
@@ -28,6 +29,9 @@ struct LetterThreadView: View {
     var onRetryPending: (String) -> Void = { _ in }
     var onEditPending: (String) -> Void = { _ in }
     var onOpenTask: (String, String?) -> Void = { _, _ in }
+    /// The pictures that went with a reply, by its `clientId`, when this phone
+    /// still holds them (`LetterReplyStore.images(ofReply:)`).
+    var pictures: (String) -> [Data] = { _ in [] }
 
     /// The gap between replies.
     static let rowSpacing: CGFloat = 10
@@ -159,12 +163,18 @@ struct LetterThreadView: View {
                     .font(.callout)
                     .textSelection(.enabled)
                     .accessibilityIdentifier(entry.isHuman ? "inbox.letter.humanTurn" : "inbox.letter.agentTurn")
-            } else if entry.bodyFile != nil {
+            } else if entry.bodyFile != nil, (entry.images ?? []).isEmpty {
                 // The index kept the turn but its body file is gone. Say so
                 // rather than rendering an empty card.
                 Text("This reply's body is no longer on disk.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+            if entry.isHuman {
+                SentPictures(
+                    datas: entry.clientId.map(pictures) ?? [], count: entry.images?.count ?? 0,
+                    identifier: "inbox.letter.humanTurnPictures"
+                )
             }
         }
         .padding(10)
@@ -182,10 +192,16 @@ struct LetterThreadView: View {
     private func pendingBubble(_ reply: LetterReplyStore.PendingReply) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             header(isHuman: true, date: reply.createdAt)
-            Text(reply.text)
-                .font(.callout)
-                .textSelection(.enabled)
-                .accessibilityIdentifier("inbox.letter.pendingReply")
+            if !reply.text.isEmpty {
+                Text(reply.text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("inbox.letter.pendingReply")
+            }
+            SentPictures(
+                datas: pictures(reply.id), count: reply.imageCount ?? 0,
+                identifier: "inbox.letter.pendingReplyPictures"
+            )
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -437,4 +453,43 @@ enum StatusInk {
             ? UIColor(red: 1, green: 0xB3 / 255, blue: 0x40 / 255, alpha: 1)
             : UIColor(red: 0x8A / 255, green: 0x5A / 255, blue: 0, alpha: 1)
     })
+}
+
+/// The pictures that went with a human turn: their thumbnails while this phone
+/// holds them, else one line saying how many (the server keeps them, the phone
+/// cannot read them back). Draws nothing for a turn without pictures.
+struct SentPictures: View {
+    let datas: [Data]
+    let count: Int
+    let identifier: String
+    @State private var thumbs: [UIImage] = []
+
+    var body: some View {
+        if !datas.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(thumbs.enumerated()), id: \.offset) { _, image in
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+            .frame(minHeight: 64, alignment: .leading)
+            .task(id: datas.map(\.count)) {
+                let source = datas
+                thumbs = await Task.detached(priority: .userInitiated) {
+                    source.compactMap { SelectedImage.thumbnail(from: $0, maxDimension: 192) }
+                }.value
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(ReplyPictures.sentLine(datas.count) ?? "")
+            .accessibilityIdentifier(identifier)
+        } else if let line = ReplyPictures.sentLine(count) {
+            Label(line, systemImage: "photo")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier(identifier)
+        }
+    }
 }

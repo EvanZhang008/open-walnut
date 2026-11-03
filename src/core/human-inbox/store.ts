@@ -1229,19 +1229,22 @@ export async function humanReplyTurn(
   requireValidId(id);
   const text = str(input?.text).trim();
   const images = cleanPictureNames(input?.images);
-  // A picture alone is a reply too, as in the chat.
-  if (!text && images.length === 0) throw invalid('text is required');
+  // A picture alone is a reply too, as in the chat. A retry names its turn by `clientId` and may
+  // carry neither (the phone does not keep a recorded turn's pictures), so it is checked below.
+  const empty = !text && images.length === 0;
   assertBodySize(text, 'text');
   const clientId = input?.clientId === undefined ? undefined : str(input.clientId);
   if (clientId !== undefined && !CLIENT_ID_RE.test(clientId)) {
     throw invalid('clientId must be 1 to 100 characters of letters, digits, and . _ : -');
   }
+  if (empty && clientId === undefined) throw invalid('text is required');
   const out = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     const existing = clientId === undefined
       ? -1
       : letter.thread.findIndex(t => t.from === 'human' && t.clientId === clientId);
     if (existing >= 0) return { record: { ...letter }, turn: existing, duplicate: true };
+    if (empty) throw invalid('text is required');
     const at = Date.now();
     letter.thread.push({
       from: 'human',

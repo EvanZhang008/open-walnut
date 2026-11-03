@@ -40,7 +40,7 @@ struct ContentActionButtons: View {
             if outcome != nil { statusSeat }
         }
         .sheet(isPresented: $writingNote) {
-            CeoNoteSheet(item: item, identifier: identifier) { note in talkToCeo(note: note) }
+            CeoNoteSheet(item: item, identifier: identifier) { note, pictures in talkToCeo(note: note, pictures: pictures) }
                 .presentationDetents([.medium, .large])
         }
     }
@@ -154,14 +154,15 @@ struct ContentActionButtons: View {
         return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut
     }
 
-    private func talkToCeo(note: String) {
+    private func talkToCeo(note: String, pictures: [SelectedImage] = []) {
         guard !ceoBusy else { return }
         ceoBusy = true
         outcome = .sending
         Task {
             defer { ceoBusy = false }
             do {
-                let reply = try await WalnutAPI().contentCeo(item: item, note: note)
+                let images = await SelectedImage.buildPayloads(pictures.map(\.jpegData))
+                let reply = try await WalnutAPI().contentCeo(item: item, note: note, images: images)
                 outcome = Self.outcome(of: reply)
                 // The words are gone from the box only once they reached the CEO; a held, a
                 // dropped or a failed send keeps them for the next try.

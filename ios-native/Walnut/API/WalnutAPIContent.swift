@@ -19,10 +19,15 @@ struct ContentDraftReply: Decodable, Equatable {
 
 extension WalnutAPI {
     /// `note` is what the person wrote to the CEO; the server puts it first, the item after it.
-    func contentCeo(item: ContentItem, note: String) async throws -> ContentCeoReply {
-        struct Body: Encodable { let item: ContentItem; let note: String }
-        // The server may start the CEO's session first; the web waits as long.
-        return try await inboxItemRequest("POST", "/content/ceo", body: Body(item: item, note: note), timeout: 30)
+    /// `images` are the pictures put with it, inline as the chat sends them (omitted when none).
+    func contentCeo(item: ContentItem, note: String, images: [ImagePayload] = []) async throws -> ContentCeoReply {
+        struct Body: Encodable { let item: ContentItem; let note: String; let images: [ImagePayload]? }
+        // The server may start the CEO's session first; the web waits as long. Pictures add an
+        // upload of up to the composer's size budget ahead of that.
+        return try await inboxItemRequest(
+            "POST", "/content/ceo",
+            body: Body(item: item, note: note, images: images.isEmpty ? nil : images), timeout: images.isEmpty ? 30 : 60
+        )
     }
 
     /// `sent` is the phone's own rendering of `item.at`, so the draft reads in the person's time zone.

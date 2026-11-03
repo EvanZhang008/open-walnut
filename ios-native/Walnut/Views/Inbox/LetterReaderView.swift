@@ -24,6 +24,10 @@ struct LetterReaderView: View {
     @State private var loading = false
     /// Free-text note attached to a decision ("option B, after the tests pass").
     @State private var decisionNote = ""
+    /// Pictures going with the choice, beside the note (`ReplyPictures`).
+    @State private var decisionPictures: [SelectedImage] = []
+    @State private var decisionPictureNotice: String?
+    @State private var replyPictureNotice: String?
     @State private var busyActionId: String?
     /// A problem that belongs to no single reply (a decision the server refused),
     /// shown non-blocking under the thread. A reply's own outcome is on its
@@ -470,17 +474,27 @@ struct LetterReaderView: View {
                 refocus: { decisionNoteFocused = true },
                 revealID: Self.decisionNoteRevealId
             ) {
-                TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
-                    .lineLimit(1...3)
-                    .font(.callout)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($decisionNoteFocused)
-                    .accessibilityIdentifier("inbox.letter.decisionNote")
+                HStack(alignment: .center, spacing: 2) {
+                    TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
+                        .lineLimit(1...3)
+                        .font(.callout)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($decisionNoteFocused)
+                        .accessibilityIdentifier("inbox.letter.decisionNote")
+                    ReplyPictureButton(
+                        images: $decisionPictures, notice: $decisionPictureNotice,
+                        idPrefix: "inbox.letter.decision", disabled: busyActionId != nil,
+                        onWillPresent: { decisionNoteFocused = false }
+                    )
+                }
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
                 decisionGeometry.boxBottom = $0
                 decisionGeometry.boxMoved?()
             }
+            ReplyPictureStrip(
+                images: $decisionPictures, notice: $decisionPictureNotice, idPrefix: "inbox.letter.decision"
+            )
         }
         .padding(12)
         .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -687,7 +701,8 @@ struct LetterReaderView: View {
                 replies.edit(letterId: letterId, clientId: clientId)
                 replyFocused = true
             },
-            onOpenTask: openTask
+            onOpenTask: openTask,
+            pictures: { clientId in replies.images(ofReply: clientId) }
         )
     }
 
@@ -897,6 +912,9 @@ struct LetterReaderView: View {
     private var composer: some View {
         VStack(spacing: 0) {
             VoiceNoticeRows(voice: voice, idPrefix: "inbox.letter") { text in insertTranscript(text) }
+            ReplyPictureStrip(images: replyPictures, notice: $replyPictureNotice, idPrefix: "inbox.letter.reply")
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
             if voice.state == .recording {
                 VoiceRecordingBar(
                     voice: voice, idPrefix: "inbox.letter",
@@ -908,11 +926,16 @@ struct LetterReaderView: View {
                 )
             } else {
                 HStack(alignment: .bottom, spacing: 4) {
+                    ReplyPictureButton(
+                        images: replyPictures, notice: $replyPictureNotice, idPrefix: "inbox.letter.reply",
+                        disabled: committingSend, onWillPresent: { replyField.endEditing() }
+                    )
                     LetterReplyField(
                         text: replyDraft, isFocused: $replyFocused, controller: replyField,
                         // The page and the reply box share this height; the box
                         // growing takes it from the page, so the sum holds still.
-                        maxHeight: LetterConversationBox.replyFieldCap(shared: pageVisibleHeight + composerHeight)
+                        maxHeight: LetterConversationBox.replyFieldCap(shared: pageVisibleHeight + composerHeight),
+                        onPasteImages: { images in pasteReplyPictures(images) }
                     )
                     // A UIKit view has no width of its own to offer the row: take
                     // what is left beside the mic and send.
@@ -950,7 +973,7 @@ struct LetterReaderView: View {
                         waiting: sendGate.isWaiting, action: gatedSend
                     )
                 }
-                .padding(.leading, 12)
+                .padding(.leading, 4)
                 .padding(.trailing, 6)
                 .padding(.vertical, 6)
             }
@@ -974,8 +997,31 @@ struct LetterReaderView: View {
         )
     }
 
+    /// This letter's picked pictures, held by the store beside the draft.
+    private var replyPictures: Binding<[SelectedImage]> {
+        Binding(
+            get: { replies.images(for: letterId) },
+            set: { replies.setImages($0, for: letterId) }
+        )
+    }
+
     private var canSend: Bool {
-        !committingSend && !replies.draft(for: letterId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !committingSend else { return false }
+        return !replies.draft(for: letterId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !replies.images(for: letterId).isEmpty
+    }
+
+    /// Paste in the reply field with pictures on the clipboard: they join the
+    /// reply under the chat's limits.
+    private func pasteReplyPictures(_ images: [UIImage]) {
+        Task { @MainActor in
+            let outcome = ComposerBar.attach(await ReplyPictures.make(images), to: replies.images(for: letterId))
+            replies.setImages(outcome.images, for: letterId)
+            if let notice = outcome.notice { replyPictureNotice = notice }
+            AppLog.info("inbox", "letter reply pictures pasted", [
+                "letterId": letterId, "count": String(outcome.images.count),
+            ])
+        }
     }
 
     // MARK: - Actions
@@ -1035,9 +1081,14 @@ struct LetterReaderView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         try? await Task.sleep(for: .milliseconds(150))
         let note = decisionNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch await inbox.answer(id: letterId, actionId: action.id, freeText: note.isEmpty ? nil : note) {
+        let pictures = decisionPictures
+        switch await inbox.answer(
+            id: letterId, actionId: action.id, freeText: note.isEmpty ? nil : note, images: pictures
+        ) {
         case .success(let result):
             decisionNote = ""
+            decisionPictures = []
+            decisionPictureNotice = nil
             deliveryNote = nil
             replies.noteAnswerDelivery(result, letterId: letterId)
             adopt(result)
@@ -1091,11 +1142,13 @@ struct LetterReaderView: View {
 
     private func handOver(_ shown: String) {
         let text = shown.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let pictures = replies.images(for: letterId)
+        guard !text.isEmpty || !pictures.isEmpty else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         AppLog.info("inbox", "letter reply sent from the reader", [
-            "letterId": letterId, "chars": "\(text.count)",
+            "letterId": letterId, "chars": "\(text.count)", "pictures": "\(pictures.count)",
         ])
+        replyPictureNotice = nil
         replyField.clear(sent: text)
         // The keyboard stays up for a follow-up, as in the chat composer,
         // except after a committed composition (its input session must end, so
@@ -1109,7 +1162,7 @@ struct LetterReaderView: View {
         let leavesWithOutcome = dynamicTypeSize.isAccessibilitySize && !replyField.committedComposition
         if replyField.committedComposition { replyField.endEditing() }
         guard let clientId = replies.beginSend(
-            letterId: letterId, text: text, afterTurns: letter?.threadEntries.count
+            letterId: letterId, text: text, images: pictures, afterTurns: letter?.threadEntries.count
         ) else {
             if leavesWithOutcome { replyField.endEditing() }
             return

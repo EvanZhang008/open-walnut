@@ -39,9 +39,12 @@ struct LetterReplyField: UIViewRepresentable {
     var maxHeight: CGFloat?
     var identifier: String = "inbox.letter.replyField"
     var accessibilityLabel: String = "Reply to the agent"
+    /// A paste that holds pictures (a screenshot, a copied photo) hands them
+    /// here instead of the field; nil = the field pastes text only.
+    var onPasteImages: (([UIImage]) -> Void)?
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = PictureTextView()
         view.delegate = context.coordinator
         view.isScrollEnabled = true
         view.alwaysBounceVertical = false
@@ -140,6 +143,34 @@ struct LetterReplyField: UIViewRepresentable {
             AppLog.warn("inbox", "reply field echo dropped after send", ["chars": "\(echoed.count)"])
             return true
         }
+    }
+}
+
+/// The reply field's text view: Paste with pictures on the clipboard attaches
+/// them beside the reply (`LetterReplyField.onPasteImages`), as pasting into the
+/// web console's reply box does; words on the clipboard paste as words.
+final class PictureTextView: UITextView {
+    private var onPasteImages: (([UIImage]) -> Void)? {
+        (delegate as? LetterReplyField.Coordinator)?.parent.onPasteImages
+    }
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = UIPasteboard.general
+        // Words win when the clipboard has both (rich text with an inline image
+        // from a web page or a note); a screenshot or a copied photo has no words.
+        if let take = onPasteImages, !pasteboard.hasStrings {
+            Task { @MainActor in
+                let images = await ReplyPictures.clipboardImages()
+                if images.isEmpty { super.paste(sender) } else { take(images) }
+            }
+            return
+        }
+        super.paste(sender)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), onPasteImages != nil, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
     }
 }
 

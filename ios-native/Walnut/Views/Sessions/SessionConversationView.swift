@@ -118,8 +118,19 @@ struct SessionConversationView: View {
                     Task { await lifecycle.respondPermission(request, allow: allow) }
                 },
                 // AskUserQuestion: the ALLOW response carries the answers.
-                onAnswer: { request, answers in
-                    Task { await lifecycle.respondPermission(request, allow: true, answers: answers) }
+                // Pictures follow the answer as a message of their own, once the
+                // answer is in (it is the question tool's result, words only).
+                onAnswer: { request, answers, pictures in
+                    Task {
+                        let answered = await lifecycle.respondPermission(request, allow: true, answers: answers)
+                        guard answered, !pictures.isEmpty else { return }
+                        AppLog.info("session", "question answer pictures sent", [
+                            "sessionId": session.id, "count": String(pictures.count),
+                        ])
+                        if !(await store.send("", images: pictures)) {
+                            lifecycle.errorMessage = "Your answer went, but its pictures did not: this session cannot take a message now."
+                        }
+                    }
                 },
                 // Refusing the ask is a deny with the reason the model reads.
                 onDismissQuestions: { request in

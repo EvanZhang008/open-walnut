@@ -88,7 +88,7 @@ struct AskQuestionHarnessView: View {
                 pageHeight: pageHeight,
                 isAnswering: { _ in false },
                 onRespond: { _, _ in },
-                onAnswer: { _, answers in submitted = answers },
+                onAnswer: { _, answers, _ in submitted = answers },
                 onDismissQuestions: { _ in dismissed = true }
             )
             transcript
