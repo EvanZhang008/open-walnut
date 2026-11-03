@@ -82,13 +82,15 @@ describe('a lead the user is away from', () => {
     expect(lastEvent()).toMatchObject({ letterId: first.letterId, kind: 'reply' });
     expect(lastEvent().quiet).toBeUndefined();
 
-    // A decision is its own letter (its buttons are the one tap), quiet while the thread is unread, named in it.
+    // A decision is its own letter (its buttons are the one tap), quiet while the thread is unread, and
+    // nothing of it goes into the thread: a letter's thread is only that letter's news.
+    const threadBefore = (await getLetter(first.letterId)).thread.length;
     const decision = await run('human_inbox_send', { subject: 'Start step one?', type: 'action_required', markdown: 'Two ways', actions: [{ id: 'go', label: 'Go' }, { id: 'later', label: 'Later' }], ...KIND }, LEAD_SID);
     expect(decision.letterId).not.toBe(first.letterId);
     expect((await getLetter(decision.letterId)).actions?.map((a) => a.id)).toEqual(['go', 'later']);
     const newEvent = events.find((e) => e.letterId === decision.letterId);
     expect(newEvent).toMatchObject({ kind: 'new', quiet: true });
-    expect((await getLetter(first.letterId)).thread.at(-1)!.text).toBe('Needs your answer: "Start step one?", in its own letter, where one tap answers it.');
+    expect((await getLetter(first.letterId)).thread.length).toBe(threadBefore);
 
     // A pinned standing report is its own letter, as before.
     const pinned = await run('human_inbox_send', { subject: 'Weekly digest', type: 'info', markdown: 'x', pin: true }, LEAD_SID);

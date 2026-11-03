@@ -1,9 +1,8 @@
 /**
  * Walnut's own words written into a letter's record rather than a letter of its own: the reason a
- * decision letter is settled when its task completes (decision-settle.ts), the away thread's
- * "needs your answer" turn (away-thread.ts), the lines Walnut puts in front of a session's letter
- * (the user's kind, a snoozed task), a withdrawal's thread turn, and the reasons a kept-local
- * task's letter is settled with. The user reads them on the letter, so they follow the letter
+ * decision letter is settled when its task completes (decision-settle.ts), the lines Walnut puts
+ * in front of a session's letter (the user's kind, a snoozed task), a withdrawal's thread turn,
+ * and the reasons a kept-local task's letter is settled with. The user reads them on the letter, so they follow the letter
  * language like every Walnut letter (languages.ts; 2026-11-02 review: all were English, one of
  * them leading a Chinese letter).
  *
@@ -17,12 +16,6 @@ import type { ByLang } from './languages.js';
 export const COMPLETION_SETTLE_WORDS: ByLang<(title: string, when?: string) => string> = {
   en: (title, when) => `Its task "${title}" was completed${when ? ` on ${when} UTC` : ''} with this unanswered, so nothing waits on the answer.`,
   zh: (title, when) => `它的任务"${title}"${when ? `在 ${when} UTC ` : ''}完成时这封信还没回答，所以没有事情在等这个答案。`,
-};
-
-/** The away thread's turn pointing at a decision letter of its own. */
-export const DECISION_NOTE_WORDS: ByLang<(subject: string) => string> = {
-  en: (subject) => `Needs your answer: "${subject}", in its own letter, where one tap answers it.`,
-  zh: (subject) => `需要你回答："${subject}"，在它自己的那封信里，点一下就能回答。`,
 };
 
 /** The user's kind as they read it in the line leading a decision letter (org/user-kind.ts). */

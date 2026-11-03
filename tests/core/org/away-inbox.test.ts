@@ -14,7 +14,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('away-inbox-pure'
 import { AWAY_AFTER_MS, awayAfterMs, awayStateOf } from '../../../src/core/org/user-away.js';
 import { USER_BACK_TEXT, effectiveHints } from '../../../src/core/hints/hint-registry.js';
 import { advanceHintState, planHints } from '../../../src/core/hints/hint-send.js';
-import { AWAY_THREAD_MAX_MS, DECISION_QUIET_MS, decisionNoteText, foldedTurnText, planAwaySend } from '../../../src/core/human-inbox/away-thread.js';
+import { AWAY_THREAD_MAX_MS, DECISION_QUIET_MS, foldedTurnText, planAwaySend } from '../../../src/core/human-inbox/away-thread.js';
 import { normalizeStore } from '../../../src/core/human-inbox/normalize.js';
 const normalizeRecord = (raw: unknown) => normalizeStore({ version: 1, letters: [raw] } as never).letters[0];
 import { buildMorningReport, parseReportAt, reportTime } from '../../../src/core/org/morning-report.js';
@@ -105,10 +105,10 @@ describe('one thread per absence (planAwaySend)', () => {
     expect(planAwaySend({ type: 'info' }, { ...mark, since: NOW - 5 * 60 * MIN }, SID, [thread], NOW)).toMatchObject({ kind: 'fold' });
   });
 
-  it('a decision is its own letter, quiet while a recent letter of the absence is unread, named in the thread', () => {
+  it('a decision is its own letter, quiet while a recent letter of the absence is unread, never named in the thread', () => {
     const thread = letter({ id: 'lt-1', awayThread: mark });
-    expect(planAwaySend({ type: 'action_required' }, mark, SID, [thread], NOW)).toEqual({ kind: 'new', mark, quiet: true, noteInto: thread });
-    expect(planAwaySend({ type: 'action_required' }, mark, SID, [{ ...thread, read: true }], NOW)).toEqual({ kind: 'new', mark, quiet: false, noteInto: { ...thread, read: true } });
+    expect(planAwaySend({ type: 'action_required' }, mark, SID, [thread], NOW)).toEqual({ kind: 'new', mark, quiet: true });
+    expect(planAwaySend({ type: 'action_required' }, mark, SID, [{ ...thread, read: true }], NOW)).toEqual({ kind: 'new', mark, quiet: false });
     // The night's first letter, unread for hours, does not silence a morning decision.
     const old = { ...thread, createdAt: NOW - DECISION_QUIET_MS - MIN, awayThread: { ...mark, since: NOW - 10 * 60 * MIN } };
     expect(planAwaySend({ type: 'action_required' }, { ...mark, since: NOW - 10 * 60 * MIN }, SID, [old], NOW)).toMatchObject({ kind: 'new', quiet: false });
@@ -137,10 +137,9 @@ describe('one thread per absence (planAwaySend)', () => {
     expect(planAwaySend({ type: 'review', userAsked: true }, mark, SID, [thread], NOW)).toBeNull();
   });
 
-  it('the turn text and the decision line', () => {
+  it('the turn text', () => {
     expect(foldedTurnText({ subject: 'Deploy is live', text: 'Prod serves abc' })).toBe('Deploy is live: Prod serves abc');
     expect(foldedTurnText({ subject: 'Deploy is live' })).toBe('Deploy is live');
-    expect(decisionNoteText(' Pick a layout ')).toBe('Needs your answer: "Pick a layout", in its own letter, where one tap answers it.');
   });
 
   it('the mark survives a rewrite of the index', () => {

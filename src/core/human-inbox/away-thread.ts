@@ -7,7 +7,9 @@
  *  - its first letter of the absence is sent as usual and marked (`awayThread`);
  *  - a later update (info, review, completion) joins that letter's thread as a turn, never a new letter;
  *  - a decision (action_required) stays its own letter, because its options are what one tap answers,
- *    and the thread gets one line naming it;
+ *    and nothing of it goes into the thread: a letter's thread holds only that letter's own news, never
+ *    a line pointing at another letter (2026-11-03: three "needs your answer, in its own letter" lines
+ *    about unrelated decisions sat in the thread of the absence's first letter, about a deadline);
  *  - the phone buzzes once: nothing of the absence pushes while a letter of it is still unread. Once
  *    he has read it, the next turn buzzes again; a decision buzzes when the unread letter that did is
  *    older than DECISION_QUIET_MS, so a night's first letter never silences a morning decision.
@@ -16,8 +18,6 @@
  * by the session that wrote it (his answers in it go to that session). Pinned, mail items and a letter
  * the user asked for stand alone, as before.
  */
-import type { LetterLang } from './walnut-letters/languages.js';
-import { DECISION_NOTE_WORDS } from './walnut-letters/thread-words.js';
 import type { AwayThreadMark, LetterRecord, LetterSender, NewLetter } from './types.js';
 
 export const AWAY_THREAD_MAX_MS = 24 * 60 * 60_000;
@@ -27,7 +27,7 @@ type SendInput = Omit<NewLetter, 'sender'>;
 
 export type AwayPlan =
   | { kind: 'fold'; into: LetterRecord }
-  | { kind: 'new'; mark: AwayThreadMark; quiet: boolean; noteInto?: LetterRecord };
+  | { kind: 'new'; mark: AwayThreadMark; quiet: boolean };
 
 /** Pure: how a letter from an away node goes out, given that node's open away letters. */
 export function planAwaySend(
@@ -51,7 +51,7 @@ export function planAwaySend(
   }
   // A decision: quiet only while the absence buzzed lately and he has not looked.
   const quiet = unread.some((l) => now - l.createdAt < DECISION_QUIET_MS);
-  return { kind: 'new', mark, quiet, ...(thread ? { noteInto: thread } : {}) };
+  return { kind: 'new', mark, quiet };
 }
 
 /** The thread line of a folded update: its subject, then its preview when it gave one. */
@@ -59,10 +59,6 @@ export function foldedTurnText(input: Pick<SendInput, 'subject' | 'text'>): stri
   const subject = String(input.subject ?? '').trim();
   const text = typeof input.text === 'string' ? input.text.trim() : '';
   return text && text !== subject ? `${subject}: ${text}` : subject;
-}
-
-export function decisionNoteText(subject: string, lang: LetterLang = 'en'): string {
-  return DECISION_NOTE_WORDS[lang](subject.trim());
 }
 
 export interface AwaySendResult {
@@ -131,12 +127,6 @@ export async function sendAway(
         return { letter: await sendNew({ awayThread: { taskId, since: state.lastSeenAt }, quiet: false }), addedToThread: false };
       }
     }
-    const letter = await sendNew({ awayThread: plan.mark, quiet: plan.quiet });
-    if (plan.noteInto) {
-      const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
-      await store.agentReply(plan.noteInto.id, { text: decisionNoteText(input.subject, await walnutLetterLanguage()) }, { quiet: true })
-        .catch((err) => log.notif.warn('human-inbox: away thread note not written', { letterId: plan.noteInto!.id, error: err instanceof Error ? err.message : String(err) }));
-    }
-    return { letter, addedToThread: false };
+    return { letter: await sendNew({ awayThread: plan.mark, quiet: plan.quiet }), addedToThread: false };
   });
 }
