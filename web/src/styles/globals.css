@@ -14957,13 +14957,19 @@ body.walnut-dragging {
   font-size: 16px;
   font-weight: 700;
   cursor: pointer;
-  /* The ⋮ glyph's ink sits 0.75px below its line box (measured, Chromium and
-     WebKit); lifting the content box puts it on the row's center line. */
-  padding: 0 0 1.5px;
+  padding: 0;
   line-height: 1;
-  letter-spacing: 1px;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+/* The dots are drawn (KebabIcon.tsx), so no font moves their ink: the button's flex
+   box centers them on the row's line in every engine. Sized in em, as the glyph was; an even
+   height (12px in a 22px button) starts on a whole pixel, so nothing rounds it off the line. */
+.task-kebab-dots {
+  display: block;
+  flex: none;
+  width: 0.1875em;
+  height: 0.75em;
 }
 
 /* Show kebab on row hover or when menu is open */

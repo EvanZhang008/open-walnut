@@ -20,6 +20,7 @@ import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
+import { KebabIcon } from '@/components/tasks/KebabIcon';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -358,7 +359,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         aria-label="More actions"
         style={{ opacity: 1 }}
       >
-        ⋮
+        <KebabIcon />
       </button>
       )}
       {/* Portalled to <body> deliberately. `position: fixed` escapes CLIPPING

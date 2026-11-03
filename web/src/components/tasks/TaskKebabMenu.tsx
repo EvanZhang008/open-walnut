@@ -19,6 +19,7 @@ import { SnoozeUntilEvent, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { TaskMenuRows } from './TaskMenuRows';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
+import { KebabIcon } from './KebabIcon';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -622,7 +623,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
         title="More actions"
         aria-label="More actions"
       >
-        ⋮
+        <KebabIcon />
       </button>
       {/* Portalled to <body>: `position: fixed` escapes clipping ancestors but
           NOT stacking contexts, so a z-indexed ancestor (a panel header, a
