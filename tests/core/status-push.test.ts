@@ -29,6 +29,12 @@ vi.mock('../../src/core/session-requests.js', () => ({
 vi.mock('../../src/core/sessions/session-send-core.js', () => ({
   deliverToSession: async (rec: SessionRecord, o: { enqueueText: string }) => { delivered.push({ sid: rec.claudeSessionId, text: o.enqueueText }); return { delivery: 'queued' }; },
 }));
+// The org switch (src/core/org/org-enabled.ts), read here without the config file.
+let orgOn = true;
+vi.mock('../../src/core/org/org-enabled.js', () => ({
+  isOrgEnabled: async () => orgOn,
+  isOrgNode: (t: { org_role?: string } | null | undefined) => t?.org_role === 'main' || t?.org_role === 'lead',
+}));
 vi.mock('../../src/core/session-message-queue.js', () => ({
   enqueueMessage: async (sid: string, text: string) => { queued.push({ sid, text }); return { id: 'qm-x' }; },
 }));
@@ -50,6 +56,7 @@ beforeEach(async () => {
   delivered.length = 0;
   queued.length = 0;
   requests = [];
+  orgOn = true;
   for (const t of [
     task('main', { org_role: 'main', phase: 'IN_PROGRESS', project: 'Org' }),
     task('vp', { org_role: 'lead', phase: 'IN_PROGRESS' }),
@@ -123,6 +130,19 @@ describe('who hears it', () => {
     pendingStatusNote('s-main')!.markTold()
     emit(task('main', { org_role: 'main', phase: 'WAITING', project: 'Org', user_status: { state: 'waiting', kind: 'you', waitingOn: 'Your next message' } }))
     expect(await flushStatusPush(Date.now() + 3 * SETTLE_MS + 3)).toBe(0)
+  });
+
+  it('with the org off a VP and Main hear nothing; a worker\'s own leader still does', async () => {
+    orgOn = false;
+    tasks.set('top', task('top', { phase: 'IN_PROGRESS', user_status: { state: 'working' } }))
+    sessions.push(sess('s-top', 'top'))
+    emit(tasks.get('top')!)
+    emit(task('top', { phase: 'WAITING', user_status: { state: 'waiting', kind: 'outside', waitingOn: 'The CI run' } }))
+    emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' } }))
+    await flushStatusPush(Date.now() + SETTLE_MS + 1)
+    expect(pendingStatusNote('s-vp')).toBeNull()
+    expect(pendingStatusNote('s-main')).toBeNull()
+    expect(ride()).toContain('Needs you → Working')
   });
 
   it('a change that settles where it began is no news', async () => {

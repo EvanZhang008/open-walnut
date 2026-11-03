@@ -46,10 +46,19 @@ export async function setProjectVp(project: string, vp: string): Promise<Project
   return apiPost<ProjectVpAnswer>('/api/v1/org/vp', { project, vp });
 }
 
-/** The org's own names (config.yaml `org`): its name on the Org page, the user's role on the chart. */
+/** The org's own names (config.yaml `org`): its name on the Org page, the user's role on the chart,
+ *  and the switch that turns the whole org off (src/core/org/org-enabled.ts; an older server sends
+ *  none: on). */
 export interface OrgSettings {
   name: string;
   founderTitle: string;
+  enabled?: boolean;
+}
+
+/** Start Main's or a VP's first session in the background (src/core/org/org-autostart.ts). `auto`:
+ *  the page shows one with none; without it, the user's Retry. Never navigates. */
+export async function startOrgNode(taskId: string, auto: boolean): Promise<{ queued: boolean; skipped?: string }> {
+  return apiPost<{ queued: boolean; skipped?: string }>(`/api/v1/org/nodes/${encodeURIComponent(taskId)}/start`, auto ? { auto: true } : {});
 }
 
 export async function fetchOrgSettings(): Promise<OrgSettings> {

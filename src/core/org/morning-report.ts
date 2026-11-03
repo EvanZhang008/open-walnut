@@ -177,6 +177,9 @@ export function stopReportClock(): void {
  */
 export async function tickReports(now = Date.now()): Promise<number> {
   if (ticking) return 0;
+  // The org is off (org-enabled.ts): nothing is sent; a report whose time passes meanwhile is dropped later.
+  const { isOrgEnabled } = await import('./org-enabled.js');
+  if (!(await isOrgEnabled())) return 0;
   ticking = true;
   let sent = 0;
   try {

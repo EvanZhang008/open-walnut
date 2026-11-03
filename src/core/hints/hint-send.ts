@@ -212,6 +212,12 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([record.taskId]))[0];
     const target = hintTargetOf(sessionId, task);
+    // The org is off (org/org-enabled.ts): Main and the VPs get none of the org's own hints (away,
+    // Brief, threads tidy); a person's message is still filed under its thread.
+    if (target.role === 'main' || target.role === 'lead') {
+      const { isOrgEnabled } = await import('../org/org-enabled.js');
+      if (!(await isOrgEnabled())) return { target, away: null, brief: null, threadsTidy: null, ...(task ? { task } : {}) };
+    }
     // Only Main and the leads hear whether the user is in their chat (hint user-away).
     const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;

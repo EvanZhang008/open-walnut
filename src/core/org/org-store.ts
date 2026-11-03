@@ -88,6 +88,8 @@ export function ensureMainTask(): Promise<Task> {
     // The baseline starts now, so Main's first follow-up already hears what moved since.
     await writeDigestState(task.id, orgDigest(await orgTasks(), undefined, new Date().toISOString()).next)
       .catch((err) => log.task.warn('org digest: baseline not recorded', { taskId: task.id, error: err instanceof Error ? err.message : String(err) }));
+    // Not started here: every caller that makes Main starts it with the user's own message next.
+    // A Main with no session starts by itself from the Org page or the boot sweep (org-autostart.ts).
     return task;
   });
 }
@@ -291,6 +293,9 @@ async function askHandover(h: Handover): Promise<{ sessionId: string; messageId?
 /** Tell the lead that took a project over, when it is mid-turn (the notice rides along); never wake it. */
 async function tellTakeOver(lead: Task, project: string): Promise<void> {
   try {
+    // With the org off (org-enabled.ts) the lead reads its projects when it is next used.
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return;
     const target = await leadSession(lead.id, true);
     if (!target) return;
     const { getTask } = await import('../task-manager.js');
@@ -328,6 +333,11 @@ export async function setProjectVp(project: string, vp: string): Promise<Project
     if (h.ends) closeAfterHandover({ taskId: h.from.id, project: h.project, ...asked });
   }
   if (newLead && !result.unchanged) await tellTakeOver(newLead, result.project);
+  // A lead made or reopened by the move starts by itself (one with a session is left alone).
+  if (result.lead?.id) {
+    const leadId = result.lead.id;
+    void import('./org-autostart.js').then((m) => m.startOrgNodeSoon(leadId, 'created')).catch(() => {});
+  }
   return result;
 }
 
@@ -712,6 +722,9 @@ export async function pendingOrgDigest(sessionId: string, nowMs = Date.now()): P
   try {
     const { role } = await import('../server-role.js');
     if (role() !== 'leader') return null;
+    // The org is off (org-enabled.ts): no team note and no digest rides anything.
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return null;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sessionId);
     if (!record?.taskId) return null;

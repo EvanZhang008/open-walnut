@@ -133,6 +133,13 @@ if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
   process.env.WALNUT_DAEMON_BOOT_START = '0'
 }
 
+// Main and every VP start a session by themselves when they are made (src/core/org/org-autostart.ts):
+// a test that makes a VP would otherwise spawn a session it never asked for. The autostart tests
+// set this to '1' themselves.
+if (process.env.WALNUT_ORG_AUTOSTART === undefined) {
+  process.env.WALNUT_ORG_AUTOSTART = '0'
+}
+
 // A Mac with no companion asks GitHub whether the newest release carries join.ps1 before it
 // shows the Windows line (src/core/net/join-ps1-published.ts): no test waits on that network
 // call. A test of the line sets this itself.

@@ -78,6 +78,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only
     || a.org_instructions?.at !== b.org_instructions?.at || a.org_instructions?.text !== b.org_instructions?.text
     || (a.org_leads ?? []).join('\n') !== (b.org_leads ?? []).join('\n')) return false;
+  // Main's or a VP's background start (org-autostart.ts): the Org page says starting, or why it failed.
+  if (a.org_start?.state !== b.org_start?.state || a.org_start?.at !== b.org_start?.at) return false;
   // The Org nodes a task is pinned to (src/core/org/org-pins.ts), written raw: the Org list and the
   // node's Pinned tab draw them.
   if ((a.org_pins ?? []).map((p) => p.node).join('\n') !== (b.org_pins ?? []).map((p) => p.node).join('\n')) return false;

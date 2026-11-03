@@ -34,6 +34,7 @@ import { ORG_TASK_MODES, OrgTaskRail, TAB_DOT, type OrgAnswers, type OrgTaskMode
 import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
+import { OrgNodeStart } from './OrgNodeStart';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
@@ -78,8 +79,10 @@ interface Props {
   onOpenSession: (sessionId: string) => void;
   /** Asks answered from their rows (the page's holds, OrgPage). */
   answers: OrgAnswers;
-  /** Start a chat with this node, which has no session yet. */
+  /** Start this node, which has no session yet, in place (Retry, Make a VP). */
   onStartChat: (row: ChannelRow) => void;
+  /** The task list is still loading: a node with no session yet may only not be known yet. */
+  tasksLoading?: boolean;
   /** Phone: back to the list. */
   onBack?: () => void;
   now: number;
@@ -152,7 +155,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, onBack, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, tasksLoading, onBack, now }: Props) {
   // What opens instead of this node or beside it (another node, a task's panel, the chat this
   // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
   // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened.
@@ -436,14 +439,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
             <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
-          <div className="org-chat-start" data-testid="org-chat-start">
-            {launch ? <p>The CEO is starting…</p> : <>
-            <p>{row.contactId || row.kind === 'main' ? `${title} has not started yet.` : `${row.name} has no VP yet.`}</p>
-            <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-chat" onClick={() => onStartChat(row)}>
-              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a VP and chat'}
-            </button>
-            </>}
-          </div>
+          // No session yet: it starts by itself in the background (org-autostart.ts); Retry only after a failure.
+          <OrgNodeStart row={row} contact={contact} title={title} onStart={onStartChat} loading={!!tasksLoading} starting={!!launch} />
         ))}
       </div>
       {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}

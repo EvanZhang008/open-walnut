@@ -188,6 +188,9 @@ export async function noteTeamAsk(
   sessionId: string, message: string, enqueued: string, source: string | undefined, messageId?: string,
 ): Promise<void> {
   try {
+    // The org is off (org-enabled.ts): no VP keeps its team's asks.
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return;
     const { PERSON_SEND_SOURCES } = await import('../session-message-queue.js');
     const person = PERSON_SEND_SOURCES.has(source ?? '');
     const peer = source === 'peer' ? peerNoteSender(enqueued) : null;

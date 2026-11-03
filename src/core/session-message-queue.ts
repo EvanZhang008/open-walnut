@@ -181,6 +181,24 @@ export { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
  * @param opts.userUuid - pre-assigned v4 uuid for the CLI's user line (see
  *   QueuedMessage.userUuid). Optional; absent changes nothing.
  */
+/**
+ * With the org off (Settings → Org), Walnut's own background turns never reach Main or a VP
+ * (org/org-enabled.ts ORG_OFF_BLOCKED_SOURCES). A backstop: each such path has its own gate.
+ * Cheap while the org is on, which is almost always.
+ */
+async function refuseOrgDeliveryWhileOff(sessionId: string, source: string | undefined, taskId: string | undefined): Promise<void> {
+  const { orgEnabledCached, isOrgEnabled, isOrgNode, ORG_OFF_BLOCKED_SOURCES, OrgOffError } = await import('./org/org-enabled.js');
+  if (!source || !ORG_OFF_BLOCKED_SOURCES.has(source) || orgEnabledCached() || await isOrgEnabled()) return;
+  const { getSessionByClaudeId } = await import('./session-tracker.js');
+  const id = taskId ?? (await getSessionByClaudeId(sessionId).catch(() => null))?.taskId;
+  if (!id) return;
+  const { getTask } = await import('./task-manager.js');
+  const task = await getTask(id).catch(() => null);
+  if (!isOrgNode(task)) return;
+  log.session.info('org off: background turn not sent to an org node', { sessionId, taskId: id, source });
+  throw new OrgOffError();
+}
+
 export async function sendMessageToSession(
   sessionId: string,
   message: string,
@@ -210,6 +228,7 @@ export async function sendMessageToSession(
   // task's active session (sessions/engine-switch.ts).
   const { activeSessionFor, movingFrom } = await import('./sessions/engine-switch.js');
   sessionId = await activeSessionFor(sessionId);
+  await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
   // Its task is moving to another host: the row is held here and goes with the task.
   const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
   const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;

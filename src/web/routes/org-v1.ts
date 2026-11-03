@@ -14,8 +14,10 @@
  *                                                     put a project under another project's VP
  *                                                     (its lead), or back under its own (vp '');
  *                                                     no task changes project
- *   GET  /org/settings        → { name, founderTitle, defaultInstructions }  the org's name, the user's role, Walnut's default core instructions
- *   PUT  /org/settings { name?, founderTitle? } → the same, after the change (blank = default)
+ *   GET  /org/settings        → { name, founderTitle, enabled, defaultInstructions }  the org's name, the user's role, the
+ *                               org switch (org-enabled.ts), Walnut's default core instructions
+ *   PUT  /org/settings { name?, founderTitle?, enabled? } → the same, after the change (blank = default)
+ *   POST /org/nodes/:id/start { auto? } → { queued, skipped? }  start Main's or a VP's first session (org-autostart.ts)
  *   POST /org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt, since }
  *                                                     Main's or a lead's report for the user
  *
@@ -58,6 +60,12 @@ function brief(task: Task): Record<string, unknown> {
     id: task.id, title: task.title, project: task.project ?? '', phase: task.phase,
     ...(task.org_role ? { org_role: task.org_role } : {}),
   }
+}
+
+/** A test run's request on a Walnut that marks them (src/core/test-run.ts): the real one. */
+async function isTestRunRequest(req: Request): Promise<boolean> {
+  const { TEST_RUN_HEADER, parseTestRunLabel, testRunMarkingEnabled } = await import('../../core/test-run.js')
+  return !!parseTestRunLabel(req.headers[TEST_RUN_HEADER]) && await testRunMarkingEnabled()
 }
 
 /** Org nodes are tasks only the leader makes: a replica making its own would split the org. */
@@ -147,6 +155,11 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
     const caller = await resolveCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
     const askerTaskId = caller.kind === 'human' ? undefined : caller.kind === 'session' ? caller.record.taskId ?? '' : ''
+    // The org is off (org-enabled.ts): an agent's org_send is refused, a person still reaches it.
+    if (caller.kind !== 'human') {
+      const { isOrgEnabled, ORG_OFF_MESSAGE } = await import('../../core/org/org-enabled.js')
+      if (!(await isOrgEnabled())) throw new OrgError('org_off', 409, ORG_OFF_MESSAGE)
+    }
     const contact = await resolveOrgContact(to, { askerTaskId })
     // `task`: more for a task the contact already gave this work to, sent to it directly; the contact
     // reads it in its next team note (team-asks.ts) instead of spending a turn passing it on.
@@ -162,6 +175,7 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     }
     const started = await hasSession(contact.task)
     const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
+
     res.json({
       task: brief(contact.task), kind: contact.kind, project: contact.project, started,
       ...(launch ? { launch } : {}), ...(contact.handedOverBy ? { handedOverBy: contact.handedOverBy } : {}),
@@ -316,13 +330,22 @@ orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: Next
 orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('The org\'s names are changed')
-    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown }
+    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown; enabled?: unknown }
     for (const k of ['name', 'founderTitle'] as const) {
       if (body[k] !== undefined && typeof body[k] !== 'string') throw new OrgError('bad_name', 400, `\`${k}\` is a string.`)
     }
+    if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new OrgError('bad_enabled', 400, '`enabled` is true or false.')
+    // A test window on the real Walnut never turns the user's org off or on.
+    if (body.enabled !== undefined && await isTestRunRequest(req)) throw new OrgError('test_run', 409, 'A test run does not change the org switch.')
+    const wasOn = (await getOrgSettings()).enabled
     const settings = await setOrgSettings(body)
-    // Every other window (and the Mac app) reads the new names at once.
+    // Every other window (and the Mac app) reads the new names at once. Turned back on, the nodes
+    // that never started start now (org-enabled.ts hears the change and runs the sweep).
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'org' }, ['web-ui'], { source: 'api' })
+    if (wasOn !== settings.enabled) {
+      const { log } = await import('../../logging/index.js')
+      log.task.info(settings.enabled ? 'org: turned on' : 'org: turned off', { by: header(req, 'x-walnut-caller-sid') ? 'agent' : 'human' })
+    }
     res.json(settings)
   } catch (err) {
     sendError(res, next, err)
@@ -333,6 +356,36 @@ orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextF
 // The user is looking at Main or a lead: when its Brief is stale, Walnut asks it for one refresh
 // turn, at most once per 15 minutes (src/core/sessions/brief-refresh.ts). A test run on the real
 // Walnut (an automated browser) never starts one.
+// POST /api/v1/org/nodes/:id/start { auto?: boolean } → { queued, skipped? }
+// Start Main's or a VP's first session in the background (src/core/org/org-autostart.ts): the Org
+// page asks for one it shows with none (`auto`), and its Retry after a start that failed. Nothing
+// navigates; the page follows the task's `org_start` and its session.
+orgV1Router.post('/org/nodes/:id/start', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('An org node is started')
+    // A test window on the real Walnut (an automated browser) starts no CLI for the user's nodes.
+    if (await isTestRunRequest(req)) {
+      res.json({ queued: false, skipped: 'test_run' })
+      return
+    }
+    const { getTask } = await import('../../core/task-manager.js')
+    const task = await getTask(String(req.params.id)).catch(() => null)
+    if (!task) throw new OrgError('unknown_task', 404, `No task "${String(req.params.id)}".`)
+    const why = req.body?.auto === true ? 'viewed' as const : 'retry' as const
+    const { orgStartSkip, startOrgNodeSoon } = await import('../../core/org/org-autostart.js')
+    const skipped = await orgStartSkip(task, why)
+    if (skipped === 'org_off') {
+      const { OrgOffError } = await import('../../core/org/org-enabled.js')
+      throw new OrgError('org_off', 409, new OrgOffError().message)
+    }
+    if (skipped === 'not_org_node') throw new OrgError('not_org_node', 409, `"${task.title}" is not Main or a VP.`)
+    if (!skipped) startOrgNodeSoon(task.id, why)
+    res.status(skipped ? 200 : 202).json({ queued: !skipped, ...(skipped ? { skipped } : {}) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
 orgV1Router.post('/org/nodes/:id/brief-refresh', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A Brief refresh is asked')
@@ -376,6 +429,11 @@ orgV1Router.post('/org/report', async (req: Request, res: Response, next: NextFu
       const d = /^(\d+(?:\.\d+)?)\s*(m|h|d)$/i.exec(b.since.trim())
       since = d ? now - Number(d[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[d[2]!.toLowerCase() as 'm' | 'h' | 'd'] : Date.parse(b.since)
       if (!Number.isFinite(since) || since >= now) throw new OrgError('bad_since', 400, '`since` is an ISO time or a duration back from now like "12h".')
+    }
+    // Sent or scheduled, a report is the org's own letter: not while the org is off. A preview still reads.
+    if ((typeof b.at === 'string' && b.at.trim()) || b.send === true) {
+      const { isOrgEnabled, ORG_OFF_MESSAGE } = await import('../../core/org/org-enabled.js')
+      if (!(await isOrgEnabled())) throw new OrgError('org_off', 409, ORG_OFF_MESSAGE)
     }
     if (typeof b.at === 'string' && b.at.trim()) {
       primaryOnly('A report is scheduled')

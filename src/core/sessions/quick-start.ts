@@ -387,6 +387,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // persona drift repair would all skip this session otherwise. General agent
     // only: agent_id is create-time data (updateTask does not take it), and a
     // stamp without it would have the repair rebuild the wrong persona.
+    // The org is off: Main or a VP is started only by a person (sessions/task-start.ts).
+    const { refuseOrgStartWhileOff } = await import('./task-start.js');
+    await refuseOrgStartWhileOff(updatedTask, source);
     if (walnutAgent && !updatedTask.walnut_agent && askAgent?.id === GENERAL_AGENT_ID) {
       updatedTask = (await updateTask(updatedTask.id, { walnut_agent: true }, { source })).task;
     }

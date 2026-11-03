@@ -72,10 +72,13 @@ export async function runStatusReconcile(nowMs = Date.now()): Promise<string[]> 
     const open = (await listTasks()).filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && !t.plugin_only);
     const byId = new Map(open.map((t) => [t.id, t] as const));
     const quieted = new Set(open.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
+    // The org is off (org/org-enabled.ts): Main and the VPs are asked nothing.
+    const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
+    const orgOff = !(await isOrgEnabled());
     for (const s of await listSessionsForTasks(new Set(byId.keys()))) {
       if (asked.length >= PER_PASS) break;
       const task = s.taskId ? byId.get(s.taskId) : undefined;
-      if (!task || quieted.has(task.id)) continue;
+      if (!task || quieted.has(task.id) || (orgOff && isOrgNode(task))) continue;
       const ended = statusMissed(task, s, nowMs);
       if (ended === null) continue;
       const last = lastAsked.get(s.claudeSessionId);

@@ -909,6 +909,11 @@ export interface Task {
    *  title stays the session's own (its turn-end topic may grow it), so the chart and the Org list
    *  read this instead (orgDisplayTitle). Payload blob, local-only; an older Walnut ignores it. */
   org_name?: string;
+  /** Main or a lead only: Walnut's own background start of its first session
+   *  (src/core/org/org-autostart.ts), so the Org page can say it is starting, or why it could not
+   *  start and offer Retry. Cleared once the node has a session. Payload blob, local-only; an
+   *  older Walnut ignores it. */
+  org_start?: { state: 'starting' | 'failed'; at: string; error?: string; attempts?: number };
   /** The Org nodes this task is pinned to (src/core/org/org-pins.ts): the user's focus on that node,
    *  apart from the board's pins. One entry per node (`main`, or `project:<key>` for a VP), with who
    *  pinned it and when. Payload blob, local-only, never pushed to sync backends; an older Walnut
@@ -1272,7 +1277,10 @@ export interface Config {
   user: { name?: string };
   /** The org's own names, set on the Org page (src/core/org/org-settings.ts): the org's name
    *  (default "Org") and the user's role at the top of the org chart (default "Founder"). */
-  org?: { name?: string; founder_title?: string };
+  /** The org above the work (src/core/org/org-settings.ts): its name, the user's role on the chart,
+   *  and `enabled`: `false` turns the whole org off (no Main or VP session started, none of the
+   *  org's own messages; org-enabled.ts). Absent = on, so an install that never set it keeps it. */
+  org?: { name?: string; founder_title?: string; enabled?: boolean };
   defaults: {
     priority: TaskPriority;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'

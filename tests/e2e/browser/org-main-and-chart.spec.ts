@@ -4,8 +4,8 @@
  *   - a new install opens the chat on Main's composer; the sidebar has the Ask Walnut
  *     toggle and the Org page
  *   - the drawer pins Main above the other chats and links the Org page
- *   - on the Org page, chatting with a project with two tasks makes its hidden lead and opens a
- *     plain chat with it (no Start Task / Ask Walnut fork, a folder ready); the Tasks page hides
+ *   - on the Org page, Make a VP on a project with two tasks makes its hidden lead, which starts
+ *     by itself and opens its chat in place (src/core/org/org-autostart.ts); the Tasks page hides
  *     the leads too
  *   - a send from Main's composer makes Main, shows its session, and keeps it off the board
  *     and off the Tasks page
@@ -27,8 +27,7 @@
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { loadHome, openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 import { expectNotInTasksTable, revealInTasksTable } from './tasks-table-helpers'
 import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
 import { expectChatShown } from './org-view-helpers'
@@ -72,7 +71,7 @@ async function removeMain(request: APIRequestContext): Promise<void> {
 }
 
 const sidebarOrg = (page: Page) => page.getByTestId('sidebar-org')
-/** On the Org page: the project's Chat tab and its start button (no session yet). */
+/** On the Org page: the project's node and its Make a VP button (no VP yet). */
 async function startProjectChat(page: Page): Promise<void> {
   await sidebarOrg(page).click()
   // Search first: other work in the shared fixture keeps re-sorting the rows.
@@ -184,82 +183,30 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
   await expect(mainRow).toHaveCount(0)
 })
 
-test('Chat with a project with two tasks makes its hidden lead and opens a plain chat with it', async ({ page, request }) => {
-  // A Parked tier header (and its "+") draws only while the tier holds a task: an Inbox
-  // anchor sits there, so the "+" below has a header to live on.
-  const anchor = await request.post('/api/tasks', { data: { title: `Org spec tier anchor ${STAMP}`, source: 'local', project: '' } })
-  expect(anchor.ok(), await anchor.text()).toBe(true)
-  const anchorId = ((await anchor.json()) as { task: { id: string } }).task.id
-  anchors.push(anchorId)
-  await pinToTier(page, anchorId, 'wait')
+test('Make a VP on a project with two tasks makes its hidden lead, which starts by itself in place', async ({ page, request }) => {
   await isolateUiPrefs(page)
-  await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
   await startProjectChat(page)
-  await expect(page).toHaveURL(/\/$/)
+  // Nothing navigates (2026-11-03: the old button opened a draft on Home that still waited for a message).
+  await expect(page).toHaveURL(/\/org/)
 
   await expect.poll(async () => (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead?.title, { timeout: 15_000 })
     .toBe(`${PROJECT} VP`)
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)!.lead!
-  const draft = page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} VP` })
-  await expect(draft).toBeVisible({ timeout: 15_000 })
-  // A chat with the lead: no Start Task / Ask Walnut fork, a line on who it is, and its name in the composer.
-  await expect(draft.locator('.draft-intent-cards')).toHaveCount(0)
-  await expect(draft.getByTestId('draft-org-lead-hint')).toContainText(`leads ${PROJECT}`)
-  const composer = draft.locator('.chat-input-textarea')
-  await expect(composer).toHaveAttribute('placeholder', `Message ${PROJECT} VP…`)
-  await expect(page.locator(`.todo-panel [data-task-id="${lead.id}"]`)).toHaveCount(0)
-  // The project's own tasks stay on the board.
-  await expect(page.locator(`.todo-panel [data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 15_000 })
-
-  // The chat opens where the lead would start (a project with no folder: the lead's own task
-  // directory, never the memory tree), so it never asks for one, and nothing is written to the lead.
-  const leadFolder = async () => (await draft.locator('.draft-folder-pill').getAttribute('aria-label')) ?? ''
-  await expect.poll(leadFolder).toContain(`/task-dirs/${lead.id} on `)
-  expect((await (await request.get(`/api/tasks/${lead.id}`)).json()).task.cwd).toBeFalsy()
-
-  // A tier "+" while this chat is untouched reuses the column for a plain draft: the
-  // lead's binding, line and folder do not ride along.
-  const header = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
-  await expect(header).toBeVisible({ timeout: 25_000 })
-  await openSessionFromPlus(page, header)
-  const drafts = page.locator('.main-page-session-column .draft-session-panel')
-  await expect(drafts).toHaveCount(1)
-  await expect(draft).toHaveCount(0)
-  await expect(drafts.getByTestId('draft-org-lead-hint')).toHaveCount(0)
-  await expect(drafts.locator('.draft-folder-pill')).toHaveAttribute('aria-label', 'Choose folder and host')
-  // Chat on the lead again: the same untouched column becomes the lead chat once more.
-  await startProjectChat(page)
-  await expect(draft).toBeVisible({ timeout: 15_000 })
-  await expect(drafts).toHaveCount(1)
-  await expect.poll(leadFolder).toContain(`/task-dirs/${lead.id} on `)
-
-  // An empty send says nothing (it would hand the lead its own title as a request).
-  let launches = 0
-  const countLaunch = (r: { method(): string; url(): string }) => {
-    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start') launches++
-  }
-  page.on('request', countLaunch)
-  await composer.press('Enter')
-  await page.waitForTimeout(1500)
-  expect(launches).toBe(0)
-  await expect(draft).toBeVisible()
-  await expect(draft.getByTestId('draft-needs-folder')).toHaveCount(0)
-  page.off('request', countLaunch)
-
-  const started = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  await composer.fill(`status please ${STAMP}`)
-  await composer.press('Enter')
-  const res = await started
-  expect(res.status(), await res.text()).toBe(200)
-  const body = (await res.json()) as { taskId: string; sessionId: string; walnutAgent?: boolean }
-  expect(body.taskId).toBe(lead.id)
-  await expect(page.locator(`.main-page-session-column [data-session-id="${body.sessionId}"]`).getByText(`I processed your message: status please ${STAMP}`).first())
-    .toBeVisible({ timeout: 60_000 })
-  // Still the lead: the launch did not turn it into an Ask Walnut chat.
-  const after = (await (await request.get(`/api/tasks/${lead.id}`)).json()).task as { org_role?: string; walnut_agent?: boolean }
+  // Its session starts in the background, with Walnut's note, and its chat opens right here.
+  const chat = page.locator('[data-testid="org-chat"] .session-panel')
+  await expect(chat).toBeVisible({ timeout: 60_000 })
+  await expect(chat.getByText(/I processed your message: .*Walnut started your session/).first()).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('org-start-chat')).toHaveCount(0)
+  const after = (await (await request.get(`/api/tasks/${lead.id}`)).json()).task as { org_role?: string; walnut_agent?: boolean; org_start?: unknown }
   expect(after.org_role).toBe('lead')
   expect(after.walnut_agent).toBeFalsy()
+  expect(after.org_start).toBeFalsy()
+
+  // The lead stays off the board; the project's own tasks stay on it.
+  await page.locator('.sidebar a[href="/"]').first().click()
+  await expect(page.locator(`.todo-panel [data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator(`.todo-panel [data-task-id="${lead.id}"]`)).toHaveCount(0)
 })
 
 test('the Tasks page hides the leads, like the board', async ({ page, request }) => {

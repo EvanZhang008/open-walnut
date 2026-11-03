@@ -169,6 +169,11 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
  */
 export async function resolveParentDestination(parent: Task): Promise<SessionRecord | null> {
   if (parent.phase === 'COMPLETE') return null;
+  // The org is off (org/org-enabled.ts): a VP or Main hears nothing of the tasks under it.
+  if (parent.org_role === 'main' || parent.org_role === 'lead') {
+    const { isOrgEnabled } = await import('../org/org-enabled.js');
+    if (!(await isOrgEnabled())) return null;
+  }
   const { getSessionsForTask, isListableSession } = await import('../session-tracker.js');
   const { addressable, bestFirst, isLive } = await import('./reply-routing.js');
   const rows = (await getSessionsForTask(parent.id)).filter((s) => addressable(s, isListableSession) && isLive(s));

@@ -156,6 +156,9 @@ export function tellKeptDigestNow(): Promise<string | null> {
 /** One line riding Main's next message. True when Main took it (told now, or riding). */
 async function tellMain(mainId: string, line: string): Promise<boolean> {
   try {
+    // The org is off (org/org-enabled.ts): Main hears nothing; the notes wait for it to be on again.
+    const { isOrgEnabled } = await import('../org/org-enabled.js');
+    if (!(await isOrgEnabled())) return false;
     const { followerSession, tellOrRide } = await import('../sessions/status-push.js');
     const rec = await followerSession(mainId);
     if (!rec?.claudeSessionId) return false;

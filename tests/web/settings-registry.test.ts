@@ -26,7 +26,8 @@ const EXPECTED_IDS = [
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // No Integrations or Heartbeat entry (removed 2026-10-27). Mail rules follows
   // Triage, which reads only Important mail when grouping is on.
-  'stt', 'audio-capture', 'calendar', 'permissions', 'triage', 'mail-rules', 'search', 'backup',
+  // Org (2026-11-03): the switch that turns Main and the VPs off.
+  'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).
   'devices', 'cloud', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).

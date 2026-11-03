@@ -9,7 +9,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { coalesceRefresh } from '@/utils/coalesce-refresh';
 
-export const ORG_DEFAULTS: OrgSettings = { name: 'Org', founderTitle: 'Founder' };
+export const ORG_DEFAULTS: OrgSettings = { name: 'Org', founderTitle: 'Founder', enabled: true };
 
 let known: OrgSettings | null = null;
 const listeners = new Set<(s: OrgSettings) => void>();
@@ -27,12 +27,18 @@ const reader = coalesceRefresh(() => fetchOrgSettings()
   .catch((err) => log.warn('org-page', 'org names read failed', { error: err instanceof Error ? err.message : String(err) })), 0);
 const refresh = (): Promise<void> => reader.request();
 
-export function useOrgSettings(): { settings: OrgSettings; save: (patch: Partial<OrgSettings>) => Promise<void> } {
+export function useOrgSettings(): {
+  settings: OrgSettings; save: (patch: Partial<OrgSettings>) => Promise<void>;
+  /** The server's values arrived (until then `settings` are the defaults: the org reads as on). */
+  loaded: boolean;
+} {
   const [settings, setSettings] = useState<OrgSettings>(known ?? ORG_DEFAULTS);
+  const [loaded, setLoaded] = useState(known !== null);
   useEffect(() => {
-    listeners.add(setSettings);
-    if (known) setSettings(known); else void refresh();
-    return () => { listeners.delete(setSettings); };
+    const take = (s: OrgSettings) => { setSettings(s); setLoaded(true); };
+    listeners.add(take);
+    if (known) take(known); else void refresh();
+    return () => { listeners.delete(take); };
   }, []);
   useEvent('config:changed', () => { void refresh(); });
   const save = useCallback(async (patch: Partial<OrgSettings>) => {
@@ -47,5 +53,5 @@ export function useOrgSettings(): { settings: OrgSettings; save: (patch: Partial
       throw err;
     }
   }, []);
-  return { settings, save };
+  return { settings, save, loaded };
 }

@@ -85,6 +85,9 @@ export function awayStateOf(input: {
 export async function userAwayFrom(task: Pick<Task, 'id' | 'org_role'> | null | undefined, now = Date.now()): Promise<AwayState | null> {
   if (!task || (task.org_role !== 'main' && task.org_role !== 'lead')) return null;
   try {
+    // The org is off (org-enabled.ts): no away hint, no away thread, no away report.
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return null;
     const { getSessionsForTask } = await import('../session-tracker.js');
     const sessions = await getSessionsForTask(task.id);
     let streaming = false;

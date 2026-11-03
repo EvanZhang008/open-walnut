@@ -85,6 +85,9 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
     if (last && nowMs - last < gapMs) { schedule(leadId, gapMs - (nowMs - last)); return false; }
     const { role } = await import('../server-role.js');
     if (role() !== 'leader') return false;
+    // The org is off (org-enabled.ts): no VP is woken.
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return false;
     const { getTask, listTasks } = await import('../task-manager.js');
     const lead = await getTask(leadId).catch(() => undefined);
     if (!lead || lead.org_role !== 'lead' || lead.phase === 'COMPLETE') return false;

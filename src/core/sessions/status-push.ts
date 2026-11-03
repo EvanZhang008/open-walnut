@@ -175,6 +175,11 @@ const openTask = (t: Task | undefined): t is Task => !!t && t.phase !== 'COMPLET
 export async function followContext(all: readonly Task[]): Promise<{
   byId: Map<string, Task>; vpOf: (task: Task) => Task | undefined; main: Task | undefined;
 }> {
+  // The org is off (org/org-enabled.ts): no VP and no Main follows anyone; a worker's own leader still does.
+  const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
+  if (!(await isOrgEnabled())) {
+    return { byId: new Map(all.filter((t) => !isOrgNode(t)).map((t) => [t.id, t] as const)), vpOf: () => undefined, main: undefined };
+  }
   const byId = new Map(all.map((t) => [t.id, t] as const));
   const main = all.find((t) => t.org_role === 'main' && openTask(t));
   const { projectKey } = await import('../org/org-tree.js');
@@ -219,6 +224,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
     const { listTasks } = await import('../task-manager.js');
     const all = await listTasks();
     const { byId, vpOf, main } = await followContext(all);
+    // With the org off byId holds no org node, so no line reaches Main or a VP, an asker among them included.
     const { pendingRequestsForTarget } = await import('../session-requests.js');
     // recipient session id → { record or null (an asker found by its request), lines by task }
     const out = new Map<string, { rec: SessionRecord | null; lines: Map<string, { line: string; at: number }>; asker: boolean }>();

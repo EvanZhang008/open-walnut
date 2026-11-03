@@ -26,7 +26,7 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { hydrateTaskSessionStatuses } from '@/api/sessions';
-import { resolveOrgContact } from '@/api/org';
+import { resolveOrgContact, ensureMainTask, startOrgNode } from '@/api/org';
 import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -354,16 +354,25 @@ export function OrgPage() {
     navigate('/');
   }, [navigate]);
 
+  /** Start a node that has no session, here (src/core/org/org-autostart.ts): it runs in the
+   *  background and its chat opens in place, so nothing navigates (2026-11-03). */
   const startChat = useCallback(async (row: ChannelRow) => {
-    if (row.kind === 'main') { chatOnHome('main'); return; }
-    if (row.contactId) { chatOnHome(row.contactId); return; }
+    log.info('org-page', 'start node in place', { node: row.key, taskId: row.contactId });
     try {
-      const answer = await resolveOrgContact(row.project || 'Inbox');
-      chatOnHome(answer.task.id);
+      if (row.contactId) await startOrgNode(row.contactId, false);
+      else if (row.kind === 'main') {
+        // Made here (null on a replica, where Main lives on the primary), then started in place.
+        const main = await ensureMainTask();
+        if (main) await startOrgNode(main.id, false);
+      } else {
+        // A project with no VP: the server makes its lead when it has two teams, started here.
+        const contact = await resolveOrgContact(row.project || 'Inbox');
+        if (contact.kind === 'lead') await startOrgNode(contact.task.id, false);
+      }
     } catch (err) {
-      showOperationError(`Could not reach ${row.name}: ${err instanceof Error ? err.message : String(err)}`);
+      showOperationError(`Could not start ${row.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [chatOnHome, showOperationError]);
+  }, [showOperationError]);
 
   // A right-click on a row: open it on a tab, and move its project the way the chart does
   // (the chart opens on the same question, so a move is confirmed in one place). The menu stays
@@ -471,6 +480,7 @@ export function OrgPage() {
             onOpenSession={openSession}
             answers={answers}
             onStartChat={(row) => { void startChat(row); }}
+            tasksLoading={tasksLoading}
             {...(phone ? { onBack: back } : {})}
             now={now}
           />}

@@ -244,3 +244,7 @@
   content: none;
 }
 
+
+/* Settings → Org: what turning the org off stops (OrgSection). */
+.settings-group .org-off-stops { margin: 0; padding: 8px 16px 2px 32px; display: flex; flex-direction: column; gap: 3px; }
+.settings-group .org-off-stops + .settings-row-help { margin: 0; padding: 4px 16px 10px; }

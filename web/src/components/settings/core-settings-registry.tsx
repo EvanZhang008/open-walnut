@@ -11,6 +11,7 @@ import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HooksSection } from './sections/HooksSection'
 import { MailRulesSection } from './sections/MailRulesSection'
+import { OrgSection } from './sections/OrgSection'
 import { PageUseSection } from './sections/PageUseSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { ProvidersSection } from './sections/ProvidersSection'
@@ -201,6 +202,14 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'What macOS allows Walnut to do on this Mac.',
     keywords: ['privacy', 'accessibility', 'screen recording', 'full disk', 'automation', 'tcc'],
     render: () => <PermissionsSection />,
+  },
+  // The org above the work (Main and the VPs) and the one switch that turns it off.
+  {
+    owner: 'walnut', id: 'org', label: 'Org', title: 'Org', group: 'configure',
+    icon: 'two-person', tint: '#AF52DE',
+    description: 'Main and the VPs that lead your projects, and whether they run at all.',
+    keywords: ['org', 'main', 'ceo', 'vp', 'lead', 'brief', 'turn off', 'disable', 'organization'],
+    render: () => <OrgSection />,
   },
   {
     owner: 'walnut', id: 'triage', label: 'Inbox Triage', title: 'Inbox Triage', group: 'configure',

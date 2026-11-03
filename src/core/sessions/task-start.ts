@@ -134,6 +134,20 @@ async function refuseStartOfRetiredLead(task: Task, callerSid: string | undefine
 }
 
 /**
+ * The org is off (org/org-enabled.ts): Main or a VP is started only by a person's own start
+ * (the user's first message in its chat). Walnut's and every agent's starts are refused.
+ */
+export async function refuseOrgStartWhileOff(task: Pick<Task, 'org_role'>, source: string | undefined, callerSid?: string): Promise<void> {
+  const { isOrgNode, isOrgEnabled, ORG_OFF_MESSAGE } = await import('../org/org-enabled.js');
+  if (!isOrgNode(task) || await isOrgEnabled()) return;
+  // An engine switch only moves a conversation that already runs to another engine.
+  if (source === 'engine-switch') return;
+  const { isPersonSource } = await import('./send-sent-by.js');
+  if (!callerSid?.trim() && isPersonSource(source)) return;
+  throw new QuickStartError(ORG_OFF_MESSAGE, 409, { code: 'org_off' });
+}
+
+/**
  * The engine a start that named none runs on: the ONE default engine
  * (Settings > Engines), as every other Walnut launch inherits it
  * (default-engine.ts). A task_start once always ran Claude here, so a Main on a
@@ -167,6 +181,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     throw err;
   }
   await refuseStartOfRetiredLead(task, params.callerSid);
+  await refuseOrgStartWhileOff(task, params.source, params.callerSid);
   if (params.source !== 'engine-switch') {
     const { isSwitching } = await import('./engine-switch.js');
     if (isSwitching(task.id)) {

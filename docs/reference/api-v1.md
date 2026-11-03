@@ -1502,12 +1502,30 @@ team is talked to through that task; the Inbox never gets a lead.
   their own, and an editor shows it in their place.
   `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
   a blank value goes back to the default; `400 bad_name` for a non-string.
+  `enabled` (additive, 2026-11-03; absent from an older server = on) is the switch that turns the
+  whole org off (config.yaml `org.enabled: false`; never set = on): `PUT { enabled: false }` stops
+  every Main and VP session Walnut would start and all of the org's own messages (status lines and
+  notices up to them, team notes, Brief refreshes, away letters, scheduled reports, routines aimed
+  at them; agents' `org_send` and `task_send` to them answer `409 org_off`, a person's own message
+  still goes in); `PUT { enabled: true }` starts the nodes that never started. `400 bad_enabled`
+  for a non-boolean, `409 test_run` for a change of it from a test run.
+- `POST /api/v1/org/nodes/:id/start { auto? }` (additive, 2026-11-03) → `202 { queued: true }`, or
+  `200 { queued: false, skipped }` (`has_session`, `starting`, `complete`, `failed_before`,
+  `test_run`, `autostart_off`, `missing`; a test run's request always answers `test_run`): starts Main's or a VP's first session in the background, on its
+  project's default host, with a Walnut note asking it to read its teams and write its Brief.
+  Every VP also starts this way by itself when it is made (Main is started by whoever made it,
+  with the user's message), and every node once after the server starts and when the org is
+  turned on. The task carries `org_start { state: 'starting' |
+  'failed', at, error? }` until it has a session (local-only, additive). `auto: true` is a page
+  that shows the node with none (it skips a start that failed before); without it, the user's
+  Retry. `404 unknown_task`, `409 org_off | not_org_node`, `501` on a replica.
 - `POST /api/v1/org/report { of?, since?, at?, send? }` (additive, 2026-10-31) → Main's or a
   lead's report for the user (`of` defaults to the caller's task): `200 { report: { subject,
   markdown, text, taskRefs, counts }, of }` alone; `{ letterId, of }` with `send: true` (sent to the
   inbox now); `{ scheduledAt, since, of }` with `at` (`"HH:MM"` on the server's clock, an ISO time
   or `"8h"`; Walnut sends it then, one per node). `since` is an ISO time or a duration back
   (`"12h"`, the default; for `at`, the time of the call). `404 unknown_task`, `409 not_org_node`,
+  `409 org_off` for `at` and `send` while the org is off,
   `400 bad_at` / `bad_since`, `501` on a replica for `at` and `send`.
 - `POST /api/v1/org/projects { name, vpName?, instructions?, override_user? }` → `201 { task }`: a
   new project with its own VP (its lead); `vpName` names the VP when it is not the

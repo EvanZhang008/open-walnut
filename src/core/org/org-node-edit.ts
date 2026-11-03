@@ -238,6 +238,8 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
     log.task.info('org: node made on the Org page', { taskId: id, project: made.name, vpOnly, named: !!vpName, reopened: !!own, instructions: instructions.length });
     const final = await tm.getTask(id);
     if (!own) announceCreated(final);
+    // The new VP starts by itself, in the background (org-autostart.ts): no click, no other window.
+    void import('./org-autostart.js').then((m) => m.startOrgNodeSoon(id, 'created')).catch(() => {});
     return final;
   });
 }
@@ -323,7 +325,7 @@ export async function editProjectVp(project: string, edit: OrgNodeEdit, writer: 
   const name = project.trim();
   if (!name || projectKey(name) === projectKey('Inbox')) throw new OrgError('no_lead_for_inbox', 400, 'The Inbox has no VP.');
   const clean = cleanEdit(edit, 'lead');
-  return withOrgLock(async () => {
+  const edited = await withOrgLock(async () => {
     const tm = await import('../task-manager.js');
     const tasks = await orgTasks();
     const key = projectKey(name);
@@ -345,4 +347,7 @@ export async function editProjectVp(project: string, edit: OrgNodeEdit, writer: 
     }
     return editNow(await tm.getTask(lead.id), clean, writer);
   });
+  // A VP made or reopened here starts by itself, once its name and instructions are written (org-autostart.ts).
+  void import('./org-autostart.js').then((m) => m.startOrgNodeSoon(edited.id, 'created')).catch(() => {});
+  return edited;
 }

@@ -102,6 +102,11 @@ export async function runWatchPass(nowMs = Date.now()): Promise<string[]> {
       continue;
     }
     if (asked.length >= WATCH_PER_PASS) break;
+    // The org is off (org/org-enabled.ts): a watch Main or a VP keeps asks nothing and tells it nothing.
+    if (watcher.org_role === 'main' || watcher.org_role === 'lead') {
+      const { isOrgEnabled } = await import('../org/org-enabled.js');
+      if (!(await isOrgEnabled())) { await polled(task.id); continue; }
+    }
     // Nowhere to tell the answer yet (the watcher's session is stopped): the clock restarts, no ask spent.
     const rec = await followerSession(watcher.id);
     if (!rec) { await polled(task.id); continue; }

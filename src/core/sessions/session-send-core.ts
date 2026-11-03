@@ -58,7 +58,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete' | 'lead_handed_over',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -415,6 +415,21 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
 }
 
 /**
+ * The org is off (org/org-enabled.ts): Main and the VPs take no new message from an agent or from
+ * Walnut. A person's own message still goes in, and so does an answer to a question one of them
+ * asked (performReply), so nothing it waits on is left open.
+ */
+async function refuseOrgNodeWhileOff(caller: CallerIdentity, source: string | undefined, targetTaskId: string | undefined): Promise<void> {
+  if (!targetTaskId) return;
+  if (caller.kind === 'human' && (!source || isPersonSource(source))) return;
+  const { isOrgEnabled, isOrgNode, ORG_OFF_MESSAGE } = await import('../org/org-enabled.js');
+  if (await isOrgEnabled()) return;
+  const { getTask } = await import('../task-manager.js');
+  const target = await getTask(targetTaskId).catch(() => undefined);
+  if (isOrgNode(target)) throw new SendError('org_off', ORG_OFF_MESSAGE, 409, { taskId: target!.id });
+}
+
+/**
  * A session's message to a lead that handed its project over goes to the lead that took it over
  * (org/retired-lead.ts; 2026-10-26, Main's go for six stack deletions reached the old lead 85
  * minutes after its handover, and both leads followed it). Refused with that pointer, unless the
@@ -521,6 +536,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('self_send', 'target resolves to the calling session itself');
   }
   await refuseSendToCompleteParent(caller, target.taskId ?? target.session.taskId);
+  await refuseOrgNodeWhileOff(caller, input.source, target.taskId ?? target.session.taskId);
   const admitted = await admitRetiredLead(caller, target.taskId ?? target.session.taskId, input, text);
   const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, admitted, 'send');
 

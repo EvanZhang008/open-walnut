@@ -121,6 +121,9 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
     const byId = new Map(all.map((t) => [t.id, t] as const));
     // A team stopped or quieted in one step (team-stop.ts) is not woken by a timer until it is resumed.
     const quieted = new Set(all.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
+    // The org is off (org/org-enabled.ts): Main and the VPs are not woken to re-check a Board choice.
+    const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
+    const orgOff = !(await isOrgEnabled());
     for (const task of all) {
       // It no longer asks the user (it waits on something else, or is done): the next ask starts a
       // fresh count. Working is not that: a re-check turn runs as Working.
@@ -150,6 +153,7 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       if (source === 'choice' && !choice) continue;
       const owner = choice ? byId.get(choice.board) : task;
       if (!owner || owner.phase === 'COMPLETE' || owner.status === 'done') continue;
+      if (orgOff && isOrgNode(owner)) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');
       const target = pickDeliverySession(await getSessionsForTask(owner.id).catch(() => []));

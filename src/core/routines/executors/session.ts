@@ -51,7 +51,7 @@ export interface SessionDelivery {
     host?: string;
   }>>;
   sendToSession(sessionId: string, message: string, taskId: string): Promise<void>;
-  getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string } | null>;
+  getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string; org_role?: string } | null>;
   /**
    * When `id` is a session id rather than a task id: its task ('' = a session
    * with no task). Undefined = no such session.
@@ -302,6 +302,16 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       const moved = await delivery.getTask(taskId).catch(() => null);
       if (!moved || moved.phase !== 'COMPLETE' || !moved.transferred_to) break;
       taskId = moved.transferred_to;
+    }
+    // The org is off (org/org-enabled.ts): a routine or trigger aimed at Main or a VP (its reflection,
+    // a report it set up) is skipped, and stays as it is for when the org is on again.
+    const aimed = await delivery.getTask(taskId).catch(() => null);
+    if (aimed?.org_role === 'main' || aimed?.org_role === 'lead') {
+      const { isOrgEnabled } = await import('../../org/org-enabled.js');
+      if (!(await isOrgEnabled())) {
+        log.cron.info('routine skipped: the org is off', { jobId: job.id, taskId });
+        return { status: 'ok', summary: 'Skipped: the org is off (Settings → Org), so Main and the VPs run nothing.' };
+      }
     }
     const envelope = envelopeFor(job, message, config.prompt);
 
