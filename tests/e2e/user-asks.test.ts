@@ -168,6 +168,21 @@ describe('the user asks a task owes', () => {
     expect(await wakeIdleOwed()).toEqual([])
   })
 
+  it('after a compaction his answered words are read back too, after the ones still owed', async () => {
+    await typeIntoChat(WORKER_SID, 'Then which version of the agent should the report name?', { threadKey: 'qm-2' })
+    await vi.waitFor(async () => { expect(openAsks(await readUserAsks(workerId))).toHaveLength(2) }, { timeout: 5_000, interval: 50 })
+    const q = await owedQuestionFor(workerId)
+    const kept = openAsks(await readUserAsks(workerId))[0].id
+    expect(await applyOwedAnswer(workerId, q.listed, `FOR_USER_OWED: ${kept}`)).toHaveLength(1)
+    const res = await fetch(`${base}/api/v1/me/open?hook=compact`, { headers: { 'x-walnut-caller-sid': WORKER_SID } })
+    const text = (await res.json() as { text: string }).text
+    expect(text.startsWith('The user\'s messages in this task that you have not answered yet')).toBe(true)
+    const recent = text.indexOf('What the user said in this task over the last two days')
+    expect(recent).toBeGreaterThan(text.indexOf('Can\'t scan it'))
+    expect(text.indexOf('which version of the agent should the report name?')).toBeGreaterThan(recent)
+    expect(text).toContain(`"id":"${workerId}","before"`)
+  })
+
   it('a letter answer is kept too; the task\'s completion closes them all', { timeout: 60_000 }, async () => {
     await sendMessageToSession(WORKER_SID, buildLetterDeliveryText({ id: 'lt-9', subject: 'Which link?' }, { text: 'the second one' }), { source: 'human-inbox', taskId: workerId })
     await vi.waitFor(async () => { expect(openAsks(await readUserAsks(workerId))).toHaveLength(2) }, { timeout: 5_000, interval: 50 })
@@ -178,6 +193,7 @@ describe('the user asks a task owes', () => {
     expect(openAsks(await readUserAsks(workerId))).toHaveLength(2)
     await updateTaskRaw(workerId, { phase: 'COMPLETE' as never }, { emitEvent: true, source: 'test' })
     await vi.waitFor(async () => { expect(openAsks(await readUserAsks(workerId))).toHaveLength(0) }, { timeout: 5_000, interval: 100 })
-    expect((await readUserAsks(workerId)).asks.every((a) => a.closedBy === 'complete')).toBe(true)
+    // The one answered earlier stays closed as answered; the rest close with the task.
+    expect((await readUserAsks(workerId)).asks.map((a) => a.closedBy).sort()).toEqual(['complete', 'complete', 'report'])
   })
 })

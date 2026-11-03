@@ -15,7 +15,7 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import type { Task } from '../types.js';
 import {
   addAsk, applyOwed, asksToJudge, closeAll, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, OWED_WAKE_MS, owedQuestionBlock,
-  owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, staleOwed, type UserAsk, type UserAsksFile,
+  owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, recentWordsReadback, staleOwed, type UserAsk, type UserAsksFile,
 } from './user-asks-model.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -134,6 +134,16 @@ export async function owedReadbackFor(task: Pick<Task, 'id' | 'org_role' | 'plug
   if (!filesUserAsks(task) || task.phase === 'COMPLETE') return '';
   try {
     return owedReadback(openAsks(await readUserAsks(task.id)), nowMs);
+  } catch {
+    return '';
+  }
+}
+
+/** The readback after a compaction of his recent words, answered ones too (user-asks-model.ts). '' when none. Never throws. */
+export async function recentWordsReadbackFor(task: Pick<Task, 'id' | 'org_role' | 'plugin_only' | 'phase'>, nowMs = Date.now()): Promise<string> {
+  if (!filesUserAsks(task) || task.phase === 'COMPLETE') return '';
+  try {
+    return recentWordsReadback(await readUserAsks(task.id), nowMs);
   } catch {
     return '';
   }

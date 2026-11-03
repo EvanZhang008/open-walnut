@@ -118,18 +118,34 @@ defineOp({
   deprecated: 'Use task_send with the task id.',
 });
 
+/**
+ * Where the page before a cut conversation starts. 2026-11-03: a lead asked to find what the user had
+ * said the night before read only the newest 193 rows, with no way back, though the route pages
+ * (`before`); the session itself had compacted the same night away.
+ */
+export function olderPage(taskId: unknown, history: Record<string, unknown>): { older?: { before: string; how: string } } {
+  const rows = history.messages as Array<{ timestamp?: unknown }> | undefined;
+  const first = rows?.find((r) => typeof r.timestamp === 'string')?.timestamp as string | undefined;
+  if (history.truncated !== true || !first) return {};
+  return { older: { before: first, how: `walnut tools call task_history '${JSON.stringify({ id: taskId, before: first })}'` } };
+}
+
 defineOp({
   name: 'task_history',
   title: 'Read a task conversation',
   description: 'Read the current conversation for a task, using the same task id as task_get and task_send. '
     + 'A placeholder returns not_started and no messages. No separate session lookup is needed. '
-    + 'A task that switched engines holds earlier sessions too (listed in `sessions`); all:true reads every one of them in order.',
+    + 'A task that switched engines holds earlier sessions too (listed in `sessions`); all:true reads every one of them in order. '
+    + 'A long conversation comes back as its newest part (`truncated: true`); `older.before` is the time to pass as before '
+    + 'for the page before it, so what the user said hours or days ago, compacted away in the session, is still readable.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     fresh: z.boolean().optional().describe('Force a live transcript read on the primary box'),
     all: z.boolean().optional().describe('Every session of the task, oldest first, not only the active one'),
+    before: z.string().datetime({ offset: true }).optional()
+      .describe('ISO time: the page of messages older than it (from a previous answer\'s older.before, or a time you know)'),
   },
-  handler: async ({ id, fresh, all }, call) => {
+  handler: async ({ id, fresh, all, before }, call) => {
     const body = await call('GET', `/tasks/${encodeURIComponent(String(id))}`) as { task?: Record<string, unknown> };
     if (!body?.task?.id) throw new Error('Task response has no id; cannot resolve its conversation.');
     const task = body.task;
@@ -140,8 +156,9 @@ defineOp({
       if (!Array.isArray(ids) || ids.length) throw new Error('Task conversation state is unavailable; retry task_history.');
       return { taskId: task.id, execution: { state: 'not_started' }, messages: [] };
     }
+    const query = new URLSearchParams({ ...(fresh ? { fresh: '1' } : {}), ...(before ? { before: String(before) } : {}) }).toString();
     const read = async (sessionId: string) => {
-      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${fresh ? '?fresh=1' : ''}`) as Record<string, unknown> | undefined;
+      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${query ? `?${query}` : ''}`) as Record<string, unknown> | undefined;
       if (!h || !Array.isArray(h.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
       return h;
     };
@@ -159,7 +176,7 @@ defineOp({
       return { taskId: task.id, sessions, messages };
     }
     const history = await read(String(sid));
-    return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}) };
+    return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
   },
   tags: { readonly: true, remote: 'allow' },
 });

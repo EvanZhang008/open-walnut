@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   addAsk, applyOwed, asksToJudge, emptyUserAsks, JUDGE_MAX, OPEN_MAX, openAsks, OWED_STALE_MS, owedQuestionBlock,
-  owedReadback, prune, readOwedLine, staleOwed, type UserAsksFile,
+  owedReadback, prune, readOwedLine, recentWordsReadback, RECENT_WORDS_MAX, RECENT_WORDS_MS, staleOwed, type UserAsksFile,
 } from '../../../src/core/sessions/user-asks-model.js'
 
 const T0 = Date.parse('2026-11-03T01:20:00Z')
@@ -99,5 +99,40 @@ describe('the user asks a task owes', () => {
     const week = prune(f, T0 + 8 * 24 * 3_600_000)
     expect(openAsks(week)).toHaveLength(0)
     expect(prune(week, T0 + 12 * 24 * 3_600_000).asks).toHaveLength(0)
+  })
+
+  // 2026-11-03: twelve hours of the user's messages in one task, every one answered, were gone from
+  // its context after three compactions; the owed readback had nothing to say about answered ones.
+  it('after a compaction his recent words are read back, answered ones too: a night of them survives the prune', () => {
+    let f = withAsks(48, T0, 15 * 60_000)
+    f = { ...f, asks: f.asks.map((a) => ({ ...a, text: `${a.text} ${'about the list risk per version '.repeat(4)}` })) }
+    f = applyOwed(f, f.asks.map((a) => a.id), new Set(['ua-0047']), iso(T0 + 48 * 15 * 60_000)).file
+    f = prune(f, T0 + 13 * 3_600_000)
+    expect(f.asks).toHaveLength(48)
+    const now = T0 + 13 * 3_600_000
+    const text = recentWordsReadback(f, now)
+    expect(text).toContain('answered ones too')
+    expect(text).toContain('"before"')
+    // The open one is the owed readback's, not this one's.
+    expect(text).not.toContain('"question 47 ')
+    expect(text).toContain('"question 46 ')
+    // Oldest first, in the room it has; what did not fit is counted.
+    expect(text.indexOf('"question 45 ')).toBeLessThan(text.indexOf('"question 46 '))
+    expect(text).not.toContain('"question 0 ')
+    expect(text.length).toBeLessThanOrEqual(RECENT_WORDS_MAX + 80)
+    expect(text).toMatch(/and \d+ earlier: task_history with before reads them/)
+    expect(text).toContain('2026-11-03 12:5')
+  })
+
+  it('the recent-words readback quotes nothing older than its window, and nothing when there is nothing', () => {
+    let f = withAsks(2)
+    f = applyOwed(f, f.asks.map((a) => a.id), new Set(), iso(T0 + 60_000)).file
+    expect(recentWordsReadback(f, T0 + RECENT_WORDS_MS + 2 * 60_000)).toBe('')
+    expect(recentWordsReadback(emptyUserAsks('t1'), T0)).toBe('')
+    expect(recentWordsReadback(withAsks(2), T0 + 60_000)).toBe('')
+    const long = { ...f, asks: f.asks.map((a) => ({ ...a, text: 'z'.repeat(1900) })) }
+    const cut = recentWordsReadback(long, T0 + 3_600_000)
+    expect(cut).toContain('z'.repeat(160) + '...')
+    expect(cut).not.toContain('z'.repeat(161))
   })
 })

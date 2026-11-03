@@ -14,7 +14,8 @@
  *              owed (FOR_USER_OWED): the session's own judgement, recorded by Walnut, so a
  *              compaction cannot lose it; "on it" is still owed, an answer or a delivered result
  *              is not
- *   closed     reported answered, the task completed, or a week old
+ *   closed     reported answered, the task completed, or a week old; kept CLOSED_KEEP_MS more,
+ *              because the readback after a compaction quotes his recent words, answered ones too
  *
  * Read back first after a compaction (open-items.ts), named at a turn's end when owed across a
  * compaction or for hours (the Stop hook), told to the lead in its team note, and a session that sits on one an hour
@@ -61,7 +62,8 @@ export const OPEN_MAX = 15;
 export const OPEN_TTL_MS = 7 * 24 * 3600_000;
 /** A closed ask is kept this long, then dropped. */
 const CLOSED_KEEP_MS = 3 * 24 * 3600_000;
-const CLOSED_MAX = 20;
+/** Enough for a night's conversation (2026-11-03: 48 messages in 12 hours) to be read back after a compaction. */
+export const CLOSED_MAX = 80;
 /** The same words again this soon is one message (a retry). */
 const SAME_WORDS_MS = 2 * 60_000;
 /** Asks the status question lists. */
@@ -247,4 +249,43 @@ export function owedWakeBody(asks: readonly UserAsk[], nowMs: number): string {
     ...asks.map((a) => `- ${ago(a.at, nowMs)}: "${preview(a)}"`),
     'Answer him now in your chat, or tell him in one line where it stands and when he gets the result. Walnut wakes you for this once.',
   ].join('\n');
+}
+
+/** How far back the readback after a compaction quotes his words, answered ones too. */
+export const RECENT_WORDS_MS = 48 * 3600_000;
+/** The most that readback adds: the hook's whole text has HOOK_CONTEXT_MAX (open-items.ts). */
+export const RECENT_WORDS_MAX = 1_600;
+const RECENT_PREVIEW_CHARS = 160;
+
+/**
+ * The readback after a compaction of what he said in this task lately, answered ones too: his own
+ * words, newest kept first when they do not all fit, listed oldest first. The open ones are left out
+ * (owedReadback quotes them whole). '' when there are none.
+ *
+ * 2026-11-03: a worker and the user talked for twelve hours (48 messages of his: a risk review, a
+ * report, a team post); three compactions later its summary kept one line of that thread, and when
+ * he came back it had moved on to other work and could not say where his thread stood. Every one of
+ * those messages had been answered, so the owed readback had nothing to say. Each compaction keeps
+ * the user's messages since the last one and only a summary of the summary before, so his words
+ * thin out one compaction at a time; Walnut's record does not.
+ */
+export function recentWordsReadback(file: UserAsksFile, nowMs: number, max = RECENT_WORDS_MAX): string {
+  const recent = file.asks
+    .filter((a) => a.state === 'closed' && nowMs - Date.parse(a.at) <= RECENT_WORDS_MS)
+    .sort((a, b) => b.at.localeCompare(a.at));
+  if (!recent.length) return '';
+  const head = 'What the user said in this task over the last two days, answered ones too, in his own words (Walnut\'s '
+    + 'record; your summary keeps less of them each compaction). It is the thread of work he follows. The exchange around '
+    + `one: walnut tools call task_history '{"id":"${file.taskId}","before":"<a minute after it>"}'`;
+  const lines: string[] = [];
+  let used = head.length;
+  let left = 0;
+  for (const a of recent) {
+    const line = `- ${a.at.slice(0, 16).replace('T', ' ')} UTC${a.via === 'letter' ? ', answering your letter' : ''}: "${preview(a, RECENT_PREVIEW_CHARS)}"`;
+    if (left || used + line.length + 1 > max) { left++; continue; }
+    lines.push(line);
+    used += line.length + 1;
+  }
+  if (!lines.length) return '';
+  return [head, ...lines.reverse(), ...(left ? [`- and ${left} earlier: task_history with before reads them.`] : [])].join('\n');
 }

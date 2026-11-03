@@ -234,8 +234,11 @@ export async function collectOpenItems(
       const core = (task.org_role === 'main' || task.org_role === 'lead') && task.phase !== 'COMPLETE'
         ? await import('./session-context.js').then((m) => m.coreInstructionsBlock(task)) : '';
       const lead = core ? `Restated after the compaction, first because they are your role's first rules.\n${core}` : '';
+      // His recent words, answered ones too, right after: the summary of a summary keeps less of
+      // them each time (user-asks-model.ts recentWordsReadback).
+      const recent = await (await import('./user-asks.js')).recentWordsReadbackFor(task, now);
       // His unanswered messages stay first, ahead of the role's rules too (a cut never takes them).
-      const head = (text: string) => [owed, lead, text].filter(Boolean).join('\n\n');
+      const head = (text: string) => [owed, recent, lead, text].filter(Boolean).join('\n\n');
       if (changed && (opts.full || changed.length + head(items.text).length + 2 <= HOOK_CONTEXT_MAX)) {
         items.text = head([changed, items.text].filter(Boolean).join('\n\n'));
         // A full read reaches the model as a tool result Claude Code may cut too: it tells nothing.
