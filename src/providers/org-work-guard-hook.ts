@@ -13,8 +13,8 @@
  * session's own prompt by core/org/org-prompt-role.ts). A PreToolUse hook on every tool counts the
  * session's own work in this turn: one slot per call, taken with `mkdir` (atomic, so parallel calls
  * of one turn never share a number) under `${TMPDIR:-/tmp}/walnut-org-work-<uid>/<session id>/`. Past the
- * limit the call is refused with a `deny` that says how to hand the work on. A Stop hook and a
- * UserPromptSubmit hook clear the slots, so every turn starts at none.
+ * limit the call is refused with a `deny` that says how to hand the work on. A Stop hook (and a
+ * SessionStart at a process's start) clears the slots, so every turn starts at none.
  *
  * What counts: a command (a Bash command with anything but Walnut ops in it, Monitor), host_exec /
  * host_mcp_call / host_http however they are called (`walnut tools call host_exec` too), reading, searching or editing files outside the task's own
@@ -152,7 +152,9 @@ export function orgWorkRefusal(role: CoreInstructionRole): string {
   return `Walnut refused this call: you are ${who}, and you already ran ${ORG_SELF_COMMAND_LIMIT} commands of your own in this turn. `
     + `You never do the work yourself past a quick look. Hand it on now: ${handOn}, with what you saw so far in the hand-over. `
     + 'A full slot is no reason to run it here: the start is queued and Walnut starts it when a slot frees. '
-    + 'Walnut\'s own ops (the walnut CLI, mcp__walnut__ tools) still work; host_exec counts as your own command.'
+    + 'Walnut\'s own ops (the walnut CLI, mcp__walnut__ tools) still work; host_exec counts as your own command. '
+    + 'For a long message, write it with the Write tool (or cat <<\'EOF\' > file) into your task directory and pass it as '
+    + 'walnut tools call <op> @file: neither counts.'
 }
 
 // Per user: a shared /tmp dir another user made first would turn the guard off for this one.
@@ -189,10 +191,14 @@ const HOOK_TIMEOUT_SECS = 10
 
 export function orgWorkGuardHooks(role: CoreInstructionRole | undefined, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
   if (!role || env.WALNUT_ORG_WORK_GUARD === '0') return null
-  const reset = [{ hooks: [{ type: 'command', command: ORG_WORK_RESET_COMMAND, timeout: HOOK_TIMEOUT_SECS }] }]
+  const reset = { type: 'command', command: ORG_WORK_RESET_COMMAND, timeout: HOOK_TIMEOUT_SECS }
   return {
     PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: orgWorkGuardCommand(role), timeout: HOOK_TIMEOUT_SECS }] }],
-    Stop: reset,
-    UserPromptSubmit: reset,
+    // A turn's end, and a process's start (a slot left by one that died mid-turn). Never
+    // UserPromptSubmit: Claude Code runs it for every message queued into a running turn too
+    // (2026-11-03 on prod: a Walnut notice taken in after the VP's first command reset its count),
+    // and never a compaction's SessionStart, which comes in the middle of a turn.
+    Stop: [{ hooks: [reset] }],
+    SessionStart: [{ matcher: 'startup|resume|clear', hooks: [reset] }],
   }
 }

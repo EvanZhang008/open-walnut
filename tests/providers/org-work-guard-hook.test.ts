@@ -126,14 +126,14 @@ describe.each(SHELLS)('the org work guard under %s', (shell) => {
     expect(call(shell, 'mcp__walnut__task_send', { to: 'x', text: 'y' }).denied).toBe(false)
   })
 
-  it('a new turn starts at none: Stop and UserPromptSubmit clear the count', () => {
+  it('a new turn starts at none: Stop and a process start clear the count', () => {
     const ls = bash('ls')
     for (let i = 0; i < 3; i++) call(shell, ...ls)
     expect(call(shell, ...ls).denied).toBe(true)
     reset(shell, 'sid-1', 'Stop')
     for (let i = 0; i < 3; i++) expect(call(shell, ...ls).denied).toBe(false)
     expect(call(shell, ...ls).denied).toBe(true)
-    reset(shell, 'sid-1', 'UserPromptSubmit')
+    reset(shell, 'sid-1', 'SessionStart')
     expect(call(shell, ...ls).denied).toBe(false)
   })
 
@@ -182,7 +182,10 @@ describe('who gets the guard', () => {
     const hooks = orgWorkGuardHooks('lead', {}) as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
     expect(hooks.PreToolUse[0].matcher).toBe('*')
     expect(hooks.Stop[0].hooks[0].command).toBe(ORG_WORK_RESET_COMMAND)
-    expect(hooks.UserPromptSubmit[0].hooks[0].command).toBe(ORG_WORK_RESET_COMMAND)
+    // A process's start resets; a compaction (mid-turn) and a message queued into a running turn never do.
+    expect(hooks.SessionStart[0].matcher).toBe('startup|resume|clear')
+    expect(hooks.SessionStart[0].hooks[0].command).toBe(ORG_WORK_RESET_COMMAND)
+    expect(hooks.UserPromptSubmit).toBeUndefined()
   })
 
   it('the session settings add it beside the other hooks for an org node, never for a worker', () => {
