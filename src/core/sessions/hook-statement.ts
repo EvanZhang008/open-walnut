@@ -29,3 +29,28 @@ export function hookStatementVoid(byHookAt: string | undefined, record: { lastCo
   const read = record.lastCompactAt ? Date.parse(record.lastCompactAt) : NaN
   return !(Number.isFinite(read) && Math.abs(read - at) < HOOK_BOUNDARY_MS)
 }
+
+/**
+ * The told record that counts for the session's own conversation. A hook statement replaces what
+ * was told before it and keeps that as `prior`: when the statement turns out to be a fork's (void),
+ * the conversation still holds the prior one, so only what came after it is told again, never
+ * everything (2026-11-03: a side question compacted 15 minutes after a real compaction, and the
+ * next message re-sent all 10.8 KB of changed instructions and the place note).
+ */
+export function heldStatement<T extends { byHookAt?: string; prior?: Omit<T, 'prior'> }>(
+  noted: T | undefined, record: { lastCompactAt?: string },
+): Omit<T, 'prior'> | undefined {
+  if (!noted) return undefined
+  if (hookStatementVoid(noted.byHookAt, record)) return noted.prior
+  const { prior: _prior, ...rest } = noted
+  return rest
+}
+
+/**
+ * The boundary a hook statement answers, read under the record's lock. The hook's caller read the
+ * record when its request came in; the server may have read the new boundary since (the race the
+ * notes above name), and a statement on the old boundary then counted for none (2026-11-03).
+ */
+export function statementBoundary(current: { lastCompactUuid?: string }): { compactUuid?: string } {
+  return current.lastCompactUuid ? { compactUuid: current.lastCompactUuid } : {}
+}

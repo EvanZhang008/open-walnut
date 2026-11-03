@@ -44,6 +44,11 @@ async function seed(role?: Role, prompt: string | null | 'old' | 'current' = 'ol
   return { sid, task };
 }
 const copies = (text: string) => text.split(RELAY).length - 1;
+/** The notice told last is past NOTICE_GAP_MS: a later change is told at once. */
+async function pastGap(sid: string) {
+  const noted = (await getSessionByClaudeId(sid))?.taskRoutingNoted;
+  if (noted) await updateSessionRecord(sid, { taskRoutingNoted: { ...noted, toldAt: new Date(Date.now() - 4 * 3600_000).toISOString() } });
+}
 async function deliver(sid: string, text: string, pick = markProcessing) {
   await enqueueMessage(sid, text);
   const batch = await pick(sid);
@@ -172,6 +177,7 @@ describe('changed default instructions for a session spawned before them', () =>
     await removeProcessed(a.sid, [ra.id]);
     await removeProcessed(b.sid, [rb.id]);
     for (const { sid } of [a, b]) {
+      await pastGap(sid);
       const next = (await deliver(sid, 'Next'))[0].message;
       expect(copies(next)).toBe(0);
       expect(next).toContain('Ship on Fridays only.');

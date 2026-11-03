@@ -29,10 +29,10 @@
 
 import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
-import type { SessionRecord, Task } from '../types.js';
+import type { SessionPlaceNoted, SessionRecord, Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAskTask, sameProject } from './caller-placement.js';
-import { HOOK_BOUNDARY_MS, hookStatementVoid } from './hook-statement.js';
+import { HOOK_BOUNDARY_MS, heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 
 const kit = createEnvelopeKit();
 
@@ -64,6 +64,11 @@ export interface PlaceNoted extends SessionPlace {
   byHookAt?: string;
 }
 
+
+function withoutPrior<T extends { prior?: unknown }>(noted: T): Omit<T, 'prior'> {
+  const { prior: _prior, ...rest } = noted;
+  return rest;
+}
 
 export function promptHash(prompt: string | undefined): string {
   return createHash('sha1').update(prompt ?? '').digest('hex').slice(0, 16);
@@ -144,8 +149,9 @@ export function toldPlaceOf(
   record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid' | 'lastCompactAt'>, taskId: string,
 ): ToldPlace {
   const hash = promptHash(record.appliedAppendSystemPrompt);
-  const noted = record.placeNoted;
-  // A fork's hook statement (a side question compacted) never reached this conversation: hook-statement.ts.
+  // A fork's hook statement (a side question compacted) never reached this conversation, and
+  // gives way to what was told before it (hook-statement.ts).
+  const noted = heldStatement(record.placeNoted, record);
   if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')
     && !hookStatementVoid(noted.byHookAt, record)) {
     return { project: noted.project, folderId: noted.folderId ?? '', folder: noted.folder ?? null, leaderId: noted.leaderId ?? null };
@@ -162,7 +168,16 @@ function notedFor(record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'las
 
 async function recordTold(sessionId: string, noted: PlaceNoted): Promise<void> {
   const { updateSessionRecordConditionally } = await import('../session-tracker.js');
-  await updateSessionRecordConditionally(sessionId, { placeNoted: noted }, () => true, { preserveLastActiveAt: true })
+  const patch: { placeNoted: SessionPlaceNoted } = { placeNoted: noted };
+  await updateSessionRecordConditionally(sessionId, patch, (current) => {
+    // A hook statement: on the boundary the record holds now, keeping what was told before it.
+    if (noted.byHookAt) {
+      const { compactUuid: _read, ...stated } = noted;
+      const prior = heldStatement(current.placeNoted, current);
+      patch.placeNoted = { ...stated, ...statementBoundary(current), ...(prior ? { prior } : {}) };
+    }
+    return true;
+  }, { preserveLastActiveAt: true })
     .catch((err) => log.session.warn('place notice: could not record it as told', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     }));
@@ -202,8 +217,9 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
       // already restated it for this compaction. Same guarded write, so a
       // replayed boundary never voids an instruction sent after it.
       ...(modeHookAnswered ? {} : { output_mode_injected: undefined }),
-      ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
-      ...(routingHookAnswered && routing ? { taskRoutingNoted: { ...routing, compactUuid: boundaryUuid } } : {}),
+      // Carried onto the boundary it answered: what it replaced no longer matters.
+      ...(hookAnswered && noted ? { placeNoted: { ...withoutPrior(noted), compactUuid: boundaryUuid } } : {}),
+      ...(routingHookAnswered && routing ? { taskRoutingNoted: { ...withoutPrior(routing), compactUuid: boundaryUuid } } : {}),
     }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
     // Its own compare-and-set on the hint state, so a send's commit landing in
     // between is never overwritten by the copy read above.

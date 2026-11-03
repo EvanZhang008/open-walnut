@@ -158,7 +158,7 @@ describe('a change keeps the context it needs', () => {
     for (const [a, b] of forms) {
       const text = renderDue(dueChanges(parseInstructions(defaultInstructions(b)), parseInstructions(defaultInstructions(a)), new Set(), {})!)
       expect(text).not.toMatch(/\)\. and|\. and Walnut|They replace every earlier version\./)
-      expect(text).toContain('Only what changed since the version you were given last')
+      expect(text).toContain('Only what changed since the version you hold')
     }
   })
 
@@ -188,7 +188,22 @@ describe('review cases (2026-10-30)', () => {
     const before = defaultInstructions(task)
     await writeUser(USER([long.replace('Friday', 'Monday'), 'Another rule.', ...FILLER]))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!)
-    expect(text).toContain(`- ${long}`)
+    // Named by its start, and said to be the rule reworded above: never a cut that reads like the new one.
+    expect(text).toContain(`${`- ${long}`.slice(0, 77)}... (its new wording is above)`)
+    expect(text).not.toContain(`- ${long}`)
+  })
+
+  it('a reworded rule whose start a kept rule shares is named in full, so the kept one is never read as gone', async () => {
+    const task: InstructionTask = { id: 'w', project: 'marina' }
+    const stem = 'When you report to the user about a long running piece of work that spans several days, always'
+    const kept = `${stem} name the task and say what changed since the last report.`
+    const old = `${stem} give the link to the board and the time you checked it.`
+    await writeUser(USER([kept, old, ...FILLER]))
+    const before = defaultInstructions(task)
+    await writeUser(USER([kept, `${stem} give the board link.`, ...FILLER]))
+    const text = renderDue(dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!)
+    expect(text).toContain(`- ${old} (its new wording is above)`)
+    expect(text).not.toContain(`- ${kept}`)
   })
 
   it('the user\'s own words told as changes: "They replace Walnut\'s default", never "every earlier" next to "stays in force"', () => {
@@ -227,16 +242,19 @@ describe('review cases (2026-10-30)', () => {
     expect(merged.lines).toEqual(['l1', 'l2'])
   })
 
-  it('a save that rewrote most lines comes whole: a change is never longer than the block (2026-10-31)', async () => {
-    // A condensing edit reworded nearly every rule; listing each new line and each old one made
-    // a 6.1 KB notice for a 4.5 KB block.
+  it('a save that rewrote most lines is still told as changes, never the block whole (2026-11-03)', async () => {
+    // A condensing edit reworded 10 of 27 lines and went whole, 5 to 6 KB, to every live session.
     const task: InstructionTask = { id: 'w', project: 'marina' }
     const before = defaultInstructions(task)
     await writeUser(USER(RULES.map((r, i) => (i < 27 ? `Rule ${i + 1}, said shorter.` : r))))
     const current = parseInstructions(defaultInstructions(task))
     const due = dueChanges(current, parseInstructions(before), new Set(), {})!
-    expect(due.blocks[0].whole).toBe(true)
-    expect(renderDue(due).length).toBeLessThanOrEqual(current.blocks.get('user-profile')!.head.length + current.blocks.get('user-profile')!.tagged.join('\n').length + 100)
+    expect(due.blocks[0].whole).toBe(false)
+    const text = renderDue(due)
+    expect(text).not.toContain('They replace every earlier version')
+    // Each new line in full, each old one by a short name: about the block's size, never more.
+    const added = due.blocks[0].added.reduce((n, l) => n + l.word.length + 13, 0)
+    expect(text.length).toBeLessThanOrEqual(added + due.blocks[0].removed.length * 110 + 900)
   })
 
   it('a line the budget cuts is never told as removed, and the change says not every line fits (2026-10-30)', async () => {
@@ -276,5 +294,48 @@ describe('review cases (2026-10-30)', () => {
     const over = await writeMemoryDoc('user', USER(long))
     expect(over.warning).toMatch(/sessions read only the first 4000: \d+ line\(s\) from "- Rule \d+/)
     expect((await writeMemoryDoc('user', USER(long.slice(0, 5)))).warning).toBeUndefined()
+  })
+})
+
+describe('a one-line change is told in about one line (2026-11-03)', () => {
+  // The org reflection: 64 notices, about 287K characters, in 12 hours across 100 sessions; one
+  // save sent the whole profile (5 to 6 KB) to every live session for a few changed lines.
+  /** What a notice adds besides the changed line itself: the opening, the headings, the block's head. */
+  const FIXED = 1_000
+  const notice = (before: string, task: InstructionTask) =>
+    instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)!
+
+  it.each([5, 40])('USER.md with %i rules: one rule reworded', async (n) => {
+    const task: InstructionTask = { id: 'w', project: 'marina' }
+    const rules = Array.from({ length: n }, (_, i) => `Rule ${i + 1}: a standing preference of the user, worded the way real ones are.`)
+    await writeUser(USER(rules))
+    const before = defaultInstructions(task)
+    const reworded = 'Rule 3: a standing preference of the user, now worded a little differently.'
+    await writeUser(USER(rules.map((r, i) => (i === 2 ? reworded : r))))
+    const text = notice(before, task)
+    expect(text).toContain(reworded)
+    expect(text).not.toContain('Rule 4:')
+    expect(text.length).toBeLessThanOrEqual(`- ${reworded}`.length + `- ${rules[2]}`.length + FIXED)
+  })
+
+  it('USER.md: one rule added, one removed, the same bound', async () => {
+    const task: InstructionTask = { id: 'w', project: 'marina' }
+    await writeUser(USER(RULES))
+    const before = defaultInstructions(task)
+    await writeUser(USER([...RULES, 'A rule the user just added.']))
+    expect(notice(before, task).length).toBeLessThanOrEqual('- A rule the user just added.'.length + FIXED)
+    const added = defaultInstructions(task)
+    await writeUser(USER(RULES.slice(1)))
+    const removed = instructionNoticeFor({ appliedAppendSystemPrompt: added }, task)!
+    expect(removed.length).toBeLessThanOrEqual('- A rule the user just added.'.length + `- ${RULES[0]}`.length + FIXED)
+  })
+
+  it('a lead\'s own instructions: one line changed among many', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `Instruction ${i + 1} for the lead, kept across edits.`)
+    const own = (text: string, when: string): InstructionTask => ({ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text, at: when, by: 'human' } })
+    const before = defaultInstructions(own(lines.join('\n'), at))
+    const text = notice(before, own(lines.map((l, i) => (i === 7 ? 'Instruction 8 for the lead, changed today.' : l)).join('\n'), '2026-11-03T01:00:00.000Z'))
+    expect(text).toContain('Instruction 8 for the lead, changed today.')
+    expect(text.length).toBeLessThanOrEqual('Instruction 8 for the lead, changed today.'.length + lines[7].length + FIXED)
   })
 })

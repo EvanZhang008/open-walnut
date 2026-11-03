@@ -344,6 +344,24 @@ export interface MessageHintSettings {
   audience?: { roles?: MessageHintRole[]; agents?: string[]; sessions?: string[] };
 }
 
+/** The place a session was last told (place-notice.ts). */
+export interface SessionPlaceNoted {
+  promptHash: string; compactUuid?: string; byHookAt?: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string;
+  /** On a hook statement: what was told before it, which still counts when the statement was a fork's (hook-statement.ts). */
+  prior?: Omit<SessionPlaceNoted, 'prior'>;
+}
+
+/** The changed default instructions a session was told (instruction-notice.ts). */
+export interface SessionInstructionsNoted {
+  version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[];
+  /** The version of each versioned block (the user's profile, core instructions) the session holds, by block id (instruction-diff.ts). */
+  blocks?: Record<string, { version: string; words: string[]; form?: string }>;
+  /** When the last notice reached it: the next waits for NOTICE_GAP_MS, so changes close together go out as one. */
+  toldAt?: string;
+  /** On a hook statement: what was told before it, which still counts when the statement was a fork's (hook-statement.ts). */
+  prior?: Omit<SessionInstructionsNoted, 'prior'>;
+}
+
 /** One hint kind as this session was last told it. */
 export interface SessionHintTold {
   /** The session's send counter when it went out. */
@@ -3106,18 +3124,14 @@ export interface SessionRecord {
    * place notice, and the hash of the prompt it ran on then
    * (src/core/sessions/place-notice.ts). A different prompt makes it void.
    */
-  placeNoted?: { promptHash: string; compactUuid?: string; byHookAt?: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
+  placeNoted?: SessionPlaceNoted;
   /**
    * The changed default-instruction lines this session was told (hashes), against
    * which prompt and compaction (src/core/sessions/instruction-notice.ts). Named for
    * the task routing rules, the first change it carried; a record from then has no
    * `lines` and is told again once.
    */
-  taskRoutingNoted?: {
-    version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[];
-    /** The version of each versioned block (the user's profile, core instructions) the session holds, by block id (instruction-diff.ts). */
-    blocks?: Record<string, { version: string; words: string[]; form?: string }>;
-  };
+  taskRoutingNoted?: SessionInstructionsNoted;
   /**
    * The uuid of the last compaction boundary Walnut saw in this session's
    * stream. A place note given before it may be gone from the context, so it

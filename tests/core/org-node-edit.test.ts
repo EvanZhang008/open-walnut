@@ -206,8 +206,8 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     const retold = (await instructionNoticeForSession(told))?.text ?? '';
     expect(retold).toContain(`[${next}] Ship on Fridays only.`);
     expect(retold).not.toContain('Water before nine.');
-    expect(retold).toContain(`Only what changed since the version you were given last (${version})`);
-    expect(retold).toContain('stays in force unless it is listed as removed');
+    expect(retold).toContain(`Only what changed since the version you hold (${version})`);
+    expect(retold).toContain('stays in force unless listed as removed');
     expect(retold).toMatch(/Removed, no longer in force:\n- Ask me before you buy seeds\./);
     expect(retold).not.toContain('They replace every earlier version');
 

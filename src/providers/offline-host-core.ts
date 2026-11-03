@@ -1179,7 +1179,14 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     // The Stop hook (unanswered-at-stop.ts) is the server's call; this host's copy never holds a turn.
     if (args.hook === 'stop') return ok({})
     if (args.hook === 'compact') {
-      const context = withTaskRouting(home, callerSid, text, true).text
+      let context = withTaskRouting(home, callerSid, text, true).text
+      // Claude Code shows the model only a preview of a hook's text past 10,000 characters (the
+      // server's open-items.ts HOOK_CONTEXT_MAX): changes that do not fit come with the next message.
+      if (context.length > 9_500) {
+        context = ['Walnut changed some of your default instructions since this session started. They are too long to '
+          + 'restate here and come in full in front of your next message: where your system prompt differs from them, they win.', text]
+          .filter(Boolean).join('\n\n').slice(0, 9_500)
+      }
       return ok(context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : {})
     }
     return ok({

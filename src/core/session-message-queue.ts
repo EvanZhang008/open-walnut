@@ -396,7 +396,8 @@ export async function markProcessing(
     const batch = head.lineUuid ? run : splitBatchAtUuid(run);
     if (routing && isFreshRow(head)) {
       const freshText = staleTriggerText(head.message, head.enqueuedAt, Date.now()) ?? head.message;
-      head.message = routing.apply(freshText, queue);
+      // The whole line counts: Walnut's notes at its head may lead a person's message.
+      head.message = routing.apply(freshText, queue, batch.map((m) => (m === head ? freshText : m.message)));
     }
     const lineUuid = head.lineUuid ?? lineUuidFor(batch);
     const now = Date.now();

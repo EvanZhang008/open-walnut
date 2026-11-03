@@ -25,6 +25,26 @@ export type { OpenAsk, OpenBoard, OpenSubtask, OpenWait } from './open-items-tex
 const MAX_SUBTASKS = 20;
 const MAX_REQUESTS = 10;
 
+/**
+ * The most the compaction hook adds. Claude Code keeps a hook's additionalContext
+ * of more than 10,000 characters in a file and shows the model only its first
+ * 2 KB and the path (CLI 2.1.312: `threshold` 1e4 in its hook output persist):
+ * 2026-11-02, Main's 39 KB statement reached it as a preview while Walnut
+ * recorded every changed instruction as told. Kept under it with room to spare.
+ */
+export const HOOK_CONTEXT_MAX = 9_500;
+const INSTRUCTIONS_LATER = 'Walnut changed some of your default instructions since this session started. They are too long to '
+  + 'restate here and come in full in front of your next message: where your system prompt differs from them, they win.';
+
+/** The hook's text within HOOK_CONTEXT_MAX: cut at a line end, saying where the rest is. */
+export function fitHookContext(text: string): string {
+  if (text.length <= HOOK_CONTEXT_MAX) return text;
+  const tail = '\n\n(Cut here: a hook may add only so much. open_items, agent_memory_read and org_get read the rest.)';
+  const room = HOOK_CONTEXT_MAX - tail.length;
+  const end = text.lastIndexOf('\n', room);
+  return `${text.slice(0, end > room / 2 ? end : room).trimEnd()}${tail}`;
+}
+
 export interface OpenItems extends OpenItemsInput {
   /** The block the session reads; '' when nothing is open and there is no place to state. */
   text: string;
@@ -193,10 +213,16 @@ export async function collectOpenItems(
       const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
       await (await import('./user-profile-context.js')).refreshUserProfile();
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
-      if (changed) {
+      // Only whole and within what the hook may add: a cut notice would leave rules unsaid. Left out,
+      // it is not told, so the next message carries it (the compaction made everything due again).
+      if (changed && changed.length + items.text.length + 2 <= HOOK_CONTEXT_MAX) {
         items.text = [changed, items.text].filter(Boolean).join('\n\n');
         await noteInstructionNoticeStatedByHook(caller.record, task);
+      } else if (changed) {
+        // First, so a cut of the rest never takes it.
+        items.text = [INSTRUCTIONS_LATER, items.text].filter(Boolean).join('\n\n');
       }
+      items.text = fitHookContext(items.text);
     }
     return items;
   } catch {

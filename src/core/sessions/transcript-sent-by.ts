@@ -42,11 +42,16 @@ export function transcriptSentBy(row: { role: string; text: string; injected?: b
  * A row can hold a Walnut notice or another session's message AND words a person typed (the CLI
  * joins what is pending into one line). The row reads `person` for the typed part; this is that
  * part alone, so nobody takes the envelope's words for the user's. Undefined when the row has no
- * envelope (its whole text is the person's) or no typed words.
+ * envelope and nothing in front (its whole text is the person's) or no typed words.
  */
 export function personTextOf(text: string): string | undefined {
-  const segments = parseSessionEnvelopes(typedUserText(text).trim())
-  if (!segments) return undefined
+  const typed = typedUserText(text).trim()
+  const segments = parseSessionEnvelopes(typed)
+  // Walnut's notes in front (a status push, a place note, changed instructions) are taken off by
+  // typedUserText already: what is left is the person's alone, and the row is not (2026-11-03:
+  // rows holding a status note and the user's question read person with no personText, so a
+  // reader took the note for the user's words).
+  if (!segments) return typed && typed !== text.trim() ? typed : undefined
   const own = segments.flatMap((s) => (s.kind === 'text' ? [s.text] : [])).join('\n\n').trim()
   return own || undefined
 }

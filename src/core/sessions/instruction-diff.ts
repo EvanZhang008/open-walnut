@@ -12,6 +12,9 @@
  * about 25 live sessions). A block is compared by its untagged words against the
  * version the session holds: only the new or reworded lines are told, with the
  * lines that were removed; a session that never had the block gets it whole.
+ * A change is never sent as the whole block (2026-11-03: a save that reworded 10
+ * of 27 lines went whole, 5 to 6 KB, to every live session): a reworded line is
+ * its new wording plus a short name of the old one.
  */
 
 import { createHash } from 'node:crypto';
@@ -20,7 +23,7 @@ export const hash = (text: string) => createHash('sha256').update(text).digest('
 
 const HEAD_RE = /Each line of this version starts with \[(v[0-9a-f]{8})\]:$/;
 /** A removed line is named, not repeated in full. */
-const REMOVED_MAX_CHARS = 160;
+const REMOVED_MAX_CHARS = 80;
 
 /**
  * A block is named by what it is, so a new version of it, or a heading added
@@ -152,11 +155,7 @@ export function dueChanges(
     const removed = changes.removed.filter((l) => !TRUNCATED_RE.test(l.word) && !beyond[block.id]?.has(l.word));
     // A save that kept every word (a new time stamp alone) changes nothing the session reads.
     if (!added.length && !removed.length) continue;
-    const delta: BlockChange = { block, whole: false, from: view.version, added, removed };
-    const whole: BlockChange = { block, whole: true, added: block.words.map((word) => ({ word })), removed: [] };
-    // A save that rewrote most lines lists each new line and each old one: then the block whole
-    // is shorter, and says the same (2026-10-31: a 6.1 KB change for a 4.5 KB block).
-    blocks.push(blockText(delta).length < blockText(whole).length ? delta : whole);
+    blocks.push({ block, whole: false, from: view.version, added, removed });
   }
   const gone: BlockGone[] = [];
   const ids = new Set([...prompt.blocks.keys(), ...Object.keys(views)]);
@@ -209,13 +208,16 @@ export function viewsAfter(views: Record<string, BlockView>, due: Due): Record<s
 const short = (line: string) => (line.length > REMOVED_MAX_CHARS ? `${line.slice(0, REMOVED_MAX_CHARS - 3)}...` : line);
 /**
  * A removed line as a list item (one that is a list item already stays one), with the parts it
- * was in. Shortened, unless its shortened form starts a line that is still there: a long rule
- * reworded at its end would read as the new one.
+ * was in. Shortened, unless its shortened form starts a line that is still there unchanged: the
+ * cut would name that one too. A new line it starts is its rewording, and says so.
  */
-const item = (kept: string[]) => ({ word, author, section }: Line) => {
+const item = (kept: string[], added: string[] = []) => ({ word, author, section }: Line) => {
   const cut = short(word);
-  const shown = cut !== word && kept.some((k) => k.startsWith(cut.slice(0, -3))) ? word : cut;
-  const text = shown.startsWith('- ') ? shown : `- ${shown}`;
+  const prefix = cut.slice(0, -3);
+  const reworded = cut !== word && added.some((k) => k.startsWith(prefix));
+  // A kept line with the same start: only the whole line says which one is gone.
+  const shown = cut !== word && kept.some((k) => k.startsWith(prefix)) ? word : cut;
+  const text = `${shown.startsWith('- ') ? shown : `- ${shown}`}${reworded ? ' (its new wording is above)' : ''}`;
   const where = [author, section].filter(Boolean).map((p) => `"${short(p!)}"`).join(' / ');
   return where ? `${text} (under ${where})` : text;
 };
@@ -231,9 +233,8 @@ function deltaHead(c: BlockChange): string {
     .replace(/They replace every earlier version and/, 'They replace')
     .replace(/\s*They replace every earlier version\.?/, '');
   const cut = c.block.words.find((w) => TRUNCATED_RE.test(w));
-  return `${head} Only what changed since the version you were given last (${c.from}) is below, each line `
-    + `starting with [${c.block.version}]. Every line you hold for this part, whatever version it is tagged with, `
-    + `stays in force${c.removed.length ? ' unless it is listed as removed' : ''}.`
+  return `${head} Only what changed since the version you hold (${c.from}) is below, tagged [${c.block.version}]; every other line you hold `
+    + `for this part stays in force${c.removed.length ? ' unless listed as removed' : ''}.`
     + (cut ? ` Not every line of it fits here: ${cut.slice(1, -1)}.` : '');
 }
 
@@ -256,7 +257,10 @@ function blockText(c: BlockChange): string {
     }
     out.push(`New or reworded:\n${lines.join('\n')}`);
   }
-  if (c.removed.length) out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words)).join('\n')}`);
+  if (c.removed.length) {
+    const added = new Set(c.added.map((l) => l.word));
+    out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words.filter((w) => !added.has(w)), [...added])).join('\n')}`);
+  }
   out.push('');
   return out.join('\n');
 }

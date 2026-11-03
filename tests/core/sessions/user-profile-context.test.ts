@@ -12,7 +12,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-user-profile-context'))
 import { WALNUT_HOME, USER_FILE } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'
-import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { buildSessionContext, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { instructionNoticeForSession } from '../../../src/core/sessions/instruction-notice.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine, userProfileText } from '../../../src/core/sessions/user-profile-context.js'
@@ -120,6 +120,13 @@ describe('the words a session reads', () => {
   })
 })
 
+/** The notice told last is past NOTICE_GAP_MS: the next change is told at once (instruction-notice.ts). */
+async function pastGap(sid: string): Promise<void> {
+  const rec = await getSessionByClaudeId(sid)
+  const noted = rec!.taskRoutingNoted!
+  await updateSessionRecord(sid, { taskRoutingNoted: { ...noted, toldAt: new Date(Date.now() - 4 * 3600_000).toISOString() } })
+}
+
 describe('every task session', () => {
   it('reads it: a worker, a lead, Main and an ask; a taskless session does not', async () => {
     await writeUser(doc(IDENTITY, RULES))
@@ -159,13 +166,14 @@ describe('every task session', () => {
     const added = (await instructionNoticeForSession(sid))!.text
     expect(added).toContain('Walnut changed your default instructions')
     expect(added).toMatch(/\[v[0-9a-f]{8}\] - Private repo keys are not a leak\./)
-    expect(added).toMatch(/Only what changed since the version you were given last \(v[0-9a-f]{8}\) is below/)
+    expect(added).toMatch(/Only what changed since the version you hold \(v[0-9a-f]{8}\) is below/)
     // 2026-10-30: a one-line save re-sent the whole 4.9 KB profile. A kept line is not told again.
     expect(added).not.toContain('Avery')
     expect(added).not.toContain('They replace every earlier version')
     // The session takes that line: told.
     expect(await deliver(sid, 'Next step')).toContain('Private repo keys are not a leak.')
 
+    await pastGap(sid)
     await writeUser(doc(RULES, KEPT))
     const removed = (await instructionNoticeForSession(sid))!.text
     expect(removed).toMatch(/Removed, no longer in force:\n- ## Identity\n- Avery, a software engineer\./)
@@ -204,11 +212,13 @@ describe('every task session', () => {
     expect(await tell()).toBeNull()
     // Back to the spawn-time words: the added rules are named as removed, the kept one is not repeated.
     await new Promise((r) => setTimeout(r, 15))
+    await pastGap(sid)
     await writeUser(doc(IDENTITY, KEPT))
     const undo = (await tell())!
     expect(undo).toMatch(/Removed, no longer in force:\n- ## Standing rules\n- Private repo keys are not a leak\./)
     expect(undo).not.toContain('Avery')
     expect(await tell()).toBeNull()
+    await pastGap(sid)
     await writeUser(PREAMBLE)
     const emptied = (await tell())!
     expect(emptied).toContain('none are recorded now, so no earlier version of them applies')

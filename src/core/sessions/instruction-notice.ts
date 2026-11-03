@@ -36,8 +36,10 @@ import {
   noticeToldGeneration,
 } from './instruction-notice-flight.js';
 import { log } from '../../logging/index.js';
-import { hookStatementVoid } from './hook-statement.js';
-import type { SessionRecord } from '../types.js';
+import { heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
+import { parseHinted } from '../hints/hint-format.js';
+import { isEnvelopeOnly, parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
+import type { SessionInstructionsNoted, SessionRecord } from '../types.js';
 
 const kit = createEnvelopeKit();
 /**
@@ -50,7 +52,17 @@ const OUTCOME = 'task-routing-policy';
 const NOTICE_ATTRS = { from: 'Walnut', outcome: OUTCOME, note: 'current default instructions, not a work request' };
 
 type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'lastCompactAt' | 'taskRoutingNoted'>;
-type Noted = NonNullable<SessionRecord['taskRoutingNoted']>;
+type Noted = Omit<SessionInstructionsNoted, 'prior'>;
+
+/**
+ * Changes close together go out as one notice: once a session was told on its
+ * current prompt and boundary, the next notice waits this long after that one
+ * (2026-11-03: Main and two leads got 4 to 5 notices in 12 hours, each riding
+ * its own message). A compaction starts a new boundary, so what it dropped is
+ * told at once, and a change to the user's profile or a role's instructions never
+ * waits (a newer word from the user wins): it goes at once, with what was waiting.
+ */
+export const NOTICE_GAP_MS = 3 * 60 * 60_000;
 
 /** Same prompt and same compaction boundary as when the lines were told; never a fork's hook statement (hook-statement.ts). */
 function sameBase(noted: Noted | undefined, record: NoticeRecord): noted is Noted {
@@ -59,10 +71,16 @@ function sameBase(noted: Noted | undefined, record: NoticeRecord): noted is Note
     && !hookStatementVoid(noted.byHookAt, record);
 }
 
+/** What was told that counts for this conversation: a fork's hook statement gives way to what it replaced. */
+function heldNoted(record: NoticeRecord): Noted | undefined {
+  const noted = heldStatement(record.taskRoutingNoted, record);
+  return sameBase(noted, record) ? noted : undefined;
+}
+
 /** What the session holds beyond its prompt: told plain lines and block versions (none when `ignoreTold`). */
 function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed, ignoreTold?: boolean) {
-  const noted = record.taskRoutingNoted;
-  if (ignoreTold || !sameBase(noted, record)) return { told: new Set<string>(), views: {} as Record<string, BlockView> };
+  const noted = heldNoted(record);
+  if (ignoreTold || !noted) return { told: new Set<string>(), views: {} as Record<string, BlockView> };
   const told = new Set(noted.lines ?? []);
   const views: Record<string, BlockView> = { ...(noted.blocks ?? {}) };
   if (noted.blocks) return { told, views };
@@ -83,7 +101,7 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
 }
 
 /** What this session should be told now, or null. */
-function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolean): { due: Due; views: Record<string, BlockView> } | null {
+function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolean, now = Date.now()): { due: Due; views: Record<string, BlockView> } | null {
   // ACP rebuilds its instructions from buildSessionContext at every establish.
   if (isAcpEngine(resolveEngine(record.engine))) return null;
   const prompt = record.appliedAppendSystemPrompt;
@@ -97,7 +115,12 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
   const due = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
-  return due ? { due, views } : null;
+  if (!due) return null;
+  // Walnut's own wording waits out the gap; a change to the user's profile or a role's
+  // instructions (the user's or an agent's words for this session) goes at once, with the rest.
+  const lastAt = heldNoted(record)?.toldAt;
+  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS && !due.blocks.length && !due.gone.length) return null;
+  return { due, views };
 }
 
 function render(due: Due): string {
@@ -117,11 +140,11 @@ const changedIds = (due: Due) => [...due.blocks.map((c) => c.block.id), ...due.g
 
 /** What counts as told once `due` reached the session: added to what this prompt and boundary were told. */
 function notedOf(record: NoticeRecord, found: { due: Due; views: Record<string, BlockView> }, extra?: Partial<Noted>): Noted {
-  const base = sameBase(record.taskRoutingNoted, record) && !extra?.byHookAt ? record.taskRoutingNoted.lines ?? [] : [];
+  const base = !extra?.byHookAt ? heldNoted(record)?.lines ?? [] : [];
   const told = [...new Set([...base, ...found.due.plain.map((c) => hash(c.line))])];
   const blocks = viewsAfter(found.views, found.due);
   return { version: hash(JSON.stringify([told, blocks])), promptHash: hash(record.appliedAppendSystemPrompt ?? ''),
-    ...(record.lastCompactUuid ? { compactUuid: record.lastCompactUuid } : {}), lines: told, blocks, ...extra };
+    ...(record.lastCompactUuid ? { compactUuid: record.lastCompactUuid } : {}), lines: told, blocks, toldAt: new Date().toISOString(), ...extra };
 }
 
 /** The notice a session should get, or null. `ignoreTold`: the caller restates it whatever was said before. */
@@ -129,6 +152,22 @@ export function instructionNoticeFor(record: NoticeRecord, task: InstructionTask
   const found = dueFor(record, task, opts?.ignoreTold);
   return found ? render(found.due) : null;
 }
+
+/**
+ * A message made only of Walnut's own notes (status pushes, a stopped or waiting
+ * subtask, a place note, its hints): a notice joining it would be a line of its own
+ * in the session. A subtask's completion or error is work, and carries it.
+ */
+export function isWalnutNotesOnly(text: string): boolean {
+  const body = parseHinted(text).text.trim();
+  // No text at all is a person's image, never Walnut's note.
+  if (!body) return false;
+  const segments = parseSessionEnvelopes(body);
+  return isEnvelopeOnly(segments) && segments.every((s) => s.kind === 'envelope' && s.envelope.source === 'walnut'
+    && (s.envelope.kind === 'app-state' || (s.envelope.kind === 'notification' && !WORK_NOTICE.test(s.envelope.raw))));
+}
+/** A subtask's completion or error: Walnut wakes the parent for it, so it starts real work. */
+const WORK_NOTICE = /^<walnut-message [^\n]*\boutcome="(completed|error)"/;
 
 /** A slash command must reach the CLI as typed: only raw input starting with "/" runs as one. */
 export function isSlashCommandText(text: string): boolean {
@@ -166,9 +205,10 @@ export interface PendingInstructionNotice {
   /**
    * Inside the queue lock: the text with the notice leading it, or the text
    * unchanged (a slash command, one that already leads with it, another live row
-   * of `queue` already carries a notice, or one is being recorded as told).
+   * of `queue` already carries a notice, one is being recorded as told, or the
+   * line, `line` being every text it joins, holds only Walnut's own notes).
    */
-  apply(text: string, queue: ReadonlyArray<{ status: string; message: string }>): string;
+  apply(text: string, queue: ReadonlyArray<{ status: string; message: string }>, line?: readonly string[]): string;
 }
 
 /**
@@ -209,24 +249,33 @@ function takeAttached(sessionId: string, key: string): Told | undefined {
 export function toldOnto(record: NoticeRecord, told: Told): Noted | null {
   const { noted, changed } = told;
   if (noted.promptHash !== hash(record.appliedAppendSystemPrompt ?? '')) return null;
-  const cur = record.taskRoutingNoted;
-  if (sameBase(cur, record)) {
+  const cur = heldNoted(record);
+  if (cur) {
     const lines = [...new Set([...(cur.lines ?? []), ...(noted.lines ?? [])])];
     // Only the blocks this notice told: the rest of its snapshot may be older than the record.
     const blocks = { ...(cur.blocks ?? {}) };
     for (const id of changed) if (noted.blocks?.[id]) blocks[id] = noted.blocks[id];
-    return { ...cur, version: hash(JSON.stringify([lines, blocks])), lines, blocks };
+    return { ...cur, version: hash(JSON.stringify([lines, blocks])), lines, blocks, ...(noted.toldAt ? { toldAt: noted.toldAt } : {}) };
   }
   return sameBase(noted, record) ? noted : null;
 }
 
-/** Record `noted` as told: as is (`base`, the compaction hook's fresh statement), else onto the record as it is now. */
+/**
+ * Record `noted` as told: as the compaction hook's fresh statement (`base`), on the boundary the
+ * record holds now and keeping what was told before it (heldStatement), else onto the record as
+ * it is now.
+ */
 async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean }): Promise<void> {
   const { updateSessionRecordConditionally } = await import('../session-tracker.js');
   // Filled in under the record's lock, from the row as it is then.
-  const patch: { taskRoutingNoted?: Noted } = {};
+  const patch: { taskRoutingNoted?: SessionInstructionsNoted } = {};
   await updateSessionRecordConditionally(sessionId, patch, (current) => {
-    const next = opts?.base ? told.noted : toldOnto(current, told);
+    let next: SessionInstructionsNoted | null;
+    if (opts?.base) {
+      const { compactUuid: _read, ...stated } = told.noted;
+      const prior = heldNoted(current);
+      next = { ...stated, ...statementBoundary(current), ...(prior ? { prior } : {}) };
+    } else next = toldOnto(current, told);
     if (!next) return false;
     patch.taskRoutingNoted = next;
     return true;
@@ -235,7 +284,7 @@ async function recordTold(sessionId: string, told: Told, opts?: { base?: boolean
   bumpNoticeTold(sessionId);
 }
 
-async function lookup(sessionId: string): Promise<{ record: SessionRecord; text: string; told: Told } | null> {
+async function lookup(sessionId: string, now = Date.now()): Promise<{ record: SessionRecord; text: string; told: Told } | null> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record?.taskId) return null;
@@ -244,7 +293,7 @@ async function lookup(sessionId: string): Promise<{ record: SessionRecord; text:
   if (!task) return null;
   // The user's profile rides the default instructions: compare against it as on disk now.
   await refreshUserProfile();
-  const found = dueFor(record, task);
+  const found = dueFor(record, task, false, now);
   return found ? { record, text: render(found.due), told: { noted: notedOf(record, found), changed: changedIds(found.due) } } : null;
 }
 
@@ -257,10 +306,12 @@ export async function instructionNoticeForSession(sessionId: string): Promise<Pe
     const { text, told } = found;
     return {
       text,
-      apply: (input, queue) => {
+      apply: (input, queue, line = [input]) => {
         // Told since this was looked up: what it says may be told already.
         if (noticeToldGeneration(sessionId) !== gen) return input;
         if (noticeDelivering(sessionId) || noticeInFlight(queue)) return input;
+        // It waits for a message from a person, a task or a trigger; Walnut's own notes never carry it alone.
+        if (line.every(isWalnutNotesOnly)) return input;
         const out = withInstructionNotice(input, text);
         if (out !== input) remember(hash(text), sessionId, told);
         return out;
@@ -330,7 +381,7 @@ export function instructionNoticeForHost(
   const active = record.process_status === 'running'
     || now - Date.parse(record.lastActiveAt ?? '') < HOST_NOTICE_ACTIVE_MS;
   if (!active) return null;
-  const found = dueFor(record, task);
+  const found = dueFor(record, task, false, now);
   if (!found) return null;
   const policy = render(found.due);
   const due = hash(JSON.stringify([hash(record.appliedAppendSystemPrompt ?? ''), record.lastCompactUuid ?? '', policy]));
