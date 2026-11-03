@@ -142,6 +142,46 @@ describe('deploy-committed.sh', () => {
     expect(r.report!.ws_file).toBe('committed lib')
   })
 
+  it('installs the commit\'s lockfile in the clone when the checkout lacks a dependency it declares, never in the checkout', () => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'package.json'), '{"name":"leftpad"}')
+    const pkg = JSON.parse(fs.readFileSync(path.join(f.repo, 'package.json'), 'utf-8'))
+    fs.writeFileSync(path.join(f.repo, 'package.json'), JSON.stringify({ ...pkg, dependencies: { leftpad: '1.0.0', freshdep: '1.0.0' } }))
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'adds freshdep', '--', 'package.json')
+    const bin = path.join(path.dirname(f.repo), 'bin')
+    fs.mkdirSync(bin)
+    const runStdin = process.versions.bun ? `"${process.execPath}" run -` : `"${process.execPath}" -`
+    const bun = path.join(bin, 'bun')
+    fs.writeFileSync(bun, [
+      '#!/bin/sh',
+      `printf '%s|%s\\n' "$(pwd -P)" "$*" >> "${bin}/bun.args"`,
+      'if [ "$1" = run ] && [ "$2" = - ]; then shift 2; exec ' + runStdin + ' "$@"; fi',
+      // A stand-in for the install: what bun and the postinstall would lay out.
+      'if [ "$1" = install ]; then mkdir -p node_modules/leftpad node_modules/freshdep node_modules/@acme/other web/node_modules; ln -s ../../packages/lib node_modules/@acme/lib; exit 0; fi',
+      'exit 9',
+    ].join('\n') + '\n', { mode: 0o755 })
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: bun })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('lacks what this commit declares (root freshdep')
+    const calls = fs.readFileSync(path.join(bin, 'bun.args'), 'utf-8').trim().split('\n')
+    expect(calls.filter((c) => c.endsWith('|install --frozen-lockfile'))).toEqual([`${r.report!.here}|install --frozen-lockfile`])
+    // The clone has its own dependencies now; the checkout's are as they were.
+    expect(r.report!.dep).toBe(path.join(r.report!.here, 'node_modules', 'leftpad'))
+    expect(fs.existsSync(path.join(f.repo, 'node_modules', 'freshdep'))).toBe(false)
+  })
+
+  it('links, and installs nothing, when the checkout has every dependency the commit declares', () => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'package.json'), '{"name":"leftpad"}')
+    const pkg = JSON.parse(fs.readFileSync(path.join(f.repo, 'package.json'), 'utf-8'))
+    fs.writeFileSync(path.join(f.repo, 'package.json'), JSON.stringify({ ...pkg, dependencies: { leftpad: '1.0.0' } }))
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'declares leftpad', '--', 'package.json')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain('lacks what this commit declares')
+    expect(r.report!.dep).toBe(path.join(f.repo, 'node_modules', 'leftpad'))
+  })
+
   it('needs bun: a machine with only node is told how to install it, and nothing runs on node', () => {
     const f = fixture()
     const bin = path.join(path.dirname(f.repo), 'bin')

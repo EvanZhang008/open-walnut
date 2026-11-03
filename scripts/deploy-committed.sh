@@ -98,7 +98,10 @@ fi
 # Dependencies: every top-level entry of this checkout's node_modules is linked,
 # except the workspace packages, which must be the COMMITTED ones in the
 # clone (this checkout's links point at its own, possibly edited, packages/).
-"${JS_RUN[@]}" "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
+# It prints each dependency the commit declares that the checkout has not
+# installed (a commit that adds one lands before anyone runs bun install here;
+# 2026-11-03: the web type-check then failed on a missing module).
+missing="$("${JS_RUN[@]}" "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
 const fs = require('fs')
 const path = require('path')
 const [src, dst, build] = process.argv.slice(2)
@@ -125,9 +128,32 @@ for (const [name, dir] of workspaces) {
   fs.mkdirSync(path.dirname(path.join(dst, name)), { recursive: true })
   fs.symlinkSync(dir, path.join(dst, name))
 }
+const declared = (p) => Object.keys({ ...(p.dependencies ?? {}), ...(p.devDependencies ?? {}) })
+const lacks = (pkgDir, nm) => declared(JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')))
+  .filter((n) => !workspaces.has(n) && !fs.existsSync(path.join(nm, n, 'package.json')))
+const webDir = path.join(build, 'web')
+const webNm = path.join(path.dirname(src), 'web', 'node_modules')
+const out = [...lacks(build, src).map((n) => `root ${n}`)]
+if (fs.existsSync(path.join(webDir, 'package.json'))) out.push(...lacks(webDir, webNm).map((n) => `web ${n}`))
+process.stdout.write(out.join('\n'))
 JS
+)"
 if [[ -d "$SERVE_ROOT/web/node_modules" ]]; then
   ln -s "$SERVE_ROOT/web/node_modules" "$BUILD/web/node_modules"
+fi
+# A dependency the commit needs and the checkout lacks: install the commit's own
+# lockfile into the clone instead of linking, never into the shared checkout.
+if [[ -n "$missing" ]]; then
+  echo "The checkout's node_modules lacks what this commit declares ($(echo "$missing" | tr '\n' ' ')); installing the commit's lockfile in the clone."
+  bun_bin="${JS_RUN[0]}"
+  rm -f "$BUILD/web/node_modules"
+  if grep -q '^root ' <<<"$missing"; then
+    # The root install's postinstall installs web/ too (scripts/postinstall.mjs).
+    rm -rf "$BUILD/node_modules"
+    (cd "$BUILD" && "$bun_bin" install --frozen-lockfile)
+  elif [[ -f "$BUILD/web/package.json" ]]; then
+    (cd "$BUILD/web" && "$bun_bin" install --frozen-lockfile)
+  fi
 fi
 
 cd "$BUILD"
