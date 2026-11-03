@@ -8,6 +8,7 @@
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import { withFixState, type HostFixAction, type HostFixing, type HostFixRecord } from './host-autofix.js'
 import type { ReadinessProblem } from './host-readiness-problems.js'
+import { forgetAllHostFixes, forgetHostFixes } from './host-fix-memory.js'
 
 export interface HostReadiness extends HostPreflightResult {
   /** When the host was last ASKED (success or failure): the UI's "is this answer new" key. */
@@ -39,7 +40,7 @@ export const inFlight = new Map<string, Promise<HostReadiness | null>>()
 export const listeners = new Set<(host: string) => void>()
 /** Per host: the fix running now and the finished ones (kept across reconnects). */
 export const fixState = new Map<string, { fixing?: HostFixing; fixes: HostFixRecord[] }>()
-/** Per host: fixes already tried this server lifetime (the once-per-problem rule). */
+/** Per host: fixes already tried (the once-per-problem rule; failures of earlier servers: host-fix-memory.ts). */
 export const attempted = new Map<string, Set<HostFixAction>>()
 /** Per host: the autofix round in progress, if any. */
 export const rounds = new Map<string, Promise<void>>()
@@ -72,6 +73,7 @@ export function getHostReadiness(host: string, now: number = Date.now()): HostRe
  */
 export function resetHostAutofixAttempts(host: string): void {
   attempted.delete(host)
+  void forgetHostFixes(host)
 }
 
 /** Fires when a host's readiness changed (set or cleared). Returns an unsubscribe. */
@@ -86,13 +88,18 @@ export function notifyReadiness(host: string): void {
   }
 }
 
-/** Test seam + disconnect-free reset. */
-export function clearHostReadiness(host?: string): void {
+/**
+ * Test seam + disconnect-free reset. The failed fixes kept across restarts go
+ * too, unless `keepFixMemory` (a test standing in for a server restart).
+ */
+export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolean } = {}): void {
   if (host === undefined) {
     store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear()
     prebuiltFor.clear(); prebuiltUnusable.clear(); problemCtx.clear()
+    if (!opts.keepFixMemory) void forgetAllHostFixes()
     return
   }
+  if (!opts.keepFixMemory) void forgetHostFixes(host)
   store.delete(host)
   inFlight.delete(host)
   fixState.delete(host)

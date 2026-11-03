@@ -549,3 +549,71 @@ describe('host display name', () => {
     expect(inHostTerms('nothing to change', 'devbox')).toBe('nothing to change')
   })
 })
+
+describe('a planned daemon swap (a deploy updating the host daemon)', () => {
+  /** A swap that ends after `ms`; waitHandover mirrors the pool's: true once connected, false with no swap. */
+  function swap(ms: number) {
+    let on = ms > 0
+    if (on) setTimeout(() => { on = false }, ms)
+    const waitHandover = async (_h: string, cap: number) => {
+      const end = Date.now() + cap
+      if (!on) return true
+      while (on && Date.now() < end) await later(5, null)
+      return !on
+    }
+    return { waitHandover, wouldWait: () => (on ? 'dialing' as const : 'connected' as const), active: () => on }
+  }
+
+  it('a read that arrives during the swap waits for the new daemon instead of answering Reconnecting', async () => {
+    const s = swap(80)
+    let ran = 0
+    const v = await boundHostRead('devbox', async () => { ran++; return 'history' }, { ...s, label })
+    expect(v).toBe('history')
+    expect(ran).toBe(1)
+  })
+
+  it('a read the swap cut from under it runs once more on the new daemon', async () => {
+    let on = false
+    let ran = 0
+    const read = async () => {
+      ran++
+      if (ran === 1) {
+        on = true
+        setTimeout(() => { on = false }, 60)
+        throw markLinkFailure(new Error('connection closed'), 'lost')
+      }
+      return 'history'
+    }
+    const waitHandover = async () => { while (on) await later(5, null); return true }
+    const v = await boundHostRead('devbox', read, { wouldWait: () => (on ? 'dialing' : 'connected'), waitHandover, label, quietMs: 1_000 })
+    expect(v).toBe('history')
+    expect(ran).toBe(2)
+  })
+
+  it('a shared read the swap cut is read again too', async () => {
+    resetSharedHostReadsForTest()
+    let on = false
+    let ran = 0
+    const read = async () => {
+      ran++
+      if (ran === 1) { on = true; setTimeout(() => { on = false }, 40); throw markLinkFailure(new Error('connection closed'), 'lost') }
+      return `file ${ran}`
+    }
+    const waitHandover = async () => { while (on) await later(5, null); return true }
+    const v = await boundSharedHostRead('devbox', 'file:/a', read, { wouldWait: () => (on ? 'dialing' : 'connected'), waitHandover, label, quietMs: 1_000 })
+    expect(v).toBe('file 2')
+  })
+
+  it('with no swap under way a dropped link answers degraded at once, as before', async () => {
+    const t0 = Date.now()
+    const err = await boundHostRead('devbox', async () => 'never', { wouldWait: () => 'dialing', waitHandover: async () => false, label }).catch((e) => e)
+    expect(err).toBeInstanceOf(HostReconnectingError)
+    expect(Date.now() - t0).toBeLessThan(200)
+  })
+
+  it('the pool says no swap for a host it does not hold', async () => {
+    const { waitDaemonHandover, daemonHandoverPending } = await import('../../../src/providers/daemon-connection.js')
+    expect(daemonHandoverPending('no-such-host')).toBe(false)
+    await expect(waitDaemonHandover('no-such-host', 1_000)).resolves.toBe(false)
+  })
+})

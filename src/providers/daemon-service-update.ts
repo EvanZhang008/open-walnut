@@ -98,14 +98,35 @@ async function serviceExecutable(
   return stageRemoteDaemonBinary(source.binary, expectedVersion, io)
 }
 
-export async function updateRemoteDaemonService(source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user'): Promise<void> {
+/** The new daemon did not get onto the host: the installed service and the running daemon are untouched. */
+export class DaemonUpdateStageError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DaemonUpdateStageError'
+  }
+}
+
+/**
+ * Update the host's daemon service to `expectedVersion`: the executable onto
+ * the host first (an upload while the old daemon still serves), then the
+ * service swap. `onStaged` is asked between the two: false keeps the old daemon
+ * (work started during the upload) and answers 'held'.
+ */
+export async function updateRemoteDaemonService(
+  source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user',
+  opts: { onStaged?: () => boolean } = {},
+): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
-  const { executable, directory } = await serviceExecutable(source, expectedVersion, io)
+  const { executable, directory } = await serviceExecutable(source, expectedVersion, io).catch((error: unknown) => {
+    throw new DaemonUpdateStageError(error instanceof Error ? error.message : String(error))
+  })
   try {
+    if (opts.onStaged && !opts.onStaged()) return 'held'
     const output = await io.run(`${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`, 600_000)
     const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }
     if (result.ok !== true) throw new Error(`Managed daemon update failed: ${result.failure?.message ?? output}; ${result.failure?.rollback ?? ''}`)
+    return 'applied'
   } finally {
     if (directory) await removeStaging(io, directory)
   }

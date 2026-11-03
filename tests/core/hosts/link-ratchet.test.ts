@@ -48,6 +48,7 @@ const REMOTE_SH_ALLOWED: Record<string, string> = {
   'src/providers/remote-runtime.ts': 'the SSH route: runtime bootstrap',
   'src/providers/ssh-control-master.ts': 'the SSH route: control master',
   'src/providers/upload-resume.ts': 'the SSH route: chunked deploy upload',
+  'src/providers/walnut-file-delta.ts': 'the SSH route: the walnut file sent as a delta',
   'src/core/host-server/install.ts': 'installing a host server over SSH',
 }
 

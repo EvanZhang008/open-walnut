@@ -12135,6 +12135,8 @@ if (action === '--start' || SERVICE_MODE) {
   logMsg('info', 'startup: complete — sessions ready', {
     totalSessions: sessions.size,
     sids: [...sessions.keys()],
+    // Process start to sessions ready: the new daemon's share of an upgrade swap.
+    bootMs: Math.round(process.uptime() * 1000),
   })
 
   if (SERVICE_MODE) {

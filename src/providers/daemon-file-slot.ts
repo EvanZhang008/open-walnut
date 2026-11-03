@@ -98,7 +98,60 @@ export function slotCheckScript(slot: string, sha256: string, alsoAt: string[] =
  */
 function leftoversOf(slot: string): string {
   const gz = shq(`${slot}.gz`)
-  return `rm -rf ${gz} ${gz}.chunks-* 2>/dev/null`
+  const delta = shq(`${slot}.delta.gz`)
+  return `rm -rf ${gz} ${gz}.chunks-* ${delta} ${delta}.chunks-* ${shq(`${slot}.delta.raw`)} 2>/dev/null`
+}
+
+/** Where a delta's payload goes beside the slot (walnut-file-delta.ts): leftoversOf removes it. */
+export function slotDeltaPath(slot: string): string {
+  return `${slot}.delta.gz`
+}
+
+/**
+ * After a delta's payload is on the host (`deltaGz`, the changed blocks' bytes
+ * in order): build the new file beside the slot from the slot's own blocks and
+ * the sent ones (`changed` lists the sent blocks' indexes, `blocks` the new
+ * file's count, each `blockBytes` long but the last), then the same checks and
+ * rename as slotInstallScript: sha256 (required here: the host hashed its blocks
+ * with the same tool), the run, the move. `slot=installed` on success.
+ */
+export function slotDeltaInstallScript(
+  slot: string, deltaGz: string, sha256: string, delta: { blocks: number; changed: number[]; blockBytes: number }, fit: SlotFit = {},
+): string {
+  const want = shq(checkSha(sha256))
+  const q = shq(slot)
+  const part = shq(`${slot}.part`)
+  const raw = shq(`${slot}.delta.raw`)
+  const { blocks, changed, blockBytes } = delta
+  if (!Number.isSafeInteger(blocks) || blocks <= 0 || !Number.isSafeInteger(blockBytes) || blockBytes <= 0) throw new Error('bad delta shape')
+  if (changed.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= blocks)) throw new Error('bad delta block index')
+  // A failed build removes its delta too: the next attempt plans its own.
+  const fail = (why: string) => `{ rm -f ${part} ${raw} ${shq(deltaGz)}; echo ${shq(why)} >&2; exit 1; }`
+  return [
+    'command -v gzip >/dev/null 2>&1 || { echo "the host has no gzip, which unpacks the walnut file" >&2; exit 1; }',
+    `[ -f ${q} ] || { echo "the daemon slot has no file to build the new one from" >&2; exit 1; }`,
+    `rm -f ${part} ${raw}`,
+    `gzip -dc ${shq(deltaGz)} > ${raw} || ${fail('cannot unpack the walnut file delta (is the disk full?)')}`,
+    `: > ${part} || ${fail('cannot write beside the daemon slot')}`,
+    `W_D=' ${changed.join(' ')} '`,
+    'W_I=0; W_K=0',
+    `while [ "$W_I" -lt ${blocks} ]; do`,
+    '  case "$W_D" in',
+    `    *" $W_I "*) dd if=${raw} bs=${blockBytes} skip=$W_K count=1 2>/dev/null >> ${part} || ${fail('cannot build the walnut file from its delta')}; W_K=$((W_K + 1)) ;;`,
+    `    *) dd if=${q} bs=${blockBytes} skip=$W_I count=1 2>/dev/null >> ${part} || ${fail('cannot build the walnut file from its delta')} ;;`,
+    '  esac',
+    '  W_I=$((W_I + 1))',
+    'done',
+    `rm -f ${raw}`,
+    `SUM=$( ${remoteSha256Command(`${slot}.part`)} )`,
+    `if [ "$SUM" != ${want} ]; then rm -f ${part} ${shq(deltaGz)}; echo "the walnut file built from its delta is broken (sha256 $SUM)" >&2; exit 1; fi`,
+    `chmod 755 ${part} || { rm -f ${part}; echo "cannot make the walnut file executable" >&2; exit 1; }`,
+    fitsSh(fit),
+    `if ! w_fits ${part}; then rm -f ${part}; ${leftoversOf(slot)}; ${UNFIT_ANSWER}; exit 0; fi`,
+    `mv -f ${part} ${q} || { rm -f ${part}; echo "cannot move the walnut file into the daemon slot" >&2; exit 1; }`,
+    leftoversOf(slot),
+    'echo slot=installed',
+  ].join('\n')
 }
 
 /**

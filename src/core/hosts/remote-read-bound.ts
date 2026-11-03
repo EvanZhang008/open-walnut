@@ -78,6 +78,14 @@ export const HOST_READ_PROGRESS_BYTES = 2_048
 export const HOST_SILENT_MEMO_MS = 15_000
 /** How long a read's result waits for the request it was cut from (boundSharedHostRead). */
 export const HOST_READ_RESULT_TTL_MS = 30_000
+/**
+ * During a planned daemon swap (a deploy updating the host's daemon): how long a
+ * read waits for the new daemon before it answers degraded. Above the swap
+ * itself (about 8 s on a cron service: the old daemon's drain, the supervisor's
+ * second, the new one's boot), and with a cold dial's HOST_READ_DIAL_CAP_MS
+ * after it still within the 15 s a browser request is given.
+ */
+export const HOST_READ_HANDOVER_CAP_MS = 10_000
 
 /** The error code the routes answer with (503), in both the web and the v1 shape. */
 export const HOST_RECONNECTING = 'host_reconnecting'
@@ -117,6 +125,8 @@ export interface BoundDeps {
   silent: (host: string) => boolean
   /** The connected link's measured round trip in ms (0 unknown). The idle bound scales with it. */
   roundTrip: (host: string) => number
+  /** A planned daemon swap: wait at most `ms` for it; true = connected now. */
+  waitHandover: (host: string, ms: number) => Promise<boolean>
   /** Cold: how long this request waits on the dial it started. */
   capMs: number
   quietMs: number
@@ -149,7 +159,7 @@ function loadPool(): Promise<Pool | null> {
  * hands out connections) reads as connected and answering, which is what the
  * read did before this file existed.
  */
-async function poolHook<K extends 'daemonConnectWouldWait' | 'probeDaemonLiveness' | 'getDaemonConnectState' | 'daemonHeardBytes' | 'daemonLinkSilent' | 'daemonRoundTripMs'>(name: K): Promise<Pool[K] | undefined> {
+async function poolHook<K extends 'daemonConnectWouldWait' | 'probeDaemonLiveness' | 'getDaemonConnectState' | 'daemonHeardBytes' | 'daemonLinkSilent' | 'daemonRoundTripMs' | 'waitDaemonHandover'>(name: K): Promise<Pool[K] | undefined> {
   try {
     const fn = (await loadPool())?.[name]
     return typeof fn === 'function' ? fn : undefined
@@ -180,6 +190,12 @@ async function defaultSilent(): Promise<(host: string) => boolean> {
 async function defaultRoundTrip(): Promise<(host: string) => number> {
   const rtt = await poolHook('daemonRoundTripMs')
   return rtt ? (host) => rtt(host) : () => 0
+}
+
+/** Wait out a planned daemon swap on `host`: true when it is connected by then (no swap, or a pool without the hook: false). */
+async function defaultWaitHandover(host: string, ms: number): Promise<boolean> {
+  const wait = await poolHook('waitDaemonHandover')
+  return wait ? wait(host, ms).catch(() => false) : false
 }
 
 async function defaultReason(host: string): Promise<string | undefined> {
@@ -278,7 +294,30 @@ export async function boundHostRead<T>(
   read: () => Promise<T>,
   deps: Partial<BoundDeps> = {},
 ): Promise<T> {
-  return boundHostReadIn(host, read, withTestBounds(deps), new ReadProgress(currentReadProgress()))
+  return acrossHandover(host, deps, () => boundHostReadIn(host, read, withTestBounds(deps), new ReadProgress(currentReadProgress())))
+}
+
+/**
+ * A read on a host whose daemon is being swapped (a deploy updating it) waits
+ * for the new daemon instead of answering "Reconnecting": before it starts, and
+ * once more when the swap took the link from under it. A swap that does not
+ * finish within HOST_READ_HANDOVER_CAP_MS answers as before.
+ */
+async function acrossHandover<T>(host: string | null | undefined, deps: Partial<BoundDeps>, run: () => Promise<T>): Promise<T> {
+  if (!isRemoteHost(host) || isSelfHost(host)) return run()
+  const wait = deps.waitHandover ?? defaultWaitHandover
+  const cap = HOST_READ_HANDOVER_CAP_MS
+  const startedAt = Date.now()
+  await wait(host, cap)
+  try {
+    return await run()
+  } catch (err) {
+    if (!(err instanceof HostReconnectingError) || err instanceof HostStillLoadingError) throw err
+    const left = cap - (Date.now() - startedAt)
+    if (left <= 0 || !(await wait(host, left))) throw err
+    log.web.info('host read waited out a daemon swap and runs again', { host, waitedMs: Date.now() - startedAt })
+    return run()
+  }
 }
 
 type Bounds = Pick<BoundDeps, 'capMs' | 'quietMs' | 'probeMs' | 'idleMs' | 'streamCapMs'>
@@ -495,6 +534,10 @@ export function boundSharedHostRead<T>(
   deps: Partial<BoundDeps> = {},
 ): Promise<T> {
   if (!isRemoteHost(host) || isSelfHost(host)) return read()
+  return acrossHandover(host, deps, () => sharedHostRead(host, key, read, deps))
+}
+
+function sharedHostRead<T>(host: string, key: string, read: () => Promise<T>, deps: Partial<BoundDeps>): Promise<T> {
   const fullKey = `${host}\u0000${key}`
   const kept = cutResults.get(fullKey)
   if (kept) {

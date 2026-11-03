@@ -24,6 +24,7 @@ import {
 } from '../../src/core/hosts/host-readiness.js'
 import { autofixDisabledReason, describeFixOutcome, fixActionFor, isTransportError, nextFixAction, withFixState } from '../../src/core/hosts/host-autofix.js'
 import type { HostFixAction } from '../../src/core/hosts/host-autofix.js'
+import { FIX_RETRY_AFTER_MS, reloadHostFixMemoryForTest } from '../../src/core/hosts/host-fix-memory.js'
 
 interface HostState {
   claude: Record<string, unknown>
@@ -179,6 +180,49 @@ describe('the autofix round', () => {
     await refreshAndSettle('devbox', h.conn)
     expect(h.sent.filter((s) => s.startsWith('fix:'))).toEqual(['fix:install-compiler', 'fix:install-compiler'])
     expect(getHostReadiness('devbox')!.fixes).toHaveLength(2)
+  })
+
+  it('a server restart does not run a failed fix again for a day; Check again and a fix that worked clear it', async () => {
+    // A home PC, 2026-11-03: every prod restart of the day downloaded the Claude Code installer again.
+    const restart = async () => { await reloadHostFixMemoryForTest(); clearHostReadiness(undefined, { keepFixMemory: true }) }
+    let works = false
+    const h = fakeHost({ compiler: { found: true }, dtach: { found: true } }, {
+      'install-claude-native': (s) => {
+        if (!works) return { action: 'install-claude-native', ok: false, error: 'timeout', log: '', durationMs: 1 }
+        s.claude = NATIVE
+        return { action: 'install-claude-native', ok: true, log: '', durationMs: 1 }
+      },
+    })
+    const fixes = () => h.sent.filter((s) => s.startsWith('fix:'))
+    await refreshAndSettle('devbox', h.conn)
+    expect(fixes()).toEqual(['fix:install-claude-native'])
+    await restart()
+    await refreshAndSettle('devbox', h.conn)
+    await restart()
+    await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
+    expect(fixes()).toEqual(['fix:install-claude-native'])
+    // The line still says what was tried, after the restart too.
+    expect(getHostReadiness('devbox')!.problems[0]!.fix).toMatchObject({ state: 'failed' })
+
+    // A day later a server tries it again on its own.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + FIX_RETRY_AFTER_MS + 1_000)
+    await restart()
+    await refreshAndSettle('devbox', h.conn)
+    expect(fixes()).toEqual(['fix:install-claude-native', 'fix:install-claude-native'])
+    now.mockRestore()
+
+    // Check again runs it at once, and once it worked a restart remembers nothing.
+    await restart()
+    resetHostAutofixAttempts('devbox')
+    works = true
+    await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
+    expect(fixes()).toHaveLength(3)
+    expect(getHostReadiness('devbox')!.problems).toEqual([])
+    h.state.claude = NPM_NO_NODE
+    works = false
+    await restart()
+    await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
+    expect(fixes()).toHaveLength(4)
   })
 
   it('a dropped connection is no attempt: the next connect tries again', async () => {

@@ -24,6 +24,7 @@ import {
   applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage, parsePreflight, readinessProblems,
 } from './host-readiness-problems.js'
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
+import { FIX_RETRY_AFTER_MS, recentFailedFixes, rememberFixOutcome } from './host-fix-memory.js'
 import {
   attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
   prebuiltFor, prebuiltUnusable, problemCtx, readinessProbeSkipped, rounds, setFixState, store, type HostReadiness,
@@ -153,11 +154,15 @@ function defaultOnFixed(host: string, action: HostFixAction): void {
 function maybeStartAutofix(host: string, conn: PreflightConnection, answer: HostReadiness, opts: AutofixOptions, now: () => number, findPrebuilt?: PrebuiltLookup, context?: RefreshContext): void {
   if (answer.problems.length === 0 || !conn.hasCapability('hostfix-v1') || rounds.has(host)) return
   let tried = attempted.get(host)
+  // First round on this host in this server: what failed under an earlier one is read first.
+  const fresh = !tried
   if (!tried) { tried = new Set(); attempted.set(host, tried) }
   const prebuiltDtach = () => prebuiltFor.get(host) === true
-  if (!nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach() })) return
+  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach() })) return
   const triedNow = tried
   const round = (async () => {
+    if (fresh) await recallFailedFixes(host, triedNow, now())
+    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach() })) return
     let def: { autofix?: unknown } | undefined
     try {
       def = await (opts.hostSettings ?? defaultHostSettings)(host)
@@ -190,6 +195,7 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
         log.session.info('host fix started', { host, action: fixing.action })
         setFixState(host, (st) => { st.fixing = fixing })
       },
+      onAttempt: (record) => { void rememberFixOutcome(host, record) },
       onFinish: (record, result) => {
         const fields = {
           host, action: record.action, ok: record.ok, error: record.error, needsPassword: record.needsPassword,
@@ -210,6 +216,26 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
       if (st?.fixing) setFixState(host, (x) => { delete x.fixing })
     })
   rounds.set(host, round)
+}
+
+/**
+ * A fix that failed on `host` under an earlier server, within its retry window,
+ * counts as tried here too, and its line stays on screen (host-fix-memory.ts).
+ */
+async function recallFailedFixes(host: string, tried: Set<HostFixAction>, now: number): Promise<void> {
+  const failed = await recentFailedFixes(host, now).catch(() => [])
+  if (!failed.length) return
+  const fresh = failed.filter((r) => !tried.has(r.action))
+  for (const r of fresh) tried.add(r.action)
+  if (!fresh.length) return
+  log.session.info('host autofix: fixes that failed under an earlier server are not run again yet', {
+    host, actions: fresh.map((r) => r.action), retryAfterHours: FIX_RETRY_AFTER_MS / 3_600_000,
+  })
+  setFixState(host, (st) => {
+    const have = new Set(st.fixes.map((f) => `${f.action}@${f.finishedAt}`))
+    for (const r of fresh) if (!have.has(`${r.action}@${r.finishedAt}`)) st.fixes.push(r)
+    st.fixes.sort((a, b) => a.finishedAt - b.finishedAt)
+  })
 }
 
 /** Test seam: the autofix round running on a host, if any. */

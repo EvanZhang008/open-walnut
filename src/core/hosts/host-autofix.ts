@@ -22,8 +22,9 @@
  *
  * The preflight re-runs after each fix, so the next step (and the UI) sees the
  * host as it is now. Policy:
- *   - once per host per server lifetime for each fix: a failed fix is not
- *     retried on every reconnect; a human "Check again" allows one more round;
+ *   - once per host for each fix: a failed fix is not retried on every
+ *     reconnect, nor after a server restart for a day (host-fix-memory.ts); a
+ *     human "Check again" allows one more round;
  *   - a lost connection or a busy daemon does NOT count as an attempt;
  *   - never on a host whose preflight had no problems, never blocking a connect;
  *   - off with WALNUT_HOST_AUTOFIX=0, or per host with `hosts.<alias>.autofix: false`.
@@ -299,6 +300,8 @@ export interface AutofixIo {
   onPrebuiltUnusable: () => void
   onStart: (fixing: HostFixing) => void
   onFinish: (record: HostFixRecord, result: Partial<HostFixResult> | null) => void
+  /** A fix that counts as an attempt finished (not a lost connection or a busy daemon): host-fix-memory.ts. */
+  onAttempt?: (record: HostFixRecord) => void
   /** The dtach source for build-dtach (base64 by file name). */
   dtachSources: () => Promise<Record<string, string>>
   now: () => number
@@ -382,6 +385,7 @@ export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo):
     }
     // A compiler that just arrived can build what a failed prebuilt could not.
     if (action === 'install-compiler' && record.ok && !record.skipped) io.tried.delete('build-dtach')
+    io.onAttempt?.(record)
     // A fix that worked stays "fixing" until the re-check answers: finishing
     // first put the old problem back on screen for the whole re-check (up to 14s).
     const checked = record.ok ? await io.preflight() : null

@@ -42,7 +42,8 @@ import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
-import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript, slotNeedKb } from './daemon-file-slot.js'
+import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
+import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
@@ -733,6 +734,34 @@ export class DaemonConnection {
   private _staged: { runtime: RemoteRuntime; dir: string; at: number; bunPath: string | null } | null = null
   /** Failed uploads of the new daemon toward one version: their own backoff, which a decision does not reset. */
   private _stageFail: { expected: string; attempt: number } | null = null
+  /**
+   * The live daemon this connect found was served as it is, whatever its build:
+   * an older one is updated in the background once connected (startDeferredUpgrade).
+   * 2026-11-03: the update ran inside the connect, so after every deploy that
+   * changed the daemon each remote host stayed dark for its whole upload (4.5
+   * minutes for a 65 MB walnut file), although its old daemon ran the whole time.
+   */
+  private _upgradeDeferred = false
+  /**
+   * A daemon swap this connection started (beginHandover) and not yet over:
+   * armed from the stop or the service update; its window opens when the link
+   * actually drops (_handoverUntil, 0 until then).
+   */
+  private _handoverArmed = false
+  private _handoverUntil = 0
+  private _handoverTimer: ReturnType<typeof setTimeout> | null = null
+  private _handoverStartedAt = 0
+  /**
+   * Settles when the re-check that started a swap ends. A reconnect waits for
+   * this, never for the upload before it: a link drop during a minutes-long
+   * upload is dialled again at once, onto the old daemon that still serves.
+   */
+  private _swapInFlight: Promise<void> | null = null
+  private _swapSettle: (() => void) | null = null
+  /** How long a planned swap may read as connected while the new daemon comes up. */
+  static HANDOVER_WINDOW_MS = 45_000
+  /** How soon after connecting a deferred update starts (the connected edge's own pushes go first). */
+  static DEFERRED_UPGRADE_DELAY_MS = 3_000
 
   constructor(hostKey: string, sshTarget: SshTarget | null) {
     this.hostKey = hostKey
@@ -1004,6 +1033,7 @@ export class DaemonConnection {
     if (changed) this._connectionEpoch++
     if (changed && value) this._bootStart?.schedule()
     if (value) {
+      if (changed) this.endHandover()
       this._disconnectedSince = null
       this._awakeDown.reset()
       this._reconnectAttempts = 0
@@ -1013,6 +1043,7 @@ export class DaemonConnection {
     } else if (changed) {
       this._disconnectedSince = Date.now()
       this._awakeDown.start(this._disconnectedSince)
+      this.openHandoverWindow()
       this.setPhase('reconnecting')
     }
     if (!value) {
@@ -1737,7 +1768,8 @@ export class DaemonConnection {
       // Step 1: Where the daemon lives on this host, then is it already running
       this.setPhase('probe')
       await this.resolveRemoteDir()
-      let daemonPort = await this.checkDaemonRunning()
+      this._upgradeDeferred = false
+      let daemonPort = await this.checkDaemonRunning({ deferUpgrade: true })
 
       if (daemonPort === null) {
         if (this.isReadOnlyRemote) {
@@ -1775,7 +1807,8 @@ export class DaemonConnection {
       // `unknown command: hello` → redeploy. A newer daemon that's somehow
       // missing a capability → redeploy. See daemon-capabilities.ts for the
       // required list.
-      const handshakeOk = await this.verifyCapabilities()
+      let handshakeOk = await this.verifyCapabilities()
+      if (!handshakeOk && this._upgradeDeferred) handshakeOk = await this.upgradeBeforeServing()
       if (!handshakeOk) {
         if (this.isReadOnlyRemote) {
           // Ephemeral attach-only: a capability mismatch must NOT trigger a redeploy
@@ -1813,6 +1846,7 @@ export class DaemonConnection {
         localPort: this.localPort,
         remotePort: daemonPort,
       })
+      this.startDeferredUpgrade()
 
       // Initial connection: recover any sessions that were left in error state
       // from a previous server run (e.g. server restart while sessions were error).
@@ -2677,6 +2711,10 @@ export class DaemonConnection {
       this.reconnectTimer = null
     }
     this.clearUpgradeRecheck()
+    this._handoverArmed = false
+    this._handoverUntil = 0
+    if (this._handoverTimer) { clearTimeout(this._handoverTimer); this._handoverTimer = null }
+    this.settleSwap()
     if (this.sshTarget) clearReconnectCause(this.hostKey)
 
     // Stop ping
@@ -3067,7 +3105,10 @@ export class DaemonConnection {
    * executed); the on-disk binary's `--status` is only asked when that scan
    * gave no readable answer.
    */
-  private async checkDaemonRunning(opts: { strict?: boolean } = {}): Promise<number | null> {
+  private async checkDaemonRunning(opts: { strict?: boolean; deferUpgrade?: boolean } = {}): Promise<number | null> {
+    // A connect serves a live daemon as it is and decides its update once connected:
+    // the upload never holds the host dark (startDeferredUpgrade).
+    const defer = opts.deferUpgrade === true && !this.isReadOnlyRemote
     // Record OS takeover BEFORE any decision: a service-managed daemon may be
     // reused as-is (never upgraded/killed from here), and its momentary absence
     // must NOT fall through to deploy + nohup — that squats the runtime dir and
@@ -3110,8 +3151,8 @@ export class DaemonConnection {
         // A running daemon can be outdated whatever started it (it writes
         // daemon.version at startup). Without this, an old daemon would stay
         // alive forever.
-        const remotePath = await this.getRemoteDaemonPath()
-        if (await this.shouldUpgradeDaemon(remotePath, service, undefined, status.runtime)) {
+        if (defer) this._upgradeDeferred = true
+        else if (await this.shouldUpgradeDaemon(await this.getRemoteDaemonPath(), service, undefined, status.runtime)) {
           return service.managed ? this.checkDaemonRunning(opts) : null
         }
         this._runtime = status.runtime
@@ -3140,7 +3181,8 @@ export class DaemonConnection {
         if (result) {
           const status = JSON.parse(result)
           if (status.running && status.port) {
-            if (await this.shouldUpgradeDaemon(remotePath, service)) {
+            if (defer) this._upgradeDeferred = true
+            else if (await this.shouldUpgradeDaemon(remotePath, service)) {
               return service.managed ? this.checkDaemonRunning(opts) : null
             }
             // The pid files say a daemon runs, not what runs it: the hello says that.
@@ -3255,7 +3297,9 @@ export class DaemonConnection {
       if (takeover.managed) {
         if (remoteVersion !== expected) {
           if (this.holdUpgrade(gate, expected, remoteVersion)) return false
-          if (await this.updateManagedDaemon(takeover, expected)) return true
+          const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
+          if (updated === 'held') return false
+          if (updated) return true
           log.session.error(
             'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
             {
@@ -3331,7 +3375,13 @@ export class DaemonConnection {
       // trip is a second chance to get no answer. It may be minutes old after a
       // long upload, which is safe: the stop itself signals only this dir's
       // `--start` daemon, never an OS service's.
-      await this.stopUnmanagedDaemon(verdict)
+      this.beginHandover()
+      try {
+        await this.stopUnmanagedDaemon(verdict)
+      } catch (err) {
+        this.endHandover('the old daemon did not stop')
+        throw err
+      }
       this._lastUpgradeAttempt = { expected, at: Date.now() }
       return true
     } catch (error) {
@@ -3501,11 +3551,27 @@ export class DaemonConnection {
    * needs nothing here: the reconnect that brings it back runs the decision.
    */
   private recheckPostponedUpgrade(): Promise<void> {
-    if (this._upgradeRecheckInFlight) return this._upgradeRecheckInFlight
-    const run = this.runUpgradeRecheck().finally(() => { this._upgradeRecheckInFlight = null })
+    if (this._upgradeRecheckInFlight) {
+      // Asked while one runs (a reconnect onto the old daemon during the upload,
+      // whose own run will find its connection gone): run again after it.
+      this._upgradeRecheckAgain = true
+      return this._upgradeRecheckInFlight
+    }
+    const run = this.runUpgradeRecheck().finally(() => {
+      this._upgradeRecheckInFlight = null
+      // A swap that never dropped the link (the update failed, or was held): the host reads as it is.
+      if (this._handoverArmed && this._connected) this.endHandover('the old daemon kept serving')
+      this.settleSwap()
+      if (this._upgradeRecheckAgain) {
+        this._upgradeRecheckAgain = false
+        if (this._connected && !this._destroyed) void this.recheckPostponedUpgrade()
+      }
+    })
     this._upgradeRecheckInFlight = run
     return run
   }
+
+  private _upgradeRecheckAgain = false
 
   private async runUpgradeRecheck(): Promise<void> {
     if (this._destroyed || this.isReadOnlyRemote) return
@@ -3549,7 +3615,115 @@ export class DaemonConnection {
     if (this._connected && this._connectionEpoch === epoch) this.handleConnectionLost()
   }
 
-  private async updateManagedDaemon(takeover: ServiceTakeover, expected: string): Promise<boolean> {
+  /**
+   * After a connect that served the live daemon as it is: an older build is
+   * updated now, in the background, through the same decision a postponed
+   * update runs (runUpgradeRecheck: upload while this daemon serves, then the
+   * swap, held while work is in flight).
+   */
+  private startDeferredUpgrade(): void {
+    if (!this._upgradeDeferred) return
+    this._upgradeDeferred = false
+    const expected = this.getExpectedDaemonVersion()
+    if (!expected || this.isReadOnlyRemote || this._daemonVersion === expected) return
+    log.session.info('DaemonConnection: serving the running daemon; its update runs in the background', {
+      host: this.hostKey, running: this._daemonVersion ?? '(unknown)', expected,
+    })
+    if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
+    this.upgradeRecheckTimer = setTimeout(() => {
+      this.upgradeRecheckTimer = null
+      void this.recheckPostponedUpgrade()
+    }, DaemonConnection.DEFERRED_UPGRADE_DELAY_MS)
+    this.upgradeRecheckTimer.unref?.()
+  }
+
+  /**
+   * The live daemon was to be served as it is, and it refused this server's
+   * handshake (too old for it): update it first, as every connect did before,
+   * then dial it again. Returns the new handshake's verdict.
+   */
+  private async upgradeBeforeServing(opts: { strict?: boolean } = {}): Promise<boolean> {
+    this._upgradeDeferred = false
+    if (this.isReadOnlyRemote) return false
+    log.session.warn('DaemonConnection: the running daemon refused the handshake; updating it before serving it', { host: this.hostKey })
+    this.closeTransport()
+    let port = await this.checkDaemonRunning(opts)
+    if (port === null) port = await this.deployAndStart()
+    this.remotePort = port
+    this.localPort = await this.createTunnel(port)
+    await this.connectWebSocket(this.localPort)
+    return this.verifyCapabilities()
+  }
+
+  /**
+   * A daemon swap this live connection makes now (the old daemon stops, the new
+   * one starts). Until the reconnect to the new daemon, at most
+   * HANDOVER_WINDOW_MS, the host reads as connected (getDaemonConnectState,
+   * getDaemonPoolStatus) and a read waits for the new daemon instead of
+   * answering "Reconnecting" (remote-read-bound.ts): the user asked for a deploy
+   * that shows no break (2026-11-03).
+   */
+  private beginHandover(): void {
+    if (!this._connected) return
+    this._handoverArmed = true
+    this._handoverStartedAt = Date.now()
+    this._handoverUntil = 0
+    if (!this._swapInFlight) this._swapInFlight = new Promise<void>((resolve) => { this._swapSettle = resolve })
+    log.session.info('DaemonConnection: daemon swap started; the host reads as connected until the new daemon answers', {
+      host: this.hostKey, windowMs: DaemonConnection.HANDOVER_WINDOW_MS,
+    })
+  }
+
+  /** The link dropped under an armed swap: the window runs from now (a slow stop never eats it). */
+  private openHandoverWindow(): void {
+    if (!this._handoverArmed || this._handoverUntil) return
+    this._handoverUntil = Date.now() + DaemonConnection.HANDOVER_WINDOW_MS
+    if (this._handoverTimer) clearTimeout(this._handoverTimer)
+    this._handoverTimer = setTimeout(() => this.endHandover('the new daemon did not answer within the window'), DaemonConnection.HANDOVER_WINDOW_MS)
+    this._handoverTimer.unref?.()
+  }
+
+  private settleSwap(): void {
+    const settle = this._swapSettle
+    this._swapSettle = null
+    this._swapInFlight = null
+    settle?.()
+  }
+
+  /** The swap is over: connected to the new daemon (no reason), or it failed (`why`) and the host reads as it is. */
+  private endHandover(why?: string): void {
+    if (!this._handoverArmed) return
+    const ms = Date.now() - this._handoverStartedAt
+    this._handoverArmed = false
+    this._handoverUntil = 0
+    if (this._handoverTimer) clearTimeout(this._handoverTimer)
+    this._handoverTimer = null
+    if (!why) {
+      log.session.info('DaemonConnection: daemon swap done', { host: this.hostKey, ms, instanceId: this._daemonInstanceId })
+      return
+    }
+    log.session.warn('DaemonConnection: daemon swap window ended', { host: this.hostKey, why, ms })
+    // What it hid reaches every surface now.
+    if (!this._connected) {
+      notifyDaemonPhaseChange(this.hostKey)
+      try { void Promise.resolve(onPoolStatusChange?.()).catch(() => {}) } catch {}
+    }
+  }
+
+  /** A daemon swap this connection started is under way and the new daemon has not answered yet. */
+  get handoverPending(): boolean {
+    return !this._connected && this._handoverUntil > Date.now()
+  }
+
+  /**
+   * Update a service-managed daemon: the new executable onto the host while the
+   * old daemon serves, then the service swap. 'held': nothing changed and the
+   * update is asked again later (the upload failed, with its own backoff, or
+   * work that started during the upload holds the swap).
+   */
+  private async updateManagedDaemon(
+    takeover: ServiceTakeover, expected: string, gate?: () => UpgradeHold, remoteVersion = '',
+  ): Promise<boolean | 'held'> {
     // An ephemeral server never updates a box's service daemon, a lifted host's included.
     if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length) return false
     const scope = managedUpdateScope(takeover.present)
@@ -3557,15 +3731,45 @@ export class DaemonConnection {
     if (this._lastUpgradeAttempt?.expected === expected
       && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) return false
     if (!(await this.hasDaemonBinary())) return false
-    this._lastUpgradeAttempt = { expected, at: Date.now() }
+    const stageFailed = (error: unknown): 'held' => {
+      const attempt = this._stageFail?.expected === expected ? this._stageFail.attempt : 0
+      this._stageFail = { expected, attempt: attempt + 1 }
+      const said = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 200)
+      this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${said})`, expected, remoteVersion, { attempt })
+      return 'held'
+    }
+    let source: ServiceDaemonSource
     try {
-      await updateRemoteDaemonService(await this.serviceDaemonSource(), expected, {
+      source = await this.serviceDaemonSource()
+    } catch (error) {
+      return stageFailed(error)
+    }
+    let swapping = false
+    try {
+      const done = await updateRemoteDaemonService(source, expected, {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
-      }, scope)
+      }, scope, {
+        // The upload may have taken minutes: work that started meanwhile holds the swap.
+        onStaged: () => {
+          if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+          this._stageFail = null
+          this._lastUpgradeAttempt = { expected, at: Date.now() }
+          swapping = true
+          this.beginHandover()
+          return true
+        },
+      })
+      if (done === 'held') return 'held'
     } catch (error) {
+      // By name: the class lives in daemon-service-update.ts, which tests replace with a double.
+      if (error instanceof Error && error.name === 'DaemonUpdateStageError') return stageFailed(error)
+      if (swapping) this.endHandover('the service update failed')
+      // A double without the hook never asked: the attempt still counts against the cooldown.
+      if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
       throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)
     }
+    if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
     return true
   }
 
@@ -4187,6 +4391,12 @@ export class DaemonConnection {
       })
       return
     }
+    if (await this.deployWalnutFileDelta(slot, file, fit)) {
+      log.session.info('DaemonConnection: walnut file deployed as the daemon', {
+        host: this.hostKey, target: target.target, id: file.id, how: 'delta from the file in the slot', deployMs: Date.now() - t0,
+      })
+      return
+    }
     const gz = `${slot}.gz`
     const sent = await this.uploadFile(gz, file.gz, { sha256: file.gzSha256 })
     const installed = await this.sshExec(slotInstallScript(slot, gz, file.sha256, fit), 120_000)
@@ -4197,6 +4407,45 @@ export class DaemonConnection {
       host: this.hostKey, target: target.target, id: file.id, how: sent.skipped ? 'its gz was already on the host' : 'uploaded',
       gzBytes: file.gz.length, deployMs: Date.now() - t0,
     })
+  }
+
+  /**
+   * Send the walnut file as the blocks that differ from the file the slot holds
+   * now, the previous build (walnut-file-delta.ts). False, with nothing changed
+   * in the slot, when a delta does not fit (no file there, no sha256 tool, most
+   * blocks changed) or fails on the way: the whole file goes up then.
+   */
+  private async deployWalnutFileDelta(slot: string, file: { gz: Buffer; sha256: string }, fit: SlotFit): Promise<boolean> {
+    if (process.env.WALNUT_DAEMON_DELTA === '0') return false
+    const t0 = Date.now()
+    try {
+      const base = parseBlockHashes(await this.sshExec(blockHashScript(slot), 120_000))
+      if (!base) return false
+      const delta = await planWalnutFileDelta(file.gz, base.hashes)
+      if (!delta) {
+        log.session.info('DaemonConnection: walnut file delta skipped, most blocks changed', { host: this.hostKey })
+        return false
+      }
+      const remote = slotDeltaPath(slot)
+      await this.uploadFile(remote, delta.payload, { sha256: delta.payloadSha256 })
+      const installed = await this.sshExec(slotDeltaInstallScript(slot, remote, file.sha256, {
+        blocks: delta.blocks, changed: delta.changed, blockBytes: DELTA_BLOCK_BYTES,
+      }, fit), 180_000)
+      const answer = parseSlotAnswer(installed)
+      if (answer === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(installed).said)
+      if (answer !== 'installed') throw new Error('the walnut file built from its delta did not go into the daemon slot')
+      log.session.info('DaemonConnection: walnut file sent as a delta', {
+        host: this.hostKey, blocks: delta.blocks, changed: delta.changed.length, payloadBytes: delta.payload.length,
+        fullGzBytes: file.gz.length, ms: Date.now() - t0,
+      })
+      return true
+    } catch (err) {
+      if (err instanceof WalnutFileUnavailableError || err instanceof SshLoginRefusedError) throw err
+      log.session.warn('DaemonConnection: walnut file delta failed; sending the whole file', {
+        host: this.hostKey, error: (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300), ms: Date.now() - t0,
+      })
+      return false
+    }
   }
 
   /**
@@ -5663,10 +5912,12 @@ export class DaemonConnection {
       return
     }
 
-    // A postponed update going ahead drops the socket while its stop is still
-    // confirming: wait for it, or this reconnect would probe (and maybe rebuild)
-    // the ControlMaster under that stop and race it to the deploy.
-    if (this._upgradeRecheckInFlight) await this._upgradeRecheckInFlight.catch(() => {})
+    // A swap going ahead drops the socket while its stop (or the service's
+    // update) is still confirming: wait for it, or this reconnect would probe
+    // (and maybe rebuild) the ControlMaster under that stop and race it to the
+    // deploy. Only the swap: a drop during the upload before it dials the old
+    // daemon, which still serves (that run then finds its connection gone).
+    if (this._swapInFlight) await this._swapInFlight
 
     // Reset deploy flags — if daemon is still alive we skip deploy entirely;
     // if daemon died, deployDaemon() will set these correctly.
@@ -5697,7 +5948,8 @@ export class DaemonConnection {
     let daemonPort: number | null
     try {
       await this.resolveRemoteDir()
-      daemonPort = await this.checkDaemonRunning({ strict: true })
+      this._upgradeDeferred = false
+      daemonPort = await this.checkDaemonRunning({ strict: true, deferUpgrade: true })
     } catch (err) {
       log.session.warn('DaemonConnection: daemon status probe failed via SSH — will retry reconnect', {
         host: this.hostKey,
@@ -5715,6 +5967,13 @@ export class DaemonConnection {
           `ephemeral server: daemon absent on '${this.hostKey}' — attach-only, not redeploying`,
         )
       }
+      // A background update still uploading to the same slot: one upload at a time.
+      if (this._upgradeRecheckInFlight) {
+        await this._upgradeRecheckInFlight.catch(() => {})
+        daemonPort = await this.checkDaemonRunning({ strict: true, deferUpgrade: true })
+      }
+    }
+    if (daemonPort === null) {
       // Daemon genuinely absent — redeploy and restart
       log.session.info('DaemonConnection: daemon not running, redeploying', { host: this.hostKey })
       daemonPort = await this.deployAndStart()
@@ -5733,7 +5992,8 @@ export class DaemonConnection {
     // the transition — downstream session probes then resume via --resume
     // naturally, but the log line is the critical diagnostic.
     const priorInstanceId = this._daemonInstanceId
-    const handshakeOk = await this.verifyCapabilities()
+    let handshakeOk = await this.verifyCapabilities()
+    if (!handshakeOk && this._upgradeDeferred) handshakeOk = await this.upgradeBeforeServing({ strict: true })
     if (!handshakeOk) {
       if (this.isReadOnlyRemote) {
         // Ephemeral attach-only: don't redeploy on reconnect handshake failure.
@@ -5767,6 +6027,7 @@ export class DaemonConnection {
       instanceId: this._daemonInstanceId,
       instanceChanged: priorInstanceId !== null && priorInstanceId !== this._daemonInstanceId,
     })
+    this.startDeferredUpgrade()
 
     // Auto-recover sessions that were marked error due to disconnect
     this.recoverDisconnectedSessions().catch(() => {})
@@ -7062,6 +7323,8 @@ export interface DaemonConnectState {
   runtime?: RemoteRuntime | 'unknown'
   /** Where the daemon keeps its files there, once a probe decided. */
   daemonDir?: DaemonDirChoice & { home?: string }
+  /** A planned daemon swap is under way: the host reads as connected meanwhile (DaemonConnection.handoverPending). */
+  handover?: true
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -7089,7 +7352,18 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     state.error = failure.error
   }
   foldReconnectCause(state, conn, failure)
+  if (conn?.handoverPending) return handoverState(state)
   return state
+}
+
+/**
+ * During a planned daemon swap the host reads as connected: every surface (the
+ * host dot, the banners, Settings) shows no break for the seconds the new
+ * daemon takes to answer, and reads wait for it (waitDaemonHandover).
+ */
+function handoverState(state: DaemonConnectState): DaemonConnectState {
+  const { error: _e, retryInMs: _r, kind: _k, retryAt: _a, lastError: _l, lastKind: _lk, reconnectSince: _s, ...rest } = state
+  return { ...rest, connected: true, phase: 'connected', handover: true }
 }
 
 /**
@@ -7108,6 +7382,26 @@ export function daemonConnectWouldWait(hostKey: string): 'connected' | 'fails-fa
   const cached = failureCache.get(hostKey)
   if (cached && Date.now() - cached.time < FAILURE_CACHE_TTL_MS) return 'fails-fast'
   return 'cold'
+}
+
+/** A planned daemon swap on `hostKey` is under way (DaemonConnection.handoverPending). */
+export function daemonHandoverPending(hostKey: string): boolean {
+  return connectionPool.get(hostKey)?.handoverPending === true
+}
+
+/**
+ * Wait, at most `ms`, for a planned daemon swap on `hostKey` to end. True when
+ * the host is connected by then (a read can run now); false when no swap is
+ * under way, or it did not finish in time.
+ */
+export async function waitDaemonHandover(hostKey: string, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const conn = connectionPool.get(hostKey)
+    if (conn?.connected) return true
+    if (!conn?.handoverPending || Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, Math.min(100, Math.max(1, deadline - Date.now()))))
+  }
 }
 
 /**
@@ -7259,7 +7553,8 @@ export function listConnectedDaemonsByHost(): Map<string, DaemonConnection[]> {
 export function getDaemonPoolStatus(): DaemonStatus[] {
   const result: DaemonStatus[] = []
   for (const [host, conn] of connectionPool) {
-    result.push({ host, connected: conn.connected, bridgeConnected: conn.lastBridgeConnected, phase: conn.connectPhase })
+    const handover = conn.handoverPending
+    result.push({ host, connected: conn.connected || handover, bridgeConnected: conn.lastBridgeConnected, phase: handover ? 'connected' : conn.connectPhase })
   }
   return result
 }
