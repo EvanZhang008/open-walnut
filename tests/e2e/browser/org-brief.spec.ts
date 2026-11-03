@@ -157,7 +157,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   // the node opens on Needs you. Waiting / snoozed lists the review.
   // (The lead's own turn ended too, so it may need the user as well: counted, not pinned.)
   const tabs = detail.getByTestId('org-task-tab')
-  await expect(tabs).toHaveText([/^Watching\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
+  await expect(tabs).toHaveText([/^Watching\s*\d+$/, /^Needs you\s*\d+$/, /^To read\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
   const needsCount = Number((await tabs.nth(1).locator('.org-task-tab-count').textContent()) ?? '-1')
   // Every one is a card, the lead's own ask included (the first, named for the node).
