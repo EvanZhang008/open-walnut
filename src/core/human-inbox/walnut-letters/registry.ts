@@ -17,6 +17,7 @@ import { MAIL_APPROVAL } from './mail-approval.js';
 import { MAIL_UNSUBSCRIBE } from './mail-unsubscribe.js';
 import { MAIL_DIGEST } from './mail-digest.js';
 import { OFFLINE_CONFLICT } from './offline-conflict.js';
+import { LOCAL_NETWORK_BLOCKED } from './local-network-blocked.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const WALNUT_LETTER_KINDS: readonly WalnutLetterKind<any>[] = [
@@ -30,6 +31,7 @@ export const WALNUT_LETTER_KINDS: readonly WalnutLetterKind<any>[] = [
   MAIL_UNSUBSCRIBE,
   MAIL_DIGEST,
   OFFLINE_CONFLICT,
+  LOCAL_NETWORK_BLOCKED,
 ];
 
 /** Send sites whose words are not Walnut's own, each with why (repo-relative path -> reason). */

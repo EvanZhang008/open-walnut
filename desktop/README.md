@@ -244,5 +244,14 @@ the way a new Mac would; CI's macOS release rehearsal runs it on every push.
 ## Notes
 
 - Bundle identifier: `com.local.walnut-desktop`.
+- Never make a variant app by copying a built `Walnut.app` and changing its bundle
+  identifier. macOS ties its Local Network permission to the program's UUID, and the
+  copy shares it: once the copy is registered (opening it, `lsregister -f`), the real
+  app's whole process tree (server, daemon, every session and its commands) is judged
+  as the copy, which has no permission, so every connection to a machine on the local
+  network fails with "No route to host" while the internet still works (2026-11-03: a
+  demo copy cut the Mac off from every LAN host for half an hour). A variant must be
+  linked on its own (`-Xlinker -random_uuid`, or a build of its own target), and never
+  answer a Local Network prompt with Don't Allow for a Walnut process.
 - This wrapper is macOS-only. Other platforms run Walnut via the CLI
   (`open-walnut web`) and a browser.

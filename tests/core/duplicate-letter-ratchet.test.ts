@@ -31,6 +31,7 @@ const DIRECT_SENDS: Record<string, string> = {
   'src/core/usage/session-budget.ts': 'Walnut\'s budget notice, once by opKey',
   'src/core/hosts/host-exec.ts': 'Walnut\'s host grant ask, external sender',
   'src/core/hosts/host-auth-alert.ts': 'Walnut\'s sign-in alert, once by opKey',
+  'src/core/hosts/local-network-alert.ts': 'Walnut\'s local network alert, once by opKey',
   'src/integrations/git-sync-secrets.ts': 'Walnut\'s secret-held notice, once by opKey',
 };
 

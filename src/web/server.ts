@@ -4347,6 +4347,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { hostFixtureMode } = await import('../core/hosts/host-fixture.js')
     const offAuthAlert = await startHostAuthAlert({ knownHosts: () => shown(hostDefs), enabled: !hostFixtureMode() })
     unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox(); offAuthAlert() }
+    // macOS blocking Walnut from the local network sends ONE letter too (archived once it reaches it again).
+    const { startLocalNetworkAlert } = await import('../core/hosts/local-network-alert.js')
+    const offLocalNetworkAlert = await startLocalNetworkAlert({ enabled: !hostFixtureMode() })
+    const offBeforeLocalNetwork = unsubscribeHostPhase
+    unsubscribeHostPhase = () => { offBeforeLocalNetwork?.(); offLocalNetworkAlert() }
 
     const warmupGate = hostWarmupGateReason({
       cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
