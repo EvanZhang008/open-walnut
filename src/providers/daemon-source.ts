@@ -1311,6 +1311,8 @@ function runWnMinimal(argv, stdinText) {
         wfinish(function () {
           var wresp;
           try { wresp = JSON.parse(wline); } catch (e) { return retryOrTimeout(); }
+          // No server just now, or the daemon stopping: keep polling (twin of wn-cli.ts waitAnswerTransient).
+          if (!wresp.ok && wresp.error && (wresp.error.code === 'hub_unreachable' || wresp.error.code === 'hub_timeout')) return retryOrTimeout();
           if (!wresp.ok) {
             var werr = wresp.error || {};
             errOut('walnut: ' + (werr.code || 'internal') + ': ' + (werr.message || 'gateway request failed'));
@@ -1335,6 +1337,34 @@ function runWnMinimal(argv, stdinText) {
     waitTick();
     return;
   }
+  // Twin of wn-cli.ts requestRidingRestart: while a fresh restart mark sits beside
+  // the socket (daemon-restart-mark.ts: under 45s old), a call nothing listens for
+  // yet, or one the stopping daemon turned away, waits for the next daemon and goes
+  // again (nothing was sent either time). An env-less caller that finds no socket at
+  // all fails at once here; wn-cli.ts waits for that one too.
+  var wnRideUntil = Date.now() + 60000;
+  var wnRideTold = false;
+  var wnRide = function () {
+    var fresh = false;
+    var markFd = null;
+    try {
+      // Only this user's small regular file, never through a link or a FIFO (twin of wn-cli.ts daemonRestartingAt).
+      markFd = fs.openSync(path.join(path.dirname(sockPath), 'restarting'), fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0));
+      var markSt = fs.fstatSync(markFd);
+      var myUid0 = typeof process.getuid === 'function' ? process.getuid() : -1;
+      if (markSt.isFile() && markSt.size <= 32 && (myUid0 < 0 || markSt.uid === myUid0)) {
+        var markBuf = Buffer.alloc(32);
+        var mark = markBuf.subarray(0, fs.readSync(markFd, markBuf, 0, 32, 0)).toString('utf-8').trim();
+        var age = Math.floor(Date.now() / 1000) - Number(mark);
+        fresh = /^\\d{1,12}$/.test(mark) && age >= -5 && age < 45;
+      }
+    } catch (e) { fresh = false; }
+    if (markFd !== null) { try { fs.closeSync(markFd); } catch (e) {} }
+    if (!fresh || Date.now() >= wnRideUntil) return false;
+    if (!wnRideTold) { wnRideTold = true; errOut('walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'); }
+    setTimeout(wnConnect, 500);
+    return true;
+  };
   var wnConnect = function () {
   var sock = net.connect(sockPath);
   var buf = '';
@@ -1346,7 +1376,7 @@ function runWnMinimal(argv, stdinText) {
   var waitMs = op === 'tools.call' ? (Number.isFinite(wnWaitEnv) && wnWaitEnv > 0 ? Math.min(Math.floor(wnWaitEnv), 180000) : 90000) : 0;
   var socketTimeoutMs = waitMs ? waitMs + 10000 : 30000;
   var waitNotice = waitMs ? setTimeout(function () {
-    errOut("walnut: still waiting for the Walnut server's answer; up to " + Math.round(waitMs / 1000) + "s");
+    errOut('walnut: no answer yet; this call waits up to ' + Math.round(waitMs / 1000) + 's');
   }, 10000) : null;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); clearTimeout(waitNotice); sock.destroy(); fn(); };
   var timer = setTimeout(function () {
@@ -1354,7 +1384,10 @@ function runWnMinimal(argv, stdinText) {
   }, socketTimeoutMs);
   sock.on('connect', function () { sent = true; sock.write(JSON.stringify(waitMs ? { v: 1, op: op, sid: sid, args: args, waitMs: waitMs } : { v: 1, op: op, sid: sid, args: args }) + '\\n'); });
   sock.on('error', function (e) {
-    finish(function () { errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
+    finish(function () {
+      if (!sent && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') && wnRide()) return;
+      errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6);
+    });
   });
   sock.on('close', function () {
     finish(function () { errOut('walnut: agent socket closed without a response'); if (sent) wnLostRun(); else wnAway(true); exitWn(6); });
@@ -1369,6 +1402,9 @@ function runWnMinimal(argv, stdinText) {
     finish(function () {
       var resp;
       try { resp = JSON.parse(line); } catch (e) { errOut('walnut: malformed response from agent socket'); return exitWn(1); }
+      // A stopping daemon took nothing of the call: wait for the next one (wnRide).
+      var wnStopping = !resp.ok && resp.error && resp.error.code === 'hub_unreachable' && resp.error.detail && resp.error.detail.stopping === true;
+      if (wnStopping && wnRide()) return;
       // A server older than the run id refused it before anything ran: the same call without it.
       if (!resp.ok && wnRunId && args && args.args && wnRefusedRunId(resp.error && resp.error.message)) {
         delete args.args[wnRunId.field];
@@ -1383,7 +1419,7 @@ function runWnMinimal(argv, stdinText) {
       }
       if (!resp.ok) {
         var err = resp.error || {};
-        if (op === 'tools.call' && err.detail !== undefined) out(JSON.stringify(err.detail, null, 2));
+        if (op === 'tools.call' && err.detail !== undefined && !wnStopping) out(JSON.stringify(err.detail, null, 2));
         errOut('walnut: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
         if (err.code === 'hub_timeout') wnLostRun();
         if (err.code === 'hub_unreachable') wnAway();
@@ -1655,6 +1691,8 @@ const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance');
 // daemon.instance, so a reader can tell a stale hint from the current one.
 // Mirror daemon-standalone.ts.
 const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service');
+// Twin of daemon-standalone.ts RESTART_MARK_FILE (daemon-restart-mark.ts RESTART_MARK_NAME).
+const RESTART_MARK_FILE = path.join(DAEMON_DIR, 'restarting');
 // Source of truth for upgrade decisions — written at startup, read by
 // DaemonConnection.shouldUpgradeDaemon via cat. Must mirror daemon-standalone.ts.
 const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version');
@@ -4314,6 +4352,8 @@ async function cmdServiceHandover(ws, id, cmd) {
   // after a committed handover stops it (stopDaemon), its download kept for the next
   // Install, and a handover that fails leaves it running. A gcc install is waited for.
   const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined);
+  // Paused, the gateway turns calls away as stopping: the mark tells them to wait for the next daemon.
+  noteRestarting();
   let recovery;
   let timer;
   try {
@@ -4327,6 +4367,7 @@ async function cmdServiceHandover(ws, id, cmd) {
   } catch (error) {
     recovery?.resume();
     pause.resume();
+    clearRestartMark();
     throw error;
   } finally { clearTimeout(timer); }
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID };
@@ -4348,7 +4389,7 @@ async function cmdServiceHandover(ws, id, cmd) {
     if (error.code === 'handover-published') {
       handoverPrepared = true;
       requestDaemonShutdown();
-    } else pause.resume();
+    } else { pause.resume(); clearRestartMark(); }
     throw error;
   }
   handoverPrepared = true;
@@ -4846,8 +4887,8 @@ var gatewaySidAliases = new Map();
 var gatewayRelayCounter = 0;
 var gatewayRelayPending = new Map();
 
-function gatewayError(code, message) {
-  return { ok: false, error: { code: code, message: message } };
+function gatewayError(code, message, detail) {
+  return { ok: false, error: detail === undefined ? { code: code, message: message } : { code: code, message: message, detail: detail } };
 }
 
 // Mirror of gateway-core.ts parseGatewayLine — same checks, same error codes.
@@ -6288,13 +6329,32 @@ function waitForPrimary(deadline, retry, respond) {
   gatewayWaiting.add(w);
   return true;
 }
+
+// Leave the restart mark when a successor takes this dir over (twin of
+// daemon-standalone.ts noteRestarting; daemon-restart-mark.ts): a walnut call in
+// the seconds between waits for it. Never for an isolated daemon, and never once
+// daemon.pid names another daemon.
+function noteRestarting() {
+  if (shouldReapOnExit()) return;
+  try {
+    var owner = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+    if (owner > 0 && owner !== process.pid) return;
+    fs.writeFileSync(RESTART_MARK_FILE, String(Math.floor(Date.now() / 1000)));
+  } catch (e) { /* a convenience: without it the calls fail at once, as before */ }
+}
+
+// A handover that did not happen: this daemon carries on, so nothing waits for another.
+function clearRestartMark() {
+  try { fs.unlinkSync(RESTART_MARK_FILE); } catch (e) {}
+}
+
 // The daemon stops: the waiting calls are told now (nothing of them was sent) rather than cut off.
 function releaseGatewayWaiters() {
   var waiting = Array.from(gatewayWaiting);
   for (var i = 0; i < waiting.length; i++) {
     gatewayWaiting.delete(waiting[i]);
     clearTimeout(waiting[i].timer);
-    waiting[i].respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again'));
+    waiting[i].respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again', { stopping: true }));
   }
 }
 function wakeGatewayCalls() {
@@ -6423,7 +6483,7 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond) {
 
 // One parsed NDJSON line from the agent socket → local reject or hub relay.
 function handleGatewayLine(line, respond) {
-  if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting'));
+  if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }));
   var parsed = parseGatewayLine(line);
   if (parsed.ok !== true) return respond(parsed);
   var req = parsed.request;
@@ -6532,18 +6592,45 @@ function userWalnutShimText() {
     + '# The daemon dir: WALNUT_DAEMON_DIR when set; otherwise ' + PROD_DAEMON_DIR + ' or\\n'
     + '# ~/.cache/open-walnut (a daemon moved there because /tmp was unusable), the\\n'
     + '# one whose daemon is alive first. Exported, so walnut reaches THAT socket.\\n'
+    + '# A daemon restarting here leaves <dir>/restarting (the epoch second it stopped;\\n'
+    + '# daemon-restart-mark.ts): while that is under 45s old, wait for the next one to\\n'
+    + '# write its bin/walnut instead of failing in the seconds between the two.\\n'
+    + 'ride() {\\n'
+    + '  i=0\\n'
+    + '  while [ ! -x "$1/bin/walnut" ]; do\\n'
+    + '    [ -f "$1/restarting" ] && [ ! -h "$1/restarting" ] || return 1\\n'
+    + '    m=$(dd if="$1/restarting" bs=16 count=1 2>/dev/null)\\n'
+    + '    case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac\\n'
+    + '    a=$(( $(date +%s) - m ))\\n'
+    + '    [ "$a" -ge -5 ] && [ "$a" -lt 45 ] && [ $i -lt 120 ] || return 1\\n'
+    + '    [ $i -eq 0 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\\n'
+    + '    sleep 0.5 2>/dev/null || sleep 1\\n'
+    + '    i=$((i+1))\\n'
+    + '  done\\n'
+    + '  return 0\\n'
+    + '}\\n'
     + 'if [ -n "$WALNUT_DAEMON_DIR" ]; then\\n'
+    + '  [ -x "$WALNUT_DAEMON_DIR/bin/walnut" ] || ride "$WALNUT_DAEMON_DIR"\\n'
     + '  [ -x "$WALNUT_DAEMON_DIR/bin/walnut" ] && exec "$WALNUT_DAEMON_DIR/bin/walnut" "$@"\\n'
     + '  echo "walnut: no Walnut daemon on this host ($WALNUT_DAEMON_DIR/bin/walnut is missing)." >&2\\n'
     + '  exit 6\\n'
     + 'fi\\n'
     + 'found=\\n'
+    + 'dead=\\n'
     + 'for d in "' + PROD_DAEMON_DIR + '" "$HOME/.cache/open-walnut"; do\\n'
     + '  [ -x "$d/bin/walnut" ] || continue\\n'
     + '  p=$(cat "$d/daemon.pid" 2>/dev/null)\\n'
     + '  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then found=$d; break; fi\\n'
-    + '  [ -n "$found" ] || found=$d\\n'
+    + '  [ -n "$dead" ] || dead=$d\\n'
     + 'done\\n'
+    + '# None alive: a dir whose daemon is restarting is waited for before a dead one is taken.\\n'
+    + 'if [ -z "$found" ]; then\\n'
+    + '  for d in "' + PROD_DAEMON_DIR + '" "$HOME/.cache/open-walnut"; do\\n'
+    + '    [ -x "$d/bin/walnut" ] && continue\\n'
+    + '    ride "$d" && { found=$d; break; }\\n'
+    + '  done\\n'
+    + 'fi\\n'
+    + '[ -n "$found" ] || found=$dead\\n'
     + 'if [ -n "$found" ]; then WALNUT_DAEMON_DIR=$found; export WALNUT_DAEMON_DIR; exec "$found/bin/walnut" "$@"; fi\\n'
     + 'echo "walnut: no Walnut daemon on this host (' + PROD_DAEMON_DIR + '/bin/walnut is missing)." >&2\\n'
     + 'exit 6\\n';
@@ -6694,8 +6781,11 @@ function writeWalnutShim() {
     walnutCliArgv = [process.execPath, target];
     // One name: walnut. The retired wn file is removed, not rewritten.
     var sp = path.join(GATEWAY_SHIM_DIR, 'walnut');
-    fs.writeFileSync(sp, shim, { mode: 0o755 });
-    fs.chmodSync(sp, 0o755);
+    // Written aside, then renamed: a call waiting out a restart runs it the moment it appears.
+    var spTmp = sp + '.tmp-' + process.pid;
+    fs.writeFileSync(spTmp, shim, { mode: 0o755 });
+    fs.chmodSync(spTmp, 0o755);
+    fs.renameSync(spTmp, sp);
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')); } catch (e) {}
     // The shim now names its final target — anything else in here is debris.
     reapShimCoreArtifacts([target]);
@@ -15465,6 +15555,8 @@ async function startDaemon() {
     // v1 records the migration then adds.
     startGatewayListener();
     writeWalnutShim();
+    // The socket listens and bin/walnut is there: calls that waited out the restart go now.
+    try { fs.unlinkSync(RESTART_MARK_FILE); } catch {}
     fs.writeFileSync(INSTANCE_ID_FILE, DAEMON_INSTANCE_ID);
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }
@@ -15590,6 +15682,8 @@ async function startDaemon() {
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel(); } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }); }
+      // Before any call is turned away: the mark is what tells it to wait for the successor.
+      noteRestarting();
       releaseGatewayWaiters();
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
       const failed = drained.find(function (result) { return result.status === 'rejected'; });

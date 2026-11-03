@@ -34,6 +34,7 @@ import {
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
 } from './mcp-cli-args.js'
@@ -472,6 +473,94 @@ function requestOverSocket(
   })
 }
 
+/** What a call says once while it waits for this host's daemon to come back. */
+export const RESTART_WAIT_LINE = `walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to ${RESTART_MARK_FRESH_SECS}s)`
+
+/**
+ * A fresh restart mark beside this socket: its daemon is being replaced
+ * (daemon-restart-mark.ts). Only this user's small regular file counts: the dir
+ * may sit under a shared /tmp, and a FIFO or a link to a device planted there
+ * must never hold a call (opened non-blocking, never through a link).
+ */
+export function daemonRestartingAt(socketPath: string, nowMs = Date.now()): boolean {
+  let fd: number | undefined
+  try {
+    const c = fs.constants
+    fd = fs.openSync(path.join(path.dirname(socketPath), RESTART_MARK_NAME), c.O_RDONLY | (c.O_NONBLOCK ?? 0) | (c.O_NOFOLLOW ?? 0))
+    const st = fs.fstatSync(fd)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+    if (!st.isFile() || st.size > 32 || (uid >= 0 && st.uid !== uid)) return false
+    const buf = Buffer.alloc(32)
+    return restartMarkFresh(buf.subarray(0, fs.readSync(fd, buf, 0, 32, 0)).toString('utf-8'), nowMs)
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
+  }
+}
+
+/** One notice per process, however many waits it rides (the socket lookup, then the call). */
+let restartWaitTold = false
+function tellRestartWait(): void {
+  if (restartWaitTold) return
+  restartWaitTold = true
+  process.stderr.write(RESTART_WAIT_LINE + '\n')
+}
+
+/** Refused before a byte left because nothing listens there (yet): no socket file, or nobody behind it. */
+function noListener(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'ECONNREFUSED'
+}
+
+/** A stopping daemon's answer (it took nothing of the call). */
+export function stoppingAnswer(resp: GatewayResponse): boolean {
+  return !resp.ok && resp.error.code === 'hub_unreachable'
+    && (resp.error.detail as { stopping?: unknown } | null | undefined)?.stopping === true
+}
+
+export interface RideRestartDeps {
+  request?: (socketPath: string, req: GatewayRequest, timeoutMs?: number) => Promise<GatewayResponse>
+  restarting?: (socketPath: string) => boolean
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+  tell?: (line: string) => void
+}
+
+/**
+ * requestOverSocket that rides a restart of this host's daemon. While a fresh
+ * restart mark sits beside the socket, a call nothing listens for yet, or one the
+ * stopping daemon turned away, waits for the next daemon and goes again: nothing
+ * was sent either time, so this is safe for every op. Says so once on stderr.
+ * Without a mark, or past RESTART_RIDE_MAX_MS, it answers as requestOverSocket does.
+ */
+export async function requestRidingRestart(
+  socketPath: string,
+  req: GatewayRequest,
+  timeoutMs?: number,
+  deps: RideRestartDeps = {},
+): Promise<GatewayResponse> {
+  const request = deps.request ?? requestOverSocket
+  const restarting = deps.restarting ?? ((p: string) => daemonRestartingAt(p))
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const now = deps.now ?? Date.now
+  const tell = deps.tell ?? (() => tellRestartWait())
+  const until = now() + RESTART_RIDE_MAX_MS
+  let told = false
+  for (;;) {
+    let resp: GatewayResponse | undefined
+    let failure: unknown
+    try { resp = await request(socketPath, req, timeoutMs) } catch (err) { failure = err }
+    const again = (resp ? stoppingAnswer(resp) : noListener(failure)) && now() < until && restarting(socketPath)
+    if (!again) {
+      if (resp) return resp
+      throw failure
+    }
+    if (!told) { told = true; tell(RESTART_WAIT_LINE) }
+    await sleep(RESTART_POLL_MS)
+  }
+}
+
 /** How long the installed CLI waits on the hub catalog before listing core ops alone. */
 export const HUB_CATALOG_TIMEOUT_MS = 5_000
 
@@ -659,7 +748,14 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   }
 
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1
-  const endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
+  let endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
+  // No socket to find because this host's daemon is restarting: wait for the next one.
+  const rideUntil = Date.now() + RESTART_RIDE_MAX_MS
+  while (!endpoint.ok && Date.now() < rideUntil && wellKnownGatewaySocketPaths(process.env).some((p) => daemonRestartingAt(p))) {
+    tellRestartWait()
+    await new Promise<void>((resolve) => setTimeout(resolve, RESTART_POLL_MS))
+    endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
+  }
   if (!endpoint.ok) {
     process.stderr.write(endpoint.message + '\n')
     return 6
@@ -778,17 +874,17 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // A call may wait out a server restart (cliWaitMs); a list of ops does not.
   const waitMs = op === 'tools.call' ? cliWaitMs() : undefined
   const waitNotice = waitMs ? setTimeout(() => {
-    process.stderr.write(`walnut: still waiting for the Walnut server's answer; up to ${Math.round(waitMs / 1000)}s\n`)
+    process.stderr.write(`walnut: no answer yet; this call waits up to ${Math.round(waitMs / 1000)}s\n`)
   }, CLI_WAIT_NOTICE_MS) : undefined
   waitNotice?.unref?.()
   const socketTimeoutMs = waitMs ? waitMs + 10_000 : WALNUT_CLI_TIMEOUT_MS
   try {
-    resp = await requestOverSocket(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
+    resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!resp.ok && runId && parsed.kind === 'tools.call' && refusedRunId(parsed.name, resp.error.message)) {
       dropRunId(parsed.name, callArgs)
       runId = null
-      resp = await requestOverSocket(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
+      resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
     }
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
@@ -818,7 +914,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   }
 
   if (!resp.ok) {
-    if (parsed.kind === 'tools.call' && resp.error.detail !== undefined) {
+    if (parsed.kind === 'tools.call' && resp.error.detail !== undefined && !stoppingAnswer(resp)) {
       await writeStdout(JSON.stringify(resp.error.detail, null, 2) + '\n')
     }
     process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
@@ -872,7 +968,7 @@ async function runMcpServer(argv: string[]): Promise<number> {
   const { socketPath, sid } = endpoint
   const { runWalnutMcpStdio } = await import('./walnut-mcp-stdio.js')
   return runWalnutMcpStdio({
-    request: (op, args, timeoutMs) => requestOverSocket(socketPath, { v: 1, op, sid, args }, timeoutMs),
+    request: (op, args, timeoutMs) => requestRidingRestart(socketPath, { v: 1, op, sid, args }, timeoutMs),
     formatError: formatErrorLines,
   })
 }
@@ -898,7 +994,7 @@ async function runMcpCli(argv: string[]): Promise<number> {
   const { socketPath, sid } = endpoint
   const callOp = async (name: string, args: Record<string, unknown>): Promise<GatewayResponse | number> => {
     try {
-      return await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args } })
+      return await requestRidingRestart(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args } })
     } catch (err) {
       if (err instanceof WalnutCliTimeoutError) {
         process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
@@ -1131,6 +1227,12 @@ async function runWait(
       await sleep(WAIT_POLL_INTERVAL_MS)
       continue
     }
+    if (!resp.ok && waitAnswerTransient(resp)) {
+      last = { transportError: resp.error.message }
+      if (Date.now() >= deadline) break
+      await sleep(WAIT_POLL_INTERVAL_MS)
+      continue
+    }
     if (!resp.ok) {
       // A definite answer (unknown id, bad request) — stop immediately.
       process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
@@ -1147,6 +1249,15 @@ async function runWait(
   }
   await writeStdout(JSON.stringify({ done: false, timeout: true, waitedSecs: parsed.timeoutSecs, ...last }, null, parsed.json ? 0 : 2) + '\n')
   return 7
+}
+
+/**
+ * No server just now, or this host's daemon stopping for its next one: a long wait
+ * keeps polling through it, as through a transport error (2026-11-03: one poll in
+ * a restart ended a 30-minute wait with exit 5).
+ */
+function waitAnswerTransient(resp: GatewayResponse): boolean {
+  return !resp.ok && (resp.error.code === 'hub_unreachable' || resp.error.code === 'hub_timeout')
 }
 
 /** `walnut wait <id> <id> ...`: one read per unsettled id per tick. */
@@ -1169,6 +1280,10 @@ async function runWaitMany(
       } catch (err) {
         // Transient, as in the one-id wait: keep polling until the budget runs out.
         latest.set(id, { ...(latest.get(id) ?? {}), transportError: err instanceof Error ? err.message : String(err) })
+        continue
+      }
+      if (!resp.ok && waitAnswerTransient(resp)) {
+        latest.set(id, { ...(latest.get(id) ?? {}), transportError: resp.error.message })
         continue
       }
       if (!resp.ok) {

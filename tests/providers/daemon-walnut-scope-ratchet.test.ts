@@ -99,6 +99,7 @@ const FILES: Record<string, string> = {
   SERVES_FILE: 'host: which Walnuts this daemon serves, by key, with its capabilities (served-walnuts-core.ts)',
   INSTANCE_ID_FILE: 'host: this daemon\'s instance id',
   SERVICE_FILE: 'host: whether this daemon runs as a service',
+  RESTART_MARK_FILE: 'host: this dir\'s daemon stops for a successor (daemon-restart-mark.ts)',
   LOG_FILE: 'host: this daemon\'s log',
   EXIT_BREADCRUMB_FILE: 'host: why this daemon last exited',
   GATEWAY_SHIM_DIR: 'host: the `walnut` shim, which routes each call by its session\'s Walnut',

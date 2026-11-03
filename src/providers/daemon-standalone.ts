@@ -224,6 +224,7 @@ import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
+import { RESTART_MARK_NAME, restartMarkText } from './daemon-restart-mark.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
 const daemonCommands = createDaemonCommandDrain()
@@ -446,6 +447,9 @@ const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
 const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service')
+// A stopping production daemon's word that its successor is on the way
+// (daemon-restart-mark.ts): `walnut` calls in between wait instead of failing.
+const RESTART_MARK_FILE = path.join(DAEMON_DIR, RESTART_MARK_NAME)
 // Written by the RUNNING daemon at startup. This is the source of truth for
 // upgrade decisions: DaemonConnection.shouldUpgradeDaemon `cat`s this file
 // instead of executing the on-disk binary's --version, because the on-disk
@@ -2894,6 +2898,8 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   // after a committed handover stops it (stopDaemon), its download kept for the next
   // Install, and a handover that fails leaves it running. A gcc install is waited for.
   const pause = daemonCommands.pause(hostFix.cancellable ? hostFixWork : undefined)
+  // Paused, the gateway turns calls away as stopping: the mark tells them to wait for the next daemon.
+  noteRestarting()
   let recovery: ReturnType<NonNullable<typeof cronRuntime>['pause']> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -2907,6 +2913,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   } catch (error) {
     recovery?.resume()
     pause.resume()
+    clearRestartMark()
     throw error
   } finally { clearTimeout(timer) }
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID }
@@ -2928,7 +2935,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     if ((error as NodeJS.ErrnoException).code === 'handover-published') {
       handoverPrepared = true
       requestDaemonShutdown()
-    } else pause.resume()
+    } else { pause.resume(); clearRestartMark() }
     throw error
   }
   handoverPrepared = true
@@ -3778,8 +3785,8 @@ const gatewayRelayPending = new Map<number, {
   call?: GatewayRelayCall
 }>()
 
-function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse {
-  return { ok: false, error: { code, message } }
+function gatewayError(code: GatewayErrorCode, message: string, detail?: unknown): GatewayResponse {
+  return { ok: false, error: detail === undefined ? { code, message } : { code, message, detail } }
 }
 
 // ── Offline host: answers a Walnut's sessions while that Walnut is away ──
@@ -5234,12 +5241,34 @@ function waitForPrimary(deadline: number, retry: () => void, respond: (resp: Gat
   return true
 }
 
+/**
+ * Leave the restart mark when a successor takes this dir over (a production
+ * daemon: an update, a handover, a service restart), so a `walnut` call in the
+ * seconds between waits for it (daemon-restart-mark.ts). Never for an isolated
+ * daemon, and never once daemon.pid names another daemon: that successor is up.
+ * Keep in sync with daemon-source.ts.
+ */
+function noteRestarting(): void {
+  if (shouldReapOnExit()) return
+  try {
+    const owner = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
+    if (owner > 0 && owner !== process.pid) return
+    fs.writeFileSync(RESTART_MARK_FILE, restartMarkText(Date.now()))
+  } catch { /* a convenience: without it the calls fail at once, as before */ }
+}
+
+/** A handover that did not happen: this daemon carries on, so nothing waits for another. */
+function clearRestartMark(): void {
+  try { fs.unlinkSync(RESTART_MARK_FILE) } catch {}
+}
+
 /** The daemon stops: the waiting calls are told now (nothing of them was sent) rather than cut off. */
 function releaseGatewayWaiters(): void {
   for (const w of [...gatewayWaiting]) {
     gatewayWaiting.delete(w)
     clearTimeout(w.timer)
-    w.respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again'))
+    // `stopping`: a CLI that finds the restart mark waits for the next daemon (wn-cli.ts requestRidingRestart).
+    w.respond(gatewayError('hub_unreachable', 'the daemon is restarting; nothing was sent, try again', { stopping: true }))
   }
 }
 
@@ -5403,7 +5432,7 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
 function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void) {
-  if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting'))
+  if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
   const req = parsed.request
@@ -5541,18 +5570,45 @@ function userWalnutShimText(): string {
     + '# The daemon dir: WALNUT_DAEMON_DIR when set; otherwise ' + PROD_DAEMON_DIR + ' or\n'
     + '# ~/.cache/open-walnut (a daemon moved there because /tmp was unusable), the\n'
     + '# one whose daemon is alive first. Exported, so walnut reaches THAT socket.\n'
+    + '# A daemon restarting here leaves <dir>/restarting (the epoch second it stopped;\n'
+    + '# daemon-restart-mark.ts): while that is under 45s old, wait for the next one to\n'
+    + '# write its bin/walnut instead of failing in the seconds between the two.\n'
+    + 'ride() {\n'
+    + '  i=0\n'
+    + '  while [ ! -x "$1/bin/walnut" ]; do\n'
+    + '    [ -f "$1/restarting" ] && [ ! -h "$1/restarting" ] || return 1\n'
+    + '    m=$(dd if="$1/restarting" bs=16 count=1 2>/dev/null)\n'
+    + '    case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac\n'
+    + '    a=$(( $(date +%s) - m ))\n'
+    + '    [ "$a" -ge -5 ] && [ "$a" -lt 45 ] && [ $i -lt 120 ] || return 1\n'
+    + '    [ $i -eq 0 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\n'
+    + '    sleep 0.5 2>/dev/null || sleep 1\n'
+    + '    i=$((i+1))\n'
+    + '  done\n'
+    + '  return 0\n'
+    + '}\n'
     + 'if [ -n "$WALNUT_DAEMON_DIR" ]; then\n'
+    + '  [ -x "$WALNUT_DAEMON_DIR/bin/walnut" ] || ride "$WALNUT_DAEMON_DIR"\n'
     + '  [ -x "$WALNUT_DAEMON_DIR/bin/walnut" ] && exec "$WALNUT_DAEMON_DIR/bin/walnut" "$@"\n'
     + '  echo "walnut: no Walnut daemon on this host ($WALNUT_DAEMON_DIR/bin/walnut is missing)." >&2\n'
     + '  exit 6\n'
     + 'fi\n'
     + 'found=\n'
+    + 'dead=\n'
     + 'for d in "' + PROD_DAEMON_DIR + '" "$HOME/.cache/open-walnut"; do\n'
     + '  [ -x "$d/bin/walnut" ] || continue\n'
     + '  p=$(cat "$d/daemon.pid" 2>/dev/null)\n'
     + '  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then found=$d; break; fi\n'
-    + '  [ -n "$found" ] || found=$d\n'
+    + '  [ -n "$dead" ] || dead=$d\n'
     + 'done\n'
+    + '# None alive: a dir whose daemon is restarting is waited for before a dead one is taken.\n'
+    + 'if [ -z "$found" ]; then\n'
+    + '  for d in "' + PROD_DAEMON_DIR + '" "$HOME/.cache/open-walnut"; do\n'
+    + '    [ -x "$d/bin/walnut" ] && continue\n'
+    + '    ride "$d" && { found=$d; break; }\n'
+    + '  done\n'
+    + 'fi\n'
+    + '[ -n "$found" ] || found=$dead\n'
     + 'if [ -n "$found" ]; then WALNUT_DAEMON_DIR=$found; export WALNUT_DAEMON_DIR; exec "$found/bin/walnut" "$@"; fi\n'
     + 'echo "walnut: no Walnut daemon on this host (' + PROD_DAEMON_DIR + '/bin/walnut is missing)." >&2\n'
     + 'exit 6\n'
@@ -5726,8 +5782,11 @@ function writeWalnutShim() {
     const shim = gatewayShimScript(argv)
     walnutCliArgv = argv
     const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
-    fs.writeFileSync(p, shim, { mode: 0o755 })
-    fs.chmodSync(p, 0o755)
+    // Written aside, then renamed: a call waiting out a restart runs it the moment it appears.
+    const tmp = p + '.tmp-' + process.pid
+    fs.writeFileSync(tmp, shim, { mode: 0o755 })
+    fs.chmodSync(tmp, 0o755)
+    fs.renameSync(tmp, p)
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {}
     // The shim now names its final target — anything else in here is debris.
     reapShimCoreArtifacts(argv)
@@ -13223,6 +13282,8 @@ if (action === '--start' || SERVICE_MODE) {
   // older v1 records the migration adds.
   startGatewayListener()
   writeWalnutShim()
+  // The socket listens and bin/walnut is there: calls that waited out the restart go now.
+  try { fs.unlinkSync(RESTART_MARK_FILE) } catch {}
   fs.writeFileSync(VERSION_FILE, DAEMON_VERSION)
   servedWalnuts.write()
   // Instance ID file — lets clients detect PID recycling / daemon swap by
@@ -13361,6 +13422,8 @@ if (action === '--start' || SERVICE_MODE) {
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
       // waits for it. Its download stays and the next Install resumes it.
       try { hostFix.cancel() } catch (error) { logMsg('warn', 'host fix cancel failed', { error: String(error) }) }
+      // Before any call is turned away: the mark is what tells it to wait for the successor.
+      noteRestarting()
       releaseGatewayWaiters()
       const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
       const failed = drained.find((result) => result.status === 'rejected')
