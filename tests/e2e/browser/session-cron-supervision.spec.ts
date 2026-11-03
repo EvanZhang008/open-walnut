@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 import { HEADER_LABELS_FLYOUT, closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 import type { SessionSupervision } from '../../../web/src/api/sessions'
@@ -391,7 +392,9 @@ test('offline stop remains pending through reload and retries without sending a 
     const column = await openColumn(page)
     await expect(column.locator('.session-supervision')).toHaveCount(0)
     await column.getByRole('button', { name: 'More actions', exact: true }).click()
-    await page.locator('.task-kebab-menu:visible').getByRole('button', { name: 'Terminate', exact: true }).click()
+    // Terminate sits in the menu's Session group (78c410ae0), which starts closed.
+    const session = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-session')
+    await session.getByRole('button', { name: 'Terminate', exact: true }).click()
     // A stop in flight opens itself — the user never has to find it.
     const bar = column.locator('.session-supervision')
     await expect(bar).toContainText('Requesting stop')

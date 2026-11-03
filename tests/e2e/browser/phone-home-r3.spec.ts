@@ -204,32 +204,78 @@ test.describe('opening from the needs-you rows', () => {
     rows: document.querySelectorAll('.todo-panel .todo-panel-item[data-task-id]').length,
   }))
 
-  test('N2-01: a needs-you row opens its task, and Back finds the list as the thumb left it', async ({ page }) => {
-    await isolateUiPrefs(page)
-    // The needs-you strip is a By project part (Flat has its Needs you rows instead).
-    await presetPanelDesign(page, 'project')
-    await page.addInitScript(() => { try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ } })
-    const tabWrites: string[] = []
-    page.on('request', (r) => {
-      if (r.method() !== 'GET' && r.url().includes('/api/ui-prefs') && (r.postData() ?? '').includes('todo-active-section')) tabWrites.push(r.postData() ?? '')
+  /** Whether a task is one the strip lists: its phase or its stored status asks for the user. */
+  const asksUser = (t: { phase?: string; user_status?: { state?: string } }) =>
+    t.phase === 'NEED_ACTION' || t.user_status?.state === 'needs' || t.user_status?.state === 'read'
+
+  /**
+   * The strip shows only `own` of the work that needs the user. The fixture server is shared:
+   * other tests (N2-14 in this file, the phone specs' probes) make a task that needs the user
+   * and delete it seconds later, and the strip lists it newest first, at once, live. On
+   * 2026-11-03 (CI run 41604915386) N2-14's worker was the row this test tapped and was gone
+   * after Back, and on the retry a probe's row arrived over the row as it was tapped.
+   */
+  async function stripShowsOnly(page: Page, own: string): Promise<void> {
+    await page.route('**/api/tasks*', async (route) => {
+      const req = route.request()
+      if (req.method() !== 'GET' || new URL(req.url()).pathname !== '/api/tasks') return route.fallback()
+      const response = await route.fetch()
+      const body = await response.json() as { tasks?: Array<{ id: string; phase?: string; user_status?: { state?: string } }> }
+      if (Array.isArray(body.tasks)) body.tasks = body.tasks.filter((t) => t.id === own || !asksUser(t))
+      await route.fulfill({ response, json: body })
     })
-    await page.goto('/')
-    const first = page.locator('.phone-needs-you-row').first()
-    await expect(first).toBeVisible({ timeout: 30_000 })
-    await page.waitForTimeout(800)
-    const before = await listState(page)
-    const id = await first.getAttribute('data-needs-you-id')
-    const box = (await first.boundingBox())!
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
-    const back = page.locator('.phone-topbar .phone-topbar-back')
-    await expect(back).toBeVisible({ timeout: 15_000 })
-    await page.waitForTimeout(800)
-    await back.tap()
-    await expect(back).toBeHidden({ timeout: 15_000 })
-    await page.waitForTimeout(400)
-    expect(await listState(page), 'no project opened, nothing scrolled under the overlay').toEqual(before)
-    const again = (await page.locator(`.phone-needs-you-row[data-needs-you-id="${id}"]`).boundingBox())!
-    expect(Math.abs(again.y - box.y)).toBeLessThanOrEqual(1)
-    expect(tabWrites).toEqual([])
+    await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+      const server = ws.connectToServer()
+      ws.onMessage((message) => server.send(message))
+      server.onMessage((message) => {
+        const text = typeof message === 'string' ? message : message.toString('utf8')
+        let frame: { type?: string; data?: { task?: { id?: string; phase?: string; user_status?: { state?: string } } } } = {}
+        try { frame = JSON.parse(text) } catch { /* not JSON: pass it on */ }
+        const task = frame.type === 'event' ? frame.data?.task : undefined
+        if (task && typeof task === 'object' && task.id !== own && asksUser(task)) return
+        ws.send(message)
+      })
+    })
+  }
+
+  test('N2-01: a needs-you row opens its task, and Back finds the list as the thumb left it', async ({ page }) => {
+    const made = await page.request.post('/api/tasks', { data: { title: `Sign the north beds watering plan ${Date.now().toString(36)}`, source: 'local', pinned: false } })
+    expect(made.ok(), await made.text()).toBe(true)
+    const own = ((await made.json()) as { task: { id: string } }).task.id
+    try {
+      // A person's NEED_ACTION on a task with no session reads Needs you (src/core/user-status.ts).
+      const marked = await page.request.patch(`/api/tasks/${own}`, { data: { phase: 'NEED_ACTION' } })
+      expect(marked.ok(), await marked.text()).toBe(true)
+      await stripShowsOnly(page, own)
+      await isolateUiPrefs(page)
+      // The needs-you strip is a By project part (Flat has its Needs you rows instead).
+      await presetPanelDesign(page, 'project')
+      await page.addInitScript(() => { try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ } })
+      const tabWrites: string[] = []
+      page.on('request', (r) => {
+        if (r.method() !== 'GET' && r.url().includes('/api/ui-prefs') && (r.postData() ?? '').includes('todo-active-section')) tabWrites.push(r.postData() ?? '')
+      })
+      await page.goto('/')
+      const first = page.locator(`.phone-needs-you-row[data-needs-you-id="${own}"]`)
+      await expect(first).toBeVisible({ timeout: 30_000 })
+      await expect(page.locator('.phone-needs-you-row')).toHaveCount(1)
+      await page.waitForTimeout(800)
+      const before = await listState(page)
+      const id = await first.getAttribute('data-needs-you-id')
+      const box = (await first.boundingBox())!
+      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
+      const back = page.locator('.phone-topbar .phone-topbar-back')
+      await expect(back).toBeVisible({ timeout: 15_000 })
+      await page.waitForTimeout(800)
+      await back.tap()
+      await expect(back).toBeHidden({ timeout: 15_000 })
+      await page.waitForTimeout(400)
+      expect(await listState(page), 'no project opened, nothing scrolled under the overlay').toEqual(before)
+      const again = (await page.locator(`.phone-needs-you-row[data-needs-you-id="${id}"]`).boundingBox())!
+      expect(Math.abs(again.y - box.y)).toBeLessThanOrEqual(1)
+      expect(tabWrites).toEqual([])
+    } finally {
+      await page.request.delete(`/api/tasks/${own}`).catch(() => {})
+    }
   })
 })
