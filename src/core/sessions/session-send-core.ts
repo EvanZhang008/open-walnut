@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { senderTitleOf } from '../peers/sender-name.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { sessionHandle } from '../peers/walnut-message-tag.js';
 import { PeerThrottle, PEER_PENDING_CAP } from '../peers/peer-throttle.js';
@@ -174,6 +175,9 @@ function liveSessionsForTask(sessions: SessionRecord[]): SessionRecord[] {
  *  (ACP engines) are not UUIDs and still get printed this way. */
 const PRINTED_HANDLE = /\[([0-9a-z][0-9a-z-]{3,})\]\s*$/i;
 
+/** How many recently active sessions' tasks a bare name is matched against by task title. */
+const TASK_TITLE_MATCH_MAX = 200;
+
 /**
  * Resolve `to` → one target session.
  * ⓪ printed `Title [8hex]` handle (exact id, then unique prefix; a bracketed
@@ -267,6 +271,22 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
   if (byTitle.length > 1) {
     throw ambiguous(to, byTitle.map((s) => ({ id: s.claudeSessionId, title: s.title, host: s.host })));
   }
+
+  // Envelopes name a sender by its TASK title (peers/sender-name.ts), so a name copied
+  // from one without its `[8hex]` is matched against the titles of the tasks behind the
+  // most recently active sessions (bounded: an in-memory lookup each, never a table read).
+  const recent = candidates
+    .filter((s) => !s.archived && s.taskId)
+    .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''));
+  const taskIds = [...new Set(recent.map((s) => s.taskId!))].slice(0, TASK_TITLE_MATCH_MAX);
+  const { getTask } = await import('../task-manager.js');
+  const named: Array<{ id: string; title: string }> = [];
+  for (const id of taskIds) {
+    const title = await getTask(id).then((t) => t.title ?? '', () => '');
+    if (title.toLowerCase().includes(lower)) named.push({ id, title });
+  }
+  if (named.length === 1) return resolveSendTargetAddress(named[0].id);
+  if (named.length > 1) throw ambiguous(to, named.map((t) => ({ id: t.id, title: `task: ${t.title}` })));
 
   throw new SendError('unknown_target', `nothing matches "${to}" — a session id/prefix, task id, or unique title substring`, 404);
 }
@@ -610,8 +630,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   if (fenced) {
     enqueueText = buildPeerWrapper(body, caller.kind === 'session'
       ? {
-        // No title → the handle is just `[8hex]`; never invent a name.
-        title: caller.record.title ?? '',
+        // The sender's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
+        title: await senderTitleOf(caller.record),
         shortId: shortId(caller.record.claudeSessionId),
         sessionId: caller.record.claudeSessionId,
         taskId: caller.record.taskId,
@@ -771,9 +791,10 @@ async function performReply(
     }, fields);
   }
 
+  const replierTitle = await senderTitleOf(caller.record);
   const wrapped = buildReplyDeliveryText(answeredFor, {
-    // No title → the handle is just `[8hex]`; never invent a name.
-    title: caller.record.title ?? '',
+    // The replier's TASK title (sender-name.ts); none → the handle is just `[8hex]`.
+    title: replierTitle,
     shortId: shortId(caller.record.claudeSessionId),
     sessionId: caller.record.claudeSessionId,
     taskId: caller.record.taskId,
@@ -806,10 +827,10 @@ async function performReply(
       const at = await resolveReplyDestination(r.fromSessionId, { exclude: [caller.record.claudeSessionId, originSid] });
       if (!at) continue;
       await tellOrRide(at.session.claudeSessionId, `onward-${r.id}`, wentPastLine({
-        replier: { title: caller.record.title ?? null, taskId: caller.record.taskId ?? null },
+        replier: { title: replierTitle || null, taskId: caller.record.taskId ?? null },
         yours: r.id,
         final: answeredFor,
-        finalAsker: { title: origin.title ?? null, taskId: origin.taskId ?? null },
+        finalAsker: { title: (await senderTitleOf(origin)) || null, taskId: origin.taskId ?? null },
       }));
     }
   }

@@ -219,7 +219,8 @@ export function createEnvelopeKit(): EnvelopeKit {
    * surrogate pair would put a lone surrogate on the wire).
    */
   function sessionHandle(title: string | null | undefined, sessionId: string | null | undefined): string {
-    const flat = (title ?? '').replace(/\s+/g, ' ').trim();
+    // A title from the era when every fork prefixed its source's name again prints one "Fork of".
+    const flat = (title ?? '').replace(/\s+/g, ' ').trim().replace(/^(?:fork of +){2,}/i, 'Fork of ');
     const points = [...flat];
     const capped = points.length > TITLE_MAX ? `${points.slice(0, TITLE_MAX).join('')}…` : flat;
     const short = (sessionId ?? '').trim().slice(0, 8);

@@ -129,6 +129,15 @@ describe('createForkSiblingTask', () => {
     expect(await waitFor(async () => (await getTask(res.task.id)).title, want)).toBe(want);
   });
 
+  it('a fork of a fork of a fork carries one "Fork of", even from a stacked source', async () => {
+    let current = await source('Fork of Fork of Reaper stalls');
+    for (let i = 0; i < 5; i++) {
+      const res = await createForkSiblingTask(current, { source: 'test' });
+      expect(res.task.title).toBe('Fork of Reaper stalls');
+      current = res.task.id;
+    }
+  });
+
   it('stores the description and inherits the source project + pin', async () => {
     const src = await source();
 

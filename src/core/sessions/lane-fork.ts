@@ -72,8 +72,8 @@ export async function forkLaneConversation(
   }
   // Strip a previous fork decoration so titles don't compound without bound
   // ("Fork of Fork of Fork of …" — same rule task forks apply).
-  const baseTitle = sourceTitle.replace(/^(Fork of\s+)+/i, '').trim() || sourceTitle;
-  const forkTitle = `Fork of ${baseTitle}`.slice(0, 60);
+  const { forkTitleOf } = await import('../fork-base-title.js');
+  const forkTitle = forkTitleOf(sourceTitle).slice(0, 60);
 
   // New conversation first (server sets it active), then bind the forked
   // session to ITS lane before the spawn — same seed-before-spawn contract as

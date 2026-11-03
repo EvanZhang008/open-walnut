@@ -60,10 +60,17 @@ export function frameForSource(text: string, source: string | undefined): string
 
 /** The session behind a start or a send, as the peer envelope prints it. */
 export interface FramingCaller {
+  /** The name the envelope prints: the caller's TASK title (`framingCallerOf`). */
   title?: string;
   claudeSessionId: string;
   taskId?: string;
   host?: string;
+}
+
+/** A session record as `frameStartText` names it: by its task's title (peers/sender-name.ts). */
+export async function framingCallerOf(record: FramingCaller): Promise<FramingCaller> {
+  const { senderTitleOf } = await import('../peers/sender-name.js');
+  return { ...record, title: await senderTitleOf(record) };
 }
 
 /**

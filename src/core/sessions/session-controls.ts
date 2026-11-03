@@ -604,10 +604,8 @@ export async function createForkSiblingTask(
   // first, otherwise titles compound without bound ("X - fork of Y - fork of
   // Z - …" reached 290+ chars in practice and permanently failed external
   // sync plugins with title-length limits).
-  const sourceBaseTitle = sourceTask.title
-    .replace(/^Fork of\s+/i, '')
-    .replace(/\s+-\s+fork of\s+.*$/i, '')
-    .trim() || sourceTask.title;
+  const { forkBaseTitle } = await import('../fork-base-title.js');
+  const sourceBaseTitle = forkBaseTitle(sourceTask.title);
   const explicitTitle = opts.childTitle
     || (opts.titlePrefix ? `${opts.titlePrefix} - fork of ${sourceBaseTitle}` : undefined);
   const autoTitle = !explicitTitle;
@@ -809,8 +807,9 @@ export async function forkSessionToTask(
   let handoffNotice = '';
   try {
     const pending = await pendingRequestsFromSession(sourceSessionId);
+    const { senderTitleOf } = await import('../peers/sender-name.js');
     handoffNotice = buildForkHandoffNotice({
-      title: sourceRecord.title,
+      title: await senderTitleOf(sourceRecord),
       sessionId: sourceSessionId,
       ...(sourceRecord.taskId ? { taskId: sourceRecord.taskId } : {}),
     }, pending);
@@ -837,7 +836,7 @@ export async function forkSessionToTask(
   // accepts, and the task's is the curated one (`Fork of <source>` now, refined
   // to `<label> - fork of <source>` moments later; see fork-session-title.ts).
   const forkTitle = title
-    ?? (task.title?.trim() || `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`);
+    ?? (task.title?.trim() || (await import('../fork-base-title.js')).forkTitleOf(sourceRecord.title ?? sourceSessionId.slice(0, 16)));
 
   // Seed the record before the spawn — the client opens the panel on this
   // response, and its first session read must not 404.

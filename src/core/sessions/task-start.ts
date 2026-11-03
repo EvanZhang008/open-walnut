@@ -391,8 +391,9 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
           // message is (team-asks.ts; org_send `task` starts a team task that has no session).
           if (caller?.kind === 'session' && launch.message) {
             const { buildPeerWrapper } = await import('../peers/peer-wrapper.js');
+            const { senderTitleOf } = await import('../peers/sender-name.js');
             const envelope = buildPeerWrapper(launch.message, {
-              title: caller.record.title ?? '', shortId: caller.record.claudeSessionId.slice(0, 8),
+              title: await senderTitleOf(caller.record), shortId: caller.record.claudeSessionId.slice(0, 8),
               sessionId: caller.record.claudeSessionId, taskId: caller.record.taskId, host: 'local',
             });
             void import('../org/team-asks.js').then((m) => m.noteTeamAsk(sid, launch.message, envelope, 'peer')).catch(() => {});
@@ -401,10 +402,10 @@ async function startSessionForTaskNow(params: SessionStartParams): Promise<Sessi
         const { sessionRunner } = await import('../../providers/claude-code-session.js');
         // The first line says who started the task: a session's peer note, or Walnut's, never a person's typing.
         const { frameStartText } = await import('./send-frame.js');
-        const { frameAsWalnut, readsAsPerson } = await import('./send-frame.js');
+        const { frameAsWalnut, readsAsPerson, framingCallerOf } = await import('./send-frame.js');
         let firstMessage = frameStartText(startBody, {
           source: params.source, ...(params.callerSid ? { callerSid: params.callerSid } : {}),
-          ...(caller?.kind === 'session' ? { caller: caller.record } : {}), ...(requestId ? { requestId } : {}),
+          ...(caller?.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}), ...(requestId ? { requestId } : {}),
         }) + (replyTrailer ? `\n${replyTrailer}` : '');
         // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
         if (replyTrailer && readsAsPerson(firstMessage)) firstMessage = frameAsWalnut(firstMessage, params.source);

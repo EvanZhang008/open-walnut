@@ -245,6 +245,20 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.journalPings.length).toBeGreaterThan(0)
   })
 
+  it('names the sender by its task title, not a stacked session title (peers/sender-name.ts)', async () => {
+    const h = harness()
+    h.host.configure(slice({
+      sessions: [
+        { sid: A, taskId: 'mtaskaaa-0001', title: 'Fork of Fork of Fork of Session: Widget Service' },
+        { sid: B, taskId: 'mtaskbbb-0002', title: 'Child: build the page' },
+      ],
+    }))
+    const r = await call(h, A, 'task_send', { to: 'mtaskbbb-0002', text: 'hello', expect_reply: false })
+    expect(r.ok).toBe(true)
+    expect(h.delivered[0].text).toContain(`from="Parent work [${A.slice(0, 8)}]"`)
+    expect(h.delivered[0].text).not.toContain('Fork of')
+  })
+
   it('an ACP session calling by its worker runtime id speaks as its session (acp-caller-sid.ts)', async () => {
     const h = harness()
     const runtimeId = 'acp-0123456789abcdef'

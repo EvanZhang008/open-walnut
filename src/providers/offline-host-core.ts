@@ -984,10 +984,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return false
   }
 
+  /** A caller is named by its TASK's title, the session's own only without one (as the server: peers/sender-name.ts). */
   function callerIdentity(home: string, sid: string): { title: string; taskId?: string } {
     const row = sessionOf(home, sid)
     const taskId = row?.taskId
-    const title = row?.title ?? (taskId ? slices.get(home)?.tasks.find((t) => t.id === taskId)?.title : undefined) ?? ''
+    const title = (taskId ? slices.get(home)?.tasks.find((t) => t.id === taskId)?.title?.trim() : undefined) || row?.title || ''
     return { title, taskId }
   }
 
