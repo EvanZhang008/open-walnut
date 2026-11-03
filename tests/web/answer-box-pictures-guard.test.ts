@@ -116,6 +116,18 @@ describe('every box for an AI takes pictures', () => {
     for (const rel of Object.keys(TEXT_ONLY_COMPOSERS)) expect(fs.existsSync(path.join(WEB_SRC, rel)), rel).toBe(true)
   })
 
+  it('the Talk to CEO box sends its pictures with the note, all the way to the route', () => {
+    // The box hands its pictures to sendToCeo, which posts them as `images`, which the route
+    // passes to the send into Main's (or the test stand-in's) chat.
+    expect(read('components/content/CeoComposer.tsx')).toMatch(/sendToCeo\(req\.item, words, sentPictures\)/)
+    expect(read('components/content/CeoComposer.tsx')).toMatch(/const sentPictures = pictures\.images/)
+    expect(read('utils/content-actions.ts')).toMatch(/'\/api\/v1\/content\/ceo', \{ item, note: words, \.\.\.\(pictures\.length > 0 \? \{ images: pictures \}/)
+    const route = fs.readFileSync(path.resolve(WEB_SRC, '../../src/web/routes/content-v1.ts'), 'utf8')
+    expect(route).toMatch(/const images = extractValidImages\(req\.body\?\.images\)/)
+    expect(route).toMatch(/sendToMain\(text, images, source\)/)
+    expect(route).toMatch(/sendToTaskChat\(standIn, [^)]*, source, images\)/)
+  })
+
   it('one rule set: the chat and the answer boxes read the same types, limit and paste rule', () => {
     const chat = read('components/chat/ChatInput.tsx')
     expect(chat).toMatch(/from '@\/components\/common\/image-attachments'/)

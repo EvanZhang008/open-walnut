@@ -1,7 +1,7 @@
 /**
  * Content actions on the server: "Talk to CEO" for one piece of content a plugin shows.
  *
- *   POST /api/v1/content/ceo { item, note } → { taskId, sessionId, started, noted?, held?, testRun? }
+ *   POST /api/v1/content/ceo { item, note, images? } → { taskId, sessionId, started, noted?, held?, testRun? }
  *   POST /api/v1/content/draft { item, sent? } → { text }
  *
  * The person wrote `note` in the Talk to CEO box and pressed Send (2026-11-03, the user: "I
@@ -12,7 +12,9 @@
  * in it is framed (core/content-actions/content-item.ts). An older client that sends no `note`
  * gets the fixed hand-over line in its place. `noted: true` says the note went in, so a newer
  * client talking to an older server (which ignores `note`) can tell the person their words were
- * not included.
+ * not included. `images` are the pictures the person added to the box (up to 5
+ * `{ data: base64, mediaType }`, as a chat send takes them): saved and named ahead of the words, the
+ * way the Ask Main and Quick Input sends carry them.
  *
  * A test run (an automated browser on the real Walnut) never writes into the real Main's chat
  * (2026-11-02: a demo of this button had to run without leaving test content there). It talks to
@@ -23,6 +25,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
+import { extractValidImages } from './session-send-v1.js'
 import { ceoContentText, ceoRequestText, newTaskDraftText, normalizeContentItem } from '../../core/content-actions/content-item.js'
 import { createEnvelopeKit } from '../../core/peers/envelope-kit.js'
 import type { Task } from '../../core/types.js'
@@ -89,17 +92,18 @@ contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: N
       return
     }
     const text = ceoMessage(item, noted.note)
+    const images = extractValidImages(req.body?.images)
     const source = routeSource('ui', req.headers)
     const { sendToMain, sendToTaskChat } = await import('./quick-input-v1.js')
     const standIn = await testRunCeo()
     if (standIn) {
-      const sent = await sendToTaskChat(standIn, `${text}\n\n${TEST_RUN_CEO_NOTE}`, source)
-      log.web.info('content: talk to ceo (test run stand-in)', { taskId: sent.taskId, sessionId: sent.sessionId, source: item.source, noted: !!noted.note })
+      const sent = await sendToTaskChat(standIn, `${text}\n\n${TEST_RUN_CEO_NOTE}`, source, images)
+      log.web.info('content: talk to ceo (test run stand-in)', { taskId: sent.taskId, sessionId: sent.sessionId, source: item.source, noted: !!noted.note, images: images.length })
       res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}), testRun: true })
       return
     }
-    const sent = await sendToMain(text, [], source)
-    log.web.info('content: talk to ceo', { taskId: sent.taskId, sessionId: sent.sessionId, held: !!sent.held, source: item.source, noted: !!noted.note })
+    const sent = await sendToMain(text, images, source)
+    log.web.info('content: talk to ceo', { taskId: sent.taskId, sessionId: sent.sessionId, held: !!sent.held, source: item.source, noted: !!noted.note, images: images.length })
     res.json({ taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started, ...(noted.note ? { noted: true } : {}), ...(sent.held ? { held: true } : {}) })
   } catch (err) {
     next(err)

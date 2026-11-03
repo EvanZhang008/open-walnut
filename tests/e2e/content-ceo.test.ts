@@ -7,6 +7,8 @@
  *   - the person's own words (`note`) lead the message and are its personText; a blank or
  *     oversized note, or an item with nothing to say, is refused before any send; an older client
  *     with no note gets the fixed hand-over line
+ *   - the pictures the person added go with the note: saved, and named ahead of the words the way a
+ *     chat send names them; anything that is not a picture is dropped
  *   - a marked test run talks to a stand-in test task, never the real Main, and reuses it
  * The session start is stubbed (it would spawn a CLI).
  */
@@ -37,6 +39,7 @@ import { createSessionRecord, updateSessionRecord } from '../../src/core/session
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { TEST_RUN_CEO_TITLE } from '../../src/web/routes/content-v1.js'
 import { personTextOf } from '../../src/core/sessions/transcript-sent-by.js'
+import { IMAGES_ATTACHED_LINE } from '../../src/core/sessions/cloud-images.js'
 
 let server: HttpServer
 let port: number
@@ -108,6 +111,28 @@ describe('POST /api/v1/content/ceo', () => {
     expect(message).toContain('Title: Benefits enrollment closes Nov 15')
     expect(message.match(/<\/external-content>/g)).toHaveLength(1)
     expect(message).toContain('Open in Walnut: /mail?account=a1&message=m1')
+  })
+
+  it('sends the pictures the person added with the note', async () => {
+    starts.length = 0
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    const res = await post({
+      item: ITEM,
+      note: 'Is this the plan from the screenshot?',
+      images: [{ data: png, mediaType: 'image/png' }, { data: 'x', mediaType: 'text/html' }],
+    })
+    expect(res.status).toBe(200)
+    expect(starts).toHaveLength(1)
+    const message = String(starts[0].message)
+    const lines = message.split('\n')
+    expect(lines[0]).toBe(IMAGES_ATTACHED_LINE)
+    // One saved picture (the non-image was dropped), on disk, then the person's words.
+    const paths = lines.slice(1).filter((l) => l.startsWith('- ')).map((l) => l.slice(2))
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toMatch(/\.png$/)
+    await expect(fs.stat(paths[0])).resolves.toBeTruthy()
+    expect(message).toContain('\n\nIs this the plan from the screenshot?\n\n')
+    expect(message).toContain('<external-content source="Mail">')
   })
 
   it("puts it in Main's live chat as the person's message, and holds it while Main waits on a prompt", async () => {

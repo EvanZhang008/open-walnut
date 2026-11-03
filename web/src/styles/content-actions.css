@@ -80,23 +80,8 @@
   line-height: 1;
   cursor: pointer;
 }
-.ceo-composer-input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 72px;
-  resize: vertical;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg, #fff);
-  color: var(--fg);
-  font: inherit;
-  line-height: 1.45;
-}
-.ceo-composer-input:focus {
-  outline: none;
-  border-color: var(--accent, var(--fg-muted));
-}
+/* The words are the AnswerBox (styles/answer-box.css); a few lines tall before it grows. */
+.ceo-composer-answer .answer-box-input { min-height: 54px; }
 .ceo-composer-attached {
   display: flex;
   align-items: center;

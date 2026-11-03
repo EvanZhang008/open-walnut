@@ -9,7 +9,8 @@
  *   - Talk to CEO: a box opens where it was clicked (CeoComposer); the person writes what they
  *     want to tell the CEO, the item rides along as attached context, and nothing is sent until
  *     they press Send (2026-11-03, the user: "I definitely have something to say ... at least
- *     give me an input box"). Send posts both (`POST /api/v1/content/ceo { item, note }`); the
+ *     give me an input box"). Send posts both, with any pictures the person added
+ *     (`POST /api/v1/content/ceo { item, note, images? }`); the
  *     server puts their words, then the framed item, into the main agent's chat as their message;
  *     a toast says so and opens that chat.
  *   - New task: the home page's draft column opens with the title and context filled in and the
@@ -20,6 +21,7 @@
  */
 import { newTaskDraftText, normalizeContentItem, type ContentItem } from '@open-walnut/content-item';
 import { apiPost } from '@/api/client';
+import type { ImageAttachment } from '@/api/chat';
 import { openSessionOnHome } from '@/utils/open-session';
 import { log } from '@/utils/log';
 
@@ -161,20 +163,24 @@ export function talkToCeo(raw: ContentItem): Promise<boolean> {
 /** The longest note the box takes (the server's CEO_NOTE_MAX). */
 export const CEO_NOTE_MAX = 8000;
 
-/** Send: the person's words and the item to the CEO. Throws (after its toast) when not sent. */
-export async function sendToCeo(raw: ContentItem, note: string): Promise<void> {
+/**
+ * Send: the person's words, their pictures (as a chat send carries them) and the item to the CEO.
+ * Throws (after its toast) when not sent.
+ */
+export async function sendToCeo(raw: ContentItem, note: string, images: readonly ImageAttachment[] = []): Promise<void> {
   const item = itemOf(raw);
   const words = note.trim();
   if (!words) throw new Error('Write what you want to tell the CEO');
   let answer: CeoAnswer;
   try {
-    answer = await apiPost<CeoAnswer>('/api/v1/content/ceo', { item, note: words }, { timeoutMs: 30_000 });
+    const pictures = images.filter((img) => img.data).map(({ data, mediaType }) => ({ data, mediaType }));
+    answer = await apiPost<CeoAnswer>('/api/v1/content/ceo', { item, note: words, ...(pictures.length > 0 ? { images: pictures } : {}) }, { timeoutMs: 30_000 });
   } catch (err) {
     log.warn('content-actions', 'talk to ceo failed', { source: item.source, error: errorWords(err) });
     runtime?.toast({ severity: 'error', title: 'Not sent to the CEO', body: errorWords(err), dedupKey: `content-ceo-error:${item.title}` });
     throw err;
   }
-  log.info('content-actions', 'talk to ceo sent', { source: item.source, taskId: answer.taskId, sessionId: answer.sessionId, held: !!answer.held, testRun: !!answer.testRun });
+  log.info('content-actions', 'talk to ceo sent', { source: item.source, images: images.length, taskId: answer.taskId, sessionId: answer.sessionId, held: !!answer.held, testRun: !!answer.testRun });
   runtime?.toast(answer.held
     ? {
       severity: 'warning', title: 'Not sent: the CEO is waiting on your answer',

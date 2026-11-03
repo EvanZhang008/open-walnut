@@ -1,5 +1,5 @@
 import { expect, test } from './shortcut-test-fixture'
-import { type Page } from '@playwright/test'
+import { type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { MailFixtureServer } from './mail-review-helpers'
 import { showAllMail } from './mail-review-helpers'
@@ -20,8 +20,9 @@ import { draftComposer, draftPanels } from './draft-helpers'
  *      are never overwritten.
  *   d. Talk to CEO opens a box under the button and sends nothing (2026-11-03, the user: "I
  *      definitely have something to say ... at least give me an input box"): Send waits for
- *      words, Escape and Cancel close it without a send and keep what was typed; Send posts the
- *      person's words with the mail attached, says it was sent, and Open chat shows Main's chat.
+ *      words, Escape and Cancel close it without a send and keep what was typed and the pasted
+ *      picture; Send posts the person's words and picture with the mail attached, says it was
+ *      sent, and Open chat shows Main's chat.
  *   e. The row's right-click menu offers the same two, and no "Make a task"; its Talk to CEO opens
  *      the same box where the person clicked, again sending nothing by itself.
  * Runs on the mail fixture's own server, whose sessions run the repo's mock CLI.
@@ -50,6 +51,25 @@ async function api<T>(path: string): Promise<T> {
 async function taskCount(): Promise<number> {
   const body = await api<{ tasks: unknown[] }>('/api/tasks?fields=list')
   return body.tasks.length
+}
+
+/** Paste a screenshot (a PNG File drawn on a canvas, in clipboardData) into `box`, as a person does. */
+async function pasteScreenshot(box: Locator): Promise<void> {
+  await box.focus()
+  await box.evaluate(async (el) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 160
+    canvas.height = 90
+    const g = canvas.getContext('2d')!
+    g.fillStyle = '#1f6feb'
+    g.fillRect(0, 0, 160, 90)
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'))
+    const data = new DataTransfer()
+    data.items.add(new File([blob], 'Screenshot.png', { type: 'image/png' }))
+    const ev = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'clipboardData', { value: data })
+    el.dispatchEvent(ev)
+  })
 }
 
 async function openLunch(page: Page): Promise<void> {
@@ -143,13 +163,17 @@ test('a mail offers Talk to CEO and New task, and neither makes a task by itself
   await page.keyboard.type('   ')
   await expect(send).toBeDisabled()
   await page.screenshot({ path: `${SHOTS}/ceo-box-empty.png` })
-  // Escape closes it, sends nothing, and keeps what was typed for the next open.
+  // Escape closes it, sends nothing, and keeps what was typed (and the pasted picture) for the next open.
+  const thumbs = box.locator('[data-testid="ceo-composer-input-pictures"] .chat-image-preview')
   await input.fill('Is Alice free on Friday instead?')
+  await pasteScreenshot(input)
+  await expect(thumbs).toHaveCount(1)
   await page.keyboard.press('Escape')
   await expect(box).toHaveCount(0)
   await expect(ceoButton).toHaveAttribute('aria-expanded', 'false')
   await ceoButton.click()
   await expect(input).toHaveValue('Is Alice free on Friday instead?')
+  await expect(thumbs).toHaveCount(1)
   await box.getByRole('button', { name: 'Cancel' }).click()
   await expect(box).toHaveCount(0)
   await page.waitForTimeout(500)
@@ -162,8 +186,12 @@ test('a mail offers Talk to CEO and New task, and neither makes a task by itself
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter')
   const answer = await (await answered).json() as { taskId: string; sessionId: string | null; started: boolean }
   expect(ceoPosts).toHaveLength(1)
-  const posted = JSON.parse(ceoPosts[0]) as { item: Record<string, string>; note: string }
+  const posted = JSON.parse(ceoPosts[0]) as { item: Record<string, string>; note: string; images?: Array<{ data: string; mediaType: string }> }
   expect(posted.note).toBe('Is Alice free on Friday instead? If yes, move it.')
+  // The picture goes with the words (the server saves it and names it ahead of them: content-ceo.test.ts).
+  expect(posted.images).toHaveLength(1)
+  expect(posted.images![0].mediaType).toBe('image/png')
+  expect(posted.images![0].data.length).toBeGreaterThan(100)
   expect(posted.item).toMatchObject({ source: 'Mail', title: 'Lunch tomorrow' })
   expect(posted.item.from).toContain('alice@example.invalid')
   expect(posted.item.open).toMatch(/^\/mail\?account=.+&message=.+/)
@@ -180,10 +208,11 @@ test('a mail offers Talk to CEO and New task, and neither makes a task by itself
   await expect(page.locator(`[data-session-id="${answer.sessionId}"]`).first()).toBeVisible({ timeout: 30_000 })
   await page.screenshot({ path: `${SHOTS}/ceo-chat.png` })
 
-  // Sent: the next open starts empty.
+  // Sent: the next open starts empty, words and picture.
   await openLunch(page)
   await ceoButton.click()
   await expect(input).toHaveValue('')
+  await expect(thumbs).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(box).toHaveCount(0)
 
