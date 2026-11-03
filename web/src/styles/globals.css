@@ -5920,6 +5920,11 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   border: 1px solid var(--border);
   padding: 6px 12px;
   text-align: left;
+  /* A message body breaks words anywhere (`word-break: break-word`), and a
+     table sizes its columns by that: in a narrow pane a column shrank to one or
+     two letters per line. Cells keep whole words; the table scrolls instead. */
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .markdown-body th {

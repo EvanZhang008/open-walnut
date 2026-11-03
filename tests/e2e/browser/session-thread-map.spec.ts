@@ -389,6 +389,34 @@ test.describe('Question map', () => {
     await expect(panel.locator('.thread-card .thread-card-title')).toHaveText(MAP_TITLES.Q2)
   })
 
+  test('a table in a narrow column keeps every word whole: it scrolls sideways instead (2026-11-03)', async ({ page }) => {
+    // The split's left half showed a table cut one or two letters per line
+    // (`.session-msg-content` breaks words anywhere, and a table sizes its
+    // columns by that). A cell is never narrower than its longest word.
+    const panel = await openAt(page, NARROW)
+    const table = panel.locator('.session-history .markdown-body table').first()
+    await table.scrollIntoViewIfNeeded()
+    await expect(table).toContainText('FLUSH_CONCURRENCY')
+    const cut = await table.evaluate((t) => {
+      const ctx = document.createElement('canvas').getContext('2d')!
+      const out: string[] = []
+      for (const cell of Array.from(t.querySelectorAll<HTMLElement>('th, td'))) {
+        const cs = getComputedStyle(cell)
+        ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+        const room = cell.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        for (const word of (cell.textContent ?? '').match(/[A-Za-z0-9_]+/g) ?? []) {
+          if (ctx.measureText(word).width > room + 1) out.push(`${word} (${Math.round(ctx.measureText(word).width)}px in ${Math.round(room)}px)`)
+        }
+      }
+      return out
+    })
+    expect(cut).toEqual([])
+    const dir = process.env.WALNUT_TASK_DIR ? `${process.env.WALNUT_TASK_DIR}/shots` : `/tmp/thread-map/e2e/${test.info().project.name}`
+    await fs.mkdir(dir, { recursive: true })
+    await table.scrollIntoViewIfNeeded()
+    await table.screenshot({ path: `${dir}/narrow-table-${test.info().project.name}.png` })
+  })
+
   test('a narrow column: the rail is always there, clear of the text; only a click opens the list, never a hover or a focus (C3, C18, C19)', async ({ page }) => {
     const panel = await openAt(page, NARROW)
     const map = mapOf(panel)

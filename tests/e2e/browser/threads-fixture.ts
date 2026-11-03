@@ -401,6 +401,8 @@ export function buildMapSession(nowMs: number): ThreadsFixtureSession & { ids: R
     '| Buffer | the flush worker, once per tick | nothing until the page lands |',
     '| Page | one worker per slot | the newest version it can prove |',
     '| Index | the compactor, every minute | a pointer to the page it trusts |',
+    // A long word beside long prose: the shape a narrow pane squeezed into one letter per line.
+    '| FLUSH_CONCURRENCY | at most six workers at once, one per slot, never two for the same slot, each holding the slot lock for one tick | the slot lock decides; a second worker waits for the next tick and then reads the newest version |',
   ].join('\n');
   const code = '```ts\nfunction flush(page: Page, index: Index): void {\n  if (page.version <= index.versionOf(page.slot)) return; // an older copy never wins\n  index.write(page.slot, page.version, checksum(page.bytes));\n}\n```';
   const turns: Array<[string, string, string]> = [
