@@ -1361,7 +1361,8 @@ function runWnMinimal(argv, stdinText) {
     } catch (e) { fresh = false; }
     if (markFd !== null) { try { fs.closeSync(markFd); } catch (e) {} }
     if (!fresh || Date.now() >= wnRideUntil) return false;
-    if (!wnRideTold) { wnRideTold = true; errOut('walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'); }
+    // To a terminal only: a caller that captures stderr would read it into the answer (twin of wn-cli.ts noticeToStderr).
+    if (!wnRideTold && process.stderr.isTTY === true) { wnRideTold = true; errOut('walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'); }
     setTimeout(wnConnect, 500);
     return true;
   };
@@ -1375,7 +1376,7 @@ function runWnMinimal(argv, stdinText) {
   var wnWaitEnv = Number(process.env.WALNUT_CLI_WAIT_MS || '');
   var waitMs = op === 'tools.call' ? (Number.isFinite(wnWaitEnv) && wnWaitEnv > 0 ? Math.min(Math.floor(wnWaitEnv), 180000) : 90000) : 0;
   var socketTimeoutMs = waitMs ? waitMs + 10000 : 30000;
-  var waitNotice = waitMs ? setTimeout(function () {
+  var waitNotice = waitMs && process.stderr.isTTY === true ? setTimeout(function () {
     errOut('walnut: no answer yet; this call waits up to ' + Math.round(waitMs / 1000) + 's');
   }, 10000) : null;
   var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); clearTimeout(waitNotice); sock.destroy(); fn(); };
@@ -6603,7 +6604,7 @@ function userWalnutShimText() {
     + '    case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac\\n'
     + '    a=$(( $(date +%s) - m ))\\n'
     + '    [ "$a" -ge -5 ] && [ "$a" -lt 45 ] && [ $i -lt 120 ] || return 1\\n'
-    + '    [ $i -eq 0 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\\n'
+    + '    [ $i -eq 0 ] && [ -t 2 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\\n'
     + '    sleep 0.5 2>/dev/null || sleep 1\\n'
     + '    i=$((i+1))\\n'
     + '  done\\n'

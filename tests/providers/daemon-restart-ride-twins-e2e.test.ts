@@ -198,7 +198,8 @@ for (const twin of TWINS) {
       const r = await call
       expect(r.code).toBe(0)
       expect(JSON.parse(r.out)).toEqual({ sent: true })
-      expect(r.err.split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
+      // stderr is a pipe here, as for an agent: no notice in what it reads back.
+      expect(r.err).not.toContain(WAIT_LINE)
       expect(r.ms).toBeGreaterThanOrEqual(1_500)
       expect(server.requests).toHaveLength(1)
     }, 120_000)

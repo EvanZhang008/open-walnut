@@ -246,8 +246,32 @@ for (const [twin, text] of [['node twin', walnutShimText], ['bun twin', standalo
       const r = await run
       expect(r.out.trim()).toBe(`NEXT dir=${dir} hello`)
       expect(r.code).toBe(0)
-      expect(r.err.split('\n').filter((l) => l === WAIT)).toHaveLength(1)
+      // stderr is a pipe, as for an agent: the wait is silent.
+      expect(r.err).not.toContain(WAIT)
       expect(r.ms).toBeGreaterThanOrEqual(1_000)
+    }, 30_000)
+
+    it.runIf(process.platform === 'linux')('on a terminal it says once that it waits', async () => {
+      const dir = daemonDir('env-tty')
+      mark(dir, 0)
+      const t0 = Date.now()
+      const run = new Promise<{ out: string; code: number | null }>((resolve) => {
+        // util-linux `script` gives the shim a terminal; stdout and stderr both land in `out`.
+        const child = spawn('script', ['-qec', `'${path.join(shimDir, 'walnut')}' hello`, '/dev/null'], {
+          env: { PATH: guardedPath([shimDir], '/usr/bin:/bin'), HOME: home, WALNUT_DAEMON_DIR: dir },
+        })
+        let out = ''
+        child.stdout.on('data', (c) => { out += c })
+        child.on('close', (code) => resolve({ out, code }))
+      })
+      await new Promise((r) => setTimeout(r, 1_200))
+      nextDaemon(dir)
+      const r = await run
+      expect(r.code).toBe(0)
+      const lines = r.out.replace(/\r/g, '').split('\n')
+      expect(lines.filter((l) => l === WAIT)).toHaveLength(1)
+      expect(lines).toContain(`NEXT dir=${dir} hello`)
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(1_000)
     }, 30_000)
 
     it('a stale, garbled or absent mark fails at once with the old message', async () => {
@@ -268,7 +292,7 @@ for (const [twin, text] of [['node twin', walnutShimText], ['bun twin', standalo
       mark(dir, 43)
       const r = await start({ WALNUT_DAEMON_DIR: dir })
       expect(r.code).toBe(6)
-      expect(r.err).toContain(WAIT)
+      expect(r.err).not.toContain(WAIT)
       expect(r.err).toContain('walnut: no Walnut daemon on this host')
       expect(r.ms).toBeGreaterThanOrEqual(1_000)
       expect(r.ms).toBeLessThan(6_000)

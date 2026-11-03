@@ -5581,7 +5581,7 @@ function userWalnutShimText(): string {
     + '    case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac\n'
     + '    a=$(( $(date +%s) - m ))\n'
     + '    [ "$a" -ge -5 ] && [ "$a" -lt 45 ] && [ $i -lt 120 ] || return 1\n'
-    + '    [ $i -eq 0 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\n'
+    + '    [ $i -eq 0 ] && [ -t 2 ] && echo "walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)" >&2\n'
     + '    sleep 0.5 2>/dev/null || sleep 1\n'
     + '    i=$((i+1))\n'
     + '  done\n'

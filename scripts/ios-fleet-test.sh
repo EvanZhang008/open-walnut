@@ -78,10 +78,10 @@ mkdir -p "$LOCAL"
 REMOTE_REL=".local/state/open-walnut/tasks/$TASK_ID/ios-fleet/$RUN"
 
 # One op call; the JSON answer on stdout. A refusal (non-zero exit) is shown as it came.
-op() { # $1 = op, $2 = JSON args
-  local f="$LOCAL/.op-args.json" out
+op() { # $1 = op, $2 = JSON args; prints the answer's JSON only (a notice on stderr is not part of it)
+  local f="$LOCAL/.op-args.json" e="$LOCAL/.op-err" out
   printf '%s' "$2" > "$f"
-  out=$(walnut tools call "$1" "@$f" 2>&1 </dev/null) || { printf '%s\n' "$out" >&2; return 1; }
+  out=$(walnut tools call "$1" "@$f" 2>"$e" </dev/null) || { cat "$e" >&2; printf '%s\n' "$out" >&2; return 1; }
   printf '%s' "$out"
 }
 js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
@@ -250,7 +250,7 @@ while IFS=$'\t' read -r H NOTE; do
   break
 done <<< "$PICKS"
 
-rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.read-err"
+rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.op-err" "$LOCAL/.read-err"
 if [ -f "$LOCAL/out/summary.json" ]; then
   python3 - "$LOCAL/out/summary.json" <<'PY' >&2
 import json, sys

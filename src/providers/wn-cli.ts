@@ -499,10 +499,21 @@ export function daemonRestartingAt(socketPath: string, nowMs = Date.now()): bool
   }
 }
 
+/**
+ * Whether a waiting notice may go to stderr: only a person's terminal. A caller
+ * that captures the output (an agent's shell, `out=$(walnut ... 2>&1)`, a script
+ * parsing JSON) reads stderr with the answer, so a notice there broke the answer
+ * it then parsed (2026-11-03: a fleet script's host_exec_read waited 15 s, the
+ * 10 s notice landed in its JSON). Such a caller sees the answer, or the error.
+ */
+function noticeToStderr(): boolean {
+  return process.stderr.isTTY === true
+}
+
 /** One notice per process, however many waits it rides (the socket lookup, then the call). */
 let restartWaitTold = false
 function tellRestartWait(): void {
-  if (restartWaitTold) return
+  if (restartWaitTold || !noticeToStderr()) return
   restartWaitTold = true
   process.stderr.write(RESTART_WAIT_LINE + '\n')
 }
@@ -873,7 +884,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   let resp: GatewayResponse
   // A call may wait out a server restart (cliWaitMs); a list of ops does not.
   const waitMs = op === 'tools.call' ? cliWaitMs() : undefined
-  const waitNotice = waitMs ? setTimeout(() => {
+  const waitNotice = waitMs && noticeToStderr() ? setTimeout(() => {
     process.stderr.write(`walnut: no answer yet; this call waits up to ${Math.round(waitMs / 1000)}s\n`)
   }, CLI_WAIT_NOTICE_MS) : undefined
   waitNotice?.unref?.()

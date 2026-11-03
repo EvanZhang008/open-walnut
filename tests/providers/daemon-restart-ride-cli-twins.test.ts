@@ -41,7 +41,7 @@ const markPath = () => path.join(daemonDir(), 'restarting')
 const freshMark = () => fs.writeFileSync(markPath(), String(Math.floor(Date.now() / 1000)))
 
 /** A gateway that answers the n-th request with answers[n] (the last one from then on), keeping every request. */
-async function gateway(answers: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+async function gateway(answers: Array<Record<string, unknown>>, delayMs = 0): Promise<Array<Record<string, unknown>>> {
   const seen: Array<Record<string, unknown>> = []
   const server = net.createServer((sock) => {
     let buf = ''
@@ -50,7 +50,8 @@ async function gateway(answers: Array<Record<string, unknown>>): Promise<Array<R
       const nl = buf.indexOf('\n')
       if (nl === -1) return
       seen.push(JSON.parse(buf.slice(0, nl)) as Record<string, unknown>)
-      sock.end(JSON.stringify(answers[Math.min(seen.length - 1, answers.length - 1)]) + '\n')
+      const answer = JSON.stringify(answers[Math.min(seen.length - 1, answers.length - 1)]) + '\n'
+      setTimeout(() => sock.end(answer), delayMs)
     })
     sock.on('error', () => { /* the CLI went */ })
   })
@@ -61,8 +62,12 @@ async function gateway(answers: Array<Record<string, unknown>>): Promise<Array<R
 }
 
 function cli(twin: Twin, args: string[], extra: Record<string, string> = {}, injected = true): Promise<{ out: string; err: string; code: number | null; ms: number }> {
-  const t0 = Date.now()
   const [cmd, argv] = twin.command('walnut', ...args)
+  return runIn(cmd, argv, { ...(injected ? { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' } : {}), ...extra })
+}
+
+function runIn(cmd: string, argv: string[], extra: Record<string, string>): Promise<{ out: string; err: string; code: number | null; ms: number }> {
+  const t0 = Date.now()
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -72,7 +77,6 @@ function cli(twin: Twin, args: string[], extra: Record<string, string> = {}, inj
     WALNUT_CLI_WAIT_MS: '30000',
     WALNUT_AGENT_SOCKET: undefined,
     WALNUT_SESSION_ID: undefined,
-    ...(injected ? { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' } : {}),
     ...extra,
   }
   const child = spawn(cmd, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -114,7 +118,8 @@ for (const twin of TWINS) {
       expect(r.code).toBe(0)
       expect(JSON.parse(r.out)).toEqual({ sent: true })
       expect(seen).toHaveLength(3)
-      expect(r.err.split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
+      // stderr is a pipe here, as for an agent: no notice in what it reads back.
+      expect(r.err).not.toContain(WAIT_LINE)
     }, 60_000)
 
     it('a stopping answer with no mark is the answer, at once, and its detail is not printed as a result', async () => {
@@ -152,6 +157,29 @@ for (const twin of TWINS) {
       expect(seen).toHaveLength(3)
     }, 90_000)
 
+    it('a call answered after more than 10 s prints only its answer when its output is captured', async () => {
+      // 2026-11-03: the 10 s notice went to stderr, and a script reading `2>&1` parsed it as JSON.
+      newRoot()
+      await gateway([{ ok: true, result: { sent: true } }], 10_800)
+      const r = await cli(twin, CALL)
+      expect(r.code).toBe(0)
+      expect(JSON.parse(r.out)).toEqual({ sent: true })
+      expect(r.err).toBe('')
+    }, 60_000)
+
+    it.runIf(process.platform === 'linux')('on a terminal it says once that it waits for the next daemon', async () => {
+      newRoot()
+      freshMark()
+      await gateway([STOPPING, STOPPING, { ok: true, result: { sent: true } }])
+      // util-linux `script` gives the CLI a terminal; its stdout and stderr both land in `out`.
+      const [cmd, argv] = twin.command('walnut', ...CALL)
+      const line = [cmd, ...argv].map((a) => `'${a}'`).join(' ')
+      const r = await runIn('script', ['-qec', line, '/dev/null'], { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' })
+      expect(r.code).toBe(0)
+      expect(r.out.replace(/\r/g, '').split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
+      expect(r.out).toContain('"sent": true')
+    }, 60_000)
+
     if (twin.full) {
       it('env-less, with no socket yet: it waits for the next daemon\'s socket, still checked owner-only', async () => {
         newRoot()
@@ -163,7 +191,7 @@ for (const twin of TWINS) {
         expect(r.code).toBe(0)
         expect(JSON.parse(r.out)).toEqual({ sent: true })
         expect(seen[0]).toMatchObject({ sid: 'external' })
-        expect(r.err.split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
+        expect(r.err).not.toContain(WAIT_LINE)
         expect(r.ms).toBeGreaterThanOrEqual(1_400)
       }, 60_000)
     }
