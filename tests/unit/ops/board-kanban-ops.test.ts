@@ -29,8 +29,8 @@ function run(name: string, reply: Reply) {
   }
 }
 
-const ME = { kind: 'worker', task: { id: 'lead01', title: 'Payments resolver group' } }
-const OWN = { task_id: 'lead01', title: 'Payments resolver group', self: true, has_board: true }
+const ME = { kind: 'worker', task: { id: 'lead01', title: 'Payments queue' } }
+const OWN = { task_id: 'lead01', title: 'Payments queue', self: true, has_board: true }
 const KANBAN = { lanes_effective: TRIAGE_LANES, cards: {}, team: [{ id: 'w1', phase: 'IN_PROGRESS' }] }
 const REFUSED = 'Walnut API error (status_set_by_user): The user placed this card in "Waiting on CR" at 2026-10-04T08:00:00.000Z. '
   + 'Leave lane out to keep their pick, or pass override_user: true to replace it. '

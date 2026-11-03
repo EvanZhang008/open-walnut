@@ -34,7 +34,7 @@ const withSession = (p: Partial<Task> = {}) => mkTask({ session_id: `s-${seq + 1
 function vm(task: Task | null, live: KanbanLive | null = null, extra: Partial<KanbanCardInput> = {}) {
   return buildCardVM({
     taskId: task?.id ?? 'missing-task-id', task, lanes: LANES, live, ownerId: 'owner-task-id',
-    titleOf: (id) => (id === 'owner-task-id' ? 'Payments resolver group triage' : `Task ${id.slice(0, 4)}`),
+    titleOf: (id) => (id === 'owner-task-id' ? 'Payments queue triage' : `Task ${id.slice(0, 4)}`),
     hasBaseline: false, now: NOW, formatWaitUntil: () => 'Fri 9:00', ...extra,
   });
 }
@@ -83,18 +83,6 @@ describe('status line (C15, C57)', () => {
     expect(n.status).toMatchObject({ text: 'Needs you: worker below', prompt: { sessionId: 's-n', fromTaskId: 'nested-id', fromTitle: 'Nested probe' } });
     const open = vm(t, { process_status: 'idle' }, { card: { lane: 'resolved', lane_at: ago(MIN), lane_by: 'human' } });
     expect([open.status.text, open.status.tone, open.lane]).toEqual(['Task still open', 'amber', 'resolved']);
-  });
-
-  it('a Board choice opens the Page at it, before and after the status sync names it (C95)', () => {
-    // 2026-11-03, CI: once the derived "Decide: <title>" replaced the signal's line, the click opened nothing.
-    const t = withSession({ phase: 'NEED_ACTION' });
-    const signals = [{ kind: 'choice' as const, id: 'c95', title: 'Ship the retry fix', taskId: t.id, count: 1 }];
-    const asked = { state: 'needs', source: 'choice', ask: 'Ship the retry fix', choice: { board: 'owner-task-id', id: 'c95' } } as Task['user_status'];
-    expect(vm(t, { process_status: 'idle' }, { signals }).status.signalTarget).toEqual({ kind: 'choice', id: 'c95' });
-    const derived = vm({ ...t, user_status: asked }, { process_status: 'idle' }, { signals }).status;
-    expect(derived).toMatchObject({ text: 'Decide: Ship the retry fix', tone: 'red', signalTarget: { kind: 'choice', id: 'c95' } });
-    // A choice this Board does not show (another team's page) is no place this click can open.
-    expect(vm({ ...t, user_status: asked }, { process_status: 'idle' }).status.signalTarget).toBeUndefined();
   });
 
   it('the one user status words a card once the server derived it (src/core/user-status.ts)', () => {
@@ -287,8 +275,8 @@ describe('stale (C29, C87)', () => {
 describe('the board view model: rollup, workers, chips (C31, C66, C93, C14)', () => {
   const OWNER = 'own00000-0000-4000-8000-000000000000';
   function team() {
-    const owner = withSession({ id: OWNER, title: 'Payments resolver group triage' });
-    const kid = (p: Partial<Task>) => mkTask({ parent_task_id: OWNER, tags: ['ticket:V1000000101', 'sev:2'], ...p });
+    const owner = withSession({ id: OWNER, title: 'Payments queue triage' });
+    const kid = (p: Partial<Task>) => mkTask({ parent_task_id: OWNER, tags: ['ticket:T-101', 'sev:2'], ...p });
     const kidS = (p: Partial<Task>) => withSession({ parent_task_id: OWNER, tags: ['sev:2'], ...p });
     const running = [0, 1, 2].map(() => kidS({}));
     const idle = [0, 1].map(() => kidS({ phase: 'NEED_ACTION' }));

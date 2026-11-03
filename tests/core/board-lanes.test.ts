@@ -15,7 +15,7 @@ const T = (iso: string) => `2026-10-0${iso}Z`;
 
 describe('templates (C2)', () => {
   it('a team with a ticket tag gets the triage lanes, in order', () => {
-    expect(pickLaneTemplate(['sev:2', 'ticket:V1000000101'])).toBe('triage');
+    expect(pickLaneTemplate(['sev:2', 'ticket:T-101'])).toBe('triage');
     expect(pickLaneTemplate(['Ticket-Id:V1000000102'])).toBe('triage');
     expect(templateLanes('triage').map((l) => l.name)).toEqual(
       ['New', 'Investigating', 'Mitigating', 'Waiting on others', 'Waiting on CR', 'Resolved']);
@@ -31,10 +31,10 @@ describe('templates (C2)', () => {
 
   it('stored lanes win over the tags and keep their template', () => {
     const stored: BoardLane[] = [{ id: 'todo', name: 'Queue', kind: 'todo' }, { id: 'done', name: 'Done', kind: 'done' }];
-    const r = effectiveLanes(stored, ['ticket:V1000000101'], 'general');
+    const r = effectiveLanes(stored, ['ticket:T-101'], 'general');
     expect(r.lanes.map((l) => l.name)).toEqual(['Queue', 'Done']);
     expect(r.template).toBe('general');
-    expect(effectiveLanes(null, ['ticket:V1000000101']).template).toBe('triage');
+    expect(effectiveLanes(null, ['ticket:T-101']).template).toBe('triage');
     // Copies: editing the result never edits the frozen template.
     templateLanes('triage')[0].name = 'Changed';
     expect(TRIAGE_LANES[0].name).toBe('New');

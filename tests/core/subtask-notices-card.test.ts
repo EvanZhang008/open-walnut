@@ -31,7 +31,7 @@ let bareKid: string
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
-  owner = await task('Payments resolver group')
+  owner = await task('Payments queue')
   worker = await task('V1000000501 refund stuck', owner, ['ticket:V1000000501'])
   await linkSessionSlot(worker, 'aaaaaaaa-0000-0000-0000-000000000501', 'exec')
   await updateTask(worker, { phase: 'NEED_ACTION' })
