@@ -36,19 +36,6 @@ export function reviewGutterOf(a: { available: boolean; collapsed: boolean; card
   return a.collapsed ? 'collapsed' : 'open';
 }
 
-/**
- * Is a passage on screen or about to be? `tops` are the passages' tops relative
- * to the visible box's top, `height` the box's. A card hangs below its passage
- * (up to about a screen), so a passage up to a screen above the box counts as on
- * screen. A column not shown comes when one is within half a screen more of
- * that; a shown one goes only when none is within a whole screen more, so
- * scrolling past a card reflows the text once each way.
- */
-export function passageNearView(tops: readonly number[], height: number, shown: boolean): boolean {
-  const reach = shown ? height : height / 2;
-  return tops.some((t) => t >= -reach - height && t <= height + reach);
-}
-
 export interface ReviewStackItem {
   key: string;
   /** The passage's top, in the layer's coordinates. */

@@ -4,7 +4,7 @@
  * a card shows.
  */
 import { describe, expect, it } from 'vitest';
-import { passageNearView, plainExcerpt, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
+import { plainExcerpt, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
 
 const tops = (m: Map<string, number>) => Object.fromEntries(m);
 
@@ -18,26 +18,6 @@ describe('reviewSidebarOn', () => {
     expect(reviewSidebarOn({ ...base, conversationMode: false })).toBe(false);
     expect(reviewSidebarOn({ ...base, hasQuestions: false })).toBe(false);
     expect(reviewSidebarOn({ ...base, boxWidth: REVIEW_MIN_BOX - 1 })).toBe(false);
-  });
-});
-
-describe('passageNearView', () => {
-  // 2026-11-03, the user: the text should be almost the whole width while no card
-  // is near; a 360px blank column sat beside a long conversation's text.
-  const H = 800;
-  it('comes for a passage on screen or within half a screen below, and for one whose card may still show above', () => {
-    expect(passageNearView([100], H, false)).toBe(true);
-    expect(passageNearView([H + H / 2], H, false)).toBe(true);
-    expect(passageNearView([H + H / 2 + 1], H, false)).toBe(false);
-    expect(passageNearView([-H - H / 2], H, false)).toBe(true);
-    expect(passageNearView([-H - H / 2 - 1], H, false)).toBe(false);
-    expect(passageNearView([], H, false)).toBe(false);
-  });
-  it('once shown, goes only when none is within a whole screen (no reflow back and forth)', () => {
-    expect(passageNearView([H * 2], H, true)).toBe(true);
-    expect(passageNearView([H * 2 + 1], H, true)).toBe(false);
-    expect(passageNearView([-H * 2], H, true)).toBe(true);
-    expect(passageNearView([-H * 2 - 1, H * 3], H, true)).toBe(false);
   });
 });
 

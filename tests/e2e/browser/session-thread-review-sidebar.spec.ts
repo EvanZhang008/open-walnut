@@ -260,8 +260,8 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(panel.locator('.session-history[data-review-sidebar="collapsed"]')).toHaveCount(1)
     await expect(sidebarCards(panel)).toHaveCount(0)
     await expect(bar).toHaveAttribute('aria-label', `Show questions (${REVIEW_COUNT})`)
-    const textRightFolded = await panel.evaluate((root) => root.querySelector('.session-history [data-message-id][data-msg-role="assistant"] .session-msg-content')!.getBoundingClientRect().right)
-    expect(textRightFolded - textRightOpen, 'the text widened by the column').toBeGreaterThan(250)
+    // (The sheet grows outward with the column open and comes back when it folds,
+    // so the text's own width barely moves: the sheet test below pins that.)
     const strip = (await bar.boundingBox())!
     const historyBox = (await history.boundingBox())!
     expect(strip.x + strip.width, 'the strip sits at the right edge').toBeGreaterThan(historyBox.x + historyBox.width - 80)
@@ -280,6 +280,51 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(again.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
     await expect(sidebarCards(again)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
     expect(await page.evaluate(() => localStorage.getItem('walnut:review-sidebar.v1'))).toBe('open')
+  })
+
+  test('the sheet grows outward while the column is open and comes back when it folds; the chat keeps its width; a narrow window keeps its gutter', async ({ page }) => {
+    // 2026-11-03, the user: "normally each side is ten percent; with this review it
+    // can grow outward from there". The sheet's side margins: a tenth of the page
+    // area (fullscreen-tab.css), less half the column (320px) while it is open,
+    // never under the 12px gutter.
+    const panel = await openFullscreen(page)
+    await page.setViewportSize({ width: 2200, height: 1000 })
+    await page.evaluate(() => localStorage.removeItem('walnut:review-sidebar.v1'))
+    await goFullscreen(panel)
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1, { timeout: 15_000 })
+    const geometry = () => panel.evaluate((root) => {
+      const left = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fullscreen-left')) || 0
+      const r = root.getBoundingClientRect()
+      const text = root.querySelector('.session-history [data-message-id][data-msg-role="assistant"] .session-msg-content')!.getBoundingClientRect()
+      return { area: innerWidth - left, marginLeft: r.left - left, marginRight: innerWidth - r.right, width: r.width, text: text.width }
+    })
+    const base = (area: number) => Math.max(12, Math.min(area * 0.1, (area - 960) / 2))
+    const open = await geometry()
+    expect(Math.abs(open.marginLeft - Math.max(12, base(open.area) - 160)), 'open: the left margin gave half the column').toBeLessThan(2)
+    expect(Math.abs(open.marginRight - open.marginLeft), 'centred').toBeLessThan(2)
+    await shot(page, '6a-sheet-grown')
+    // Folded: back to a tenth on each side.
+    await panel.getByTestId('thread-review-bar').click()
+    await expect(panel.locator('.session-history[data-review-sidebar="collapsed"]')).toHaveCount(1)
+    const folded = await geometry()
+    expect(Math.abs(folded.marginLeft - base(folded.area)), 'folded: a tenth of the area').toBeLessThan(2)
+    expect(open.width - folded.width, 'the sheet grew by the whole column').toBeGreaterThan(318)
+    expect(Math.abs(open.text - folded.text), 'the chat kept its width').toBeLessThan(40)
+    await shot(page, '6b-sheet-folded')
+    // Open again: out again.
+    await panel.getByTestId('thread-review-bar').click()
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
+    expect(Math.abs((await geometry()).width - open.width)).toBeLessThan(2)
+    // A window with less room: the margins give what they have, down to the gutter.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await expect.poll(async () => Math.round((await geometry()).marginLeft)).toBe(Math.round(Math.max(12, base((await geometry()).area) - 160)))
+    await shot(page, '6c-sheet-1440')
+    // A narrow window: the plain gutter on each side, whatever the column does.
+    await page.setViewportSize({ width: 1000, height: 800 })
+    await expect.poll(async () => Math.round((await geometry()).marginLeft)).toBe(12)
+    expect(Math.round((await geometry()).marginRight)).toBe(12)
+    await shot(page, '6d-sheet-narrow')
+    await page.evaluate(() => localStorage.removeItem('walnut:review-sidebar.v1'))
   })
 
   test('a click on a card, its passage or Enter opens the full question over the card; Quote in chat', async ({ page }) => {
@@ -561,32 +606,14 @@ test.describe('asks on turns that are not loaded', () => {
     await expect(panel.locator('[data-testid="thread-review-bar"]')).toHaveCount(0)
     await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
 
-    // Load the turn. Its asks are now in the DOM but far above the visible box
-    // (the timeline holds its place at the bottom): a column only takes its room
-    // while an asked passage is near the view (passageNearView), so the text
-    // still has the full width.
+    // Load the turn: its two asks get their cards and the bar, which folds to a band
+    // counting them.
     await expect.poll(async () => {
       if (await history.getByText(REVIEW_OLD_PASSAGES[0].slice(0, 20)).count()) return true
       const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
       if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
       return false
     }, { timeout: 20_000, intervals: [300] }).toBe(true)
-    // How many screens above the visible box the lower asked passage sits.
-    const screensAbove = async () => {
-      const box = (await history.boundingBox())!
-      const top = (await passageRects(panel, REVIEW_OLD_PASSAGES[1].slice(0, 30)))[0].top - box.y
-      return -top / box.height
-    }
-    // A column comes for a passage whose top is less than 1.5 screens above the
-    // box's top, and goes once none is within 2 (passageNearView).
-    expect(await screensAbove(), 'the loaded asks sit well above the view').toBeGreaterThan(1.6)
-    await page.waitForTimeout(600)
-    await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
-    await expect(sidebarCards(panel)).toHaveCount(0)
-    // Scrolled to them: the column opens with their two cards and the bar, which
-    // folds to a band counting them.
-    await centreInHistory(page, panel, REVIEW_OLD_PASSAGES[0].slice(0, 30), { at: 0.3 })
-    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1, { timeout: 15_000 })
     await expect(sidebarCards(panel)).toHaveCount(2, { timeout: 15_000 })
     const bar = panel.locator('[data-testid="thread-review-bar"]')
     await bar.click()
@@ -599,15 +626,5 @@ test.describe('asks on turns that are not loaded', () => {
     await page.waitForTimeout(400)
     await page.screenshot({ path: `${shots}/open-column.png` })
     await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
-
-    // Scrolled far below every asked passage (the last turn), the column gives
-    // its room back: no gutter, no cards; back up, it comes again with its card.
-    await centreInHistory(page, panel, REVIEW_OLD_READY, { at: 0.5 })
-    expect(await screensAbove(), 'the view is more than two screens below the asks').toBeGreaterThan(2.1)
-    await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0, { timeout: 15_000 })
-    await expect(sidebarCards(panel)).toHaveCount(0)
-    await centreInHistory(page, panel, REVIEW_OLD_PASSAGES[0].slice(0, 30), { at: 0.3 })
-    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1, { timeout: 15_000 })
-    await expect(sidebarCards(panel).filter({ hasText: 'Old point 1' })).toHaveCount(1)
   })
 })

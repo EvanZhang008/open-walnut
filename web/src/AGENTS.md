@@ -456,10 +456,10 @@ show inline after the open ones, other completed hits that show the query fold i
   history box at least `REVIEW_MIN_BOX` (880px) wide, one card per asked passage sits in a
   right gutter (`data-review-sidebar="open"|"collapsed"` on `.session-history`; no attribute and no
   room at all while no card is on screen, held 1.2 s so a re-derive to nothing never reflows the
-  text; open, the column takes its room only while a passage is near the visible box,
-  `passageNearView`, so a long conversation with a few asks reads at full width between them,
-  2026-11-03, the user: "almost 100%", and the top row on screen holds still when the text
-  rewraps), level with its passage in content
+  text; open, the sheet itself grows outward by the column's width, its side margins shrinking
+  from a tenth of the page area down to the 12px gutter at most, so the chat keeps its width:
+  `fullscreen-tab.css`, 2026-11-03, the user: "once there is this review, it can grow outward";
+  a narrow window has no margin to give and the text narrows as before), level with its passage in content
   coordinates (measured from the marks' ranges at each re-derive and resize, never per frame) and
   pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A review
   card is its head row (number, title, rounds, state) over the question's WHOLE conversation, the
