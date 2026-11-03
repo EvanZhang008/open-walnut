@@ -1290,6 +1290,9 @@ if (outputFormat === 'stream-json') {
       const partialText = parts[2] === 'dense'
         ? Array.from({ length: 80 }, (_, i) => `Section ${i + 1}: ${'The current turn retains its context and pending work. '.repeat(8)}`).join('\n\n')
         : 'Starting a long answer that will be cut short';
+      // A strict Ask here question's answer opens with its tag, as the hint asks
+      // (the turn is cut before the closing tag, so the tag stays open).
+      const opening = strictAsk ? `<walnut-ask-answer thread="${strictAsk.thread}"${strictAsk.name ? ` name="${strictAsk.name}"` : ''}>\n` : '';
       // `:sticky` — the CLI ACKs the interrupt but the turn does not end (a tool
       // ignoring its abort signal). Pins the repeat-Stop escalation.
       const sticky = parts[3] === 'sticky';
@@ -1303,8 +1306,8 @@ if (outputFormat === 'stream-json') {
         const wrap = (ev) => ({ type: 'stream_event', event: ev, session_id: sid, parent_tool_use_id: null });
         emit(wrap({ type: 'message_start', message: { id: msgId, role: 'assistant', content: [], model: 'mock-model', usage: { input_tokens: 10, output_tokens: 0 } } }));
         emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
-        emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: partialText } }));
-        streamedPartial = { msgId, text: partialText };
+        emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: opening + partialText } }));
+        streamedPartial = { msgId, text: opening + partialText };
       }
       const natural = setTimeout(() => {
         onInterrupt = null;
