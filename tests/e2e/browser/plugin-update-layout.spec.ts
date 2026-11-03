@@ -309,8 +309,9 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   const disabled = page.getByTestId('plugin-update-acme-tracker')
   await expect(disabled).toBeDisabled()
   await backToApps(page)
-  // An enabled secondary button on the page: the Sources card's Copy install link.
-  const enabled = page.locator('[data-testid="plugin-store-sources"] button.settings-button-default:not([disabled])').first()
+  // An enabled secondary button on the page: a source head's Copy install link (the Apps page
+  // groups plugins by source, each installed source with its verbs on its head).
+  const enabled = page.getByTestId('plugin-source-native-plugin-repo').locator('button.settings-button-default:not([disabled])').first()
   for (const theme of ['Light', 'Dark'] as const) {
     // Theme is picked in Settings; the sidebar's Apps entry lands back on the card grid.
     await pickTheme(page, theme)
@@ -463,8 +464,11 @@ test('(N2-3) a clone that disappears reads Not installed here, keeps its name, a
     const sourceChip = page.getByTestId('update-chip-source-native-plugin-repo')
     await expect(sourceChip).toHaveAttribute('data-update-kind', 'missing', { timeout: 30_000 })
     await expect(sourceChip).toHaveText(/Not installed here/i)
-    // The display name, never the slug, on the card title.
-    await expect(card.locator('.plugin-store-source-title .settings-addons-ellipsis')).toHaveText('Walnut Plugin Demo')
+    // The head reads where the source comes from (the Apps page groups plugins by source since
+    // f7a70a356), and the clone that is gone keeps its name: the plugins it carried last time
+    // (the server's memo) name its Remove.
+    await expect(card.locator('.plugin-store-source-title .plugin-store-origin')).toContainText('git, ')
+    await expect(card.getByRole('button', { name: 'Remove Walnut Plugin Demo' })).toBeVisible()
     const restore = card.getByRole('button', { name: 'Restore' })
     await expect(restore).toBeVisible()
     await expect(restore).toHaveClass(/btn-primary/)

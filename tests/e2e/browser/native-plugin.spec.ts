@@ -1021,13 +1021,15 @@ test.describe('update status', () => {
     const cardChip = page.getByTestId('update-chip-source-native-plugin-repo')
     await expect(cardChip).toHaveAttribute('data-update-kind', 'current', { timeout: 30_000 })
     const card = page.getByTestId('plugin-source-native-plugin-repo')
-    await expect(card.locator('.plugin-store-source-title .settings-addons-ellipsis').first()).toHaveText('Walnut Plugin Demo')
-    // One plugin in the source: its version and status sit on the title row, and the name is
-    // not repeated on a list of one (N16).
+    // The Apps page groups plugins by source (f7a70a356): the source's head carries where it comes
+    // from and its verbs, and its one plugin is the card under it, in the same section. The name
+    // and the plugin's state are the card's, never repeated on the head (N16).
+    const section = page.getByTestId('apps-source-native-plugin-repo')
+    await expect(section.getByTestId('plugin-card-walnut-demo')).toContainText('Walnut Plugin Demo')
     await expect(card.locator('li')).toHaveCount(0)
-    await expect(card.getByTestId('plugin-source-status-native-plugin-repo')).toHaveText(/^(active|restart to activate)$/i)
-    await expect(card.locator('.plugin-store-version')).toHaveText(/^v\d/)
-    expect((await card.innerText()).split('Walnut Plugin Demo').length - 1).toBe(1)
+    await expect(card.getByTestId('plugin-source-status-native-plugin-repo')).toHaveCount(0)
+    expect(await card.innerText()).not.toContain('Walnut Plugin Demo')
+    expect((await section.innerText()).split('Walnut Plugin Demo').length - 1).toBe(1)
     const cardText = await card.innerText()
     expect(cardText).not.toMatch(/https?:\/\/|git@|file:\/\/|@ [0-9a-f]{7}|sha(256|512)-/)
     expect(cardText).toMatch(/git, /)

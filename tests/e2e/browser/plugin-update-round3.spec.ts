@@ -253,22 +253,27 @@ test('(N3-3)(N3-15) at 960 the dropped controls sit flush right on every row, th
   await shot(page, 'detail-960', page.getByTestId('plugin-detail'))
   await backToApps(page)
 
-  // Sources card: title line, then origin line, then the controls (flush right), like a row.
+  // A source's head (the Apps page groups plugins by source since f7a70a356): one title line,
+  // its origin with the chip, then the controls, flush right like a row. Beside the title they
+  // never overlap it; dropped under it they sit flush right.
   const card = page.getByTestId('plugin-source-native-plugin-repo')
   await card.scrollIntoViewIfNeeded()
-  const [title, origin, actions] = [card.locator('.plugin-store-source-title'), card.locator('.settings-row-copy .plugin-store-origin'), card.locator('.plugin-store-source-actions')]
+  const [title, origin, actions] = [card.locator('.plugin-store-source-title'), card.locator('.plugin-store-source-title .plugin-store-origin'), card.locator('.plugin-store-source-actions')]
   const [t, o, a] = [await rect(title), await rect(origin), await rect(actions)]
-  expect(o.top).toBeGreaterThanOrEqual(t.bottom - 1)
+  // The origin is the title's own words, not a line of its own.
+  expect(o.top).toBeGreaterThanOrEqual(t.top - 1)
+  expect(o.bottom).toBeLessThanOrEqual(t.bottom + 1)
   const cardRight = await card.evaluate((el) => el.getBoundingClientRect().right - parseFloat(getComputedStyle(el).paddingRight))
   expect(a.right).toBeLessThanOrEqual(cardRight + 1)
-  if (a.top >= o.bottom - 1) expect(Math.abs(a.right - cardRight)).toBeLessThanOrEqual(1.5)
-  else expect(a.left).toBeGreaterThanOrEqual(Math.max(t.right, o.right) - 1)
+  if (a.top >= t.bottom - 1) expect(Math.abs(a.right - cardRight)).toBeLessThanOrEqual(1.5)
+  else expect(a.left).toBeGreaterThanOrEqual(t.right - 1)
   // And the same rule at a width where the card must drop its controls.
   await page.setViewportSize({ width: 700, height: 800 })
   await card.scrollIntoViewIfNeeded()
-  const [o2, a2] = [await rect(origin), await rect(actions)]
+  const [t2, a2] = [await rect(title), await rect(actions)]
   const cardRight2 = await card.evaluate((el) => el.getBoundingClientRect().right - parseFloat(getComputedStyle(el).paddingRight))
-  if (a2.top >= o2.bottom - 1) expect(Math.abs(a2.right - cardRight2)).toBeLessThanOrEqual(1.5)
+  if (a2.top >= t2.bottom - 1) expect(Math.abs(a2.right - cardRight2)).toBeLessThanOrEqual(1.5)
+  else expect(a2.left).toBeGreaterThanOrEqual(t2.right - 1)
   // The plugin's page in a narrow group (under 600px: 820 wide, sidebar expanded, above the
   // phone layout): rows wrap their controls, and the dropped ones sit flush right.
   await page.setViewportSize({ width: 820, height: 800 })

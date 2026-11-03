@@ -243,7 +243,10 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   })
   await page.route('**/api/tasks?*', async (route) => { await new Promise((r) => setTimeout(r, 1500)); await route.continue() })
   await page.reload()
-  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(LED))
+  // A whole new mount (the dev bundle again, the task list held 1.5 s above): the first load's
+  // budget, not the 5 s default (CI: one attempt ran out on a loaded runner). What is graded is
+  // the order of the views, which __topViews records from the first frame however long it takes.
+  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(LED), { timeout: 30_000 })
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
   await page.waitForTimeout(2_000)
   expect(await page.evaluate(() => (window as unknown as { __topViews: string[] }).__topViews)).toEqual(['brief'])
