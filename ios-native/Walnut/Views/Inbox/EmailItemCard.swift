@@ -37,6 +37,13 @@ struct EmailItemCard: View {
             if let reason = item.unavailableReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
             if store.isMirror(key) { Text("Last saved status. Connect to the primary Walnut to act.").font(.caption) }
             if !state.supported { Text(state.error ?? "Email actions need a newer server").font(.caption) }
+            // Talk to CEO and New task lead every usable email (the web's ContentActionButtons).
+            if let content = item.contentItem {
+                ContentActionButtons(item: content, sentLabel: item.dateLabel == "Date unavailable" ? nil : item.dateLabel,
+                                     identifier: "inbox.item.\(item.id)")
+                    // Its status belongs to this email, not to the card's place in the list.
+                    .id(item.id)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(item.visibleActions) { action in actionButton(action, state: state) }
             }

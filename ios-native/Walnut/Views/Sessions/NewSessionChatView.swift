@@ -133,7 +133,7 @@ struct NewSessionChatView: View {
                     // Draft is keyed to the DRAFT, not to a session id that
                     // doesn't exist yet, so text typed before launching survives
                     // a path change and a backgrounding.
-                    draftKey: "draft:new-session",
+                    draftKey: ContentActionLink.newSessionDraftKey,
                     // No live model pill (`modelSource`): a draft has no session to
                     // switch. Its own model and mode pills take that seat, and both
                     // choices RIDE the create call. At the accessibility sizes they

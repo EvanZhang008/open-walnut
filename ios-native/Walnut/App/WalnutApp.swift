@@ -271,6 +271,7 @@ struct MainTabView: View {
     /// Approvals a script waits on (`walnut approve`): their sheet opens over any tab.
     @State private var approvals = ApprovalCenter.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var contentLink = ContentActionLink.shared
 
     var body: some View {
         TabView(selection: $selection) {
@@ -377,6 +378,14 @@ struct MainTabView: View {
         // mailbox and opens that letter. Only the tab switch happens here.
         .onChange(of: letterLink.pending) { _, request in
             if request != nil { selection = .inbox }
+        }
+        // Talk to CEO's "Open chat" brings Chat forward, New task brings Tasks forward; each
+        // tab takes its own request (ChatView opens the CEO's session, TasksTabView the draft).
+        .onChange(of: contentLink.chat) { _, request in
+            if request != nil { selection = .chat }
+        }
+        .onChange(of: contentLink.draft) { _, request in
+            if request != nil { selection = .tasks }
         }
         // Any letter push (a silent one included) refreshes the list, so the tab
         // badge is right even when the user is reading something else. This does

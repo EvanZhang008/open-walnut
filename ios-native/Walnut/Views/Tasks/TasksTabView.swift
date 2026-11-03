@@ -29,6 +29,8 @@ struct TasksTabView: View {
     @State private var draftReturnsToBoard = false
     @State private var draftReturnTask: Task<Void, Never>?
     @State private var draftTabBarHidden = false
+    /// New task on an email (`ContentActionButtons`): its words go into the draft.
+    @State private var contentLink = ContentActionLink.shared
 
     var body: some View {
         @Bindable var router = router
@@ -102,6 +104,12 @@ struct TasksTabView: View {
             }
             .presentationDetents([.large])
         }
+        // MainTabView has brought this tab forward: the email's words join whatever the draft
+        // already holds (never replacing what the person typed), and the task-less draft opens.
+        .onChange(of: contentLink.draft) { _, request in
+            if request != nil { openContentDraft() }
+        }
+        .onAppear { if contentLink.draft != nil { openContentDraft() } }
         // Back (or any pop) drops a lookup the page it started on no longer wants.
         .onChange(of: path) { router.supersede() }
         .onChange(of: drawer.isOpen) { _, open in
@@ -116,6 +124,16 @@ struct TasksTabView: View {
         }
         .toolbarVisibility(drawer.isOpen || draftTabBarHidden ? .hidden : .visible, for: .tabBar)
         .task { await restore() }
+    }
+
+    private func openContentDraft() {
+        guard let request = contentLink.consumeDraft() else { return }
+        let drafts = ComposerDrafts.shared
+        let key = ContentActionLink.newSessionDraftKey
+        drafts.setDraft(ContentActionLink.merged(existing: drafts.draft(key), adding: request.text), key: key)
+        if router.draftSeed != BoardModel.BoardDraftSeed.unattached {
+            router.draftSeed = BoardModel.BoardDraftSeed.unattached
+        }
     }
 
     // MARK: - The page

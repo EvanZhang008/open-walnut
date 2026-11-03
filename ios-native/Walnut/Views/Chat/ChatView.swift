@@ -42,6 +42,8 @@ struct ChatView: View {
     /// The org node a tap is opening (shown while its lookups run); a newer tap replaces it.
     @State private var orgOpening: (token: UUID, name: String)?
     @State private var firstMessageDraft = ""
+    /// Talk to CEO's "Open chat" on an email (`ContentActionButtons`).
+    @State private var contentLink = ContentActionLink.shared
 
     /// How far the drawer is out: 0 shut, 1 open. A fraction rather than a Bool
     /// because the edge swipe tracks the finger and can be released anywhere,
@@ -244,6 +246,11 @@ struct ChatView: View {
         } message: {
             Text("This conversation has not started yet. Its first message starts it.")
         }
+        // MainTabView has brought this tab forward; the CEO's chat opens over it.
+        .onChange(of: contentLink.chat) { _, request in
+            if request != nil { openContentChat() }
+        }
+        .onAppear { if contentLink.chat != nil { openContentChat() } }
         .alert(sessionlessOrgNode?.name ?? "Start this conversation", isPresented: Binding(
             get: { sessionlessOrgNode != nil },
             set: { if !$0 { sessionlessOrgNode = nil } }
@@ -381,6 +388,38 @@ struct ChatView: View {
             openedAskSession = session
         } else {
             chat.errorMessage = "Couldn't open \(name). Try again in a moment."
+        }
+    }
+
+    /// The CEO chat Talk to CEO wrote into: the CEO's current session (it may have restarted
+    /// since), else the one the server named, the way the web opens Main's chat.
+    private func openContentChat() {
+        guard let request = contentLink.consumeChat() else { return }
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { drawer = 0 }
+        let token = UUID()
+        orgOpening = (token, "CEO")
+        Task {
+            defer { if orgOpening?.token == token { orgOpening = nil } }
+            var sessionId = request.sessionId
+            var taskId = request.taskId ?? ""
+            var failure: Error?
+            do {
+                if taskId.isEmpty { taskId = try await WalnutAPI().orgMain() }
+                let detail = try await WalnutAPI().taskDetail(id: taskId)
+                tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
+                if let current = detail.currentSessionId, !current.isEmpty { sessionId = current }
+            } catch {
+                failure = error
+            }
+            guard orgOpening?.token == token else { return }
+            guard let sessionId, !sessionId.isEmpty, !taskId.isEmpty else {
+                chat.errorMessage = failure.map { Self.orgFailure("the CEO", $0) }
+                    ?? "The CEO chat is starting. Open it again in a moment."
+                return
+            }
+            await openOrgSession(sessionId, taskId: taskId, name: "CEO", token: token)
         }
     }
 
