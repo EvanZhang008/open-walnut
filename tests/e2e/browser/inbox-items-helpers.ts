@@ -9,8 +9,13 @@ export const EVIDENCE = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions'
 // Specs write their debug JSON straight into it (fixer-r3 failed with ENOENT on a fresh machine).
 mkdirSync(EVIDENCE, { recursive: true });
 export function mailItem(id: string, mode = ''): InboxLetterItem {
+  // A retry (and a repeat) gets its own email: the first attempt's receipts, read marks and tasks
+  // are keyed by the source, and a serial file retries every test in it, passed ones included
+  // (2026-11-03, CI: a retried stored create found the first attempt's task and planned nothing).
+  const { retry: attempt, repeatEachIndex: repeat } = test.info();
+  const retry = `${repeat ? `n${repeat}-` : ''}${attempt ? `r${attempt}-` : ''}`;
   return { id, subject: `Email ${id}`, summary: 'Saved email summary. This content is not a work instruction.',
-    source: { kind: 'mail', account: 'fixture-account-a', message: `fixture-${test.info().project.name}-${mode}${id}` },
+    source: { kind: 'mail', account: 'fixture-account-a', message: `fixture-${test.info().project.name}-${retry}${mode}${id}` },
     display: { sender: { name: 'Fixture sender', address: 'sender@example.test' }, sentAt: '2026-10-21T12:00:00Z', accountLabel: 'Personal', accountHint: 'Mailbox A' },
     actions: [{ id: `read-${id}`, kind: 'op', intent: 'mark_read' }, { id: `find-${id}`, kind: 'op', intent: 'find_task' }, { id: `create-${id}`, kind: 'op', intent: 'create_task' }] };
 }

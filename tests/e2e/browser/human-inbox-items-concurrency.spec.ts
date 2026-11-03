@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIResponse } from '@playwright/test';
 import { createCandidate, expectContentActionsOnly, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -32,13 +32,22 @@ test('a stored letter attaches to one exact task for an older client, then queue
   const sent = await sendLegacyItems(request, items);
   for (const [item, goal, operation] of [[items[0], 'Inspect the selected system', 'task_start'], [items[1], 'Report the follow-up result', 'task_send']] as const) {
     const base = `/api/v1/human-inbox/${sent.id}/items/${item.id}`;
-    const prepared = await request.post(`${base}/prepare`, { data: { actionId: `find-${item.id}`, selectedTaskId: task.id, goal } });
-    expect(prepared.ok(), await prepared.text()).toBeTruthy();
-    const plan = (await prepared.json()).plan;
-    const ops = JSON.stringify(plan.ops);
-    expect(plan.ops.map((op: { tool: string }) => op.tool)).toContain(operation);
-    expect(ops).toContain(task.id); expect(ops).not.toContain(other.id);
-    const executed = await request.post(`${base}/execute`, { data: { actionId: plan.actionId, requestId: `pw-attach-${item.id}-${Date.now()}`, confirmed: true, planId: plan.id, planVersion: plan.version } });
+    // The first email's start keeps moving the task for a moment (its session settles, its turn
+    // ends), and a plan prepared in that moment names the task as it was: execute refuses it with
+    // task_changed before it claims anything, the product's "review the action again". Review it
+    // again, as the user would (2026-11-03, CI 41604915386).
+    let executed!: APIResponse;
+    for (let review = 1; ; review++) {
+      const prepared = await request.post(`${base}/prepare`, { data: { actionId: `find-${item.id}`, selectedTaskId: task.id, goal } });
+      expect(prepared.ok(), await prepared.text()).toBeTruthy();
+      const plan = (await prepared.json()).plan;
+      const ops = JSON.stringify(plan.ops);
+      expect(plan.ops.map((op: { tool: string }) => op.tool)).toContain(operation);
+      expect(ops).toContain(task.id); expect(ops).not.toContain(other.id);
+      executed = await request.post(`${base}/execute`, { data: { actionId: plan.actionId, requestId: `pw-attach-${item.id}-${Date.now()}`, confirmed: true, planId: plan.id, planVersion: plan.version } });
+      if (review === 5 || executed.status() !== 409 || !(await executed.text()).includes('"task_changed"')) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     expect(executed.status(), await executed.text()).toBeLessThan(300);
     // Settled before the next email: the second one's plan must see the task already running.
     await expect.poll(async () => { const last = (await receipt(request, sent.id, item.id)).receipts.at(-1); return last?.status === 'success' ? last.taskId : last?.status; }, { timeout: 25_000 }).toBe(task.id);

@@ -65,6 +65,10 @@ test('pending read separates the current observation and missing mail dates stay
     await page.screenshot({ path: `${EVIDENCE}/${info.project.name}-polish-pending.png`, scale: 'css' });
   } finally { release(); }
   await expect(row.locator('.hii-receipts')).toContainText('Marked read');
+  // The gate is done. Off before the confirmation below, whose prepares (one per edit, aborted on
+  // Cancel) would otherwise still be in route.fetch when the page closes, and that fails the test
+  // after it passed (2026-11-03, CI).
+  await page.unrouteAll({ behavior: 'wait' });
   // The confirmation an item still opens (Mark read again; the create form is gone since 5a28ae6c9).
   await markUnreadElsewhere(request, item);
   await row.getByRole('button', { name: /^Check status for/ }).click();

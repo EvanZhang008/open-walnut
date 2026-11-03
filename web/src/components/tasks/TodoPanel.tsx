@@ -450,13 +450,24 @@ function makePinnedCollision(rulesFor: () => SlotRulesFor | null): CollisionDete
     // The closest row whose slot the drop can honour (overFits): a slot opens only
     // where the drop keeps what lands there, so the preview is the result. None nearby
     // = the dragged row stays where it is.
-    const ranked = closestCenter({
+    const centered = closestCenter({
       ...args,
       droppableContainers: args.droppableContainers.filter((container) => {
         const id = String(container.id);
         return !id.endsWith('-header-drop-zone') && !isIntoFolderId(id);
       }),
     });
+    // A tier's own drop zone is the whole list, so its center sits among the rows, and a
+    // card whose center is between two rows could rank it first: the drop then named the
+    // tier, not the row the preview had opened, and a move into that row's project was
+    // lost (2026-11-03, CI: task-move-project). With rows in the tier it only catches what
+    // no row takes; an empty tier keeps it as its one target.
+    const tierHasRows = (tier: string) => args.droppableContainers.some((c) => String(c.id) !== activeId && sortableSlot(c.data)?.containerId === tier);
+    const isFallbackZone = (collision: (typeof centered)[number]) => {
+      const id = String(collision.id);
+      return id.endsWith('-drop-zone') && tierHasRows(id.slice(0, -'-drop-zone'.length));
+    };
+    const ranked = [...centered.filter((c) => !isFallbackZone(c)), ...centered.filter(isFallbackZone)];
     // The search stays in the project run the pointer is in (the nearest row's run):
     // a card aimed between two folders slides to the end of its own run's loose cards,
     // it never jumps into whichever other project happens to have a legal slot closer.
