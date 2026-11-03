@@ -130,7 +130,7 @@ export async function runHostAction(alias: string, kind: HostActionKind, verb: '
   // A request that never gets an answer frame still ends (the check has its own server deadline).
   else e.timers.cap = setTimeout(() => { if (e.attempt === attempt) endAttempt(e, alias, null); }, kind === 'check' ? CHECK_CAP_MS : CONNECT_CAP_MS);
   try {
-    const answer = await (kind === 'check' ? checkHostReadiness(alias) : connectHost(alias));
+    const answer = await (kind === 'check' ? checkHostReadiness(alias) : connectHost(alias, { agents: kind === 'fix' }));
     attempt.posted = true;
     seedHostStatus(answer);
     settleHostAction(alias);

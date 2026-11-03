@@ -9,6 +9,10 @@
  *     build                                         → install-claude-native
  *     the native installer's build                  → update-claude
  *     (Homebrew or a wrapper: never touched, the line says how to update)
+ *   (these two only when a person asked, with the line's Install or Update: a coding
+ *   agent is the user's choice, never installed by joining or connecting a host;
+ *   2026-11-03, the user: "user can choose to install it, but we don't install for
+ *   them automatically". Walnut's own parts below are set up by themselves.)
  *   no compiler and no dtach, host not a Mac, and
  *     no prebuilt dtach this server ships for it    → install-compiler (sudo -n)
  *   dtach missing, and a compiler or a prebuilt     → build-dtach
@@ -179,10 +183,10 @@ export function autofixDisabledReason(env: Record<string, string | undefined>, h
  * to do. `prebuiltDtach`: this server ships a dtach for the host's platform/arch
  * that has not been seen failing there.
  */
-export function nextFixAction(p: HostPreflightResult, tried: ReadonlySet<HostFixAction>, ctx: { prebuiltDtach?: boolean } = {}): HostFixAction | null {
+export function nextFixAction(p: HostPreflightResult, tried: ReadonlySet<HostFixAction>, ctx: { prebuiltDtach?: boolean; agents?: boolean } = {}): HostFixAction | null {
   const claudeBroken = !p.claude.found || (p.claude.needsNode === true && p.claude.nodeFound === false)
-  if (claudeBroken && !tried.has('install-claude-native')) return 'install-claude-native'
-  if (!claudeBroken && !p.claude.error && p.claude.versionOk === false) {
+  if (ctx.agents && claudeBroken && !tried.has('install-claude-native')) return 'install-claude-native'
+  if (ctx.agents && !claudeBroken && !p.claude.error && p.claude.versionOk === false) {
     const update = fixActionFor('claude_outdated', p)
     if (update && !tried.has(update)) return update
   }
@@ -272,6 +276,14 @@ export function describeFixOutcome(action: HostFixAction, outcome: FixOutcome, f
 }
 
 /**
+ * Whether a finished fix was an attempt: the host never answering (the connection or ssh
+ * dropped) or a daemon busy with another fix is none, so the next connect may try again.
+ */
+export function countsAsAttempt(record: Pick<HostFixRecord, 'error'>): boolean {
+  return record.error !== 'busy' && record.error !== 'ssh-failed' && record.error !== 'connection-lost'
+}
+
+/**
  * A thrown send error that means the host never answered. Anything else the
  * daemon SAID (a handler failure, a drain refusal, an unknown command) is a real
  * attempt: retrying it on every connect would repeat the same answer forever.
@@ -295,6 +307,8 @@ export interface AutofixIo {
   preflight: () => Promise<HostPreflightResult | null>
   /** A usable prebuilt dtach exists for this host (planner input, see nextFixAction). */
   prebuiltDtach: () => boolean
+  /** A person asked for the coding agent's install or update (the line's button). */
+  agents?: boolean
   /** The terminal's provisioning, forced fresh: upload a prebuilt or compile, over ssh. */
   provisionDtach: () => Promise<DtachProvisionOutcome>
   /** The prebuilt was offered and did not run there: plan as if there were none. */
@@ -371,7 +385,7 @@ export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo):
   let current = first
   // Four fixes exist; build-dtach may run a second time after gcc arrived.
   for (let step = 0; step < 5; step++) {
-    const action = nextFixAction(current, io.tried, { prebuiltDtach: io.prebuiltDtach() })
+    const action = nextFixAction(current, io.tried, { prebuiltDtach: io.prebuiltDtach(), agents: io.agents === true })
     if (!action) return
     io.tried.add(action)
     io.onStart({ action, startedAt: io.now(), text: fixingText(action) })
@@ -379,7 +393,7 @@ export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo):
     const record = describeFixOutcome(action, outcome, io.now())
     // The host never got to answer, or was busy with another fix: that was no
     // attempt, so the next connect may try again. Stop this round either way.
-    if (outcome.transportError || record.error === 'busy') {
+    if (!countsAsAttempt(record)) {
       io.onFinish(record, outcome.result)
       io.tried.delete(action)
       return

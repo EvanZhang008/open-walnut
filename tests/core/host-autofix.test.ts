@@ -6,11 +6,21 @@
  *
  * Only the daemon connection is faked: a tiny host whose preflight answer
  * changes when a fix "installs" something. No installer ever runs.
+ *
+ * Claude Code is installed or updated only when a person clicked Install or Update on
+ * its line (2026-11-03, the user: "we don't install for them automatically"). Most
+ * rounds below are that click (`ask.every`); the block "the coding agent waits for a
+ * person" turns it off and pins the rule itself.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-autofix'))
+const ask = vi.hoisted(() => ({ every: true }))
+vi.mock('../../src/core/hosts/host-readiness-store.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/core/hosts/host-readiness-store.js')>()
+  return { ...orig, agentsAskedNow: (host: string, now?: number) => ask.every || orig.agentsAskedNow(host, now) }
+})
 
 import {
   clearHostReadiness,
@@ -25,6 +35,7 @@ import {
 import { autofixDisabledReason, describeFixOutcome, fixActionFor, isTransportError, nextFixAction, withFixState } from '../../src/core/hosts/host-autofix.js'
 import type { HostFixAction } from '../../src/core/hosts/host-autofix.js'
 import { FIX_RETRY_AFTER_MS, reloadHostFixMemoryForTest } from '../../src/core/hosts/host-fix-memory.js'
+import { AGENTS_ASK_MS, agentsAsked, attempted } from '../../src/core/hosts/host-readiness-store.js'
 
 interface HostState {
   claude: Record<string, unknown>
@@ -37,6 +48,8 @@ type FixReply = Record<string, unknown> | Promise<Record<string, unknown>> | Err
 
 const NPM_NO_NODE = { found: true, path: '/home/dev/.local/bin/claude', kind: 'npm', needsNode: true, nodeFound: false }
 const NATIVE = { found: true, path: '/home/dev/.local/bin/claude', kind: 'native', needsNode: false, version: '2.1.280' }
+const OLD_NATIVE = { ...NATIVE, version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native', auth: 'ok' }
+const floorCtx = async () => ({ label: 'devbox', sshTarget: 'devbox', floor: { minVersion: '2.1.280', model: 'Opus 5.5' } })
 
 /** A host that "installs" what each fix names, unless `replies` says otherwise. */
 function fakeHost(initial: Partial<HostState>, replies: Partial<Record<HostFixAction, (s: HostState) => FixReply>> = {}, caps = ['preflight-v1', 'hostfix-v1']) {
@@ -85,6 +98,7 @@ async function refreshAndSettle(host: string, conn: PreflightConnection, opts: A
 }
 
 beforeEach(() => {
+  ask.every = true
   clearHostReadiness()
   onFixed.mockReset()
   provisionDtach.mockClear()
@@ -455,8 +469,6 @@ describe('a prebuilt dtach the server ships', () => {
 })
 
 describe('a claude older than the model needs', () => {
-  const OLD_NATIVE = { ...NATIVE, version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native', auth: 'ok' }
-  const floorCtx = async () => ({ label: 'devbox', sshTarget: 'devbox', floor: { minVersion: '2.1.280', model: 'Opus 5.5' } })
 
   it('the native installer\'s build gets update-claude with the floor, then the line is gone', async () => {
     const h = fakeHost({ claude: OLD_NATIVE, compiler: { found: true, name: 'gcc' }, dtach: { found: true } })
@@ -487,14 +499,17 @@ describe('a claude older than the model needs', () => {
 
   it('an outdated npm build gets the native build instead; Homebrew, a wrapper, or sign-in get no fix at all', () => {
     const q = (claude: Record<string, unknown>) => ({ claude, compiler: { found: true }, dtach: { found: true } }) as never
-    expect(nextFixAction(q({ ...OLD_NATIVE, kind: 'npm', installMethod: 'npm' }), new Set())).toBe('install-claude-native')
-    expect(nextFixAction(q(OLD_NATIVE), new Set())).toBe('update-claude')
-    expect(nextFixAction(q(OLD_NATIVE), new Set(['update-claude']))).toBeNull()
-    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'homebrew' }), new Set())).toBeNull()
-    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'other' }), new Set())).toBeNull()
+    const asked = { agents: true }
+    expect(nextFixAction(q({ ...OLD_NATIVE, kind: 'npm', installMethod: 'npm' }), new Set(), asked)).toBe('install-claude-native')
+    expect(nextFixAction(q(OLD_NATIVE), new Set(), asked)).toBe('update-claude')
+    // Nobody clicked Update: an old Claude Code stays as it is.
+    expect(nextFixAction(q(OLD_NATIVE), new Set())).toBeNull()
+    expect(nextFixAction(q(OLD_NATIVE), new Set(['update-claude']), asked)).toBeNull()
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'homebrew' }), new Set(), asked)).toBeNull()
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'other' }), new Set(), asked)).toBeNull()
     // A daemon from before install methods: the version is known but not how it was installed.
-    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: undefined }), new Set())).toBeNull()
-    expect(nextFixAction(q({ ...NATIVE, auth: 'not-logged-in', versionOk: true }), new Set())).toBeNull()
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: undefined }), new Set(), asked)).toBeNull()
+    expect(nextFixAction(q({ ...NATIVE, auth: 'not-logged-in', versionOk: true }), new Set(), asked)).toBeNull()
     expect(fixActionFor('claude_not_logged_in', q(NATIVE))).toBeNull()
     expect(fixActionFor('claude_outdated', q({ ...OLD_NATIVE, installMethod: undefined, kind: 'npm' }))).toBe('install-claude-native')
   })
@@ -522,8 +537,11 @@ describe('planning and wording', () => {
   const p = (x: Partial<HostState>) => ({ claude: NATIVE, compiler: { found: true }, dtach: { found: true }, ...x }) as never
 
   it('nextFixAction follows the documented order and skips what was tried', () => {
-    expect(nextFixAction(p({ claude: { found: false } }), new Set())).toBe('install-claude-native')
-    expect(nextFixAction(p({ claude: NPM_NO_NODE, compiler: { found: false }, dtach: { found: false } }), new Set(['install-claude-native']))).toBe('install-compiler')
+    expect(nextFixAction(p({ claude: { found: false } }), new Set(), { agents: true })).toBe('install-claude-native')
+    // Nobody asked for it: no Claude Code is installed, Walnut's own parts still are.
+    expect(nextFixAction(p({ claude: { found: false } }), new Set())).toBeNull()
+    expect(nextFixAction(p({ claude: { found: false }, compiler: { found: false }, dtach: { found: false } }), new Set())).toBe('install-compiler')
+    expect(nextFixAction(p({ claude: NPM_NO_NODE, compiler: { found: false }, dtach: { found: false } }), new Set(['install-claude-native']), { agents: true })).toBe('install-compiler')
     expect(nextFixAction(p({ compiler: { found: true }, dtach: { found: false } }), new Set())).toBe('build-dtach')
     expect(nextFixAction(p({ compiler: { found: false }, dtach: { found: true } }), new Set())).toBeNull()
     expect(nextFixAction(p({ compiler: { found: false }, dtach: { found: false }, platform: 'darwin' }), new Set())).toBeNull()
@@ -531,7 +549,7 @@ describe('planning and wording', () => {
     expect(nextFixAction(p({ compiler: { found: false }, dtach: { found: false } }), new Set(), { prebuiltDtach: true })).toBe('build-dtach')
     expect(nextFixAction(p({ compiler: { found: false }, dtach: { found: false }, platform: 'darwin' }), new Set(), { prebuiltDtach: true })).toBe('build-dtach')
     // A claude that is installed but crashes is not something a reinstall is guessed to fix.
-    expect(nextFixAction(p({ claude: { ...NATIVE, error: 'claude --version exited with code 1' } }), new Set())).toBeNull()
+    expect(nextFixAction(p({ claude: { ...NATIVE, error: 'claude --version exited with code 1' } }), new Set(), { agents: true })).toBeNull()
   })
 
   it('describeFixOutcome turns daemon codes into one sentence', () => {
@@ -566,6 +584,61 @@ describe('planning and wording', () => {
     expect(autofixDisabledReason({ WALNUT_HOST_AUTOFIX: '1' }, { autofix: true })).toBeNull()
     for (const v of ['0', 'false', 'off', 'NO']) expect(autofixDisabledReason({ WALNUT_HOST_AUTOFIX: v }, {})).toBe('env')
     expect(autofixDisabledReason({}, { autofix: false })).toBe('config')
+  })
+})
+
+/**
+ * 2026-11-03, the user: "We don't bind to Claude Code, user can choose to install it,
+ * but we don't install for them automatically". Joining or connecting a machine sets up
+ * Walnut's own parts; a coding agent is installed or updated only on Install / Update.
+ */
+describe('the coding agent waits for a person', () => {
+  beforeEach(() => { ask.every = false })
+  const BARE = { claude: { found: false }, compiler: { found: false }, dtach: { found: false } }
+
+  it('a new machine gets the compiler and dtach by themselves, and its Claude Code line waits with Install', async () => {
+    const h = fakeHost(BARE)
+    await refreshAndSettle('devbox', h.conn)
+    expect(h.sent.filter((x) => x.startsWith('fix:'))).toEqual(['fix:install-compiler', 'fix:build-dtach'])
+    const r = getHostReadiness('devbox')!
+    expect(r.problems.map((p) => p.kind)).toEqual(['claude_missing'])
+    expect(r.problems[0]!.fix).toBeUndefined()
+    expect(r.fixes.map((f) => f.action)).toEqual(['install-compiler', 'build-dtach'])
+  })
+
+  it('an old Claude Code is never updated by itself', async () => {
+    const h = fakeHost({ claude: OLD_NATIVE, compiler: { found: true }, dtach: { found: true } })
+    await refreshHostReadiness('devbox', { getConnection: () => h.conn, autofix: autofix(), hostContext: floorCtx })
+    await hostAutofixRound('devbox')
+    expect(h.sent.filter((x) => x.startsWith('fix:'))).toEqual([])
+    expect(getHostReadiness('devbox')!.problems.map((p) => p.kind)).toEqual(['claude_outdated'])
+  })
+
+  it('the click installs it in that round only; a later connect installs nothing by itself', async () => {
+    let installs = 0
+    const h = fakeHost({ ...BARE, compiler: { found: true }, dtach: { found: true } }, {
+      'install-claude-native': () => { installs++; return { action: 'install-claude-native', ok: false, error: 'timeout', log: '', durationMs: 1 } },
+    })
+    agentsAsked.set('devbox', Date.now())
+    await refreshAndSettle('devbox', h.conn)
+    expect(installs).toBe(1)
+    expect(agentsAsked.has('devbox')).toBe(false)
+    // A reconnect and even a Check again: no click on Install, no install.
+    resetHostAutofixAttempts('devbox')
+    await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
+    expect(installs).toBe(1)
+    // The next click does.
+    resetHostAutofixAttempts('devbox')
+    agentsAsked.set('devbox', Date.now())
+    await refreshAndSettle('devbox', h.conn, autofix(), { force: true })
+    expect(installs).toBe(2)
+  })
+
+  it('a click that found nothing to do expires: ten minutes on, it installs nothing', async () => {
+    const h = fakeHost({ ...BARE, compiler: { found: true }, dtach: { found: true } })
+    agentsAsked.set('devbox', Date.now() - AGENTS_ASK_MS - 1)
+    await refreshAndSettle('devbox', h.conn)
+    expect(h.sent.filter((x) => x.startsWith('fix:'))).toEqual([])
   })
 })
 

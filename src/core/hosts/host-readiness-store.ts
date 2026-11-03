@@ -42,6 +42,19 @@ export const listeners = new Set<(host: string) => void>()
 export const fixState = new Map<string, { fixing?: HostFixing; fixes: HostFixRecord[] }>()
 /** Per host: fixes already tried (the once-per-problem rule; failures of earlier servers: host-fix-memory.ts). */
 export const attempted = new Map<string, Set<HostFixAction>>()
+/**
+ * Hosts where a person asked for the coding agent's install or update (Install / Update on
+ * the host's line), with when: the next autofix round within AGENTS_ASK_MS may run those
+ * fixes, and only that round.
+ */
+export const agentsAsked = new Map<string, number>()
+export const AGENTS_ASK_MS = 10 * 60_000
+
+/** Did a person ask for the coding agent's fixes on `host` recently? */
+export function agentsAskedNow(host: string, now: number = Date.now()): boolean {
+  const at = agentsAsked.get(host)
+  return at !== undefined && now - at >= 0 && now - at < AGENTS_ASK_MS
+}
 /** Per host: the autofix round in progress, if any. */
 export const rounds = new Map<string, Promise<void>>()
 export const MAX_FIX_RECORDS = 20
@@ -94,7 +107,7 @@ export function notifyReadiness(host: string): void {
  */
 export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolean } = {}): void {
   if (host === undefined) {
-    store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear()
+    store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear(); agentsAsked.clear()
     prebuiltFor.clear(); prebuiltUnusable.clear(); problemCtx.clear()
     if (!opts.keepFixMemory) void forgetAllHostFixes()
     return
@@ -104,6 +117,7 @@ export function clearHostReadiness(host?: string, opts: { keepFixMemory?: boolea
   inFlight.delete(host)
   fixState.delete(host)
   attempted.delete(host)
+  agentsAsked.delete(host)
   rounds.delete(host)
   prebuiltFor.delete(host)
   prebuiltUnusable.delete(host)

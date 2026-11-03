@@ -233,14 +233,23 @@ describe('GET /api/hosts/status', () => {
       states.devbox = { connected: true, phase: 'connected' };
       const conn = fixingConn();
       pooled.devbox = conn;
+      installWarmup();
       await refreshHostReadiness('devbox');
       await hostAutofixRound('devbox');
-      expect(fixCalls(conn.send)).toEqual(['install-claude-native', 'install-compiler']);
+      // Walnut's own parts are fixed by themselves; Claude Code waits for its Install click.
+      expect(fixCalls(conn.send)).toEqual(['install-compiler']);
+      const before = byHost((await request(createApp()).get('/api/hosts/status')).body.hosts).devbox.readiness!;
+      expect(before.problems[0]).toMatchObject({ kind: 'claude_needs_node', commands: ['curl -fsSL https://claude.ai/install.sh | bash'] });
+      expect(before.problems[0]!.fix).toBeUndefined();
+      // The Install click: POST /connect { agents: true }.
+      await request(createApp()).post('/api/hosts/devbox/connect').send({ agents: true });
+      await vi.waitFor(() => expect(fixCalls(conn.send)).toEqual(['install-compiler', 'install-claude-native', 'install-compiler']));
+      await hostAutofixRound('devbox');
       const res = await request(createApp()).get('/api/hosts/status');
       const r = byHost(res.body.hosts).devbox.readiness!;
       expect(r.fixing).toBeUndefined();
       expect(r.fixes.map((f) => [f.action, f.ok, f.needsPassword ?? false])).toEqual([
-        ['install-claude-native', false, false], ['install-compiler', false, true],
+        ['install-compiler', false, true], ['install-claude-native', false, false], ['install-compiler', false, true],
       ]);
       expect(r.problems).toEqual([
         expect.objectContaining({
@@ -389,11 +398,13 @@ describe('POST /api/hosts/:host/connect', () => {
       await hostAutofixRound('devbox');
       await refreshHostReadiness('devbox');   // a reconnect: the failures stand
       await hostAutofixRound('devbox');
-      expect(fixCalls(conn.send)).toHaveLength(2);
+      expect(fixCalls(conn.send)).toEqual(['install-compiler']);
       await request(createApp()).post('/api/hosts/devbox/connect');
-      await vi.waitFor(() => expect(fixCalls(conn.send)).toHaveLength(4));
+      await vi.waitFor(() => expect(fixCalls(conn.send)).toHaveLength(2));
       await hostAutofixRound('devbox');
-      expect(getHostReadiness('devbox')!.fixes).toHaveLength(4);
+      expect(getHostReadiness('devbox')!.fixes).toHaveLength(2);
+      // A plain Connect never installs Claude Code: only the Install click's { agents: true } does.
+      expect(fixCalls(conn.send)).toEqual(['install-compiler', 'install-compiler']);
     } finally {
       if (saved !== undefined) process.env.WALNUT_HOST_AUTOFIX = saved;
     }
@@ -409,16 +420,16 @@ describe('POST /api/hosts/:host/connect', () => {
       installWarmup();
       await refreshHostReadiness('devbox');
       await hostAutofixRound('devbox');
-      expect(fixCalls(conn.send)).toHaveLength(2);
-      // The host drops; the user presses Check again while it is down.
+      expect(fixCalls(conn.send)).toHaveLength(1);
+      // The host drops; the user presses Install while it is down.
       states.devbox = { connected: false, phase: 'failed' };
-      await request(createApp()).post('/api/hosts/devbox/connect');
-      expect(fixCalls(conn.send)).toHaveLength(2);
-      // The reconnect's handshake refresh is what runs them again.
+      await request(createApp()).post('/api/hosts/devbox/connect').send({ agents: true });
+      expect(fixCalls(conn.send)).toHaveLength(1);
+      // The reconnect's handshake refresh is what runs them again, the asked install included.
       states.devbox = { connected: true, phase: 'connected' };
       await refreshHostReadiness('devbox');
       await hostAutofixRound('devbox');
-      expect(fixCalls(conn.send)).toHaveLength(4);
+      expect(fixCalls(conn.send)).toEqual(['install-compiler', 'install-claude-native', 'install-compiler']);
     } finally {
       if (saved !== undefined) process.env.WALNUT_HOST_AUTOFIX = saved;
     }

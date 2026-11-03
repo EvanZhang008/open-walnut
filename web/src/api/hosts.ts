@@ -139,11 +139,13 @@ export async function fetchHostStatus(): Promise<HostStatus[]> {
  * Answers the fresh status so the caller can seed the store without waiting for
  * the WS push. 409 = a connect is already running, 404 = unknown host: both are
  * designed outcomes, so they ride `quietStatuses` and stay out of the error audit.
+ * `agents`: the Install / Update click on the coding agent's line, the only ask that
+ * installs or updates one (the server never does it by itself).
  */
-export async function connectHost(host: string): Promise<HostStatus> {
+export async function connectHost(host: string, opts: { agents?: boolean } = {}): Promise<HostStatus> {
   const res = await apiPost<{ ok: true; status: HostStatus }>(
     `/api/hosts/${encodeURIComponent(host)}/connect`,
-    undefined,
+    opts.agents ? { agents: true } : undefined,
     { quietStatuses: [404, 409] },
   );
   return res.status;

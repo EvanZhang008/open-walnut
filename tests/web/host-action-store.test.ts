@@ -17,9 +17,9 @@ vi.mock('@/hooks/useHostStatus', () => ({
   seedHostStatus: (s: HostStatus | null | undefined) => { if (s) { statuses.set(s.host, s); for (const l of statusListeners) l() } },
   subscribeHostStatus: (cb: () => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb) } },
 }))
-const connect = vi.fn<(alias: string) => Promise<HostStatus>>()
+const connect = vi.fn<(alias: string, opts?: { agents?: boolean }) => Promise<HostStatus>>()
 const check = vi.fn<(alias: string) => Promise<HostStatus>>()
-vi.mock('@/api/hosts', () => ({ connectHost: (a: string) => connect(a), checkHostReadiness: (a: string) => check(a) }))
+vi.mock('@/api/hosts', () => ({ connectHost: (a: string, o?: { agents?: boolean }) => connect(a, o), checkHostReadiness: (a: string) => check(a) }))
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 
 const store = await import('../../web/src/utils/host-action-store')
@@ -44,6 +44,15 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('host action store', () => {
+  it('only Install / Update asks the server for the coding agent (Walnut never installs one by itself)', async () => {
+    connect.mockResolvedValue(failed(clock))
+    await store.runHostAction('devbox', 'retry')
+    expect(connect).toHaveBeenLastCalledWith('devbox', { agents: false })
+    vi.advanceTimersByTime(30_000)
+    await store.runHostAction('devbox', 'fix', 'install')
+    expect(connect).toHaveBeenLastCalledWith('devbox', { agents: true })
+  })
+
   it('two readers share one pending, and a second run while pending sends no request', async () => {
     let answer!: (s: HostStatus) => void
     connect.mockImplementation(() => new Promise((r) => { answer = r }))

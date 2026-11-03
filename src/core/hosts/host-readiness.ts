@@ -17,7 +17,7 @@
 
 import { log } from '../../logging/index.js'
 import {
-  autofixDisabledReason, nextFixAction, runHostAutofix,
+  autofixDisabledReason, countsAsAttempt, nextFixAction, runHostAutofix,
   type DtachProvisionOutcome, type HostFixAction, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
 import {
@@ -26,7 +26,7 @@ import {
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
 import { FIX_RETRY_AFTER_MS, recentFailedFixes, rememberFixOutcome } from './host-fix-memory.js'
 import {
-  attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
+  agentsAsked, agentsAskedNow, attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
   prebuiltFor, prebuiltUnusable, problemCtx, readinessProbeSkipped, rounds, setFixState, store, type HostReadiness,
 } from './host-readiness-store.js'
 
@@ -158,11 +158,15 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
   const fresh = !tried
   if (!tried) { tried = new Set(); attempted.set(host, tried) }
   const prebuiltDtach = () => prebuiltFor.get(host) === true
-  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach() })) return
+  // The ask's own clock (the click's Date.now), not the round's injectable one.
+  const agents = agentsAskedNow(host)
+  if (!fresh && !nextFixAction(answer, tried, { prebuiltDtach: prebuiltDtach(), agents })) return
   const triedNow = tried
+  // The ask is for this round only: a later connect installs nothing by itself.
+  agentsAsked.delete(host)
   const round = (async () => {
     if (fresh) await recallFailedFixes(host, triedNow, now())
-    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach() })) return
+    if (!nextFixAction(answer, triedNow, { prebuiltDtach: prebuiltDtach(), agents })) return
     let def: { autofix?: unknown } | undefined
     try {
       def = await (opts.hostSettings ?? defaultHostSettings)(host)
@@ -180,6 +184,7 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
     await runHostAutofix(answer, {
       conn,
       tried: triedNow,
+      agents,
       now,
       ...(answer.claude.minVersion ? { minClaudeVersion: answer.claude.minVersion } : {}),
       preflight: () => refreshHostReadiness(host, { getConnection: () => conn, now, force: true, autofix: false, findPrebuilt, hostContext: context }),

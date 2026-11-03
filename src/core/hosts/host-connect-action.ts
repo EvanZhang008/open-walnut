@@ -19,6 +19,7 @@ import {
 import { buildHostStatus, type HostDef, type HostStatus } from './host-status.js'
 import { getHostWarmup } from './host-warmup-registry.js'
 import { getHostReadiness, refreshHostReadiness, resetHostAutofixAttempts, type HostReadiness } from './host-readiness.js'
+import { agentsAsked } from './host-readiness-store.js'
 import { REMOTE_OFF_NOTE } from './host-problem.js'
 import {
   bumpFixtureCounter, fixtureConnectAttempt, fixtureEphemeral, fixtureHost, fixtureHostStatus, fixtureNow,
@@ -103,8 +104,10 @@ function withinDeadline(attempt: Promise<unknown>, ms: number): Promise<ConnectO
  * runs the loop's attempt now and keeps the loop), and a fresh readiness check
  * once connected. Automation never calls this (host-start-gate.ts `source`).
  * `deadlineMs`: wait for the attempt (the Start gate); otherwise it only starts it.
+ * `agents`: the person clicked Install or Update on the coding agent's line, so this
+ * round may install or update it. Nothing else ever does (host-autofix.ts).
  */
-export async function connectHostNow(host: string, opts: { deadlineMs?: number } = {}): Promise<ConnectNowResult> {
+export async function connectHostNow(host: string, opts: { deadlineMs?: number; agents?: boolean } = {}): Promise<ConnectNowResult> {
   if (!host || host === '__local__') return refuse(400, 'host is required')
   if (CLOUD_MODE) return refuse(409, 'a cloud replica cannot connect to hosts; run this on the primary')
   const def = await configHostDef(host)
@@ -120,12 +123,13 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
     clearDaemonFailureCache(host)
     bumpFixtureCounter('failureCacheCleared', host)
     resetHostAutofixAttempts(host)
-    log.session.info('host connect now', { host, fixture: true, failureCacheCleared: true, awaited: !!opts.deadlineMs })
+    log.session.info('host connect now', { host, fixture: true, failureCacheCleared: true, awaited: !!opts.deadlineMs, agents: !!opts.agents })
     const r = fixtureConnectAttempt(host)
     if (r.connected) {
       seedFixtureReadiness(host)
       // Connected with a fixable problem: the real refresh would start the automatic fix now.
-      if (!opts.deadlineMs) maybeStartFixtureAutofix(host, () => pushHostFrame(host, def))
+      // The fixture's fixes are the coding agent's, so only Install / Update starts one.
+      if (!opts.deadlineMs && opts.agents) maybeStartFixtureAutofix(host, () => pushHostFrame(host, def))
     }
     const status = hostStatusFrame(host, def)
     pushHostFrame(host, def)
@@ -135,6 +139,7 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
 
   clearDaemonFailureCache(host)
   resetHostAutofixAttempts(host)
+  if (opts.agents) agentsAsked.set(host, Date.now())
   // A person's Retry on Cloud may mint a new machine credential now: the
   // cloudBox re-mint window only paces the automatic redials.
   const cloudBox = def.cloud_box === true
@@ -147,7 +152,7 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
   // the loop back on its schedule. Cancelling the loop and calling connect()
   // instead ended recovery for good the first time that dial failed.
   const joined = reconnectHostNow(host, target)
-  log.session.info('host connect now', { host, failureCacheCleared: true, joinedReconnect: !!joined, phase: before, awaited: !!opts.deadlineMs })
+  log.session.info('host connect now', { host, failureCacheCleared: true, joinedReconnect: !!joined, phase: before, awaited: !!opts.deadlineMs, agents: !!opts.agents })
 
   const warmup = getHostWarmup()
   let outcome: ConnectOutcome = 'started'

@@ -98,11 +98,12 @@ hostsRouter.get('/:host/status', async (req, res, next) => {
 // POST /api/hosts/:host/connect — the human just fixed their VPN / ssh key.
 // connectHostNow: enabled check, failure cache cleared, autofix reset, the
 // reconnect backoff cancelled, then the dial (fire-and-forget: progress arrives
-// as `host:status`). The reply is the CURRENT status.
+// as `host:status`). The reply is the CURRENT status. `{ agents: true }` is the
+// Install / Update click on the coding agent's line: only it installs or updates one.
 hostsRouter.post('/:host/connect', async (req, res, next) => {
   try {
     const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
-    const r = await connectHostNow(host)
+    const r = await connectHostNow(host, { agents: req.body?.agents === true })
     res.status(r.httpStatus).json(r.body)
   } catch (err) {
     next(err)
