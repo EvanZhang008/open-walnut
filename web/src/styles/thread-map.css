@@ -192,7 +192,14 @@
 .thread-map-row[data-kind="pin"] .thread-map-label { color: var(--fg-muted); font-style: italic; font-size: 12px; }
 .thread-map-row[data-kind="pin"] .thread-map-label::before { content: '\201C'; }
 .thread-map-row[data-kind="pin"] .thread-map-label::after { content: '\201D'; }
-.thread-map-row:is([data-kind="done-group"], [data-kind="pending"], [data-kind="draft"]) .thread-map-label {
+.thread-map-section-dash {
+  width: 7px;
+  height: 0;
+  border-top: 1.5px solid var(--fg-muted);
+  border-radius: 1px;
+}
+.thread-map-row[data-kind="section"] .thread-map-label { color: var(--fg-secondary); font-size: 12px; }
+.thread-map-row:is([data-kind="done-group"], [data-kind="section-group"], [data-kind="pending"], [data-kind="draft"]) .thread-map-label {
   color: var(--fg-muted);
   font-weight: 400;
 }
@@ -296,6 +303,8 @@
 .thread-map-mark:is([data-kind="pending"], [data-kind="draft"]) .thread-map-tick { border-top-style: dashed; }
 .thread-map-mark[data-kind="pin"] .thread-map-tick { width: 5px; border-top-width: 1px; opacity: 0.5; }
 .thread-map-mark[data-kind="done-group"] .thread-map-tick { width: 6px; opacity: 0.4; }
+.thread-map-mark[data-kind="section-group"] .thread-map-tick { width: 6px; opacity: 0.4; }
+.thread-map-mark[data-kind="section"] .thread-map-tick { width: 6px; opacity: 0.55; }
 .thread-map-mark[data-current="true"] { color: var(--fg); }
 .thread-map-mark[data-current="true"] .thread-map-tick { border-top-width: 2px; opacity: 1; }
 .thread-map-mark[data-unread="true"]::after {

@@ -143,7 +143,7 @@ test.describe('Question stack', () => {
     expect(withFrame.equals(unwrapped), 'the panel is pixel-identical without the wrapper').toBe(true)
   })
 
-  test('Ask from Tree Mode opens the card in Conversation Mode in the same frame; Esc before sending writes nothing', async ({ page, request }) => {
+  test('Ask in a session with no question yet opens the card in the same frame, whatever its stored view; Esc before sending writes nothing', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, 'How should the reader treat stale copies?')
     // Compared with what was there, not with nothing: a question another spec
@@ -155,8 +155,9 @@ test.describe('Question stack', () => {
     await selectPassage(page, panel, passage)
     const ask = page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]')
     await expect(ask).toBeVisible()
-    // Sample the DOM one animation frame after the click that asks. Ask here
-    // always asks in Conversation Mode (2026-10-23): the column switches and the
+    // Sample the DOM one animation frame after the click that asks. The column
+    // was opened with the stored view Tree Mode, but a session with no question
+    // reads as Conversation Mode, and Ask here asks in the view on screen: the
     // card opens beside the passage, in that same frame.
     const panelEl = await panel.elementHandle()
     await page.evaluate((root) => {

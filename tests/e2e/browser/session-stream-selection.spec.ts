@@ -32,9 +32,10 @@ import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 
-/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused; the
- *  composer stays on the main conversation (2026-10-27). */
+/** This session has no question yet, so it reads as Conversation Mode and Ask
+ *  here asks there (the view on screen, 2026-11-03): the question's card opens
+ *  beside the passage with its own box focused; the composer stays on the main
+ *  conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<void> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
@@ -177,7 +178,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     expect(stillOnScreen.top).toBeLessThan(stillOnScreen.boxBottom)
     await shot(page, '03-pill-survived-turn-end')
 
-    // Ask still works after all that: it asks in Conversation Mode, the card
+    // Ask still works after all that: in this Conversation Mode column, the card
     // beside the passage, the composer left on the main conversation.
     //
     // Pressed the way a HAND presses it: mouse down, a beat, mouse up. Playwright's
@@ -275,8 +276,8 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.waitForTimeout(220)
     await page.mouse.up()
 
-    // Ask asks in Conversation Mode: the card opens beside the passage, the
-    // composer left on the main conversation.
+    // Ask asks in the view on screen (Conversation Mode here): the card opens
+    // beside the passage, the composer left on the main conversation.
     await expectAskCard(panel, 'never blocks')
     await shot(page, '06-ask-pressed-mid-answer')
   })

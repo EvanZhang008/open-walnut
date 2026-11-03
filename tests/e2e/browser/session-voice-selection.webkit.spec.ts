@@ -29,9 +29,10 @@ import {
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
-/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused; the
- *  composer stays on the main conversation (2026-10-27). */
+/** These sessions have no question yet, so they read as Conversation Mode and
+ *  Ask here asks there (the view on screen, 2026-11-03): the question's card
+ *  opens beside the passage with its own box focused; the composer stays on the
+ *  main conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')

@@ -36,15 +36,18 @@ import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-un
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown, firstCheckHeldBelow } from '@/stream/render-filter';
 import { isPendingPermissionBlock, type StreamingUserLineBlock } from '@/stream/stream-reducer';
-import { bubbleIndexOf, cardLiveRounds, liveLineOwners, splitQueuedTail, takenLinesOf, type TakenLines } from '@/stream/chat-order';
+import { bubbleIndexOf, cardLiveRounds, liveLineOwners, midTurnQuestionLines, splitQueuedTail, takenLinesOf, type TakenLines } from '@/stream/chat-order';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
+import { mergeOutline, outlineSections, SECTIONS_GROUP_KEY, sectionMsgIdOf, untitledSectionIds } from '@/utils/outline-sections';
+import { useTurnTitleRequest } from '@/hooks/useTurnTitleRequest';
 import { ThreadMap } from './ThreadMap';
 import type { MapArchiveApi } from './ThreadMapArchive';
 import { placePins } from './outline-order';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
+import { askModeOf, type AskMode } from '@/utils/ask-mode';
 import { QuotePinPopover } from './QuotePinPopover';
 import { PassageCommentMarks } from './PassageCommentMarks';
 import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
@@ -108,7 +111,7 @@ import { WorkflowProgress } from './WorkflowProgress';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { Lightbox } from '../common/Lightbox';
 import type {
-  SessionEngine, SessionHistoryMessage, SessionHistoryTool, SessionPinnedQuote, SessionThreadAnchor,
+  SessionEngine, SessionHistoryMessage, SessionHistoryTool, SessionPinnedQuote, SessionThreadAnchor, SessionTurnTitle,
 } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
@@ -297,6 +300,11 @@ interface SessionChatHistoryProps {
    * follow-bottom paths respect. 0/undefined = no-op (initial mount).
    */
   scrollToBottomNonce?: number;
+  /** AI titles of the main conversation's messages: the outline's sections
+   *  (SessionRecord.turnTitles; utils/outline-sections.ts). A host that passes
+   *  it (an empty list included) follows the record, so the timeline asks the
+   *  server to name what is untitled; without it the labels stay first lines. */
+  turnTitles?: SessionTurnTitle[];
   /**
    * The user asked about something (a passage, or a thread picked in the outline):
    * reveal the composer and focus it. The panel owns both, so the timeline only
@@ -485,6 +493,7 @@ function buildTimeline(
 
 /** No live block is placed by a taken line (a stream without markers). */
 const NO_LINE_OWNERS: Array<string | null> = [];
+const NO_MID_TURN_LINES: ReadonlySet<string> = new Set();
 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
@@ -556,7 +565,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, turnTitles }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1680,11 +1689,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   /** Ask on a passage (the pill): the stack pushes a pending page in this frame,
    *  or the question already about this passage. Nothing is written yet. */
-  // Ask here always asks in Conversation Mode (2026-10-23, the user): the card
-  // opens beside the passage with its own composer focused and the timeline
-  // stays where it is. From Tree Mode the panel switches to Conversation Mode
-  // first, so the question never becomes a page the reader is moved onto.
-  const askAboutQuote = useCallback((target: QuotePinTarget) => {
+  // Ask here asks in the view the reader is in, unless the pill's choice names
+  // the other (2026-11-03, the user: "when i tree conversation mode, I ask here
+  // one more time it jump to main conversation ... it should directly go to next
+  // level since we are in treemode", and "people can select inline mode or tree
+  // mode for this one"). Inline: the card opens beside the passage with its own
+  // composer focused and the timeline stays where it is (from Tree Mode the
+  // panel switches to Conversation Mode first). Tree: a new page on top of the
+  // page the passage is on, one level down, and the reader is on it.
+  const askAboutQuote = useCallback((target: QuotePinTarget, opts?: { mode?: AskMode }) => {
+    // The view on screen: a session with no question yet reads as Conversation
+    // Mode whatever its stored view (the mode pill comes with the first question).
+    const mode = opts?.mode ?? askModeOf(stackMode ? 'stack' : 'linear');
+    if (mode === 'tree') {
+      if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
+      stack.ask({ msgId: target.msgId, quote: target.quote });
+      setCardOpen(false);
+      setCardOverKey(null);
+      return;
+    }
     if (threadsApi.viewMode !== 'linear') {
       // The switch folds questions and adds turn labels above the passage: hold
       // the passage's row where the reader selected it while the new view settles.
@@ -1696,7 +1719,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
     setCardOpen(true);
     setCardOverKey(null);
-  }, [stack, sessionId, threadsApi.viewMode, threadsApi.setViewMode]);
+  }, [stack, sessionId, stackMode, threadsApi.viewMode, threadsApi.setViewMode]);
   const askHold = useRef<{ msgId: string; top: number; until: number } | null>(null);
   useLayoutEffect(() => {
     const hold = askHold.current;
@@ -1760,8 +1783,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * the drawer on Pinned. Questions are not outline rows any more: the drawer is
    * their overview.
    */
+  // A long conversation's sections (one per message sent in the main
+  // conversation, named by the AI) read in the outline beside the pins. The
+  // array keeps its identity while no section changed, so a streaming delta
+  // that only grows a reply rebuilds neither the outline nor the map.
+  const sectionsNow = useMemo(
+    () => outlineSections(messages, (id) => rowThreadKey(id) === ROOT_THREAD_KEY, turnTitles),
+    [messages, rowThreadKey, turnTitles],
+  );
+  const sectionsSig = sectionsNow.map((x) => `${x.msgId}\u0001${x.at}\u0001${x.label}`).join('\u0002');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature is the identity
+  const sections = useMemo(() => sectionsNow, [sectionsSig]);
+  const mapSections = useMemo(() => sections.map((x) => ({ msgId: x.msgId, label: x.label })), [sections]);
+  // Asked only by a host that follows the record's titles (the session panel);
+  // elsewhere the sections keep their first-line labels.
+  useTurnTitleRequest(sessionId, useMemo(() => (turnTitles ? untitledSectionIds(sections) : []), [sections, turnTitles]));
+
   const pagePins = useMemo(() => {
-    if (!stackMode) return { entries: pinTocEntries, other: 0 };
+    if (!stackMode) return { entries: mergeOutline(pinTocEntries, sections), other: 0 };
     const entries: typeof pinTocEntries = [];
     let other = 0;
     for (const e of pinTocEntries) {
@@ -1769,8 +1808,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (key === currentKey) entries.push(e);
       else if (!threadsApi.hiddenKeys.has(key)) other += 1;
     }
-    return { entries, other };
-  }, [stackMode, pinTocEntries, rowThreadKey, currentKey, threadsApi.hiddenKeys]);
+    // The sections are the main conversation's: they read on its page only.
+    return { entries: currentKey === ROOT_THREAD_KEY ? mergeOutline(entries, sections) : entries, other };
+  }, [stackMode, pinTocEntries, rowThreadKey, currentKey, threadsApi.hiddenKeys, sections]);
   const tocEntries = useMemo<TocEntry[]>(
     () => pagePins.entries.map(({ at: _at, quoteExact: _q, ...entry }) => entry),
     [pagePins],
@@ -1949,6 +1989,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * effect below), instead of jumping to a row that is filtered out.
    */
   const handleTocJump = useCallback((pinKey: string) => {
+    // A section: its message, no passage. From a question page (Tree Mode) it
+    // goes through the main conversation's page first, as a pin there would.
+    const sectionMsg = sectionMsgIdOf(pinKey);
+    if (sectionMsg) {
+      if (stackMode && currentKeyRef.current !== ROOT_THREAD_KEY) {
+        threadsApi.requestPinJump(pinKey, ROOT_THREAD_KEY);
+        return;
+      }
+      jumpToPlace(sectionMsg, undefined, 'outline-section');
+      return;
+    }
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinKey);
     if (stackMode && pin) {
       const key = rowThreadKey(pin.msgId);
@@ -1958,7 +2009,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
     }
     jumpToPin(pinKey);
-  }, [stackMode, pinsApi.pins, rowThreadKey, threadsApi, jumpToPin]);
+  }, [stackMode, pinsApi.pins, rowThreadKey, threadsApi, jumpToPin, jumpToPlace]);
 
   // A pin jump waiting for its page: land once the page on screen is the pin's.
   // Each request lands exactly ONCE: a later return to that page (Esc back to
@@ -1968,6 +2019,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const pinJumpLandedRef = useRef<typeof pinJump>(null);
   useEffect(() => {
     if (!pinJump || pinJump === pinJumpLandedRef.current) return;
+    const sectionMsg = sectionMsgIdOf(pinJump.pinKey);
+    if (sectionMsg) {
+      if (stackMode && currentKey !== ROOT_THREAD_KEY) return;
+      pinJumpLandedRef.current = pinJump;
+      jumpToPlace(sectionMsg, undefined, 'outline-section', { armBack: false });
+      return;
+    }
     const pin = pinsApi.pins.find((p) => pinKeyOf(p) === pinJump.pinKey);
     if (!pin) return;
     if (stackMode && rowThreadKey(pin.msgId) !== currentKey) return;
@@ -3504,13 +3562,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const seq = questionSeqOfRow(row);
     return seq === null ? [] : [seq];
   };
+  // Where each finished turn ends: the recorded turns, and the stream's own
+  // boundary (a turn that ended before questions were tracked was never recorded,
+  // and a line taken mid-turn is told from one that opened a turn by it).
+  const liveTurnEnds = turnSegmentsRef.current.map((seg) => seg.end);
+  if (completedLen > 0 && completedLen <= blocks.length && !liveTurnEnds.includes(completedLen)) {
+    liveTurnEnds.push(completedLen);
+    liveTurnEnds.sort((x, y) => x - y);
+  }
   const lineOwners = hasQuestions && takenLines.reports
     ? liveLineOwners(blocks, takenLines, lineKeyOf, lineSeqsOf, (b) => {
       const tag = b.type === 'text' ? parseQuestionTag(b.content) : null;
       const key = tag ? keyBySeq.get(tag.seq) : undefined;
       return tag && key !== undefined ? { key, seq: tag.seq } : null;
-    }, turnSegmentsRef.current.map((seg) => seg.end))
+    }, liveTurnEnds)
     : NO_LINE_OWNERS;
+  // Questions Claude Code took while a turn ran: never that turn's owner by position.
+  const midTurnLines = hasQuestions && takenLines.reports ? midTurnQuestionLines(blocks, takenLines, lineSeqsOf, liveTurnEnds) : NO_MID_TURN_LINES;
+  const takenMidTurn = (m: OptimisticMessage) => (!!m.userUuid && midTurnLines.has(m.userUuid)) || (!!m.queueId && midTurnLines.has(m.queueId));
   const liveTurnStart = turnSegmentsRef.current.length > 0 ? turnSegmentsRef.current[turnSegmentsRef.current.length - 1].end : 0;
   const liveTagKey = hasQuestions && blocks.length > liveTurnStart
     ? tagKeyAtBlock(blocks, liveTurnStart, blocks.length, blocks.length - 1, keyBySeq) : null;
@@ -3528,7 +3597,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     let nextQueued: OptimisticMessage | undefined;
     for (let i = deduped.length - 1; i >= 0; i--) {
       const m = deduped[i];
-      if (m.role !== 'user' || m.status === 'failed') continue;
+      if (m.role !== 'user' || m.status === 'failed' || takenMidTurn(m)) continue;
       if (m.status === 'pending' || m.status === 'received') { nextQueued = m; continue; }
       return optimisticThreadKey(m);
     }
@@ -3558,6 +3627,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const m of deduped) {
       if (m.role !== 'user' || m.status !== 'delivered' || book.seen.has(rowIdOf(m))) continue;
       book.seen.add(rowIdOf(m));
+      // A question delivered while the turn already ran is taken mid-turn (the
+      // server never holds it back) or opens the next turn, and its marker says
+      // which: it is no delivery a turn may claim by order.
+      if (takenLines.reports && book.wasStreaming && isStreaming && !!m.requestedHints?.question) continue;
       fresh.push(m);
     }
     const entries = deliveryEntries(fresh.map((m) => ({ key: optimisticThreadKey(m), uuid: !!m.userUuid })));
@@ -3595,9 +3668,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [sessionId]);
 
   /** The page a live block renders on: the line Claude Code took before it (its
-   *  marker, stream/chat-order.ts), else the newest tag at or before it in its
-   *  turn, else that turn's recorded owner, else the live turn's key (tag first,
-   *  see liveStreamKey). */
+   *  marker, stream/chat-order.ts; a question taken mid-turn only through its
+   *  tag), else its own tag (a block with no words: the turn's first words'),
+   *  else that turn's recorded owner, else the live turn's key (tag first, see
+   *  liveStreamKey). */
   let blockTags: { segs: readonly StreamTurnSegment[]; keys: Array<string | null> } | null = null;
   const pageKeyOfBlock = (index: number): string => {
     const byLine = lineOwners[index];
@@ -3688,6 +3762,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // from its question; once it ended, no longer live.
       else if (status === 'processing' && isStreaming && !leftKeys.has(threadTree.byRow.get(rowId)?.key ?? '')) queued.push({ rowId, status });
     }
+    // A question taken mid-turn in the turn still running may yet get its tag: it
+    // waits on that turn, it has not gone unanswered (a reload drops its bubble).
+    if (isStreaming) {
+      for (const rowId of threadStats.openMidTurn) {
+        turnEnds.delete(rowId);
+        if (!leftKeys.has(threadTree.byRow.get(rowId)?.key ?? '')) queued.push({ rowId, status: 'processing' });
+      }
+    }
     const answeredAt = new Map(threadStats.answeredAt);
     for (const [key, at] of streamEnds) if (at > (answeredAt.get(key) ?? 0)) answeredAt.set(key, at);
     const streamingKey = isStreaming ? liveStreamKey : null;
@@ -3767,6 +3849,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     drafts: stack.drafts,
     currentKey: hasQuestions ? targetKey : null,
     doneGroupsOpen: mapDoneOpen,
+    sections: mapSections,
   }, () => isAtBottom.current);
   const mapCounts = useMemo(
     () => (threadMap.shape ? threadCounts(threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys) : null),
@@ -3869,8 +3952,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           return next;
         });
         return;
-      case 'pin':
+      case 'pin': case 'section':
         if (row.pinKey) handleTocJump(row.pinKey);
+        return;
+      case 'section-group':
+        setMapDoneOpen((prev) => {
+          const next = new Set(prev);
+          if (next.has(SECTIONS_GROUP_KEY)) next.delete(SECTIONS_GROUP_KEY); else next.add(SECTIONS_GROUP_KEY);
+          return next;
+        });
         return;
       case 'root': case 'thread': case 'pending': case 'draft':
         // Conversation Mode: the row is the composer's target, and its card
@@ -5553,7 +5643,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               containerRef={containerRef}
               sessionId={sessionId}
               onPin={pinsApi.pinQuote}
-              {...(threadsApi.canAsk ? { onAsk: askAboutQuote } : {})}
+              {...(threadsApi.canAsk ? { onAsk: askAboutQuote, askMode: askModeOf(stackMode ? 'stack' : 'linear') } : {})}
               {...(onQuoteInChat ? { onQuoteInChat } : {})}
             />
             <QuotePinPopover

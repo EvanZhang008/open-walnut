@@ -3333,8 +3333,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('thread-ai')) {
     const { startThreadTitler } = await import('../core/sessions/thread-title.js')
     const { startThreadTakeaways } = await import('../core/sessions/thread-takeaway.js')
+    // The outline's sections of a long conversation (turn-titles.ts), same gate.
+    const { startTurnTitler } = await import('../core/sessions/turn-titles.js')
     for (const h of threadAiHandles) h.stop()
-    threadAiHandles = [startThreadTitler(), startThreadTakeaways()]
+    threadAiHandles = [startThreadTitler(), startThreadTakeaways(), startTurnTitler()]
   }
 
   // Revoke steps another process (`walnut device revoke`) or a bridge outage

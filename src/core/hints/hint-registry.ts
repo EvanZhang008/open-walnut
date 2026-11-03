@@ -113,7 +113,9 @@ const BUILT_IN: readonly HintSpec[] = [
       if (!seq || !/^\d{1,5}$/.test(seq)) return null;
       return {
         arg: seq,
-        text: `this message is question ${seq} of this conversation. Begin your reply with the line "[Q${seq}]" (nothing else on that line) so the reply is filed under question ${seq}.`,
+        // A message without the tag is filed with the turn it was written in (a question
+        // read mid-turn owns only the messages that open with its tag, web/src/stream/chat-order.ts).
+        text: `this message is question ${seq} of this conversation. Begin your reply with the line "[Q${seq}]" (nothing else on that line) so the reply is filed under question ${seq}. If you answer it in more than one message, or while you are doing other work, begin each message of the answer with that line.`,
       };
     },
   },

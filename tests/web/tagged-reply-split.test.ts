@@ -74,7 +74,7 @@ describe('splitTaggedReplies', () => {
     expect(cardTurnsOf(rows, tree.byKey.get(k1))[0].replies.map((r) => r.text)).toEqual(['[Q1]\nAlpha means one.']);
   });
 
-  it('a tag hands what follows it to its question, as the live view files it', async () => {
+  it('a tag files the part it opens in its row; the rows after it are the turn\'s again (2026-11-03)', async () => {
     const rows = splitTaggedReplies([
       user('u1', 'Run two commands.'),
       midTurn('queue-1', 'src-q1', 'Why?', 1),
@@ -82,8 +82,8 @@ describe('splitTaggedReplies', () => {
       reply('a2', 'Both commands ran.'),
     ]);
     expect(rows.map((r) => [r.msgId, r.text])).toEqual([
-      ['u1', 'Run two commands.'], ['a1', 'First step done.'],
-      ['queue-1', 'Why?'], ['a1~1', '[Q1]\nBecause.'], ['a2', 'Both commands ran.'],
+      ['u1', 'Run two commands.'], ['a1', 'First step done.'], ['a2', 'Both commands ran.'],
+      ['queue-1', 'Why?'], ['a1~1', '[Q1]\nBecause.'],
     ]);
     // The row's id stays on its first part with its thinking; its tool calls follow the tag.
     expect(rows.find((r) => r.msgId === 'a1')).toMatchObject({ thinking: 'plan' });
@@ -98,12 +98,16 @@ describe('splitTaggedReplies', () => {
     expect(b.find((r) => r.msgId === 'a2~1')).toBe(a.find((r) => r.msgId === 'a2~1'));
   });
 
-  it('changes nothing without a mid-turn question or without its tag', () => {
+  it('changes nothing without a mid-turn question; without its tag the turn keeps its reply', () => {
     const plain = [user('u1', 'hi'), reply('a1', 'Done.\n[Q1]\nx')];
     expect(splitTaggedReplies(plain)).toBe(plain);
-    // The model answered without the tag: the rows stay as the transcript has them.
-    const untagged = [user('u1', 'go'), midTurn('queue-1', 'src-q1', 'Why?', 1), reply('a1', 'Because.')];
-    expect(splitTaggedReplies(untagged)).toBe(untagged);
+    // No tag: the words after the question are the running turn's (2026-11-03,
+    // the main turn's reply read as the question's answer). The question has none.
+    const untagged = [user('u1', 'go'), midTurn('queue-1', 'src-q1', 'Why?', 1), reply('a1', 'Done.')];
+    expect(splitTaggedReplies(untagged).map((r) => r.msgId)).toEqual(['u1', 'a1', 'queue-1']);
+    // Nothing after it yet: as the transcript has it.
+    const waiting = [user('u1', 'go'), reply('a0', 'Working.'), midTurn('queue-1', 'src-q1', 'Why?', 1)];
+    expect(splitTaggedReplies(waiting)).toBe(waiting);
     // An idle-time question is its own turn already.
     const idle = [user('u1', 'go'), reply('a1', 'ok'), { ...user('u2', 'Why?'), hints: [{ kind: 'question', arg: '1' }] }, reply('a2', '[Q1]\nBecause.')];
     expect(splitTaggedReplies(idle)).toBe(idle);

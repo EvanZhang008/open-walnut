@@ -31962,6 +31962,19 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   background: rgba(250, 204, 21, 0.85);
 }
 
+/* A section of a long conversation (one of your messages, named by the AI): a
+   plain grey mark, lighter than a pin, so the pins still stand out among them. */
+.session-toc-tick--section,
+.session-toc-dash--section {
+  width: 10px;
+  background: var(--fg-muted);
+  opacity: 0.75;
+}
+/* A long outline stays on screen: its entries scroll inside their own box,
+   with Back always in view under them. */
+.session-toc-panel { display: flex; flex-direction: column; max-height: min(70vh, 560px); }
+.session-toc-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
 /* ── Quote pins: the selection pill and the passage popover ───────────────────
    Both are portalled to <body> and positioned by useMenuPlacement (fixed
    top/right + a height cap), so they only own their looks here. */
@@ -31993,6 +32006,21 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 .quote-pin-pill-btn:hover { background: var(--bg-hover); }
 .quote-pin-pill-btn:disabled { opacity: 0.45; cursor: default; background: none; }
+/* Ask here's caret sits flush against it: one control, two parts. */
+.quote-pin-pill-btn.quote-ask-mode-btn { padding: 4px 5px; margin-left: -3px; color: var(--fg-muted); }
+/* The choice: inline or in Tree, each with what it does under its name. */
+.quote-ask-modes { display: flex; flex-direction: column; gap: 2px; padding: 1px; }
+.quote-pin-pill-btn.quote-ask-mode {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 7px;
+  row-gap: 3px;
+  padding: 6px 9px;
+  text-align: left;
+}
+.quote-ask-mode > svg { grid-row: span 2; align-self: center; }
+.quote-ask-mode-hint { color: var(--fg-muted); font-size: 11px; }
+.quote-ask-mode.is-current { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 
 /* The pill's Comment box: the note that goes under the quote in the composer. */
 .quote-pin-comment {

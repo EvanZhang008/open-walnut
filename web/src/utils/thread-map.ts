@@ -14,6 +14,7 @@ import type { ThreadDraftRow, ThreadPendingPage } from '@/components/sessions/th
 import type { ThreadTree } from '@/utils/thread-tree';
 import type { ThreadLiveState, ThreadMetaIndex } from '@/utils/thread-meta';
 import { flattenTree, type TreeRow } from '@/utils/thread-tree-rows';
+import { SECTIONS_GROUP_KEY, sectionKeyOf } from '@/utils/outline-sections';
 
 export type ThreadMapShape = 'panel' | 'rail';
 
@@ -57,14 +58,53 @@ export interface MapRowsInput {
   drafts?: readonly ThreadDraftRow[];
   /** The page on screen, or Conversation Mode's target; null when neither. */
   currentKey: string | null;
-  /** Parents whose `<n> done` group the user opened in the map. */
+  /** Parents whose `<n> done` group the user opened in the map (and
+   *  SECTIONS_GROUP_KEY once the sections group is open). */
   doneGroupsOpen: ReadonlySet<string>;
+  /** The main conversation's sections (outline-sections.ts), in transcript order. */
+  sections?: readonly MapSection[];
+}
+
+export interface MapSection { msgId: string; label: string }
+
+export const sectionsGroupText = (n: number): string => `${n} sections`;
+
+/** The sections as one `<n> sections` group closing the main conversation's
+ *  rows (folded until opened: the map is about questions, the sections are
+ *  one click away), and the root row says it has children. */
+function withSections(rows: TreeRow[], sections: readonly MapSection[], open: boolean): TreeRow[] {
+  const rootAt = rows.findIndex((r) => r.kind === 'root');
+  if (rootAt < 0 || sections.length === 0) return rows;
+  const root = rows[rootAt];
+  const out = rows.slice();
+  out[rootAt] = { ...root, hasChildren: true };
+  // After the root's own subtree (the map has no hidden group after it).
+  let end = rootAt + 1;
+  while (end < out.length && out[end].depth > 0) end += 1;
+  const groupId = 'sections';
+  const added: TreeRow[] = [{
+    id: groupId, kind: 'section-group', key: SECTIONS_GROUP_KEY, depth: 1, parentRowId: root.id, hue: root.hue,
+    title: sectionsGroupText(sections.length), hasChildren: true, expanded: open, disclosureDisabled: false,
+    matched: true, ancestorOnly: false, current: false, openBelow: 0, groupCount: sections.length,
+  }];
+  if (open) {
+    for (const s of sections) {
+      added.push({
+        id: `s:${s.msgId}`, kind: 'section', key: root.key, depth: 2, parentRowId: groupId, hue: root.hue,
+        title: s.label, tooltip: s.label, msgId: s.msgId, pinKey: sectionKeyOf(s.msgId),
+        hasChildren: false, expanded: false, disclosureDisabled: true, matched: true, ancestorOnly: false,
+        current: false, openBelow: 0,
+      });
+    }
+  }
+  out.splice(end, 0, ...added);
+  return out;
 }
 
 /** The map's rows: the drawer's All view (root, questions, pins, done groups,
  *  the pending page and drafts). Hidden questions and their pins never appear. */
 export function mapRows(input: MapRowsInput): TreeRow[] {
-  return flattenTree(input.tree, input.index, input.pins, input.live, {
+  const rows = flattenTree(input.tree, input.index, input.pins, input.live, {
     filter: 'all',
     query: '',
     collapsed: NO_KEYS,
@@ -74,6 +114,9 @@ export function mapRows(input: MapRowsInput): TreeRow[] {
     ...(input.drafts ? { drafts: input.drafts } : {}),
     currentKey: input.currentKey ?? NO_PAGE,
   }).rows;
+  return input.sections?.length
+    ? withSections(rows, input.sections, input.doneGroupsOpen.has(SECTIONS_GROUP_KEY))
+    : rows;
 }
 
 /** Rows that are a question (or hold one): a pin alone is not. */

@@ -16,11 +16,19 @@
  * as one turn, so the whole reply (and the turn's own tool calls after the
  * question) was filed under the LAST question sent: question 1 read New with no
  * answer, the main conversation lost its own reply (2026-10-29 real-CLI run).
+ * Without any tag it was worse: the turn went on with its own work after taking
+ * the question, and its whole reply read as the question's answer (2026-11-03,
+ * the user: "this is not answer question of this thread").
  *
- * This splits such a reply at those lines and lays the rows out the way the
- * turns were meant: the turn's own rows first, then each question with the part
- * of the reply under its tag. Only a CLI turn with a mid-turn question AND a tag
- * for it is touched; everything else is returned as it is (same array).
+ * This lays the rows out the way the turns were meant: the turn's own rows
+ * first, then each question with the part of the reply under its tag, and
+ * nothing when the model never wrote its tag (the question reads No answer). A
+ * tag files the part it opens, up to the next tag or the end of its row (one
+ * reply message); the rows after it are the turn's again. Only a CLI turn with a
+ * question taken mid-turn is touched; everything else is returned as it is
+ * (same array). Every positional reader (the thread tree, the stats, the card,
+ * the review sidebar) reads these rows, so they all agree
+ * (tests/web/question-answer-readers-guard.test.ts).
  *
  * Pure: unit tested in tests/web/tagged-reply-split.test.ts.
  */
@@ -41,7 +49,7 @@ export interface SplitRow {
 const TAG_LINE = /^[ \t]*(?:\*\*|__)?\[Q\s?(\d{1,5})\]/gm;
 
 /** A user line the CLI took while a turn ran: kept only as a `queue-…` row. */
-function isMidTurn(m: SplitRow): boolean {
+export function isMidTurn(m: { role: string; sourceUuid?: string; msgId?: string }): boolean {
   return m.role === 'user' && (!!m.sourceUuid || !!m.msgId?.startsWith('queue-'));
 }
 
@@ -93,12 +101,21 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
   if (!rows.some((m) => midTurnSeq(m) !== null)) return rows;
   const out: M[] = [];
   let changed = false;
+  /** The question number of the line that started the turn now running (null: none). */
+  let turnSeq: number | null = null;
   let sawTurn = false;
   let i = 0;
+  // A mid-turn line of the turn's own question (a follow-up typed in it) goes on
+  // with that turn: what follows is the same question's either way.
+  const asked = (m: M) => { const seq = midTurnSeq(m); return seq !== null && seq !== turnSeq ? seq : null; };
   while (i < rows.length) {
     const first = rows[i];
-    if (!sawTurn || midTurnSeq(first) === null) {
-      if (first.role === 'user') sawTurn = true;
+    if (!sawTurn || asked(first) === null) {
+      if (first.role === 'user') {
+        sawTurn = true;
+        if (!isMidTurn(first)) turnSeq = questionSeqOfRow(first);
+        else if (midTurnSeq(first) === null) turnSeq = null;
+      }
       out.push(first);
       i++;
       continue;
@@ -109,15 +126,16 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
     // repeats (2026-10-31: a main line's answer opened with `[Q6]` and was filed
     // under question 6).
     let end = i + 1;
-    while (end < rows.length && !(rows[end].role === 'user' && midTurnSeq(rows[end]) === null)) end++;
+    while (end < rows.length && !(rows[end].role === 'user' && asked(rows[end]) === null)) end++;
     const stretch = rows.slice(i, end);
-    const questions = new Map<number, M>();
+    // Every row the stretch's questions were asked in, per number, in order.
+    const questions = new Map<number, M[]>();
     for (const r of stretch) {
-      const seq = midTurnSeq(r);
-      if (seq !== null && !questions.has(seq)) questions.set(seq, r);
+      const seq = asked(r);
+      if (seq !== null) questions.set(seq, [...(questions.get(seq) ?? []), r]);
     }
     const seqs = new Set(questions.keys());
-    const placed = new Set<M>(questions.values());
+    const placed = new Set<M>([...questions.values()].flat());
     const own: M[] = [];
     const answers = new Map<number, M[]>();
     const put = (seq: number | null, row: M) => {
@@ -126,20 +144,16 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
       list.push(row);
       answers.set(seq, list);
     };
-    // The live view's rule (question-tag.ts blockTagKeys): a tag line hands what
-    // follows it, in this row and the rows after, to that question until the next
-    // tag. What comes before the first tag is the turn's own: the live view, which
-    // cannot see when a question was sent, gives it to the first tagged question,
-    // but here the question's own row marks that moment, and the turn's work and
-    // answer after it ("ROOT-DONE" above) are still the turn's.
-    let cur: number | null = null;
-    let split = false;
+    // A tag line hands what follows it IN ITS ROW (one reply message) to that
+    // question, up to the next tag; the rows after it, and what comes before the
+    // first tag, are the turn's own (the live view's rule, question-tag.ts
+    // blockTagKeys). The question's own row marks when it was taken: the turn's
+    // work and answer after it ("ROOT-DONE" above) are still the turn's.
     for (const r of stretch) {
       if (placed.has(r)) continue;
       const parts = r.role === 'assistant' && r.text ? cutAtTags(r.text, seqs) : null;
-      if (!parts || (parts.length === 1 && parts[0].seq === null)) { put(cur, r); continue; }
-      split = true;
-      const sig = `${[...seqs].join(',')}|${cur ?? ''}`;
+      if (!parts || (parts.length === 1 && parts[0].seq === null)) { put(null, r); continue; }
+      const sig = [...seqs].join(',');
       const hit = partsCache.get(r);
       const segs = hit && hit.sig === sig ? hit.segs as M[] : parts.map((p, n) => {
         // The first part keeps the row's id (live blocks and anchors name it); its
@@ -150,20 +164,12 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
         return seg;
       });
       if (segs !== hit?.segs) partsCache.set(r, { sig, segs });
-      parts.forEach((p, n) => {
-        const seq = p.seq ?? cur;
-        if (p.seq !== null) cur = p.seq;
-        put(seq, segs[n]);
-      });
+      parts.forEach((p, n) => put(p.seq, segs[n]));
     }
-    if (!split) {
-      out.push(...stretch);
-    } else {
-      changed = true;
-      out.push(...own);
-      for (const [seq, q] of questions) out.push(q, ...(answers.get(seq) ?? []));
-    }
+    changed = true;
+    out.push(...own);
+    for (const [seq, asks] of questions) out.push(...asks, ...(answers.get(seq) ?? []));
     i = end;
   }
-  return changed ? out : rows;
+  return changed && out.some((r, k) => r !== rows[k]) ? out : rows;
 }

@@ -50,8 +50,9 @@ async function centreText(page: Page, panel: Locator, phrase: string): Promise<v
   await centreInHistory(page, panel, phrase)
 }
 
-/** Press Ask on the selected passage: Ask here asks in Conversation Mode
- *  (2026-10-23), the card opens beside the passage with its own box focused. */
+/** Press Ask on the selected passage. The session has no question yet, so it
+ *  reads as Conversation Mode, where Ask here opens the card beside the passage
+ *  with its own box focused. */
 async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
   await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
@@ -133,7 +134,7 @@ test.describe('Question AI on the fixture server', () => {
     const t0 = Date.now()
     await centreText(page, panel, PASSAGE)
     await selectPassage(page, panel, PASSAGE)
-    // Sent from the question's card (Ask here asks in Conversation Mode): the
+    // Sent from the question's card (the first Ask opens a card): the
     // card's title is the first place the name shows.
     await sendFromCard(await pressAsk(page, panel), 'why merge once a minute')
     await expect(panel.locator('.thread-card .thread-card-title')).toHaveText('Why Merge Once', { timeout: 20_000 })

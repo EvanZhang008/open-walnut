@@ -8,9 +8,9 @@
  * already once per frame of DOM change at most) and when the box resizes. A
  * measure that moved nothing changes no state.
  */
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ThreadMark } from '@/utils/thread-mark-hit';
-import { anchorsSig, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, type ReviewGutter } from '@/utils/review-sidebar';
+import { anchorsSig, passageNearView, REVIEW_CARD_W, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, type ReviewGutter } from '@/utils/review-sidebar';
 import { useReviewSidebarCollapsed } from './useReviewSidebarCollapsed';
 import { log } from '@/utils/log';
 
@@ -38,6 +38,25 @@ export interface ReviewSidebar {
 }
 
 const NO_ANCHORS: ReadonlyMap<string, number> = new Map();
+
+/** How much taller the text runs with the card column beside it (its width over
+ *  the text's width then): a passage's distance from the top row grows by it. */
+function narrowScale(box: HTMLElement): number {
+  const cs = getComputedStyle(box);
+  const text = box.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  const narrow = text - REVIEW_CARD_W - 20;
+  return narrow > 120 ? Math.max(1, text / narrow) : 1;
+}
+
+/** The first row whose bottom is below the box's top, and where it sits. */
+function topRowOnScreen(box: HTMLElement): { id: string; top: number } | null {
+  const boxTop = box.getBoundingClientRect().top;
+  for (const row of box.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    const r = row.getBoundingClientRect();
+    if (r.bottom > boxTop) return { id: row.dataset.messageId ?? '', top: r.top - boxTop };
+  }
+  return null;
+}
 const REVIEW_EMPTY_HOLD_MS = 1200;
 
 /**
@@ -165,7 +184,61 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
     const t = setTimeout(() => setHeld(false), REVIEW_EMPTY_HOLD_MS);
     return () => clearTimeout(t);
   }, [available, anchors.size]);
+  // Open, the column takes its room only while a card is on screen or about to
+  // be (2026-11-03, the user: the chat should be "almost 100%" wide when the
+  // review side bar is there with nothing in it; a long conversation with a few
+  // asks left a 360px blank column beside the text). Coming needs a passage
+  // within half a screen of the visible box, going needs none within a whole
+  // screen, so a scroll past one card reflows the text once each way; the top
+  // row on screen stays where it was when the text rewraps. Distances are judged
+  // as they would be with the column there: the rewrap alone (narrower text runs
+  // taller) must never carry a passage across a line, or the column would come
+  // and go with no scroll at all.
+  const [near, setNear] = useState(false);
+  const nearRef = useRef(false);
+  const anchorsRef = useRef(anchors);
+  anchorsRef.current = anchors;
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
+  const keep = useRef<{ id: string; top: number } | null>(null);
+  const checkNear = useCallback(() => {
+    const box = containerRef.current;
+    const layer = layerRef.current;
+    let next = false;
+    if (onRef.current && box && layer && anchorsRef.current.size > 0) {
+      const base = layer.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      const scale = nearRef.current ? 1 : narrowScale(box);
+      next = passageNearView([...anchorsRef.current.values()].map((t) => (base + t) * scale), box.clientHeight, nearRef.current);
+    }
+    if (next === nearRef.current) return;
+    // Folded, the bar stays as it is: nothing rewraps, so no row is held.
+    keep.current = box && !collapsedRef.current ? topRowOnScreen(box) : null;
+    nearRef.current = next;
+    setNear(next);
+  }, [containerRef]);
+  useEffect(() => {
+    const el = containerRef.current;
+    checkNear();
+    if (!available || !el || anchors.size === 0) return;
+    let raf = 0;
+    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; checkNear(); }); };
+    el.addEventListener('scroll', later, { passive: true });
+    return () => { el.removeEventListener('scroll', later); if (raf) cancelAnimationFrame(raf); };
+  }, [available, anchors, containerRef, checkNear]);
+
   // Folded, the bar is there only while a card would be: its count is never 0.
-  const gutter = reviewGutterOf({ available, collapsed, cards: anchors.size > 0 || (held && !collapsed) ? Math.max(1, anchors.size) : 0 });
+  const cards = anchors.size > 0 || (held && !collapsed) ? Math.max(1, anchors.size) : 0;
+  const gutter = reviewGutterOf({ available, collapsed, cards: collapsed || near ? cards : 0 });
+  // The text rewraps when the column comes or goes: hold the top row on screen.
+  useLayoutEffect(() => {
+    const k = keep.current;
+    keep.current = null;
+    const box = containerRef.current;
+    if (!k || !box) return;
+    const row = box.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(k.id)}"]`);
+    if (!row) return;
+    const delta = row.getBoundingClientRect().top - box.getBoundingClientRect().top - k.top;
+    if (Math.abs(delta) >= 1) box.scrollTop += delta;
+  }, [gutter, containerRef]);
   return { available, gutter, on: gutter === 'open', collapsed, setCollapsed, layerRef, anchors, onMarks };
 }

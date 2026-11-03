@@ -22,6 +22,11 @@
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 
+/** The outline's PIN entries: a long conversation also lists its sections (one
+ *  per message you sent, utils/outline-sections.ts), which these checks are not about. */
+const PIN_TICK = '.session-toc-tick:not(.session-toc-tick--section)'
+const PIN_ROW = '.session-toc-row:not([data-section])'
+
 const SESSION_ID = 'pw-pins-session'
 const TASK_ID = 'pw-task-pins'
 /** Second user message (index 2 of 52) — outside the 30-row render window, so the
@@ -144,8 +149,8 @@ test.describe('Session outline, message time, and rewind', () => {
     await page.waitForLoadState('networkidle')
     const panel = await openSession(page)
 
-    // No pins yet → no outline at all (an unused feature shows nothing).
-    await expect(panel.locator('.session-toc')).toHaveCount(0)
+    // No pins yet → no pin in the outline (this long conversation still lists its sections).
+    await expect(panel.locator(PIN_TICK)).toHaveCount(0)
 
     // Reveal the head of the transcript so the FIRST message can be pinned; the
     // jump path back to it (after a reload re-windows to the tail) is the
@@ -169,7 +174,7 @@ test.describe('Session outline, message time, and rewind', () => {
     const late = row(panel, LATE_ASK)
     await hoverRow(page, panel, late)
     await late.locator('.msg-pin-btn').click()
-    await expect(panel.locator('.session-toc-tick')).toHaveCount(1)
+    await expect(panel.locator(PIN_TICK)).toHaveCount(1)
     const early = row(panel, EARLY_ASK)
     await hoverRow(page, panel, early)
     await early.locator('.msg-pin-btn').click()
@@ -184,12 +189,12 @@ test.describe('Session outline, message time, and rewind', () => {
     const toc = panel.locator('.session-toc')
     const rail = toc.locator('.session-toc-rail')
     await expect(rail).toBeVisible()
-    await expect(toc.locator('.session-toc-tick')).toHaveCount(2)
+    await expect(toc.locator(PIN_TICK)).toHaveCount(2)
     await expect(toc.locator('.session-toc-panel')).toHaveCount(0)
 
     // 2. Hover expands it into the labelled list, in transcript order.
     await rail.hover()
-    const items = toc.locator('.session-toc-item')
+    const items = toc.locator(`${PIN_ROW} .session-toc-item`)
     await expect(items).toHaveCount(2)
     await expect(items.nth(0)).toContainText(EARLY_ASK)
     await expect(items.nth(1)).toContainText(LATE_ASK)
@@ -203,7 +208,12 @@ test.describe('Session outline, message time, and rewind', () => {
     expect(beforeJump).toBeGreaterThan(0)
 
     await rail.hover()
-    await items.nth(0).click()
+    // A real pointer click at the row. Locator.click() first scrolls its target
+    // into view, and for a row of this sticky list (below the first section
+    // entry) Chromium's scroll-into-view moves the timeline itself, so the jump
+    // would start from a place the reader never was and Back could not match it.
+    const firstPin = (await items.nth(0).boundingBox())!
+    await page.mouse.click(firstPin.x + firstPin.width / 2, firstPin.y + firstPin.height / 2)
     await page.waitForTimeout(900) // smooth scroll + the render-window expansion
     const afterJump = await history.evaluate((el) => el.scrollTop)
     expect(afterJump).toBeLessThan(beforeJump - 100)
@@ -231,7 +241,7 @@ test.describe('Session outline, message time, and rewind', () => {
     const target = row(panel, LATE_ASK)
     await hoverRow(page, panel, target)
     await target.locator('.msg-pin-btn').click()
-    await expect(panel.locator('.session-toc-tick')).toHaveCount(1)
+    await expect(panel.locator(PIN_TICK)).toHaveCount(1)
 
     // Round-trip through the server, not just React state.
     const stored = await page.request.get(`/api/sessions/${SESSION_ID}`)
@@ -245,13 +255,12 @@ test.describe('Session outline, message time, and rewind', () => {
     await page.waitForLoadState('networkidle')
     panel = await openSession(page)
     const toc = panel.locator('.session-toc')
-    await expect(toc.locator('.session-toc-tick')).toHaveCount(1)
+    await expect(toc.locator(PIN_TICK)).toHaveCount(1)
 
-    // Unpin from the outline itself; the last pin taking the whole outline with it
-    // is intended (nothing pinned ⇒ nothing to show).
+    // Unpin from the outline itself: the pin leaves it (the sections stay).
     await toc.locator('.session-toc-rail').hover()
     await toc.locator('.session-toc-unpin').first().click()
-    await expect(panel.locator('.session-toc')).toHaveCount(0)
+    await expect(panel.locator(PIN_TICK)).toHaveCount(0)
     await expect(row(panel, LATE_ASK).locator('.msg-pin-btn')).not.toHaveClass(/is-pinned/)
   })
 

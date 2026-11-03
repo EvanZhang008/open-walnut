@@ -68,9 +68,9 @@ async function centreText(page: Page, panel: Locator, phrase: string): Promise<v
   await centreInHistory(page, panel, phrase)
 }
 
-/** Press Ask on the selected passage. Ask here asks in Conversation Mode
- *  (2026-10-23): the column switches and the card opens beside the passage with
- *  its own box focused. */
+/** Press Ask on the selected passage. A session with no question yet reads as
+ *  Conversation Mode, where Ask here opens the card beside the passage with its
+ *  own box focused. */
 async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
   await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
@@ -89,21 +89,29 @@ async function backToPage(panel: Locator): Promise<void> {
 }
 
 /** Select `phrase` in the paragraph, press Ask and land on its page in Tree
- *  Mode. A session without a question has no mode pill yet: there the question
- *  is sent from its card first (`first`), and the pill that comes with it takes
- *  the column back to the page. */
+ *  Mode. A session without a question has no mode pill yet and reads as
+ *  Conversation Mode: there the question is sent from its card first (`first`),
+ *  and the pill that comes with it takes the column back to the page. Once the
+ *  column is in Tree Mode, Ask here goes straight to the page one level down
+ *  (2026-11-03), with no card. */
 async function askAbout(page: Page, panel: Locator, phrase: string, first?: string): Promise<void> {
   await centreParagraph(page, panel)
   await passageRects(panel, phrase)
   await selectPassage(page, panel, phrase)
-  const card = await pressAsk(page, panel)
-  if (first !== undefined) {
-    const input = card.locator('.thread-card-input')
-    await input.fill(first)
-    await input.press('Enter')
-    await expect(input).toHaveValue('')
-    await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
+  if (first === undefined) {
+    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+    await expectDepth(panel, 1)
+    await expect(panel.locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
+    await composer(panel).click()
+    return
   }
+  const card = await pressAsk(page, panel)
+  const input = card.locator('.thread-card-input')
+  await input.fill(first)
+  await input.press('Enter')
+  await expect(input).toHaveValue('')
+  await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
   await backToPage(panel)
 }
 
@@ -165,7 +173,7 @@ test.describe('Question stack: asking and sending', () => {
     await centreParagraph(page, panel)
     await passageRects(panel, PHRASE)
     await selectPassage(page, panel, PHRASE)
-    // Ask here asks in Conversation Mode; the first question is sent from its
+    // No question yet, so Conversation Mode: the first question is sent from its
     // card (the mode pill comes with the first question).
     const card = await pressAsk(page, panel)
     expect((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).toHaveLength(0)
@@ -311,9 +319,10 @@ test.describe('Question stack: asking and sending', () => {
     const phrase = densePassage('Q9').slice(0, 26)
     await centreText(page, panel, phrase)
     await selectPassage(page, panel, phrase)
-    await pressAsk(page, panel)
-    await switchView(panel, 'stack')
+    // Tree Mode: Ask here pushes the new page straight away, no card.
+    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expectDepth(panel, 1)
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
     // C60: the pending page starts empty; the root draft is untouched.
     await expect(composer(panel)).toHaveValue('')
     await composer(panel).fill('a pending question draft')

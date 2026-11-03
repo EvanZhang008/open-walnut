@@ -142,9 +142,10 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
     if (row.method === 'session:send') sent.push(row.payload)
   }))
   // Tree Mode starts once the session holds a question: answer once, ask about a
-  // passage of that answer and start the long turn from the question's card (Ask
-  // here asks in Conversation Mode, and a session's first question brings the
-  // mode pill), then take the pill to Tree Mode, onto the question page.
+  // passage of that answer and start the long turn from the question's card (a
+  // session with no question reads as Conversation Mode, where Ask here opens a
+  // card, and its first question brings the mode pill), then take the pill to
+  // Tree Mode, onto the question page.
   await page.addInitScript(([key]) => localStorage.setItem(key, 'stack'), [VIEW_MODE_DEFAULT_KEY])
   await openHome(page)
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })

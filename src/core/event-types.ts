@@ -15,6 +15,7 @@ import type {
   SessionStatusSnapshot,
   SessionThreadMeta,
   SessionTurnSpeed,
+  SessionTurnTitle,
 } from './types.js';
 
 // ── Task events ──
@@ -443,6 +444,9 @@ export interface SessionStatusChangedEvent extends SessionStatusSnapshot {
    *  takeaway): the whole stored list, so an open panel adopts it without a
    *  record refetch (it refetches only on result, error and reconnect). */
   threadMeta?: SessionThreadMeta[];
+  /** Present when the background AI titled main-conversation messages: the
+   *  whole stored list (sessions/turn-titles.ts), adopted the same way. */
+  turnTitles?: SessionTurnTitle[];
 }
 
 export interface SessionMessagesDeliveredEvent {

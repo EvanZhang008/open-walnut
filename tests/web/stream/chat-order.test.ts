@@ -66,9 +66,9 @@ describe('liveLineOwners: the question the words after a taken line answer', () 
     expect(owners(blocks)).toEqual(['K6', 'K6', '', '']);
   });
 
-  it('after a question line, the tag files the words (the model may answer an earlier question too)', () => {
+  it('a question taken mid-turn owns only its tagged words: the turn\'s own (ROOT-DONE) stay with the turn (2026-11-03)', () => {
     const blocks = [line('q6'), tool('t1'), line('q7'), text('ROOT-DONE'), text('[Q6] six'), text('[Q7] seven')];
-    expect(owners(blocks)).toEqual(['K6', 'K6', 'K7', 'K7', 'K6', 'K7']);
+    expect(owners(blocks)).toEqual(['K6', 'K6', 'K6', 'K6', 'K6', 'K7']);
   });
 
   it('lines drained together are one run: a main line in it does not close its own question', () => {
@@ -82,7 +82,11 @@ describe('liveLineOwners: the question the words after a taken line answer', () 
   });
 
   it('blocks before the first marker and a stream without markers are left to the older rules', () => {
-    expect(owners([text('before'), line('q6'), text('x')])).toEqual([null, 'K6', 'K6']);
+    // The blocks before belong to a finished turn: the question's line opens its own.
+    expect(liveLineOwners([text('before'), line('q6'), text('x')], takenLinesOf([text('before'), line('q6'), text('x')]), keyOf, seqsOf, tagOf, [1]))
+      .toEqual([null, 'K6', 'K6']);
+    // In the same turn, the question was taken mid-turn: the turn is not its own.
+    expect(owners([text('before'), line('q6'), text('x')])).toEqual([null, null, null]);
     expect(owners([text('[Q6] x')])).toEqual([null]);
   });
 

@@ -17,7 +17,8 @@
 import { backendTitleAvailable, titleViaBackendModel } from '../session-title-backend.js';
 import { log } from '../../logging/index.js';
 
-export type ThreadAiKind = 'title' | 'refine' | 'takeaway';
+/** `sections`: the outline's batch of main-conversation titles (turn-titles.ts). */
+export type ThreadAiKind = 'title' | 'refine' | 'takeaway' | 'sections';
 
 export interface ThreadAiRequest {
   kind: ThreadAiKind;
@@ -66,6 +67,13 @@ function titleCase(list: string[]): string {
 
 /** Deterministic answers the browser specs can assert word for word. */
 export function stubThreadAnswer(req: ThreadAiRequest): string | null {
+  if (req.kind === 'sections') {
+    // One numbered title per numbered input line: its first three words.
+    return req.message.split('\n').map((line) => /^(\d+)\.\s+(.*)$/.exec(line))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => `${m[1]}. ${titleCase(words(m[2], 3)) || 'Stub Section'}`)
+      .join('\n') || null;
+  }
   const title = titleCase(words(req.question, 3)) || 'Stub Question';
   if (req.kind === 'title') return title;
   if (req.kind === 'refine') {
@@ -92,6 +100,10 @@ export async function callThreadAi(req: ThreadAiRequest): Promise<string | null>
   try {
     if (testModel) return await testModel(req);
     if (channel === 'stub') return await stubModel(req);
+    if (req.kind === 'sections') {
+      const { sectionsViaBackendModel } = await import('./turn-titles-backend.js');
+      return await sectionsViaBackendModel(req.message);
+    }
     return await titleViaBackendModel(req.message, req.placeholder, req.requirement);
   } catch (err) {
     log.session.warn('thread ai call threw', {

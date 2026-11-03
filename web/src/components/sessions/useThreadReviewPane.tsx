@@ -63,7 +63,9 @@ export interface ThreadReviewPane {
 export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
   const review = useReviewSidebar({ containerRef: a.containerRef, conversationMode: a.conversationMode, hasQuestions: a.hasQuestions });
   const [selected, setSelected] = useState<string | null>(null);
-  useEffect(() => { setSelected(null); }, [a.sessionId, review.on]);
+  // Not on `on`: the column comes and goes as cards near the view, and a card
+  // picked a screen away is still the one picked when it comes back.
+  useEffect(() => { setSelected(null); }, [a.sessionId, review.available]);
 
   const keys = useMemo(() => [...review.anchors].sort((x, y) => x[1] - y[1]).map(([k]) => k), [review.anchors]);
   // Nothing of this runs while the sidebar is not shown. The messages are

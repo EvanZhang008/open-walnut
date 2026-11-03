@@ -123,6 +123,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/EngineSettingsPopoverBody.tsx#expanded': 'a row unfolded inside a popover',
   'components/sessions/ModelPicker.tsx#detailsOpen': 'details inside the model picker, a popover',
   'components/sessions/QuotePinSelectionBar.tsx#commentOpen': 'one comment being written',
+  'components/sessions/QuotePinSelectionBar.tsx#askPick': 'the Ask here choice for one selection, gone with the pill',
   'components/sessions/SessionChatHistory.tsx#cardOpen': 'one card unfolded',
   'components/sessions/SessionChatHistory.tsx#firstCheckShown': 'held stream rows, not a choice',
   'components/sessions/SessionChatHistory.tsx#mapDoneOpen': 'finished map rows unfolded in one look',

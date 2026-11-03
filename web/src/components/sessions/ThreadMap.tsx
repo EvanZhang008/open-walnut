@@ -124,6 +124,7 @@ const STOP_BACK = 'back';
 /** What a row is called, for a tooltip and a screen reader. */
 function rowName(row: TreeRow): string {
   if (row.kind === 'pin') return `Pinned passage: ${row.tooltip ?? row.title}`;
+  if (row.kind === 'section') return `Section: ${row.title}`;
   if (row.kind === 'done-group' && row.disclosureDisabled) return `${row.title} (holds the page you are on)`;
   if (row.naming) return `${row.title} (naming)`;
   return row.title;
@@ -152,10 +153,11 @@ const Lead = memo(function Lead({ kind, number, expanded }: {
   kind: TreeRow['kind']; number: number | undefined; expanded: boolean;
 }) {
   if (kind === 'pin') return <ThreadPinIcon size={11} className="thread-map-pin" />;
-  if (kind === 'done-group') {
+  if (kind === 'done-group' || kind === 'section-group') {
     return <span className="thread-map-fold" data-open={expanded ? 'true' : undefined}><ThreadChevronIcon size={9} /></span>;
   }
   if (kind === 'root') return <span className="thread-map-root-dot" aria-hidden="true" />;
+  if (kind === 'section') return <span className="thread-map-section-dash" aria-hidden="true" />;
   // A question being asked has no number yet: a plus in the badge's place (an
   // SVG, so a row's text is its title alone).
   if (kind === 'pending' || kind === 'draft') {
@@ -206,7 +208,7 @@ export const MapRow = memo(function MapRow(r: MapRowProps) {
       data-on-path={r.onPath ? 'true' : undefined}
       tabIndex={r.tabIndex}
       aria-current={r.current ? 'page' : undefined}
-      aria-expanded={r.kind === 'done-group' ? r.expanded : undefined}
+      aria-expanded={r.kind === 'done-group' || r.kind === 'section-group' ? r.expanded : undefined}
       aria-disabled={r.disabled ? 'true' : undefined}
       aria-label={r.kind === 'pin' ? r.name : undefined}
       title={r.name}
@@ -396,7 +398,7 @@ function MapList(p: ListProps) {
     const { p: props, byId: rowsById } = live.current;
     const row = rowsById.get(id);
     if (!row || (row.kind === 'done-group' && row.disclosureDisabled)) return;
-    if (row.kind !== 'done-group') props.onDone?.(byKey);
+    if (row.kind !== 'done-group' && row.kind !== 'section-group') props.onDone?.(byKey);
     props.onActivate(row);
   }, []);
   // The row leaves the open list once archived: a keyboard user's focus moves to

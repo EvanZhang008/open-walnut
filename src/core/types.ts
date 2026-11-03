@@ -2705,6 +2705,20 @@ export interface SessionThreadAnchor {
 export type SessionThreadStatus = 'open' | 'suggested' | 'resolved' | 'older';
 
 /**
+ * A short AI title of one main-conversation user message: a section of the
+ * transcript outline (sessions/turn-titles.ts). Keyed by the row's msgId as the
+ * history serves it; written once per message, never rewritten.
+ */
+export interface SessionTurnTitle {
+  /** The user row's msgId (SessionHistoryMessage.msgId), <= 128 chars. */
+  msgId: string;
+  /** 2 to 6 words, <= 80 chars. */
+  title: string;
+  /** ISO time the title was written. */
+  at: string;
+}
+
+/**
  * Per-question navigation metadata, keyed by the question's HEAD user row msgId
  * (the anchor's `msgId`). Walnut-owned, merged by headId on every PATCH (upsert,
  * never a whole-list replace), so a server AI title and a client Done can write
@@ -3108,6 +3122,10 @@ export interface SessionRecord {
   /** Per-question metadata (status, title, takeaway, hidden), keyed by head
    *  msgId and merged by headId on write (see SessionThreadMeta). */
   threadMeta?: SessionThreadMeta[];
+  /** AI titles of the main conversation's user messages: the outline's
+   *  sections in a long session (see SessionTurnTitle). Optional; older
+   *  records and older servers simply have none. */
+  turnTitles?: SessionTurnTitle[];
   /**
    * Git commit SHAs this session produced (extracted from `git commit` tool
    * results by the session indexer, in commit order). The structured half of

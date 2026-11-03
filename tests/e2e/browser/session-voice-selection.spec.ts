@@ -61,9 +61,10 @@ import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 import { FAKE_MIC_ARGS } from './fake-mic'
 import { NO_RECORDER, hasMediaRecorder } from './webkit-recorder'
 
-/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused; the
- *  composer stays on the main conversation (2026-10-27). */
+/** These sessions have no question yet, so they read as Conversation Mode and
+ *  Ask here asks there (the view on screen, 2026-11-03): the question's card
+ *  opens beside the passage with its own box focused; the composer stays on the
+ *  main conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
@@ -523,7 +524,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await page.goto('/')
       const panel = await openSession(page, TREE_SESSION_ID, TREE_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
-      // Ask here asks in Conversation Mode: the first question goes from its card,
+      // No question yet, so Conversation Mode: the first question goes from its card,
       // and the mode pill that comes with it takes the column to its page.
       const pill = await selectPassage(page, panel, PHRASE, TREE_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
@@ -572,7 +573,7 @@ test.describe('Voice input keeps the selected passage', () => {
       const panel = await openSession(page, SEND_SESSION_ID, SEND_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
 
-      // Ask about passage one, send it from the question's card (Ask here asks in
+      // Ask about passage one, send it from the question's card (no question yet, so
       // Conversation Mode). The message is filed under its passage and the answer
       // lands in the card. The anchor was recorded.
       const pill = await selectPassage(page, panel, PHRASE, SEND_SESSION_ID)

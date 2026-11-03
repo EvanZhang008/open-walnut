@@ -135,8 +135,8 @@ test.describe('Question stack review fixes', () => {
     expect(scrollBefore).toBeGreaterThan(100)
     await selectPassage(page, panel, phrase)
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    // Ask here asks in Conversation Mode: the card opens beside the passage and
-    // the passage stays where the reader selected it.
+    // No question yet, so the column reads as Conversation Mode: Ask here opens
+    // the card beside the passage and the passage stays where the reader selected it.
     await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
     await expect(panel.locator('.thread-card')).toBeVisible()
     await page.waitForTimeout(800)

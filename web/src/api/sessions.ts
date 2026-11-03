@@ -697,6 +697,16 @@ export async function stopBackgroundTask(
   return apiPost(`/api/v1/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(taskId)}/stop`, {}, { timeoutMs: 20_000 });
 }
 
+/**
+ * Ask the server to name the untitled sections of a long conversation (the
+ * outline's entries; src/core/sessions/turn-titles.ts). Answers at once; the
+ * titles arrive on `session:status-changed`. `queued: false` with a reason when
+ * the server will not name them (no model for background calls here).
+ */
+export async function requestTurnTitles(sessionId: string): Promise<{ queued: boolean; reason?: string }> {
+  return apiPost(`/api/sessions/${encodeURIComponent(sessionId)}/turn-titles`, {}, { timeoutMs: 10_000 });
+}
+
 /** A model row an ACP provider advertised at session start. */
 export interface CodexModelInfo {
   modelId: string;

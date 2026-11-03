@@ -295,22 +295,28 @@ describe('tagKeyAtBlock / tagKeysOfBlocks', () => {
   const tool = { type: 'tool_call', content: '' };
   const blocks = [{ type: 'thinking', content: 'hm' }, text('[Q1]\nfirst'), tool, text('more on one'), text('[Q2]\nsecond'), tool, text('done')];
 
-  it('gives each block the newest tag at or before it', () => {
+  it('a tag files the block it opens; the work and words after it are the turn\'s (2026-11-03)', () => {
+    // Before any words: the first words' tag. A tool call or untagged words after a
+    // tagged answer went on with the turn's own work, never the question's.
     expect(blocks.map((_, i) => tagKeyAtBlock(blocks, 0, blocks.length, i, keyBySeq)))
-      .toEqual(['k1', 'k1', 'k1', 'k1', 'k2', 'k2', 'k2']);
+      .toEqual(['k1', 'k1', null, null, 'k2', null, null]);
   });
 
-  it('falls back to the first-text rule before any tag, and ignores lane text and unknown numbers', () => {
+  it('falls back to the first-text rule before any words, and ignores lane text; an unknown number is no question\'s', () => {
     const untagged = [text('plain'), tool, text('[Q2]\nlater')];
     expect(tagKeyAtBlock(untagged, 0, 3, 0, keyBySeq)).toBeNull();
     expect(tagKeyAtBlock(untagged, 0, 3, 2, keyBySeq)).toBe('k2');
-    const lane = [text('[Q1]\nmain'), text('[Q2]\nlane', 'tool-9'), text('[Q9]\nunknown')];
-    expect(tagKeyAtBlock(lane, 0, 3, 2, keyBySeq)).toBe('k1');
+    const lane = [tool, text('[Q2]\nlane', 'tool-9'), text('[Q1]\nmain'), text('[Q9]\nunknown')];
+    expect(tagKeyAtBlock(lane, 0, 4, 0, keyBySeq)).toBe('k1');
+    expect(tagKeyAtBlock(lane, 0, 4, 1, keyBySeq)).toBe('k1');
+    expect(tagKeyAtBlock(lane, 0, 4, 3, keyBySeq)).toBeNull();
   });
 
   it('honours the window and lists each named question once, in order', () => {
-    expect(tagKeyAtBlock(blocks, 4, blocks.length, 6, keyBySeq)).toBe('k2');
-    expect(tagKeyAtBlock(blocks, 0, 3, 6, keyBySeq)).toBe('k1');
+    expect(tagKeyAtBlock(blocks, 4, blocks.length, 4, keyBySeq)).toBe('k2');
+    expect(tagKeyAtBlock(blocks, 4, blocks.length, 6, keyBySeq)).toBeNull();
+    expect(tagKeyAtBlock(blocks, 0, 3, 6, keyBySeq)).toBeNull();
+    expect(tagKeyAtBlock(blocks, 2, 4, 2, keyBySeq)).toBeNull();
     expect(tagKeysOfBlocks(blocks, 0, blocks.length, keyBySeq)).toEqual(['k1', 'k2']);
     expect(tagKeysOfBlocks([...blocks, text('[Q1]\nback')], 0, 8, keyBySeq)).toEqual(['k1', 'k2']);
     expect(tagKeysOfBlocks(blocks, 4, blocks.length, keyBySeq)).toEqual(['k2']);
@@ -330,7 +336,7 @@ describe('tagKeyAtBlock / tagKeysOfBlocks', () => {
       return tagKeyAtBlock(runs, from, to, i, keyBySeq);
     });
     expect(keys).toEqual(expected);
-    expect(keys).toEqual([null, null, 'k2', 'k1', 'k1', 'k1', 'k2', null, null]);
+    expect(keys).toEqual([null, null, 'k2', 'k1', 'k1', null, 'k2', null, null]);
     // Ends past the blocks (a reset array) and an empty list are safe.
     expect(blockTagKeys(runs.slice(0, 2), [3, 7], keyBySeq)).toEqual([null, null]);
     expect(blockTagKeys([], [], keyBySeq)).toEqual([]);

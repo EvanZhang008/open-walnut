@@ -456,7 +456,10 @@ show inline after the open ones, other completed hits that show the query fold i
   history box at least `REVIEW_MIN_BOX` (880px) wide, one card per asked passage sits in a
   right gutter (`data-review-sidebar="open"|"collapsed"` on `.session-history`; no attribute and no
   room at all while no card is on screen, held 1.2 s so a re-derive to nothing never reflows the
-  text), level with its passage in content
+  text; open, the column takes its room only while a passage is near the visible box,
+  `passageNearView`, so a long conversation with a few asks reads at full width between them,
+  2026-11-03, the user: "almost 100%", and the top row on screen holds still when the text
+  rewraps), level with its passage in content
   coordinates (measured from the marks' ranges at each re-derive and resize, never per frame) and
   pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A review
   card is its head row (number, title, rounds, state) over the question's WHOLE conversation, the
@@ -489,9 +492,15 @@ show inline after the open ones, other completed hits that show the query fold i
   state, see below), never a per-question hue; an
   archived one keeps its line in grey (`thread-mark-done-neutral`; the fill differs too, for
   WebKit, which may not draw a highlight's underline) while the map folds it into `N archived`,
-  the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
-  (`tagKeyAtBlock`, each block to the newest tag at or before it): a turn that moved on to another
-  question is answering that one, and the question it left is answered. The server never holds a
+  the row that shows it again. **A tag files the block it opens, no further** (`tagKeyAtBlock`,
+  `liveLineOwners`, `splitTaggedReplies`: a text block or reply row opening with `[Qn]` is question
+  n's; the tool calls and words after it are the turn's own again), and **a question taken mid-turn
+  owns nothing by position**: the turn that was running goes on with its own work, so its reply
+  stays with the turn (the main conversation, or the question that started it), and the question
+  reads `No answer` unless a part under its own tag came (2026-11-03, the user: the main turn's
+  reply showed as the question's answer). A question asked while idle starts its own turn and owns
+  it, tag or not. Every reader agrees because the live owners and the split rows are the only
+  places that decide (`tests/web/question-answer-readers-guard.test.ts`). The server never holds a
   question row back from a running turn: it goes to the CLI at once and the CLI queues it (holding
   it hid the user's message for 8 minutes, 2026-10-23); a turn that took one mid-turn claims no
   question (`noteTurnUserUuid(…, undefined)`). **A question being answered scans its line**
@@ -575,12 +584,17 @@ show inline after the open ones, other completed hits that show the query fold i
   Conversation Mode call `unfoldQuestions` (threads-helpers.ts) first. Ratchets:
   `tests/web/thread-fold.test.ts`, `tests/e2e/browser/session-conversation-fold.spec.ts`.
   **The transcript's selection pill has both ways to ask, like the Files tab's** (2026-10-22):
-  `Ask here` asks on the passage, always in Conversation Mode (2026-10-23, the user: "ask here
-  when click default should be conversation mode not in treemode"): from Tree Mode the column
-  switches first (`keepCardOnSwitch`, so the mode change does not close the new card, and
-  `askHold`, which keeps the passage's row where it was selected for `ASK_HOLD_MS` while the
-  folds and turn labels settle) and the card opens beside the passage; the pending question is
-  still the stack's page, so the pill back to Tree Mode shows it. `Quote` and `Comment` keep
+  `Ask here` asks on the passage in the view the reader is in (2026-11-03, the user: "when i
+  tree conversation mode, I ask here one more time it jump to main conversation ... it should
+  directly go to next level since we are in treemode"; it replaced the 2026-10-23 rule that
+  every Ask asked in Conversation Mode): in Tree Mode the question is a page one level below the
+  page the passage is on and the reader is on it; in Conversation Mode the card opens beside the
+  passage. The caret beside Ask here offers the other way for this one question ("people can
+  select inline mode or tree mode for this one"): `Ask inline` from Tree Mode switches the column
+  first (`keepCardOnSwitch`, so the mode change does not close the new card, and `askHold`, which
+  keeps the passage's row where it was selected for `ASK_HOLD_MS` while the folds and turn labels
+  settle), `Ask in Tree` from Conversation Mode switches to Tree Mode onto the new page
+  (`utils/ask-mode.ts`; `tests/web/ask-mode-guard.test.ts` lists every view switch). `Quote` and `Comment` keep
   the passage for the MAIN conversation's next message, never as text in its box (2026-11-01,
   the user's sketch): a `passage_comments` entry on the session record (`useSessionComments`,
   `utils/passage-comments.ts`) that `PassageCommentMarks` paints on the words (orange

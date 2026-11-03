@@ -335,16 +335,20 @@ export async function unfoldQuestions(panel: Locator): Promise<void> {
   await expect(folded).toHaveCount(0)
 }
 
-/** Press the pill's Ask here on a column in Tree Mode and return to that mode.
- *  Ask here always asks in Conversation Mode (2026-10-23): the column switches,
- *  the card opens beside the passage. Specs about the question PAGE then take
- *  the pill back to Tree Mode, where the new question is the page on screen. */
+/** Press the pill's Ask here on a column in Tree Mode: the question is a page one
+ *  level below the page the passage is on, on screen at once (2026-11-03, the
+ *  user: in Tree Mode an Ask "should directly go to next level"). */
 export async function askHereThenTree(page: Page, panel: Locator, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
   await pill.locator('[data-testid="quote-ask-btn"]').click()
-  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
-  await expect(panel.locator('.thread-card')).toBeVisible()
-  await switchView(panel, 'stack')
+  await expect(panel.locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
   await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+}
+
+/** Ask here inline (the card beside the passage, in Conversation Mode) from any
+ *  view: the pill's caret, then "Ask inline". */
+export async function askInline(page: Page, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
+  await pill.locator('[data-testid="quote-ask-mode-btn"]').click()
+  await pill.locator('[data-testid="quote-ask-inline"]').click()
 }
 
 /** Every scrollTop the timeline takes, one sample per frame, from now until

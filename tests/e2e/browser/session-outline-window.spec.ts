@@ -18,6 +18,11 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 
+/** The outline's PIN entries: a long conversation also lists its sections (one
+ *  per message you sent, utils/outline-sections.ts), which these checks are not about. */
+const PIN_TICK = '.session-toc-tick:not(.session-toc-tick--section)'
+const PIN_ROW = '.session-toc-row:not([data-section])'
+
 const SESSION_ID = 'pw-outline-window-session'
 const TASK_ID = 'pw-task-outline-window'
 /** Transcript uuids (test-server.ts longTranscript, prefix 0199bd): pair n is
@@ -84,9 +89,9 @@ test.describe('Outline over a lazy tail', () => {
 
     // 1. The rail reads in TRANSCRIPT order: the early (unloaded) pin first.
     const toc = panel.locator('.session-toc')
-    await expect(toc.locator('.session-toc-tick')).toHaveCount(2)
+    await expect(toc.locator(PIN_TICK)).toHaveCount(2)
     await toc.locator('.session-toc-rail').hover()
-    const rows = toc.locator('.session-toc-row')
+    const rows = toc.locator(PIN_ROW)
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText(`reply ${EARLY}`)
     await expect(rows.nth(1)).toContainText(`reply ${LATE}`)

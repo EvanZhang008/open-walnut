@@ -28,7 +28,9 @@ import { questionNumbers } from '@/utils/question-tag';
 export { hitSnippet, matchRanges, segmentsOf } from '@/utils/thread-search-window';
 
 export type TreeRowKind =
-  | 'root' | 'thread' | 'pin' | 'done-group' | 'pending' | 'draft' | 'removed' | 'hidden-header' | 'hidden';
+  | 'root' | 'thread' | 'pin' | 'done-group' | 'pending' | 'draft' | 'removed' | 'hidden-header' | 'hidden'
+  // The question map only (thread-map.ts): the main conversation's sections.
+  | 'section-group' | 'section';
 
 export type { MatchRange } from '@/utils/thread-search-window';
 
@@ -72,6 +74,8 @@ export interface TreeRow {
    *  shows (quote, question, takeaway), so the row explains it (N23). */
   hitSnippet?: boolean;
   pinKey?: string;
+  /** section: the message it jumps to. */
+  msgId?: string;
   /** done-group: how many resolved children. removed: what the placeholder stands for. */
   groupCount?: number;
   removedOf?: 'thread' | 'pin';

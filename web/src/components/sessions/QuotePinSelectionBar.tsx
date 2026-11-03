@@ -69,6 +69,7 @@ import { fitsAsComment } from '@/utils/passage-comments';
 import { ICON_PIN } from './MessageActionIcons';
 import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
+import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/ask-mode';
 
 /** A speech bubble with a question mark: Ask opens a question page. */
 const ICON_ASK = (
@@ -76,6 +77,15 @@ const ICON_ASK = (
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
     <path d="M6.6 5.6a1.5 1.5 0 1 1 2 1.4c-.4.2-.6.5-.6.9" />
     <path d="M8 9.3v.01" />
+  </svg>
+);
+
+/** Three nodes, one below another: Ask in Tree opens a page one level down. */
+const ICON_TREE = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M3.5 3h4M5.5 3v9.5h4M5.5 7.5h4" />
+    <circle cx="11.5" cy="7.5" r="1.5" />
+    <circle cx="11.5" cy="12.5" r="1.5" />
   </svg>
 );
 
@@ -104,7 +114,10 @@ interface QuotePinSelectionBarProps {
    * no Ask button, which is how a surface without a session record to write
    * anchors to keeps the pill honest.
    */
-  onAsk?: (target: QuotePinTarget) => void;
+  onAsk?: (target: QuotePinTarget, opts?: { mode?: AskMode }) => void;
+  /** Where a plain Ask here lands (the view the reader is in); the caret beside
+   *  it offers the other way for this one question. */
+  askMode?: AskMode;
   /**
    * The text fallback of "Quote" / "Comment": the passage as a Markdown quote in the
    * main conversation's composer. Used only where the passage cannot be kept as a
@@ -197,8 +210,12 @@ function readLiveSelection(
   return { captured, anchor, range, backward: selectionIsBackward(selection) };
 }
 
-export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, onQuoteInChat }: QuotePinSelectionBarProps) {
+export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, askMode = 'inline', onQuoteInChat }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
+  /** The Ask here choice (inline or Tree) is open in place of the buttons. */
+  const [askPick, setAskPick] = useState(false);
+  const askPickRef = useRef(false);
+  askPickRef.current = askPick;
   /** The Comment box is open (the pill shows it instead of its buttons). */
   const [commentOpen, setCommentOpen] = useState(false);
   // Its words are a draft of this passage: a reload, or an Esc, keeps them, and the
@@ -258,6 +275,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     held.clearHold();
     setState(null);
     setCommentOpen(false);
+    setAskPick(false);
   }, [held]);
 
   /**
@@ -335,6 +353,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       if (e.key === 'Escape') {
         // An Esc that cancelled an IME composition is the input method's, not ours.
         if (escComposing.current) { escComposing.current = false; return; }
+        // The Ask choice is a layer of its own: Esc goes back to the buttons.
+        if (askPickRef.current) { setAskPick(false); return; }
         cancelAnimationFrame(raf); dismiss(); return;
       }
       schedule();
@@ -490,22 +510,22 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     dismiss();
   }, [onPin, sessionId, state, dismiss]);
 
-  const ask = useCallback(() => {
+  const ask = useCallback((mode?: AskMode) => {
     if (!state?.msgId || !onAsk) return;
     log.info('session', 'asking about a quoted passage', {
-      sessionId, msgId: state.msgId, chars: state.quote.exact.length,
+      sessionId, msgId: state.msgId, chars: state.quote.exact.length, mode: mode ?? askMode, picked: !!mode,
     });
     onAsk({
       msgId: state.msgId,
       role: state.role,
       ...(state.timestamp ? { timestamp: state.timestamp } : {}),
       quote: state.quote,
-    });
+    }, mode ? { mode } : undefined);
     // Same gesture-time capture as Pin (the quote is already in `state`); the
     // selection goes: the page the Ask opens carries the passage as its quote head.
     window.getSelection()?.removeAllRanges();
     dismiss();
-  }, [onAsk, sessionId, state, dismiss]);
+  }, [onAsk, askMode, sessionId, state, dismiss]);
 
   // Quote and Comment keep the passage as a comment on its words (listed above the
   // composer, sent with the next message); the text fallback is for a passage that
@@ -561,6 +581,14 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     return () => document.removeEventListener('keydown', onDown, true);
   }, [shown]);
 
+  // A new passage starts on the buttons, never on the last one's choice.
+  const passageId = state ? `${state.msgId}|${state.quote.exact}` : '';
+  useEffect(() => { setAskPick(false); }, [passageId]);
+  // The choice opened (by a click or the keyboard): the keyboard is on its first way.
+  useEffect(() => {
+    if (askPick) pillRef.current?.querySelector<HTMLButtonElement>(`[data-testid="quote-ask-${askMode}"]`)?.focus();
+  }, [askPick, askMode]);
+
   if (!state) return null;
 
   // An anchor names its parent by the reply's row id, which only has to be STABLE
@@ -586,7 +614,25 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       // and would unmount this pill before `click` fires.
       onMouseUp={(e) => e.stopPropagation()}
     >
-      {commentOpen ? (
+      {askPick && canAsk ? (
+        <div className="quote-ask-modes" role="group" aria-label="Ask about this passage" data-testid="quote-ask-modes">
+          {ASK_MODES.map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`quote-pin-pill-btn quote-ask-mode${m === askMode ? ' is-current' : ''}`}
+              data-testid={`quote-ask-${m}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => ask(m)}
+              title={ASK_MODE_HINT[m]}
+            >
+              {m === 'inline' ? ICON_ASK : ICON_TREE}
+              <span>{ASK_MODE_LABEL[m]}</span>
+              <span className="quote-ask-mode-hint">{ASK_MODE_HINT[m]}</span>
+            </button>
+          ))}
+        </div>
+      ) : commentOpen ? (
         <div className="quote-pin-comment" data-testid="quote-comment-box">
           <AnswerBox
             value={commentDraft.text}
@@ -633,11 +679,28 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
           className="quote-pin-pill-btn"
           data-testid="quote-ask-btn"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={ask}
-          title="Ask about this passage (opens a question page)"
+          onClick={() => ask()}
+          title={`${ASK_MODE_LABEL[askMode]}: ${ASK_MODE_HINT[askMode].toLowerCase()}`}
         >
           {ICON_ASK}
           <span>Ask here</span>
+        </button>
+      )}
+      {canAsk && (
+        <button
+          type="button"
+          className="quote-pin-pill-btn quote-ask-mode-btn"
+          data-testid="quote-ask-mode-btn"
+          aria-haspopup="true"
+          aria-expanded={askPick}
+          aria-label="Choose how to ask: inline or in Tree"
+          // Held like Comment's: the choice row about to take focus must not lose the passage.
+          onPointerDown={(e) => { if (e.button === 0) hold(); }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => { hold(); setAskPick(true); }}
+          title="Choose how to ask: inline or in Tree"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
       )}
       {canQuote && !!state.text.trim() && (

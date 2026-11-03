@@ -131,8 +131,9 @@ test.describe('Slice 1 fixes, round 3', () => {
     // Wheel the passage to the middle of the box (a real scroll, like a reader).
     await centreInHistory(page, panel, phrase)
     await selectPassage(page, panel, phrase)
-    // Ask here asks in Conversation Mode: the first question is sent from its
-    // card (the mode pill comes only once a question exists).
+    // A session with no question yet reads as Conversation Mode, so Ask here
+    // opens the first question's card (the mode pill comes only once a question
+    // exists).
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
     const box = panel.locator('.thread-card .thread-card-input')
@@ -204,13 +205,12 @@ test.describe('Slice 1 fixes, round 3', () => {
       await page.waitForTimeout(300)
       asked.push(await topOf(phrase))
       await selectPassage(page, panel, phrase)
-      // Ask here opens the question's card in Conversation Mode; the pill takes
-      // the column back to Tree Mode, where the question is the page.
+      // In Tree Mode, Ask here pushes the question as a page one level below the
+      // page the passage is on: no detour through Conversation Mode, no card.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-      await expect(history).toHaveAttribute('data-view-mode', 'linear')
-      await expect(panel.locator('.thread-card')).toBeVisible()
-      await switchView(panel, 'stack')
       await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i + 1))
+      await expect(history).toHaveAttribute('data-view-mode', 'stack')
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await expect(note).toHaveCount(1)
       await page.mouse.move(10, 10)
     }
@@ -416,7 +416,8 @@ test.describe('Slice 1 fixes, round 3', () => {
       await page.waitForTimeout(160)
     }
     await selectPassage(page, panel, phrase)
-    // Ask here asks in Conversation Mode: the card's own box sends it.
+    // No question yet, so the column reads as Conversation Mode: Ask here opens
+    // the card, and the card's own box sends it.
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     const box = panel.locator('.thread-card .thread-card-input')
     await expect(box).toBeFocused()

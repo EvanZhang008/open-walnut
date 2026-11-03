@@ -383,6 +383,8 @@ if (inputFormat === 'stream-json') {
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
           resolve(typeof c === 'string' ? c : JSON.stringify(c));
+        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onInterrupt && takeMidTurn) {
+          takeLineMidTurn(parsed);
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && (onInterrupt || (QUEUE_MIDTURN && cleanTurnThinking))) {
           queuedUserLines.push(parsed);
           if (parsed.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state: 'queued', session_id: outputSessionId }) + '\n');
@@ -567,9 +569,19 @@ let tagSwitch = null;
 // ms, then its tag and first words, and its result lands at the slow delay. A
 // mark can then be looked at waiting (no words yet) and answering (words in).
 let speakAtMs = null;
+// `MOCK_TAKE_MIDTURN` in a slow message's words: a line that arrives while this
+// turn runs is TAKEN mid-turn, as Claude Code hands a queued line to the model at
+// a tool boundary (command_lifecycle queued + started; in the transcript an
+// enqueue, a `queued_command` attachment carrying the sent uuid, a remove), and
+// the turn then goes on with its own work: its final reply is this message's,
+// with no `[Qn]` tag. `MOCK_MIDTURN_ANSWER` in the taken line: the model answers
+// it right away, in a message of its own under its tag.
+let takeMidTurn = false;
 function computeMessageParts() {
   slowDelayMs = 0;
-  const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
+  const decorated = stripInputDecorations(stripBanners(message), questionSeq !== null);
+  takeMidTurn = /(^|\s)MOCK_TAKE_MIDTURN(\s|$)/.test(decorated);
+  const bare = takeMidTurn ? decorated.replace(/\s*MOCK_TAKE_MIDTURN\s*/, ' ').trim() : decorated;
   rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
   const sw = /\s*MOCK_TAG_SWITCH:(\d+):(\d+)\s*/.exec(bare);
   tagSwitch = sw ? { seq: Number(sw[1]), ms: Number(sw[2]) } : null;
@@ -639,6 +651,44 @@ function sayMidTurn(text) {
     persistedUser.parent = uuid;
   }
   process.stdout.write(JSON.stringify({ type: 'assistant', message, session_id: outputSessionId }) + '\n');
+}
+
+/** A line taken while the turn runs (MOCK_TAKE_MIDTURN): Claude Code names it
+ *  queued then started, and writes no user line for it, only the queue entries
+ *  and the `queued_command` attachment at the place the model got it. */
+function takeLineMidTurn(parsed) {
+  const c = parsed.message.content;
+  const text = typeof c === 'string' ? c
+    : Array.isArray(c) ? c.filter((b) => b?.type === 'text').map((b) => b.text ?? '').join('\n') : '';
+  if (parsed.uuid && process.env.MOCK_CLAUDE_NO_LIFECYCLE_CAPS !== '1') {
+    for (const state of ['queued', 'started']) {
+      process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state, session_id: outputSessionId }) + '\n');
+    }
+  }
+  if (persistedUser) {
+    const ts = new Date().toISOString();
+    const uuid = randomUUID();
+    const op = (operation) => JSON.stringify({ type: 'queue-operation', operation, timestamp: ts, sessionId: outputSessionId, content: text });
+    fs.appendFileSync(persistedUser.file, [
+      op('enqueue'),
+      JSON.stringify({
+        sessionId: outputSessionId, cwd: process.cwd(), timestamp: ts, isSidechain: false, type: 'attachment', uuid,
+        parentUuid: persistedUser.parent ?? persistedUser.userId,
+        attachment: { type: 'queued_command', prompt: text, commandMode: 'prompt', ...(parsed.uuid ? { source_uuid: parsed.uuid } : {}) },
+      }),
+      op('remove'),
+    ].join('\n') + '\n');
+    persistedUser.parent = uuid;
+  }
+  // Read the taken line's question number without touching the running turn's.
+  const turnSeq = questionSeq;
+  const bare = stripInputDecorations(stripBanners(text), questionSeq !== null);
+  const seq = questionSeq;
+  questionSeq = turnSeq;
+  if (seq && /(^|\s)MOCK_MIDTURN_ANSWER(\s|$)/.test(bare)) {
+    const words = bare.replace(/\s*MOCK_MIDTURN_ANSWER\s*/, ' ').trim();
+    setTimeout(() => sayMidTurn(`[Q${seq}]\nMid-turn answer: ${words}`), 300);
+  }
 }
 
 // ── stream-json mode: emit JSONL lines ──

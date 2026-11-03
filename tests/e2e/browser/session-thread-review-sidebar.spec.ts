@@ -561,14 +561,32 @@ test.describe('asks on turns that are not loaded', () => {
     await expect(panel.locator('[data-testid="thread-review-bar"]')).toHaveCount(0)
     await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
 
-    // Load the turn: its two asks get their cards and the bar, which folds to a band
-    // counting them.
+    // Load the turn. Its asks are now in the DOM but far above the visible box
+    // (the timeline holds its place at the bottom): a column only takes its room
+    // while an asked passage is near the view (passageNearView), so the text
+    // still has the full width.
     await expect.poll(async () => {
       if (await history.getByText(REVIEW_OLD_PASSAGES[0].slice(0, 20)).count()) return true
       const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
       if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
       return false
     }, { timeout: 20_000, intervals: [300] }).toBe(true)
+    // How many screens above the visible box the lower asked passage sits.
+    const screensAbove = async () => {
+      const box = (await history.boundingBox())!
+      const top = (await passageRects(panel, REVIEW_OLD_PASSAGES[1].slice(0, 30)))[0].top - box.y
+      return -top / box.height
+    }
+    // A column comes for a passage whose top is less than 1.5 screens above the
+    // box's top, and goes once none is within 2 (passageNearView).
+    expect(await screensAbove(), 'the loaded asks sit well above the view').toBeGreaterThan(1.6)
+    await page.waitForTimeout(600)
+    await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
+    await expect(sidebarCards(panel)).toHaveCount(0)
+    // Scrolled to them: the column opens with their two cards and the bar, which
+    // folds to a band counting them.
+    await centreInHistory(page, panel, REVIEW_OLD_PASSAGES[0].slice(0, 30), { at: 0.3 })
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1, { timeout: 15_000 })
     await expect(sidebarCards(panel)).toHaveCount(2, { timeout: 15_000 })
     const bar = panel.locator('[data-testid="thread-review-bar"]')
     await bar.click()
@@ -581,5 +599,15 @@ test.describe('asks on turns that are not loaded', () => {
     await page.waitForTimeout(400)
     await page.screenshot({ path: `${shots}/open-column.png` })
     await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
+
+    // Scrolled far below every asked passage (the last turn), the column gives
+    // its room back: no gutter, no cards; back up, it comes again with its card.
+    await centreInHistory(page, panel, REVIEW_OLD_READY, { at: 0.5 })
+    expect(await screensAbove(), 'the view is more than two screens below the asks').toBeGreaterThan(2.1)
+    await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0, { timeout: 15_000 })
+    await expect(sidebarCards(panel)).toHaveCount(0)
+    await centreInHistory(page, panel, REVIEW_OLD_PASSAGES[0].slice(0, 30), { at: 0.3 })
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1, { timeout: 15_000 })
+    await expect(sidebarCards(panel).filter({ hasText: 'Old point 1' })).toHaveCount(1)
   })
 })

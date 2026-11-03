@@ -101,12 +101,21 @@ export function bubbleIndexOf(
  * hint; [] for a line that asked none), null when unknown.
  * `tagOf` reads a main-lane text block's `[Qn]` reply tag.
  *
- * The words after a marker answer the newest known line of its run (markers with
- * only notices between them: the CLI drained those lines together). A reply tag
- * moves them to its question only when a line of the run asked a question (or is
- * not known here): after a line typed in the main conversation the model's
- * `[Qn]` is an echo of the last tag it saw. The same rule files persisted rows
- * (web/src/utils/question-tag.ts withTagAnchors, tagged-reply-split.ts).
+ * A line taken at the START of a turn (markers with only notices between them:
+ * the CLI drained those lines together) owns the turn: the words after it answer
+ * the newest known line of that run, and a reply tag on the turn's first words
+ * names its owner when a line of the run asked a question (after a line typed in
+ * the main conversation the model's `[Qn]` is an echo of the last tag it saw).
+ *
+ * A line taken MID-TURN (the turn already wrote something) that asked a question
+ * owns nothing by position: the turn goes on with its own work, and only a text
+ * block opening with a reply tag is that question's answer, that block and no
+ * further (2026-11-03: the running turn's reply, untagged, was filed under the
+ * question asked during it). A line typed in the main conversation and taken
+ * mid-turn still takes what follows, as the transcript reads.
+ *
+ * The same rule files persisted rows (web/src/utils/question-tag.ts
+ * withTagAnchors, tagged-reply-split.ts).
  */
 export function liveLineOwners(
   blocks: readonly StreamingBlock[],
@@ -120,34 +129,91 @@ export function liveLineOwners(
 ): Array<string | null> {
   const out: Array<string | null> = new Array(blocks.length).fill(null);
   if (!lines.reports) return out;
+  const asks = (line: StreamingUserLineBlock) => { const s = lineSeqs(line); return s === null || s.length > 0; };
   let run: StreamingUserLineBlock[] = [];
   let runAsks = false;
   let runOpen = false;
-  let owner: string | null = null;
+  let runMid = false;
+  let anyLine = false;
+  /** The turn wrote something (a marker after it was taken mid-turn). */
+  let wrote = false;
+  /** Whose turn it is: the line that started it, or a main line taken since. */
+  let base: string | null = null;
+  /** The turn-start run's first words are still to come (their tag may name the owner). */
+  let firstWords = false;
   let nextEnd = 0;
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     while (nextEnd < turnEnds.length && turnEnds[nextEnd] <= i) {
-      if (turnEnds[nextEnd] === i) { run = []; runAsks = false; runOpen = false; owner = null; }
+      if (turnEnds[nextEnd] === i) {
+        run = []; runAsks = false; runOpen = false; runMid = false; anyLine = false; wrote = false; base = null; firstWords = false;
+      }
       nextEnd++;
     }
     if (b.type === 'user_line') {
-      if (!runOpen) { run = []; runAsks = false; }
+      if (!runOpen) { run = []; runAsks = false; runMid = wrote; }
       run.push(b);
       runOpen = true;
-      const seqs = lineSeqs(b);
-      if (seqs === null || seqs.length > 0) runAsks = true;
-      // The newest known line of the run: the reply follows it, as the transcript reads.
-      owner = null;
-      for (let k = run.length - 1; k >= 0 && owner === null; k--) owner = lineKey(run[k]);
-      out[i] = owner;
+      anyLine = true;
+      if (asks(b)) runAsks = true;
+      // The newest known line of the run that may own what follows by position.
+      let owner: string | null = null;
+      for (let k = run.length - 1; k >= 0 && owner === null; k--) {
+        if (runMid && asks(run[k])) continue;
+        owner = lineKey(run[k]);
+      }
+      if (!runMid) { base = owner; firstWords = true; } else if (owner !== null) base = owner;
+      out[i] = base;
       continue;
     }
-    if (b.type !== 'system') runOpen = false;
-    if (run.length === 0) continue;
-    const tag = b.type === 'text' && !b.parentToolUseId ? tagOf(b) : null;
-    if (tag && runAsks) owner = tag.key;
-    out[i] = owner;
+    if (b.type !== 'system') { runOpen = false; wrote = true; }
+    if (!anyLine) continue;
+    const words = b.type === 'text' && !b.parentToolUseId && /\S/.test(b.content);
+    const tag = words ? tagOf(b) : null;
+    if (words && firstWords) {
+      firstWords = false;
+      if (tag && runAsks && !runMid) { base = tag.key; out[i] = base; continue; }
+    }
+    out[i] = tag && runAsks ? tag.key : base;
+  }
+  return out;
+}
+
+/**
+ * Uuids (and the queue row ids they carry) of the lines Claude Code took MID-TURN
+ * that asked a question (the same
+ * reading as liveLineOwners): such a line never owns the running turn, so the
+ * live turn's key and the turn book skip its bubble.
+ */
+export function midTurnQuestionLines(
+  blocks: readonly StreamingBlock[],
+  lines: TakenLines,
+  lineSeqs: (line: StreamingUserLineBlock) => readonly number[] | null,
+  turnEnds: readonly number[] = [],
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  if (!lines.reports) return out;
+  let wrote = false;
+  let runOpen = false;
+  let runMid = false;
+  let nextEnd = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    while (nextEnd < turnEnds.length && turnEnds[nextEnd] <= i) {
+      if (turnEnds[nextEnd] === i) { wrote = false; runOpen = false; runMid = false; }
+      nextEnd++;
+    }
+    if (b.type === 'user_line') {
+      if (!runOpen) runMid = wrote;
+      runOpen = true;
+      const seqs = lineSeqs(b);
+      if (runMid && (seqs === null || seqs.length > 0)) {
+        out.add(b.uuid);
+        for (const id of b.rowIds ?? []) out.add(id);
+      }
+      continue;
+    }
+    if (b.type !== 'system') { runOpen = false; wrote = true; }
   }
   return out;
 }

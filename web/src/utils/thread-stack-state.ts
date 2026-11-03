@@ -9,6 +9,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import { QUOTE_CONTEXT_CHARS } from '@/utils/text-quote-anchor';
 import { ROOT_THREAD_KEY, THREAD_HUES, normalizePassage, pathToRoot, type ThreadTree } from '@/utils/thread-tree';
 import { stripQuestionTag } from '@/utils/question-tag';
+import { isMidTurn } from '@/utils/tagged-reply-split';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { sessionDraftKey } from '@/utils/composer-insert';
 import {
@@ -420,6 +421,9 @@ export interface ThreadStats {
   answered: Set<string>;
   /** Thread key to its newest question's row id. */
   lastAsk: Map<string, string>;
+  /** Questions taken mid-turn in the newest turn with no answer yet: `silent`
+   *  above, unless that turn is still running (it may still write their tag). */
+  openMidTurn: Set<string>;
 }
 
 const INTERRUPT_RE = /^\[Request interrupted/;
@@ -435,6 +439,7 @@ export function deriveThreadStats(
 ): ThreadStats {
   const out: ThreadStats = {
     answeredAt: new Map(), lastAnswer: new Map(), lastQuestion: new Map(), turnEnds: new Map(), answered: new Set(), lastAsk: new Map(),
+    openMidTurn: new Set(),
   };
   let turnHead: string | undefined;
   let turnKey = '';
@@ -445,10 +450,23 @@ export function deriveThreadStats(
         if (turnHead && !out.answered.has(turnHead)) out.turnEnds.set(turnHead, 'interrupted');
         continue;
       }
+      const takenIn = turnKey;
+      const before = turnHead;
       turnHead = r.sourceUuid ?? r.msgId ?? r.walnutMessageId;
       turnKey = keyOfRow(turnHead);
       out.lastQuestion.set(turnKey, text);
       if (turnHead) out.lastAsk.set(turnKey, turnHead);
+      const mid = isMidTurn(r);
+      if (!mid) out.openMidTurn.clear();
+      // A question the CLI took while another conversation's turn ran: that turn's
+      // reply is not its answer (tagged-reply-split.ts lays it out first), so it
+      // has none until a row under its own tag follows (2026-11-03). A second
+      // line of the same question right after an unanswered one is the same wait.
+      const unansweredBefore = !!before && out.openMidTurn.has(before);
+      if (turnHead && mid && turnKey !== ROOT_THREAD_KEY && (turnKey !== takenIn || unansweredBefore)) {
+        out.turnEnds.set(turnHead, 'silent');
+        out.openMidTurn.add(turnHead);
+      }
       continue;
     }
     if (!turnHead) continue;
@@ -461,6 +479,7 @@ export function deriveThreadStats(
     if (/\S/.test(stripQuestionTag(text))) {
       out.answered.add(turnHead);
       out.turnEnds.delete(turnHead);
+      out.openMidTurn.delete(turnHead);
       // The takeaway reads its last paragraph: never the no-action line.
       out.lastAnswer.set(turnKey, stripTurnMarker(text));
       const at = r.timestamp ? Date.parse(r.timestamp) : NaN;

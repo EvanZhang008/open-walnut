@@ -29,6 +29,7 @@
  */
 
 import { buildReviewOldSession, buildReviewSession } from './threads-review-fixture';
+import { buildSectionsMapSession, buildSectionsSession } from './sections-fixture';
 
 export const DENSE_SESSION = 'pw-threads-dense-session';
 export const AI_SESSION = 'pw-threads-ai-session';
@@ -679,11 +680,55 @@ export function buildMergedSession(): ThreadsFixtureSession & { ids: Record<stri
   };
 }
 
+/** Sends, and its mock CLI turns (lines taken mid-turn included) are written into
+ *  its transcript, so a reload reads what the live turn showed. */
+export const MIDTURN_SESSION = 'pw-threads-midturn-session';
+export const MIDTURN_TASK = 'pw-task-threads-midturn';
+export const MIDTURN_READY = 'Draft the namespace guide.';
+export const MIDTURN_PASSAGES = {
+  Q1: 'Every namespace keeps its own list of service accounts.',
+  ASK: 'A pod names one service account when it is created.',
+  ASK2: 'The admission check runs before the pod is stored.',
+} as const;
+export const MIDTURN_TITLES = { Q1: 'Account lists' } as const;
+
+/**
+ * The 2026-11-03 report, neutral text: a question asked while the main
+ * conversation's turn ran, which the CLI took mid-turn. The turn went on with its
+ * own work, and its reply (no tag) showed in the question's card as its answer.
+ * Question 1 is an answered question asked while idle, so the session opens in
+ * Conversation Mode; the specs ask the new questions live.
+ */
+export function buildMidTurnSession(): ThreadsFixtureSession {
+  const P = 'e1f2a3';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), Q1: t(2) };
+  const banner1 = '[Question Q1]\nThis message is question 1 of this conversation. Begin your reply with the line "[Q1]" (nothing else on that line) so the reply is filed under question 1.\n[/Question Q1]';
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: MIDTURN_READY },
+    {
+      role: 'assistant', uuid: ids.R1.a,
+      text: `${filler(501, 40)}\n\n${MIDTURN_PASSAGES.Q1} ${filler(502, 30)}\n\n${MIDTURN_PASSAGES.ASK} ${filler(503, 30)}\n\n${MIDTURN_PASSAGES.ASK2} ${filler(504, 30)}`,
+    },
+    { role: 'user', uuid: ids.Q1.u, text: `${banner1}\n\n> ${MIDTURN_PASSAGES.Q1}\n\nIs the list shared across clusters?` },
+    { role: 'assistant', uuid: ids.Q1.a, text: `[Q1]\nNo, each cluster keeps its own. ${filler(505, 20)}` },
+  ];
+  const at = '2026-11-03T01:00:00.000Z';
+  return {
+    sessionId: MIDTURN_SESSION, taskId: MIDTURN_TASK, title: 'Threads mid-turn fixture session',
+    rows, parked: [], pinnedMessages: [],
+    threadAnchors: [{ msgId: ids.Q1.u, parent: ids.R1.a, quote: { exact: MIDTURN_PASSAGES.Q1 }, source: 'selection', at }],
+    threadMeta: [
+      { headId: ids.Q1.u, status: 'open', title: MIDTURN_TITLES.Q1, titleSource: 'ai', titleState: 'done', question: 'Is the list shared across clusters?', seq: 1, updatedAt: at },
+    ],
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(),
-    buildReviewSession(nowMs), buildReviewOldSession(nowMs),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(),
+    buildReviewSession(nowMs), buildReviewOldSession(nowMs), buildSectionsSession(nowMs), buildSectionsMapSession(nowMs),
   ];
 }
 

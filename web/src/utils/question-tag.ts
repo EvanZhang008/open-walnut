@@ -218,9 +218,18 @@ export function tagKeyOfBlocks(
 
 type TagBlock = { type: string; content?: string; parentToolUseId?: string };
 
-/** The question a block of the run belongs to: the newest tagged main-lane text
- *  block at or before it (a turn that moves on to `[Q3]` hands everything after
- *  that line to Q3), else the run's first-text rule (`tagKeyOfBlocks`). */
+const isWords = (b: TagBlock) => b.type === 'text' && !b.parentToolUseId && !!(b.content ?? '').trim();
+const tagKeyOf = (b: TagBlock, keyBySeq: ReadonlyMap<number, string>): string | null => {
+  const tag = parseQuestionTag(b.content);
+  return tag ? keyBySeq.get(tag.seq) ?? null : null;
+};
+
+/** The question a block of the run belongs to by its tag: a text block with words
+ *  is its own tag's (none: the turn's own), a block after words goes with the
+ *  turn (a tag files the block it opens, never the work and words after it:
+ *  2026-11-03, the running turn's reply after a question's tagged answer was
+ *  filed under that question), and a block before any words goes with the run's
+ *  first words (`tagKeyOfBlocks`: the steps of a tagged answer). */
 export function tagKeyAtBlock(
   blocks: ReadonlyArray<TagBlock>,
   from: number,
@@ -228,13 +237,10 @@ export function tagKeyAtBlock(
   index: number,
   keyBySeq: ReadonlyMap<number, string>,
 ): string | null {
-  for (let i = Math.min(index, to - 1, blocks.length - 1); i >= from; i--) {
-    const b = blocks[i];
-    if (b.type !== 'text' || b.parentToolUseId) continue;
-    const tag = parseQuestionTag(b.content);
-    const key = tag ? keyBySeq.get(tag.seq) : undefined;
-    if (key) return key;
-  }
+  const at = Math.min(index, to - 1, blocks.length - 1);
+  if (at < from) return null;
+  if (isWords(blocks[at])) return tagKeyOf(blocks[at], keyBySeq);
+  for (let i = at - 1; i >= from; i--) if (isWords(blocks[i])) return null;
   return tagKeyOfBlocks(blocks, from, to, keyBySeq);
 }
 
@@ -253,15 +259,11 @@ export function blockTagKeys(
     const to = Math.min(Math.max(end, from), blocks.length);
     if (to <= from) continue;
     const first = tagKeyOfBlocks(blocks, from, to, keyBySeq);
-    let cur: string | null = null;
+    let spoke = false;
     for (let i = from; i < to; i++) {
       const b = blocks[i];
-      if (b.type === 'text' && !b.parentToolUseId) {
-        const tag = parseQuestionTag(b.content);
-        const key = tag ? keyBySeq.get(tag.seq) : undefined;
-        if (key) cur = key;
-      }
-      out[i] = cur ?? first;
+      if (isWords(b)) { spoke = true; out[i] = tagKeyOf(b, keyBySeq); continue; }
+      out[i] = spoke ? null : first;
     }
     from = to;
   }
