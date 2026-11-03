@@ -22,7 +22,11 @@ export const fixNotStartedText = (verb: 'update' | 'install'): string =>
 export type HostActionPending = 'retry' | 'check' | 'fix' | null;
 export type HostActionFailed = 'retry' | 'check' | null;
 export type HostActionKind = 'retry' | 'fix' | 'check';
-export interface HostFixStart { verb: 'update' | 'install'; at: number }
+/**
+ * `action`: the fix the server runs (host-autofix.ts), once it names one. `asked`: a person
+ * clicked Install / Update (always a Claude Code line's), kept while the round runs gcc or dtach first.
+ */
+export interface HostFixStart { verb: 'update' | 'install'; at: number; action?: string; asked?: true }
 export interface HostActionSnapshot { pending: HostActionPending; failed: HostActionFailed; receipt: string | null; fixStart: HostFixStart | null; lastTriedAt: number | null }
 export interface HostActionEvent { alias: string; kind: 'receipt' | 'failed'; text: string }
 /**
@@ -82,8 +86,9 @@ function holdFix(e: Entry, s: HostStatus | undefined): void {
     e.sawServerFix = true;
     // Hold from the FIX's start, not the click: the click's own re-check lands before the fix begins.
     const at = sf.startedAt;
-    if (!fs) patch(e, { fixStart: { verb: fixVerbOf(sf.action), at: at ?? serverNow() } });
-    else if (typeof at === 'number' && at > fs.at) patch(e, { fixStart: { verb: fixVerbOf(sf.action), at } });
+    if (!fs) patch(e, { fixStart: { verb: fixVerbOf(sf.action), at: at ?? serverNow(), action: sf.action } });
+    else if (typeof at === 'number' && at > fs.at) patch(e, { fixStart: { verb: fixVerbOf(sf.action), at, action: sf.action, ...(fs.asked ? { asked: true as const } : {}) } });
+    else if (fs.action !== sf.action) patch(e, { fixStart: { ...fs, action: sf.action } });
     return;
   }
   if (!fs) return;
@@ -135,7 +140,7 @@ export async function runHostAction(alias: string, kind: HostActionKind, verb: '
   // A user Retry reads as theirs on every surface (and lets a discovered host take a banner row).
   if (kind === 'retry' && !e.release) e.release = markUserRetry([alias]);
   clearTimeout(e.timers.receipt);
-  patch(e, { pending: kind, failed: null, receipt: null, lastTriedAt: at, ...(kind === 'fix' ? { fixStart: { verb, at } } : {}) });
+  patch(e, { pending: kind, failed: null, receipt: null, lastTriedAt: at, ...(kind === 'fix' ? { fixStart: { verb, at, asked: true as const } } : {}) });
   if (kind === 'fix') holdFix(e, before);
   // A request that never gets an answer frame still ends (the check has its own server deadline).
   else e.timers.cap = setTimeout(() => { if (e.attempt === attempt) endAttempt(e, alias, null); }, kind === 'check' ? CHECK_CAP_MS : CONNECT_CAP_MS);

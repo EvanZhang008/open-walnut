@@ -6,11 +6,12 @@ import { describe, it, expect } from 'vitest'
 import {
   hostFailureHeadline, hostProblemOf, hostDotOf, hostActionsFor, joinLabels, credentialGroupHeadline,
   formatRetryIn, retryCountdownText, middleTruncatePath, hostGateBody, hostReadySentence,
-  autofixProgressText, sameResultReceipt, firstSentence, listingProblemOf, READINESS_ANSWER_GRACE_MS,
+  autofixProgressText, isClaudeFixAction, sameResultReceipt, firstSentence, listingProblemOf, READINESS_ANSWER_GRACE_MS,
   BANNER_READINESS_KINDS, BLOCKING_READINESS_KINDS, bannerReadinessProblem,
   type HostStatusInput,
 } from '../../../src/core/hosts/host-problem.js'
 import { PREFLIGHT_TIMEOUT_MS } from '../../../src/core/hosts/host-readiness.js'
+import { isAgentFix } from '../../../src/core/hosts/host-autofix.js'
 
 const L = 'Dev box'
 const NOW = 1_900_000_000_000
@@ -255,6 +256,16 @@ describe('success, progress and receipts', () => {
     expect(autofixProgressText('update', L, NOW, NOW + 2000)).toEqual({ text: 'Updating Claude Code on Dev box...', base: 'Updating Claude Code on Dev box...', elapsed: '', showCheckAgain: false })
     expect(autofixProgressText('update', L, NOW, NOW + 42_000).text).toBe('Updating Claude Code on Dev box... 42s')
     expect(autofixProgressText('install', L, NOW, NOW + 185_000)).toMatchObject({ text: 'Still installing Claude Code on Dev box... 3m 5s', showCheckAgain: true })
+    // Walnut's own parts name themselves, never Claude Code.
+    expect(autofixProgressText('install', L, NOW, NOW + 2000, 'install-compiler').text).toBe('Installing gcc on Dev box...')
+    expect(autofixProgressText('install', L, NOW, NOW + 2000, 'build-dtach').text).toBe('Installing dtach on Dev box...')
+    expect(autofixProgressText('install', L, NOW, NOW + 2000, 'install-claude-native').text).toBe('Installing Claude Code on Dev box...')
+    expect(isClaudeFixAction(undefined)).toBe(true)
+    expect(isClaudeFixAction('update-claude')).toBe(true)
+    expect(isClaudeFixAction('install-compiler')).toBe(false)
+    expect(isClaudeFixAction('build-dtach')).toBe(false)
+    // The same rule as the server's (host-problem.ts imports nothing, so it keeps its own copy).
+    for (const a of ['install-claude-native', 'update-claude', 'install-compiler', 'build-dtach'] as const) expect(isClaudeFixAction(a)).toBe(isAgentFix(a))
   })
   it('same result receipts', () => {
     const f1 = st({ phase: 'failed', kind: 'timeout', at: NOW })

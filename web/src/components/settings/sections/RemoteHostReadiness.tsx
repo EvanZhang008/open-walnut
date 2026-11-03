@@ -14,7 +14,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  HOST_READY_HOLD_MS, autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadySentence,
+  HOST_READY_HOLD_MS, autofixProgressText, autofixVerbFor, BLOCKING_READINESS_KINDS, hostReadySentence, isClaudeFixAction,
 } from '@open-walnut/host-problem';
 import type { HostStatus } from '@/api/hosts';
 import { useServerTick } from '@/hooks/useServerTick';
@@ -86,8 +86,12 @@ function ProblemLine({ problem, alias, label, installMethod, actions, replica, w
   const verb = blocking ? autofixVerbFor(problem, installMethod) : null;
   const serverRunning = problem.fix?.state === 'running';
   const common = { 'data-host': alias, 'data-problem': problem.kind };
-  if (verb && (actions.fixing || serverRunning)) {
-    const p = autofixProgressText(actions.fixing?.verb ?? verb, label, actions.fixing?.startedAt ?? fixStartedAt, now);
+  // A Claude line shows progress only for a Claude fix, or a person's Install / Update whose round
+  // sets up gcc or dtach first: those set up by themselves are not it.
+  const claudeFix = !!actions.fixing && (actions.fixing.asked || isClaudeFixAction(actions.fixing.action));
+  if (verb && (serverRunning || claudeFix)) {
+    const ownVerb = actions.fixing && isClaudeFixAction(actions.fixing.action) ? actions.fixing.verb : verb;
+    const p = autofixProgressText(ownVerb, label, actions.fixing?.startedAt ?? fixStartedAt, now);
     return (
       <div className="rh-readiness-line" data-tone="info">
         <span className="rh-readiness" {...common} data-fix="running">

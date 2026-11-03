@@ -237,17 +237,28 @@ export interface AutofixProgress {
 export const AUTOFIX_SHOW_ELAPSED_MS = 5_000
 export const AUTOFIX_STILL_MS = 180_000
 
+/**
+ * A running fix is Claude Code's: a Claude action (host-autofix.ts), or none named yet (a click
+ * on a Claude line's Install or Update). 2026-11-03: gcc and dtach set up on a new host by
+ * themselves made its "Claude Code is not installed" line read "Installing Claude Code".
+ */
+export const isClaudeFixAction = (action: string | undefined): boolean =>
+  action === undefined || action === 'install-claude-native' || action === 'update-claude'
+/** What a fix of Walnut's own parts puts on the host; any other fix is Claude Code's. */
+const FIX_SUBJECT: Record<string, string> = { 'install-compiler': 'gcc', 'build-dtach': 'dtach' }
+
 export function autofixProgressText(
-  verb: 'update' | 'install', label: string, startedAt: number | undefined, now: number,
+  verb: 'update' | 'install', label: string, startedAt: number | undefined, now: number, action?: string,
 ): AutofixProgress {
   const ing = verb === 'install' ? 'Installing' : 'Updating'
+  const what = (action && FIX_SUBJECT[action]) || 'Claude Code'
   const ms = typeof startedAt === 'number' ? Math.max(0, now - startedAt) : 0
   if (ms >= AUTOFIX_STILL_MS) {
-    const base = `Still ${ing.toLowerCase()} Claude Code on ${label}...`
+    const base = `Still ${ing.toLowerCase()} ${what} on ${label}...`
     const elapsed = formatElapsed(ms)
     return { text: `${base} ${elapsed}`, base, elapsed, showCheckAgain: true }
   }
-  const base = `${ing} Claude Code on ${label}...`
+  const base = `${ing} ${what} on ${label}...`
   const elapsed = ms >= AUTOFIX_SHOW_ELAPSED_MS ? formatElapsed(ms) : ''
   return { text: elapsed ? `${base} ${elapsed}` : base, base, elapsed, showCheckAgain: false }
 }

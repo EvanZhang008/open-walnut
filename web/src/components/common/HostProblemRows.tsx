@@ -173,7 +173,7 @@ function StepLabel({ alias }: { alias: string }) {
 function FixProgress({ actions, label }: { actions: HostActions; label: string }) {
   const now = useServerTick(!!actions.fixing);
   if (!actions.fixing) return null;
-  const p = autofixProgressText(actions.fixing.verb, label, actions.fixing.startedAt, now);
+  const p = autofixProgressText(actions.fixing.verb, label, actions.fixing.startedAt, now, actions.fixing.action);
   return (
     <div className="hpb-fixing" data-testid="hpb-fixing">
       <span className="hpb-spinner" aria-hidden="true" />

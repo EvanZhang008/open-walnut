@@ -80,6 +80,24 @@ describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
     expect(held).not.toContain(OUTDATED.message)
   })
 
+  it('a fix of Walnut\'s own parts (gcc) never reads as installing Claude Code on the Claude line', () => {
+    const MISSING = { kind: 'claude_missing', message: 'Claude Code is not installed on Build box.', commands: [] as string[] }
+    const s = statusWith({
+      checkedAt: 5, problems: [MISSING, { ...GCC, fix: { action: 'install-compiler', state: 'running', text: 'Installing gcc' } }],
+      fixing: { action: 'install-compiler', text: 'Installing gcc', startedAt: clock },
+    })
+    const t = text(render(s, { fixing: { verb: 'install', startedAt: clock, action: 'install-compiler' } }))
+    expect(t).not.toContain('Installing Claude Code')
+    expect(t).toContain(MISSING.message)
+    // A click on that line's Install, before the server names its fix, still holds the line.
+    const clicked = text(render(statusWith({ checkedAt: 5, problems: [MISSING] }), { fixing: { verb: 'install', startedAt: clock } }))
+    expect(clicked).toContain('Installing Claude Code on Build box...')
+    // ...and so does a person's Install whose round sets up gcc first: no second Install to click.
+    const asked = render(s, { fixing: { verb: 'install', startedAt: clock, action: 'install-compiler', asked: true } })
+    expect(text(asked)).toContain('Installing Claude Code on Build box...')
+    expect(asked).not.toContain('rh-readiness-fix-claude_missing')
+  })
+
   it('after 5s the elapsed time shows; after 3 minutes "Still updating" and Check again', () => {
     const gap = statusWith({ checkedAt: 5, claude: claudeNative, problems: [OUTDATED] })
     const at6 = text(render(gap, { fixing: { verb: 'update', startedAt: clock - 6_000 } }))

@@ -21,7 +21,8 @@ import {
 
 export { RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, RECEIPT_MS } from '@/utils/host-action-store';
 export type { HostActionPending, HostActionFailed } from '@/utils/host-action-store';
-export interface HostFixingView { verb: 'update' | 'install'; startedAt: number }
+/** `action`: the fix running (host-autofix.ts), when the server named it. `asked`: a person's Install / Update. */
+export interface HostFixingView { verb: 'update' | 'install'; startedAt: number; action?: string; asked?: true }
 
 export interface HostActions {
   retry: () => Promise<void>;
@@ -52,7 +53,12 @@ export function useHostActions(alias: string): HostActions {
   const serverFixing = status?.readiness?.fixing;
   const { fixStart, pending } = snap;
   const fixing: HostFixingView | null = fixStart
-    ? { verb: serverFixing ? fixVerbOf(serverFixing.action) : fixStart.verb, startedAt: serverFixing?.startedAt ?? fixStart.at }
+    ? {
+      verb: serverFixing ? fixVerbOf(serverFixing.action) : fixStart.verb,
+      startedAt: serverFixing?.startedAt ?? fixStart.at,
+      ...((serverFixing?.action ?? fixStart.action) ? { action: serverFixing?.action ?? fixStart.action } : {}),
+      ...(fixStart.asked ? { asked: true as const } : {}),
+    }
     : null;
   return {
     retry, connectNow: retry, update, checkAgain,

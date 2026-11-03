@@ -126,6 +126,32 @@ describe('host action store', () => {
   })
 })
 
+describe('a fix the server starts by itself is held under its own action', () => {
+  it('gcc set up on a new host is held as install-compiler, so no Claude line reads "Installing Claude Code"', () => {
+    const fixing = (action: string, startedAt: number) => ({
+      ...failed(clock), connected: true, phase: 'connected',
+      readiness: { checkedAt: clock - 1, problems: [], fixing: { action, text: 'Installing gcc', startedAt } },
+    } as unknown as HostStatus)
+    store.observeHostStatus('devbox', fixing('install-compiler', clock))
+    expect(store.getHostActionSnapshot('devbox').fixStart).toMatchObject({ verb: 'install', action: 'install-compiler' })
+    // The next fix of the same round (dtach) replaces it.
+    store.observeHostStatus('devbox', fixing('build-dtach', clock + 5))
+    expect(store.getHostActionSnapshot('devbox').fixStart).toMatchObject({ action: 'build-dtach', at: clock + 5 })
+  })
+
+  it('a click on Install, before the server names its fix, has no action yet, and stays asked through gcc', async () => {
+    connect.mockResolvedValue(failed(clock))
+    await store.runHostAction('devbox', 'fix', 'install')
+    expect(store.getHostActionSnapshot('devbox').fixStart).toEqual({ verb: 'install', at: clock, asked: true })
+    const gcc = {
+      ...failed(clock), connected: true, phase: 'connected',
+      readiness: { checkedAt: clock - 1, problems: [], fixing: { action: 'install-compiler', text: 'Installing gcc', startedAt: clock + 10 } },
+    } as unknown as HostStatus
+    store.observeHostStatus('devbox', gcc)
+    expect(store.getHostActionSnapshot('devbox').fixStart).toMatchObject({ action: 'install-compiler', asked: true })
+  })
+})
+
 describe('a connect attempt settles on its own answer, never on a frame pushed before it (C23, C48)', () => {
   const seedFrame = (s: HostStatus): void => { statuses.set(s.host, s); for (const l of statusListeners) l() }
 
