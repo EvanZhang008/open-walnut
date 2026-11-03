@@ -125,14 +125,15 @@ describe('the Watching tab', () => {
     expect([...by.values()].flat().every((x) => x.watched && !x.locked)).toBe(true)
   })
 
-  it('draws each watched task with its own state\'s dot and words, for every user state', () => {
+  it('draws each watched task with the dot and words of the group its state is drawn in, for every user state', () => {
     const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/core/user-status.ts'), 'utf8')
     const states = [...src.match(/export type UserState = ((?:'[a-z]+'\s*\|\s*)+'[a-z]+');/)![1]!.matchAll(/'([a-z]+)'/g)].map((m) => m[1]!)
     expect(states.length).toBeGreaterThan(3)
     for (const s of states) {
       const task = t(`s-${s}`, 'Walnut', s === 'done' ? 'COMPLETE' : 'IN_PROGRESS', { user_status: { state: s } as Task['user_status'] })
       const tab = stateTab(task)
-      expect(tab, s).toBe(s)
+      // To read is drawn under Needs you (shownState, 2026-11-03); every other state is its own tab.
+      expect(tab, s).toBe(s === 'read' ? 'needs' : s)
       expect(TAB_DOT[tab], s).toBeTruthy()
       expect(USER_STATE_LABELS[tab], s).toBeTruthy()
     }

@@ -35,7 +35,7 @@ import { reminderDue } from './board-items-model';
 import { PHASE_LABELS, deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { subtaskPlaceLabel, subtasksOf } from '@/components/tasks/subtask-index';
 import type { ProcessStatus } from '@/types/session';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
 
 /** Levels walked below the owner. Sessions nest at most 3 (MAX_SUBTASK_DEPTH); humans may nest deeper. */
 export const TEAM_DEPTH_CAP = 8;
@@ -284,6 +284,14 @@ function latest(...stamps: Array<string | null | undefined>): string {
   return best;
 }
 
+/** A Needs you task's line, "<Category>: <words>" (needsLineOf), or '' with no status to read it from. */
+export function needsRowText(task: Pick<Task, 'user_status'>): string {
+  const line = task.user_status ? needsLineOf(task.user_status) : null;
+  if (!line) return '';
+  const label = NEEDS_CATEGORY_LABELS[line.category];
+  return line.text ? `${label}: ${line.text}` : label;
+}
+
 /**
  * A task's group, reason, badge and "now" line. `live` is the session-status
  * store's record for its session (the task's enrichment when the store has none).
@@ -315,14 +323,15 @@ export function describeTask(
 
   // The one user state decides "needs you", never the phase alone: a snoozed NEED_ACTION task
   // reads Waiting (src/core/user-status.ts). The phase is the fallback for a task not derived yet.
-  const needsYou = taskNeedsAction(task);
+  // A task with only a result or an answer to look at (To read) is under Needs you too
+  // (shownState, 2026-11-03, the user: "I dont wnat serpeate to read").
   const userState = taskUserState(task);
+  const needsYou = taskNeedsAction(task) || userState === 'read';
   // A live prompt for the user (a permission, a question) is Needs you, whatever the phase.
   const badge: RowBadge = display === 'waiting' ? { label: USER_STATE_LABELS.needs, tone: 'red' }
     : display === 'error' ? { label: 'Error', tone: 'red' }
       : display === 'running' ? { label: 'Running', tone: 'green' }
-        // To read: nothing asked, only something to read, in a calm tone, never red.
-        : userState === 'read' ? { label: USER_STATE_LABELS.read, tone: 'blue' }
+        : userState === 'read' ? { label: USER_STATE_LABELS.needs, tone: 'red' }
         : task.phase === 'WAITING' ? { label: 'Waiting', tone: 'violet' }
           : display === 'idle' ? { label: 'Idle', tone: 'amber' }
             : display === 'stopped' ? { label: 'Stopped', tone: 'grey' }
@@ -346,7 +355,8 @@ export function describeTask(
   let now = '';
   if (reason === 'permission') now = withBoard(permissionText(tool));
   else if (reason === 'error') now = withBoard(live?.errorMessage?.trim() || 'The session stopped on an error');
-  else if (reason === 'need-action') now = withBoard('Needs you');
+  // Its one line: what to do with it, then what it asks or has to read ("Take a look: ...").
+  else if (reason === 'need-action') now = withBoard(needsRowText(task) || USER_STATE_LABELS.needs);
   else if (reason === 'unread') now = withBoard('New output you have not read');
   else if (reason === 'board') now = running ? `${board} · ${activityText(live?.activity)}` : board;
   else if (running) now = activityText(live?.activity);

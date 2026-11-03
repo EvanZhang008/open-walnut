@@ -1,20 +1,27 @@
 /**
  * The Board's Status view (BoardStatusView.tsx): every task of the team in ONE list, by the
- * one status the user sees (src/core/user-status.ts), the same five states and the same
+ * one status the user sees (src/core/user-status.ts), the same four groups and the same
  * counts as the Org page, the task list and the phone. Pure: no React, no DOM. Unit-pinned
  * in tests/web/board-status-model.test.ts.
  *
- * Order, top down: Needs you (newest first), To read (newest first), Working (latest activity
- * first), Waiting (stuck first, then by what it waits on, not started last), Done (the recent
- * window, newest first).
+ * Order, top down: Needs you (its due date first, then newest first; a task with only a result
+ * or an answer to look at is here too, shownState: 2026-11-03, the user: "I dont wnat serpeate
+ * to read"), Working (latest activity first), Waiting (stuck first, then by what it waits on,
+ * not started last), Done (the recent window, newest first). Each Needs you row has one line
+ * saying what to do with it (needsRowLine: Take a look, Decide, Review, Can close).
  * A worker under another worker is listed flat and says whom it is under.
  */
 import type { Task } from '@open-walnut/core';
 import {
-  USER_STATES, countUserStates, dueAtMs, fallbackUserState, stateCountLabel, storedUserState,
-  type UserState, type UserStatus, type UserStatusCounts, type WaitKind,
+  NEEDS_CATEGORY_LABELS, USER_STATES, dueAtMs, fallbackUserState, needsLineOf, shownState, stateCountLabel,
+  storedUserState, type NeedsCategory, type UserState, type UserStatus, type WaitKind,
 } from '@open-walnut/user-status';
 import { teamChildren, walkTeam } from './board-overview-model';
+
+/** The groups the user sees: To read is drawn under Needs you (shownState). */
+export type ShownState = Exclude<UserState, 'read'>;
+export const SHOWN_STATES: readonly ShownState[] = USER_STATES.filter((s): s is ShownState => s !== 'read');
+export type ShownCounts = Record<ShownState, number>;
 
 export interface StatusRow {
   task: Task;
@@ -26,8 +33,9 @@ export interface StatusRow {
 }
 
 export interface StatusBoard {
-  counts: UserStatusCounts;
-  groups: Record<UserState, StatusRow[]>;
+  /** By group: Needs you counts the To read rows drawn in it. */
+  counts: ShownCounts;
+  groups: Record<ShownState, StatusRow[]>;
   /** Finished tasks older than the window are left out of Done (and its count). */
   doneWindowDays: number;
 }
@@ -75,11 +83,11 @@ export function buildStatusBoard(input: {
   ];
   const titleOf = new Map(input.tasks.map((t) => [t.id, t.title] as const));
   const cutoff = input.now - input.doneWindowDays * 24 * 60 * 60_000;
-  const groups: Record<UserState, StatusRow[]> = { needs: [], read: [], working: [], waiting: [], done: [] };
+  const groups: Record<ShownState, StatusRow[]> = { needs: [], working: [], waiting: [], done: [] };
   for (const m of members) {
     const status = userStatusOf(m.task);
     if (status.state === 'done' && ms(m.task.completed_at ?? m.task.updated_at) < cutoff) continue;
-    groups[status.state].push({
+    groups[shownState(status.state)].push({
       task: m.task, status, depth: m.depth,
       ...(m.depth > 1 ? { under: titleOf.get(m.parentId) ?? '' } : {}),
     });
@@ -97,7 +105,6 @@ export function buildStatusBoard(input: {
     return order(a, b);
   };
   groups.needs.sort(byDue(newest));
-  groups.read.sort(newest);
   groups.working.sort(byDue(newest));
   groups.done.sort(newest);
   groups.waiting.sort(byDue((a, b) => {
@@ -105,9 +112,20 @@ export function buildStatusBoard(input: {
     const kb = WAIT_ORDER[b.status.kind ?? 'other'] ?? 6;
     return ka !== kb ? ka - kb : newest(a, b);
   }));
-  const counts = countUserStates(USER_STATES.flatMap((s) => groups[s].map((r) => r.status)));
+  const counts = { needs: groups.needs.length, working: groups.working.length, waiting: groups.waiting.length, done: groups.done.length };
   return { counts, groups, doneWindowDays: input.doneWindowDays };
 }
+
+/** A Needs you row's one line: what to do with it, then what it asks or has to read
+ *  ("Take a look: It answered your question"). Null for a row under another group. */
+export function needsRowLine(status: UserStatus): { category: NeedsCategory; label: string; text: string } | null {
+  if (shownState(status.state) !== 'needs') return null;
+  const line = needsLineOf(status);
+  return line ? { ...line, label: NEEDS_CATEGORY_LABELS[line.category] } : null;
+}
+
+/** "Take a look: It answered your question", or the label alone when there are no words. */
+export const needsLineText = (l: { label: string; text: string }): string => (l.text ? `${l.label}: ${l.text}` : l.label);
 
 /** A waiting row's one line: "Waiting on another task: …", "Nothing will wake it. …", "Not started yet". */
 export function waitingLine(status: UserStatus, formatUntil: (iso: string) => string): string {
@@ -121,8 +139,9 @@ export function waitingLine(status: UserStatus, formatUntil: (iso: string) => st
 
 /** The brief above the table: what needs the user, then one line of counts. */
 export interface StatusBrief {
-  needs: { id: string; title: string; ask: string; unverified?: boolean }[];
-  counts: UserStatusCounts;
+  /** Every Needs you row, its `line` saying what to do with it (needsLineText). */
+  needs: { id: string; title: string; ask: string; line: string; category?: NeedsCategory; unverified?: boolean }[];
+  counts: ShownCounts;
   stuck: number;
   notStarted: number;
   doneWindowDays: number;
@@ -130,7 +149,13 @@ export interface StatusBrief {
 
 export function statusBrief(board: StatusBoard): StatusBrief {
   return {
-    needs: board.groups.needs.map((r) => ({ id: r.task.id, title: r.task.title, ask: r.status.ask ?? '', ...(r.status.unverified ? { unverified: true } : {}) })),
+    needs: board.groups.needs.map((r) => {
+      const line = needsRowLine(r.status);
+      return {
+        id: r.task.id, title: r.task.title, ask: r.status.ask ?? '', line: line ? needsLineText(line) : r.status.ask ?? '',
+        ...(line ? { category: line.category } : {}), ...(r.status.unverified ? { unverified: true } : {}),
+      };
+    }),
     counts: board.counts,
     stuck: board.groups.waiting.filter((r) => r.status.kind === 'stuck').length,
     notStarted: board.groups.waiting.filter((r) => r.status.kind === 'not-started').length,
@@ -138,19 +163,22 @@ export function statusBrief(board: StatusBoard): StatusBrief {
   };
 }
 
-/** "2 To read, 10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
+/** "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
 export function briefCountsLine(b: StatusBrief): string {
   const extra = [b.stuck ? `${b.stuck} with nothing to wake it` : '', b.notStarted ? `${b.notStarted} not started` : ''].filter(Boolean).join(', ');
   const waiting = `${stateCountLabel('waiting', b.counts.waiting)}${extra ? ` (${extra})` : ''}`;
-  const read = b.counts.read ? `${stateCountLabel('read', b.counts.read)}, ` : '';
-  return `${read}${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
+  return `${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
 }
 
-export type StatusFilter = 'open' | UserState;
-export const isStatusFilter = (v: unknown): v is StatusFilter => v === 'open' || (USER_STATES as readonly unknown[]).includes(v);
+export type StatusFilter = 'open' | ShownState;
+/** A kept filter (usePageViewOf): one of the filters, or the To read chip an older build kept,
+ *  which is Needs you now (statusFilterShown). */
+export type KeptStatusFilter = StatusFilter | 'read';
+export const isStatusFilter = (v: unknown): v is KeptStatusFilter => v === 'open' || v === 'read' || (SHOWN_STATES as readonly unknown[]).includes(v);
+export const statusFilterShown = (v: KeptStatusFilter): StatusFilter => (v === 'read' ? 'needs' : v);
 
-/** The rows a filter shows, in the table's order: Needs you, To read, Working, Waiting (open), or one state. */
+/** The rows a filter shows, in the table's order: Needs you, Working, Waiting (open), or one group. */
 export function filteredRows(board: StatusBoard, filter: StatusFilter): StatusRow[] {
-  if (filter === 'open') return [...board.groups.needs, ...board.groups.read, ...board.groups.working, ...board.groups.waiting];
+  if (filter === 'open') return [...board.groups.needs, ...board.groups.working, ...board.groups.waiting];
   return board.groups[filter];
 }

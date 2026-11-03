@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState, type UserState } from '@open-walnut/user-status';
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
@@ -55,15 +55,22 @@ describe('boardPhaseLabel', () => {
     const line = frame.split('\n').find((l) => /var PHASE_USER = \{/.test(l)) ?? '';
     for (const [phase, state] of Object.entries(BOARD_PHASE_USER)) expect(line).toContain(`${phase}: '${state}'`);
     const users = frame.split('\n').find((l) => /var USER = \{/.test(l)) ?? '';
-    for (const [state, label] of Object.entries(USER_STATE_LABELS)) expect(users).toContain(`${state}: '${label}'`);
+    // The one set of names, and a read chip drawn as Needs you (shownState) through SHOWN.
+    for (const state of Object.keys(USER_STATE_LABELS) as UserState[]) expect(users).toContain(`${state}: '${USER_STATE_LABELS[state]}'`);
+    const shown = frame.split('\n').find((l) => /var SHOWN = \{/.test(l)) ?? '';
+    for (const state of Object.keys(USER_STATE_LABELS) as UserState[]) if (shownState(state) !== state) expect(shown).toContain(`${state}: '${shownState(state)}'`);
+    expect(frame).toMatch(/user = SHOWN\[user\] \|\| user;/);
   });
 
   it('the stored user status first, the phase for a task not derived yet, an unknown phase passed through', () => {
     expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } })).toBe('Waiting / snoozed');
     expect(boardPhaseLabel({ phase: 'COMPLETE', user_status: { state: 'needs' } })).toBe('Completed');
-    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result' } })).toBe('To read');
+    // To read is drawn under Needs you, so it reads Needs you; never a To read label.
+    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result' } })).toBe('Needs you');
     // An older server stored To read as Waiting with toRead.
-    expect(boardPhaseLabel({ phase: 'WAITING', user_status: { state: 'waiting', toRead: 'answer' } })).toBe('To read');
+    expect(boardPhaseLabel({ phase: 'WAITING', user_status: { state: 'waiting', toRead: 'answer' } })).toBe('Needs you');
+    // A snoozed one stays Waiting / snoozed.
+    expect(boardPhaseLabel({ phase: 'WAITING', user_status: { state: 'waiting', toRead: 'answer', snoozed: { until: '2099-01-01' } } })).toBe('Waiting / snoozed');
     expect(boardPhaseLabel({ phase: 'NEED_ACTION' })).toBe('Needs you');
     expect(boardPhaseLabel({ phase: 'SOMETHING_NEW' as never })).toBe('SOMETHING_NEW');
     expect(boardPhaseLabel(undefined)).toBe('');

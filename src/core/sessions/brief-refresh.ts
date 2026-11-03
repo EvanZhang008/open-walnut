@@ -24,7 +24,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
-import { agoWords } from '../user-status.js';
+import { agoWords, needsLineText, storedUserState } from '../user-status.js';
 import { briefFreshness, type BriefFreshness, type BriefRefreshRecord } from './brief-fresh.js';
 import { briefNeedsAsks } from './brief.js';
 
@@ -69,11 +69,16 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
   const at = Date.parse(fresh.writtenAt);
   const lines = [
     `The user is looking at you now (the Org page or the phone). Your Brief was written ${Number.isFinite(at) ? agoWords(now - at) : 'a while ago'}, and since then (Walnut's live record):`,
-    ...fresh.moved.slice(0, 12).map((m) => `- ${name(m.id)}: now ${m.state === 'done' ? 'Completed' : m.state === 'needs' ? 'Needs you' : m.state === 'working' ? 'Working' : 'Waiting'}: ${m.words}`),
+    ...fresh.moved.slice(0, 12).map((m) => `- ${name(m.id)}: now ${m.state === 'done' ? 'Completed' : m.state === 'needs' || m.state === 'read' ? 'Needs you' : m.state === 'working' ? 'Working' : 'Waiting'}: ${m.words}`),
     ...(fresh.moved.length > 12 ? [`- and ${fresh.moved.length - 12} more lines moved`] : []),
     ...fresh.finished.slice(0, 8).map((id) => `- ${name(id)}: completed`),
     ...(fresh.finished.length > 8 ? [`- and ${fresh.finished.length - 8} more completed`] : []),
-    ...fresh.newAsks.slice(0, 8).map((id) => `- ${name(id)} now asks the user: "${(byId.get(id)?.user_status?.ask ?? '').replace(/\s+/g, ' ').slice(0, 200)}" (not in your Brief)`),
+    ...fresh.newAsks.slice(0, 8).map((id) => {
+      const s = byId.get(id)?.user_status;
+      // A result or an answer for the user is no ask of them (it reads under Needs you all the same).
+      if (s && storedUserState(s) === 'read') return `- ${name(id)} now has something for the user to look at: "${needsLineText(s).slice(0, 200)}" (not in your Brief)`;
+      return `- ${name(id)} now asks the user: "${(s?.ask ?? '').replace(/\s+/g, ' ').slice(0, 200)}" (not in your Brief)`;
+    }),
     ...(fresh.newAsks.length > 8 ? [`- and ${fresh.newAsks.length - 8} more new asks`] : []),
     ...needsLines(changes, name),
     changes.length

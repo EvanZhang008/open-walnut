@@ -58,8 +58,17 @@ describe('org chart cards', () => {
     const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', ask: 'Choose one of two quotes', at: at(5) } as never })
     const vp = { ...gardenLead, org_leads: ['Seeds'] }
     const both = cardsOf([signed, busy, ask, vp]).find((c) => c.name === 'Garden')!
-    expect([both.news, both.newsTask]).toEqual(['Seeds · Needs you: Choose one of two quotes', 'Pick a supplier'])
-    expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Needs you: Choose one of two quotes'])
+    // Its line says what to do with it (Decide), then the ask (2026-11-03).
+    expect([both.news, both.newsTask]).toEqual(['Seeds · Decide: Choose one of two quotes', 'Pick a supplier'])
+    expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Decide: Choose one of two quotes'])
+  })
+
+  it('a task with only something to read counts in the card\'s Needs you, its news led by what to do with it', () => {
+    const done = t('Seeds', { phase: 'NEED_ACTION', title: 'Order seeds', user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready', at: '2026-10-26T12:40:00.000Z' } as never })
+    const card = cardsOf([...garden, done, seedsLead]).find((c) => c.name === 'Seeds')!
+    expect(card.needsYou).toBe(1)
+    expect([card.news, card.newsTask]).toEqual(['Can close: The result is ready', 'Order seeds'])
+    expect(card.line).not.toContain('To read')
   })
 
   it('a VP the user named carries that name; a VP made only to put projects under lists none until one is dragged there', () => {
@@ -94,7 +103,8 @@ describe('org chart cards', () => {
   it('vpLine says what moves, else what is open, else nothing', () => {
     expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
     expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')
-    expect(vpLine({ open: 4, running: 1, needsYou: 0, toRead: 2, waiting: 1 })).toBe('2 To read · 1 Working · 1 Waiting / snoozed')
+    // To read is counted under Needs you (the card's own number), never a count of its own here.
+    expect(vpLine({ open: 4, running: 1, needsYou: 0, toRead: 2, waiting: 1 })).toBe('1 Working · 1 Waiting / snoozed')
     // An older server's counts carry no toRead.
     expect(vpLine({ open: 1, running: 1, needsYou: 0, waiting: 0 } as never)).toBe('1 Working')
   })

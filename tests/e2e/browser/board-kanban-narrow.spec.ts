@@ -321,7 +321,8 @@ test('C95: a double click on a section head renames nothing; Add lane scrolls in
   const html = `<section><h2>Incident notes</h2>\n${filler}\n<walnut-choice id="c95-ship" title="Ship the retry fix" options="now:Ship it now,later:Wait for the window" task="${team.idle[0]}"></walnut-choice></section>`
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board`, { html })
   const status = card(pane, team.idle[0]).getByTestId('kanban-card-status')
-  await expect(status).toHaveText(/^Needs you: /, { timeout: 15_000 })
+  // A Board choice: "Decide: <its title>" once the status names it, the signal's words before.
+  await expect(status).toHaveText(/^(Decide|Needs you): /, { timeout: 15_000 })
   await expect(status).toHaveAttribute('data-tone', 'red')
   await status.scrollIntoViewIfNeeded()
   await status.click()

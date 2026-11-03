@@ -198,7 +198,8 @@ const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: stri
   { file: 'components/org/OrgNodeDetail.tsx', state: 'keptTab', key: /usePageViewOf<KeptRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
-  { file: 'components/board/BoardStatusView.tsx', state: 'filter', key: /usePageViewOf<StatusFilter>\('board', 'statusFilter', ownerId,/, what: 'a board\'s status filter, per board' },
+  // Kept as KeptStatusFilter: a To read chip an older build kept opens as Needs you (statusFilterShown).
+  { file: 'components/board/BoardStatusView.tsx', state: 'kept', key: /usePageViewOf<KeptStatusFilter>\('board', 'statusFilter', ownerId,/, what: 'a board\'s status filter, per board' },
   { file: 'components/sessions/SessionFileExplorer.tsx', state: 'showHidden', key: /usePageView\('files', 'showHidden'/, what: 'hidden files shown in the explorer' },
   { file: 'components/sessions/SessionDiffView.tsx', state: 'treeCollapsed', key: /usePageView\('diff', 'treeCollapsed'/, what: 'the diff\'s file tree hidden' },
 ];

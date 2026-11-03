@@ -108,7 +108,7 @@ describe('wait_until helpers', () => {
     // A park on its own build reads Working, one with only a result To read (2026-11-02).
     const wu = new Date(2026, 9, 2, 13, 27).toISOString()
     expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', carriesOn: 'watch' } } as never)).toBe('Working · checks back Fri 13:27');
-    expect(waitingChipLabel({ phase: 'WAITING', user_status: { state: 'read', toRead: 'result' } } as never)).toBe('To read');
+    expect(waitingChipLabel({ phase: 'WAITING', user_status: { state: 'read', toRead: 'result' } } as never)).toBe('Can close');
     expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'waiting', kind: 'outside' } } as never)).toBe('Wait until Fri 13:27');
     const own = waitingDetailLines({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', waitingOn: 'x' } } as never)
     expect(own[0]).toMatch(/own work runs/)

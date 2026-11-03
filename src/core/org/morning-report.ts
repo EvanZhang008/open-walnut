@@ -15,7 +15,7 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import type { LetterRecord } from '../human-inbox/types.js';
-import { briefTeam } from '../user-status.js';
+import { briefTeam, needsLineText, storedUserState } from '../user-status.js';
 import { ORG_REPORT } from '../human-inbox/walnut-letters/org-report.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { briefSectionOf } from '../sessions/brief-structure.js';
@@ -67,9 +67,11 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
       const s = t.user_status;
       const letter = decisions.find((l) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id));
       const form = s?.askForm;
+      // A result or an answer to look at says what to do with it (needsLineText, 2026-11-03).
+      const toRead = !!s && storedUserState(s) === 'read';
       return {
         title: flat(t.title, 120),
-        ...(s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
+        ...(toRead ? { ask: flat(needsLineText(s!)) } : s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
         ...(s?.checkedAt ? { checked: hhmm(Date.parse(s.checkedAt)), unverified: !!s.unverified } : {}),
         ...(form?.kind === 'yes_no' ? { yesNo: true } : form?.options?.length ? { options: form.options.map((o) => o.label) } : {}),
         ...(letter ? { letter: flat(letter.subject, 120) } : {}),
@@ -83,7 +85,6 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
       return {
         title: flat(t.title, 120),
         ...(s?.snoozed ? { snoozedUntil: hhmm(Date.parse(s.snoozed.until)) }
-          : s?.state === 'read' && s.waitingOn ? { now: flat(s.waitingOn, 160) }
           : s?.state === 'waiting' ? (s.waitingOn ? { waitingOn: flat(s.waitingOn, 160) } : { waiting: true })
             : s?.now ? { now: flat(s.now, 160) } : {}),
       };

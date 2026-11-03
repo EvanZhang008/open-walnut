@@ -30,8 +30,7 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-task[data-phase="NEED_ACTION"] .wn-dot { background: var(--wn-need, #d93025); }
 .wn-task[data-phase="WAITING"] .wn-dot { background: var(--wn-wait, #d97706); }
 .wn-task[data-phase="COMPLETE"] .wn-dot { background: var(--wn-done, #15803d); }
-.wn-task[data-user="needs"] .wn-dot { background: var(--wn-need, #d93025); }
-.wn-task[data-user="read"] .wn-dot { background: var(--wn-read, #6d5bd0); }
+.wn-task[data-user="needs"] .wn-dot, .wn-task[data-user="read"] .wn-dot { background: var(--wn-need, #d93025); }
 .wn-task[data-user="working"] .wn-dot { background: var(--wn-wip, #2f6feb); }
 .wn-task[data-user="waiting"] .wn-dot { background: var(--wn-todo, #8e8e93); }
 .wn-task[data-user="done"] .wn-dot { background: var(--wn-done, #15803d); }

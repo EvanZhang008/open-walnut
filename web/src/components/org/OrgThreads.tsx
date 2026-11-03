@@ -36,7 +36,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
 import { cardView, exchangesOf, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -59,7 +59,7 @@ import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
 const TASK_DOT: Record<string, string> = {
-  needs: 'var(--error, #FF3B30)', read: '#6d5bd0', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
 /** A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). */
 const STATE_LABEL: Record<OrgThreadState, string> = {
@@ -127,7 +127,8 @@ function TaskChips({ ids, tasks, onOpenTask }: { ids: readonly string[]; tasks: 
     <div className="org-thread-tasks" data-testid="org-thread-tasks">
       {ids.map((id) => {
         const t = byId.get(id);
-        const state = t ? userStateOf(t) : null;
+        // A task with only something to read wears Needs you, where it is drawn (shownState).
+        const state = t ? shownState(userStateOf(t)) : null;
         return (
           <button key={id} type="button" className="org-thread-task" data-testid="org-thread-task" data-task-id={id} onClick={() => onOpenTask(id)} title={t?.title ?? id}>
             {state && <i style={{ background: TASK_DOT[state] }} />}

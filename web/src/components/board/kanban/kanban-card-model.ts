@@ -12,7 +12,7 @@ import {
 } from '../../../../../src/core/boards/board-lanes';
 import { deriveDisplayStatus, resolveTaskSessionId } from '@/utils/session-status';
 import type { ProcessStatus } from '@/types/session';
-import { USER_STATE_LABELS, storedUserState } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf, storedUserState } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
 import type { KanbanPromptRequest } from './kanban-contract';
 import { STALE_AFTER_MS } from './kanban-contract';
@@ -26,7 +26,7 @@ export type KanbanLive = LiveStatus & {
   sessionId?: string | null;
 };
 
-export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'blue' | 'grey';
+export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'grey';
 
 export type KanbanStatusKind =
   | 'question' | 'plan' | 'permission' | 'error' | 'handed-back' | 'board-signal' | 'worker-below'
@@ -228,10 +228,16 @@ export function redReasonOf(
     const text = msg ? `Error: ${msg}` : 'Error: the session stopped';
     return { text, tone: 'red', kind: 'error', tooltip: live?.errorMessage?.trim() || text };
   }
-  // The one user status (src/core/user-status.ts): the session asked the user something.
+  // The one user status (src/core/user-status.ts): the session asked the user something, or has
+  // only a result or an answer to look at (To read), which is under Needs you too (shownState,
+  // 2026-11-03, the user: "I dont wnat serpeate to read"). Its line says what to do with it.
   const us = task.user_status;
-  if (us && us.state === 'needs' && us.ask) {
-    return { text: `Needs you: ${us.ask}`, tone: 'red', kind: 'needs', tooltip: us.ask };
+  const line = us ? needsLineOf(us) : null;
+  if (us && line && (line.text || storedUserState(us) === 'read')) {
+    const label = NEEDS_CATEGORY_LABELS[line.category];
+    const text = line.text ? `${label}: ${line.text}` : label;
+    const kind: KanbanStatusKind = storedUserState(us) === 'read' ? 'to-read' : 'needs';
+    return { text, tone: 'red', kind, tooltip: text };
   }
   const handedBack = card?.handed_back_at;
   // Without a derived status (an older server) a hand back still reads as needing the user.
@@ -278,11 +284,6 @@ function quietStatus(
   const us = task.user_status?.kind === 'not-started' && hasSession ? undefined : task.user_status;
   if (us && display !== 'running' && task.phase !== 'COMPLETE') {
     const state = storedUserState(us);
-    // To read: nothing asked, only its words to read (src/core/user-status.ts ToRead), never red.
-    if (state === 'read') {
-      const text = us.waitingOn || USER_STATE_LABELS.read;
-      return { text, tone: 'blue', kind: 'to-read', tooltip: `${USER_STATE_LABELS.read}: ${text}` };
-    }
     // Working with no turn running: its own build, test run or deploy goes on and wakes it.
     if (state === 'working' && us.carriesOn) {
       const text = us.now ? `Working: ${us.now}` : 'Working';

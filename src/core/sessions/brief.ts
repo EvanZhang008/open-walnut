@@ -13,7 +13,7 @@
  * task it names with its live status dot.
  */
 import {
-  BRIEF_SECTIONS, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
+  BRIEF_SECTIONS, storedUserState, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
 } from '../user-status.js';
 import type { Task } from '../types.js';
 import { briefVpOf } from './brief-rules.js';
@@ -38,7 +38,9 @@ export function briefNeedsAsks(owner: Task, tasks: readonly Task[]): Record<stri
   const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
   const out: Record<string, string> = {};
   for (const t of org) {
-    if (briefSectionOf(t) === 'needs') out[t.id] = (t.user_status?.ask ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const us = t.user_status;
+    const words = us && storedUserState(us) === 'read' ? us.waitingOn : us?.ask;
+    if (briefSectionOf(t) === 'needs') out[t.id] = (words ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
   }
   return out;
 }
@@ -49,14 +51,16 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
   const main = owner.org_role === 'main';
   const team = briefTeam(owner, tasks);
   const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : team;
-  const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], read: [], working: [], waiting: [] };
+  const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], working: [], waiting: [] };
   const inTeam = new Set(team.map((t) => t.id));
   for (const t of org) {
     const section = briefSectionOf(t);
     if (!section || (section !== 'needs' && !inTeam.has(t.id))) continue;
     const s = t.user_status;
     let words = '';
-    if (section === 'needs') {
+    if (section === 'needs' && s && storedUserState(s) === 'read') {
+      words = s.waitingOn ? `to read: ${flat(s.waitingOn).slice(0, 160)}` : 'to read';
+    } else if (section === 'needs') {
       const checked = s?.checkedAt ? Date.parse(s.checkedAt) : NaN;
       // A Board choice is checked like a session's own ask (its write on the Board is its check).
       const by = s?.source === 'choice' ? 'on its Board' : 'by its session';
@@ -65,8 +69,6 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
           : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
             : `checked ${agoWords(now - checked)} ${by}`;
       words = `${s?.ask ? `"${flat(s.ask).slice(0, 200)}"` : 'needs the user'} (${when})`;
-    } else if (section === 'read') {
-      words = s?.waitingOn ? `to read: ${flat(s.waitingOn).slice(0, 160)}` : 'to read';
     } else if (section === 'waiting') {
       // Snoozed (src/core/snooze.ts, on the status itself): its date, and the ask it holds back.
       const snoozed = (s as { snoozed?: { until?: string; ask?: string } } | undefined)?.snoozed;

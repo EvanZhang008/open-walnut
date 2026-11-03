@@ -195,9 +195,9 @@ describe('buildStatusSections', () => {
 });
 
 describe('readSectionOpen / writeSectionOpen', () => {
-  it('defaults: Watching, Needs you, To read and Working open; Waiting and Completed folded', () => {
+  it('defaults: Watching, Needs you and Working open; Waiting and Completed folded', () => {
     expect(readSectionOpen(null)).toEqual(STATUS_SECTION_DEFAULT_OPEN);
-    expect(STATUS_SECTION_DEFAULT_OPEN).toEqual({ watching: true, needs: true, read: true, working: true, waiting: false, done: false });
+    expect(STATUS_SECTION_DEFAULT_OPEN).toEqual({ watching: true, needs: true, working: true, waiting: false, done: false });
   });
   it('stores only what the user flipped, and reads it back', () => {
     const raw = writeSectionOpen({ ...STATUS_SECTION_DEFAULT_OPEN, done: true, needs: false });

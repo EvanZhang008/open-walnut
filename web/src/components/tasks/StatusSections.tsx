@@ -1,6 +1,6 @@
 /**
  * StatusSections: the home task panel's status headings and the rows under the
- * ones the panel draws itself (Watching, Needs you, To read, Waiting, Completed). Working
+ * ones the panel draws itself (Watching, Needs you, Waiting, Completed). Working
  * is the view's own list (tiers, Recent, projects), so TodoPanel draws only its
  * heading from here. The model (which task goes where, order, stored open state)
  * is status-sections.ts.
@@ -33,7 +33,7 @@ import {
   STATUS_SECTION_TITLES,
   type StatusSectionKey,
   type StatusSectionsModel,
-  readReason,
+  needsLine,
   waitingReason,
 } from './status-sections';
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
@@ -42,7 +42,6 @@ import '@/styles/status-sections.css';
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
   needs: ICONS.ICON_ATTENTION,
-  read: ICONS.ICON_TO_READ,
   working: ICONS.ICON_PHASE_IN_PROGRESS,
   waiting: ICONS.ICON_PHASE_WAITING,
   done: ICONS.ICON_PHASE_COMPLETE,
@@ -126,15 +125,32 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     : task.user_status ? task.user_status.snoozed?.until ?? ''
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
   const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
-  // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...); under To read:
-  // what there is to read.
+  // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...). Under Needs you:
+  // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
+  // show what need u", "in one line").
+  const need = isDone || sectionKey !== 'needs' ? null : needsLine(task);
   const reasonText = isDone ? '' : sectionKey === 'waiting' ? waitingReason(task, formatWaitUntil)
-    : sectionKey === 'read' ? readReason(task) : '';
+    : need ? [need.label, need.text].filter(Boolean).join(': ') : '';
   // Flat: the sentence of what it waits on is a third line under the title, so the top line
   // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
   // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
   const reasonBelow = twoLine && reasonText !== '' && reasonText !== 'Snoozed';
-  const reason = reasonText ? (
+  const reason = need ? (
+    <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
+      <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text ? ':' : ''}</span>
+      {need.text ? <span className="needs-line-text">{need.text}</span> : null}
+      {need.category === 'close' && handlers.onSetPhase ? (
+        <button
+          type="button"
+          className="needs-close-btn"
+          data-testid="needs-close"
+          title="Mark it complete"
+          onClick={(e) => { e.stopPropagation(); handlers.onSetPhase?.(task.id, 'COMPLETE'); }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >Close</button>
+      ) : null}
+    </span>
+  ) : reasonText ? (
     <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
   ) : null;
   const projectName = task.project || 'Inbox';
@@ -196,8 +212,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : snoozeDate ? 'Snoozed: click to complete'
-          : sectionKey === 'waiting' ? 'Waiting: click to complete' : sectionKey === 'read' ? 'To read: click to complete' : 'Click to complete'}
-        data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : sectionKey === 'read' ? 'read' : 'open'}
+          : sectionKey === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
+        data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : need ? (taskUserState(task) === 'read' ? 'needs-read' : `needs-${need.category}`) : 'open'}
       >
         {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate, taskUserState(task))}
       </button>
@@ -311,7 +327,6 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
   switch (key) {
     case 'watching': return { tasks: model.watching, count: model.watching.length };
     case 'needs': return { tasks: model.needs, count: model.needs.length };
-    case 'read': return { tasks: model.read, count: model.read.length };
     case 'waiting': return { tasks: model.waiting, count: model.waiting.length };
     case 'done': return { tasks: model.done, count: model.done.length + model.doneUnloaded };
     default: return { tasks: model.working, count: model.workingCount };

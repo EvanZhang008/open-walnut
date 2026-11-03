@@ -58,6 +58,9 @@ export interface StatusFacts {
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
+  /** Task id -> subject of its newest open review letter (read with `letters`). Optional: an older
+   *  caller's facts carry none. */
+  reviews?: Map<string, string>;
   /** Task id -> the unanswered Board choices about it, in Board order: its title, the Board it is
    *  on and its id, and when it was last written there (board-store.ts choice_at; absent: never). */
   choices: Map<string, ChoiceFact[]>;
@@ -124,8 +127,14 @@ async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string
   return built as NonNullable<StatusFacts[K]>;
 }
 
+/** The open review letters, read in the same pass as the decision letters (readLetters). */
+let reviewLetters: Map<string, string> = new Map();
+
 async function readLetters(): Promise<StatusFacts['letters']> {
   const out: StatusFacts['letters'] = new Map();
+  // Replaced at once, so an unreadable inbox leaves no older review behind.
+  const reviews = new Map<string, string>();
+  reviewLetters = reviews;
   await safely('inbox', async () => {
     const { listLetters } = await import('./human-inbox/store.js');
     const { letters: list } = await listLetters({ archived: false });
@@ -133,8 +142,11 @@ async function readLetters(): Promise<StatusFacts['letters']> {
     const now = Date.now();
     for (const l of [...list].sort((a, b) => a.createdAt - b.createdAt)) {
       const tid = l.sender?.taskId;
-      if (l.type !== 'action_required' || l.answered || l.archived || !tid) continue;
+      if (l.answered || l.archived || !tid) continue;
+      // A letter the user read a while ago is no news, as for a decision.
       if (l.read && !(typeof l.readAt === 'number' && now < l.readAt + DECISION_SEEN_GRACE_MS)) continue;
+      if (l.type === 'review') reviews.set(tid, l.subject);
+      if (l.type !== 'action_required') continue;
       out.set(tid, l.subject);
     }
   }, undefined);
@@ -274,6 +286,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   }, undefined);
 
   const letters = await cachedSlow('letters', allIds);
+  const reviews = reviewLetters;
   const choices = await cachedSlow('choices', allIds);
 
   const requestsFrom: StatusFacts['requestsFrom'] = new Map();
@@ -303,7 +316,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  return { sessions, letters, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered };
+  return { sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered };
 }
 
 /**
@@ -359,6 +372,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     statusSince: main?.statusSince ?? null,
     pendingPermissionTool: prompt,
     openLetter: facts.letters.get(task.id) ?? null,
+    openReview: facts.reviews?.get(task.id) ?? null,
     ...choiceInput(task, facts),
     waitingOnTasks: [...new Set(waitingOnTasks)],
     // A trigger on the user's own ask or letter (trigger_create `watches`) is no outside watch:

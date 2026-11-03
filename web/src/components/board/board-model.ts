@@ -167,7 +167,7 @@ export interface FrameTask {
   title: string;
   phase: string;
   status: string;
-  /** needs | working | waiting | done: the chip's word and dot (src/core/user-status.ts). */
+  /** needs | working | waiting | done: the chip's word and dot (src/core/user-status.ts); To read is sent as needs. */
   user?: string;
 }
 
@@ -239,9 +239,10 @@ export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: stri
 
 function frameTask(t: StoreTaskLike): FrameTask {
   const us = t.user_status;
-  // A To read an older server stored as Waiting with `toRead` reads as To read (storedUserState).
+  // A task with only something to read (To read, or an older server's Waiting with `toRead`,
+  // storedUserState) is drawn and named under Needs you (shownState, 2026-11-03).
   const user = t.phase === 'COMPLETE' || t.status === 'done' ? 'done'
-    : us && us.state === 'waiting' && us.toRead && !us.snoozed ? 'read' : us?.state;
+    : us && (us.state === 'read' || (us.state === 'waiting' && us.toRead && !us.snoozed)) ? 'needs' : us?.state;
   return { id: t.id, title: t.title, phase: t.phase ?? '', status: t.status ?? '', ...(user ? { user } : {}) };
 }
 

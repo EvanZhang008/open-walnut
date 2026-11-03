@@ -93,11 +93,12 @@ interface Props {
 export const alertQuote = (a: OrgAlertView): string => `> ${a.title}: ${askWords(a)}\n\n`;
 
 const COLUMN_DOT: Record<TeamColumn['key'], string> = {
-  needs: 'var(--error, #FF3B30)', read: TAB_DOT.read, working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
 };
 
 /** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
- *  counted from the same lists as the Task view's tabs; each pill opens its tab. */
+ *  counted from the same lists as the Task view's tabs; each pill opens its tab. Needs you counts
+ *  its cards, a result or an answer to look at included (To read has no pill of its own). */
 function CountPills({ row, tabs, onOpen, approvals }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number }) {
   const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
@@ -107,7 +108,6 @@ function CountPills({ row, tabs, onOpen, approvals }: { row: ChannelRow; tabs: O
   return (
     <span className="org-pills" data-testid="org-detail-counts">
       {tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
-      {tabs.read.length > 0 && pill('read', tabs.read.length)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
       <span className="org-pill">{row.counts.open} open</span>

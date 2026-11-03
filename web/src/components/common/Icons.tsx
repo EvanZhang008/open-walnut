@@ -128,7 +128,8 @@ export const ICON_TO_READ = <svg width="14" height="14" viewBox="0 0 16 16" fill
 export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean, state: string | undefined): ReactNode {
   if (isDone) return binaryPhaseIcon(true, phase, state);
   if (section === 'waiting') return snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING;
-  if (section === 'read') return ICON_TO_READ;
+  // Under Needs you a row with only something to read wears the page; an ask, the open ring.
+  if (section === 'needs' && state === 'read') return ICON_TO_READ;
   // Working (its own build may run while it is parked) and Needs you wear the open ring.
   if (section === 'working' || section === 'needs') return ICON_PHASE_TODO;
   return binaryPhaseIcon(false, phase, state);

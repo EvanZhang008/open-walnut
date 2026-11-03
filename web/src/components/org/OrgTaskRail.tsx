@@ -11,8 +11,10 @@
  *            their live lines), or as the Board its lead keeps (when it keeps one)
  *   tabs     Watching (the tasks the user watches, Home's own list, of this node's work), then the home
  *            panel's four names with counts: Needs you, Working, Waiting / snoozed, Completed
- *   Needs you  one row per ask: its summary first, its task and when it was checked, More for the
- *              detail, and the answer right in the row (OrgInlineAnswer); Quote and Snooze small
+ *   Needs you  one row per ask, and per result or answer to look at (To read is no tab of its own,
+ *              2026-11-03): what to do with it (Decide, Take a look, Review, Can close) and its summary
+ *              first, its task and when it was checked, More for the detail, and the answer right
+ *              in the row (OrgInlineAnswer); Quote and Snooze small
  *   others   one row per task: its own line (user_status.line, "set by <VP>" when its lead changed it);
  *            Watching's rows wear their own state's dot, and each row's eye watches it or stops (Home's eye)
  *   Brief    the letter its lead or Main keeps (OrgBrief)
@@ -44,11 +46,12 @@ import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
-import { cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { alertCategoryLabel, cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
 import type { ImageAttachment } from '@/api/chat';
+import { completeTask } from '@/api/tasks';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -132,7 +135,6 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
 const EMPTY: Record<OrgRailTab, string> = {
   watching: 'Nothing watched here. Watch a task with the eye on its row to keep it in view, here and on Home.',
   needs: 'Nothing needs you here.',
-  read: 'Nothing to read here.',
   working: 'Nothing is working here.',
   waiting: 'Nothing is waiting or snoozed here.',
   done: 'Nothing completed in the last week.',
@@ -183,6 +185,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
 }) {
   const { summary, more } = askSummary(a);
   const checked = cardChecked(a);
+  const category = alertCategoryLabel(a);
   const [open, setOpen] = useState(false);
   const failure = answers.failed.get(a.taskId);
   // A failure belongs to the ask it answered: a new ask of the task drops it.
@@ -208,8 +211,12 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
           >{a.via.title} ›</a>
         </div>
       )}
-      <div className="org-ask-summary" data-testid="org-ask-summary">{summary}</div>
-      <div className={`org-alert-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</div>
+      {/* One line: what to do with it, then what it asks or has to read (2026-11-03, the user: "in one line"). */}
+      <div className="org-ask-summary" {...(a.category ? { 'data-category': a.category } : {})}>
+        {category && <><span className={`org-ask-category org-ask-category-${a.category}`} data-testid="org-ask-category">{category}:</span>{' '}</>}
+        <span data-testid="org-ask-summary">{summary}</span>
+      </div>
+      {checked && <div className={`org-alert-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</div>}
       <div className="org-ask-meta">
         <a
           className="org-alert-link"
@@ -236,6 +243,18 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
             <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onStart={() => answers.start(a.taskId)} />
           )}
           {task && <OrgWatchToggle task={task} className="org-ask-tool" />}
+          {/* Done and asking nothing: close it from the card (2026-11-03, the user: "see if can closed"). */}
+          {a.category === 'close' && (
+            <button
+              type="button"
+              className="org-ask-tool org-ask-close"
+              data-testid="org-ask-close"
+              onClick={() => {
+                const settle = answers.start(a.taskId);
+                completeTask(a.taskId).then(() => settle(), (err: unknown) => settle({ of: 'answer', message: `Could not close it: ${err instanceof Error ? err.message : String(err)}` }));
+              }}
+            >Close</button>
+          )}
         </span>
       </div>
       {open && more && <div className="org-ask-more" data-testid="org-ask-more">{more}</div>}

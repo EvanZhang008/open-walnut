@@ -118,9 +118,22 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    centred placeholder row. */
 .home-navigation-scroll .todo-focus-drop-zone-empty:has(.project-status-folds) { display: block; padding-left: 0; }
 
-/* To read: its own calm mark and tint, never the red of Needs you (2026-11-02). */
-.status-section-read .status-section-heading-icon { color: var(--accent); }
-.status-section-card .pinned-phase-picker[data-row-mark="read"] { color: var(--accent); }
+/* Needs you: one line under the title, what to do with it (its category word) and then what it
+   asks or has to read, cut to one line (2026-11-03, the user: "thridline cna show what need u",
+   "in one line"). A row with only something to read keeps a calm mark, never the red. */
+.status-card-reason.status-card-needs-line { display: flex; align-items: center; gap: 6px; text-overflow: clip; }
+.status-card-needs-line .needs-category { flex: none; font-weight: 600; }
+.status-card-needs-line .needs-line-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.needs-category-decide { color: var(--error, #ff3b30); }
+.needs-category-review { color: var(--warning, #c77700); }
+.needs-category-look { color: var(--accent); }
+.needs-category-close { color: var(--success, #2f9e44); }
+.status-card-needs-line .needs-close-btn {
+  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: 11px; line-height: 16px; cursor: pointer;
+}
+.status-card-needs-line .needs-close-btn:hover { background: var(--bg-secondary); }
+.status-section-card .pinned-phase-picker[data-row-mark="needs-read"] { color: var(--accent); }
 /* Waiting / snoozed: the row's wait or snooze mark, muted, and an unread dot that does not
    read as an ask (2026-11-02, the user: "looks kike they are waiting for my input"). */
 .status-section-card .pinned-phase-picker[data-row-mark="waiting"],

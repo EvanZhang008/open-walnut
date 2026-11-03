@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { BRIEF_SECTIONS, USER_STATES } from '../../../src/core/user-status.js'
+import { BRIEF_SECTIONS, USER_STATES, shownState } from '../../../src/core/user-status.js'
 import { briefSectionOf, emptySectionLine, headingSection, structureBrief } from '../../../src/core/sessions/brief-structure.js'
 import { briefSectionLines } from '../../../src/core/sessions/brief.js'
 import type { Task } from '../../../src/core/types.js'
@@ -24,20 +24,21 @@ describe('the three sections', () => {
     const covered = new Set(BRIEF_SECTIONS.map((s) => s.state))
     for (const state of USER_STATES) {
       if (state === 'done') continue
-      expect(covered.has(state), `user status "${state}" has no Brief section`).toBe(true)
+      // Drawn where the user reads it: To read under Needs you (shownState).
+      expect(covered.has(shownState(state) as never), `user status "${state}" has no Brief section`).toBe(true)
     }
-    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'To read', 'Working', 'Waiting / snoozed'])
-    // The user's three always stand; To read only while a task is to read (2026-11-02).
-    expect(BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+    // The user's three sections; a task with only something to read is under Needs you (2026-11-03).
+    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
   })
 
-  it('draws To read right under Needs you while a task is to read, and leaves it out when none is', () => {
-    const done = t('rd', { phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished' } })
+  it('puts a task to read under Needs you, and a To read heading an earlier letter has folds into it', () => {
+    const done = t('rd', { phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } })
     const text = structureBrief('### Needs you\n- nothing\n### Working\n- nothing\n### Waiting / snoozed\n- <task-ref id="rd">x</task-ref> finished', lead.id, [done]).text
-    expect(text.indexOf('### To read')).toBeGreaterThan(text.indexOf('### Needs you'))
-    expect(text.indexOf('### To read')).toBeLessThan(text.indexOf('### Working'))
-    expect(text).toMatch(/### To read\n- <task-ref id="rd">/)
-    expect(structureBrief('### Needs you\n- nothing', lead.id, []).text).not.toContain('To read')
+    expect(text).toMatch(/### Needs you\n- <task-ref id="rd">/)
+    expect(text).not.toContain('To read')
+    const older = structureBrief('### Needs you\n- nothing\n### To read\n- <task-ref id="rd">x</task-ref> finished\n### Working\n- nothing\n### Waiting / snoozed\n- nothing', lead.id, [done]).text
+    expect(older).toMatch(/### Needs you\n- <task-ref id="rd">/)
+    expect(older).not.toContain('To read')
   })
 
   it('put a task by its own live status; done has none', () => {

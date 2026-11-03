@@ -234,6 +234,8 @@ export interface UserStatusInput {
   pendingPermissionTool?: string | null;
   /** An unanswered action_required letter this task sent (its subject). */
   openLetter?: string | null;
+  /** An open review letter this task sent (its subject): only names what the user does (category). */
+  openReview?: string | null;
   /** An unanswered Board choice about this task (its title). */
   openChoice?: string | null;
   /** When that choice was last written on its Board (ISO); null = no time recorded (older Board). */
@@ -293,8 +295,8 @@ export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: 
  * closes itself (routines/run-close.ts).
  */
 export type ToRead = 'result' | 'answer' | 'turn';
-export const RESULT_TO_READ = 'It finished, and its result is there to read';
-export const ANSWER_TO_READ = 'It answered your message, and its answer is there to read';
+export const RESULT_TO_READ = 'The result is ready';
+export const ANSWER_TO_READ = 'It answered your question';
 export const TURN_TO_READ = 'Its turn ended without asking you anything';
 /** A task with no session that a person or a lead set to NEED_ACTION by hand. */
 export const MARKED_ASK = 'It was set to need you by hand: open it.';
@@ -352,6 +354,8 @@ export interface UserStatus {
   askForm?: AskForm;
   /** read: nothing is asked of the user, only this to read (ToRead). */
   toRead?: ToRead;
+  /** needs or read: what the user does with it, the head of its line under Needs you (NeedsCategory). */
+  category?: NeedsCategory;
   /** working with no turn running: its own work goes on and wakes it (ownWork): a live process
    *  that carries on, an armed watch on it, or its wait clock. */
   carriesOn?: 'process' | 'watch' | 'clock';
@@ -584,7 +588,60 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   // handed it back" is no claim about the world.
   if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report, hasAbove(input))) stampChecked(out, input, nowMs);
   if (out.state === 'needs' && out.source === 'choice') stampChoiceChecked(out, input, nowMs);
+  // A review letter names what to do with a result or the session's own ask, never with a prompt,
+  // a choice or a decision letter (those are decisions).
+  const review = !none(input.openReview) && (storedUserState(out) === 'read' || out.source === 'session');
+  let category = needsCategoryOf(out, review);
+  // An ask with no kind of the user's own reads as a result, but it asked something: never Can close.
+  if (category === 'close' && input.report?.kindless_ask) category = 'look';
+  if (category) out.category = category;
   return out;
+}
+
+/**
+ * What the user does with a row under Needs you, from facts Walnut holds, never a model's guess
+ * (2026-11-03, the user: "I think shoudl shoudlbe in need aciton but I love ur idea of give more
+ * category, I guess, read, makde decison, review, see if can closed"):
+ *   look    it answered the user's message, its turn ended, or it failed: take a look
+ *   decide  a real ask: its own question, a Board choice, a decision letter, a permission prompt
+ *   review  it sent a review letter that is still open
+ *   close   it finished and asks nothing: read the result and close it
+ */
+export type NeedsCategory = 'look' | 'decide' | 'review' | 'close';
+export const NEEDS_CATEGORY_LABELS: Record<NeedsCategory, string> = {
+  look: 'Take a look', decide: 'Decide', review: 'Review', close: 'Can close',
+};
+
+/** A status's category (NeedsCategory), or undefined for one that is not under Needs you. Pure: the
+ *  web reads it again for a status stored before the field. */
+export function needsCategoryOf(s: Pick<UserStatus, 'state' | 'source' | 'toRead' | 'snoozed'>, openReview = false): NeedsCategory | undefined {
+  const state = storedUserState(s);
+  if (state !== 'needs' && state !== 'read') return undefined;
+  if (openReview) return 'review';
+  if (state === 'read') return s.toRead === 'result' ? 'close' : 'look';
+  return s.source === 'error' ? 'look' : 'decide';
+}
+
+/** The group a state is drawn in for the user: To read sits under Needs you, its line saying what
+ *  to do with it (2026-11-03, the user: "I dont wnat serpeate to read"). The stored state keeps
+ *  `read` apart, so nothing re-checks or wakes a task for it. Pure. */
+export function shownState<S extends UserState>(state: S): Exclude<S, 'read'> | 'needs' {
+  return (state === 'read' ? 'needs' : state) as Exclude<S, 'read'> | 'needs';
+}
+
+/** The one line under a Needs you row's title: its category, then what it asks or what there is to
+ *  read; null for a status with no category. */
+export function needsLineOf(s: Pick<UserStatus, 'state' | 'source' | 'toRead' | 'snoozed' | 'ask' | 'waitingOn' | 'category'>): { category: NeedsCategory; text: string } | null {
+  const category = s.category ?? needsCategoryOf(s);
+  if (!category) return null;
+  const words = storedUserState(s) === 'read' ? s.waitingOn : s.ask;
+  return { category, text: (words ?? '').replace(/\s+/g, ' ').trim() };
+}
+
+/** needsLineOf as one string: "Can close: The result is ready", or the category word alone. */
+export function needsLineText(s: Parameters<typeof needsLineOf>[0]): string {
+  const line = needsLineOf(s);
+  return line ? [NEEDS_CATEGORY_LABELS[line.category], line.text].filter(Boolean).join(': ') : '';
 }
 
 /** The ask of a current needs report in its one-click shape (AskForm), when the status is that ask. */
@@ -943,7 +1000,7 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
 }
 
 /** The keys of the status every agent task read carries (agentStatusView). */
-export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
 
 /**
  * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,
@@ -984,7 +1041,8 @@ export function countUserStates(statuses: Iterable<Pick<UserStatus, 'state'>>): 
 /** "2 Needs you · 1 To read · 10 Working · 16 Waiting / snoozed · 12 Completed", the one line every
  *  surface prints; To read only when there is one. */
 export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean } = {}): string {
-  const parts = [stateCountLabel('needs', c.needs), ...(c.read ? [stateCountLabel('read', c.read)] : []), stateCountLabel('working', c.working), stateCountLabel('waiting', c.waiting)];
+  // To read is counted under Needs you, where it is drawn (shownState).
+  const parts = [stateCountLabel('needs', c.needs + (c.read ?? 0)), stateCountLabel('working', c.working), stateCountLabel('waiting', c.waiting)];
   if (opts.withDone !== false) parts.push(stateCountLabel('done', c.done));
   return parts.join(' · ');
 }
@@ -1055,10 +1113,9 @@ export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly
  * live status (Task.user_status), whose Waiting covers a snoozed or parked task, and To read (2026-11-02)
  * a finished result or an answer with nothing asked. Done work has no section: it leaves the Brief. sessions/brief-structure.ts keeps every stored Brief in this shape.
  */
-export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done'>; heading: string; optional?: true }> = [
+export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done' | 'read'>; heading: string; optional?: true }> = [
+  // A task with only something to read is under Needs you too (shownState, 2026-11-03).
   { state: 'needs', heading: 'Needs you' },
-  // Only while a task is to read: the user's three sections stay as they were (2026-10-30).
-  { state: 'read', heading: 'To read', optional: true },
   { state: 'working', heading: 'Working' },
   { state: 'waiting', heading: 'Waiting / snoozed' },
 ];

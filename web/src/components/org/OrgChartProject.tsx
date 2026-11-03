@@ -7,7 +7,7 @@
 import { useState, type DragEvent, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { teamNews, type OrgTaskNode, type TeamNewsItem, type TeamNewsTask } from '@open-walnut/org-tree';
-import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState, stateCountLabel } from '@open-walnut/user-status';
 import type { VpProject } from './org-chart-model';
 
 /** Tasks shown before "Show all". */
@@ -30,7 +30,8 @@ export function projectTasks(project: VpProject, byId: ReadonlyMap<string, Task>
   const add = (nodes: readonly OrgTaskNode[], depth: number) => {
     const known = new Map(nodes.map((n) => [n.id, n] as const));
     for (const item of teamNews(nodes.map(line))) {
-      out.push({ id: item.taskId, title: item.title, state: item.state, words: item.words, depth: Math.min(depth, 1) });
+      // A task with only something to read is drawn and named under Needs you (shownState, 2026-11-03).
+      out.push({ id: item.taskId, title: item.title, state: shownState(item.state), words: item.words, depth: Math.min(depth, 1) });
       const node = known.get(item.taskId);
       if (node?.workers.length) add(node.workers, depth + 1);
     }

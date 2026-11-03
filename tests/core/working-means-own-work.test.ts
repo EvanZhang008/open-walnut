@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest'
 import {
   deriveUserStatus, legacyUserState, storedUserState, countUserStates, userStatusLine,
   USER_STATES, USER_STATE_LABELS, BRIEF_SECTIONS, STATUS_RULE_VERSION,
+  needsCategoryOf, needsLineOf, needsLineText, shownState, NEEDS_CATEGORY_LABELS,
   type StatusReport, type UserStatusInput,
 } from '../../src/core/user-status.js'
 import { readStatusReport, FOR_USER_PROMPT } from '../../src/core/session-hooks/builtins.js'
@@ -157,10 +158,11 @@ describe('something to read with nothing asked is To read', () => {
 })
 
 describe('the states every surface reads', () => {
-  it('To read sits right under Needs you, with its own name', () => {
+  it('To read is a state of its own, drawn and counted under Needs you (2026-11-03)', () => {
     expect(USER_STATES).toEqual(['needs', 'read', 'working', 'waiting', 'done'])
     expect(USER_STATE_LABELS.read).toBe('To read')
-    expect(BRIEF_SECTIONS.map((s) => s.state)).toEqual(['needs', 'read', 'working', 'waiting'])
+    expect(BRIEF_SECTIONS.map((s) => s.state)).toEqual(['needs', 'working', 'waiting'])
+    for (const s of USER_STATES) expect(shownState(s)).toBe(s === 'read' ? 'needs' : s)
   })
 
   it('an older stored status reads To read; an older client\'s state never meets read', () => {
@@ -170,11 +172,59 @@ describe('the states every surface reads', () => {
     for (const s of USER_STATES) expect(['needs', 'working', 'waiting', 'done']).toContain(legacyUserState(s))
   })
 
-  it('counts carry To read, and the line names it only when there is one', () => {
+  it('counts carry To read apart, and the line counts it under Needs you', () => {
     const c = countUserStates([{ state: 'needs' }, { state: 'read' }, { state: 'working' }])
     expect(c).toEqual({ needs: 1, read: 1, working: 1, waiting: 0, done: 0 })
-    expect(userStatusLine(c)).toBe('1 Needs you · 1 To read · 1 Working · 0 Waiting / snoozed · 0 Completed')
+    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 0 Waiting / snoozed · 0 Completed')
     expect(userStatusLine({ needs: 0, working: 1, waiting: 2, done: 0 })).not.toContain('To read')
+  })
+})
+
+describe('every row under Needs you says what to do with it (2026-11-03)', () => {
+  // The user: "I love ur idea of give more category, I guess, read, makde decison, review, see if can closed".
+  it('each status under Needs you has a category, from facts only', () => {
+    const cases: Array<[Parameters<typeof needsCategoryOf>[0], boolean, string]> = [
+      [{ state: 'read', toRead: 'result' }, false, 'close'],
+      [{ state: 'read', toRead: 'answer' }, false, 'look'],
+      [{ state: 'read', toRead: 'turn' }, false, 'look'],
+      [{ state: 'waiting', toRead: 'result' }, false, 'close'],
+      [{ state: 'needs', source: 'session' }, false, 'decide'],
+      [{ state: 'needs', source: 'choice' }, false, 'decide'],
+      [{ state: 'needs', source: 'letter' }, false, 'decide'],
+      [{ state: 'needs', source: 'prompt' }, false, 'decide'],
+      [{ state: 'needs', source: 'error' }, false, 'look'],
+      [{ state: 'read', toRead: 'result' }, true, 'review'],
+      [{ state: 'needs', source: 'session' }, true, 'review'],
+    ]
+    for (const [s, review, want] of cases) expect(needsCategoryOf(s, review), JSON.stringify(s)).toBe(want)
+    for (const s of ['working', 'waiting', 'done'] as const) expect(needsCategoryOf({ state: s })).toBeUndefined()
+    expect(needsCategoryOf({ state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } })).toBeUndefined()
+    expect(Object.keys(NEEDS_CATEGORY_LABELS).sort()).toEqual(['close', 'decide', 'look', 'review'])
+  })
+
+  it('the server stores the category, a review letter making it Review', () => {
+    const base = { hasSession: true, phaseChangedAt: MOVED } as const
+    expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', report: own({ state: 'done' }) }, NOW).category).toBe('close')
+    expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', report: own({ state: 'done' }), openReview: 'Review the draft' }, NOW).category).toBe('review')
+    expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', openLetter: 'Approve the spend?' }, NOW).category).toBe('decide')
+    expect(deriveUserStatus({ ...base, phase: 'IN_PROGRESS', processStatus: 'running' }, NOW).category).toBeUndefined()
+  })
+
+  it('an ask with no kind of the user\'s own is never Can close; a decision stays Decide beside a review letter', () => {
+    const base = { hasSession: true, phaseChangedAt: MOVED } as const
+    const kindless = deriveUserStatus({ ...base, phase: 'NEED_ACTION', report: own({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'Should I ship it?', kindless_ask: true }) }, NOW)
+    expect(kindless.state).toBe('read')
+    expect(kindless.category).toBe('look')
+    expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', openLetter: 'Approve the spend?', openReview: 'Review the draft' }, NOW).category).toBe('decide')
+    expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', pendingPermissionTool: 'Bash', openReview: 'Review the draft' }, NOW).category).toBe('decide')
+  })
+
+  it('the line is the category and the ask or what there is to read', () => {
+    expect(needsLineOf({ state: 'needs', source: 'session', ask: '  Pick   a plan ' })).toEqual({ category: 'decide', text: 'Pick a plan' })
+    expect(needsLineOf({ state: 'read', toRead: 'answer', waitingOn: 'It answered your question' })).toEqual({ category: 'look', text: 'It answered your question' })
+    expect(needsLineOf({ state: 'working' })).toBeNull()
+    expect(needsLineText({ state: 'read', toRead: 'result', waitingOn: 'The result is ready' })).toBe('Can close: The result is ready')
+    expect(needsLineText({ state: 'needs', source: 'session' })).toBe('Decide')
   })
 })
 

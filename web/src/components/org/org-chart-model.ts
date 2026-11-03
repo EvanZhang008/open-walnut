@@ -55,11 +55,10 @@ export interface VpCard {
   row: ChannelRow;
 }
 
-/** "2 To read · 18 Working · 12 Waiting / snoozed": what moves and what waits, else what is open, else nothing. */
+/** "18 Working · 12 Waiting / snoozed": what moves and what waits, else what is open, else nothing.
+ *  What needs the user (To read included) is the card's own Needs you number, not here. */
 export function vpLine(c: ChannelRow['counts']): string {
   const parts: string[] = [];
-  // `toRead` may be missing from an older server's counts.
-  if (c.toRead) parts.push(stateCountLabel('read', c.toRead));
   if (c.running) parts.push(stateCountLabel('working', c.running));
   if (c.waiting) parts.push(stateCountLabel('waiting', c.waiting));
   if (parts.length) return parts.join(' · ');
@@ -121,9 +120,8 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
 }
 
 function groupLine(projects: readonly VpProject[]): string {
-  const sum = (k: 'running' | 'toRead' | 'waiting') => projects.reduce((n, p) => n + (p.row.counts[k] ?? 0), 0);
+  const sum = (k: 'running' | 'waiting') => projects.reduce((n, p) => n + p.row.counts[k], 0);
   const parts = [`${projects.length} projects`];
-  if (sum('toRead')) parts.push(stateCountLabel('read', sum('toRead')));
   if (sum('running')) parts.push(stateCountLabel('working', sum('running')));
   if (sum('waiting')) parts.push(stateCountLabel('waiting', sum('waiting')));
   return parts.join(' · ');

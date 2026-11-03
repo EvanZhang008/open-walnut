@@ -285,8 +285,9 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
   await expect(r.getByTestId('org-channel-badge')).toHaveText('1')
   // The line says what the user is asked; the task it is about is beside it.
-  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Needs you: \S/)
-  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Renewal ${STAMP}: Needs you: `))
+  // Led by what to do with it (2026-11-03): a Board choice is a decision.
+  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Decide: \S/)
+  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Renewal ${STAMP}: Decide: `))
   await r.click()
   await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
@@ -295,6 +296,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(alert).toHaveAttribute('data-kind', 'needs')
   await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Pick the renewal date ${STAMP}`)
+  await expect(alert.getByTestId('org-ask-category')).toHaveText('Decide:')
   // The task's name leads to where the ask lives: the Board.
   await alert.getByTestId('org-alert-link').click()
   await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')
@@ -326,8 +328,8 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await page.getByTestId('org-search').fill(project)
   const r = row(page, project)
   await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
-  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Needs you: \S/)
-  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Lease ${STAMP}: Needs you: `))
+  await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Decide: \S/)
+  await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Lease ${STAMP}: Decide: `))
   await r.click()
   await expectChatShown(page)
   const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })

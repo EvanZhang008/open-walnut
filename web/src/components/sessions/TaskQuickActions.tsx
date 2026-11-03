@@ -14,7 +14,7 @@ import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
 import { taskCircleClass, taskUserState } from '@/utils/session-status';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
@@ -46,7 +46,10 @@ const PHASE_LABEL: Record<string, string> = {
 function quickPhaseLabel(task: Task): string {
   const label = PHASE_LABEL[task.phase] ?? task.phase;
   const state = taskUserState(task);
-  return label === PHASE_LABEL.WAITING && (state === 'working' || state === 'read') ? USER_STATE_LABELS[state] : label;
+  if (label !== PHASE_LABEL.WAITING) return label;
+  if (state === 'working') return USER_STATE_LABELS.working;
+  if (state === 'read') { const line = task.user_status ? needsLineOf(task.user_status) : null; return NEEDS_CATEGORY_LABELS[line?.category ?? 'look']; }
+  return label;
 }
 
 

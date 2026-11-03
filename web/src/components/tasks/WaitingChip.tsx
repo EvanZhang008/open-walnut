@@ -23,7 +23,7 @@ import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { triggerPillTitle } from '@/components/routines/TriggerPill';
 import { formatWaitUntil, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { taskUserState } from '@/utils/session-status';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
 import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons';
 import '@/styles/task-status.css';
 
@@ -53,7 +53,10 @@ export function waitingChipLabel(task: ChipTask): string {
   const until = formatWaitUntil(task.wait_until);
   const reads = parkReads(task);
   if (reads === 'working') return until ? `${USER_STATE_LABELS.working} · checks back ${until}` : USER_STATE_LABELS.working;
-  if (reads === 'read') return USER_STATE_LABELS.read;
+  if (reads === 'read') {
+    const line = task.user_status ? needsLineOf(task.user_status) : null;
+    return line ? NEEDS_CATEGORY_LABELS[line.category] : NEEDS_CATEGORY_LABELS.look;
+  }
   return until ? `Wait until ${until}` : 'Waiting';
 }
 

@@ -316,9 +316,6 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-tone-violet { color: var(--kb-violet); }
 .kanban-tone-violet .kanban-card-dot { background: var(--kb-violet); }
 .kanban-tone-grey .kanban-card-dot { background: var(--fg-muted); }
-/* To read: nothing asked, only something to read; a calm accent, never the red of Needs you. */
-.kanban-tone-blue { color: var(--accent); }
-.kanban-tone-blue .kanban-card-dot { background: var(--accent); }
 .kanban-card-start-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Summary: 3 lines wide, 2 narrow; a click shows it all. */

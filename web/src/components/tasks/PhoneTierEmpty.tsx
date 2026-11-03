@@ -17,7 +17,8 @@ export const PHONE_SHOW_SECTION_EVENT = 'phone:show-section';
  *  the phase only for a task the server has not derived yet. */
 export function countNeedingYou(tasks: Iterable<Pick<Task, 'phase' | 'status' | 'user_status'>>): number {
   let n = 0;
-  for (const t of tasks) if (taskUserState(t) === 'needs') n++;
+  // To read counts under Needs you, where it is drawn (2026-11-03).
+  for (const t of tasks) { const s = taskUserState(t); if (s === 'needs' || s === 'read') n++; }
   return n;
 }
 

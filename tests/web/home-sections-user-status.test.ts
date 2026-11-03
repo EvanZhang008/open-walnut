@@ -13,8 +13,8 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '@open-walnut/core'
-import { USER_STATES, type WaitKind } from '../../src/core/user-status'
-import { readReason, stateSectionNoNeeds, stateSectionOf, statusSectionOf, waitingReason, STATUS_SECTION_ORDER } from '@/components/tasks/status-sections'
+import { USER_STATES, shownState, type WaitKind } from '../../src/core/user-status'
+import { needsLine, stateSectionNoNeeds, stateSectionOf, statusSectionOf, waitingReason, STATUS_SECTION_ORDER } from '@/components/tasks/status-sections'
 import { ICON_PHASE_TODO, ICON_PHASE_WAITING, ICON_SNOOZE, ICON_TO_READ, sectionRowIcon } from '@/components/common/Icons'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -42,7 +42,7 @@ describe('Home sections equal the user status', () => {
     expect(kinds).toEqual(expect.arrayContaining(['not-started', 'stuck', 'time', 'task', 'you']))
   })
 
-  it('every state, wait kind, snooze and phase lands in the section of its state', () => {
+  it('every state, wait kind, snooze and phase lands in the section of its state (To read under Needs you)', () => {
     const wrong: string[] = []
     for (const phase of PHASES) {
       for (const state of USER_STATES.filter((s) => s !== 'done')) {
@@ -52,8 +52,9 @@ describe('Home sections equal the user status', () => {
             // The panel's own start-date read never overrides a derived status.
             const t = task({ phase, user_status: us, start_date: '2099-01-01' })
             const got = stateSectionOf(t, () => true)
-            if (got !== state) wrong.push(`${phase} ${state}/${kind ?? '-'}${snoozed ? ' snoozed' : ''} -> ${got}`)
-            if (statusSectionOf(t) !== state) wrong.push(`${phase} ${state}/${kind ?? '-'} drawn in ${statusSectionOf(t)}`)
+            const want = shownState(state)
+            if (got !== want) wrong.push(`${phase} ${state}/${kind ?? '-'}${snoozed ? ' snoozed' : ''} -> ${got}`)
+            if (statusSectionOf(t) !== want) wrong.push(`${phase} ${state}/${kind ?? '-'} drawn in ${statusSectionOf(t)}`)
           }
         }
       }
@@ -116,15 +117,24 @@ describe('Home sections equal the user status', () => {
   })
 
   // 2026-11-02, the user: under Waiting / snoozed the rows wore the needs ring and "looks kike they
-  // are waiting for my input", and finished results sat there too.
-  it('To read is its own section right under Needs you, and an older stored status lands in it', () => {
-    expect(STATUS_SECTION_ORDER.slice(0, 4)).toEqual(['watching', 'needs', 'read', 'working'])
-    const older = task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'other', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } as Task['user_status'] })
-    expect(stateSectionOf(older)).toBe('read')
-    expect(readReason(older)).toBe('It finished, and its result is there to read')
-    const now = task({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'answer', waitingOn: 'It answered your message' } as Task['user_status'] })
-    expect(stateSectionOf(now)).toBe('read')
-    expect(readReason(now)).toBe('It answered your message')
+  // are waiting for my input", and finished results sat there too. 2026-11-03: "I dont wnat
+  // serpeate to read", "thridline cna show what need u", with a category ("read, makde decison,
+  // review, see if can closed").
+  it('To read sits under Needs you, its line saying what to do with it; no section of its own', () => {
+    expect(STATUS_SECTION_ORDER).toEqual(['watching', 'needs', 'working', 'waiting', 'done'])
+    const older = task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'other', toRead: 'result', waitingOn: 'The result is ready' } as Task['user_status'] })
+    expect(stateSectionOf(older)).toBe('needs')
+    expect(needsLine(older)).toMatchObject({ category: 'close', label: 'Can close', text: 'The result is ready' })
+    const now = task({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'answer', waitingOn: 'It answered your question' } as Task['user_status'] })
+    expect(stateSectionOf(now)).toBe('needs')
+    expect(needsLine(now)).toMatchObject({ category: 'look', label: 'Take a look', text: 'It answered your question' })
+    const ask = task({ phase: 'NEED_ACTION', user_status: { state: 'needs', source: 'session', ask: 'Pick the rollout plan' } as Task['user_status'] })
+    expect(needsLine(ask)).toMatchObject({ category: 'decide', label: 'Decide', text: 'Pick the rollout plan' })
+    // The category the server stored wins.
+    const review = task({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready', category: 'review' } as Task['user_status'] })
+    expect(needsLine(review)).toMatchObject({ category: 'review', label: 'Review' })
+    // Not under Needs you: no line.
+    expect(needsLine(task({ phase: 'IN_PROGRESS', user_status: { state: 'working' } as Task['user_status'] }))).toBeNull()
     // Snoozed, it sleeps under Waiting / snoozed.
     expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting')
   })
@@ -133,11 +143,13 @@ describe('Home sections equal the user status', () => {
     const wrong: string[] = []
     for (const phase of PHASES) {
       for (const snoozed of [false, true]) {
-        const w = sectionRowIcon('waiting', false, phase, snoozed)
+        const w = sectionRowIcon('waiting', false, phase, snoozed, 'waiting')
         if (w !== (snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING)) wrong.push(`waiting ${phase}${snoozed ? ' snoozed' : ''}`)
-        if (sectionRowIcon('read', false, phase, snoozed) !== ICON_TO_READ) wrong.push(`read ${phase}`)
+        // Under Needs you a row with only something to read wears the page; an ask, the open ring.
+        if (sectionRowIcon('needs', false, phase, snoozed, 'read') !== ICON_TO_READ) wrong.push(`read ${phase}`)
+        if (sectionRowIcon('needs', false, phase, snoozed, 'needs') !== ICON_PHASE_TODO) wrong.push(`needs ${phase}`)
         // Working: the open ring even while parked on its own build.
-        if (sectionRowIcon('working', false, phase, false) !== ICON_PHASE_TODO) wrong.push(`working ${phase}`)
+        if (sectionRowIcon('working', false, phase, false, 'working') !== ICON_PHASE_TODO) wrong.push(`working ${phase}`)
       }
     }
     expect(wrong).toEqual([])

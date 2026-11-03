@@ -18,7 +18,7 @@
  * letter stored before marks existed is read by its sections the same way: a line that left or
  * joined Needs you, or finished, moved.
  */
-import { fallbackUserState, type BriefSectionTask, type TaskBrief, type UserState } from '../user-status.js';
+import { fallbackUserState, needsLineText, type BriefSectionTask, type TaskBrief, type UserState } from '../user-status.js';
 import { briefAskScope, briefSectionOf, headingSection, type BriefSectionKey } from './brief-structure.js';
 
 const WORDS_MAX = 160;
@@ -108,7 +108,7 @@ export function liveWords(task: BriefSectionTask): string {
   const snoozed = (s as { snoozed?: { until?: string } } | undefined)?.snoozed;
   if (state === 'done') return 'Completed';
   if (state === 'needs') return clip(s?.ask) || 'Needs you';
-  if (state === 'read') return clip(s?.waitingOn) || 'To read';
+  if (state === 'read') return clip(s ? needsLineText(s) : '') || 'Take a look';
   if (state === 'waiting') {
     if (snoozed?.until) return `Snoozed until ${snoozed.until.slice(0, 10)}`;
     const on = clip(s?.waitingOn ?? s?.now);

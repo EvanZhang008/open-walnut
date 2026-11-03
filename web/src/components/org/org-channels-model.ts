@@ -4,7 +4,8 @@
  * project (its lead, else its one task, else the Inbox's tasks).
  *
  *   state   alert   a task in the project needs the user: its session waits on an answer
- *                   or approval or failed, or its status (src/core/user-status.ts) says so
+ *                   or approval or failed, or its status (src/core/user-status.ts) says so,
+ *                   or it has a result or an answer to look at (To read, shownState)
  *           working a task in the project is Working
  *           quiet   open work, nothing running (Waiting)
  *           parked  every open task is parked (WAITING) or snoozed
@@ -19,7 +20,10 @@ import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
 import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
 import { readAskForm, type AskForm } from './org-ask-form';
-import { USER_STATE_LABELS, checkedLine, stateCountLabel, storedUserState, type UserState, type UserStatus } from '@open-walnut/user-status';
+import {
+  NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, checkedLine, needsLineOf, shownState, stateCountLabel, storedUserState,
+  type NeedsCategory, type ToRead, type UserState, type UserStatus,
+} from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
 
@@ -38,6 +42,10 @@ export interface OrgAlertView {
   checked?: { text: string; unverified: boolean };
   /** `needs`: the shape its task gave the ask (user_status.askForm): a summary, More, how to answer. */
   form?: AskForm;
+  /** `needs`: what the user does with it, the head of its line (NEEDS_CATEGORY_LABELS). */
+  category?: NeedsCategory;
+  /** `needs` with nothing asked, only this to read (To read, drawn under Needs you): no check line. */
+  toRead?: ToRead;
   /** A subtask's ask: the top-level task it rolls up to (topLevelOf), shown first on the card,
    *  so a VP's or Main's Task view reads by top-level task. Answering it answers the subtask. */
   via?: { id: string; title: string };
@@ -56,12 +64,26 @@ export function topLevelOf(task: Task, byId: ReadonlyMap<string, Task>): Task | 
 
 /** What every ask card says about how fresh its ask is (2026-10-31, the user: every card shows when
  *  it was checked): its session's check, a prompt open in its session now, or Not verified. */
-export function cardChecked(a: OrgAlertView): { text: string; unverified: boolean } {
+export function cardChecked(a: OrgAlertView): { text: string; unverified: boolean } | null {
   if (a.checked) return a.checked;
+  // Nothing asked, only a result or an answer to look at: there is no ask to check.
+  if (a.toRead) return null;
   if (a.kind === 'question' || a.kind === 'permission') return { text: 'Open in its session now', unverified: false };
   if (a.kind === 'error') return { text: 'Failed in its session now', unverified: false };
   return { text: 'Not verified', unverified: true };
 }
+
+/** A Needs you task's one line, "<Category>: <words>" ("Take a look: It answered your question"),
+ *  or '' for a status with no category (needsLineOf). */
+export function needsRowText(task: Pick<Task, 'user_status'>): string {
+  const line = task.user_status ? needsLineOf(task.user_status) : null;
+  if (!line) return '';
+  const label = NEEDS_CATEGORY_LABELS[line.category];
+  return line.text ? `${label}: ${line.text}` : label;
+}
+
+/** The head of a card's line: its category's word (Decide, Take a look, Review, Can close). */
+export const alertCategoryLabel = (a: Pick<OrgAlertView, 'category'>): string | null => (a.category ? NEEDS_CATEGORY_LABELS[a.category] : null);
 
 /** What waits on the user in one task's session right now, or null. */
 export type AlertProbe = (task: Task) => { kind: Exclude<OrgAlertView['kind'], 'needs'>; tool?: string } | null;
@@ -143,8 +165,9 @@ function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Tas
     if (!task) continue;
     const status = task.user_status;
     // The task's own status decides what counts (the same one the Board and the counts read); a
-    // live prompt only names how it needs the user.
-    if (userStateOf(task) !== 'needs') continue;
+    // live prompt only names how it needs the user. A task with only something to read is a card
+    // too, under Needs you (shownState, 2026-11-03).
+    if (shownState(userStateOf(task)) !== 'needs') continue;
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.
@@ -152,11 +175,17 @@ function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Tas
     const via = top ? { via: { id: top.id, title: orgDisplayTitle(top) } } : {};
     if (hit && !(hit.kind === 'error' && status && status.state !== 'needs')) {
       out.push({ taskId: id, title: orgDisplayTitle(task), kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}), ...via });
-    } else if (userStateOf(task) === 'needs') {
-      const ask = status?.ask?.trim();
-      const checked = checkedLine(status);
-      const form = readAskForm(status);
-      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}), ...(checked ? { checked } : {}), ...(form ? { form } : {}), ...via });
+    } else {
+      const read = userStateOf(task) === 'read' ? status?.toRead ?? 'turn' : undefined;
+      const line = status ? needsLineOf(status) : null;
+      // To read: its words (what there is to read) are the card's line.
+      const ask = (read ? line?.text : status?.ask)?.trim();
+      const checked = read ? null : checkedLine(status);
+      const form = read ? undefined : readAskForm(status);
+      out.push({
+        taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}),
+        ...(checked ? { checked } : {}), ...(form ? { form } : {}), ...(line ? { category: line.category } : {}), ...(read ? { toRead: read } : {}), ...via,
+      });
     }
   }
   return out;
@@ -192,7 +221,7 @@ function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>
     const task = byId.get(a.taskId);
     // A live prompt or a failure is as new as the task's last move; a status ask has its own time.
     const at = a.kind === 'needs' && task ? newsItem(task as TeamNewsTask).at : taskTime(task);
-    return a.kind === 'needs' && a.ask ? { text: `Needs you: ${a.ask}`, at, task: a.title } : { text: alertText(a), at };
+    return a.kind === 'needs' && a.ask ? { text: `${alertCategoryLabel(a) ?? 'Needs you'}: ${a.ask}`, at, task: a.title } : { text: alertText(a), at };
   }
   const top = teamNews(nodes.map((n) => byId.get(n.id)).filter((t): t is Task => !!t) as TeamNewsTask[])[0];
   if (!top) return { text: 'Nothing open', at: 0 };
@@ -251,7 +280,7 @@ export interface OrgChannels {
 }
 
 function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
-  // `toRead` may be missing from an older server's counts.
+  // `toRead` may be missing from an older server's counts; it is shown under Needs you.
   return { open: a.open + b.open, running: a.running + b.running, needsYou: a.needsYou + b.needsYou, toRead: (a.toRead ?? 0) + (b.toRead ?? 0), waiting: a.waiting + b.waiting };
 }
 
@@ -290,9 +319,8 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const working = tree.counts.running;
   const summary = [`${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
   if (working) summary.push(stateCountLabel('working', working));
+  // Every row's cards, To read ones included (they are under Needs you).
   if (needYou) summary.push(stateCountLabel('needs', needYou));
-  const toRead = tree.counts.toRead ?? 0;
-  if (toRead) summary.push(stateCountLabel('read', toRead));
   const main: ChannelRow = {
     key: MAIN_KEY,
     kind: 'main',
@@ -379,7 +407,8 @@ export function movedProjects(channels: OrgChannels, tasks: readonly Task[]): Mo
 
 // ── The Team tab: the row's work, one column per state ──
 
-export type TeamColumnKey = Exclude<UserState, 'done'>;
+/** To read is under Needs you (shownState): no column of its own. */
+export type TeamColumnKey = Exclude<UserState, 'done' | 'read'>;
 
 export interface TeamItem {
   id: string;
@@ -401,7 +430,7 @@ export interface TeamColumn {
   items: TeamItem[];
 }
 
-const COLUMN_ORDER: readonly TeamColumnKey[] = ['needs', 'read', 'working', 'waiting'];
+const COLUMN_ORDER: readonly TeamColumnKey[] = ['needs', 'working', 'waiting'];
 
 function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): TeamColumn[] {
   return COLUMN_ORDER
@@ -413,26 +442,34 @@ function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): Te
     .filter((c) => c.items.length > 0);
 }
 
-/** The task's own status line for its column: its ask, what it does, or what it waits on. */
-function statusNote(task: Task | undefined, column: TeamColumnKey): string | undefined {
+/** The task's own status line for its column: its ask or what it has to read (with what to do
+ *  with it, its category), what it does, or what it waits on. */
+function statusNote(task: Task | undefined, column: TeamColumnKey): { text: string; label?: string } | undefined {
   const s = task?.user_status;
-  if (!s || storedUserState(s) !== column) return undefined;
-  const text = column === 'needs' ? s.ask : column === 'working' ? s.now : column === 'read' ? s.waitingOn : (s.waitingOn ?? s.now);
-  return text?.trim() || undefined;
+  if (!s || shownState(storedUserState(s)) !== column) return undefined;
+  if (column === 'needs') {
+    const line = needsLineOf(s);
+    return line?.text ? { text: line.text, label: NEEDS_CATEGORY_LABELS[line.category] } : undefined;
+  }
+  const text = (column === 'working' ? s.now : (s.waitingOn ?? s.now))?.trim();
+  return text ? { text } : undefined;
 }
 
 /** The team's line for its column: the first of its tasks (itself, then its workers) in that
- *  state with words for it, named when it is a worker. */
+ *  state with words for it, named when it is a worker; under Needs you led by what to do with it
+ *  ("Decide: <worker>: <ask>"). */
 function teamNote(all: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, column: TeamColumnKey): string | undefined {
   for (const [i, x] of all.entries()) {
-    const text = statusNote(byId.get(x.id), column);
-    if (text) return i === 0 ? text : `${x.title}: ${text}`;
+    const note = statusNote(byId.get(x.id), column);
+    if (!note) continue;
+    const words = i === 0 ? note.text : `${x.title}: ${note.text}`;
+    return note.label ? `${note.label}: ${words}` : words;
   }
   return undefined;
 }
 
-/** A project's teams by the user's status: a team with anything in it that needs the user sits
- *  under Needs you, else one with anything to read under To read, else one with anything working
+/** A project's teams by the user's status: a team with anything in it that needs the user (an
+ *  ask, or a result or an answer to look at) sits under Needs you, else one with anything working
  *  under Working, else under Waiting. */
 export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn[] {
   if (!row.node) return [];
@@ -440,9 +477,8 @@ export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn
   const alerted = new Set(row.alerts.map((a) => a.taskId));
   const items = row.node.teams.map((n) => {
     const all = [n, ...flattenNodes(n.workers)];
-    const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || x.userState === 'needs') ? 'needs'
-      : all.some((x) => x.userState === 'read') ? 'read'
-        : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
+    const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || shownState(x.userState) === 'needs') ? 'needs'
+      : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
     const note = teamNote(all, byId, column);
     // Every running task of the team, also under Needs you (its ask leads; what runs shows below).
     const live = all.flatMap((x, i) => (x.userState === 'working' ? [i === 0 ? { id: x.id } : { id: x.id, title: x.title }] : []));

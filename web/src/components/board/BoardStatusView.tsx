@@ -1,8 +1,9 @@
 /**
  * The Board's Status view, its default (2026-10-25, the user's pick "C" of three designs):
- * a brief in plain words that names what needs the user and counts the rest, the five
- * state chips that filter, and one table of the team: status, task, where it stands, next
- * and who, when. Every word comes from the one user status (src/core/user-status.ts), which
+ * a brief in plain words that names what needs the user and counts the rest, the four
+ * state chips that filter (a task with only a result or an answer to look at is under Needs
+ * you, its line saying what to do with it: 2026-11-03), and one table of the team: status,
+ * task, where it stands, next and who, when. Every word comes from the one user status (src/core/user-status.ts), which
  * the server keeps on each task, so the numbers here are the Org page's, the task list's
  * and the phone's. Nothing here is written by the lead by hand.
  *
@@ -11,7 +12,7 @@
  */
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
-import { USER_STATE_LABELS, USER_STATES, stateCountLabel, checkedLine, dueAtMs, resultIsPartial, type UserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState, stateCountLabel, checkedLine, dueAtMs, resultIsPartial } from '@open-walnut/user-status';
 import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
@@ -22,8 +23,8 @@ import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
-  briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, rowTime, statusBrief, waitingLine,
-  type StatusFilter, type StatusRow,
+  SHOWN_STATES, briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, needsRowLine, rowTime, statusBrief,
+  statusFilterShown, waitingLine, type KeptStatusFilter, type ShownState, type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
 import '@/styles/board-status.css';
@@ -46,14 +47,15 @@ const ago = (ms: number): string => (ms ? timeAgo(new Date(ms).toISOString()) : 
 const EMPTY_TEXT: Record<StatusFilter, string> = {
   open: 'No open tasks on this team.',
   needs: 'Nothing needs you right now.',
-  read: 'Nothing to read right now.',
   working: 'Nothing is working right now.',
   waiting: 'Nothing is waiting right now.',
   done: `Nothing was done in the last ${RECENT_COMPLETED_DAYS} days.`,
 };
 
 function StatusPill({ row }: { row: StatusRow }) {
-  const { state, kind } = row.status;
+  const { kind } = row.status;
+  // A task with only something to read wears Needs you, where it is drawn (shownState).
+  const state = shownState(row.status.state);
   // Stuck is a wait nothing will wake: the state's own name, in the stuck colour (its words say why).
   if (state === 'waiting' && kind === 'stuck') {
     return <span className="bs-pill bs-pill-stuck" data-state="stuck">{USER_STATE_LABELS.waiting}</span>;
@@ -69,7 +71,6 @@ function WhereCell({ row }: { row: StatusRow }) {
   const live = useLiveActivity(s.state === 'working' ? row.task.id : undefined);
   return (
     <>
-      {s.state === 'read' && s.waitingOn && <span className="bs-to-read" data-testid="board-to-read">{s.waitingOn}</span>}
       {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`}>{waitingLine(s, formatWaitUntil)}</span>}
       {s.state === 'working' && <LiveActivityLine taskId={row.task.id} />}
       {s.now && <span className="bs-now">{s.now}</span>}
@@ -108,10 +109,16 @@ function compactDays(at: string | undefined): string {
 function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void }) {
   const s = row.status;
   const checked = checkedLine(s);
-  if (s.state === 'needs') {
+  // Under Needs you: one line, what to do with it and then what it asks or has to read
+  // (2026-11-03, the user: "thridline cna show what need u", "in one line").
+  const line = needsRowLine(s);
+  if (line) {
     return (
       <>
-        <span className="bs-you"><b>You:</b> {s.ask}</span>
+        <span className="bs-needs-line" data-testid="board-needs-line" data-category={line.category} title={line.text ? `${line.label}: ${line.text}` : line.label}>
+          <b className={`bs-needs-category bs-needs-category-${line.category}`}>{line.text ? `${line.label}:` : line.label}</b>
+          {line.text && <> <span className="bs-needs-text">{line.text}</span></>}
+        </span>
         {checked && (
           <span className={`bs-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="board-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</span>
         )}
@@ -136,15 +143,16 @@ const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow;
   const t = row.task;
   const title = orgDisplayTitle(t);
   const when = ago(rowTime(row));
+  const shown = shownState(row.status.state);
   return (
     <tr
-      className={`bs-row bs-row-${row.status.state}${row.status.kind === 'stuck' ? ' bs-row-stuck' : ''}`}
+      className={`bs-row bs-row-${shown}${row.status.kind === 'stuck' ? ' bs-row-stuck' : ''}`}
       data-testid="board-status-row"
       data-task-id={t.id}
-      data-state={row.status.state}
+      data-state={shown}
       tabIndex={0}
       role="button"
-      aria-label={`${title}: ${USER_STATE_LABELS[row.status.state]}. Open the task`}
+      aria-label={`${title}: ${USER_STATE_LABELS[shown]}. Open the task`}
       onClick={() => onOpenTask(t.id)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenTask(t.id); } }}
     >
@@ -222,14 +230,16 @@ function TeamStopControl({ owner, ownerId, working }: { owner: Task | undefined;
 
 export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTask, onOpenPage, soloExtra }: BoardStatusViewProps) {
   // Each board's filter stays as it was left (utils/view-memory.ts).
-  const [filter, setFilter] = usePageViewOf<StatusFilter>('board', 'statusFilter', ownerId, 'open', isStatusFilter);
+  // A To read chip an older build kept opens as Needs you (statusFilterShown).
+  const [kept, setFilter] = usePageViewOf<KeptStatusFilter>('board', 'statusFilter', ownerId, 'open', isStatusFilter);
+  const filter = statusFilterShown(kept);
   // A minute clock is not needed: the server rewrites a status when it moves, and the
   // "updated" column is read again on every render the task list causes.
   const board = useMemo(() => buildStatusBoard({ ownerId, tasks, now: Date.now(), doneWindowDays: RECENT_COMPLETED_DAYS }), [ownerId, tasks]);
   const brief = statusBrief(board);
   const owner = useMemo(() => tasks.find((t) => t.id === ownerId), [tasks, ownerId]);
   const rows = filteredRows(board, filter);
-  const open = board.counts.needs + (board.counts.read ?? 0) + board.counts.working + board.counts.waiting;
+  const open = board.counts.needs + board.counts.working + board.counts.waiting;
   // The owner alone, nothing below it open or recently done.
   const solo = open + board.counts.done <= 1;
   const pick = (f: StatusFilter) => {
@@ -254,7 +264,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
                 <span key={n.id}>
                   {i > 0 && '; '}
                   <button type="button" className="bs-link" onClick={() => onOpenTask(n.id)}>{n.title}</button>
-                  {n.ask && <> ({n.ask.replace(/\.$/, '')})</>}
+                  {n.line && <> ({n.line.replace(/\.$/, '')})</>}
                   {n.unverified && <span className="bs-unverified" data-testid="board-brief-unverified"> not verified</span>}
                 </span>
               ))}.
@@ -268,7 +278,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
           <button type="button" className={`bs-chip${filter === 'open' ? ' is-on' : ''}`} aria-pressed={filter === 'open'} onClick={() => pick('open')} data-testid="board-status-filter-open">
             All open <b>{open}</b>
           </button>
-          {USER_STATES.map((s: UserState) => (
+          {SHOWN_STATES.map((s: ShownState) => (
             <button
               key={s}
               type="button"
@@ -277,7 +287,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
               onClick={() => pick(s)}
               data-testid={`board-status-filter-${s}`}
             >
-              <span className="bs-dot" /><b>{board.counts[s] ?? 0}</b> {USER_STATE_LABELS[s]}
+              <span className="bs-dot" /><b>{board.counts[s]}</b> {USER_STATE_LABELS[s]}
             </button>
           ))}
         </div>

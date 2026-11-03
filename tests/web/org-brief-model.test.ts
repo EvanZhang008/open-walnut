@@ -3,6 +3,8 @@
  * letter wears its task's live status, each section heading its section, and the dot on the Brief
  * tab marks a rewrite the user has not read here yet.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { applyBriefDecorations, briefUnread, markBriefSeen, readBriefFolded, writeBriefFolded } from '../../web/src/components/org/org-brief-model'
 import { BRIEF_SECTIONS } from '../../src/core/user-status'
@@ -44,13 +46,20 @@ describe('applyBriefDecorations', () => {
     expect(t2.writes).toBe(before)
   })
 
-  it('stamps a To read pill and the To read heading as read, never needs', () => {
+  it('a To read pill keeps its state (its dot is the Needs you one, org-brief.css); "To read" is no section heading', () => {
     const t1 = pill('t1')
     const head = { ...pill(''), textContent: 'To read' }
     const letter = { querySelectorAll: (sel: string) => (sel === 'a[data-task-id]' ? [t1] : [head]) }
     applyBriefDecorations(letter, new Map([['t1', 'read']]))
     expect(t1.getAttribute('data-user-state')).toBe('read')
-    expect(head.getAttribute('data-brief-section')).toBe('read')
+    expect(head.getAttribute('data-brief-section')).toBeNull()
+    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+    // The stylesheets draw a read pill in the Needs you colour, the same rule as needs.
+    const css = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/org-brief.css'), 'utf8')
+    const globals = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/globals.css'), 'utf8')
+    expect(css).toMatch(/a\.task-link\[data-user-state='needs'\]::before,\s*\.org-brief-body a\.task-link\[data-user-state='read'\]::before/)
+    expect(globals).toContain("a.task-link[data-user-state='read']::before { background: var(--error, #ff3b30); }")
+    expect(css).not.toContain('#6d5bd0')
   })
 
   it('drops a status no longer known', () => {

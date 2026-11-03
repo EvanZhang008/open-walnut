@@ -5,9 +5,10 @@
  * user's Watching list on top:
  *
  *   Watching   open    tasks the user keeps in front of them, whatever their state
- *   Needs you  open    the task's user status is Needs you
- *   To read    open    its user status is To read: it finished, or answered the user, and
- *                      asks nothing (2026-11-02, the user: under Waiting "this is not waiting")
+ *   Needs you  open    the task's user status is Needs you, or To read (it finished, or
+ *                      answered the user, asking nothing: 2026-11-02, the user, under Waiting
+ *                      "this is not waiting"; 2026-11-03, "I dont wnat serpeate to read"); each
+ *                      row's line says what to do with it: Take a look, Decide, Review, Can close
  *   Working    open    its user status is Working: a turn runs, or its own work goes on
  *   Waiting    folded  its user status is Waiting: not started, stopped, on a watch,
  *                      a time, another task or something outside, or snoozed; each row
@@ -25,24 +26,28 @@
  */
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
-import { USER_STATE_LABELS, USER_STATE_MEANINGS } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, needsLineOf, shownState, type NeedsCategory } from '@open-walnut/user-status';
 import { waitingLine } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
-export type StatusSectionKey = 'watching' | 'needs' | 'read' | 'working' | 'waiting' | 'done';
+export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done';
 /** The sections a task falls into by its state (Watching is the user's own pick). */
 export type StateSectionKey = Exclude<StatusSectionKey, 'watching'>;
 
-export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'read', 'working', 'waiting', 'done'];
+export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'done'];
+
+const { read: _readLabel, ...SHOWN_LABELS } = USER_STATE_LABELS;
+const { read: _readMeaning, ...SHOWN_MEANINGS } = USER_STATE_MEANINGS;
 
 export const STATUS_SECTION_LABELS: Record<StatusSectionKey, string> = {
   watching: 'Watching',
-  ...USER_STATE_LABELS,
+  ...SHOWN_LABELS,
 };
 
 export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
   watching: 'Tasks you watch: kept here whatever their state',
-  ...USER_STATE_MEANINGS,
+  ...SHOWN_MEANINGS,
+  needs: 'It asks you something, or has a result or an answer for you to look at',
   waiting: 'It waits on something: not started, stopped, a watch, a time, another task, or you snoozed it',
 };
 
@@ -50,7 +55,6 @@ export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
 export const STATUS_SECTION_DEFAULT_OPEN: Record<StatusSectionKey, boolean> = {
   watching: true,
   needs: true,
-  read: true,
   working: true,
   waiting: false,
   done: false,
@@ -73,7 +77,7 @@ export function isWatched(task: Watchable): boolean {
  *  is the panel's own read of the start date, used only for a task the server has not
  *  derived yet. Nothing else moves a task between sections (tests/web/home-sections-user-status.test.ts). */
 export function stateSectionOf(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
-  return taskUserState(task, !task.user_status && !!snoozed?.(task));
+  return shownState(taskUserState(task, !task.user_status && !!snoozed?.(task)));
 }
 
 /** Why a row under Waiting waits, in the Board's words (not started, stopped, a watch...).
@@ -104,15 +108,19 @@ export function stateSectionNoNeeds(task: Task, snoozed?: (task: Task) => boolea
   const s = stateSectionOf(task, snoozed);
   if (s === 'done') return s;
   const asleep = !!snoozed && (task.user_status ? !!task.user_status.snoozed : snoozed(task));
-  // A parked row folds, unless its own work goes on (its build, its test run: Working, 2026-11-02);
-  // the list never draws one (hiddenAsWaiting).
-  return (task.phase === 'WAITING' && s !== 'working' && s !== 'read') || (s === 'waiting' && asleep) ? 'waiting' : 'working';
+  // A parked row folds, unless its own work goes on (its build, its test run: Working, 2026-11-02)
+  // or it is for the user (Needs you, its result or answer to look at); the list never draws one
+  // (hiddenAsWaiting).
+  const toRead = s === 'needs' && taskUserState(task) === 'read';
+  return (task.phase === 'WAITING' && s !== 'working' && !toRead) || (s === 'waiting' && asleep) ? 'waiting' : 'working';
 }
 
-/** What a To read row has to read, in its own words (no "Waiting on"). */
-export function readReason(task: Task): string {
+/** A Needs you row's line: what to do with it (its category) and what it asks or has to read. */
+export function needsLine(task: Task): { category: NeedsCategory; label: string; text: string } | null {
   const us = task.user_status;
-  return us && taskUserState(task) === 'read' ? (us.waitingOn ?? '').trim() : '';
+  if (!us || stateSectionOf(task) !== 'needs') return null;
+  const line = needsLineOf(us);
+  return line ? { ...line, label: NEEDS_CATEGORY_LABELS[line.category] } : null;
 }
 
 /** When a waiting row wakes: its clock, else its start date. */
@@ -176,7 +184,6 @@ export function projectRuns(tasks: readonly Task[]): ProjectRun[] {
 export interface StatusSectionsModel {
   watching: Task[];
   needs: Task[];
-  read: Task[];
   waiting: Task[];
   done: Task[];
   /** Open tasks under Working: Flat draws them as rows, By project's list draws them itself. */
@@ -215,7 +222,6 @@ export interface StatusSectionsInput {
 export function buildStatusSections(input: StatusSectionsInput): StatusSectionsModel {
   const watching: Task[] = [];
   const needs: Task[] = [];
-  const read: Task[] = [];
   const waiting: Task[] = [];
   const done: Task[] = [];
   const working: Task[] = [];
@@ -226,7 +232,6 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     if (isWatched(t) || !input.passes(t)) continue;
     switch (input.placeOf?.(t) ?? stateSectionOf(t, input.snoozed)) {
       case 'needs': needs.push(t); break;
-      case 'read': read.push(t); break;
       case 'waiting': waiting.push(t); break;
       case 'done': done.push(t); break;
       default: working.push(t);
@@ -236,7 +241,6 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
   return {
     watching: sortSectionTasks('watching', watching),
     needs: sortSectionTasks('needs', needs),
-    read: sortSectionTasks('read', read),
     waiting: sortSectionTasks('waiting', waiting),
     done: sortSectionTasks('done', done),
     working: sortSectionTasks('working', working),

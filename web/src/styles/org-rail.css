@@ -98,6 +98,13 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-alerts { display: flex; flex-direction: column; }
 .org-ask { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); box-shadow: inset 2px 0 0 var(--error, #FF3B30); }
 .org-ask-summary { font-weight: 600; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* What to do with it, in its own colour, ahead of the words (the home panel's needs line,
+   status-sections.css): Decide, Review, Take a look, Can close (2026-11-03). */
+.org-ask-category { font-weight: 700; }
+.org-ask-category-decide { color: var(--error, #ff3b30); }
+.org-ask-category-review { color: var(--warning, #c77700); }
+.org-ask-category-look { color: var(--accent, #0a84ff); }
+.org-ask-category-close { color: var(--success, #2f9e44); }
 .org-ask-meta { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 11.5px; color: var(--fg-muted); }
 .org-ask-meta > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-ask-meta .org-alert-link { flex: 0 1 auto; }

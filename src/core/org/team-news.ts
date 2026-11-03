@@ -13,7 +13,7 @@
  */
 
 import type { TaskPhase } from '../types.js';
-import { fallbackUserState, type UserState, type UserStatus } from '../user-status.js';
+import { fallbackUserState, needsLineText, type UserState, type UserStatus } from '../user-status.js';
 
 export interface TeamNewsTask {
   id: string;
@@ -59,7 +59,8 @@ const PLAIN_WAITS: ReadonlySet<string> = new Set(['you', 'lead', 'not-started', 
 export function statusWords(s: TeamNewsTask['user_status'], state: UserState): string {
   if (!s || s.state !== state) return '';
   if (state === 'needs') return clean(s.ask || s.now);
-  if (state === 'read') return clean(s.now || s.waitingOn);
+  // What to do with it: "Can close: The result is ready" (needsLineText, 2026-11-03).
+  if (state === 'read') return clean(needsLineText(s as UserStatus));
   const waits = state === 'waiting' && !PLAIN_WAITS.has(s.kind ?? '') ? s.waitingOn : '';
   return clean(s.now || waits);
 }
@@ -81,7 +82,7 @@ export function newsItem(t: TeamNewsTask): TeamNewsItem {
  * what waits with words (on what, or a day-old report), then the rest; newest first in each.
  */
 export function teamNews(tasks: readonly TeamNewsTask[]): TeamNewsItem[] {
-  const tier = (i: TeamNewsItem) => (i.state === 'needs' ? 0 : i.reported ? 1 : i.state === 'working' ? 2 : i.words ? 3 : 4);
+  const tier = (i: TeamNewsItem) => (i.state === 'needs' || i.state === 'read' ? 0 : i.reported ? 1 : i.state === 'working' ? 2 : i.words ? 3 : 4);
   return tasks
     .filter((t) => t.phase !== 'COMPLETE')
     .map(newsItem)
@@ -100,6 +101,8 @@ export function shortTitle(title: string, max = 36): string {
  *  what the task is doing. The task it is about goes beside it (newsSubject). */
 export function newsLine(item: TeamNewsItem): string {
   if (item.state === 'needs') return `Needs you: ${item.words || item.title}`;
+  // To read is drawn under Needs you (shownState, 2026-11-03).
+  if (item.state === 'read') return `Needs you: ${item.words || item.title}`;
   if (item.words) return item.words;
   return item.state === 'working' ? `Working on: ${item.title}` : `Waiting: ${item.title}`;
 }

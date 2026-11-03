@@ -40,7 +40,7 @@ import { recheckDue } from '../../src/core/sessions/needs-recheck.js'
 import { snoozeEndedMs } from '../../src/core/snooze.js'
 import { buildStatusBoard } from '../../web/src/components/board/board-status-model.js'
 import { taskNeedsAction, taskUserState } from '../../web/src/utils/session-status.js'
-import { askAnswerText, type StatusReport } from '../../src/core/user-status.js'
+import { askAnswerText, shownState, type StatusReport } from '../../src/core/user-status.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import type { Task } from '../../src/core/types.js'
 
@@ -61,8 +61,10 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
   const all = await listTasks()
   const lead = all.find((t) => t.id === leadId)!
   const { tasks: phoneRows } = await v1<{ tasks: { id: string; user_status?: { state: State } }[] }>('/tasks?include_done=1')
-  const reports = await v1<{ rows: { project?: string; needs_you: number }[] }>('/org/reports')
-  const orgNeeds = reports.rows.find((r) => (r.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase())?.needs_you ?? 0
+  const reports = await v1<{ rows: { project?: string; needs_you: number; to_read?: number }[] }>('/org/reports')
+  // The Org page shows To read under Needs you (needs_you + to_read, 2026-11-03).
+  const orgRow = reports.rows.find((r) => (r.project ?? '').toLowerCase() === (task.project ?? '').toLowerCase())
+  const orgNeeds = (orgRow?.needs_you ?? 0) + (orgRow?.to_read ?? 0)
   const board = buildStatusBoard({ ownerId: leadId, tasks: all as never, now: Date.now(), doneWindowDays: 30 })
   const boardState = (Object.keys(board.groups) as State[]).find((s) => board.groups[s].some((r) => r.task.id === taskId))
   const mismatches = (await checkStatuses(Date.now(), { settleMs: 0 })).filter((m) => m.taskId === taskId)
@@ -78,13 +80,14 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
   }
 }
 
-/** All surfaces agree on `state`. */
+/** All surfaces agree on `state`: the stored one, and where it is drawn (To read under Needs you,
+ *  shownState); only a real ask wears the red Needs you mark (webNeedsYou). */
 async function expectEverywhere(taskId: string, leadId: string, state: State, step: string): Promise<void> {
   const s = await surfaces(taskId, leadId)
-  const needs = state === 'needs'
+  const shown = shownState(state)
   expect(s, step).toEqual({
-    stored: state, phone: state, web: state, board: state,
-    orgNeedsYou: needs, webNeedsYou: needs, briefNeedsYou: needs, checkClean: true,
+    stored: state, phone: state, web: state, board: shown,
+    orgNeedsYou: shown === 'needs', webNeedsYou: state === 'needs', briefNeedsYou: shown === 'needs', checkClean: true,
   })
 }
 
@@ -265,13 +268,14 @@ describe('every surface shows the same state after every step', () => {
   }, 120_000)
 
   // 2026-11-02, the user: finished work under Waiting / snoozed "looks kike they are waiting for my
-  // input". Something to read with nothing asked is To read everywhere, never Needs you or Waiting.
-  it('a turn that answered the user -> To read everywhere -> the user writes again', async () => {
+  // input". Something to read with nothing asked is To read, drawn under Needs you (2026-11-03: "I
+  // dont wnat serpeate to read"), never Waiting.
+  it('a turn that answered the user -> To read under Needs you everywhere -> the user writes again', async () => {
     const { lead, worker, sid } = await team('Readflow')
     await turnEnds(worker, sid, { state: 'waiting', waiting_kind: 'outside', waiting_on: 'the code review', answered_person: true })
     expect((await getTask(worker.id)).phase).toBe('NEED_ACTION')
     await expectEverywhere(worker.id, lead.id, 'read', 'answered the user')
-    expect((await getTask(worker.id)).user_status?.toRead).toBe('answer')
+    expect((await getTask(worker.id)).user_status).toMatchObject({ toRead: 'answer', category: 'look' })
     // Snoozed, it sleeps under Waiting / snoozed.
     await updateTask(worker.id, { start_date: '2099-01-01' } as never)
     await expectEverywhere(worker.id, lead.id, 'waiting', 'to read, snoozed')

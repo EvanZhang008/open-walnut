@@ -20,7 +20,10 @@
 
   // The one user status (src/core/user-status.ts) names a chip; the phase is the fallback for a
   // task the server has not derived, read as fallbackUserState reads it (board-peek-model.ts twins it).
+  // `read` (To read, from an older parent) is drawn as Needs you (shownState, 2026-11-03): the chip
+  // reads it through SHOWN, and USER stays the one set of names (task-state-ratchet).
   var USER = { needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed' };
+  var SHOWN = { read: 'needs' };
   var PHASE_USER = { TODO: 'waiting', IN_PROGRESS: 'working', NEED_ACTION: 'needs', WAITING: 'waiting', COMPLETE: 'done' };
   // The first click on a message's × arms it for this long; the second deletes.
   var DELETE_ARM_MS = 4000;
@@ -49,6 +52,7 @@
       var ref = state.refs[id];
       var phase = ref ? ref.phase : '';
       var user = ref ? (ref.user || PHASE_USER[phase] || '') : '';
+      user = SHOWN[user] || user;
       var title = ref ? ref.title : id;
       var label = this.hasAttribute('compact') || !ref ? '' : '<span class="wn-phase">' + esc(USER[user] || phase) + '</span>';
       kit.setHtml(this, '<span class="wn-task' + (!ref && kit.flags.hasData ? ' wn-unknown' : '') + '" data-phase="' + esc(phase)

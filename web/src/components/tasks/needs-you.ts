@@ -12,7 +12,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { resolveParentRef } from './task-tree-index';
-import { taskNeedsAction } from '@/utils/session-status';
+import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { stateCountLabel } from '@open-walnut/user-status';
 
 export interface NeedsYouOptions {
@@ -26,7 +26,8 @@ export function isOpenTask(task: Task): boolean {
 
 export function taskNeedsYou(task: Task, opts?: NeedsYouOptions): boolean {
   if (!isOpenTask(task)) return false;
-  return taskNeedsAction(task) || !!opts?.isWaiting?.(task);
+  // A result or an answer to look at is under Needs you too (2026-11-03).
+  return taskNeedsAction(task) || taskUserState(task) === 'read' || !!opts?.isWaiting?.(task);
 }
 
 type TaskMap = ReadonlyMap<string, Task>;

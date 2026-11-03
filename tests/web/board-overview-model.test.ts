@@ -137,14 +137,19 @@ describe('describeTask', () => {
     expect(describeTask(task('l', { phase: 'TODO', user_status: letter }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'To Do', tone: 'red' } });
   });
 
-  it('To read is a calm badge, never red, and never Needs you', () => {
-    const read = { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } as Task['user_status'];
+  it('To read is under Needs you, its line saying what to do with it; no To read badge', () => {
+    const read = { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } as Task['user_status'];
     expect(describeTask(task('r', { phase: 'NEED_ACTION', user_status: read }), null, [])).toMatchObject({
-      group: 'open', reason: null, badge: { label: 'To read', tone: 'blue' },
+      group: 'needs', reason: 'need-action', badge: { label: 'Needs you', tone: 'red' }, now: 'Can close: The result is ready',
     });
     // An older server stored To read as Waiting with toRead.
-    const legacy = { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your message' } as Task['user_status'];
-    expect(describeTask(task('w', { phase: 'WAITING', user_status: legacy }), null, [])).toMatchObject({ group: 'open', badge: { label: 'To read', tone: 'blue' } });
+    const legacy = { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' } as Task['user_status'];
+    expect(describeTask(task('w', { phase: 'WAITING', user_status: legacy }), null, [])).toMatchObject({
+      group: 'needs', badge: { label: 'Needs you', tone: 'red' }, now: 'Take a look: It answered your question',
+    });
+    // A real ask: Decide, then its words.
+    const ask = { state: 'needs', source: 'session', ask: 'Pick a vendor?' } as Task['user_status'];
+    expect(describeTask(task('a', { phase: 'NEED_ACTION', user_status: ask }), null, []).now).toBe('Decide: Pick a vendor?');
   });
 
   it('WAITING is Open, violet, with its wait-until', () => {

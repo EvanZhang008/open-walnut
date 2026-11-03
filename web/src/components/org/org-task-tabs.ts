@@ -7,17 +7,19 @@
  */
 import type { Task } from '@open-walnut/core';
 import { projectKey, userStateOf } from '@open-walnut/org-tree';
+import { shownState } from '@open-walnut/user-status';
 import { STATUS_SECTION_LABELS, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
-import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { LayoutSlot } from '@/utils/layout-record';
 
-// To read sits right under Needs you (2026-11-02): nothing asked, only something to read.
-export type OrgTaskTab = 'needs' | 'read' | 'working' | 'waiting' | 'done';
-export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'read', 'working', 'waiting', 'done'];
+// A task with only a result or an answer to look at (To read) is under Needs you, a card with
+// its line (2026-11-03, the user: "I dont wnat serpeate to read"): no tab of its own.
+export type OrgTaskTab = 'needs' | 'working' | 'waiting' | 'done';
+export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'working', 'waiting', 'done'];
 export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
-  needs: STATUS_SECTION_LABELS.needs, read: STATUS_SECTION_LABELS.read, working: STATUS_SECTION_LABELS.working,
+  needs: STATUS_SECTION_LABELS.needs, working: STATUS_SECTION_LABELS.working,
   waiting: STATUS_SECTION_LABELS.waiting, done: STATUS_SECTION_LABELS.done,
 };
 
@@ -29,15 +31,15 @@ export type OrgRailTab = 'watching' | OrgTaskTab;
 export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['watching', ...ORG_TASK_TABS];
 export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { watching: STATUS_SECTION_LABELS.watching, ...ORG_TASK_TAB_LABELS };
 
-/** A kept tab (usePageViewOf): one of the tabs, or the Pinned tab an older build kept, which is
- *  Watching now (railTabShown). */
-export type KeptRailTab = OrgRailTab | 'pinned';
-export const isKeptRailTab = (v: unknown): v is KeptRailTab => v === 'pinned' || (ORG_RAIL_TABS as readonly unknown[]).includes(v);
-export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'watching' : v);
+/** A kept tab (usePageViewOf): one of the tabs, the Pinned tab an older build kept, which is
+ *  Watching now, or the To read tab one kept, which is Needs you now (railTabShown). */
+export type KeptRailTab = OrgRailTab | 'pinned' | 'read';
+export const isKeptRailTab = (v: unknown): v is KeptRailTab => v === 'pinned' || v === 'read' || (ORG_RAIL_TABS as readonly unknown[]).includes(v);
+export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'watching' : v === 'read' ? 'needs' : v);
 
 /** Each status tab's dot. */
 export const TAB_DOT: Record<OrgTaskTab, string> = {
-  needs: 'var(--error, #FF3B30)', read: '#6d5bd0', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
 
 /** Completed work stays listed this long (the Board's Status view and the phone use the same). */
@@ -46,10 +48,8 @@ export const ORG_DONE_WINDOW_DAYS = 7;
 export interface OrgTaskTabs {
   /** The watched tasks of this node's work, in the order they were watched, whatever their state. */
   watching: Task[];
-  /** The cards: every ask in the node's work. */
+  /** The cards: every ask in the node's work, and every result or answer it has to look at. */
   needs: OrgAlertView[];
-  /** Nothing asked, only something to read (its words in user_status.waitingOn). */
-  read: Task[];
   working: Task[];
   waiting: Task[];
   done: Task[];
@@ -80,7 +80,7 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
     ? dedupe([...row.alerts, ...rows.flatMap((r) => r.alerts)])
     : row.alerts;
   const newest = (a: Task, b: Task) => taskTime(b) - taskTime(a);
-  const of = (state: 'read' | 'working' | 'waiting') => [...open.values()].filter((t) => userStateOf(t) === state).sort(newest);
+  const of = (state: 'working' | 'waiting') => [...open.values()].filter((t) => userStateOf(t) === state).sort(newest);
   const cutoff = now - ORG_DONE_WINDOW_DAYS * 24 * 60 * 60_000;
   const done = tasks
     .filter((t) => userStateOf(t) === 'done' && !t.plugin_only && projects.has(projectKey(t.project)) && doneAt(t) >= cutoff)
@@ -88,7 +88,7 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
   // Watched, done or not: on the CEO every one Home's Watching lists, on a VP those of its projects.
   const watching = sortSectionTasks('watching', tasks.filter((t) => isWatched(t) && !t.plugin_only
     && (row.kind === 'main' || projects.has(projectKey(t.project)))));
-  return { watching, needs, read: of('read'), working: of('working'), waiting: of('waiting'), done };
+  return { watching, needs, working: of('working'), waiting: of('waiting'), done };
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
@@ -150,8 +150,9 @@ export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], 
   return out;
 }
 
-/** The status tab a task's own state belongs to (a watched row wears its dot and its line). */
-export const stateTab = (task: Task): OrgTaskTab => userStateOf(task);
+/** The status tab a task's own state belongs to (a watched row wears its dot and its line): To
+ *  read is under Needs you (shownState). */
+export const stateTab = (task: Task): OrgTaskTab => shownState(userStateOf(task));
 
 /** The line under a task in its tab: what it does, or what it waits on, in its status's words. */
 export function taskTabNote(task: Task, tab: OrgTaskTab): string {
@@ -159,7 +160,8 @@ export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   // The task's own line for the state it is in (user_status.line), when it has one.
   const own = readStatusLine(s);
   if (own && tab !== 'done') return own.text;
-  if (tab === 'read') return s?.waitingOn?.trim() ?? '';
+  // Under Needs you (a watched row): what to do with it, then what it asks or has to read.
+  if (tab === 'needs') return task.user_status ? needsRowText(task) : '';
   if (tab === 'working') return s?.now?.trim() ?? '';
   if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
   return '';

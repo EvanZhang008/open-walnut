@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import {
-  MAIN_KEY, alertText, buildChannels, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
+  MAIN_KEY, alertText, buildChannels, cardChecked, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
   projectRowKey, rowOf, teamColumns, type AlertProbe,
 } from '../../web/src/components/org/org-channels-model.js'
 
@@ -108,30 +108,43 @@ describe('org channels', () => {
     const personal = rows[0]!
     expect(personal.name).toBe('Personal')
     expect(personal.state).toBe('alert')
-    expect(personal.alerts).toEqual([{ taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'Pick the renewal date', source: 'letter' }])
-    expect([personal.latest, personal.latestTask]).toEqual(['Needs you: Pick the renewal date', 'p1 title'])
+    expect(personal.alerts).toEqual([{ taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'Pick the renewal date', source: 'letter', category: 'decide' }])
+    // The row's line says what to do with it, then the ask (2026-11-03).
+    expect([personal.latest, personal.latestTask]).toEqual(['Decide: Pick the renewal date', 'p1 title'])
     expect(personal.needs).toBe(1)
     expect(personal.counts.needsYou).toBe(1)
     expect(main.needs).toBe(1)
     expect(main.latest).toBe('4 VPs · 1 Working · 1 Needs you')
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
-      ['needs', [['p1', 'Pick the renewal date']]], ['waiting', [['p2', undefined]]],
+      ['needs', [['p1', 'Decide: Pick the renewal date']]], ['waiting', [['p2', undefined]]],
     ])
   })
 
-  it('a To read task is no ask: no card, its own column under Needs you, and Main counts it', () => {
-    const read = t('p1', 'Personal', 'NEED_ACTION', { updated_at: at(1), user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } })
-    const list = tasks.map((x) => (x.id === 'p1' ? read : x))
+  it('a To read task is a Needs you card with its line, counted in Needs you; no To read column or count', () => {
+    const read = t('p1', 'Personal', 'NEED_ACTION', { updated_at: at(1), user_status: { state: 'read', toRead: 'result', waitingOn: 'The result is ready' } })
+    // An older server stored To read as Waiting with toRead.
+    const legacy = t('p2', 'Personal', 'NEED_ACTION', { updated_at: at(2), user_status: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your question' } })
+    const list = tasks.map((x) => (x.id === 'p1' ? read : x.id === 'p2' ? legacy : x))
     const { main, rows } = buildChannels(buildOrgTree(list), list, noAlerts)
     const personal = rows.find((r) => r.name === 'Personal')!
-    expect(personal.alerts).toEqual([])
-    expect(personal.needs).toBe(0)
-    expect(personal.counts.needsYou).toBe(0)
-    expect(personal.counts.toRead).toBe(1)
-    expect(main.latest).toBe('4 VPs · 1 Working · 1 To read')
-    expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
-      ['read', [['p1', 'It finished, and its result is there to read']]], ['waiting', [['p2', undefined]]],
+    expect(personal.state).toBe('alert')
+    expect(personal.alerts).toEqual([
+      { taskId: 'p2', title: 'p2 title', kind: 'needs', ask: 'It answered your question', category: 'look', toRead: 'answer' },
+      { taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'The result is ready', category: 'close', toRead: 'result' },
     ])
+    // Nothing asked: no "checked" or "Not verified" line on its card.
+    expect(cardChecked(personal.alerts[0]!)).toBeNull()
+    expect(personal.needs).toBe(2)
+    // The wire still counts them apart (older phones read needsYou); the page shows the sum.
+    expect([personal.counts.needsYou, personal.counts.toRead]).toEqual([0, 2])
+    expect(personal.latest).toBe('Take a look: It answered your question')
+    expect(main.needs).toBe(2)
+    expect(main.latest).toBe('4 VPs · 1 Working · 2 Needs you')
+    expect(main.latest).not.toContain('To read')
+    expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
+      ['needs', [['p2', 'Take a look: It answered your question'], ['p1', 'Can close: The result is ready']]],
+    ])
+    expect(teamColumns(personal, list).map((c) => c.label)).toEqual(['Needs you'])
   })
 
   it('reads by top-level task: a subtask\'s ask names the top-level task it rolls up to, right after that task\'s own', () => {
@@ -234,7 +247,8 @@ describe('org channels', () => {
     // A team that sits in a column for one of its workers reads that worker's words, named.
     const asks = tasks.map((x) => (x.id === 'w3' ? { ...x, user_status: { state: 'needs' as const, source: 'choice' as const, ask: 'Pick a name' } } : x))
     const team = teamColumns(buildChannels(buildOrgTree(asks), asks, noAlerts).rows[0]!, asks)
-    expect(team[0]).toMatchObject({ key: 'needs', items: [{ id: 'w2', note: 'w3 title: Pick a name' }] })
+    // Under Needs you the line leads with what to do with it.
+    expect(team[0]).toMatchObject({ key: 'needs', items: [{ id: 'w2', note: 'Decide: w3 title: Pick a name' }] })
   })
 
   it('Main\'s Team is its leads by state, each selecting its row', () => {
@@ -273,7 +287,7 @@ describe('org channels', () => {
     // Its work is the VP's: all three projects' teams, counts, asks and news.
     expect(marina.counts).toMatchObject({ open: 4, running: 1 })
     expect(marina.alerts.map((a) => a.taskId)).toEqual(['i2'])
-    expect(marina.latest).toBe('Needs you: Approve the cleanup')
+    expect(marina.latest).toBe('Decide: Approve the cleanup')
     expect(marina.node?.teams.map((n) => n.id).sort()).toEqual(['e1', 'h1', 'i1', 'i2'])
     // The chart still has one row per project, each with its own work.
     expect(channels.projects.map((r) => r.name).sort()).toEqual(['Events', 'Insights', 'Marina', 'Other'])
