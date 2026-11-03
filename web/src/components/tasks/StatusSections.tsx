@@ -322,7 +322,8 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
  * Approvals a script waits on (`walnut approve`) are drawn first in Needs you: they need the
  * person as much as any task there. 'with-needs': the section the panel already draws; 'alone':
  * the panel does not draw Needs you (By project keeps those tasks in its list), so a Needs you
- * section holding only the approvals joins the run while one waits.
+ * section holding only the approvals joins the run while one waits. The approvals show even
+ * when the person folded Needs you (its tasks stay folded): each one blocks a script, for minutes.
  */
 export type NeedsApprovals = 'with-needs' | 'alone';
 
@@ -357,7 +358,8 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]}>
             <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft} />
-            {open[key] && extra && <ApprovalRows list={waiting} variant="home" />}
+            {/* A folded Needs you still shows its approvals: a script is blocked on each, for minutes. */}
+            {extra && <ApprovalRows list={waiting} variant="home" />}
             {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft} />}
           </section>
         );
