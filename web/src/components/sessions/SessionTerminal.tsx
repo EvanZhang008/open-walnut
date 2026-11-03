@@ -30,7 +30,7 @@ import { useSessionTerminal } from '@/hooks/useSessionTerminal';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
-import { TerminalEndUnconfirmedNotice, TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard } from './TerminalModeNotices';
+import { TerminalEndUnconfirmedNotice, TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard, TerminalStatusPill } from './TerminalModeNotices';
 
 interface SessionTerminalProps {
   sessionId: string;
@@ -196,7 +196,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
             <span className="session-terminal-icon">&#x2328;</span>
             <span className="session-terminal-label">{title ?? 'Terminal'}</span>
             {remote && <span className="session-terminal-host">{remoteHostTag(remote, hostName)}</span>}
-            <span className={`session-terminal-status session-terminal-status-${status}`}>{status}</span>
+            <TerminalStatusPill status={status} />
             {plain && <TerminalPlainBadge plain={plain} />}
           </div>
           <div className="session-terminal-actions">

@@ -1,8 +1,8 @@
 /**
  * Terminal mode notices: the "Not persistent" badge and inline notice for a
  * plain shell (dtach unavailable on the target), and the blocking card for an
- * ssh failure, and the notice of an End the server could not confirm. Kept
- * free of xterm so they render in unit tests.
+ * ssh failure, the notice of an End the server could not confirm, and the
+ * header's status pill. Kept free of xterm so they render in unit tests.
  *
  * WHY a plain shell gets a badge AND a notice: it dies with its connection,
  * which the user must know before starting a long build in it. The badge stays
@@ -14,6 +14,7 @@ import { useCallback, useState } from 'react';
 import type { TerminalOpenPlain, TerminalSshFailed } from '@/api/terminal';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { END_REATTACH_HINT, END_UNCONFIRMED_TEXT } from '@/hooks/terminal-end-model';
+import { terminalStatusClass, terminalStatusLabel, type TerminalStatus } from '@/hooks/terminal-status-label';
 
 /** Copies exactly `command` (never the surrounding prose). */
 export function CopyCommandButton({ command }: { command: string }) {
@@ -28,6 +29,18 @@ export function CopyCommandButton({ command }: { command: string }) {
     <button className="session-terminal-btn" onClick={onCopy} title={`Copy: ${command}`}>
       {copied ? 'Copied' : 'Copy'}
     </button>
+  );
+}
+
+/**
+ * The header's status pill: the state in words (terminal-status-label.ts), never
+ * the code. The class and `data-status` carry the code for colours and tests.
+ */
+export function TerminalStatusPill({ status }: { status: TerminalStatus }) {
+  return (
+    <span className={terminalStatusClass(status)} data-status={status} data-testid="terminal-status">
+      {terminalStatusLabel(status)}
+    </span>
   );
 }
 

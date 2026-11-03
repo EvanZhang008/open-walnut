@@ -32,9 +32,11 @@ import {
   type TerminalSshFailed,
 } from '@/api/terminal';
 import { log } from '@/utils/log';
-import { awaitEndAnswer } from './terminal-end-model';
+import { awaitEndAnswer, createEndGuard } from './terminal-end-model';
+import type { TerminalStatus } from './terminal-status-label';
 
-export type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'ssh_failed' | 'error' | 'exited' | 'ending' | 'end_unconfirmed';
+// The states and their pill labels live in terminal-status-label.ts.
+export type { TerminalStatus };
 
 interface UseSessionTerminalOpts {
   sessionId: string;
@@ -73,9 +75,10 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   const wasPlainRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [endUnconfirmed, setEndUnconfirmed] = useState<string | null>(null);
-  // An End in flight (one at a time), and an End left unconfirmed: a reconnect
+  // An End in flight (one per generation), and an End left unconfirmed: a reconnect
   // must not reopen then, since a reopen starts a new shell when the old one is gone.
-  const endingRef = useRef(false);
+  // Keyed by generation so a new session or reopen is never blocked by an old End.
+  const [endGuard] = useState(createEndGuard);
   const unconfirmedRef = useRef(false);
   // Bumped by every (re)open and by unmount: an End answer that lands after
   // either belongs to a view that is gone, and is dropped (no state, no close).
@@ -173,7 +176,7 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   // On WS reconnect: try cheap attach (pty still alive in grace window);
   // on failure, reopen — server re-attaches the persistent dtach session.
   useEvent('_ws:reconnected', () => {
-    if (!enabled || unconfirmedRef.current || endingRef.current) return;
+    if (!enabled || unconfirmedRef.current || endGuard.busy(genRef.current)) return;
     const id = terminalIdRef.current;
     const { cols, rows } = getSizeRef.current();
     if (id) {
@@ -205,9 +208,8 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   const kill = useCallback(async (): Promise<boolean> => {
     const id = terminalIdRef.current;
     if (!id) return true; // no terminal was open: nothing to end
-    if (endingRef.current) return false;
-    endingRef.current = true;
     const gen = genRef.current;
+    if (!endGuard.take(gen)) return false;
     setStatus('ending');
     try {
       const outcome = await awaitEndAnswer(terminalKill(id));
@@ -228,12 +230,12 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
       log.warn('terminal', 'end unconfirmed', { sessionId, terminalId: id, reason: outcome.reason, detail: outcome.detail });
       return false;
     } finally {
-      endingRef.current = false;
+      endGuard.release(gen);
     }
-  }, [sessionId]);
+  }, [sessionId, endGuard]);
 
   // Never while an End runs: a reopen then would take that End's answer.
-  const retry = useCallback(() => { if (!endingRef.current) void open({ reprobe: true }); }, [open]);
+  const retry = useCallback(() => { if (!endGuard.busy(genRef.current)) void open({ reprobe: true }); }, [open, endGuard]);
 
   return { status, plain, sshFailed, errorMessage, endUnconfirmed, sendInput, sendResize, kill, retry };
 }

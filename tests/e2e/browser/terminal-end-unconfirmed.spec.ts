@@ -15,6 +15,7 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { TERMINAL_STATUSES, TERMINAL_STATUS_LABEL, type TerminalStatus } from '../../../web/src/hooks/terminal-status-label'
 
 const SHOTS = '/tmp/end-terminal-unconfirmed'
 const sidFor = (browserName: string) => `pw-term-end-${browserName}`
@@ -22,6 +23,22 @@ const sidFor = (browserName: string) => `pw-term-end-${browserName}`
 test.setTimeout(150_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
+
+// Playwright's Linux WebKit reports the browser's own ResizeObserver notice (a loop
+// that settled on the next frame, harmless by the spec) as a page error; it shows on
+// clean HEAD too. Only that exact message is dropped: every other page error still
+// fails the test, and the first test proves the collector still records one.
+const BENIGN_PAGE_ERROR = /^ResizeObserver loop completed with undelivered notifications\.$/
+
+/** Page errors of this page, the benign ResizeObserver notice left out. */
+function collectPageErrors(page: Page): string[] {
+  const errors: string[] = []
+  page.on('pageerror', (e) => {
+    if (BENIGN_PAGE_ERROR.test(e.message)) return
+    errors.push(String(e))
+  })
+  return errors
+}
 
 async function openColumn(page: Page, sid: string): Promise<Locator> {
   await page.addInitScript((id) => {
@@ -58,13 +75,35 @@ async function rpc(page: Page, method: string, payload: unknown): Promise<unknow
   }, { method, payload })
 }
 
+const RAW_CODE = new RegExp(`\\b(${TERMINAL_STATUSES.filter((c) => c.includes('_')).join('|')})\\b`, 'i')
+
+/** The pill shows the state in words; the code is only its data-status. */
+async function expectPill(term: Locator, status: TerminalStatus, timeout?: number): Promise<void> {
+  const pill = term.getByTestId('terminal-status')
+  await expect(pill).toHaveAttribute('data-status', status, { timeout })
+  await expect(pill).toHaveText(TERMINAL_STATUS_LABEL[status])
+  expect(await pill.innerText()).not.toMatch(/_/)
+  // Nowhere in the header (text, tooltips, screen-reader names) shows a code. The
+  // codes with an underscore are matched as whole words anywhere; a one-word code
+  // ("ready", "ending") only as a whole title or name, so copy like "Ending" passes.
+  const header = term.locator('.session-terminal-header')
+  expect(await header.innerText()).not.toMatch(RAW_CODE)
+  const names = await header.evaluate((el) =>
+    [el, ...el.querySelectorAll('*')].flatMap((e) => ['title', 'aria-label'].map((a) => e.getAttribute(a)).filter((v): v is string => v !== null)))
+  for (const name of names) {
+    expect(name).not.toMatch(RAW_CODE)
+    expect(TERMINAL_STATUSES as readonly string[]).not.toContain(name.trim().toLowerCase())
+  }
+}
+
 async function openTerminal(page: Page, panel: Locator): Promise<{ chip: Locator; term: Locator }> {
   const chip = panel.locator('[data-header-id="terminal"]')
   await expect(chip).toBeVisible({ timeout: 30_000 })
   await chip.click()
   const term = page.locator('.session-terminal-panel')
   await expect(term).toBeVisible()
-  await expect(term.locator('.session-terminal-status')).toHaveText('ready', { timeout: 60_000 })
+  await expectPill(term, 'ready', 60_000)
+  await expect(term.getByTestId('terminal-status')).toHaveText('Connected')
   return { chip, term }
 }
 
@@ -84,9 +123,14 @@ test.afterEach(async ({ page, browserName }) => {
 test('an unconfirmed End keeps the terminal with a notice; a second End and Try again work', async ({ page, browserName }) => {
   await fs.mkdir(SHOTS, { recursive: true })
   const sid = sidFor(browserName)
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(String(e)))
+  const errors = collectPageErrors(page)
   const panel = await openColumn(page, sid)
+
+  // The filter swallows nothing else: a real uncaught error is still recorded.
+  await page.evaluate(() => { setTimeout(() => { throw new Error('pw-term-end probe error') }, 0) })
+  await expect.poll(() => errors.some((e) => e.includes('pw-term-end probe error'))).toBe(true)
+  // Drop only the probe's own error; anything the page raised while loading stays.
+  errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('pw-term-end probe error')))
 
   const { chip, term } = await openTerminal(page, panel)
 
@@ -101,7 +145,8 @@ test('an unconfirmed End keeps the terminal with a notice; a second End and Try 
   await expect(notice).toContainText('Walnut could not confirm the terminal ended. It may still be running.')
   await expect(notice).toContainText('Reason: the host did not answer in time.')
   await expect(notice).toContainText('Close and reopen the terminal to reattach to it.')
-  await expect(term.locator('.session-terminal-status')).toHaveText('end_unconfirmed')
+  await expectPill(term, 'end_unconfirmed')
+  await expect(term.getByTestId('terminal-status')).toHaveText('End not confirmed')
   await expect(term).toBeVisible() // never closed as if it ended
   await expect(end).toBeEnabled()
   await term.screenshot({ path: `${SHOTS}/notice-${browserName}.png` })
@@ -110,7 +155,7 @@ test('an unconfirmed End keeps the terminal with a notice; a second End and Try 
   // A second End from the header: still held back, still honest.
   await end.click()
   await confirmEnd(page)
-  await expect(term.locator('.session-terminal-status')).toHaveText('end_unconfirmed', { timeout: 30_000 })
+  await expectPill(term, 'end_unconfirmed', 30_000)
   await expect(notice).toBeVisible()
 
   // Try again, now with the real stop: the terminal ends and closes.
@@ -125,8 +170,7 @@ test('an unconfirmed End keeps the terminal with a notice; a second End and Try 
 test('a slow End that answers after the user moved to Files leaves Files open', async ({ page, browserName }) => {
   const sid = sidFor(browserName)
   await fs.mkdir(SHOTS, { recursive: true })
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(String(e)))
+  const errors = collectPageErrors(page)
   const panel = await openColumn(page, sid)
   const { chip, term } = await openTerminal(page, panel)
 
@@ -134,7 +178,7 @@ test('a slow End that answers after the user moved to Files leaves Files open', 
   expect(await rpc(page, 'test:terminal-end-unconfirmed', { sessionId: sid, times: 0, delayMs: 5_000 })).toEqual({ armed: 0, delayMs: 5_000 })
   await term.locator('.session-terminal-btn-kill').click()
   await confirmEnd(page)
-  await expect(term.locator('.session-terminal-status')).toHaveText('ending')
+  await expectPill(term, 'ending')
 
   const filesChip = panel.locator('[data-header-id="files"]')
   await filesChip.click()

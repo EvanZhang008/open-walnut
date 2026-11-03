@@ -25308,6 +25308,8 @@ a.file-link:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Keeps the status pill off the End button when the title fills a narrow bar. */
+  gap: 8px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
@@ -25342,10 +25344,9 @@ a.file-link:hover {
   flex-shrink: 0;
 }
 
+/* Sentence case as written (terminal-status-label.ts): the pill reads words, not a code. */
 .session-terminal-status {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
   flex-shrink: 0;

@@ -38,3 +38,31 @@ export function awaitEndAnswer(answer: Promise<TerminalKillResult>, ms = END_ANS
     );
   });
 }
+
+/**
+ * One End at a time, per terminal generation. The hook bumps its generation on
+ * every (re)open, which a sessionId change also triggers, so an End still waiting
+ * on the old terminal (up to END_ANSWER_MS) never blocks End on the new one, and
+ * its late release cannot free a newer End's hold.
+ */
+export interface EndGuard {
+  /** True while an End of generation `gen` is in flight. */
+  busy(gen: number): boolean;
+  /** Takes the hold for `gen`; false when an End of that generation already runs. */
+  take(gen: number): boolean;
+  /** Frees the hold only if `gen` still owns it. */
+  release(gen: number): void;
+}
+
+export function createEndGuard(): EndGuard {
+  let owner: number | null = null;
+  return {
+    busy: (gen) => owner === gen,
+    take: (gen) => {
+      if (owner === gen) return false;
+      owner = gen;
+      return true;
+    },
+    release: (gen) => { if (owner === gen) owner = null; },
+  };
+}
