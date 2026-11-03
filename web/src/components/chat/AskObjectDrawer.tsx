@@ -106,10 +106,19 @@ const OVERLAY = '[role="menu"], [role="listbox"], [role="dialog"], .wn-context-m
 function escapeBelongsToAnOverlay(e: KeyboardEvent, drawer: HTMLElement | null): boolean {
   const target = e.target instanceof Element ? e.target : null;
   if (target instanceof HTMLInputElement) return true;
-  if (target?.closest(OVERLAY)) return true;
-  if (drawer?.querySelector(`${OVERLAY}, [aria-haspopup][aria-expanded="true"]`)) return true;
+  if (target && isDrawn(target.closest(OVERLAY))) return true;
+  if (drawer && Array.from(drawer.querySelectorAll(`${OVERLAY}, [aria-haspopup][aria-expanded="true"]`)).some(isDrawn)) return true;
   // Portalled overlays hang off <body>, outside the app root.
-  return Array.from(document.querySelectorAll(OVERLAY)).some((one) => !one.closest('#root'));
+  return Array.from(document.querySelectorAll(OVERLAY)).some((one) => !one.closest('#root') && isDrawn(one));
+}
+
+/**
+ * Only an overlay on screen owns Escape. Some stay mounted while closed (the session header's
+ * labels flyout is a `hidden` portal at the end of <body>, so its count reads the pills that
+ * render), and counting one of those kept every Escape from closing this drawer (2026-11-02).
+ */
+function isDrawn(el: Element | null): boolean {
+  return !!el && !el.closest('[hidden]') && el.getClientRects().length > 0;
 }
 
 async function sendIntoSession(sessionId: string, message: string): Promise<void> {
