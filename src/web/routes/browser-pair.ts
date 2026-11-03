@@ -7,7 +7,9 @@
  *     address with the code after `#pair=`, which a browser never sends to a server.
  *     `addresses` adds the tunnels of the servers on this Mac's hosts, which stay up
  *     while it sleeps (Connect your phone prefers those).
- *   POST /api/v1/browser-pair { code } → { token, name }
+ *   POST /api/v1/browser-pair { code, client? } → { token, name, deviceName }
+ *     `client: 'extension'` is the Walnut browser extension: its device is named
+ *     `extension-<hex>` and shown as "Walnut extension (Chrome on Mac)".
  *     Public (the browser has nothing else yet). Wrong codes are rate limited per
  *     caller address in their own count: through a tunnel every caller is the
  *     tunnel's loopback address, and a browser still holding a removed token
@@ -98,12 +100,20 @@ browserCodeRouter.post('/browser-code', async (req: Request, res: Response, next
   }
 })
 
-async function freshBrowserName(): Promise<string> {
+async function freshBrowserName(prefix: 'browser' | 'extension'): Promise<string> {
   const taken = new Set((await listDevices()).map((d) => d.name))
   for (;;) {
-    const name = `browser-${crypto.randomBytes(3).toString('hex')}`
+    const name = `${prefix}-${crypto.randomBytes(3).toString('hex')}`
     if (!taken.has(name)) return name
   }
+}
+
+/** "Mac Chrome" → "Walnut extension (Chrome on Mac)". */
+export function extensionDeviceName(kind: string): string {
+  const words = kind.split(' ')
+  const browser = words.length > 1 ? words[words.length - 1] : ''
+  if (!browser) return 'Walnut extension'
+  return `Walnut extension (${browser} on ${words.slice(0, -1).join(' ')})`
 }
 
 browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, next: NextFunction) => {
@@ -121,18 +131,21 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
       res.status(400).json({ error: { code: 'invalid_code', message: 'That code is wrong or has expired. Make a new one in Walnut on your computer.' } })
       return
     }
-    const name = await freshBrowserName()
+    const body = req.body as { standalone?: unknown; client?: unknown } | undefined
+    const extension = body?.client === 'extension'
+    const name = await freshBrowserName(extension ? 'extension' : 'browser')
     const device = await createDeviceAs(name, { by: LOCAL_ACTOR })
     // Settings names the row by what it is ("iPhone Safari"), not by the id (N2-21).
     // Only deviceName: no model/os, so this never claims a platform for the record.
-    const standalone = (req.body as { standalone?: unknown } | undefined)?.standalone === true
-    await setDeviceInfo(name, { deviceName: browserKindFromUserAgent(req.get('user-agent'), { standalone }) }).catch(() => false)
+    const kind = browserKindFromUserAgent(req.get('user-agent'), { standalone: body?.standalone === true })
+    const deviceName = extension ? extensionDeviceName(kind) : kind
+    await setDeviceInfo(name, { deviceName }).catch(() => false)
     clearAuthFailures(codeKey)
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })
     // Its link is used up: Settings shows the next one (BrowserAccessGroup's phone link).
     bus.emit(BROWSER_SIGNED_IN_EVENT, { name }, ['web-ui'], { source: 'browser-pair' })
-    res.json({ token: device.token, name })
+    res.json({ token: device.token, name, deviceName })
   } catch (err) {
     next(err)
   }

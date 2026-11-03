@@ -18,7 +18,8 @@ export const DEFAULT_IDLE_MINUTES = 15
 export const MAX_SESSION_HOURS = 12
 const FREE_FAILURES = 5
 
-interface Session { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number }
+/** `device`: the paired device whose token opened it (the browser extension, a paired browser); it holds only for that device. */
+interface Session { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number; device?: string }
 
 const sessions = new Map<string, Session>()
 
@@ -51,15 +52,25 @@ function schedule(): void {
   timer.unref?.()
 }
 
+/**
+ * A session removed by itself (it lapsed when read, its device was removed or did not come with
+ * it): when it was the last, the vault closes as when the timer finds them all gone. No timer
+ * is armed once none are left, so this is the only way that close happens.
+ */
+function dropped(): void {
+  schedule()
+  if (sessions.size === 0 && onExpire) { const cb = onExpire; queueMicrotask(() => cb()) }
+}
+
 function hashOf(token: string): string {
   return crypto.createHash('sha256').update(`walnut-vault-session\0${token}`).digest('hex')
 }
 
-export function createSession(client: string, idleMinutes: number): { token: string; expiresAt: string; idleMinutes: number } {
+export function createSession(client: string, idleMinutes: number, device?: string): { token: string; expiresAt: string; idleMinutes: number } {
   const token = crypto.randomBytes(32).toString('base64url')
   const now = Date.now()
   const idle = Math.max(1, Math.min(MAX_SESSION_HOURS * 60, Math.round(idleMinutes || DEFAULT_IDLE_MINUTES)))
-  sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs: idle * 60_000 })
+  sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs: idle * 60_000, ...(device ? { device } : {}) })
   schedule()
   return { token, expiresAt: new Date(now + idle * 60_000).toISOString(), idleMinutes: idle }
 }
@@ -73,12 +84,15 @@ function live(s: Session, now: number): boolean {
  * makes by itself (the one-time code refreshing every 30 s) passes false, so an open item
  * never keeps a window unlocked.
  */
-export function useSession(token: string | undefined, touch = true): { client: string } | null {
+export function useSession(token: string | undefined, touch: boolean, device: string | undefined): { client: string } | null {
   if (!token) return null
   const s = sessions.get(hashOf(token))
   const now = Date.now()
   if (!s) return null
-  if (!live(s, now)) { sessions.delete(s.hash); schedule(); return null }
+  if (!live(s, now)) { sessions.delete(s.hash); dropped(); return null }
+  // A session a device opened ends when that device's token no longer comes with it (removed in
+  // Settings): the token alone was what made the session that device's.
+  if (s.device && s.device !== device) { sessions.delete(s.hash); dropped(); return null }
   if (touch) s.lastUsedAt = now // the timer, when it fires early, schedules itself again
   return { client: s.client }
 }
@@ -94,6 +108,14 @@ export function endOtherSessions(keep: string | undefined): number {
   let n = 0
   for (const h of [...sessions.keys()]) if (h !== k) { sessions.delete(h); n++ }
   schedule()
+  return n
+}
+
+/** Every session the device opened (it was removed). */
+export function endDeviceSessions(device: string): number {
+  let n = 0
+  for (const [h, s] of [...sessions]) if (s.device === device) { sessions.delete(h); n++ }
+  if (n) dropped(); else schedule()
   return n
 }
 

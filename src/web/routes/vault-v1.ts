@@ -32,10 +32,13 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { requestOrigin } from '../middleware/request-origin.js'
+import { classifyLocalRequest, isLoopbackAddress, isTunnelPort } from '../middleware/local-trust.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { isFollower, role } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
+import { onCredentialsRevoked } from '../../core/device-auth.js'
+import { currentExposeStatus } from '../../core/expose/status.js'
 import { derivePasswordKey, toB64, type KdfParams } from '../../core/vault/crypto.js'
 import type { VaultItemInput } from '../../core/vault/types.js'
 
@@ -87,6 +90,11 @@ async function sessions() {
   return s
 }
 
+// A device removed (Settings, `walnut device revoke`): every vault unlock it holds ends with it.
+onCredentialsRevoked((names) => {
+  void import('../../core/vault/sessions.js').then((s) => { for (const n of names) s.endDeviceSessions(n) }).catch(() => undefined)
+})
+
 async function store() {
   return import('../../core/vault/store.js')
 }
@@ -94,7 +102,10 @@ async function store() {
 /** The person's vault session for this request, or a 401 answered. */
 async function needSession(req: Request, res: Response, touch = true): Promise<boolean> {
   const s = await sessions()
-  if (s.useSession(header(req, s.SESSION_HEADER), touch)) return true
+  // `x-walnut-vault-quiet: 1`: a read a client makes by itself (the browser extension looking up
+  // a page's logins as the person browses) never keeps the vault unlocked.
+  const quiet = header(req, 'x-walnut-vault-quiet') === '1'
+  if (s.useSession(header(req, s.SESSION_HEADER), touch && !quiet, deviceOf(req))) return true
   res.status(401).json({ error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
   return false
 }
@@ -127,8 +138,13 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
  * on plain http (not a secure context) has no WebCrypto, so it sends the password itself.
  */
 async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; password?: unknown }, kdf: KdfParams | undefined): Promise<string> {
-  if (typeof body.passwordKey === 'string' && body.passwordKey) return body.passwordKey
   const { VaultError, checkKdf } = await store()
+  // A derived key replays as the password wherever this Mac holds the Secret Key: it crosses
+  // only the same private links a typed password does.
+  if (typeof body.passwordKey === 'string' && body.passwordKey) {
+    if (!keyLink(req)) throw new VaultError('Open Walnut over https or Tailscale to unlock Passwords from this device: plain http would send your unlock readable on the network.', 400, 'insecure_link')
+    return body.passwordKey
+  }
   if (typeof body.password === 'string' && body.password && kdf) {
     // The password itself crosses the wire only on a link nobody else reads: this machine,
     // https, or Tailscale. Plain http on a shared network gets a refusal, not the password.
@@ -141,17 +157,43 @@ async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; passwo
 
 /**
  * Nobody else reads this link: https here, this machine (a local proxy such as Tailscale Serve
- * included), or Tailscale's own addresses. A forwarded-proto header is not trusted: any client
- * can send one.
+ * included, and a loopback caller on another origin), Walnut's own tunnel while its public
+ * address is https, or Tailscale's own addresses. A forwarded-proto header is not trusted here:
+ * any client can send one, and a plain relay passes it on.
  */
 function privateLink(req: Request): boolean {
   if (req.secure) return true
   // This machine, by the caller-origin rule (a loopback self-call made for someone else is not).
   if (requestOrigin(req) === LOCAL_ORIGIN) return true
+  // A page or extension on this machine: a loopback connection with no proxy header, addressed
+  // to a loopback name, from another origin (the browser extension). Its bytes never left this
+  // machine. A loopback request addressed to another name is not: that is how a header-less
+  // relay (socat, an ssh gateway port) from the network looks.
+  const t = classifyLocalRequest(req)
+  if (!t.trusted && t.reason === 'foreign-origin') return true
+  // Walnut's own tunnel, while what it publishes is https: https from the browser to its edge,
+  // then this machine's loopback (or a host server's way back to it).
+  if (isTunnelPort(req.socket.localPort) && isLoopbackAddress(req.socket.remoteAddress)) {
+    const st = currentExposeStatus()
+    if (st.url?.startsWith('https://') && (st.port === req.socket.localPort || st.runsOn)) return true
+  }
   const ip = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
   const m = /^100\.(\d+)\./.exec(ip)
   if (m && Number(m[1]) >= 64 && Number(m[1]) <= 127) return true // Tailscale's 100.64.0.0/10
   return /^fd7a:115c:a1e0:/i.test(ip)
+}
+
+/**
+ * A key the client derived (it never sends the password) may also come through the person's own
+ * TLS proxy on this machine (Caddy, nginx: loopback, a forwarded proto of https). Only a page in
+ * a secure context derives one, so a browser behind a plain-http relay never sends a key; a typed
+ * password through the same proxy is still refused, since a browser that types one is on http.
+ */
+function keyLink(req: Request): boolean {
+  if (privateLink(req)) return true
+  if (!isLoopbackAddress(req.socket.remoteAddress) || isTunnelPort(req.socket.localPort)) return false
+  const proto = req.headers['x-forwarded-proto']
+  return typeof proto === 'string' && proto.split(',')[0].trim().toLowerCase() === 'https'
 }
 
 /**
@@ -199,6 +241,14 @@ export async function closeIfNobody(): Promise<void> {
   st.closeVault()
 }
 
+/**
+ * The paired device a request came with (its token), if any (auth middleware). Every read of a
+ * vault session passes it: a session a device opened holds only for that device.
+ */
+export function deviceOf(req: Request): string | undefined {
+  return (req as Request & { deviceName?: string }).deviceName
+}
+
 function clientName(req: Request): string {
   const c = (req.body as { client?: unknown } | undefined)?.client
   if (typeof c === 'string' && c.trim()) return c.trim()
@@ -209,7 +259,7 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
   if (!gate(req, res, true)) return
   await run(res, next, async () => {
     const s = await sessions()
-    const unlocked = !!s.useSession(header(req, s.SESSION_HEADER))
+    const unlocked = !!s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
     return { ...st, unlocked, autoLockMinutes: await autoLockMinutes(), waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
@@ -228,7 +278,7 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, kdf)
       const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true })
-      return { ...made, session: s.createSession(clientName(req), minutes) }
+      return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
     })
     return r ? r.value : SENT
   })
@@ -251,7 +301,7 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
       await st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) })
-      return { session: s.createSession(clientName(req), minutes) }
+      return { session: s.createSession(clientName(req), minutes, deviceOf(req)) }
     })
     return r ? r.value : SENT
   })
@@ -440,7 +490,7 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
       })
       // Inside the attempt, as unlock does: closeIfNobody must not close the vault before this window holds its session.
       s.endAllSessions()
-      return { ...kit, session: s.createSession(clientName(req), minutes) }
+      return { ...kit, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
     })
     if (!r) return SENT
     const { endAllGrants } = await import('../../core/vault/agent.js')

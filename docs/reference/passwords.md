@@ -162,6 +162,99 @@ Bitwarden's columns, or Walnut JSON.
 The security check (weak, reused, not changed in a year, saved for plain http) runs on this
 machine; no password or site leaves it.
 
+## Browser extension
+
+`packages/browser-extension` is one source for Chrome (and Edge, Brave, Arc) and Firefox (128
+or later), built by `bun run extension:build` (part of `web:build` and of the compiled release
+build) into `dist/extension/{chrome,firefox}` and the downloads this Walnut serves at
+`/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Passwords, Browser extension shows
+how to load it and lists the connected ones with Remove.
+
+**Connecting.** The popup's Connect opens `<walnut>/connect-extension` in a tab it remembers
+(storage.session, per tab). That page finds the extension through its content script
+(`window.postMessage`, its own origin only); on the person's click it mints a browser sign-in
+code (`POST /api/devices/browser-code`, the person at this machine only) and hands it over,
+and the extension trades it at `POST /api/v1/browser-pair {code, client:"extension"}` for its
+own device token (device `extension-<hex>`, a browser in Settings, shown as "Walnut extension
+(Chrome on Mac)"). That handshake answers no other page. (A page can still tell the extension
+is installed, from the elements it draws or the pages it exposes for framing; it learns nothing
+more.) Connecting again removes the device it replaces. The popup also takes a code made in Settings, Devices. The address must be https, this
+machine or a Tailscale address: plain http to another computer would carry everything
+readable, so the extension refuses it.
+
+**Unlocking.** The extension is a window like any other: the master password buys it a vault
+session, kept in `storage.session` (memory only, gone when the browser quits, closed to
+content scripts). It derives the password key with WebCrypto, after checking the KDF the
+server names against the same floor the server holds (PBKDF2-SHA256, 600,000 iterations or
+more, a 16-byte salt), and sends that, never the password. The server takes a derived key, like
+a typed password, only over a private link: https, this machine (a loopback connection with no
+proxy header, addressed to a loopback name; a loopback request addressed to another name is how
+a header-less relay from the network looks, and is refused), Walnut's tunnel while what it
+publishes is https, or Tailscale. A derived key also comes through the person's own TLS proxy
+on this machine (loopback with a forwarded proto of https); a typed password does not, since a
+browser types one only on plain http. A key replays as the password wherever the Mac holds the
+Secret Key. A session a device token opened holds only with that token (every read of a vault
+session checks it) and ends when the device is removed in Settings; one removed by `walnut
+device revoke`, another process, ends at its next use. The last session ending that way closes
+the vault as an auto-lock would. The reads the extension makes by itself carry
+`x-walnut-vault-quiet: 1`, so browsing, and opening the popup, never keep the vault unlocked;
+a fill or a copy does. Disconnect locks its session and removes its device.
+
+**What lives where.** The background holds the device token (its IndexedDB, which content
+scripts cannot open), the vault session and, for 5 s while unlocked, the item summaries (so a
+Lock elsewhere shows within seconds); a content script holds neither. Each kind of message is accepted only from the page that may
+send it (the popup, the menu, the save bar, a content script). A fill fetches the item and
+sends its username and password only to frames on the top page's origin that reported a login
+form (or to the one frame whose menu was picked), with that origin, which the frame checks
+again; it keeps nothing.
+
+**The in-page menu and save bar** are the extension's own pages framed into the site, inside
+closed shadow roots, so the site cannot read them. Each open has a one-time nonce that every
+message from it must carry; the content script hands it to the frame by `postMessage` to the
+extension's origin, never in a URL the page can read, so a page that frames `menu.html` itself
+gets nothing, and a frame the page navigates (a second load) is closed. Their hosts carry
+`!important` styles, and their shadow roots turn off the host's `::before` and `::after`, so a
+stylesheet cannot hide them or draw over them from the host itself; a script that changes a
+host, or an element put after one (it would paint on top), closes it. Before a fill or a save
+the page is checked once more: the page faded or hidden around them, or something in the top
+layer (a popover, a modal dialog, full screen) over them, and Walnut does nothing and closes
+them. Their buttons act only after the frame has been on screen for half a second and, in
+Chrome, only while nothing covers or fades it (IntersectionObserver v2); Firefox has no such
+signal, so there the wait and the checks before acting hold. The menu
+opens by itself only right after the person clicked or tabbed into an empty field, never on a
+focus a script made or a fill moved; typing your own value closes it.
+
+**What it fills.** Only a login whose saved site has the page's registrable domain (the
+same rule as everywhere, `url-match.ts`: an https login never fills an http page), and only in
+the top page or a frame on the top page's origin: a login form framed in from another site, or
+a sandboxed frame, gets no icon and no fill. Every fill, menu or popup, checks the item against
+the page again in the background. It does nothing on Walnut's own pages (so its master
+password is never offered for saving): every Walnut page carries `<meta name="walnut-app">`,
+under whatever address it is opened (a mark a page can only use to turn the extension off),
+and the connected address and its loopback aliases are known besides.
+
+**Saving.** A login is offered only when the person sent it (a trusted submit, a click on a
+button that sends, or Enter) and typed its password (or used the strong password the menu
+made): a page that fills a form itself offers nothing. The field counts whatever its type
+while typed, so a "show password" switch does not lose it. It is kept in the background for 3
+minutes (expired ones are swept away), never in the page, and offered on that site, or on the next page within 20 seconds (a
+sign in that lands elsewhere): Save for a new one, Update when a saved login with that username
+has another password, nothing when it is the same. A two-step sign in carries the username of
+its first page. Seen while locked, the bar asks to unlock, and once unlocked (the popup, or
+anywhere the extension's session changes) it is compared and offered. "Never for this site" is
+kept per registrable domain. A sign-up or password-change field offers a strong password (the
+generator's defaults) in the menu, fills every new-password field, and the sign-up is saved the
+same way. Ctrl+Shift+L (Cmd+Shift+L) fills the page's one login, or opens the top page's menu
+when there are several.
+
+**Firefox.** The same build with an event-page background, a gecko id and
+`data_collection_permissions: none`; `web-ext lint` passes clean. Until a signed build is
+published it loads as a temporary add-on (about:debugging), which lasts until Firefox quits.
+
+Tests: `tests/e2e/browser/extension-passwords.spec.ts` (Chromium with the extension loaded, test
+sites on `*.example.test`, the attacks above included), `tests/e2e/browser/extension-form-detect.spec.ts`
+(the form shapes), `tests/scripts/build-extension.test.ts`, and the server side in `tests/e2e/vault.test.ts`.
+
 ## Agents
 
 Code: `src/core/vault/agent.ts` (policy, asks, grants, brakes), `agent-log.ts`, `policy.ts`,

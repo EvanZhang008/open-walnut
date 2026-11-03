@@ -368,6 +368,62 @@ describe('the vault, start to end', () => {
     expect((await http('GET', '/vault/status')).body).toMatchObject({ hasRecovery: true, recoveryUnsaved: false })
   })
 
+  it('an unlock made with a device token holds only with that token, and ends when the device is removed', async () => {
+    const pairDevice = async () => {
+      const code = (await (await fetch(`${base}/api/devices/browser-code`, { method: 'POST' })).json() as { code: string }).code
+      const r = await http('POST', '/browser-pair', { code, client: 'extension' })
+      expect(r.status).toBe(200)
+      expect(r.body.name).toMatch(/^extension-[0-9a-f]{6}$/)
+      expect(r.body.deviceName).toMatch(/^Walnut extension/)
+      return r.body as { token: string; name: string }
+    }
+    const dev = await pairDevice()
+    // The browser extension's own origin: never this machine for trust, so its token counts.
+    const asExt = { authorization: `Bearer ${dev.token}`, origin: 'chrome-extension://walnuttestextensionid' }
+    const st = (await http('GET', '/vault/status')).body
+    const key = toB64(await derivePasswordKey('recovered test phrase', st.kdf))
+    const unlockAsExt = async () => {
+      const u = await http('POST', '/vault/unlock', { passwordKey: key, kdfSalt: st.kdf.salt, client: 'Walnut extension' }, { ...asExt, 'x-walnut-vault-session': '' })
+      expect(u.status).toBe(200) // a loopback caller on another origin is still a private link
+      return u.body.session.token as string
+    }
+    const s1 = await unlockAsExt()
+    expect((await http('GET', '/vault/items', undefined, { ...asExt, 'x-walnut-vault-session': s1 })).status).toBe(200)
+    // The same session without the device's token is not that device's: refused, and gone.
+    expect((await http('GET', '/vault/items', undefined, { 'x-walnut-vault-session': s1 })).body.code).toBe('vault_session_needed')
+    expect((await http('GET', '/vault/items', undefined, { ...asExt, 'x-walnut-vault-session': s1 })).status).toBe(401)
+    // Removed in Settings: its unlock ends at once.
+    const s2 = await unlockAsExt()
+    expect((await fetch(`${base}/api/devices/${dev.name}`, { method: 'DELETE' })).status).toBe(200)
+    expect((await http('GET', '/vault/items', undefined, { ...asExt, 'x-walnut-vault-session': s2 })).body.code).toBe('token_refused')
+    expect((await http('GET', '/vault/items', undefined, { 'x-walnut-vault-session': s2 })).body.code).toBe('vault_session_needed')
+  })
+
+  it('refuses a derived key too over a link someone else can read (a proxy relayed it)', async () => {
+    const code = (await (await fetch(`${base}/api/devices/browser-code`, { method: 'POST' })).json() as { code: string }).code
+    const dev = (await http('POST', '/browser-pair', { code, client: 'extension' })).body as { token: string; name: string }
+    const relayed = { authorization: `Bearer ${dev.token}`, 'x-forwarded-for': '203.0.113.9', 'x-walnut-vault-session': '' }
+    const st = (await http('GET', '/vault/status', undefined, relayed)).body
+    expect(st.privateLink).toBe(false)
+    const key = toB64(await derivePasswordKey('recovered test phrase', st.kdf))
+    expect((await http('POST', '/vault/unlock', { passwordKey: key, kdfSalt: st.kdf.salt }, relayed)).body.code).toBe('insecure_link')
+    // A relay that adds no header: loopback, addressed to a network name. Not this machine.
+    const bare = { authorization: `Bearer ${dev.token}`, host: 'mymac.lan', 'x-walnut-vault-session': '' }
+    expect((await http('GET', '/vault/status', undefined, bare)).body.privateLink).toBe(false)
+    expect((await http('POST', '/vault/unlock', { passwordKey: key, kdfSalt: st.kdf.salt }, bare)).body.code).toBe('insecure_link')
+    // The person's own TLS proxy here: a derived key goes through, a typed password does not.
+    const tls = { authorization: `Bearer ${dev.token}`, 'x-forwarded-proto': 'https', 'x-forwarded-for': '192.0.2.4', 'x-walnut-vault-session': '' }
+    expect((await http('POST', '/vault/unlock', { password: 'recovered test phrase' }, tls)).body.code).toBe('insecure_link')
+    const viaTls = await http('POST', '/vault/unlock', { passwordKey: key, kdfSalt: st.kdf.salt, client: 'tls proxy' }, tls)
+    expect(viaTls.status).toBe(200)
+    // A paired browser's unlock holds across its own status reads (the web app reads status right after).
+    const own = { ...tls, 'x-walnut-vault-session': viaTls.body.session.token as string }
+    expect((await http('GET', '/vault/status', undefined, own)).body.unlocked).toBe(true)
+    expect((await http('GET', '/vault/status', undefined, own)).body.unlocked).toBe(true)
+    expect((await http('GET', '/vault/items', undefined, own)).status).toBe(200)
+    await fetch(`${base}/api/devices/${dev.name}`, { method: 'DELETE' })
+  })
+
   it('counts wrong recovery codes like wrong passwords', async () => {
     resetSessionsForTest()
     let last = 0

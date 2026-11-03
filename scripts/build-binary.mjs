@@ -123,12 +123,17 @@ const mb = (n) => `${(n / 2 ** 20).toFixed(1)} MB`
 
 function buildWeb(reuse) {
   const index = path.join(repo, 'dist/web/static/index.html')
-  if (reuse && fs.existsSync(index)) return
-  const vite = path.join(repo, 'web/node_modules/vite/bin/vite.js')
-  if (!fs.existsSync(vite)) throw new Error('web dependencies are missing (web/node_modules/vite): install them first')
-  // The native config loader writes no temp file into node_modules; bun runs the TS config itself.
-  run(process.execPath, ['--bun', vite, 'build', '--configLoader', 'native'], { cwd: path.join(repo, 'web') })
-  if (!fs.existsSync(index)) throw new Error('the web build left no dist/web/static/index.html')
+  if (!(reuse && fs.existsSync(index))) {
+    const vite = path.join(repo, 'web/node_modules/vite/bin/vite.js')
+    if (!fs.existsSync(vite)) throw new Error('web dependencies are missing (web/node_modules/vite): install them first')
+    // The native config loader writes no temp file into node_modules; bun runs the TS config itself.
+    run(process.execPath, ['--bun', vite, 'build', '--configLoader', 'native'], { cwd: path.join(repo, 'web') })
+    if (!fs.existsSync(index)) throw new Error('the web build left no dist/web/static/index.html')
+  }
+  // The browser extension's downloads ride the web assets (Settings, Passwords links them).
+  // Vite empties its output, so they are made after it, here as in `web:build`.
+  const zips = ['chrome', 'firefox'].map((b) => path.join(repo, `dist/web/static/downloads/walnut-extension-${b}.zip`))
+  if (!zips.every((z) => fs.existsSync(z))) run(process.execPath, ['scripts/build-extension.mjs'])
 }
 
 /** The two first-party plugins a stock install ships (walnut-time, the plugin store), as `bun run build` makes them. */

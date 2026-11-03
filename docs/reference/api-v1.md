@@ -39,7 +39,9 @@ Primary-mode refusals carry a `code`: `not_paired` (no credential) or
   Cloud, or `walnut device add <name>`) or a config.yaml `api_keys[]` entry.
   Apple Health (`/health/*`) is the exception: it takes a device token only.
 - **A browser sign-in code** (primary mode, 2026-10):
-  `POST /api/v1/browser-pair` `{ code }` → `{ token, name }` (public). The
+  `POST /api/v1/browser-pair` `{ code, client? }` → `{ token, name, deviceName }`
+  (public; `client: "extension"` is the Walnut browser extension, named
+  `extension-<hex>`, `deviceName` what Settings shows). The
   person at this machine mints the code (`POST /api/devices/browser-code` →
   `{ code, expiresAt, url?, link? }`; anyone else gets
   `403 person_at_this_machine`): 8 characters shown as `XXXX-XXXX`, any case,

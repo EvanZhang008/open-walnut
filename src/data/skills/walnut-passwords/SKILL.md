@@ -23,6 +23,9 @@ never open the vault yourself: you name an item and say why, and Walnut decides.
 - Never ask the user for their master password, Secret Key or recovery code, and never read
   their recovery kit: nothing an agent does needs them. A user who forgot the master password
   uses "Forgot master password?" on the Passwords lock screen with the kit's recovery code.
+- The user's own browser fills and saves their logins with the Walnut browser extension
+  (Chrome, Firefox): if they ask how, point them to Settings, Passwords, Browser extension.
+  It is the user's: an agent never drives it or reads what it fills.
 
 ## Pick the right way
 

@@ -228,8 +228,9 @@ approvalsV1Router.post('/approvals/:id/cancel', (req: Request, res: Response, ne
 async function vaultApprover(req: Request, body: Record<string, unknown>, target: { mode: string; guard?: string }): Promise<boolean> {
   if (target.guard === 'vault-sensitive' && target.mode === 'biometric') return false
   const { useSession, SESSION_HEADER } = await import('../../core/vault/sessions.js')
+  const { deviceOf } = await import('./vault-v1.js')
   const token = header(req, SESSION_HEADER) ?? (typeof body.vaultSession === 'string' ? body.vaultSession : undefined)
-  return !!useSession(token)
+  return !!useSession(token, true, deviceOf(req))
 }
 
 approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, next: NextFunction) => {

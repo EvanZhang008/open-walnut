@@ -21,7 +21,7 @@ describe('isStaticAssetPath', () => {
   });
 
   it('claims file extensions served from the static root', () => {
-    for (const p of ['/favicon.ico', '/logo.svg', '/manifest.json', '/sw.js', '/style.css', '/f.woff2', '/x.map', '/robots.txt']) {
+    for (const p of ['/favicon.ico', '/logo.svg', '/manifest.json', '/sw.js', '/style.css', '/f.woff2', '/x.map', '/robots.txt', '/downloads/walnut-extension-chrome.zip']) {
       expect(isStaticAssetPath(p), p).toBe(true);
     }
   });

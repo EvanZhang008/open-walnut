@@ -60,7 +60,8 @@ async function person(req: Request, res: Response): Promise<boolean> {
     return false
   }
   const s = await import('../../core/vault/sessions.js')
-  if (s.useSession(header(req, s.SESSION_HEADER))) return true
+  const { deviceOf } = await import('./vault-v1.js')
+  if (s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))) return true
   res.status(401).json({ error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
   return false
 }

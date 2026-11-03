@@ -1,5 +1,5 @@
 /**
- * Settings → Passwords: auto-lock, what an agent gets when it asks, a new master password,
+ * Settings → Passwords: auto-lock, what an agent gets when it asks, the browser extension, a new master password,
  * the recovery kit, whether agents may ask while nobody unlocked, export, and Lock everywhere. Changing the vault itself needs this
  * window unlocked (the Passwords app); auto-lock is a plain config value.
  */
@@ -15,6 +15,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl'
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
 import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type VaultStatus } from '@/api/vault'
 import { downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
+import { BrowserExtensionGroup } from './BrowserExtensionGroup'
 import '@/styles/passwords.css'
 
 interface Props {
@@ -103,6 +104,8 @@ export function PasswordsSection({ config, onSave }: Props) {
           />
         </SettingsGroup>
       )}
+
+      {status?.setUp && <BrowserExtensionGroup />}
 
       {status?.setUp && (
         <SettingsGroup heading="Master password">

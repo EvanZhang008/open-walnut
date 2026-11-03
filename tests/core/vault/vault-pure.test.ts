@@ -217,11 +217,58 @@ describe('vault sessions', () => {
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
       const { token } = s.createSession('test', 1)
       vi.setSystemTime(new Date('2026-01-01T00:00:50Z'))
-      expect(s.useSession(token, false)).not.toBeNull()
+      expect(s.useSession(token, false, undefined)).not.toBeNull()
       vi.setSystemTime(new Date('2026-01-01T00:01:10Z'))
-      expect(s.useSession(token, false)).toBeNull()
+      expect(s.useSession(token, false, undefined)).toBeNull()
     } finally {
       vi.useRealTimers()
+      s.resetSessionsForTest()
+    }
+  })
+
+  it('a session a device opened holds only for that device, and ends with it', async () => {
+    const s = await import('../../../src/core/vault/sessions.js')
+    s.resetSessionsForTest()
+    try {
+      const a = s.createSession('ext', 5, 'extension-aaaaaa')
+      expect(s.useSession(a.token, true, 'extension-aaaaaa')).not.toBeNull()
+      expect(s.useSession(a.token, true, 'browser-bbbbbb')).toBeNull()
+      expect(s.useSession(a.token, true, 'extension-aaaaaa')).toBeNull() // gone for good
+      const b = s.createSession('ext', 5, 'extension-aaaaaa')
+      const c = s.createSession('web', 5)
+      expect(s.endDeviceSessions('extension-aaaaaa')).toBe(1)
+      expect(s.useSession(b.token, true, 'extension-aaaaaa')).toBeNull()
+      // A session no device opened is anyone's who holds it, as before.
+      expect(s.useSession(c.token, true, undefined)).not.toBeNull()
+      expect(s.useSession(c.token, true, 'extension-aaaaaa')).not.toBeNull()
+    } finally {
+      s.resetSessionsForTest()
+    }
+  })
+
+  it('the vault closes when a removed device or a wrong one ends the last session', async () => {
+    const s = await import('../../../src/core/vault/sessions.js')
+    s.resetSessionsForTest()
+    let closed = 0
+    try {
+      s.onSessionsExpired(() => { closed++ })
+      s.createSession('ext', 5, 'extension-aaaaaa')
+      const web = s.createSession('web', 5)
+      s.endDeviceSessions('extension-aaaaaa')
+      await Promise.resolve()
+      expect(closed).toBe(0) // the web window still holds one
+      s.endSession(web.token)
+      const b = s.createSession('ext', 5, 'extension-aaaaaa')
+      s.endDeviceSessions('extension-aaaaaa')
+      await Promise.resolve()
+      expect(closed).toBe(1)
+      expect(s.useSession(b.token, true, 'extension-aaaaaa')).toBeNull()
+      const c = s.createSession('ext', 5, 'extension-aaaaaa')
+      expect(s.useSession(c.token, true, undefined)).toBeNull()
+      await Promise.resolve()
+      expect(closed).toBe(2)
+    } finally {
+      s.onSessionsExpired(null)
       s.resetSessionsForTest()
     }
   })
@@ -237,7 +284,7 @@ describe('vault sessions', () => {
       const a = s.createSession('a', 1)
       s.createSession('b', 3)
       await vi.advanceTimersByTimeAsync(62_000)
-      expect(s.useSession(a.token)).toBeNull()
+      expect(s.useSession(a.token, true, undefined)).toBeNull()
       expect(closed).toBe(0) // b is still open
       await vi.advanceTimersByTimeAsync(120_000)
       expect(closed).toBe(1)

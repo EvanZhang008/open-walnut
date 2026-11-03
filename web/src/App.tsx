@@ -26,6 +26,7 @@ import { SessionRawViewHost } from './components/sessions/SessionRawView';
 import { MainPage } from './pages/MainPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { OrgPage } from './pages/OrgPage';
+import { ConnectExtensionPage } from './pages/ConnectExtensionPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { CreatePluginPage } from './pages/CreatePluginPage';
@@ -200,6 +201,7 @@ export function App() {
         <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
         <Route path="/org" element={<OrgPage />} />
+        <Route path="/connect-extension" element={<ConnectExtensionPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/commands" element={<CommandsPage />} />
         {/* The Skills page was removed 2026-10-31 (its on/off switch was never used and

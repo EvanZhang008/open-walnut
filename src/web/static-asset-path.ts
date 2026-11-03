@@ -17,7 +17,7 @@
  */
 
 /** Extensions that only ever name a file on disk, never an SPA route. */
-const ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|json|wasm|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|ico|mp4|webm|txt|xml)$/i
+const ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|json|wasm|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|ico|mp4|webm|txt|xml|zip)$/i
 
 /** True when a not-found GET must answer 404 rather than the SPA shell. */
 export function isStaticAssetPath(pathname: string): boolean {

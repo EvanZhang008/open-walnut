@@ -20,6 +20,8 @@ describe('roleOf: what a credential is, for the console', () => {
 
   it('browsers and Macs keep their roles', () => {
     expect(roleOf({ name: 'browser-afab06', createdAt: at }, none)).toBe('browser')
+    // The Walnut browser extension is a browser too: no phone wording, no QR over its pairing.
+    expect(roleOf({ name: 'extension-0c1d2e', createdAt: at }, none)).toBe('browser')
     expect(roleOf({ name: 'studio', createdAt: at, info: { model: 'Mac' } }, none)).toBe('mac')
   })
 })

@@ -152,8 +152,9 @@ type DeviceRole = 'phone' | 'simulator' | 'browser' | 'mac' | 'self'
 export function roleOf(d: DeviceInfo & { role?: unknown }, macs: ReadonlySet<string>): DeviceRole {
   if (d.role === 'mac' || macs.has(d.name) || reportsAsComputer(d.info)) return 'mac'
   if (/(^|-)sim\d*(-|$)|simulator/i.test(d.name) || reportsAsSimulator(d.info)) return 'simulator'
-  // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>.
-  return /^browser-[0-9a-f]{6}$/.test(d.name) ? 'browser' : 'phone'
+  // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>, the
+  // Walnut browser extension extension-<6 hex>: neither is a phone (no QR, no phone wording).
+  return /^(browser|extension)-[0-9a-f]{6}$/.test(d.name) ? 'browser' : 'phone'
 }
 
 /**
