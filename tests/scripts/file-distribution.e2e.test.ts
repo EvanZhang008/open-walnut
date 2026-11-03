@@ -151,7 +151,11 @@ describe.skipIf(!NODE)('the compiled file, from every way it arrives', () => {
     // The card says this install updates itself on start (off here: WALNUT_NO_AUTO_UPDATE).
     expect(status.autoUpdate).toBe(false)
     const running = path.join(share, 'running')
-    expect(fs.readdirSync(running).map((pid) => fs.readFileSync(path.join(running, pid), 'utf8').trim())).toEqual([OLD])
+    // The started process supervises the server (a live update restarts it), and both keep
+    // the version they run from: one version marked, by the started process among others.
+    const marks = fs.readdirSync(running)
+    expect([...new Set(marks.map((pid) => fs.readFileSync(path.join(running, pid), 'utf8').trim()))]).toEqual([OLD])
+    expect(marks).toContain(String(w.server!.pid))
     await w.stop()
     expect(fs.readdirSync(running)).toEqual([])
   }, 300_000)
