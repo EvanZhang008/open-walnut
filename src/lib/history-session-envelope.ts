@@ -575,7 +575,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(attrs.request ? { requestId: attrs.request } : {}),
       peer,
       ...(attrs.asked ? { askedPreview: attrs.asked } : {}),
-      ...(attrs.title && (kind === 'peer-note' || kind === 'reply' || appState) ? { title: attrs.title } : {}),
+      ...(attrs.title && (kind === 'peer-note' || kind === 'reply' || kind === 'notification' || appState) ? { title: attrs.title } : {}),
       ...(notify ? { statusLine } : trigger ? { statusLine, body } : { body }),
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),
