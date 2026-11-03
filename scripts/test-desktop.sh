@@ -51,3 +51,9 @@ swiftc \
     "$ROOT/tests/desktop/app-update-tests.swift" \
     -o "$OUT_DIR/walnut-app-update-tests"
 "$OUT_DIR/walnut-app-update-tests"
+
+swiftc \
+    "$ROOT/desktop/DesktopDiagnostics.swift" \
+    "$ROOT/tests/desktop/server-lock-tests.swift" \
+    -o "$OUT_DIR/walnut-server-lock-tests"
+"$OUT_DIR/walnut-server-lock-tests"

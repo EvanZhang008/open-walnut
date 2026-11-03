@@ -96,7 +96,7 @@ describe('dev-prod.sh smoke boot isolation', () => {
 
   it('every server launch drops BUN_BE_BUN, the nohup fallback included', () => {
     const launch = /^launch_server\(\) \{\n[\s\S]*?^\}\n/m.exec(script)![0]
-    const nohup = launch.slice(launch.indexOf('nohup env'))
+    const nohup = launch.slice(launch.indexOf('nohup '))
     expect(nohup.slice(0, nohup.indexOf('"${server_argv[@]}"'))).toMatch(/-u BUN_BE_BUN/)
   })
 

@@ -625,6 +625,23 @@ function sweepDeadStreams(): void {
 // lines without dominating. Written to daemon.instance so clients can verify
 // they're talking to the same daemon they expected (detect PID reuse / swap).
 const DAEMON_START_TS = Date.now()
+// A working directory deleted under this daemon is never handed to what it
+// starts: it moves to the home directory, at start and once a minute (2026-11-03:
+// a server whose cwd was a deleted build clone could not start the voice model).
+// Keep in sync with daemon-source.ts and healCwd in src/core/login-session.ts.
+function healDaemonCwd(): void {
+  try {
+    const here = fs.statSync('.')
+    const there = fs.statSync(process.cwd())
+    if (here.ino === there.ino && here.dev === there.dev) return
+  } catch { /* gone: move */ }
+  for (const dir of [process.env.HOME, os.homedir(), os.tmpdir(), '/']) {
+    if (!dir) continue
+    try { process.chdir(dir); return } catch { /* next */ }
+  }
+}
+healDaemonCwd()
+setInterval(healDaemonCwd, 60_000).unref?.()
 // What runs this daemon, for `hello`: the compiled binary (its own executable),
 // or bun running this file. The server shows it in the host status; the pid
 // files alone cannot tell them apart. Keep in sync with daemon-source.ts.

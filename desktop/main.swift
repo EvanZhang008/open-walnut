@@ -217,8 +217,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let dir = ProcessInfo.processInfo.environment["WALNUT_DESKTOP_E2E_SNAPSHOTS"], !dir.isEmpty else { return }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let web = self?.webView else { return }
             let at = Int64(Date().timeIntervalSince1970 * 1000)
+            // Before the console shows (the loading and error screens), the window's
+            // own views, drawn into a bitmap: a covered window is filmed too.
+            guard let web = self?.webView, web.window != nil else {
+                guard let view = self?.window.contentView, view.bounds.width > 0,
+                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                guard let png = rep.representation(using: .png, properties: [:]) else { return }
+                try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(at).png"))
+                return
+            }
             web.createPDF(configuration: WKPDFConfiguration()) { result in
                 guard case .success(let pdf) = result, let page = NSPDFImageRep(data: pdf) else { return }
                 let scale: CGFloat = 2
@@ -922,7 +931,183 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func startServer() {
         DesktopLogger.shared.log("server_discovery_started")
+        // A Walnut server already owns this data directory: that is the one to show,
+        // however slow it is to answer. Starting a second one only gets it refused.
+        if let holder = liveLockHolder() {
+            waitForRunningServer(holder)
+            return
+        }
         checkExistingServer(index: 0)
+    }
+
+    /// The live Walnut server holding this data directory's lock, if any.
+    func liveLockHolder() -> ServerLockHolder? {
+        guard let home = walnutHome, let holder = ServerLockHolder.read(home: home) else { return nil }
+        // Never a server this app started: one that hung past its deadline is being
+        // stopped, and an orphan of an earlier run (server.pid) is reclaimed by the
+        // ordinary discovery (orphanedWalnutServerPid), never attached to.
+        guard holder.pid != getpid(), holder.pid != lastSpawnedServerPid, holder.pid != recordedSpawnedServerPid(),
+              isWalnutServer(pid: holder.pid) else { return nil }
+        return holder
+    }
+
+    /// Whether `pid` is alive and runs a Walnut server: `ps` itself, never a login shell.
+    func isWalnutServer(pid: Int32) -> Bool {
+        guard LocalProcess.isAlive(pid), let line = LocalProcess.psLine(pid: pid),
+              let parsed = LocalProcess.parsePsLine(line) else { return false }
+        return ServerLockHolder.isWalnutServerCommand(parsed.command)
+    }
+
+    var runningServerWaitTimer: Timer?
+    var rediscoveries = 0
+    var lastSpawnedServerPid: Int32?
+
+    /// Waits for the server that holds the lock to answer on its port, then
+    /// attaches to it. A holder that dies (or whose pid now names another program)
+    /// sends the app back to discovery, which starts its own; one that never
+    /// answers ends, after the deadline, on a screen that names it and what to do.
+    func waitForRunningServer(_ holder: ServerLockHolder) {
+        runningServerWaitTimer?.invalidate()
+        DesktopLogger.shared.log("running_server_wait_started", fields: [
+            "pid": String(holder.pid), "port": holder.port.map(String.init) ?? "unknown"
+        ])
+        statusLabel?.stringValue = RunningServerWait.busyText(pid: holder.pid, port: holder.port)
+        let began = Date()
+        var port = holder.port
+        var inFlight = false
+        let tick: (Timer) -> Void = { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            guard self.runningServerWaitTimer === timer else { return }
+            if !self.isWalnutServer(pid: holder.pid) {
+                timer.invalidate()
+                self.runningServerWaitTimer = nil
+                DesktopLogger.shared.log("running_server_gone", fields: ["pid": String(holder.pid)])
+                if self.rediscoveries < RunningServerWait.maxRediscoveries {
+                    self.rediscoveries += 1
+                    self.startServer()
+                } else {
+                    self.showError(RunningServerWait.keptStoppingText())
+                }
+                return
+            }
+            if Date().timeIntervalSince(began) >= RunningServerWait.deadline {
+                timer.invalidate()
+                self.runningServerWaitTimer = nil
+                DesktopLogger.shared.log("running_server_wait_timed_out", fields: ["pid": String(holder.pid)])
+                self.showError(RunningServerWait.gaveUpText(pid: holder.pid, port: port))
+                return
+            }
+            // A server still booting has not written its port yet: only the lock says
+            // which port is its own, never another Walnut that answers on one of ours.
+            if port == nil, let home = self.walnutHome, let now = ServerLockHolder.read(home: home), now.pid == holder.pid { port = now.port }
+            guard let ask = port, !inFlight else { return }
+            inFlight = true
+            var request = URLRequest(url: URL(string: "http://localhost:\(ask)")!)
+            request.timeoutInterval = RunningServerWait.requestTimeout
+            URLSession.shared.dataTask(with: request) { _, response, _ in
+                DispatchQueue.main.async {
+                    inFlight = false
+                    guard (response as? HTTPURLResponse)?.statusCode == 200, self.runningServerWaitTimer === timer else { return }
+                    timer.invalidate()
+                    self.runningServerWaitTimer = nil
+                    DesktopLogger.shared.log("running_server_answered", fields: [
+                        "pid": String(holder.pid), "port": String(ask),
+                        "waitedSec": String(Int(Date().timeIntervalSince(began)))
+                    ])
+                    self.attachExistingServer(port: ask)
+                }
+            }.resume()
+        }
+        let timer = Timer(timeInterval: RunningServerWait.pollInterval, repeats: true, block: tick)
+        runningServerWaitTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        tick(timer) // the first look now, not a second from now
+    }
+
+    var replacedEndedSessionServer = false
+    var endedSessionRecheck: DispatchWorkItem?
+
+    /// Attaches to the server answering on `port`, unless it lives in a login
+    /// session macOS has ended (it says so in GET /api/config): that one can no
+    /// longer reach other hosts or resolve names, and only a process in the
+    /// current session (this app) can start one that does. A busy server may miss
+    /// the first ask, so it is asked up to three times, and once more a while after
+    /// the console opened. Replaced at most once per launch.
+    func attachExistingServer(port: Int) {
+        guard !replacedEndedSessionServer, ServerLoginSession.ownSessionWorks() else { return attachServer(port: port) }
+        statusLabel?.stringValue = "Connecting to Walnut on port \(port)..."
+        askLoginSession(port: port, attempts: 3) { [weak self] problems in
+            guard let self = self else { return }
+            guard let problems = problems, !problems.isEmpty else {
+                self.attachServer(port: port)
+                self.scheduleEndedSessionRecheck(port: port)
+                return
+            }
+            self.replaceEndedSessionServer(port: port, problems: problems)
+        }
+    }
+
+    /// The server's session problems, nil when it never answered `attempts` asks.
+    func askLoginSession(port: Int, attempts: Int, done: @escaping ([String]?) -> Void) {
+        var request = URLRequest(url: URL(string: "http://localhost:\(port)/api/config")!)
+        request.timeoutInterval = 10
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            DispatchQueue.main.async {
+                if (response as? HTTPURLResponse)?.statusCode == 200, let data = data {
+                    return done(ServerLoginSession.endedSessionProblems(configJSON: data))
+                }
+                guard attempts > 1, self != nil else { return done(nil) }
+                self?.askLoginSession(port: port, attempts: attempts - 1, done: done)
+            }
+        }.resume()
+    }
+
+    func scheduleEndedSessionRecheck(port: Int) {
+        endedSessionRecheck?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.replacedEndedSessionServer, !self.ownsServer, self.serverPort == port else { return }
+            self.askLoginSession(port: port, attempts: 2) { problems in
+                guard let problems = problems, !problems.isEmpty, !self.replacedEndedSessionServer, self.serverPort == port else { return }
+                self.showLoadingScreen()
+                self.replaceEndedSessionServer(port: port, problems: problems)
+            }
+        }
+        endedSessionRecheck = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90, execute: item)
+    }
+
+    func replaceEndedSessionServer(port: Int, problems: [String]) {
+        replacedEndedSessionServer = true
+        let lockPid = walnutHome.flatMap { ServerLockHolder.read(home: $0) }.flatMap { $0.port == port ? $0.pid : nil }
+        guard let pid = lockPid ?? LocalProcess.listeners(port: port).first, pid > 1, isWalnutServer(pid: pid) else {
+            return attachServer(port: port)
+        }
+        DesktopLogger.shared.log("ended_session_server_replaced", fields: [
+            "pid": String(pid), "port": String(port), "problems": problems.joined(separator: ",")
+        ])
+        statusLabel?.stringValue = "Walnut was left running in a login session that ended. Restarting it..."
+        serverPort = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let gone = LocalProcess.stop(pid: pid, grace: 8)
+            DispatchQueue.main.async {
+                guard gone else { return self.attachServer(port: port) }
+                if recordedSpawnedServerPid() == pid { clearSpawnedServerPid() }
+                self.tryStartServerOnPort(index: self.portsToTry.firstIndex(of: port) ?? 0)
+            }
+        }
+    }
+
+    func attachServer(port: Int) {
+        DesktopLogger.shared.log("existing_server_attached", fields: [
+            "port": String(port)
+        ])
+        rediscoveries = 0
+        serverRestartPolicy.reset()
+        isRecoveringServer = false
+        ownsServer = false
+        serverPort = port
+        serverReadyAt = nil
+        loadWebUI()
     }
 
     func checkExistingServer(index: Int) {
@@ -962,15 +1147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             }
                         }
                     } else {
-                        DesktopLogger.shared.log("existing_server_attached", fields: [
-                            "port": String(port)
-                        ])
-                        self.serverRestartPolicy.reset()
-                        self.isRecoveringServer = false
-                        self.ownsServer = false
-                        self.serverPort = port
-                        self.serverReadyAt = nil
-                        self.loadWebUI()
+                        self.attachExistingServer(port: port)
                     }
                 } else {
                     self.checkExistingServer(index: index + 1)
@@ -1209,6 +1386,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Persist the child's PID so a future launch (after an app crash)
             // can recognize this exact process as OUR orphan and reclaim it.
             recordSpawnedServerPid(process.processIdentifier)
+            lastSpawnedServerPid = process.processIdentifier
             DesktopLogger.shared.log("server_process_started", fields: [
                 "pid": String(process.processIdentifier),
                 "port": String(port)
@@ -1281,11 +1459,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if portInUse {
                     self.tryStartServerOnPort(index: index + 1)
                 } else {
-                    let detail = self.lastServerOutput.isEmpty ? "No output was captured." : self.lastServerOutput
-                    self.handleServerStartupFailure(
-                        "The Walnut server exited during startup (exit code \(proc.terminationStatus)).\n\n"
-                        + "\(detail)\n\n"
-                        + (self.runtime != nil
+                    self.handleServerStartupFailure(StartupExitText.text(
+                        code: proc.terminationStatus, output: trimmed,
+                        hint: self.runtime != nil
                             ? "Reset Setup... and Get Started again downloads a fresh copy (your data stays)."
                             : "This is usually a stale build. In the source directory run:\n    bun run web:build"))
                 }
@@ -1323,7 +1499,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         armStartupDeadline()
     }
 
+    /// Every way a server start fails ends here. A Walnut server that owns the
+    /// data directory (the one whose lock refused ours, or one that came up while
+    /// ours was starting) turns the failure into a wait for it, so no first launch
+    /// ends on an error screen while Walnut is in fact running.
     func handleServerStartupFailure(_ message: String) {
+        if let holder = liveLockHolder() {
+            DesktopLogger.shared.log("startup_failure_running_server", fields: ["pid": String(holder.pid)])
+            waitForRunningServer(holder)
+            return
+        }
         if isRecoveringServer {
             scheduleServerRecovery(
                 reason: "recovery_start_failed",
@@ -1787,6 +1972,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         stopServer()
         serverRestartPolicy.reset()
+        rediscoveries = 0
         serverPort = nil
         showLoadingScreen()
         startServer()
@@ -2067,6 +2253,7 @@ extension AppDelegate: WKNavigationDelegate {
         }
         webContentWatchdog?.pageDidFinishLoading()
         if let state = appUpdater?.state { pushAppUpdateState(state) }
+        if !consolePageLoaded { DesktopLogger.shared.log("console_loaded", fields: ["port": serverPort.map(String.init) ?? "none"]) }
         consolePageLoaded = true
         deliverAppLinks()
         if !commandLineToolChecked {

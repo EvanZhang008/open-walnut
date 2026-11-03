@@ -487,8 +487,11 @@ export class LocalDaemon {
           this.auditOwnerOnAdopt(this._instanceId)
           return existingPort
         }
-        // 2. Check version — auto-restart if stale
-        if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion) {
+        // 2. Check version — auto-restart if stale. A daemon whose login session
+        // ended (checkDaemonSessionInBackground) is replaced the same way, with the same holds:
+        // it cannot look up its user or resolve names, nor can anything it starts.
+        const sessionEnded = !!helloResult.instanceId && this._sessionEnded.has(helloResult.instanceId)
+        if ((expectedVersion && helloResult.version && helloResult.version !== expectedVersion) || sessionEnded) {
           // Upgrade-vs-live-work guard: restarting the daemon closes every ACP
           // worker's stdin → turn-interrupted:shutdown for whatever the user is
           // mid-flight on (each dev:prod deploy used to kill live codex turns —
@@ -516,11 +519,12 @@ export class LocalDaemon {
             this.scheduleUpgradeRecheck()
             return existingPort
           }
-          if (this.deferForExecRuns(helloResult, existingPort, expectedVersion)) return existingPort
+          if (this.deferForExecRuns(helloResult, existingPort, expectedVersion ?? helloResult.version ?? '')) return existingPort
           // Prepare the new daemon's fold checkpoints first, while this one
           // still serves (fold-prewarm.ts): its adopt otherwise folds every
           // live stream before listening, minutes on a checkpoint format change.
-          if (await this.deferUpgradeForFoldPrewarm(binaryPath, expectedVersion)) {
+          // A replacement of the same version (an ended login session) keeps the checkpoint format.
+          if (expectedVersion && helloResult.version !== expectedVersion && await this.deferUpgradeForFoldPrewarm(binaryPath, expectedVersion)) {
             log.session.info('local daemon version mismatch — upgrade DEFERRED (preparing fold checkpoints)', {
               running: helloResult.version,
               expected: expectedVersion,
@@ -531,7 +535,7 @@ export class LocalDaemon {
             this.auditOwnerOnAdopt(this._instanceId)
             return existingPort
           }
-          log.session.info('local daemon version mismatch — restarting', {
+          log.session.info(sessionEnded ? 'local daemon in an ended login session — restarting' : 'local daemon version mismatch — restarting', {
             running: helloResult.version,
             expected: expectedVersion,
             runningInstanceId: helloResult.instanceId,
@@ -542,6 +546,7 @@ export class LocalDaemon {
           this._port = existingPort
           this._wsUrl = `ws://localhost:${existingPort}`
           this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+          this.checkDaemonSessionInBackground(existingPort, helloResult)
           log.session.info('local daemon already running', {
             port: existingPort,
             version: helloResult.version,
@@ -823,6 +828,83 @@ export class LocalDaemon {
     } catch (error) {
       return (error as NodeJS.ErrnoException).code !== 'ESRCH'
     }
+  }
+
+  /** Daemon instances whose login session this server has checked, and the ones found ended. */
+  private _sessionChecked = new Set<string>()
+  private _sessionEnded = new Set<string>()
+  /** Replacements for an ended session this server made: a brake, never a loop. */
+  private _sessionReplacements = 0
+
+  /**
+   * Whether the daemon on `port` runs in a login session macOS ended while this
+   * server's own session works (login-session.ts): the daemon runs the probe the
+   * server runs on itself (exec.run, host-exec-v1), twice, and only what both runs
+   * see counts. In the background, never holding up a start; once per daemon
+   * instance. A daemon found ended is replaced by the next ensureRunning, through
+   * the version-mismatch path and its holds (open ACP turns, fold prewarm), and its
+   * CLIs are recycled through the idle reaper (ended-session-clis.ts).
+   */
+  private checkDaemonSessionInBackground(port: number, hello: { instanceId?: string; capabilities?: string[] }): void {
+    if (process.platform !== 'darwin' || !hello.instanceId || !hello.capabilities?.includes('host-exec-v1')) return
+    if (!isProductionDaemonDir(this.daemonDir) && process.env.WALNUT_LOGIN_SESSION_CHECK_ISOLATED !== '1') return
+    const id = hello.instanceId
+    if (this._sessionChecked.has(id) || this._sessionReplacements >= 2) return
+    this._sessionChecked.add(id)
+    void (async () => {
+      const { checkLoginSession, loginSessionSeen, confirmedProblems, LOGIN_SESSION_PROBE_SCRIPT } = await import('../core/login-session.js')
+      await checkLoginSession()
+      // This server's own session must work, or a new daemon would be no better.
+      if (loginSessionSeen().some((p) => p !== 'cwd_gone')) return
+      const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+      const probe = async () => {
+        const reply = await this.rpc(port, 'exec.run', {
+          jobId: `hx-walnut-login-${Date.now().toString(36)}`, argv: ['/bin/sh', '-c', LOGIN_SESSION_PROBE_SCRIPT],
+          cwd: '/', timeoutMs: 10_000, caller: { task: 'walnut-login-session' },
+        }, 20_000)
+        return typeof reply?.output === 'string' ? reply.output : null
+      }
+      const problems = (await confirmedProblems(probe, uid)).filter((p) => p !== 'cwd_gone')
+      if (!problems.length || this._instanceId !== id) return
+      const { listNonTerminalSessions } = await import('../core/session-tracker.js')
+      const { markEndedSessionClis } = await import('../core/sessions/ended-session-clis.js')
+      const live = (await listNonTerminalSessions().catch(() => [])).filter((r) => !r.host || r.host === '__local__')
+      const marked = markEndedSessionClis(live)
+      this._sessionEnded.add(id)
+      this._sessionReplacements++
+      log.session.error('local daemon runs in a login session that ended — replacing it', {
+        port, instanceId: id, problems, clisToRecycle: marked,
+      })
+      await this._ensureInFlight?.catch(() => {})
+      await this.ensureRunning()
+    })().catch((err: unknown) => {
+      log.session.warn('local daemon login-session check failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /** One command to the daemon on `port` and its answer (null on no answer). */
+  private rpc(port: number, cmd: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown> | null> {
+    return new Promise((resolve) => {
+      let ws: WebSocket | null = null
+      const timeout = setTimeout(() => { try { ws?.terminate() } catch { /* closed */ } resolve(null) }, timeoutMs)
+      try {
+        const socket = new WebSocket(`ws://localhost:${port}`)
+        ws = socket
+        socket.on('open', () => socket.send(JSON.stringify({ ...payload, id: 7, cmd })))
+        socket.on('message', (data) => {
+          let msg: Record<string, unknown> | null = null
+          try { msg = JSON.parse(data.toString()) } catch { /* not JSON */ }
+          if (!msg || msg.id !== 7) return
+          clearTimeout(timeout)
+          socket.close()
+          resolve(msg)
+        })
+        socket.on('error', () => { clearTimeout(timeout); resolve(null) })
+      } catch {
+        clearTimeout(timeout)
+        resolve(null)
+      }
+    })
   }
 
   private async ping(port: number, timeoutMs = 2000): Promise<{

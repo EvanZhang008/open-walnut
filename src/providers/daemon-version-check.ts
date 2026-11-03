@@ -357,17 +357,40 @@ function bunAvailable(): boolean {
   return candidates.some((p) => { try { fs.accessSync(p, fs.constants.X_OK); return true } catch { return false } })
 }
 
+/**
+ * The version files a full `scripts/build-daemon.sh` writes (one per compiled
+ * daemon, and the ACP worker's). `daemon.version` is the marker a sidecars-only
+ * build leaves (WALNUT_DAEMON_SIDECARS_ONLY): a full build never rewrote it, so
+ * one left in this dir read as drift on every boot, ran a blocking rebuild that
+ * could never fix it, and filled the Mac app's error screen with this guard's
+ * text (2026-11-03). It names no binary here and is not read.
+ */
 function readBuiltVersions(): Map<string, string> {
   const out = new Map<string, string>()
   try {
     for (const f of fs.readdirSync(DAEMON_BINARIES_DIR)) {
-      if (!f.endsWith('.version')) continue
+      if (!f.endsWith('.version') || f === 'daemon.version') continue
       const arch = f.slice(0, -'.version'.length)
       const v = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, f), 'utf-8').trim()
       if (v) out.set(arch, v)
     }
   } catch { /* no binaries dir — nothing built yet */ }
   return out
+}
+
+const GAVE_UP_FILE = '.version-guard-gave-up'
+
+/** The drift a rebuild could not fix, recorded so the next boots do not rebuild for it again. */
+function gaveUpKey(ctx: { expected: string; got: string }): string {
+  return `${ctx.expected} ${ctx.got}`
+}
+
+function gaveUpOn(ctx: { expected: string; got: string }): boolean {
+  try { return fs.readFileSync(path.join(DAEMON_BINARIES_DIR, GAVE_UP_FILE), 'utf8').trim() === gaveUpKey(ctx) } catch { return false }
+}
+
+function rememberGaveUp(ctx: { expected: string; got: string }): void {
+  try { fs.writeFileSync(path.join(DAEMON_BINARIES_DIR, GAVE_UP_FILE), gaveUpKey(ctx) + '\n') } catch { /* advisory */ }
 }
 
 /**
@@ -456,6 +479,14 @@ function handleMismatch(ctx: {
     console.error('    Cannot auto-rebuild (no repo root). Continuing WITHOUT guard.\n')
     return false
   }
+  // The same drift a rebuild already failed to fix: rebuilding again only blocks
+  // this boot for up to two minutes and ends the same way.
+  if (gaveUpOn(ctx)) {
+    log.session.warn('daemon version guard: a rebuild already failed to fix this drift; not rebuilding again', ctx)
+    // eslint-disable-next-line no-console
+    console.error('    A rebuild already failed to fix this; not rebuilding again. Startup continues.\n')
+    return true
+  }
 
   // Always attempt to auto-rebuild. Rebuild takes 1-2s with bun compile and
   // the cost of shipping a drifted binary (silent permission hangs) vastly
@@ -509,23 +540,16 @@ function handleMismatch(ctx: {
         sourceFiles: [...DAEMON_SOURCE_FILES],
       },
     )
+    rememberGaveUp(ctx)
+    // Short: a launcher (the Mac app) shows the last lines of this output when the
+    // server fails for another reason, and they must be that reason. The file list
+    // is in the log line above.
     // eslint-disable-next-line no-console
     console.error(
       `\n⚠️  DAEMON VERSION GUARD CANNOT CONVERGE — continuing WITHOUT guard.`
-      + `\n    Rebuild completed but versions are still ${stillOff.map(([a, v]) => `${a}=${v}`).join(', ')},`
-      + `\n    expected ${ctx.expected}.`
-      + `\n    Most likely cause: a STALE dist/ bundle. This check runs from the`
-      + `\n    compiled dist/cli.js, whose embedded file list can lag src/. If dist/`
-      + `\n    was built before scripts/build-daemon.sh's SOURCES list last changed,`
-      + `\n    the two hash over DIFFERENT files and can never agree. Fix: rebuild —`
-      + `\n        bun run web:build`
-      + `\n    (dist/ is gitignored, so this changes nothing tracked.)`
-      + `\n    Less likely: the shell hash algorithm in scripts/build-daemon.sh has`
-      + `\n    genuinely drifted from computeExpectedDaemonVersion() in`
-      + `\n    daemon-version-check.ts. They must compute the SAME hash over:`
-      + `\n      files: ${DAEMON_SOURCE_FILES.join(', ')}`
-      + `\n      algorithm: sha256, per-file path + NUL + content + NUL, truncate to 12 hex chars`
-      + `\n    Either way this is a guard bug, NOT a reason to kill the server — startup continues.\n`,
+      + `\n    Rebuilt, still ${stillOff.map(([a, v]) => `${a}=${v}`).join(', ')}; expected ${ctx.expected}.`
+      + `\n    Most likely a stale dist/ (bun run web:build), else the hash lists of scripts/build-daemon.sh`
+      + `\n    and daemon-version-check.ts differ (the log names the files). A guard bug, not fatal.\n`,
     )
     return true
   }

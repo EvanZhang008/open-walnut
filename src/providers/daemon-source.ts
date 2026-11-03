@@ -1813,6 +1813,22 @@ function sweepDeadStreams() {
 // ── Daemon Instance ID ──
 // Must mirror daemon-standalone.ts exactly (CLAUDE.md: keep in sync).
 const DAEMON_START_TS = Date.now();
+// A working directory deleted under this daemon is never handed to what it
+// starts: it moves to the home directory, at start and once a minute.
+// Keep in sync with daemon-standalone.ts healDaemonCwd.
+function healDaemonCwd() {
+  try {
+    const here = fs.statSync('.');
+    const there = fs.statSync(process.cwd());
+    if (here.ino === there.ino && here.dev === there.dev) return;
+  } catch (e) { /* gone: move */ }
+  for (const dir of [process.env.HOME, os.homedir(), os.tmpdir(), '/']) {
+    if (!dir) continue;
+    try { process.chdir(dir); return; } catch (e) { /* next */ }
+  }
+}
+healDaemonCwd();
+{ const t = setInterval(healDaemonCwd, 60000); if (t && t.unref) t.unref(); }
 // What runs this daemon, for hello: bun or node (this file is never compiled).
 // Keep in sync with daemon-standalone.ts DAEMON_RUNTIME.
 const DAEMON_RUNTIME = typeof Bun !== 'undefined' ? 'bun' : 'node';

@@ -29,6 +29,7 @@ import {
 import { engineCaps } from './agents/engine-registry.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import { memoryPressureShedding } from './memory-pressure.js'
+import { ENDED_SESSION_IDLE_TIMEOUT_MS, isEndedSessionCli } from './sessions/ended-session-clis.js'
 import { transcriptLastActivityMs } from './transcript-last-activity.js'
 
 /** Best effort: an unreadable task is not the main agent's. */
@@ -952,6 +953,11 @@ export class SessionHealthMonitor {
         : session.process_status !== 'running'
       if (!isRemote && !cronArmed && !outlivingWork && turnOver && memoryPressureShedding()) {
         idleTimeoutMs = Math.min(idleTimeoutMs, PRESSURE_IDLE_TIMEOUT_MS)
+      }
+      // Still in a login session macOS ended (its daemon was replaced): stopped soon
+      // after its turn, so the next message resumes it in the current session.
+      if (!isRemote && !cronArmed && !outlivingWork && turnOver && isEndedSessionCli(session)) {
+        idleTimeoutMs = Math.min(idleTimeoutMs, ENDED_SESSION_IDLE_TIMEOUT_MS)
       }
 
       // (The old WAIT-task exemption was deleted with the WAIT phase,

@@ -261,6 +261,45 @@ rehearsal_refuse_foreign_listeners() {
 }
 rehearsal_refuse_foreign_listeners
 
+# ── An ended login session (macOS) ──────────────────────────────────────────
+# 2026-11-03: WindowServer crashed and macOS logged the user out; a deploy that
+# ran in those seconds could not load its launchd job, fell back to nohup, and
+# its server lived on in the ended session for hours: no user lookup (ssh: "No
+# user exists for uid 503"), no DNS configuration, and the build clone it ran in
+# was deleted. A process in such a session cannot start anything into the user's
+# new one, so the deploy refuses here, before anything is built or stopped, and
+# the server that runs keeps serving. src/core/login-session.ts reads the same
+# signals for a running server; LOGIN_SESSION_PROBE_SCRIPT there is this probe.
+# A dry run or a rehearsal may name its own probe (WALNUT_DEVPROD_LOGIN_PROBE_CMD).
+login_session_problems() {
+  [[ "$(uname -s)" == "Darwin" || -n "${WALNUT_DEVPROD_LOGIN_PROBE_CMD:-}" ]] || return 0
+  local probe="echo '--walnut-id--'; /usr/bin/id -un 2>&1; echo '--walnut-dns--'; if [ -x /usr/sbin/scutil ]; then /usr/sbin/scutil --dns 2>&1 | /usr/bin/head -3; fi"
+  if [[ -n "${WALNUT_DEVPROD_LOGIN_PROBE_CMD:-}" ]] && [[ "${WALNUT_DEVPROD_DRY_RUN:-0}" == "1" || "$REHEARSAL" == "1" ]]; then
+    probe="$WALNUT_DEVPROD_LOGIN_PROBE_CMD"
+  fi
+  local out id_part dns_part
+  out="$(/bin/sh -c "$probe" 2>/dev/null || true)"
+  [[ "$out" == *--walnut-id--* ]] || return 0
+  out="${out##*--walnut-id--}"
+  id_part="${out%%--walnut-dns--*}"
+  id_part="$(printf '%s' "$id_part" | tr -d '[:space:]')"
+  dns_part=""
+  [[ "$out" == *--walnut-dns--* ]] && dns_part="${out#*--walnut-dns--}"
+  if [[ -n "$id_part" && ( "$id_part" == "$(id -u)" || "$id_part" == *"nosuchuser"* ) ]]; then
+    printf 'user_lookup '
+  fi
+  if [[ "$dns_part" == *"No DNS configuration available"* ]]; then
+    printf 'dns_config '
+  fi
+}
+ended_session="$(login_session_problems)"
+if [[ -n "$ended_session" ]]; then
+  echo "Deploy refused: this shell runs in a macOS login session that has ended (${ended_session% }: the user was logged out since it started)." >&2
+  echo "A server started from here could not look up its user or resolve names, and would not run in the user's current session." >&2
+  echo "The running server keeps serving. Deploy from a new Terminal window, or open the Walnut app, which restarts such a server in the current session." >&2
+  exit 1
+fi
+
 # ── Redeploy-storm breaker ──────────────────────────────────────────────────
 # 2026-07-25 incident: an agent wrapped this script in `launchctl submit`,
 # whose implicit KeepAlive re-runs the job every time it exits — the "deploy"
@@ -1636,7 +1675,12 @@ launch_server() {
     fi
   fi
   if (( ! use_launchd )); then
-    nohup env -u OPEN_WALNUT_EPHEMERAL \
+    # In the checkout, as the launchd job runs (launchd_job_argv): the directory
+    # this script runs in may be a build clone deleted when it ends, and every
+    # child of the server would inherit it (2026-11-03: the voice model's Python
+    # died with FileNotFoundError in a server started here).
+    nohup /bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut "$SERVE_ROOT" \
+      env -u OPEN_WALNUT_EPHEMERAL \
       -u OPEN_WALNUT_HOME \
       -u WALNUT_DAEMON_DIR \
       -u VITEST \

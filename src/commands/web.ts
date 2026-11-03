@@ -51,6 +51,9 @@ export async function runWeb(options: {
   _ephemeralChild?: boolean
   replica?: boolean
 }): Promise<void> {
+  // A server started in a directory deleted since (a deploy's build clone) moves
+  // out of it first: every child it starts would inherit it (login-session.ts).
+  ;(await import('../core/login-session.js')).healCwd()
   // Taken before the boot below edits process.env.
   const bootEnv = bootEnvOf(process.env)
   // Before anything that may take a while: the app may die during an update check.
@@ -200,6 +203,9 @@ export async function runWeb(options: {
   })
 
   await startServer({ port, dev: !!options.dev })
+  // Its own login session and cwd, checked now and every minute; GET /api/config
+  // reports it, and the Mac app replaces a server whose session ended.
+  ;(await import('../core/login-session.js')).startLoginSessionMonitor()
   if (readyFile) {
     try { fs.writeFileSync(readyFile, `${process.pid}\n`) } catch { /* the parent then reads an exit as a failed start */ }
   }

@@ -211,3 +211,52 @@ describe('daemon version guard: hash source lists stay in lockstep', () => {
     expect(shList).toEqual(tsList)
   })
 })
+
+// 2026-11-03: a sidecars-only build's daemon.version, left in the binaries dir and
+// never rewritten by a full build, read as drift on every boot. Each boot ran a
+// blocking rebuild that could not fix it, and its 140-file console message filled
+// the Mac app's error screen over the line that said why the server stopped.
+describe('daemon version guard: a drift no rebuild fixes costs one rebuild, and few words', () => {
+  it('a sidecars-only marker (daemon.version) names no binary and is not drift', async () => {
+    const { verifyDaemonBinaryVersion, computeExpectedDaemonVersion } = await loadGuard()
+    const expected = computeExpectedDaemonVersion()!
+    writeVersion('daemon-darwin-arm64', expected)
+    writeVersion('daemon', 'walnut-daemon-5ddd085a4a4b')
+    expect(verifyDaemonBinaryVersion()).toBe(true)
+    expect(spawnCalls).toHaveLength(0)
+    expect(logged.filter(l => l.level === 'error')).toHaveLength(0)
+  })
+
+  it('rebuilds once for a drift it cannot fix, then never again for the same drift', async () => {
+    const { verifyDaemonBinaryVersion } = await loadGuard()
+    writeVersion('daemon-darwin-arm64', 'walnut-daemon-222222222222')
+    expect(verifyDaemonBinaryVersion()).toBe(true)
+    expect(spawnCalls).toHaveLength(1)
+    expect(verifyDaemonBinaryVersion()).toBe(true)
+    expect(spawnCalls).toHaveLength(1)
+    // A different drift (new source, new binaries) is tried again.
+    writeVersion('daemon-darwin-arm64', 'walnut-daemon-333333333333')
+    verifyDaemonBinaryVersion()
+    expect(spawnCalls).toHaveLength(2)
+  })
+
+  it('says it on the console in a few short lines, the file list only in the log', async () => {
+    const { verifyDaemonBinaryVersion } = await loadGuard()
+    writeVersion('daemon-darwin-arm64', 'walnut-daemon-444444444444')
+    verifyDaemonBinaryVersion()
+    const text = consoleErrorSpy.mock.calls.flat().join('\n')
+    expect(text).toMatch(/CANNOT CONVERGE/)
+    expect(text).not.toMatch(/daemon-standalone\.ts/)
+    const block = text.slice(text.indexOf('CANNOT CONVERGE'))
+    expect(block.split('\n').length).toBeLessThanOrEqual(6)
+    for (const line of block.split('\n')) expect(line.length).toBeLessThan(120)
+    const err = logged.find(l => /cannot converge/.test(l.msg))
+    expect((err?.ctx as { sourceFiles?: string[] })?.sourceFiles?.length).toBeGreaterThan(10)
+  })
+
+  it('a full build removes the sidecars-only marker and the remembered drift', () => {
+    const sh = fs.readFileSync(path.resolve(import.meta.dirname, '../../scripts/build-daemon.sh'), 'utf-8')
+    const full = sh.slice(sh.indexOf('if [ "$SIDECARS_ONLY" != 1 ]; then'))
+    expect(full.slice(0, 400)).toContain('rm -f "$OUTDIR/daemon.version" "$OUTDIR/.version-guard-gave-up"')
+  })
+})

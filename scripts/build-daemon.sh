@@ -234,6 +234,9 @@ SIDECARS_ONLY="${WALNUT_DAEMON_SIDECARS_ONLY:-0}"
 mkdir -p "$OUTDIR"
 
 if [ "$SIDECARS_ONLY" != 1 ]; then
+# A sidecars-only build's marker describes no binary: a full build leaves none
+# behind (daemon-version-check.ts read a stale one as drift on every boot).
+rm -f "$OUTDIR/daemon.version" "$OUTDIR/.version-guard-gave-up"
 echo "Building daemon binaries (version: $VERSION)..."
 
 "$BUN" build --compile --target=bun-linux-x64 --minify \

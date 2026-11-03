@@ -175,6 +175,40 @@ enum StartupFailureText {
     }
 }
 
+/// What the app says when the server it started exited before it listened: the
+/// line that says why first (the server's own "SERVER EXIT" line), then its last
+/// lines, each cut short. 2026-11-03: one advisory line of 140 file names filled
+/// the screen and the reason, the last line, was off the bottom of it.
+enum StartupExitText {
+    static let maxLineChars = 300
+    static let tailLines = 8
+
+    static func reason(_ output: String) -> String? {
+        let lines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let exit = lines.last(where: { $0.contains("SERVER EXIT") }) ?? lines.last else { return nil }
+        // "[<ISO time>] SERVER EXIT: uncaughtException {"detail":"..."}": the detail is the reason.
+        if let data = exit.range(of: "{").map({ String(exit[$0.lowerBound...]) })?.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = obj["detail"] as? String, !detail.isEmpty {
+            return cut(detail)
+        }
+        return cut(exit)
+    }
+
+    static func cut(_ line: String) -> String {
+        return line.count <= maxLineChars ? line : String(line.prefix(maxLineChars)) + "..."
+    }
+
+    static func text(code: Int32, output: String, hint: String) -> String {
+        let lines = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
+        let tail = lines.suffix(tailLines).map { cut(String($0)) }.joined(separator: "\n")
+        var text = "The Walnut server exited during startup (exit code \(code))."
+        if let why = reason(output) { text += "\n\n\(why)" }
+        text += "\n\nLast output:\n" + (tail.isEmpty ? "No output was captured." : tail)
+        return text + "\n\n" + hint
+    }
+}
+
 struct ServerRestartPolicy {
     static let healthyResetInterval: TimeInterval = 120
     static let ordinaryStartupTimeout: TimeInterval = 180
@@ -204,4 +238,95 @@ func shouldAutomaticallyRestartServer(
     isCurrentProcess: Bool
 ) -> Bool {
     return portConfirmed && ownsServer && !isTerminating && isCurrentProcess
+}
+
+/// The Walnut server that owns a data directory, read from the lock it holds
+/// there (src/core/instance-lock.ts writes {pid, port, startedAt} to
+/// <home>/server.lock.json). A launch that finds a live holder waits for that
+/// server and attaches to it instead of starting a second one, which the lock
+/// refuses: 2026-11-03, a server busy right after a log-in missed one 2-second
+/// probe, the app started its own, the lock turned it away, and the first launch
+/// ended on an error screen until the app was opened again.
+struct ServerLockHolder: Equatable {
+    let pid: Int32
+    let port: Int?
+
+    static func lockFile(home: String) -> String {
+        return (home as NSString).appendingPathComponent("server.lock.json")
+    }
+
+    /// The holder the lock names, or nil when there is no lock or it is unreadable.
+    static func parse(_ data: Data) -> ServerLockHolder? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawPid = obj["pid"] as? NSNumber, rawPid.int32Value > 1 else { return nil }
+        let port = (obj["port"] as? NSNumber).map { $0.intValue }.flatMap { (1...65535).contains($0) ? $0 : nil }
+        return ServerLockHolder(pid: rawPid.int32Value, port: port)
+    }
+
+    static func read(home: String) -> ServerLockHolder? {
+        guard let data = FileManager.default.contents(atPath: lockFile(home: home)) else { return nil }
+        return parse(data)
+    }
+
+    /// Whether `ps -o command=` of the holder is a Walnut server: the compiled
+    /// file (`walnut-<target> web`, `walnut web`) or a checkout's (`cli.js web`,
+    /// `src/cli.ts web`). A pid the system gave to another program after the
+    /// server died hard (SIGKILL leaves the lock behind) is not one.
+    static func isWalnutServerCommand(_ command: String) -> Bool {
+        let parts = command.split(separator: " ").map(String.init)
+        guard let webAt = parts.firstIndex(of: "web"), webAt > 0 else { return false }
+        return parts[..<webAt].contains { part in
+            let name = (part as NSString).lastPathComponent
+            return name == "walnut" || name.hasPrefix("walnut-") || name == "open-walnut"
+                || name == "cli.js" || name == "cli.ts"
+        }
+    }
+}
+
+/// How the app waits for a Walnut server that already runs but has not answered.
+/// Three minutes, the same ceiling as a server this app starts itself
+/// (ServerRestartPolicy.ordinaryStartupTimeout): a server stalled by load after
+/// a log-in answers well inside it.
+enum RunningServerWait {
+    static let deadline: TimeInterval = ServerRestartPolicy.ordinaryStartupTimeout
+    static let pollInterval: TimeInterval = 2
+    static let requestTimeout: TimeInterval = 5
+    /// A holder that died while the app waited sends it back to discovery, at most this often.
+    static let maxRediscoveries = 3
+
+    static func busyText(pid: Int32, port: Int?) -> String {
+        let at = port.map { " on port \($0)" } ?? ""
+        return "Walnut is already running\(at) (pid \(pid)). Waiting for it to answer..."
+    }
+
+    static func keptStoppingText() -> String {
+        return "Walnut kept stopping while it started. Retry starts it again."
+    }
+
+    static func gaveUpText(pid: Int32, port: Int?) -> String {
+        let at = port.map { ", port \($0)" } ?? ""
+        return "Walnut is already running (pid \(pid)\(at)) but has not answered for \(Int(deadline / 60)) minutes.\n\n"
+            + "It may be stuck. Retry waits for it again. To start over, stop it in Terminal with:\n    kill \(pid)\nthen choose Retry."
+    }
+}
+
+/// What a running server says of its own login session (src/core/login-session.ts,
+/// GET /api/config `loginSession`). A server that lives on in a session macOS
+/// ended (the user was logged out while it ran) cannot look up its user or
+/// resolve names, and cannot move itself into the new session; the app, which
+/// runs in it, replaces that server with its own.
+enum ServerLoginSession {
+    /// The session problems in a /api/config reply (a deleted cwd the server fixes
+    /// itself, so it is not one); empty when the reply has none or is unreadable.
+    static func endedSessionProblems(configJSON data: Data) -> [String] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let session = obj["loginSession"] as? [String: Any],
+              let problems = session["problems"] as? [String] else { return [] }
+        return problems.filter { $0 == "user_lookup" || $0 == "dns_config" }
+    }
+
+    /// Whether this process can look up its own user: the app's own session works.
+    static func ownSessionWorks() -> Bool {
+        return getpwuid(getuid()) != nil
+    }
 }

@@ -236,7 +236,18 @@ page, for a test's own steps (typing a draft, reading what the page shows).
 `WALNUT_DESKTOP_E2E_SNAPSHOTS=<dir>` (with the background knob) writes the console
 page's own pixels there once a second (`<epoch ms>.png`), for a test's video:
 WebKit paints the page as it is then (`createPDF`), so the window may be covered
-and the Mac locked.
+and the Mac locked. Before the console shows, the loading and error screens are
+drawn from the window's own views the same way.
+
+A launch next to a Walnut server that already owns the data directory (its lock,
+`<home>/server.lock.json`) waits for that server, up to three minutes, and opens
+its console; it never starts a second one, which the lock would refuse. A server
+that says its macOS login session ended (`loginSession` in `GET /api/config`: it
+cannot look up its user or resolve names, after a logout it outlived) is stopped
+and replaced by one the app starts in the current session.
+`scripts/desktop-first-launch-e2e.mjs` runs both on this Mac with a test copy
+(`--scenario busy|gone|ended`, `--video <dir>`; `--before` for a build from
+before this behavior).
 `scripts/desktop-smoke.mjs` uses them with a throwaway `HOME` and
 `CFFIXED_USER_HOME` (which `NSHomeDirectory()` follows) to launch a built app
 the way a new Mac would; CI's macOS release rehearsal runs it on every push.
