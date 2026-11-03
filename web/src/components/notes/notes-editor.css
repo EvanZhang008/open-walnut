@@ -750,7 +750,10 @@ mark.notes-search-mark {
   overflow-y: hidden;
   border-bottom: 1px solid var(--border, #2a2d35);
   background: var(--bg-secondary, #1a1c22);
-  scrollbar-width: thin;
+}
+/* Firefox only: elsewhere the ::-webkit-scrollbar rules below draw it. */
+@supports not selector(::-webkit-scrollbar) {
+  .notes-tab-strip { scrollbar-width: thin; }
 }
 /* Keep the strip slim — hide the horizontal scrollbar track visually. */
 .notes-tab-strip::-webkit-scrollbar { height: 4px; }

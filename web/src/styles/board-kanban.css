@@ -123,7 +123,8 @@
 }
 /* R3-20: every lane draws the same thin scrollbar room (WebKit ignored scrollbar-gutter with classic
    scrollbars), so a lane that scrolls never gets narrower cards; the thumb shows only where it scrolls. */
-.board-kanban .kanban-lanes-wide .kanban-lane { overflow-y: scroll; scrollbar-width: thin; }
+.board-kanban .kanban-lanes-wide .kanban-lane { overflow-y: scroll; }
+@supports not selector(::-webkit-scrollbar) { .board-kanban .kanban-lanes-wide .kanban-lane { scrollbar-width: thin; } }
 .board-kanban .kanban-lanes-wide .kanban-lane::-webkit-scrollbar { width: 6px; }
 .board-kanban .kanban-lanes-wide .kanban-lane::-webkit-scrollbar-track { background: transparent; }
 .board-kanban .kanban-lanes-wide .kanban-lane::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 22%, transparent); border-radius: 3px; }

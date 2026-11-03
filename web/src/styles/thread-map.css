@@ -96,8 +96,11 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding-bottom: 2px;
+}
+/* Firefox only: elsewhere ::-webkit-scrollbar draws it (top of globals.css). */
+@supports not selector(::-webkit-scrollbar) {
+  .thread-map-rows { scrollbar-width: thin; }
 }
 .thread-map-row {
   position: relative;

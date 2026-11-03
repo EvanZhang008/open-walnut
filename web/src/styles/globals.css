@@ -190,25 +190,53 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ===== Thin Overlay Scrollbars (desktop browsers) ===== */
+/* ===== Thin Scrollbars (desktop browsers) =====
 
-/* Standard (Firefox, Chrome 121+, Edge 121+) */
-html {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+   ONE model per engine. Where `::-webkit-scrollbar` exists (WebKit, Chromium) it
+   draws every scrollbar: 6px, transparent track, a thumb only on a box that
+   scrolls. The standard `scrollbar-width` / `scrollbar-color` are only for the
+   engines without it (Firefox), so they sit behind `@supports not selector(...)`.
+
+   Why never both: WebKit learned `scrollbar-color` (macOS 26 WKWebView, the Mac
+   app), and an element with a non-auto `scrollbar-color` or `scrollbar-width`
+   ignores every `::-webkit-scrollbar` rule. It then draws the native macOS track,
+   which ignores the colours: a white 13 to 17px bar. Inherited from <html>, that
+   put a white strip under every code block (`overflow-x: scroll` reserves the
+   track even on a block that fits; 2026-11-03 report). Pinned by
+   tests/web/scrollbar-model-guard.test.ts.
+
+   The thumb colour is a variable, so a surface that is dark in both themes (the
+   chat's code blocks) gives its own scrollbar a light thumb. */
+:root {
+  --wn-scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --wn-scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
 }
 
 [data-theme="dark"] {
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  --wn-scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --wn-scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
 }
 
 @media (prefers-color-scheme: dark) {
-  html:not([data-theme]) {
-    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  :root:not([data-theme]) {
+    --wn-scrollbar-thumb: rgba(255, 255, 255, 0.15);
+    --wn-scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
   }
 }
 
-/* Safari fallback (does not yet support scrollbar-color) */
+@supports not selector(::-webkit-scrollbar) {
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: var(--wn-scrollbar-thumb) transparent;
+  }
+
+  /* scrollbar-color inherits as a resolved colour, so a box that sets its own
+     thumb variable re-reads it here. */
+  pre {
+    scrollbar-color: var(--wn-scrollbar-thumb) transparent;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -219,34 +247,16 @@ html {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--wn-scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--wn-scrollbar-thumb-hover);
 }
 
 ::-webkit-scrollbar-corner {
   background: transparent;
-}
-
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  :root:not([data-theme]) ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.35);
-  }
 }
 
 code, pre, .mono {
@@ -3294,6 +3304,16 @@ select {
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
+/* Code blocks dark in both themes: their own scrollbar gets a light thumb (the
+   page's dark-on-light one would vanish on them). Read by ::-webkit-scrollbar-thumb
+   and Firefox's scrollbar-color (Thin Scrollbars, top of this file). */
+.session-msg-assistant .markdown-body pre,
+.session-msg-user .markdown-body pre,
+.bash-tool-pre {
+  --wn-scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --wn-scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+}
+
 [data-theme="dark"] .session-msg-assistant .markdown-body pre {
   background: #0d1117;
   color: #e6edf3;
@@ -5709,9 +5729,9 @@ select {
      sized for the old one.
      The bottom padding then subtracts whatever the track actually costs, so the
      bottom edge reads 12px like the other three sides. That cost is not a
-     constant: 6px in the Mac app and Safari (::-webkit-scrollbar is styled at
-     the top of this file, which makes macOS scrollbars classic), 0px in Chrome on
-     macOS and on iOS (overlay), ~15px on Windows/Linux — hence the measured
+     constant: 6px in the Mac app, Safari and Chrome (::-webkit-scrollbar is
+     styled at the top of this file, which makes macOS scrollbars classic), 0px
+     on iOS (overlay), ~14px in Firefox — hence the measured
      var (web/src/utils/scrollbar-metrics.ts), and `max()` so a track wider than
      the design padding never becomes a negative one.
      Pinned by tests/e2e/browser/code-block-hscroll-overlap{,.webkit}.spec.ts. */
@@ -10861,7 +10881,11 @@ body.walnut-dragging {
 
 .todo-pinned-list-scroll {
   overflow-y: auto;
-  scrollbar-width: thin;
+}
+
+/* Firefox only: elsewhere ::-webkit-scrollbar draws it (Thin Scrollbars, top). */
+@supports not selector(::-webkit-scrollbar) {
+  .todo-pinned-list-scroll { scrollbar-width: thin; }
 }
 
 /* Per-tier resize handle — one under each of Focus/Satellite/Wait, independent
@@ -32313,9 +32337,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* A CLAMPED menu has to look clamped. The fade above is the soft half; this is the loud one, because on
    macOS the overlay scrollbar is invisible until something scrolls, and the keyboard highlight can now
-   move the box on its own (see `ContextMenu`). Both engines honour one of these two rules. */
-.wn-context-menu {
-  scrollbar-width: thin;
+   move the box on its own (see `ContextMenu`). Firefox reads the first rule, every other engine the
+   ::-webkit-scrollbar ones (never both: Thin Scrollbars at the top of this file). */
+@supports not selector(::-webkit-scrollbar) {
+  .wn-context-menu { scrollbar-width: thin; }
 }
 
 .wn-context-menu::-webkit-scrollbar {

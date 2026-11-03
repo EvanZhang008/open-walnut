@@ -225,11 +225,15 @@
   margin: 0;
 }
 
-/* Thin, quiet scrollbars for the nav list and the pane. */
-.settings-container .settings-nav-list,
-.settings-container .settings-pane {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--fg-muted) 45%, transparent) transparent;
+/* Thin, quiet scrollbars for the nav list and the pane. Firefox reads the
+   standard pair; every other engine the ::-webkit-scrollbar rules below, which a
+   standard value would switch off (Thin Scrollbars, top of globals.css). */
+@supports not selector(::-webkit-scrollbar) {
+  .settings-container .settings-nav-list,
+  .settings-container .settings-pane {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--fg-muted) 45%, transparent) transparent;
+  }
 }
 
 .settings-container .settings-nav-list::-webkit-scrollbar,

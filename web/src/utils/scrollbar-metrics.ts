@@ -12,11 +12,13 @@
  *
  *     padding-bottom: max(0px, calc(<design> - var(--wn-scrollbar-h)))
  *
- * The four values this returns in practice, all different, which is why it is
- * measured rather than assumed: 6px in the Mac app and Safari (globals.css styles
+ * The values this returns in practice, which is why it is measured rather than
+ * assumed: 6px in the Mac app, Safari and Chrome (globals.css styles
  * `::-webkit-scrollbar`, which turns macOS overlay scrollbars into classic ones),
- * 0px in Chrome on macOS and on iOS (overlay), ~15px on Windows/Linux, ~14px in
- * Firefox (which ignores the `::-webkit-scrollbar` rules entirely).
+ * 0px on iOS (overlay) and in headless Chromium (--hide-scrollbars), ~14px in
+ * Firefox (which ignores the `::-webkit-scrollbar` rules entirely). Never 17px:
+ * that is the native macOS track WebKit draws when a standard `scrollbar-color`
+ * reaches the box, which globals.css keeps to Firefox for exactly that reason.
  *
  * Measured once at startup: the value only changes if the user flips the system
  * "Show scroll bars" setting, which does not happen mid-session, and a resize
