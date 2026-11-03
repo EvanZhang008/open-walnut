@@ -204,23 +204,23 @@ test.describe('Session outline, message time, and rewind', () => {
 
     await rail.hover()
     await items.nth(0).click()
-    await page.waitForTimeout(900) // smooth scroll + the render-window expansion
-    const afterJump = await history.evaluate((el) => el.scrollTop)
-    expect(afterJump).toBeLessThan(beforeJump - 100)
-    // The target row is on screen, not merely in the DOM.
-    const targetBox = await row(panel, EARLY_ASK).boundingBox()
+    // Smooth scroll + the render-window expansion: polled, since a loaded machine
+    // (CI) can take longer than any fixed wait (2026-11-03: a 900 ms wait read
+    // the position mid-scroll).
+    await expect.poll(() => history.evaluate((el) => el.scrollTop), { timeout: 5_000 }).toBeLessThan(beforeJump - 100)
+    // The target row is on screen, not merely in the DOM (once the scroll settles).
     const historyBox = (await history.boundingBox())!
-    expect(targetBox).not.toBeNull()
-    expect(targetBox!.y).toBeGreaterThanOrEqual(historyBox.y - 10)
-    expect(targetBox!.y).toBeLessThanOrEqual(historyBox.y + historyBox.height)
+    await expect.poll(async () => {
+      const box = await row(panel, EARLY_ASK).boundingBox()
+      return !!box && box.y >= historyBox.y - 10 && box.y <= historyBox.y + historyBox.height
+    }, { timeout: 5_000 }).toBe(true)
 
     // 4. "Back" restores the pre-jump position.
     await rail.hover()
     const back = toc.locator('.session-toc-back')
     await expect(back).toBeVisible()
     await back.click()
-    await page.waitForTimeout(900)
-    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - beforeJump)).toBeLessThanOrEqual(60)
+    await expect.poll(async () => Math.abs((await history.evaluate((el) => el.scrollTop)) - beforeJump), { timeout: 5_000 }).toBeLessThanOrEqual(60)
   })
 
   test('pins are server state: they survive a reload, and unpin removes them', async ({ page }) => {
