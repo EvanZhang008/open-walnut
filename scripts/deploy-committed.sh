@@ -4,6 +4,11 @@
 #   bash scripts/deploy-committed.sh             # deploy HEAD
 #   bash scripts/deploy-committed.sh <commit>    # deploy another commit
 #   WALNUT_DEVPROD_DRY_RUN=1 bash scripts/deploy-committed.sh
+#   WALNUT_DEPLOY_NO_WAIT=1 bash scripts/deploy-committed.sh   # queue it, do not wait
+#
+# Deploys queue (scripts/lib/deploy-queue.sh): production restarts at most once per
+# 10 minutes, each time with the newest commit, and every caller hears whether
+# the deploy that carried its commit went out.
 #
 # Several agents share one checkout, and `bun run dev:prod` builds whatever is on
 # disk, so a peer's half-written files ship with your commit (2026-09-26: a peer's
@@ -45,6 +50,23 @@ if (( ${#JS_RUN[@]} == 0 )); then
   exit 1
 fi
 
+# The deploy queue (scripts/lib/deploy-queue.sh): at most one restart per gap, each
+# shipping the newest commit of then. Its runner is this script, detached.
+DQ_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+DQ_LIB="$(dirname "$DQ_SCRIPT")/lib/deploy-queue.sh"
+# The queue's own deploy of a target: never passed on to dev-prod.sh, whose server
+# and sessions would inherit it and skip the queue.
+DQ_IS_RUNNER="${WALNUT_DEPLOY_RUNNER:-0}"
+unset WALNUT_DEPLOY_RUNNER
+if [[ "${WALNUT_DEPLOY_RUNNER_LOOP:-0}" == "1" ]]; then
+  # Its own deploys are plain runs of this script.
+  unset WALNUT_DEPLOY_RUNNER_LOOP
+  # shellcheck source=lib/deploy-queue.sh
+  source "$DQ_LIB"
+  dq_runner || true
+  exit 0
+fi
+
 # Nothing new to serve: production already runs this commit, or a later one that
 # contains it (a peer deployed after it landed), from a clean build. Each deploy
 # restarts the server, which costs every open window a few seconds of timeouts,
@@ -65,6 +87,20 @@ JS
     echo "Deploy skipped: production already serves ${served_sha:0:12}, which contains ${SHA:0:12} (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
     exit 0
   fi
+fi
+
+# Every other caller waits its turn in the queue; the runner's own deploy, a forced
+# one and a dry run go straight on. WALNUT_DEPLOY_QUEUE=0 turns the queue off.
+if [[ "$DQ_IS_RUNNER" != "1" && "${WALNUT_DEVPROD_FORCE:-0}" != "1" && "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" \
+  && "${WALNUT_DEPLOY_QUEUE:-1}" != "0" ]]; then
+  if [[ -f "$DQ_LIB" ]]; then
+    # shellcheck source=lib/deploy-queue.sh
+    source "$DQ_LIB"
+    dq_code=0
+    dq_request "$SHA" || dq_code=$?
+    exit "$dq_code"
+  fi
+  echo "No deploy queue at $DQ_LIB; deploying at once." >&2
 fi
 
 BUILD="${TMPDIR:-/tmp}"

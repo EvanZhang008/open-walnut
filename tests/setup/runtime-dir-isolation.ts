@@ -133,6 +133,13 @@ if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
   process.env.WALNUT_DAEMON_BOOT_START = '0'
 }
 
+// A host's daemon is replaced at most once per gap (src/providers/daemon-update-gap.ts): a
+// test's daemon has always just started, so every upgrade test would wait 20 minutes. The gap's
+// own tests set it themselves.
+if (process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS === undefined) {
+  process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS = '0'
+}
+
 // Main and every VP start a session by themselves when they are made (src/core/org/org-autostart.ts):
 // a test that makes a VP would otherwise spawn a session it never asked for. The autostart tests
 // set this to '1' themselves.

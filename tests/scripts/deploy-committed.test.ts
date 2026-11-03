@@ -80,8 +80,9 @@ function run(f: ReturnType<typeof fixture>, env: Record<string, string> = {}, ar
   const r = spawnSync('bash', [path.join(f.repo, 'scripts', 'deploy-committed.sh'), ...args], {
     cwd: f.repo,
     encoding: 'utf-8',
-    // Never read the real production server: a config file stands in for it.
-    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, ...env },
+    // Never read the real production server: a config file stands in for it. The deploy
+    // itself, not its queue (tests/scripts/deploy-queue.test.ts), is what these pin.
+    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, WALNUT_DEPLOY_QUEUE: '0', ...env },
   })
   const report = fs.existsSync(f.report)
     ? Object.fromEntries(fs.readFileSync(f.report, 'utf-8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))

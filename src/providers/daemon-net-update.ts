@@ -30,6 +30,7 @@
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
  */
 import { execRunsHold } from './exec-runs-hold.js'
+import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
@@ -44,7 +45,7 @@ import type { DaemonLinkKind } from './daemon-update-paths.js'
 
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
-  | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'platform-unknown' | 'no-binary'
+  | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'recent' | 'platform-unknown' | 'no-binary'
 
 /** Daemon commands the update runs on the host. */
 export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const
@@ -83,6 +84,11 @@ export interface NetUpdateFacts {
   failedTries?: number
   now: number
   cooldownMs: number
+  /** How long the running daemon has run (its hello's startedAt), and the gap between replacements (daemon-update-gap.ts). */
+  daemonAgeMs?: number | null
+  minGapMs?: number
+  /** How long this build's update has been held by the gap already (it waits one gap at most). */
+  gapHeldForMs?: number
   /** Looked up only when everything above allows an update: undefined = not yet. */
   target?: HostFileTarget | null
   source?: NetUpdateSource | { missing: string }
@@ -91,9 +97,9 @@ export interface NetUpdateFacts {
 export type NetUpdateDecision =
   | { go: true; source: NetUpdateSource; target: HostFileTarget }
   | { go: 'lookup' }
-  | { go: false; skip: NetUpdateSkip; why: string }
+  | { go: false; skip: NetUpdateSkip; why: string; retryInMs?: number }
 
-const no = (skip: NetUpdateSkip, why: string): NetUpdateDecision => ({ go: false, skip, why })
+const no = (skip: NetUpdateSkip, why: string, retryInMs?: number): NetUpdateDecision => ({ go: false, skip, why, ...(retryInMs ? { retryInMs } : {}) })
 
 /** Whether this connect updates the host's daemon, from what is known; pure. */
 export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
@@ -129,6 +135,8 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
   if (!f.requested && f.lastAttempt?.expected === f.expected && f.now - f.lastAttempt.at < f.cooldownMs) {
     return no('cooldown', `an update to ${f.expected} was tried ${Math.round((f.now - f.lastAttempt.at) / 1000)} s ago`)
   }
+  const gapWait = f.requested ? 0 : daemonUpdateWaitMs(f.daemonAgeMs, f.minGapMs ?? 0, f.gapHeldForMs ?? 0)
+  if (gapWait > 0) return no('recent', daemonUpdateGapWhy(f.daemonAgeMs!, gapWait), gapWait)
   if (f.target === undefined || f.source === undefined) return { go: 'lookup' }
   if (!f.target) return no('platform-unknown', 'Walnut does not know which system and processor that machine has')
   if ('missing' in f.source) return no('no-binary', f.source.missing)
@@ -195,6 +203,8 @@ export interface NetUpdateLink extends NetUpdateConn {
   readonly serviceExecutable: string | null
   /** hello `served` (daemon-shared.ts); absent on an older link. */
   readonly daemonServes?: DaemonServes | null
+  /** hello `startedAt` (ms epoch on the host); absent on an older link. */
+  readonly daemonStartedAt?: number | null
   hasCapability(cap: string): boolean
 }
 
@@ -210,6 +220,8 @@ export interface NetUpdaterDeps {
   /** Why the host's daemon must not stop now, asked of the host (host_exec runs there: exec-runs-hold.ts), or null. */
   busy?: () => Promise<string | null>
   cooldownMs: number
+  /** The gap between automatic replacements (daemon-update-gap.ts); default from the env. */
+  minGapMs?: number
   autofixOff?: () => Promise<string | null>
   /** The host's target, read with host-target.ts's probe over exec.run (as the SSH path reads it). */
   target?: (run: (command: string, timeoutMs?: number) => Promise<string>) => Promise<HostFileTarget | null>
@@ -248,6 +260,8 @@ export class NetDaemonUpdater {
   private retryAt = 0
   private heldNoted: string | null = null
   private skipNoted: string | null = null
+  /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
+  private gapHeld: { expected: string; since: number } | null = null
   private stopped = false
   private waiters: Array<() => void> = []
   state: NetUpdateState
@@ -331,6 +345,9 @@ export class NetDaemonUpdater {
       shared: sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
       contested: !!this.installed && this.installed === this.d.expectedVersion() && c.daemonVersion !== this.installed,
       failedTries: this.failed && this.failed.expected === this.d.expectedVersion() ? this.failed.count : 0,
+      daemonAgeMs: c.daemonStartedAt ? (this.d.now ?? Date.now)() - c.daemonStartedAt : null,
+      minGapMs: this.d.minGapMs ?? daemonUpdateMinGapMs(env),
+      gapHeldForMs: this.gapHeld && this.gapHeld.expected === this.d.expectedVersion() ? (this.d.now ?? Date.now)() - this.gapHeld.since : 0,
     }
   }
 
@@ -400,6 +417,12 @@ export class NetDaemonUpdater {
         log.session.warn('DaemonConnection: daemon update held by the host setting', { host: c.host, running: c.daemonVersion, expected, why: d.why })
       }
       return this.set('held', d.why, { skip: d.skip })
+    }
+    // A daemon that started within the gap: decided again when it ends.
+    if (d.skip === 'recent' && d.retryInMs && !this.stopped) {
+      const expected = this.d.expectedVersion()
+      if (expected && this.gapHeld?.expected !== expected) this.gapHeld = { expected, since: (this.d.now ?? Date.now)() }
+      this.later(d.retryInMs + 5_000)
     }
     // Said once per reason and build: a link that comes back every few minutes would say it every time.
     const noted = `${d.skip}:${this.d.expectedVersion()}`

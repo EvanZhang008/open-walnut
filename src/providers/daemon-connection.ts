@@ -101,6 +101,7 @@ import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplicaProgram } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
+import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 
@@ -108,6 +109,7 @@ import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 const gzipAsync = promisify(gzip)
 /** Splits daemon.version from daemon.serves.json in the upgrade probe's one ssh call. */
 const SERVES_MARK = '__WALNUT_DAEMON_SERVES__'
+const AGE_MARK = '__WALNUT_DAEMON_AGE__'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -3542,13 +3544,18 @@ export class DaemonConnection {
       if (!expected) return false
       const takeover = service ?? await this.detectServiceTakeover()
 
-      // daemon.serves.json in the same call: whether another Walnut shares this daemon.
+      // daemon.serves.json in the same call: whether another Walnut shares this daemon;
+      // and how long the running daemon has run (daemon-update-gap.ts).
       const probe = await this.sshExec(
-        `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true; echo; echo ${SERVES_MARK}; cat ${shq(this._remoteDir + '/' + SERVES_FILE)} 2>/dev/null || true`, 5_000,
+        `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true; echo; echo ${SERVES_MARK}; cat ${shq(this._remoteDir + '/' + SERVES_FILE)} 2>/dev/null || true; `
+          + `echo; echo ${AGE_MARK}; p=$(cat ${shq(this._remoteDir + '/daemon.pid')} 2>/dev/null); [ -n "$p" ] && ps -o etime= -p "$p" 2>/dev/null || true`, 5_000,
       )
-      const markAt = probe.indexOf(SERVES_MARK)
-      remoteVersion = (markAt === -1 ? probe : probe.slice(0, markAt)).trim()
-      const runningServes = markAt === -1 ? null : parseServes(probe.slice(markAt + SERVES_MARK.length))
+      const ageAt = probe.indexOf(AGE_MARK)
+      const head = ageAt === -1 ? probe : probe.slice(0, ageAt)
+      const daemonAgeMs = ageAt === -1 ? null : parseEtimeMs(probe.slice(ageAt + AGE_MARK.length))
+      const markAt = head.indexOf(SERVES_MARK)
+      remoteVersion = (markAt === -1 ? head : head.slice(0, markAt)).trim()
+      const runningServes = markAt === -1 ? null : parseServes(head.slice(markAt + SERVES_MARK.length))
 
       if (remoteVersion === expected) this.clearUpgradeRecheck()
 
@@ -3567,6 +3574,18 @@ export class DaemonConnection {
       // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
       // or each server would put its own build back on every connect (daemon-shared.ts).
       if (remoteVersion && remoteVersion !== expected && this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
+      // One replacement per host per gap: the update is decided again when it ends,
+      // with the build of then (daemon-update-gap.ts). A host with no daemon is a start.
+      if (remoteVersion && remoteVersion !== expected) {
+        const since = this._gapHeld?.expected === expected ? this._gapHeld.since : Date.now()
+        const waitMs = daemonUpdateWaitMs(daemonAgeMs, daemonUpdateMinGapMs(), Date.now() - since)
+        if (waitMs > 0) {
+          this._gapHeld = { expected, since }
+          this.postponeUpgrade(daemonUpdateGapWhy(daemonAgeMs!, waitMs), expected, remoteVersion, { delayMs: waitMs + 5_000 })
+          return false
+        }
+      }
+      this._gapHeld = null
 
       if (takeover.managed) {
         if (remoteVersion !== expected) {
@@ -3801,6 +3820,8 @@ export class DaemonConnection {
     return true
   }
 
+  /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
+  private _gapHeld: { expected: string; since: number } | null = null
   /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
   private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
   private _upgradeRecheckAttempt = 0
@@ -3818,13 +3839,13 @@ export class DaemonConnection {
    * never reached a remote host), an ACP turn open at connect, a version read that
    * timed out. Nothing else re-ran the check until some later reconnect.
    */
-  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number } = {}): void {
+  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number; delayMs?: number } = {}): void {
     if (this.isReadOnlyRemote || this._destroyed) return
     // Work in progress ends on its own: ask again every minute. No answer may
-    // last a while: back off.
+    // last a while: back off. A known wait (the update gap) is its own clock.
     const delays = UPGRADE_RECHECK_DELAYS_MS
-    const delayMs = opts.steady ? delays[0] : delays[Math.min(opts.attempt ?? this._upgradeRecheckAttempt, delays.length - 1)]
-    if (!opts.steady && opts.attempt === undefined) this._upgradeRecheckAttempt += 1
+    const delayMs = opts.delayMs ?? (opts.steady ? delays[0] : delays[Math.min(opts.attempt ?? this._upgradeRecheckAttempt, delays.length - 1)])
+    if (!opts.steady && opts.attempt === undefined && opts.delayMs === undefined) this._upgradeRecheckAttempt += 1
     log.session.warn('DaemonConnection: daemon update postponed; checking again', {
       host: this.hostKey, reason, expected, remoteVersion: remoteVersion || '(missing)',
       attempt: opts.attempt !== undefined ? opts.attempt + 1 : this._upgradeRecheckAttempt, retryInMs: delayMs,

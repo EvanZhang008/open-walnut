@@ -34,7 +34,11 @@ copied into this checkout's `dist/`, because the local `walnut` CLI runs the op 
 sessions read op text two deploys old). It skips the deploy (exit 0, no restart) when production
 already serves that commit or a later one containing it from a clean build, because every restart
 costs open windows seconds of timeouts (2026-10-28: up to 76 a day); `WALNUT_DEVPROD_FORCE=1`
-deploys anyway. Never wait for the tree to be clean, and never stash, revert or commit
+deploys anyway. Deploys are queued (`scripts/lib/deploy-queue.sh`, 2026-11-03: 31 restarts in a
+day): production restarts at most once per 10 minutes (`WALNUT_DEPLOY_MIN_GAP_SECS`), a call
+inside the gap waits and goes out with the newest commit of then, and it exits 0 only once
+production serves a build containing its commit (it says which); a host's daemon is replaced at
+most once per 20 minutes (`src/providers/daemon-update-gap.ts`). Never wait for the tree to be clean, and never stash, revert or commit
 their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
 what it names or report it as the blocker. Never end with "committed, not deployed, say
 deploy". Scope the commit to your own changes only (never sweep up other agents'

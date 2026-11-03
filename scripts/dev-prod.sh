@@ -323,7 +323,7 @@ if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then
     if [[ "$last_deploy" =~ ^[0-9]+$ ]] && (( now_epoch - last_deploy < COOLDOWN_SECS )); then
       kind="deploy"; [[ "$stamp_file" == "$ATTEMPT_STAMP" ]] && kind="deploy attempt"
       echo "Deploy skipped: last $kind was $(( now_epoch - last_deploy ))s ago (< ${COOLDOWN_SECS}s cooldown)."
-      echo "Server on :$PORT is already current. Set WALNUT_DEVPROD_FORCE=1 to override."
+      echo "Nothing was deployed: :$PORT still serves the build it had. scripts/deploy-committed.sh waits its turn instead; WALNUT_DEVPROD_FORCE=1 overrides."
       exit 0
     fi
   done
