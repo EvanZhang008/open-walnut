@@ -207,7 +207,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `request_get` | Read a reply-request status (read) | id (string): Request id returned by task_create, task_start, or task_send |
 | `message_send_now` | Send a queued message now (write, primary-only) | id (string): The request id (rq-…) or the queued message id (qm-…) |
 | `app_state` | What the App beside you shows (read) | (none) |
-| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you is still unanswered, as a Stop hook's block answer |
+| `open_items` | What is still open for your task (read) | hook? (compact\|stop): Set by Walnut's own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; stop = at a turn end, only whether a request to you or an Ask here question is still unanswered, as a Stop hook's block answer; asked? (string): Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated; answered? (string): Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated |
 | `status_check` | Check every task's status against its facts (read) | (none) |
 | `task_dir` | Your task directory (read) | (none) |
 | `skill_read` | Read a Walnut skill (read) | dirName (string): Skill directory name |

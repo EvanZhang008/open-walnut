@@ -73,9 +73,9 @@ describe('guard: every send filed under a question names the question', () => {
 
   it('every way into a question goes through those sends', () => {
     const src = files.find((f) => f.rel === 'web/src/hooks/useSessionThreads.ts')!.src;
-    // The card's composer and a review card's composer post through sendAnchored.
-    expect(src).toMatch(/const sendToTarget = useCallback\(\s*\(text: string\) => sendAnchored\(/);
-    expect(src).toMatch(/const sendToQuestion = useCallback\(\s*\(key: string, text: string\) => sendAnchored\(/);
+    // The card's composer and a review card's composer post through sendAnchored, pictures too (f471cab33).
+    expect(src).toMatch(/const sendToTarget = useCallback\(\s*\(text: string, images\?: ImageAttachment\[\]\) => sendAnchored\(text, images,/);
+    expect(src).toMatch(/const sendToQuestion = useCallback\(\s*\(key: string, text: string, images\?: ImageAttachment\[\]\) => sendAnchored\(text, images,/);
     // A new question stores the id it was given, beside its number.
     expect(src).toMatch(/metaEntries\.push\(\{ headId: userUuid, status: 'open', titleState: 'pending', question: message\.slice\(0, 400\), seq, thread \}\)/);
     // Its id and number count the questions asked before their meta was read back (two asks in a row).
