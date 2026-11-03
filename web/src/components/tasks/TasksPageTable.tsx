@@ -27,7 +27,7 @@ import { TasksColumnsMenu } from './TasksColumnsMenu';
 import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
 import { useTagDisplay } from '@/stores/tag-display-store';
-import { PHASE_LABELS, taskNeedsAction } from '@/utils/session-status';
+import { PHASE_LABELS, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
@@ -326,7 +326,7 @@ function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (
       aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
       onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
     >
-      {ICONS.binaryPhaseIcon(isDone, task.phase)}
+      {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
     </button>
   );
 }

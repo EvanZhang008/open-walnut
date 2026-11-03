@@ -125,20 +125,26 @@ export const ICON_TO_READ = <svg width="14" height="14" viewBox="0 0 16 16" fill
  * the needs ring and "looks kike they are waiting for my input"): its section's, never its phase's.
  * Waiting: the snooze mark when snoozed, else the hourglass; To read: the page; elsewhere the phase's.
  */
-export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean): ReactNode {
-  if (isDone) return binaryPhaseIcon(true, phase);
+export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean, state: string | undefined): ReactNode {
+  if (isDone) return binaryPhaseIcon(true, phase, state);
   if (section === 'waiting') return snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING;
   if (section === 'read') return ICON_TO_READ;
   // Working (its own build may run while it is parked) and Needs you wear the open ring.
   if (section === 'working' || section === 'needs') return ICON_PHASE_TODO;
-  return binaryPhaseIcon(false, phase);
+  return binaryPhaseIcon(false, phase, state);
 }
 
-export function binaryPhaseIcon(isDone: boolean, phase?: string): ReactNode {
+/**
+ * A task's toggle icon. The one open phase with its own shape: a Waiting row says it is set
+ * aside, and the toggle still completes it. `state` is the task's one user status
+ * (taskUserState): a parked task whose own work runs (a build, a test run of its change) reads
+ * Working, and one with only a result to read reads To read, so neither wears the hourglass
+ * (2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i
+ * progress right?"). Required, so a new caller cannot draw a wait from the phase alone.
+ */
+export function binaryPhaseIcon(isDone: boolean, phase: string | undefined, state: string | undefined): ReactNode {
   if (isDone) return ICON_PHASE_NEED_ACTION;
-  // The one open phase with its own shape: a Waiting row says it is set aside,
-  // and the toggle still completes it.
-  return phase === 'WAITING' ? ICON_PHASE_WAITING : ICON_PHASE_TODO;
+  return phase === 'WAITING' && state !== 'working' && state !== 'read' ? ICON_PHASE_WAITING : ICON_PHASE_TODO;
 }
 
 // ── Phase icon map (for TodoPanel, StatusBadge, ChatMessage) ──

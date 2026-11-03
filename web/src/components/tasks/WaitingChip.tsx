@@ -4,7 +4,10 @@
  * the user: the wait was a bar above the composer; "put it up with the task and
  * its tags, on the left ... hover shows the details").
  *
- *   chip   "Wait until Mon 6:53" (or "Waiting" with no clock)
+ *   chip   "Wait until Mon 6:53" (or "Waiting" with no clock); a parked task whose own work
+ *          runs (its build, a test run of its change) reads "Working · checks back Mon 6:53",
+ *          and one with only a result to read "To read" (2026-11-02, the user: "wait is just
+ *          acutally waitng, if it is runnig it shoud be i progress right?")
  *   card   on hover, focus or a tap: when it wakes by itself, on whom or what it
  *          waits, its triggers, and that a message here moves it to In Progress
  *
@@ -19,6 +22,9 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { triggerPillTitle } from '@/components/routines/TriggerPill';
 import { formatWaitUntil, WAIT_UNTIL_ICON } from './TaskStatusControl';
+import { taskUserState } from '@/utils/session-status';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons';
 import '@/styles/task-status.css';
 
 const OPEN_DELAY_MS = 250;
@@ -33,10 +39,21 @@ function isParked(task: Pick<Task, 'phase'> | null | undefined): boolean {
   return task?.phase === 'WAITING';
 }
 
+type ChipTask = Pick<Task, 'phase' | 'wait_until'> & Partial<Pick<Task, 'status' | 'user_status'>>;
+
+/** What the park is to the user: a wait, the task's own work going on, or a result to read. */
+function parkReads(task: ChipTask): 'waiting' | 'working' | 'read' {
+  const state = taskUserState(task as Pick<Task, 'phase' | 'status' | 'user_status'>);
+  return state === 'working' || state === 'read' ? state : 'waiting';
+}
+
 /** The chip's words. */
-export function waitingChipLabel(task: Pick<Task, 'phase' | 'wait_until'>): string {
+export function waitingChipLabel(task: ChipTask): string {
   if (!isParked(task)) return '';
   const until = formatWaitUntil(task.wait_until);
+  const reads = parkReads(task);
+  if (reads === 'working') return until ? `${USER_STATE_LABELS.working} · checks back ${until}` : USER_STATE_LABELS.working;
+  if (reads === 'read') return USER_STATE_LABELS.read;
   return until ? `Wait until ${until}` : 'Waiting';
 }
 
@@ -47,11 +64,14 @@ export function waitingDetailLines(
 ): string[] {
   if (!isParked(task)) return [];
   const lines: string[] = [];
+  const reads = parkReads(task);
+  if (reads === 'working') lines.push(`Its own work runs (a build, a test run or a deploy of its change), so it reads ${USER_STATE_LABELS.working}.`);
+  if (reads === 'read') lines.push('Nothing is asked: there is a result to read.');
   lines.push(task.wait_until
     ? `Wakes by itself ${new Date(task.wait_until).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, or sooner when something happens.`
     : 'No clock: it waits until something happens (a trigger fires, a message arrives).');
   const on = task.user_status?.waitingOn?.trim();
-  if (on) lines.push(`Waiting on ${on}.`);
+  if (on && reads === 'waiting') lines.push(`Waiting on ${on}.`);
   const next = task.user_status?.next?.trim();
   if (next) lines.push(`Next: ${next}`);
   for (const t of triggersText.split('\n').map((l) => l.trim()).filter(Boolean)) lines.push(`Trigger ${t}`);
@@ -105,12 +125,14 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
   if (!task || !isParked(task)) return null;
   const label = waitingChipLabel(task);
   const lines = waitingDetailLines(task, triggerPillTitle(triggers));
+  const reads = parkReads(task);
+  const icon = reads === 'working' ? ICON_PHASE_IN_PROGRESS : reads === 'read' ? ICON_TO_READ : WAIT_UNTIL_ICON;
   return (
     <>
       <button
         ref={chipRef}
         type="button"
-        className={`task-waiting-chip${compact ? ' is-compact' : ''}`}
+        className={`task-waiting-chip${compact ? ' is-compact' : ''}${reads !== 'waiting' ? ` is-${reads}` : ''}`}
         data-testid="session-waiting-chip"
         aria-label={`${label}. ${lines.join(' ')}`}
         aria-expanded={open}
@@ -131,7 +153,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
           setOpen(!open);
         }}
       >
-        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true">{WAIT_UNTIL_ICON}</span> : label}
+        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true">{icon}</span> : label}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -139,7 +161,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
               ref={cardRef}
               className="task-waiting-card"
               role="dialog"
-              aria-label="Why this task is waiting"
+              aria-label={reads === 'waiting' ? 'Why this task is waiting' : 'When this task checks back'}
               data-testid="session-waiting-card"
               style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}

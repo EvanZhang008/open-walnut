@@ -12,7 +12,7 @@ import { useNotifications } from '@/contexts/notifications';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
-import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction } from '@/utils/session-status';
+import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { phoneOpenKeepsList, phonePhaseAttrs, phoneRowFocusOpts, phoneTitleTapOpens, usePhoneHomeList } from './phone-row-behavior';
 import { PhoneNeedsYouStrip } from './PhoneNeedsYouStrip';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -1275,7 +1275,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
             title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
           >
-            {ICONS.binaryPhaseIcon(isDone, task.phase)}
+            {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
           </button>
           <span data-no-draft="rename"
             ref={titleRef}
@@ -2320,7 +2320,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone, task.phase)}
+        {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
       {/* Editable title */}
       <span data-no-draft="rename"

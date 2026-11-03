@@ -4,7 +4,7 @@
  */
 import { Fragment, useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { resolveTaskSessionId, taskNeedsAction } from '@/utils/session-status';
+import { resolveTaskSessionId, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
@@ -505,7 +505,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone, task.phase)}
+        {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
       {/* Editable title */}
       <span data-no-draft="rename"

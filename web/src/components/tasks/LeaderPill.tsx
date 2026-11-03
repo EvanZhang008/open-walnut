@@ -6,7 +6,7 @@ import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { locateTaskOnHome } from '@/utils/open-session';
-import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
+import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass, taskUserState } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
@@ -175,7 +175,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         onClick={() => goTo(sub)}
                       >
                         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
-                          {binaryPhaseIcon(false, sub.phase)}
+                          {binaryPhaseIcon(false, sub.phase, taskUserState(sub))}
                         </span>
                         <span className="leader-sub-title">{sub.title}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}

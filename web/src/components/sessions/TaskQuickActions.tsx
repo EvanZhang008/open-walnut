@@ -13,7 +13,8 @@ import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
 import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
-import { taskCircleClass } from '@/utils/session-status';
+import { taskCircleClass, taskUserState } from '@/utils/session-status';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
@@ -39,6 +40,14 @@ const PHASE_LABEL: Record<string, string> = {
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
 };
+
+/** The phase as the user reads it: a parked task whose own work runs is Working, one with only a
+ *  result to read is To read, never Waiting (2026-11-02; Icons.tsx binaryPhaseIcon). */
+function quickPhaseLabel(task: Task): string {
+  const label = PHASE_LABEL[task.phase] ?? task.phase;
+  const state = taskUserState(task);
+  return label === PHASE_LABEL.WAITING && (state === 'working' || state === 'read') ? USER_STATE_LABELS[state] : label;
+}
 
 
 /* ── Component ───────────────────────────────────────────────────── */
@@ -346,8 +355,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           }}
           title={isDone ? 'Done — click to reopen' : 'Click to complete'}
         >
-          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone, task.phase)}</span>
-          {!compact && <span className="task-quick-phase-label">{PHASE_LABEL[task.phase] ?? task.phase}</span>}
+          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}</span>
+          {!compact && <span className="task-quick-phase-label">{quickPhaseLabel(task)}</span>}
         </button>
       </div>
       )}

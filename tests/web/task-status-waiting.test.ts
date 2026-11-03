@@ -18,7 +18,7 @@ vi.mock('@/contexts/FocusBarContext', () => ({ useFocusBarContextSafe: () => nul
 vi.mock('@/hooks/useProjectRegistry', () => ({ useProjectRegistry: () => ({ projects: [] }) }));
 vi.mock('@/hooks/useShowPriority', () => ({ useShowPriority: () => true, useShowPriorityState: () => true }));
 vi.mock('@/hooks/useIntegrations', () => ({ getIntegrationMeta: () => undefined, useIntegrations: () => [] }));
-vi.mock('@/utils/session-status', () => ({ resolveTaskSessionId: () => undefined }));
+vi.mock('@/utils/session-status', async (importOriginal) => ({ ...(await importOriginal<object>()), resolveTaskSessionId: () => undefined }));
 vi.mock('@/components/tasks/PluginFieldPicker', () => ({ PluginFieldsSection: () => null }));
 vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: () => null }));
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
@@ -105,6 +105,14 @@ describe('wait_until helpers', () => {
     expect(waitingChipLabel({ phase: 'WAITING', wait_until: new Date(2026, 9, 2, 13, 27).toISOString() })).toBe('Wait until Fri 13:27');
     expect(waitingChipLabel({ phase: 'WAITING' })).toBe('Waiting');
     expect(waitingChipLabel({ phase: 'TODO' })).toBe('');
+    // A park on its own build reads Working, one with only a result To read (2026-11-02).
+    const wu = new Date(2026, 9, 2, 13, 27).toISOString()
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', carriesOn: 'watch' } } as never)).toBe('Working · checks back Fri 13:27');
+    expect(waitingChipLabel({ phase: 'WAITING', user_status: { state: 'read', toRead: 'result' } } as never)).toBe('To read');
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'waiting', kind: 'outside' } } as never)).toBe('Wait until Fri 13:27');
+    const own = waitingDetailLines({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', waitingOn: 'x' } } as never)
+    expect(own[0]).toMatch(/own work runs/)
+    expect(own.join(' ')).not.toMatch(/Waiting on/)
   });
 });
 

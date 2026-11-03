@@ -13,7 +13,7 @@ import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { isBuiltinTier } from '@/api/focus';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { taskNeedsAction } from '@/utils/session-status';
+import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
 import { NavigationChevron } from './NavigationSections';
@@ -199,7 +199,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           : sectionKey === 'waiting' ? 'Waiting: click to complete' : sectionKey === 'read' ? 'To read: click to complete' : 'Click to complete'}
         data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : sectionKey === 'read' ? 'read' : 'open'}
       >
-        {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate)}
+        {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate, taskUserState(task))}
       </button>
       {twoLine ? (
         // Flat: a small line with the project, its tags and the time, then the title alone,
