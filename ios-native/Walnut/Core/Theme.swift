@@ -23,6 +23,8 @@ enum Theme {
     /// on the dark one, where the bright tints above only work as dots and washes.
     static let needsText = Color(dynamic: UIColor(light: 0xB23A06, dark: 0xFF9A5C))
     static let workingText = Color(dynamic: UIColor(light: 0x1D4FC4, dark: 0x7FA8FF))
+    /// To read: a calm teal, apart from Working's blue and never the needs orange-red.
+    static let readText = Color(dynamic: UIColor(light: 0x0B6E78, dark: 0x5AC8D8))
     static let doneText = Color(dynamic: UIColor(light: 0x186A2C, dark: 0x4CD964))
     static let stuckText = Color(dynamic: UIColor(light: 0x854E00, dark: 0xFFD60A))
     /// A secondary line at 4.5:1 or more on secondarySystemBackground in both

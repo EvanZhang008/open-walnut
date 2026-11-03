@@ -41,7 +41,7 @@ const team = (): Task[] => [
 describe('buildStatusBoard', () => {
   it('counts by the stored status, the lead included, done in the window only', () => {
     const b = buildStatusBoard({ ownerId: 'lead', tasks: team(), now: NOW, doneWindowDays: 7 });
-    expect(b.counts).toEqual({ needs: 2, working: 3, waiting: 3, done: 1 });
+    expect(b.counts).toEqual({ needs: 2, read: 0, working: 3, waiting: 3, done: 1 });
     expect(b.groups.needs.map((r) => r.task.id)).toEqual(['vm', 'stt']); // newest first
     expect(b.groups.waiting.map((r) => r.task.id)).toEqual(['budget', 'npm', 'todo1']); // stuck first, not started last
     expect(b.groups.working.find((r) => r.task.id === 'lead')?.depth).toBe(0);
@@ -71,6 +71,27 @@ describe('buildStatusBoard', () => {
     expect(b.groups.needs.map((r) => r.task.id)).toEqual(['due-past', 'due-later', 'vm', 'stt']);
     // A not-started task with a deadline comes ahead of a stuck one without.
     expect(b.groups.waiting[0].task.id).toBe('wait-due');
+  });
+
+  it('To read is its own group right under Needs you, an older stored Waiting with toRead included', () => {
+    const tasks = [
+      ...team(),
+      task('result', { us: { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read', at: ago(20) } }),
+      // An older server stored To read as Waiting with toRead: it still reads To read.
+      task('legacy', { us: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your message', at: ago(5) } }),
+      // A snoozed one stays Waiting / snoozed.
+      task('snoozed', { us: { state: 'waiting', toRead: 'result', waitingOn: 'Its result', snoozed: { until: ago(-600) }, at: ago(1) } }),
+    ];
+    const b = buildStatusBoard({ ownerId: 'lead', tasks, now: NOW, doneWindowDays: 7 });
+    expect(b.counts).toEqual({ needs: 2, read: 2, working: 3, waiting: 4, done: 1 });
+    expect(b.groups.read.map((r) => r.task.id)).toEqual(['legacy', 'result']); // newest first
+    expect(b.groups.read.every((r) => r.status.state === 'read')).toBe(true);
+    expect(b.groups.waiting.map((r) => r.task.id)).toContain('snoozed');
+    expect(filteredRows(b, 'open').map((r) => r.status.state).slice(0, 5)).toEqual(['needs', 'needs', 'read', 'read', 'working']);
+    const brief = statusBrief(b);
+    // Never counted as needs.
+    expect(brief.needs.map((n) => n.id)).toEqual(['vm', 'stt']);
+    expect(briefCountsLine(brief)).toBe('2 To read, 3 Working, 4 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.');
   });
 
   it('a task not derived yet: the phase alone, as an older server meant it', () => {

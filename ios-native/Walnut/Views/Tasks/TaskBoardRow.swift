@@ -236,6 +236,9 @@ struct TaskBoardRow: View {
     /// False under a heading that already names the project ("By project"), where the
     /// grey line would repeat it on every row. The line is then absent, not empty.
     var showsProject = true
+    /// The status section the row is drawn under, nil in a band: its group decides the mark
+    /// (`BoardModel.dot(_:in:)`), so a row under Waiting / snoozed never wears the needs dot.
+    var section: BoardStatusSection? = nil
     /// True while this row's tap is asking the server where to go — its session by id,
     /// or which sessions its task has (`BoardModel.tapRoute`).
     ///
@@ -364,7 +367,7 @@ struct TaskBoardRow: View {
     // MARK: - The leading gutter: the web's dots
 
     /// The row's one mark (`BoardModel.dot`, the web's pinned-card rule).
-    private var dot: BoardRowDot? { BoardModel.dot(row.task) }
+    private var dot: BoardRowDot? { BoardModel.dot(row.task, in: section) }
 
     /// Side of the gutter's slot. The dot is smaller than the slot; the resolving
     /// spinner fills it.

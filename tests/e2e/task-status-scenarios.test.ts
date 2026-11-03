@@ -35,6 +35,7 @@ import { applySessionPhase } from '../../src/core/phase.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import { briefSectionLines } from '../../src/core/sessions/brief.js'
 import { checkStatuses } from '../../src/core/status-consistency.js'
+import { createRoutine } from '../../src/core/routines/routines-core.js'
 import { recheckDue } from '../../src/core/sessions/needs-recheck.js'
 import { snoozeEndedMs } from '../../src/core/snooze.js'
 import { buildStatusBoard } from '../../web/src/components/board/board-status-model.js'
@@ -43,7 +44,7 @@ import { askAnswerText, type StatusReport } from '../../src/core/user-status.js'
 import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import type { Task } from '../../src/core/types.js'
 
-type State = 'needs' | 'working' | 'waiting' | 'done'
+type State = 'needs' | 'read' | 'working' | 'waiting' | 'done'
 
 let server: HttpServer
 let port: number
@@ -236,6 +237,47 @@ describe('every surface shows the same state after every step', () => {
     await turnEnds(worker, sid, { state: 'done', now: 'Shipped the fix.' })
     await expectEverywhere(worker.id, lead.id, 'waiting', 'done, on its lead')
     expect((await getTask(worker.id)).user_status?.kind).toBe('lead')
+  }, 120_000)
+
+  // 2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i
+  // progress right?", "it is working". Its own build is its work: Working everywhere, parked or not.
+  it('parked on its own build with its session idle -> Working everywhere -> the build ends', async () => {
+    const { lead, worker, sid } = await team('Ownbuildflow')
+    await updateSessionRecord(sid, { process_status: 'idle' })
+    // The trigger on the build parks it (trigger_create wait:true), then its turn ends saying so.
+    await createRoutine({
+      name: 'Ownbuildflow build watch', schedule: { kind: 'every', everyMs: 600_000 },
+      check: { run: `echo '{"fire": false}'`, host: '__local__' },
+      executor: { type: 'session', config: { target: worker.id, prompt: 'The build finished: read its result.' } },
+    } as never)
+    await updateTask(worker.id, { phase: 'WAITING', wait_until: at(2 * 60 * 60_000) } as never)
+    const r = readStatusReport('FOR_USER_STATE: working\nFOR_USER_NOW: The build of my change is running')!
+    await updateTaskRaw(worker.id, { status_report: { ...r, at: at(), turn_ended_at: at() } }, { emitEvent: true })
+    expect((await getTask(worker.id)).phase).toBe('WAITING')
+    await expectEverywhere(worker.id, lead.id, 'working', 'its own build runs')
+    // Written as a wait of its own work, the same.
+    const own = readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: own: the build of my change')!
+    await updateTaskRaw(worker.id, { status_report: { ...own, at: at(2_000), turn_ended_at: at(2_000) } }, { emitEvent: true })
+    await expectEverywhere(worker.id, lead.id, 'working', 'waits on its own build')
+    // The build ends: the trigger fires and a turn runs.
+    await turnStarts(worker, sid, 'trigger')
+    await expectEverywhere(worker.id, lead.id, 'working', 'fired')
+  }, 120_000)
+
+  // 2026-11-02, the user: finished work under Waiting / snoozed "looks kike they are waiting for my
+  // input". Something to read with nothing asked is To read everywhere, never Needs you or Waiting.
+  it('a turn that answered the user -> To read everywhere -> the user writes again', async () => {
+    const { lead, worker, sid } = await team('Readflow')
+    await turnEnds(worker, sid, { state: 'waiting', waiting_kind: 'outside', waiting_on: 'the code review', answered_person: true })
+    expect((await getTask(worker.id)).phase).toBe('NEED_ACTION')
+    await expectEverywhere(worker.id, lead.id, 'read', 'answered the user')
+    expect((await getTask(worker.id)).user_status?.toRead).toBe('answer')
+    // Snoozed, it sleeps under Waiting / snoozed.
+    await updateTask(worker.id, { start_date: '2099-01-01' } as never)
+    await expectEverywhere(worker.id, lead.id, 'waiting', 'to read, snoozed')
+    await updateTask(worker.id, { start_date: '' } as never)
+    await turnStarts(worker, sid, 'web')
+    await expectEverywhere(worker.id, lead.id, 'working', 'the user wrote again')
   }, 120_000)
 
   it('a finished task reads Done, and reopened it is working again', async () => {

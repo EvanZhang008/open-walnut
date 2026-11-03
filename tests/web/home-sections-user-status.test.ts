@@ -14,7 +14,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '@open-walnut/core'
 import { USER_STATES, type WaitKind } from '../../src/core/user-status'
-import { stateSectionNoNeeds, stateSectionOf, statusSectionOf, waitingReason } from '@/components/tasks/status-sections'
+import { readReason, stateSectionNoNeeds, stateSectionOf, statusSectionOf, waitingReason, STATUS_SECTION_ORDER } from '@/components/tasks/status-sections'
+import { ICON_PHASE_TODO, ICON_PHASE_WAITING, ICON_SNOOZE, ICON_TO_READ, sectionRowIcon } from '@/components/common/Icons'
 
 const ROOT = path.resolve(__dirname, '../..')
 const PHASES = ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'NEED_ACTION', 'WAITING'] as const
@@ -70,8 +71,11 @@ describe('Home sections equal the user status', () => {
             const got = stateSectionNoNeeds(task({ phase, user_status: us }))
             // Folded: Waiting by its status, or parked (the list never draws a parked row).
             if (got === 'waiting' && state !== 'waiting' && phase !== 'WAITING') wrong.push(`${phase} ${state}/${kind ?? '-'} folded`)
-            // Kept in the list: open work, a to-do, a stopped task; never a parked one.
-            if (got === 'working' && phase === 'WAITING') wrong.push(`${phase} ${state}/${kind ?? '-'} in the list`)
+            // Kept in the list: open work, a to-do, a stopped task; never a parked one, unless its
+            // own work goes on (Working, 2026-11-02: its build runs while it is parked on it).
+            const stays = state === 'working' || state === 'read'
+            if (got === 'working' && phase === 'WAITING' && !stays) wrong.push(`${phase} ${state}/${kind ?? '-'} in the list`)
+            if (got !== 'working' && phase === 'WAITING' && stays && !snoozed) wrong.push(`${phase} ${state} parked folded`)
             if (got === 'done') wrong.push(`${phase} ${state} done`)
           }
         }
@@ -109,6 +113,38 @@ describe('Home sections equal the user status', () => {
     // A snoozed task says so, whatever it would wait on after (its date is on the row).
     expect(waitingReason(task({ user_status: { state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet', snoozed: { until: '2099-01-01' } } as Task['user_status'] }), fmt)).toBe('Snoozed')
     expect(waitingReason(task({ phase: 'IN_PROGRESS', user_status: { state: 'working' } as Task['user_status'] }), fmt)).toBe('')
+  })
+
+  // 2026-11-02, the user: under Waiting / snoozed the rows wore the needs ring and "looks kike they
+  // are waiting for my input", and finished results sat there too.
+  it('To read is its own section right under Needs you, and an older stored status lands in it', () => {
+    expect(STATUS_SECTION_ORDER.slice(0, 4)).toEqual(['watching', 'needs', 'read', 'working'])
+    const older = task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'other', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } as Task['user_status'] })
+    expect(stateSectionOf(older)).toBe('read')
+    expect(readReason(older)).toBe('It finished, and its result is there to read')
+    const now = task({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'answer', waitingOn: 'It answered your message' } as Task['user_status'] })
+    expect(stateSectionOf(now)).toBe('read')
+    expect(readReason(now)).toBe('It answered your message')
+    // Snoozed, it sleeps under Waiting / snoozed.
+    expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: 'result', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting')
+  })
+
+  it('a row wears its section\'s mark, never the phase\'s: no ring under Waiting / snoozed', () => {
+    const wrong: string[] = []
+    for (const phase of PHASES) {
+      for (const snoozed of [false, true]) {
+        const w = sectionRowIcon('waiting', false, phase, snoozed)
+        if (w !== (snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING)) wrong.push(`waiting ${phase}${snoozed ? ' snoozed' : ''}`)
+        if (sectionRowIcon('read', false, phase, snoozed) !== ICON_TO_READ) wrong.push(`read ${phase}`)
+        // Working: the open ring even while parked on its own build.
+        if (sectionRowIcon('working', false, phase, false) !== ICON_PHASE_TODO) wrong.push(`working ${phase}`)
+      }
+    }
+    expect(wrong).toEqual([])
+    // Every section card draws its mark through sectionRowIcon (a new row kind fails here).
+    const card = fs.readFileSync(path.join(ROOT, 'web/src/components/tasks/StatusSections.tsx'), 'utf8')
+    expect(card).toContain('sectionRowIcon(sectionKey')
+    expect(card).not.toMatch(/binaryPhaseIcon\(/)
   })
 
   it('the panel picks a section only through stateSectionOf (a ratchet of the places that name one)', () => {

@@ -88,8 +88,8 @@ describe('readStatusReport', () => {
 
   it('the ask says a wait on the user is needs-you, and waiting is only for an outside wait', () => {
     expect(FOR_USER_PROMPT).toContain('a wait on the user is ALWAYS needs-you')
-    expect(FOR_USER_PROMPT).toMatch(/waiting ONLY when nothing of this turn is for the user to read and the next move belongs to something outside Walnut and the user/)
-    expect(FOR_USER_PROMPT).toContain('<outside | task | lead | machine>')
+    expect(FOR_USER_PROMPT).toMatch(/waiting ONLY when nothing of this turn is for the user to read and the task is really blocked outside its own work/)
+    expect(FOR_USER_PROMPT).toContain('<outside | task | lead | machine | own>')
   })
 
   it('an ask outside needs-you is dropped; none and n/a are no line', () => {
@@ -148,7 +148,7 @@ describe('an ask with no kind of the user\'s own (org/user-kind.ts)', () => {
     const r = readStatusReport(ASK, AT)!
     expect(derive(r, true)).toMatchObject({ state: 'waiting', kind: 'lead' })
     const alone = derive(r, false)
-    expect(alone).toMatchObject({ state: 'waiting', toRead: 'result', waitingOn: RESULT_TO_READ })
+    expect(alone).toMatchObject({ state: 'read', toRead: 'result', waitingOn: RESULT_TO_READ })
     expect(alone.ask).toBeUndefined()
   })
 

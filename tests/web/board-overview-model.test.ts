@@ -137,6 +137,16 @@ describe('describeTask', () => {
     expect(describeTask(task('l', { phase: 'TODO', user_status: letter }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'To Do', tone: 'red' } });
   });
 
+  it('To read is a calm badge, never red, and never Needs you', () => {
+    const read = { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } as Task['user_status'];
+    expect(describeTask(task('r', { phase: 'NEED_ACTION', user_status: read }), null, [])).toMatchObject({
+      group: 'open', reason: null, badge: { label: 'To read', tone: 'blue' },
+    });
+    // An older server stored To read as Waiting with toRead.
+    const legacy = { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your message' } as Task['user_status'];
+    expect(describeTask(task('w', { phase: 'WAITING', user_status: legacy }), null, [])).toMatchObject({ group: 'open', badge: { label: 'To read', tone: 'blue' } });
+  });
+
   it('WAITING is Open, violet, with its wait-until', () => {
     const w = withSession('w', { phase: 'WAITING', wait_until: '2026-10-05T09:00:00.000Z' });
     expect(describeTask(w, live({ process_status: 'idle' }), [], fmt)).toMatchObject({

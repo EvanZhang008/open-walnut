@@ -1,6 +1,6 @@
 /**
  * StatusSections: the home task panel's status headings and the rows under the
- * ones the panel draws itself (Watching, Needs you, Waiting, Completed). Working
+ * ones the panel draws itself (Watching, Needs you, To read, Waiting, Completed). Working
  * is the view's own list (tiers, Recent, projects), so TodoPanel draws only its
  * heading from here. The model (which task goes where, order, stored open state)
  * is status-sections.ts.
@@ -33,6 +33,7 @@ import {
   STATUS_SECTION_TITLES,
   type StatusSectionKey,
   type StatusSectionsModel,
+  readReason,
   waitingReason,
 } from './status-sections';
 import '@/styles/status-sections.css';
@@ -40,6 +41,7 @@ import '@/styles/status-sections.css';
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
   needs: ICONS.ICON_ATTENTION,
+  read: ICONS.ICON_TO_READ,
   working: ICONS.ICON_PHASE_IN_PROGRESS,
   waiting: ICONS.ICON_PHASE_WAITING,
   done: ICONS.ICON_PHASE_COMPLETE,
@@ -123,8 +125,10 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     : task.user_status ? task.user_status.snoozed?.until ?? ''
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
   const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
-  // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...).
-  const reasonText = sectionKey === 'waiting' && !isDone ? waitingReason(task, formatWaitUntil) : '';
+  // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...); under To read:
+  // what there is to read.
+  const reasonText = isDone ? '' : sectionKey === 'waiting' ? waitingReason(task, formatWaitUntil)
+    : sectionKey === 'read' ? readReason(task) : '';
   // Flat: the sentence of what it waits on is a third line under the title, so the top line
   // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
   // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
@@ -176,7 +180,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         </span>
       )}
       {unread ? (
-        <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
+        // Under Waiting / snoozed the unread dot is quiet: nothing there asks the user to act.
+        <span className={`task-unread-dot${sectionKey === 'waiting' ? ' task-unread-dot-quiet' : ''}`} role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
@@ -189,9 +194,11 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           handlers.onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-        title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
+        title={isDone ? 'Done: click to reopen' : snoozeDate ? 'Snoozed: click to complete'
+          : sectionKey === 'waiting' ? 'Waiting: click to complete' : sectionKey === 'read' ? 'To read: click to complete' : 'Click to complete'}
+        data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : sectionKey === 'read' ? 'read' : 'open'}
       >
-        {ICONS.binaryPhaseIcon(isDone, task.phase)}
+        {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate)}
       </button>
       {twoLine ? (
         // Flat: a small line with the project, its tags and the time, then the title alone,
@@ -303,6 +310,7 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
   switch (key) {
     case 'watching': return { tasks: model.watching, count: model.watching.length };
     case 'needs': return { tasks: model.needs, count: model.needs.length };
+    case 'read': return { tasks: model.read, count: model.read.length };
     case 'waiting': return { tasks: model.waiting, count: model.waiting.length };
     case 'done': return { tasks: model.done, count: model.done.length + model.doneUnloaded };
     default: return { tasks: model.working, count: model.workingCount };

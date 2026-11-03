@@ -12,7 +12,7 @@ import {
 } from '../../../../../src/core/boards/board-lanes';
 import { deriveDisplayStatus, resolveTaskSessionId } from '@/utils/session-status';
 import type { ProcessStatus } from '@/types/session';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, storedUserState } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
 import type { KanbanPromptRequest } from './kanban-contract';
 import { STALE_AFTER_MS } from './kanban-contract';
@@ -26,12 +26,12 @@ export type KanbanLive = LiveStatus & {
   sessionId?: string | null;
 };
 
-export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'grey';
+export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'blue' | 'grey';
 
 export type KanbanStatusKind =
   | 'question' | 'plan' | 'permission' | 'error' | 'handed-back' | 'board-signal' | 'worker-below'
   | 'still-open' | 'turn-ended' | 'running' | 'waiting-until' | 'waiting' | 'done' | 'idle' | 'stopped'
-  | 'no-session' | 'loading' | 'needs' | 'stuck';
+  | 'no-session' | 'loading' | 'needs' | 'stuck' | 'to-read' | 'carries-on';
 
 export interface KanbanStatus {
   text: string;
@@ -277,7 +277,18 @@ function quietStatus(
   // (debounced, seconds later): a task with a session has started, so the live rows speak.
   const us = task.user_status?.kind === 'not-started' && hasSession ? undefined : task.user_status;
   if (us && display !== 'running' && task.phase !== 'COMPLETE') {
-    if (us.state === 'waiting') {
+    const state = storedUserState(us);
+    // To read: nothing asked, only its words to read (src/core/user-status.ts ToRead), never red.
+    if (state === 'read') {
+      const text = us.waitingOn || USER_STATE_LABELS.read;
+      return { text, tone: 'blue', kind: 'to-read', tooltip: `${USER_STATE_LABELS.read}: ${text}` };
+    }
+    // Working with no turn running: its own build, test run or deploy goes on and wakes it.
+    if (state === 'working' && us.carriesOn) {
+      const text = us.now ? `Working: ${us.now}` : 'Working';
+      return { text, tone: 'amber', kind: 'carries-on', tooltip: text };
+    }
+    if (state === 'waiting') {
       const on = us.waitingOn || 'Waiting';
       if (us.kind === 'stuck') return { text: `Stuck: ${on.charAt(0).toLowerCase()}${on.slice(1)}`, tone: 'amber', kind: 'stuck', tooltip: on };
       if (us.kind === 'time' && us.until) {

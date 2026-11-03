@@ -118,7 +118,7 @@ describe('org-tree', () => {
     expect(team.workers.map((w) => w.id)).toEqual([w1.id, w2.id]) // NEED_ACTION before IN_PROGRESS
     expect(team.workers[0]!.workers[0]!.id).toBe(deep.id)
     // By the user's status: the leader not started and the parked one both wait.
-    expect(team.counts).toEqual({ open: 4, running: 1, needsYou: 1, waiting: 2 })
+    expect(team.counts).toEqual({ open: 4, running: 1, needsYou: 1, toRead: 0, waiting: 2 })
     expect(tree.counts.open).toBe(4)
   })
 

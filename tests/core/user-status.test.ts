@@ -33,12 +33,13 @@ describe('the state is the phase', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', status: 'done' }, NOW).state).toBe('done')
   })
 
-  // 2026-10-31, the user: "working 就是他现在必须正在 working ... 这个在任何地方都是这样".
-  it('in progress is working only while a turn runs, else says on whom it waits', () => {
+  // 2026-10-31, the user: "working 就是他现在必须正在 working ... 这个在任何地方都是这样"; 2026-11-02: its own
+  // work going on without a turn (a background job, its build) is Working too (working-means-own-work.test.ts).
+  it('in progress is working while a turn runs or its own work goes on, else says on whom it waits', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'running' }, NOW).state).toBe('working')
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: false }, NOW)).toMatchObject({ state: 'waiting', kind: 'not-started' })
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', report: report({ state: 'working' }) }, NOW))
-      .toMatchObject({ state: 'waiting', kind: 'other', waitingOn: expect.stringContaining('carries on by itself') })
+      .toMatchObject({ state: 'working', carriesOn: 'process' })
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', isMain: true }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams' })
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', openWorkers: 3 }, NOW))
@@ -65,7 +66,7 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, report: report({ state: 'waiting', waiting_kind: 'you', waiting_on: 'A real-device test when you have time' }) }, NOW))
       .toMatchObject({ source: 'session', ask: 'A real-device test when you have time' })
     // Its turn only ended: nothing is asked, only its turn to read (2026-11-02, only a real ask reaches Needs you).
-    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'waiting', kind: 'other', toRead: 'turn', waitingOn: TURN_TO_READ })
+    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'read', toRead: 'turn', waitingOn: TURN_TO_READ })
   })
 
   // 2026-10-27, the lead on the user's demo: the user answered a question, the turn only confirmed
@@ -76,7 +77,7 @@ describe('the words say why', () => {
     // Done with no lead to check it: its result is there to read, never a Needs you and never a wait
     // on the user (2026-11-02; tests/core/only-real-asks-need-you.test.ts).
     expect(deriveUserStatus({ ...base, report: report({ state: 'done', now: 'Plan: ship in 2.4.' }) }, NOW))
-      .toMatchObject({ state: 'waiting', toRead: 'result', waitingOn: RESULT_TO_READ, now: 'Plan: ship in 2.4.' })
+      .toMatchObject({ state: 'read', toRead: 'result', waitingOn: RESULT_TO_READ, now: 'Plan: ship in 2.4.' })
     expect(deriveUserStatus({ ...base, hasLeader: true, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
     // Main and a lead are never closed: they wait on the user's next message.
     for (const who of [{ isMain: true }, { isLead: true }]) {
@@ -85,7 +86,7 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'other', waitingOn: expect.stringContaining('report') })
     // A done report from before the latest hand-back is an older turn's: with none coming, the turn is there to read.
     expect(deriveUserStatus({ ...base, phaseChangedAt: ago(10_000), report: report({ state: 'done', at: ago(20 * 60_000) }) }, NOW))
-      .toMatchObject({ state: 'waiting', toRead: 'turn' })
+      .toMatchObject({ state: 'read', toRead: 'turn' })
     // What does need the user still does, report pending or not.
     expect(deriveUserStatus({ ...base, reportPending: true, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...base, reportPending: true, openChoice: 'Raise the quota?' }, NOW)).toMatchObject({ state: 'needs', source: 'choice' })
@@ -106,7 +107,7 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
     // No lead: its turn is there for the user to read, with nothing asked.
-    expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'waiting', toRead: 'turn' })
+    expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'read', toRead: 'turn' })
     // A lead (or Main) with no ask of its own is never a bare Needs you (2026-10-31, the user: "u can
     // show VP sure, but u need to show what are actually waiting"): it waits on the user's next message.
     expect(deriveUserStatus({ ...base, isLead: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
@@ -200,7 +201,7 @@ describe('a turn\'s report moves its phase (sessions/report-phase.ts)', () => {
 describe('counts', () => {
   it('one line, the same everywhere', () => {
     const c = countUserStates([{ state: 'needs' }, { state: 'needs' }, { state: 'working' }, { state: 'waiting' }, { state: 'done' }])
-    expect(c).toEqual({ needs: 2, working: 1, waiting: 1, done: 1 })
+    expect(c).toEqual({ needs: 2, read: 0, working: 1, waiting: 1, done: 1 })
     expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 1 Waiting / snoozed · 1 Completed')
     expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 Needs you · 0 Working · 0 Waiting / snoozed')
   })
@@ -256,7 +257,7 @@ describe('stopped by the machine, not the work', () => {
     expect(deriveUserStatus({ ...dead, restartLoss: { state: 'pending' } }, NOW).kind).toBe('stuck')
     // Back and alive, or decided as settled: the loss says nothing more.
     expect(deriveUserStatus({ ...dead, processStatus: 'idle', restartLoss: { state: 'queued' } }, NOW).kind).not.toBe('machine')
-    expect(deriveUserStatus({ ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'skipped' } }, NOW)).toMatchObject({ state: 'waiting', toRead: 'turn' })
+    expect(deriveUserStatus({ ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'skipped' } }, NOW)).toMatchObject({ state: 'read', toRead: 'turn' })
   })
 
   it('a turn that reported waiting on the machine (a full disk) reads so', () => {

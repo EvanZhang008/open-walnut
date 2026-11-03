@@ -1,6 +1,6 @@
 /**
  * The Board's Status view, its default (2026-10-25, the user's pick "C" of three designs):
- * a brief in plain words that names what needs the user and counts the rest, the four
+ * a brief in plain words that names what needs the user and counts the rest, the five
  * state chips that filter, and one table of the team: status, task, where it stands, next
  * and who, when. Every word comes from the one user status (src/core/user-status.ts), which
  * the server keeps on each task, so the numbers here are the Org page's, the task list's
@@ -46,6 +46,7 @@ const ago = (ms: number): string => (ms ? timeAgo(new Date(ms).toISOString()) : 
 const EMPTY_TEXT: Record<StatusFilter, string> = {
   open: 'No open tasks on this team.',
   needs: 'Nothing needs you right now.',
+  read: 'Nothing to read right now.',
   working: 'Nothing is working right now.',
   waiting: 'Nothing is waiting right now.',
   done: `Nothing was done in the last ${RECENT_COMPLETED_DAYS} days.`,
@@ -68,10 +69,11 @@ function WhereCell({ row }: { row: StatusRow }) {
   const live = useLiveActivity(s.state === 'working' ? row.task.id : undefined);
   return (
     <>
+      {s.state === 'read' && s.waitingOn && <span className="bs-to-read" data-testid="board-to-read">{s.waitingOn}</span>}
       {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`}>{waitingLine(s, formatWaitUntil)}</span>}
       {s.state === 'working' && <LiveActivityLine taskId={row.task.id} />}
       {s.now && <span className="bs-now">{s.now}</span>}
-      {!s.now && !live && s.state === 'working' && <span className="bs-muted">Running a turn now.</span>}
+      {!s.now && !live && s.state === 'working' && <span className="bs-muted">{s.carriesOn ? 'Its own work goes on.' : 'Running a turn now.'}</span>}
       {s.due && (
         <span className={`bs-due bs-due-${s.due.state}`} data-testid="board-due" data-due={s.due.state}>
           {s.due.state === 'overdue' ? `Overdue: was due ${formatDue(s.due.at)}` : `Due ${formatDue(s.due.at)}`}
@@ -227,7 +229,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
   const brief = statusBrief(board);
   const owner = useMemo(() => tasks.find((t) => t.id === ownerId), [tasks, ownerId]);
   const rows = filteredRows(board, filter);
-  const open = board.counts.needs + board.counts.working + board.counts.waiting;
+  const open = board.counts.needs + (board.counts.read ?? 0) + board.counts.working + board.counts.waiting;
   // The owner alone, nothing below it open or recently done.
   const solo = open + board.counts.done <= 1;
   const pick = (f: StatusFilter) => {
@@ -275,7 +277,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
               onClick={() => pick(s)}
               data-testid={`board-status-filter-${s}`}
             >
-              <span className="bs-dot" /><b>{board.counts[s]}</b> {USER_STATE_LABELS[s]}
+              <span className="bs-dot" /><b>{board.counts[s] ?? 0}</b> {USER_STATE_LABELS[s]}
             </button>
           ))}
         </div>

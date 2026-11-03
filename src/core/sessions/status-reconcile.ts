@@ -18,6 +18,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
+import { STATUS_RULE_VERSION } from '../user-status.js';
 
 export const RECONCILE_EVERY_MS = 5 * 60_000;
 /** A session asked by the loop is not asked by it again for this long. */
@@ -46,7 +47,16 @@ export function statusMissed(
   const ended = Date.parse(session.last_status_change ?? '');
   if (!Number.isFinite(ended) || nowMs - ended < MISSED_AFTER_MS) return null;
   const said = Date.parse(task.status_report?.turn_ended_at ?? task.status_report?.at ?? '');
-  return !Number.isFinite(said) || said < ended - MISSED_AFTER_MS ? ended : null;
+  if (!Number.isFinite(said) || said < ended - MISSED_AFTER_MS) return ended;
+  // A wait reported under the rules before 2026-11-02 may be the task's own build or test run, which
+  // reads Working now: asked once again under the current rules (MAX_PER_TURN_END bounds it).
+  return reportUnderOldWaitRule(task.status_report) ? ended : null;
+}
+
+/** A self-reported wait (outside or other) asked before STATUS_RULE_VERSION. Pure. */
+export function reportUnderOldWaitRule(r: Task['status_report'] | undefined): boolean {
+  if (!r || r.by || r.state !== 'waiting' || (r.rule ?? 1) >= STATUS_RULE_VERSION) return false;
+  return !r.waiting_kind || r.waiting_kind === 'outside' || r.waiting_kind === 'other';
 }
 
 /** One pass. Returns the task ids asked. Exported for tests. */

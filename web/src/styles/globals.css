@@ -5798,6 +5798,7 @@ a.task-link[data-user-state]::before {
   background: var(--fg-muted, #86868b);
 }
 a.task-link[data-user-state='needs']::before { background: var(--error, #ff3b30); }
+a.task-link[data-user-state='read']::before { background: #6d5bd0; }
 a.task-link[data-user-state='working']::before { background: var(--success, #34c759); }
 a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff); }
 

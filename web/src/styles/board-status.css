@@ -1,10 +1,12 @@
-/* The Board's Status view (components/board/BoardStatusView.tsx): a brief, four state
-   chips, one table. Four colours carry the four user states and nothing else:
-   needs = orange-red, working = blue, waiting = grey, done = green; stuck is waiting in amber.
+/* The Board's Status view (components/board/BoardStatusView.tsx): a brief, five state
+   chips, one table. Five colours carry the five user states and nothing else:
+   needs = orange-red, read = calm violet (never the red of needs), working = blue,
+   waiting = grey, done = green; stuck is waiting in amber.
    Every selector carries the bs- prefix (this file loads before globals.css). */
 
 .board-status {
   --bs-needs: #e0601a;
+  --bs-read: #6d5bd0;
   --bs-working: #2f6ff0;
   --bs-waiting: #8e95a1;
   --bs-done: #1f9d55;
@@ -76,6 +78,7 @@
 
 .board-status .bs-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bs-waiting); }
 .board-status .bs-chip-needs .bs-dot, .board-status .bs-pill-needs .bs-dot { background: var(--bs-needs); }
+.board-status .bs-chip-read .bs-dot, .board-status .bs-pill-read .bs-dot { background: var(--bs-read); }
 .board-status .bs-chip-working .bs-dot, .board-status .bs-pill-working .bs-dot { background: var(--bs-working); }
 .board-status .bs-chip-done .bs-dot, .board-status .bs-pill-done .bs-dot { background: var(--bs-done); }
 
@@ -120,6 +123,7 @@
 }
 
 .board-status .bs-pill-needs { background: color-mix(in srgb, var(--bs-needs) 16%, transparent); color: var(--bs-needs); }
+.board-status .bs-pill-read { background: color-mix(in srgb, var(--bs-read) 14%, transparent); color: var(--bs-read); }
 .board-status .bs-pill-working { background: color-mix(in srgb, var(--bs-working) 14%, transparent); color: var(--bs-working); }
 .board-status .bs-pill-done { background: color-mix(in srgb, var(--bs-done) 14%, transparent); color: var(--bs-done); }
 .board-status .bs-pill-stuck { background: color-mix(in srgb, var(--bs-stuck) 16%, transparent); color: var(--bs-stuck); }
@@ -129,6 +133,8 @@
 .board-status .bs-c-where > span, .board-status .bs-c-next > span { display: block; }
 .board-status .bs-on { font-weight: 550; }
 .board-status .bs-on-stuck { color: var(--bs-stuck); }
+/* To read: its words (what there is to read) as the line, no "Waiting on". */
+.board-status .bs-to-read { font-weight: 550; color: var(--bs-read); }
 .board-status .bs-muted { color: var(--fg-muted); }
 .board-status .bs-you b { color: var(--bs-needs); }
 /* When a session's ask was last checked; amber once it is too old to be fact. */

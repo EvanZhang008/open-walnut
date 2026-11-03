@@ -500,6 +500,7 @@ export interface OrgReportRow {
   open: number;
   running: number;
   needs_you: number;
+  to_read: number;
   waiting: number;
   /** For a project: who to talk to (task_send / org_send). */
   contact?: { id?: string; title: string; kind: 'lead' | 'team' };
@@ -540,7 +541,7 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
           title: p.project || 'Inbox',
           kind: 'project' as const,
           project: p.project,
-          open: p.counts.open, running: p.counts.running, needs_you: p.counts.needsYou, waiting: p.counts.waiting,
+          open: p.counts.open, running: p.counts.running, needs_you: p.counts.needsYou, to_read: p.counts.toRead, waiting: p.counts.waiting,
           ...(contact ? { contact } : {}),
           // The Inbox has no lead: name its first few tasks so they can be talked to directly.
           ...(!contact ? { teams: p.teams.slice(0, 5).map((t) => ({ id: t.id, title: t.title })) } : {}),
@@ -551,7 +552,7 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
   }
   const row = (n: import('./org-tree.js').OrgTaskNode, kind: 'team' | 'worker'): OrgReportRow => ({
     id: n.id, title: n.title, kind, project: n.project, phase: n.phase,
-    open: n.counts.open, running: n.counts.running, needs_you: n.counts.needsYou, waiting: n.counts.waiting,
+    open: n.counts.open, running: n.counts.running, needs_you: n.counts.needsYou, to_read: n.counts.toRead, waiting: n.counts.waiting,
   });
   if (of.org_role === 'lead') {
     // Its own project's teams, and those of every project put under it.

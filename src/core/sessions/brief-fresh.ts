@@ -44,7 +44,7 @@ function stateOf(task: MarkTask): UserState {
 export function statusMark(task: MarkTask): string {
   const state = stateOf(task);
   const s = state === 'done' ? undefined : task.user_status;
-  const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' ? clip(s?.waitingOn) : '';
+  const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   return `${state}|${state === 'waiting' ? s?.kind ?? '' : ''}|${words}`;
 }
 
@@ -108,6 +108,7 @@ export function liveWords(task: BriefSectionTask): string {
   const snoozed = (s as { snoozed?: { until?: string } } | undefined)?.snoozed;
   if (state === 'done') return 'Completed';
   if (state === 'needs') return clip(s?.ask) || 'Needs you';
+  if (state === 'read') return clip(s?.waitingOn) || 'To read';
   if (state === 'waiting') {
     if (snoozed?.until) return `Snoozed until ${snoozed.until.slice(0, 10)}`;
     const on = clip(s?.waitingOn ?? s?.now);

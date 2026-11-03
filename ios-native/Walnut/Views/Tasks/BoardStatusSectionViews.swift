@@ -70,6 +70,7 @@ struct BoardStatusHeading: View {
         switch section {
         case .watching: return Theme.tint
         case .needs: return Theme.danger
+        case .read: return UserStatePill.color(.read)
         case .working: return BoardHeadingType.ink
         case .waiting: return Theme.warning
         case .done: return Theme.success
@@ -77,8 +78,8 @@ struct BoardStatusHeading: View {
     }
 }
 
-/// One status section that draws its own rows (Watching, Needs you, Waiting / snoozed,
-/// Completed): the heading, then the rows run by project, a small project label above each
+/// One status section that draws its own rows (Watching, Needs you, To read, Waiting /
+/// snoozed, Completed): the heading, then the rows run by project, a small project label above each
 /// run when the section spans two or more projects, then a "Show N more" row past 30.
 ///
 /// Emits List `Section`s, like `TaskBoardList`: one per project run, the status heading in the
@@ -169,6 +170,7 @@ struct BoardStatusSectionList: View {
         TaskBoardRow(
             row: row,
             showsProject: showsProject,
+            section: section,
             isResolving: row.id == resolvingRowId,
             onToggleDone: { actions.onToggleDone(row) },
             onOpenSession: { actions.onOpenSession(row) }

@@ -57,7 +57,7 @@ import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
 const TASK_DOT: Record<string, string> = {
-  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+  needs: 'var(--error, #FF3B30)', read: '#6d5bd0', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
 /** A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). */
 const STATE_LABEL: Record<OrgThreadState, string> = {

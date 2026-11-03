@@ -94,6 +94,9 @@ describe('org chart cards', () => {
   it('vpLine says what moves, else what is open, else nothing', () => {
     expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
     expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')
+    expect(vpLine({ open: 4, running: 1, needsYou: 0, toRead: 2, waiting: 1 })).toBe('2 To read · 1 Working · 1 Waiting / snoozed')
+    // An older server's counts carry no toRead.
+    expect(vpLine({ open: 1, running: 1, needsYou: 0, waiting: 0 } as never)).toBe('1 Working')
   })
 })
 

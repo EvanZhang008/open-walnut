@@ -562,7 +562,7 @@ struct WalnutLiveActivity: Codable, Equatable {
     var sessionId: String? = nil
 }
 
-/// `user_status` on a task row: needs | working | waiting | done, with what the user must do
+/// `user_status` on a task row: needs | read | working | waiting | done, with what the user must do
 /// (`ask`), on whom or what a waiting task waits (`kind`, `waitingOn`, `until`), and the
 /// session's own words (`now`, `next`, written `at`; `stale` when a day old and not running).
 struct WalnutUserStatus: Codable, Equatable {
@@ -587,6 +587,34 @@ struct WalnutUserStatus: Codable, Equatable {
     var checkedBy: String? = nil
     var unverified: Bool? = nil
     var watchedAt: String? = nil
+    /// Snoozed by a start date still to come (its own or an ancestor's): such a status is always
+    /// `waiting`, never Needs you or To read until then (additive, 2026-10-30).
+    var snoozed: WalnutSnooze? = nil
+    /// To read (`state: "read"`): what there is to read, `result` | `answer` | `turn`, its words
+    /// in `waitingOn`. A server from before the To read state sends it as `waiting` with this set
+    /// (additive, 2026-11-02).
+    var toRead: String? = nil
+    /// Working with no turn running: its own work carries on, `process` | `watch` | `clock`
+    /// (additive, 2026-11-02).
+    var carriesOn: String? = nil
+}
+
+/// `user_status.snoozed`: until when, and the ask it holds back meanwhile. Decoded leniently: a
+/// shape this build does not know still reads as snoozed, never as a failed task list.
+struct WalnutSnooze: Codable, Equatable {
+    var until: String? = nil
+    var ask: String? = nil
+
+    init(until: String? = nil, ask: String? = nil) {
+        self.until = until
+        self.ask = ask
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        until = (try? c?.decodeIfPresent(String.self, forKey: .until)) ?? nil
+        ask = (try? c?.decodeIfPresent(String.self, forKey: .ask)) ?? nil
+    }
 }
 
 /// `user_status.due`: the due date as set (a bare date or an ISO time) and how near it is.

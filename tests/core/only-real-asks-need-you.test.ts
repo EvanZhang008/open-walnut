@@ -86,7 +86,7 @@ describe('nothing asked is never Needs you', () => {
 
   it('reads what there is to read, in plain words', () => {
     const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'stopped', phaseChangedAt: iso(NOW - 120_000) }
-    expect(deriveUserStatus({ ...base, report: NO_ASK[1] }, NOW)).toMatchObject({ state: 'waiting', toRead: 'result', waitingOn: RESULT_TO_READ, now: 'Shipped the seed planner.' })
+    expect(deriveUserStatus({ ...base, report: NO_ASK[1] }, NOW)).toMatchObject({ state: 'read', toRead: 'result', waitingOn: RESULT_TO_READ, now: 'Shipped the seed planner.' })
     expect(deriveUserStatus({ ...base, report: NO_ASK[4] }, NOW)).toMatchObject({ toRead: 'result' })
     expect(deriveUserStatus({ ...base, report: NO_ASK[6] }, NOW)).toMatchObject({ toRead: 'answer' })
     expect(deriveUserStatus({ ...base, lastWords: 'The seed order is in.' }, NOW)).toMatchObject({ toRead: 'turn', waitingOn: `${TURN_TO_READ}; its last words: "The seed order is in."` })
@@ -171,7 +171,7 @@ describe('a routine run that ended with nothing for the user closes itself', () 
     await syncUserStatuses(new Set([done, bare]), Date.now() + HANDBACK_SETTLE_MS + 1_000)
     expect((await getTask(done)).phase).toBe('COMPLETE')
     expect((await getTask(bare)).phase).toBe('NEED_ACTION')
-    expect((await getTask(bare)).user_status).toMatchObject({ state: 'waiting', toRead: 'turn' })
+    expect((await getTask(bare)).user_status).toMatchObject({ state: 'read', toRead: 'turn' })
   })
 
   it('a run that asks, or answered a person, stays open', async () => {
@@ -203,7 +203,7 @@ describe('a routine run that ended with nothing for the user closes itself', () 
     await updateTaskRaw(id, { status_report: { state: 'done', at: iso(Date.now() + 1_000) } } as never, { source: 'test' })
     await syncUserStatuses(new Set([id]))
     expect((await getTask(id)).phase).toBe('NEED_ACTION')
-    expect((await getTask(id)).user_status).toMatchObject({ state: 'waiting', toRead: 'result' })
+    expect((await getTask(id)).user_status).toMatchObject({ state: 'read', toRead: 'result' })
   })
 })
 

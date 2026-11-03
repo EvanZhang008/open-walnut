@@ -890,9 +890,14 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
   `state` is `needs` (only what the user alone can decide, approve or do; `ask`
   says what, `source` where it lives: `prompt`, `letter`, `choice`, `error` or
-  `session`), `working` (its session runs a turn), `waiting` (`kind` = `task`,
-  `time`, `machine`, `you`, `lead`, `not-started`, `stuck` or `other`, `waitingOn`
-  in words, `until` its next check) or `done`. `now` / `next` are the session's own
+  `session`), `read` (added 2026-11-02: nothing is asked, only something to read;
+  `toRead` = `result`, `answer` or `turn`, `waitingOn` its words; a server before it
+  sent these as `waiting` with `toRead`, and a client that does not know `read` reads
+  the phase, as for any unknown state), `working` (its session runs a turn, or, with
+  `carriesOn` = `process`, `watch` or `clock`, its own build, test run or deploy goes on
+  and brings it back), `waiting` (really blocked: `kind` = `task`, `time`, `machine`,
+  `you`, `lead`, `outside`, `not-started`, `stuck` or `other`, `waitingOn` in words,
+  `until` its next check; a snoozed task reads `waiting`, except a turn running now) or `done`. `now` / `next` are the session's own
   plain words from its last turn, written `at`; `stale` marks words a day old on a
   task that is not running. `stoppedBy: 'machine'` (added 2026-10-28) marks a task the
   machine stopped (a lost host, a restart, a dead process): Walnut resumes it and its

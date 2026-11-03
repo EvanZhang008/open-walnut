@@ -43,7 +43,7 @@ describe('the stamp', () => {
 
   it("Walnut's own hand-back words and the moment before a report carry no stamp", () => {
     const back = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(30 * H) }, NOW)
-    expect(back).toMatchObject({ state: 'waiting', toRead: 'turn' })
+    expect(back).toMatchObject({ state: 'read', toRead: 'turn' })
     expect(back.checkedAt).toBeUndefined()
     expect(back.unverified).toBeUndefined()
     const pending = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', reportPending: true, phaseChangedAt: ago(60_000) }, NOW)

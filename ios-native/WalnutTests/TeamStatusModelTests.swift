@@ -49,6 +49,100 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusModel.state(of: task("x", phase: "COMPLETE", status: "done")), .done)
     }
 
+    // MARK: - To read (2026-11-02)
+
+    @MainActor func testTheFiveStatesInOrderWithTheirWords() {
+        XCTAssertEqual(UserState.allCases, [.needs, .read, .working, .waiting, .done])
+        XCTAssertEqual(UserState.allCases.map(\.label), ["Needs you", "To read", "Working", "Waiting / snoozed", "Completed"])
+        XCTAssertEqual(TeamStatusSection.emptyText(.read), "Nothing to read right now.")
+    }
+
+    func testToReadFromTheServerAndFromAnOlderOne() {
+        let words = "It finished, and its result is there to read"
+        // This server: state "read".
+        let now = task("r", user: .init(state: "read", waitingOn: words, toRead: "result"))
+        XCTAssertEqual(TeamStatusModel.state(of: now), .read)
+        // A server from before the To read state: "waiting" with toRead set.
+        let legacy = task("l", user: .init(state: "waiting", waitingOn: words, toRead: "result"))
+        XCTAssertEqual(TeamStatusModel.state(of: legacy), .read)
+        // A snoozed status stays Waiting whatever it holds.
+        let snoozed = task("s", user: .init(state: "waiting", snoozed: .init(until: "2026-11-05"), toRead: "result"))
+        XCTAssertEqual(TeamStatusModel.state(of: snoozed), .waiting)
+        // An empty toRead is no To read.
+        XCTAssertEqual(TeamStatusModel.state(of: task("e", user: .init(state: "waiting", toRead: " "))), .waiting)
+        // Not the needs mark, whatever the phase.
+        XCTAssertFalse(BoardModel.needsHuman(now))
+        XCTAssertFalse(BoardModel.needsHuman(legacy))
+        // Its line is its words, never "Waiting on".
+        XCTAssertEqual(TeamStatusModel.readLine(now.userStatus), words)
+        XCTAssertEqual(TeamStatusModel.readLine(.init(state: "read", toRead: "answer")), "It answered your message, and its answer is there to read")
+        XCTAssertFalse(TeamStatusModel.readLine(.init(state: "read")).hasPrefix("Waiting"))
+    }
+
+    func testAnUnknownStateFallsBackToThePhase() {
+        XCTAssertEqual(TeamStatusModel.state(of: task("x", phase: "NEED_ACTION", user: .init(state: "later-kind"))), .needs)
+        XCTAssertEqual(TeamStatusModel.state(of: task("x", phase: "IN_PROGRESS", user: .init(state: "later-kind"))), .working)
+        XCTAssertEqual(TeamStatusModel.state(of: task("x", phase: "WAITING", user: .init(state: "later-kind"))), .waiting)
+        XCTAssertNil(TeamStatusModel.userState(.init(state: "later-kind")))
+        XCTAssertTrue(BoardModel.needsHuman(task("x", phase: "NEED_ACTION", user: .init(state: "later-kind"))))
+    }
+
+    func testCountsAndOrderWithToRead() {
+        let tasks = [
+            task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),
+            task("n", user: .init(state: "needs", ask: "Pick one", source: "session")),
+            task("r1", user: .init(state: "read", waitingOn: "It finished", at: "2026-10-26T01:00:00Z", toRead: "result")),
+            task("r2", user: .init(state: "waiting", waitingOn: "It answered your message", at: "2026-10-26T04:00:00Z", toRead: "answer")),
+            task("w", phase: "WAITING", user: .init(state: "waiting", kind: "task", waitingOn: "Another task")),
+            task("z", phase: "WAITING", user: .init(state: "waiting", kind: "time", snoozed: .init(until: "2026-11-05"), toRead: "result")),
+            task("c", phase: "IN_PROGRESS", user: .init(state: "working", carriesOn: "process")),
+            task("d", phase: "COMPLETE", status: "done", completed: "2026-10-25T00:00:00Z"),
+        ]
+        let b = TeamStatusModel.build(ownerId: "lead", tasks: tasks, now: Self.now)
+        XCTAssertEqual(b.counts, TeamStatusCounts(needs: 1, read: 2, working: 2, waiting: 2, done: 1))
+        XCTAssertEqual(UserState.allCases.map { b.counts[$0] }, [1, 2, 2, 2, 1])
+        // Latest status time first, like the other open groups.
+        XCTAssertEqual(b.rows(.read).map(\.id), ["r2", "r1"])
+        XCTAssertEqual(b.open.map(\.id).prefix(3), ["n", "r2", "r1"])
+        XCTAssertEqual(Set(b.waiting.map(\.id)), ["w", "z"])
+        XCTAssertEqual(Set(b.working.map(\.id)), ["lead", "c"])
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "2 To read, 2 Working, 2 Waiting / snoozed, 1 Completed in the last 7 days.")
+        // No To read, no words for it.
+        let none = TeamStatusModel.build(ownerId: "lead", tasks: [tasks[0], tasks[4]], now: Self.now)
+        XCTAssertEqual(TeamStatusModel.countsLine(none), "1 Working, 1 Waiting / snoozed, 0 Completed in the last 7 days.")
+    }
+
+    func testDecodesToReadCarriesOnAndSnoozed() throws {
+        let json = #"{"id":"t1","title":"T","status":"in_progress","phase":"NEED_ACTION","priority":"none","project":"","user_status":{"state":"read","toRead":"turn","waitingOn":"Its turn ended without asking you anything","carriesOn":"watch","snoozed":{"until":"2026-11-05","ask":"Approve"}}}"#
+        let t = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        XCTAssertEqual(t.userStatus?.toRead, "turn")
+        XCTAssertEqual(t.userStatus?.carriesOn, "watch")
+        XCTAssertEqual(t.userStatus?.snoozed, WalnutSnooze(until: "2026-11-05", ask: "Approve"))
+        // A snooze shape this build does not know still reads as snoozed, never a failed list.
+        let odd = json.replacingOccurrences(of: #"{"until":"2026-11-05","ask":"Approve"}"#, with: #"{"until":5}"#)
+        let o = try JSONDecoder().decode(WalnutTask.self, from: Data(odd.utf8))
+        XCTAssertNotNil(o.userStatus?.snoozed)
+        // An older server sends none of them.
+        let old = try JSONDecoder().decode(WalnutTask.self, from: Data(#"{"id":"t2","title":"T","status":"in_progress","phase":"TODO","priority":"none","project":"","user_status":{"state":"working"}}"#.utf8))
+        XCTAssertNil(old.userStatus?.toRead)
+        XCTAssertNil(old.userStatus?.carriesOn)
+        XCTAssertNil(old.userStatus?.snoozed)
+    }
+
+    func testOrgCountsReadToReadAndStayAbsentFromAnOlderServer() throws {
+        let now = try JSONDecoder().decode(OrgCountsWire.self, from: Data(#"{"open":5,"running":1,"needsYou":1,"toRead":2,"waiting":1}"#.utf8))
+        XCTAssertEqual(now.read, 2)
+        let alias = try JSONDecoder().decode(OrgCountsWire.self, from: Data(#"{"open":5,"running":1,"needsYou":1,"read":3,"waiting":1}"#.utf8))
+        XCTAssertEqual(alias.read, 3)
+        let old = try JSONDecoder().decode(OrgCountsWire.self, from: Data(#"{"open":5,"running":1,"needsYou":1,"waiting":3}"#.utf8))
+        XCTAssertNil(old.toRead)
+        XCTAssertEqual(old.read, 0)
+        XCTAssertNil((old + old).toRead)
+        XCTAssertEqual((now + old).toRead, 2)
+        XCTAssertEqual((now + alias).read, 5)
+        XCTAssertEqual((now + old).open, 10)
+    }
+
     func testWaitingLines() {
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "task", waitingOn: "A reply from Bun lead")), "Waiting on a reply from Bun lead")
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "stuck", waitingOn: "")), "Nothing will wake it.")

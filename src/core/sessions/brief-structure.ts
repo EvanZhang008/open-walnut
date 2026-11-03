@@ -16,7 +16,7 @@
  *     written bare becomes a list item.
  */
 import { ABOUT_TAG_NAME } from '../org/message-about.js';
-import { BRIEF_SECTIONS, briefTeam, fallbackUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
+import { BRIEF_SECTIONS, briefTeam, fallbackUserState, storedUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
 
 export type BriefSectionKey = (typeof BRIEF_SECTIONS)[number]['state'];
@@ -28,6 +28,7 @@ const INLINE_LABEL_RE = /^\s*(?:[-*+]\s+)?(?:\*\*|__)([^*_]{1,40}?)(?:[:：](?:\
 /** Other words a writer uses for a section's heading (English and Chinese). */
 const HEADING_WORDS: Record<BriefSectionKey, RegExp> = {
   needs: /^(?:needs?\s+(?:you|your\s+action|action|the\s+user)|for\s+you|your\s+action|(?:需要|需|待|要)(?:你|您)(?:处理|决定|做|的)?)$/i,
+  read: /^(?:to\s+read|for\s+you\s+to\s+read|results?(?:\s+to\s+read)?|待读|待阅读?|可以看了)$/i,
   working: /^(?:working|in\s+progress|work\s+in\s+progress|进行中|正在做|正在进行|在做)$/i,
   waiting: /^(?:waiting(?:\s*\/\s*snoozed)?|snoozed|parked|on\s+hold|等待中?|在等|暂停|搁置|等待\s*\/\s*暂停)$/i,
 };
@@ -54,7 +55,7 @@ export function headingSection(line: string): BriefSectionKey | null {
  *  task's state; this file adds no rule of its own. */
 export function briefSectionOf(task: BriefSectionTask): BriefSectionKey | null {
   const state: UserState = task.phase === 'COMPLETE' || task.status === 'done'
-    ? 'done' : task.user_status?.state ?? fallbackUserState(task.phase, task.status);
+    ? 'done' : task.user_status ? storedUserState(task.user_status) : fallbackUserState(task.phase, task.status);
   return state === 'done' ? null : state;
 }
 
@@ -138,7 +139,7 @@ export function structureBrief(
 ): StructuredBrief {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const lead: string[] = [];
-  const body: Record<BriefSectionKey, string[]> = { needs: [], working: [], waiting: [] };
+  const body: Record<BriefSectionKey, string[]> = { needs: [], read: [], working: [], waiting: [] };
   const seen = new Set<BriefSectionKey>();
   let current: BriefSectionKey | null = null;
   let moved = 0;
@@ -216,24 +217,25 @@ export function structureBrief(
     const items = lines.filter((l) => l.trim() && !saysNothing(l) && !headingSection(l));
     // A "nothing" line next to real items is stale (a task moved in); an empty section says so.
     if (items.length) lines = lines.filter((l) => !saysNothing(l));
+    else if (s.optional) continue;
     else if (!lines.some(saysNothing)) lines = [emptySectionLine(opts.language, text)];
     out.push(`### ${s.heading}`, ...lines, '');
   }
   return {
     text: out.join('\n').trim(),
     moved,
-    added: BRIEF_SECTIONS.map((s) => s.state).filter((k) => !seen.has(k)),
+    added: BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => s.state).filter((k) => !seen.has(k)),
     ...(opts.live ? { asksAdded: added, dropped } : {}),
   };
 }
 
 /** The three sections' headings and Walnut's lists under each, for the ask. */
 export function briefSectionsBlock(sections: Record<BriefSectionKey, readonly string[]> | undefined): string {
-  return BRIEF_SECTIONS.map((s) => {
+  return BRIEF_SECTIONS.filter((s) => !s.optional || (sections?.[s.state]?.length ?? 0) > 0).map((s) => {
     const rows = sections?.[s.state] ?? [];
     return `### ${s.heading}\n${rows.length ? rows.join('\n') : '(none now)'}`;
   }).join('\n');
 }
 
 /** The rule every Brief follows: the three headings, each task under its own live status. */
-export const BRIEF_STRUCTURE_RULE = `It has exactly three sections, always all three, in this order, under these exact Markdown headings: ${BRIEF_SECTIONS.map((s) => `"### ${s.heading}"`).join(', ')}. A task goes in the section of its own live status in Walnut's lists below, never in another one; an empty section gets one line saying there is nothing. Finished work leaves the Brief. Nothing before the first heading. Walnut moves a line to its task's section and adds a missing heading.`;
+export const BRIEF_STRUCTURE_RULE = `It has exactly these sections, always all of them, in this order, under these exact Markdown headings: ${BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => `"### ${s.heading}"`).join(', ')}; and "### To read" right after Needs you only while a task is there to read (finished, or it answered the user, asking nothing). A task goes in the section of its own live status in Walnut's lists below, never in another one; an empty section gets one line saying there is nothing. Finished work leaves the Brief. Nothing before the first heading. Walnut moves a line to its task's section and adds a missing heading.`;

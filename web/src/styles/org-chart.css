@@ -228,6 +228,7 @@
 .oc-task.is-worker { padding-left: 16px; }
 .oc-task-dot { flex-shrink: 0; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted, #86868b); }
 .oc-task-dot.is-needs { background: var(--error, #ff3b30); }
+.oc-task-dot.is-read { background: #6d5bd0; }
 .oc-task-dot.is-working { background: var(--success, #34c759); }
 .oc-task-text { display: flex; flex-direction: column; min-width: 0; }
 .oc-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

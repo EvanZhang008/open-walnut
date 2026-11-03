@@ -83,6 +83,7 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
       return {
         title: flat(t.title, 120),
         ...(s?.snoozed ? { snoozedUntil: hhmm(Date.parse(s.snoozed.until)) }
+          : s?.state === 'read' && s.waitingOn ? { now: flat(s.waitingOn, 160) }
           : s?.state === 'waiting' ? (s.waitingOn ? { waitingOn: flat(s.waitingOn, 160) } : { waiting: true })
             : s?.now ? { now: flat(s.now, 160) } : {}),
       };

@@ -26,7 +26,8 @@ export function routineRunToClose(
   if (task.routine_start?.state !== 'started' || task.phase !== 'NEED_ACTION') return false;
   // A run filed under a task is its leader's to check; an org node is never a run.
   if (task.org_role || task.parent_task_id || task.plugin_only) return false;
-  if (status.state !== 'waiting') return false;
+  // To read (an older status: Waiting with toRead), nothing asked.
+  if (status.state !== 'read' && status.state !== 'waiting') return false;
   // A finished report closes any run. A turn with no report at all closes only a triage run, whose
   // asks are its letters (an open one keeps it Needs you): another routine's turn may have asked in
   // its last words without the report lines.

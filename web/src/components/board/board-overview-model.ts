@@ -321,6 +321,8 @@ export function describeTask(
   const badge: RowBadge = display === 'waiting' ? { label: USER_STATE_LABELS.needs, tone: 'red' }
     : display === 'error' ? { label: 'Error', tone: 'red' }
       : display === 'running' ? { label: 'Running', tone: 'green' }
+        // To read: nothing asked, only something to read, in a calm tone, never red.
+        : userState === 'read' ? { label: USER_STATE_LABELS.read, tone: 'blue' }
         : task.phase === 'WAITING' ? { label: 'Waiting', tone: 'violet' }
           : display === 'idle' ? { label: 'Idle', tone: 'amber' }
             : display === 'stopped' ? { label: 'Stopped', tone: 'grey' }

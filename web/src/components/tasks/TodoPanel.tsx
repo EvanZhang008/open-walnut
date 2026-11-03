@@ -2506,7 +2506,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  By project: a parked one, or a snoozed one while Date reads "Available now", in its
    *  project's fold) is never in a list too. */
   const hiddenAsWaiting = useCallback(
-    (t: Task): boolean => (t.phase === 'WAITING' && !waitingRevealed)
+    // A parked task whose own work goes on (its build, its test run) is Working, and one with a result
+    // to read is To read: they stay (2026-11-02).
+    (t: Task): boolean => (t.phase === 'WAITING' && !waitingRevealed && stateSectionOf(t) !== 'working' && stateSectionOf(t) !== 'read')
       || (statusOnSections && (panelDesign === 'status' ? stateSectionOf(t)
         : stateSectionNoNeeds(t, filterEvalCtx.state.date === 'now' ? (x) => !dimPasses(x, 'date', filterEvalCtx) : undefined)) === 'waiting'),
     [waitingRevealed, statusOnSections, panelDesign, filterEvalCtx],
@@ -4949,7 +4951,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isSearchMode) return false;
     if (isWatched(t)) return true;
     if (!sectionsActive) return false;
-    return (needsSection && taskNeedsAction(t)) || (lastPlaceRef.current.has(t.id) && heldInGrace(t));
+    return (needsSection && (taskNeedsAction(t) || stateSectionOf(t) === 'read')) || (lastPlaceRef.current.has(t.id) && heldInGrace(t));
   }, [isSearchMode, sectionsActive, needsSection, heldInGrace]);
 
   const passesBoard = useCallback((t: Task): boolean => {
@@ -7654,7 +7656,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const t = filterOverrideReasons?.task;
     if (!flatSections || !t) return null;
     const m = baseSectionModel;
-    if ([m.watching, m.needs, m.working, m.waiting, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
+    if ([m.watching, m.needs, m.read, m.working, m.waiting, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
     return stateSectionOf(t, regionRules.snoozed);
   }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules]);
   const sectionModel = useMemo(() => {
@@ -7672,7 +7674,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per task shown, not on every open toggle
   }, [overrideId, overrideSection]);
   // Flat draws every section itself, Working too; elsewhere the list is Working.
-  const sectionsTop: readonly StatusSectionKey[] = flatSections ? ['watching', 'needs', 'working'] : needsSection ? ['watching', 'needs'] : ['watching'];
+  const sectionsTop: readonly StatusSectionKey[] = flatSections ? ['watching', 'needs', 'read', 'working'] : needsSection ? ['watching', 'needs', 'read'] : ['watching'];
   // Waiting / snoozed and Completed fold at the bottom, except By project, which folds
   // them inside each project (Recent has no projects to fold into, so it keeps them here).
   const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? []
@@ -7682,7 +7684,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const drawn = new Set<StatusSectionKey>([...sectionsTop, ...sectionsBottom]);
     const place = new Map<string, StatusSectionKey>();
     const graceAt = new Map<string, StateSectionKey>();
-    for (const key of ['watching', 'needs', 'working', 'waiting', 'done'] as const) {
+    for (const key of ['watching', 'needs', 'read', 'working', 'waiting', 'done'] as const) {
       if (!drawn.has(key)) continue;
       for (const t of sectionRowsOf(sectionModel, key).tasks) {
         place.set(t.id, key);

@@ -179,7 +179,7 @@ export interface StoreTaskLike {
   phase?: string;
   status?: string;
   parent_task_id?: string;
-  user_status?: { state: string };
+  user_status?: { state: string; toRead?: string; snoozed?: unknown };
 }
 
 // ── The frame document ──
@@ -236,7 +236,10 @@ export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: stri
 // ── Live refs ──
 
 function frameTask(t: StoreTaskLike): FrameTask {
-  const user = t.phase === 'COMPLETE' || t.status === 'done' ? 'done' : t.user_status?.state;
+  const us = t.user_status;
+  // A To read an older server stored as Waiting with `toRead` reads as To read (storedUserState).
+  const user = t.phase === 'COMPLETE' || t.status === 'done' ? 'done'
+    : us && us.state === 'waiting' && us.toRead && !us.snoozed ? 'read' : us?.state;
   return { id: t.id, title: t.title, phase: t.phase ?? '', status: t.status ?? '', ...(user ? { user } : {}) };
 }
 

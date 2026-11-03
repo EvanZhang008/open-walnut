@@ -119,6 +119,21 @@ describe('org channels', () => {
     ])
   })
 
+  it('a To read task is no ask: no card, its own column under Needs you, and Main counts it', () => {
+    const read = t('p1', 'Personal', 'NEED_ACTION', { updated_at: at(1), user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } })
+    const list = tasks.map((x) => (x.id === 'p1' ? read : x))
+    const { main, rows } = buildChannels(buildOrgTree(list), list, noAlerts)
+    const personal = rows.find((r) => r.name === 'Personal')!
+    expect(personal.alerts).toEqual([])
+    expect(personal.needs).toBe(0)
+    expect(personal.counts.needsYou).toBe(0)
+    expect(personal.counts.toRead).toBe(1)
+    expect(main.latest).toBe('4 VPs · 1 Working · 1 To read')
+    expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
+      ['read', [['p1', 'It finished, and its result is there to read']]], ['waiting', [['p2', undefined]]],
+    ])
+  })
+
   it('reads by top-level task: a subtask\'s ask names the top-level task it rolls up to, right after that task\'s own', () => {
     const needs = (ask: string) => ({ state: 'needs' as const, source: 'session' as const, ask })
     const list = [

@@ -64,12 +64,12 @@ describe('its report never parks it', () => {
   it('reads its answer to read first, even with a trigger armed, never Needs you', () => {
     const report: StatusReport = { state: 'waiting', waiting_kind: 'outside', waiting_on: 'A colleague\'s CR approval', at: iso(T + 10_000), answered_person: true }
     const input = { phase: 'NEED_ACTION' as const, phaseChangedAt: iso(T), hasSession: true, processStatus: 'idle' as const, report, triggers: ['CR approval watch'] }
-    expect(deriveUserStatus(input, T + 20_000)).toMatchObject({ state: 'waiting', toRead: 'answer', waitingOn: `${ANSWER_TO_READ}; then it waits on: A colleague's CR approval` })
+    expect(deriveUserStatus(input, T + 20_000)).toMatchObject({ state: 'read', toRead: 'answer', waitingOn: `${ANSWER_TO_READ}; then it waits on: A colleague's CR approval` })
     // No trigger, no lead: the same, never the bare "its turn ended" line.
-    expect(deriveUserStatus({ ...input, triggers: [] }, T + 20_000)).toMatchObject({ state: 'waiting', toRead: 'answer' })
+    expect(deriveUserStatus({ ...input, triggers: [] }, T + 20_000)).toMatchObject({ state: 'read', toRead: 'answer' })
     // An answer whose report said needs-you with no ask (a Q&A answer, 2026-11-02) reads the same.
     expect(deriveUserStatus({ ...input, report: { state: 'needs', at: iso(T + 10_000), answered_person: true } }, T + 20_000))
-      .toMatchObject({ state: 'waiting', toRead: 'answer', waitingOn: ANSWER_TO_READ })
+      .toMatchObject({ state: 'read', toRead: 'answer', waitingOn: ANSWER_TO_READ })
     // A turn nobody wrote into: the watch.
     expect(deriveUserStatus({ ...input, report: { ...report, answered_person: undefined } }, T + 20_000)).toMatchObject({ state: 'waiting' })
     // Main and a lead are never Needs you.

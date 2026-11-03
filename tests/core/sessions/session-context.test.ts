@@ -347,7 +347,9 @@ describe('buildSessionContext (identity note)', () => {
     // sent is never the user's word, whatever tag the CLI wraps it in; only typed words count.
     // 9050 → 9450 (2026-11-02) for the charter's line that testing and review scale with the
     // size of the change: a small one runs only the tests it touches, a large one a full review.
-    expect(systemPrompt.length).toBeLessThan(9450)
+    // 9450 → 9650 (2026-11-02) for the line that a task's own build, test run or deploy is its work
+    // and reads Working, never Waiting (a task parked on its own build read Waiting to the user).
+    expect(systemPrompt.length).toBeLessThan(9650)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

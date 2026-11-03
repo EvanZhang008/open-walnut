@@ -124,7 +124,7 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
     for (const task of all) {
       // It no longer asks the user (it waits on something else, or is done): the next ask starts a
       // fresh count. Working is not that: a re-check turn runs as Working.
-      const left = task.user_status?.state === 'waiting' || task.user_status?.state === 'done' || task.phase === 'COMPLETE';
+      const left = task.user_status?.state === 'waiting' || task.user_status?.state === 'read' || task.user_status?.state === 'done' || task.phase === 'COMPLETE';
       if (task.needs_recheck && left && !task.user_status?.transient) {
         await updateTaskRaw(task.id, { needs_recheck: null }, { push: false, source: 'needs-recheck' }).catch(() => null);
         continue;

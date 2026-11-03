@@ -22,7 +22,7 @@
  */
 
 import type { OrgRole, TaskPhase } from '../types.js';
-import { fallbackUserState, type UserState, type UserStatus } from '../user-status.js';
+import { fallbackUserState, storedUserState, type UserState, type UserStatus } from '../user-status.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
 export * from './instructions-author.js';
@@ -61,6 +61,8 @@ export interface OrgCounts {
   running: number;
   /** Needs you: waits on a decision or approval only the user can give. */
   needsYou: number;
+  /** To read: finished, or answered the user, with nothing asked (2026-11-02). */
+  toRead: number;
   /** Waiting: on another task, a time, the machine, a lead, or not started. */
   waiting: number;
 }
@@ -110,7 +112,7 @@ export interface OrgTree {
   counts: OrgCounts;
 }
 
-const ZERO: OrgCounts = { open: 0, running: 0, needsYou: 0, waiting: 0 };
+const ZERO: OrgCounts = { open: 0, running: 0, needsYou: 0, toRead: 0, waiting: 0 };
 
 /** The main agent or a project lead: the org's own nodes, never work. */
 export function isOrgNode(task: { org_role?: string }): boolean {
@@ -193,7 +195,7 @@ function refOf(task: OrgTaskLike): OrgNodeRef {
 }
 
 // The user's state orders the work, as it counts it (a snoozed NEED_ACTION task is not first).
-const STATE_RANK: Record<UserState, number> = { needs: 0, working: 1, waiting: 2, done: 3 };
+const STATE_RANK: Record<UserState, number> = { needs: 0, read: 1, working: 2, waiting: 3, done: 4 };
 
 function compareWork(a: OrgTaskNode, b: OrgTaskNode, at: Map<string, string>): number {
   const rank = STATE_RANK[a.userState] - STATE_RANK[b.userState];
@@ -208,13 +210,14 @@ function add(into: OrgCounts, from: OrgCounts): void {
   into.open += from.open;
   into.running += from.running;
   into.needsYou += from.needsYou;
+  into.toRead += from.toRead;
   into.waiting += from.waiting;
 }
 
 /** The user's status of a task: the stored one, else what its phase alone says (a task not yet derived). */
 export function userStateOf(t: Pick<OrgTaskLike, 'phase' | 'user_status'>): UserState {
   if (t.phase === 'COMPLETE') return 'done';
-  return t.user_status?.state ?? fallbackUserState(t.phase);
+  return t.user_status ? storedUserState(t.user_status) : fallbackUserState(t.phase);
 }
 
 function ownCounts(state: UserState): OrgCounts {
@@ -222,6 +225,7 @@ function ownCounts(state: UserState): OrgCounts {
     open: 1,
     running: state === 'working' ? 1 : 0,
     needsYou: state === 'needs' ? 1 : 0,
+    toRead: state === 'read' ? 1 : 0,
     waiting: state === 'waiting' ? 1 : 0,
   };
 }

@@ -37,6 +37,11 @@ struct TaskStatusCard: View {
                     .font(.subheadline)
                 CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked")
             }
+            if state == .read {
+                Text(TeamStatusModel.readLine(s))
+                    .font(.subheadline.weight(.medium))
+                    .accessibilityIdentifier("task.userStatus.read")
+            }
             if state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.subheadline.weight(.medium))
@@ -91,6 +96,7 @@ struct UserStatePill: View {
     nonisolated static func color(_ s: UserState) -> Color {
         switch s {
         case .needs: return Color(red: 0.88, green: 0.38, blue: 0.10)
+        case .read: return Color(red: 0.12, green: 0.62, blue: 0.70)
         case .working: return Color(red: 0.18, green: 0.44, blue: 0.94)
         case .waiting: return .secondary
         case .done: return Theme.success
@@ -101,6 +107,7 @@ struct UserStatePill: View {
     static func textColor(_ s: UserState) -> Color {
         switch s {
         case .needs: return Theme.needsText
+        case .read: return Theme.readText
         case .working: return Theme.workingText
         case .waiting: return .primary
         case .done: return Theme.doneText
@@ -130,7 +137,7 @@ struct UserStatePill: View {
 }
 
 /// A lead's team in its detail sheet, the web Board's Status view on the phone: a brief
-/// that names what needs the user, the four state chips that filter, and one row per task.
+/// that names what needs the user, the five state chips that filter, and one row per task.
 /// Shown only for a task with a team (a subtask at least).
 struct TeamStatusSection: View {
     let ownerId: String
@@ -248,6 +255,7 @@ struct TeamStatusSection: View {
         switch filter {
         case nil: return "No open tasks on this team."
         case .needs: return "Nothing needs you right now."
+        case .read: return "Nothing to read right now."
         case .working: return "Nothing is working right now."
         case .waiting: return "Nothing is waiting right now."
         case .done: return "Nothing was done in the last \(TeamStatusModel.doneWindowDays) days."
@@ -352,6 +360,10 @@ struct TeamStatusRowView: View {
                 (Text("You: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.footnote)
                 CheckedCaption(status: s, font: .caption, id: "task.team.checked")
+            } else if row.state == .read {
+                Text(TeamStatusModel.readLine(s))
+                    .font(.footnote.weight(.medium))
+                    .accessibilityIdentifier("task.team.read")
             } else if row.state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))

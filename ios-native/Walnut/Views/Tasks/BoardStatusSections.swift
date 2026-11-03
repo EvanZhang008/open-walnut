@@ -4,11 +4,12 @@ import Foundation
 //
 // 2026-10-29, the user: the hidden work should not be behind filter switches ("Show done",
 // "Show waiting") but in sections, collapsed by default, that open on a tap. The web's home
-// task panel and this board draw the same five headings (`web/src/components/tasks/
+// task panel and this board draw the same headings (`web/src/components/tasks/
 // status-sections.ts` is the web's half of this file):
 //
 //   Watching           open    tasks the user watches, whatever their state, from every tier
 //   Needs you          open    open tasks whose one user status says the user is needed
+//   To read            open    nothing is asked, only a result or an answer to read (2026-11-02)
 //   Working            open    everything else that is open: the board's own bands
 //   Waiting / snoozed  folded  phase WAITING, or a start date still to come under "Now"
 //   Completed          folded  done
@@ -18,7 +19,7 @@ import Foundation
 
 /// One status section of the board.
 enum BoardStatusSection: String, CaseIterable, Identifiable {
-    case watching, needs, working, waiting, done
+    case watching, needs, read, working, waiting, done
 
     var id: String { rawValue }
 
@@ -27,6 +28,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         switch self {
         case .watching: return "Watching"
         case .needs: return "Needs you"
+        case .read: return UserState.read.label
         case .working: return "Working"
         case .waiting: return "Waiting / snoozed"
         case .done: return "Completed"
@@ -38,6 +40,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         switch self {
         case .watching: return "eye"
         case .needs: return "exclamationmark.circle"
+        case .read: return "doc.text"
         case .working: return "circle.lefthalf.filled"
         case .waiting: return "clock"
         case .done: return "checkmark.circle"
@@ -47,7 +50,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
     /// Open on a first visit: what is in front of the user now. Waiting and Completed fold.
     var defaultOpen: Bool {
         switch self {
-        case .watching, .needs, .working: return true
+        case .watching, .needs, .read, .working: return true
         case .waiting, .done: return false
         }
     }
@@ -58,6 +61,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
 struct BoardStatusSections: Equatable {
     var watching: [BoardRow] = []
     var needs: [BoardRow] = []
+    var read: [BoardRow] = []
     var waiting: [BoardRow] = []
     var done: [BoardRow] = []
     /// Rows the bands draw under Working.
@@ -72,6 +76,7 @@ struct BoardStatusSections: Equatable {
         switch section {
         case .watching: return watching
         case .needs: return needs
+        case .read: return read
         case .working: return []
         case .waiting: return waiting
         case .done: return done
@@ -90,7 +95,7 @@ struct BoardStatusSections: Equatable {
 
     /// Some section other than Working holds rows, so an empty Working is no empty board.
     var drawsRows: Bool {
-        !(watching.isEmpty && needs.isEmpty && waiting.isEmpty && done.isEmpty)
+        !(watching.isEmpty && needs.isEmpty && read.isEmpty && waiting.isEmpty && done.isEmpty)
     }
 }
 
@@ -116,7 +121,8 @@ enum BoardStatusSectionModel {
     }
 
     /// The state section a row belongs to, the web's `stateSectionOf`: done wins, then the
-    /// user's turn (`BoardModel.needsHuman`, the rule the red dot reads), then a park or a
+    /// user's turn (`BoardModel.needsHuman`, the rule the red dot reads), then something to
+    /// read (its one user status says To read; a snoozed status never does), then a park or a
     /// snooze (a start date still to come, which only the `Now` date filter treats as one),
     /// else Working. A session-only row has no task to read, so it is Working.
     static func stateSection(
@@ -125,6 +131,7 @@ enum BoardStatusSectionModel {
         guard let task = row.task else { return .working }
         if task.isDone || task.phase == "COMPLETE" { return .done }
         if BoardModel.needsHuman(task) { return .needs }
+        if TeamStatusModel.userState(task.userStatus) == .read { return .read }
         if task.isWaiting || BoardModel.isDeferred(row, filter: dateFilter, now: now) { return .waiting }
         return .working
     }
@@ -152,8 +159,8 @@ enum BoardStatusSectionModel {
     }
 
     /// Order inside a section, the web's `sortSectionTasks`: Watching in the order the user
-    /// added them (a new watch lands at the foot, nothing reshuffles); Needs you latest
-    /// activity first; Waiting the soonest wake first, then the ones with no clock by latest
+    /// added them (a new watch lands at the foot, nothing reshuffles); Needs you and To read
+    /// latest activity first; Waiting the soonest wake first, then the ones with no clock by latest
     /// activity; Completed the latest completion first. Ties keep the id order, so the same
     /// input always draws the same list.
     static func sorted(_ section: BoardStatusSection, _ rows: [BoardRow]) -> [BoardRow] {
@@ -187,7 +194,7 @@ enum BoardStatusSectionModel {
             }
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id < $1.0.id }
             .map(\.0)
-        case .needs, .working:
+        case .needs, .read, .working:
             return rows.map { ($0, activity($0)) }
                 .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.id < $1.0.id }
                 .map(\.0)
@@ -241,6 +248,7 @@ enum BoardStatusSectionModel {
         dateFilter: BoardDateFilter, now: Date
     ) -> BoardStatusSections {
         var needs: [BoardRow] = []
+        var read: [BoardRow] = []
         var waiting: [BoardRow] = []
         var done: [BoardRow] = []
         var seen = Set<String>()
@@ -248,6 +256,7 @@ enum BoardStatusSectionModel {
             if isWatched(row.task) { continue }
             switch stateSection(row, dateFilter: dateFilter, now: now) {
             case .needs: needs.append(row)
+            case .read: read.append(row)
             case .waiting: waiting.append(row)
             case .done: done.append(row)
             case .working, .watching: continue
@@ -258,6 +267,7 @@ enum BoardStatusSectionModel {
         return BoardStatusSections(
             watching: sorted(.watching, watching),
             needs: sorted(.needs, needs),
+            read: sorted(.read, read),
             waiting: sorted(.waiting, waiting),
             done: sorted(.done, done),
             workingCount: workingCount,

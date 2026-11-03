@@ -1,14 +1,19 @@
 /**
  * The ONE status the user sees for a task (2026-10-25, the user: "I don't even know what
- * needs me, what not, and what exactly it is waiting for"). Four states, the same on the
+ * needs me, what not, and what exactly it is waiting for"). Five states, the same on the
  * Board, the Org page, the task list and the phone:
  *
  *   needs    Needs you: the task's phase is NEED_ACTION (or a live prompt blocks on the user).
  *            Always says what to do: the prompt, the letter, the Board choice, the failure, or
  *            the session's own ask.
- *   working  Working: IN_PROGRESS with its session running a turn (or worked by hand).
- *   waiting  Waiting: WAITING or TODO, or IN_PROGRESS with nothing running, and says on whom or
- *            what (another task, a time, a watch, this machine, its lead, not started yet);
+ *   read     To read: nothing is asked, only something to read (ToRead): it finished and its
+ *            result is there, or its turn answered the user's message (2026-11-02, the user:
+ *            these sat under Waiting wearing the needs ring, "this is not waiting").
+ *   working  Working: a turn runs, or the task's own work goes on without one (its build, test
+ *            run, CI run, deploy or land, which wakes it: ownWork). 2026-11-02, the user: "it is
+ *            not finish it is working right, the implementaiton is working, then why it is waiting".
+ *   waiting  Waiting: really blocked outside its own work (a person's review or reply, another
+ *            task, its lead, a set time, this machine, not started yet), or snoozed;
  *            `stuck` when it was in progress and nothing will wake it.
  *   done     Done: COMPLETE.
  *
@@ -26,15 +31,35 @@ import { infraStopCause } from './session-error-kind.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 
-export type UserState = 'needs' | 'working' | 'waiting' | 'done';
+export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
-/** On what a waiting task waits. `outside`: a pipeline, a build, a deploy, a review, a reply from outside Walnut. */
-export type WaitKind = 'task' | 'time' | 'machine' | 'outside' | 'you' | 'lead' | 'not-started' | 'stuck' | 'other';
+/**
+ * On what a waiting task waits. `outside`: a review, a reply, a pipeline someone else runs, from
+ * outside Walnut. `own` is a report's word only (FOR_USER_WAITING_ON own:): the task's own build,
+ * test run, CI run, deploy or land runs and wakes it, which reads Working, never Waiting (ownWork).
+ */
+export type WaitKind = 'task' | 'time' | 'machine' | 'outside' | 'own' | 'you' | 'lead' | 'not-started' | 'stuck' | 'other';
 
-export const USER_STATES: readonly UserState[] = ['needs', 'working', 'waiting', 'done'];
+/** In the order every surface draws them: what needs the user first, finished work last. */
+export const USER_STATES: readonly UserState[] = ['needs', 'read', 'working', 'waiting', 'done'];
 
-/** The report kinds that name a wait outside the user by themselves (sessions/outside-wait.ts). */
-export const OUTSIDE_WAIT_KINDS: ReadonlySet<WaitKind> = new Set<WaitKind>(['task', 'lead', 'machine', 'outside']);
+/**
+ * A state an older reader knows (an iOS build or a companion from before To read): To read was
+ * Waiting with `toRead` set there. Pure; for a writer that must keep an older client's shape.
+ */
+export function legacyUserState(state: UserState): Exclude<UserState, 'read'> {
+  return state === 'read' ? 'waiting' : state;
+}
+
+/** The state a stored status reads as: a To read an older server stored as Waiting with `toRead`
+ *  (and no snooze) is To read. Every reader of a stored status reads it through this. Pure. */
+export function storedUserState(s: Pick<UserStatus, 'state' | 'toRead' | 'snoozed'>): UserState {
+  return s.state === 'waiting' && s.toRead && !s.snoozed ? 'read' : s.state;
+}
+
+/** The report kinds that name a wait outside the user by themselves (sessions/outside-wait.ts):
+ *  `own` too, its own work that wakes it, which may park it on a trigger and reads Working. */
+export const OUTSIDE_WAIT_KINDS: ReadonlySet<WaitKind> = new Set<WaitKind>(['task', 'lead', 'machine', 'outside', 'own']);
 
 /** The words a wait on the user starts with: "you: ...", "the user to paste ...", "your call". */
 const ON_USER_RE = /^\s*(?:(?:waiting\s+)?(?:on|for)\s+)?(?:you|your|user|the user)(?:'s)?(?![\w-])/i;
@@ -66,11 +91,11 @@ function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean
   return true;
 }
 
-/** The four names a person reads, the same on every surface (2026-10-30, the user: "we make the
- *  whole system's naming clear ... the same everywhere ... four small tabs"). No other words for them:
- *  not "need you", "needs me", "handed back" or "stuck" as a state. */
+/** The names a person reads, the same on every surface (2026-10-30, the user: "we make the
+ *  whole system's naming clear ... the same everywhere ... four small tabs"; To read joined them
+ *  2026-11-02). No other words for them: not "need you", "needs me", "handed back" or "stuck" as a state. */
 export const USER_STATE_LABELS: Record<UserState, string> = {
-  needs: 'Needs you', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed',
+  needs: 'Needs you', read: 'To read', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed',
 };
 
 /**
@@ -85,12 +110,13 @@ export function stateWord(state: UserState, snoozed = false): string {
 /** What each name means, in one plain line (shown where a surface explains its tabs). */
 export const USER_STATE_MEANINGS: Record<UserState, string> = {
   needs: 'The next move is yours (an answer, a review, a decision), and it is not snoozed.',
-  working: 'A turn is running, or it carries on by itself.',
-  waiting: 'It waits on something outside you (a build, a review, another task, a time), or you snoozed it; until when is shown.',
+  read: 'Nothing is asked of you: it finished, or answered you, and there is something to read.',
+  working: 'A turn is running, or its own work goes on (its build, test run, deploy) and wakes it.',
+  waiting: 'It is blocked on something outside its own work (a person\'s review or reply, another task, a set time), or you snoozed it; until when is shown.',
   done: 'Finished.',
 };
 
-/** A count in those names: "3 Needs you", "8 Working", "2 Waiting / snoozed", "5 Completed". */
+/** A count in those names: "3 Needs you", "2 To read", "8 Working", "2 Waiting / snoozed", "5 Completed". */
 export function stateCountLabel(state: UserState, n: number): string {
   return `${n} ${USER_STATE_LABELS[state]}`;
 }
@@ -128,12 +154,19 @@ export interface StatusReport {
    * waiting_on), and a task with no lead above it reads as finished, to read and close.
    */
   kindless_ask?: true;
+  /** The status rules it was asked under (STATUS_RULE_VERSION); absent = before 2026-11-02, when a
+   *  task's own build read as a wait (status-reconcile.ts asks such a wait again once). */
+  rule?: number;
   /** Who wrote it when not the task's own session (sessions/report-set.ts): its lead, VP or Main
    *  (`task:<id>`), or a person. The task's next own report replaces it. */
   by?: StatusLineBy;
   /** The setter task's title, for display. */
   by_name?: string;
 }
+
+/** The status rules a report is asked under: 2 = the task's own build, test run, deploy or land is
+ *  working, not waiting (2026-11-02). */
+export const STATUS_RULE_VERSION = 2;
 
 /** How the user answers an ask: yes or no, one of a few options, several of them, or their own words. */
 export type AskKind = 'yes_no' | 'single' | 'multi' | 'text';
@@ -254,14 +287,15 @@ export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: 
  * real ask reaches Needs you"; two finished triage runs, a finished Interview task and a Q&A answer
  * sat in Needs you on Walnut's own sentences). `result`: its own report says it finished and no lead
  * checks it. `answer`: its turn answered the user's message. `turn`: its turn ended with no report
- * asking anything (its last words, sessions/last-words.ts, once read). Each reads Waiting on nothing
- * with these words, while its phase keeps it on the user's list (only WAITING leaves it); a routine
- * run's `result` (and a triage run's `turn`) closes itself (routines/run-close.ts).
+ * asking anything (its last words, sessions/last-words.ts, once read). Each reads To read with these
+ * words in `waitingOn` (2026-11-02, the user: under Waiting they looked like they waited on him),
+ * while its phase keeps it on the user's list; a routine run's `result` (and a triage run's `turn`)
+ * closes itself (routines/run-close.ts).
  */
 export type ToRead = 'result' | 'answer' | 'turn';
-export const RESULT_TO_READ = 'Nothing: it finished, and its result is there to read';
-export const ANSWER_TO_READ = 'Nothing: it answered your message, and its answer is there to read';
-export const TURN_TO_READ = 'Nothing: its turn ended without asking you anything';
+export const RESULT_TO_READ = 'It finished, and its result is there to read';
+export const ANSWER_TO_READ = 'It answered your message, and its answer is there to read';
+export const TURN_TO_READ = 'Its turn ended without asking you anything';
 /** A task with no session that a person or a lead set to NEED_ACTION by hand. */
 export const MARKED_ASK = 'It was set to need you by hand: open it.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
@@ -278,7 +312,7 @@ export interface UserStatus {
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
   source?: 'prompt' | 'letter' | 'choice' | 'error' | 'session';
-  /** waiting: on whom or what, in words. */
+  /** waiting: on whom or what, in words. read: what there is to read. */
   waitingOn?: string;
   now?: string;
   next?: string;
@@ -316,8 +350,11 @@ export interface UserStatus {
   line?: StatusLine;
   /** needs from its own report: the ask in a one-click shape (AskForm). */
   askForm?: AskForm;
-  /** waiting: nothing is asked of the user, only this to read (ToRead). */
+  /** read: nothing is asked of the user, only this to read (ToRead). */
   toRead?: ToRead;
+  /** working with no turn running: its own work goes on and wakes it (ownWork): a live process
+   *  that carries on, an armed watch on it, or its wait clock. */
+  carriesOn?: 'process' | 'watch' | 'clock';
   /** The questions its subtasks ask the user, rolled up through each leader (rollUpAsks): origin
    *  named, its options kept, never a snoozed or a finished subtask's. Its own ask is `ask`. Read
    *  by agents (task_get, task_list rows), so a VP or Main sees every ask below a direct report
@@ -488,7 +525,30 @@ function words(report: StatusReport | null | undefined, nowMs: number, running: 
 
 /** A status with nothing asked of the user, only something to read (ToRead). */
 function toRead(what: ToRead, waitingOn: string, w: Partial<UserStatus>): UserStatus {
-  return strip<UserStatus>({ state: 'waiting', kind: 'other', waitingOn, toRead: what, ...w });
+  return strip<UserStatus>({ state: 'read', waitingOn, toRead: what, ...w });
+}
+
+/**
+ * The task's own work goes on with no turn running (2026-11-02, the user: a task parked on its own
+ * build "is working right, the implementaiton is working, then why it is waiting"): its current
+ * report says so (FOR_USER_STATE working, or a wait of kind `own`: its build, test run, CI run,
+ * deploy or land), and something brings it back when that work ends: its live process (a
+ * background command), an armed watch, or its WAITING clock. Null otherwise: a claim of work with
+ * nothing to wake it is a stop, which the caller reads as such.
+ */
+function ownWork(input: UserStatusInput, report: StatusReport | null, w: ReturnType<typeof words>, nowMs: number): UserStatus | null {
+  // Main and a lead wait on the user and their teams; a task the user snoozed sleeps under Waiting.
+  if (input.isMain || input.isLead || !report) return null;
+  const snooze = startDateMs(clean(input.snoozedUntil));
+  if (Number.isFinite(snooze) && snooze > nowMs) return null;
+  const own = report.state === 'working' || (report.state === 'waiting' && report.waiting_kind === 'own');
+  if (!own || input.processStatus === 'error') return null;
+  const carriesOn: UserStatus['carriesOn'] | null = input.processStatus === 'idle' ? 'process'
+    : (input.triggers ?? []).some((t) => clean(t)) ? 'watch'
+      : input.phase === 'WAITING' && input.waitUntil && Date.parse(input.waitUntil) > nowMs ? 'clock' : null;
+  if (!carriesOn) return null;
+  const until = input.phase === 'WAITING' && input.waitUntil && Date.parse(input.waitUntil) > nowMs ? input.waitUntil : undefined;
+  return strip<UserStatus>({ state: 'working', carriesOn, ...w, ...(until ? { until } : {}) });
 }
 
 function strip<T extends object>(o: T): T {
@@ -602,12 +662,12 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
  *  on them, except a live prompt (it blocks a turn someone started now: the user answers it, snoozed
  *  or not) and Main (its Needs you is the user's turn to talk). The Org rail offers Snooze only here. */
 export function snoozeTakesOff(s: Pick<UserStatus, 'state' | 'source' | 'kind'>, isMain = false): boolean {
-  return !isMain && ((s.state === 'needs' && s.source !== 'prompt') || (s.state === 'waiting' && s.kind === 'you'));
+  return !isMain && ((s.state === 'needs' && s.source !== 'prompt') || s.state === 'read' || (s.state === 'waiting' && s.kind === 'you'));
 }
 
 /**
  * A snoozed task asks nothing of the user until its start date (snooze.ts, 2026-10-30): a status that
- * would ask them (Needs you, or a wait on them) reads Waiting until that date, keeping the ask for the
+ * would ask them (Needs you, To read, or a wait on them) reads Waiting until that date, keeping the ask for the
  * Brief's snoozed list; any other status only carries the mark. Working, Done and a live prompt are
  * as they are, and Main is never snoozed (its Needs you is the user's turn to talk). A session's own
  * report cannot undo it; only a letter with a stated reason raises the task (letter-ops.ts). Null
@@ -620,7 +680,7 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
   if (!Number.isFinite(startMs) || startMs <= nowMs) return null;
   const onUser = snoozeTakesOff(s);
   if (!onUser) return { ...s, snoozed: { until } };
-  const ask = s.state === 'needs' ? s.ask : s.waitingOn;
+  const ask = s.state === 'needs' ? s.ask : s.state === 'read' ? undefined : s.waitingOn;
   return strip<UserStatus>({
     state: 'waiting', kind: 'time', waitingOn: `Snoozed until ${until}`, until: new Date(startMs).toISOString(),
     now: s.now, next: s.next, at: s.at, stale: s.stale,
@@ -722,9 +782,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.pendingPermissionTool) {
     return strip({ state: 'needs', source: 'prompt', ask: `Answer the ${input.pendingPermissionTool} prompt in its session.`, ...w, stale: undefined });
   }
-  // Working is a turn running right now, and nothing else (2026-10-31, the user: "working 就是他现在
-  // 必须正在 working ... 这个在任何地方都是这样"), whatever its phase says.
+  // Working is a turn running right now, whatever its phase says (2026-10-31, the user: "working 就是
+  // 他现在必须正在 working"), or its own work going on without one (ownWork, 2026-11-02, the user:
+  // "if it is runnig it shoud be i progress right?"), read below once nothing asks the user.
   if (running) return strip({ state: 'working', ...w });
+  const own = ownWork(input, report, w, nowMs);
 
   // The state is the task's own phase (2026-10-26, the user: "this status need to be self updated
   // by task, can also be updated by leader ... task has status, we already have good task system").
@@ -790,6 +852,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
       return toRead('result', RESULT_TO_READ, w);
     }
+    // It said its own work goes on (a build it started, a test run) and something wakes it: Working.
+    if (own) return own;
     // Its own armed trigger wakes it (a fire resumes a stopped session): with no ask of its own and no
     // turn running (a NEED_ACTION set inside a turn waits for that turn's report), it waits on the watch.
     // Not Main or a lead: they are never closed, and their NEED_ACTION is the user's turn to talk.
@@ -822,10 +886,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // In progress with no turn running is Waiting, with its reason (Working is a running turn only).
     if (!input.hasSession) return strip({ state: 'waiting', kind: 'not-started', waitingOn: 'Marked in progress; no session runs it', ...w });
     if (machine) return machine;
-    // It said it carries on by itself (a background job it started will wake it) and its process is there.
-    if (report?.state === 'working' && input.processStatus === 'idle') {
-      return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its own background work: it said it carries on by itself', ...w });
-    }
+    // It said its own work carries on (a background job, a build it watches) and something wakes it.
+    if (own) return own;
     // In progress with nothing running: on whom it waits, so no one reads "working" on an idle session.
     if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if ((input.openWorkers ?? 0) > 0) {
@@ -847,6 +909,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const reported = report?.state === 'waiting' && !none(report.waiting_on) ? clean(report.waiting_on) : '';
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
   if (machine) return machine;
+  // Parked on its own work (its build, its test run, a deploy of its change): that is Working, not a
+  // wait (2026-11-02, the user: "wait is not waintg wait is just acutally waitng").
+  if (own && !tasks.length) return own;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
   // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
@@ -878,7 +943,7 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
 }
 
 /** The keys of the status every agent task read carries (agentStatusView). */
-export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
 
 /**
  * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,
@@ -907,17 +972,19 @@ export function summaryAt(task: { field_at?: unknown }): string | undefined {
   return typeof at === 'string' && at ? at : undefined;
 }
 
-export interface UserStatusCounts { needs: number; working: number; waiting: number; done: number }
+/** `read` is optional for a count an older server sent (it counted those under waiting). */
+export interface UserStatusCounts { needs: number; read?: number; working: number; waiting: number; done: number }
 
-export function countUserStates(statuses: Iterable<Pick<UserStatus, 'state'>>): UserStatusCounts {
-  const c: UserStatusCounts = { needs: 0, working: 0, waiting: 0, done: 0 };
-  for (const s of statuses) c[s.state] += 1;
+export function countUserStates(statuses: Iterable<Pick<UserStatus, 'state'>>): Required<UserStatusCounts> {
+  const c: Required<UserStatusCounts> = { needs: 0, read: 0, working: 0, waiting: 0, done: 0 };
+  for (const s of statuses) c[s.state] = (c[s.state] ?? 0) + 1;
   return c;
 }
 
-/** "2 Needs you · 10 Working · 16 Waiting / snoozed · 12 Completed", the one line every surface prints. */
+/** "2 Needs you · 1 To read · 10 Working · 16 Waiting / snoozed · 12 Completed", the one line every
+ *  surface prints; To read only when there is one. */
 export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean } = {}): string {
-  const parts = [stateCountLabel('needs', c.needs), stateCountLabel('working', c.working), stateCountLabel('waiting', c.waiting)];
+  const parts = [stateCountLabel('needs', c.needs), ...(c.read ? [stateCountLabel('read', c.read)] : []), stateCountLabel('working', c.working), stateCountLabel('waiting', c.waiting)];
   if (opts.withDone !== false) parts.push(stateCountLabel('done', c.done));
   return parts.join(' · ');
 }
@@ -982,14 +1049,16 @@ export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly
 // ── The Brief's three sections: what needs the user, what works, what waits ──
 
 /**
- * Every Brief has these three sections, in this order, under these headings (2026-10-30, the user:
+ * Every Brief has these sections, in this order, under these headings (2026-10-30, the user:
  * "what is being done, what does not need me, what needs me ... this task itself actually has this
  * status ... we must put this whole structure in"). A task's line goes in the section of its own
- * live status (Task.user_status), whose Waiting covers a snoozed or parked task. Done work has no
- * section: it leaves the Brief. sessions/brief-structure.ts keeps every stored Brief in this shape.
+ * live status (Task.user_status), whose Waiting covers a snoozed or parked task, and To read (2026-11-02)
+ * a finished result or an answer with nothing asked. Done work has no section: it leaves the Brief. sessions/brief-structure.ts keeps every stored Brief in this shape.
  */
-export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done'>; heading: string }> = [
+export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done'>; heading: string; optional?: true }> = [
   { state: 'needs', heading: 'Needs you' },
+  // Only while a task is to read: the user's three sections stay as they were (2026-10-30).
+  { state: 'read', heading: 'To read', optional: true },
   { state: 'working', heading: 'Working' },
   { state: 'waiting', heading: 'Waiting / snoozed' },
 ];

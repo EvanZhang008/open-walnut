@@ -19,7 +19,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
-import type { StatusReport } from '../user-status.js';
+import { STATUS_RULE_VERSION, type StatusReport } from '../user-status.js';
 import { setReportPending } from './report-pending.js';
 
 /** A turn end this quiet is the end (the CLI's own follow-up turn starts within ~3 s). */
@@ -47,7 +47,7 @@ export function statusQuestionOwns(sessionId: string): boolean {
 export function buildStatusPrompt(forUserPrompt: string, title: string, uiLanguageName?: string): string {
   const lines = forUserPrompt.replace(/^Then these lines/, 'Answer with only these lines');
   const lang = uiLanguageName
-    ? `\nFOR_USER_ASK, FOR_USER_ASK_OWN, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user: write them in ${uiLanguageName}, keeping identifiers and technical terms in their original form; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) and the kind word that starts FOR_USER_ASK_OWN stay in English, followed by ":".`
+    ? `\nFOR_USER_ASK, FOR_USER_ASK_OWN, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user: write them in ${uiLanguageName}, keeping identifiers and technical terms in their original form; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine, own) and the kind word that starts FOR_USER_ASK_OWN stay in English, followed by ":".`
     : '';
   return `Walnut asks where this task${title ? ` ("${title.replace(/\s+/g, ' ').slice(0, 120)}")` : ''} stands now, for the user's board. Do not use any tool and do not continue the work. ${lines}${lang}`;
 }
@@ -70,7 +70,7 @@ export async function applyStatusAnswer(
   const prev = current.status_report;
   const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
-  report = { ...report, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}) };
+  report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}) };
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });

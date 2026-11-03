@@ -366,7 +366,7 @@ function ago(at: number, nowMs: number): string {
   return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
 }
 
-const STATE_WORD: Record<TeamNewsItem['state'], string> = { needs: 'needs the user', working: 'working', waiting: 'waiting', done: 'done' };
+const STATE_WORD: Record<TeamNewsItem['state'], string> = { needs: 'needs the user', read: 'for the user to read', working: 'working', waiting: 'waiting', done: 'done' };
 
 /** The note's text, inside a Walnut notification the lead reads as background. */
 export function buildTeamNoteText(

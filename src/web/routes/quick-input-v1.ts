@@ -426,7 +426,7 @@ export interface QuickTaskRow {
 }
 
 /** Tasks matching the words, best first, open ones before finished ones. */
-const STATE_RANK: Record<string, number> = { needs: 0, working: 1, waiting: 2, done: 3 }
+const STATE_RANK: Record<string, number> = { needs: 0, read: 1, working: 2, waiting: 3, done: 4 }
 
 /** Open board tasks, the ones needing the user first, then the most recently changed. */
 export async function recentQuickTasks(limit: number): Promise<QuickTaskRow[]> {

@@ -22,14 +22,14 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { fallbackUserState, stateWord, type UserStatus } from '../user-status.js';
+import { fallbackUserState, stateWord, storedUserState, type UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
 
 /** One open subtask as a notice names it. */
 export interface OpenSibling {
   id: string;
   title: string;
-  state: 'needs' | 'working' | 'waiting';
+  state: 'needs' | 'read' | 'working' | 'waiting';
   /** The status's words: what the user must do, on what it waits. */
   why?: string;
   /** Its start date is still to come. */
@@ -47,13 +47,14 @@ function isOpen(t: Pick<Task, 'phase' | 'status'>): boolean {
 function stateOf(t: Task): OpenSibling['state'] {
   const s: UserStatus | undefined = t.user_status;
   const state = s?.state ?? fallbackUserState(t.phase, t.status);
-  return state === 'done' ? 'waiting' : state;
+  const read = storedUserState({ state, ...(s ? { toRead: s.toRead, snoozed: s.snoozed } : {}) });
+  return read === 'done' ? 'waiting' : read;
 }
 
 function whyOf(t: Task, state: OpenSibling['state']): string | undefined {
   const s = t.user_status;
   if (!s || s.state !== state) return undefined;
-  const raw = state === 'needs' ? s.ask : state === 'waiting' ? s.waitingOn : undefined;
+  const raw = state === 'needs' ? s.ask : state === 'waiting' || state === 'read' ? s.waitingOn : undefined;
   const text = raw?.replace(/\s+/g, ' ').trim().replace(/[.;:]+$/, '');
   if (!text) return undefined;
   const chars = Array.from(text);
@@ -83,7 +84,7 @@ export async function openSiblings(parentTaskId: string, exclude: ReadonlySet<st
     });
 }
 
-const ORDER: Record<OpenSibling['state'], number> = { needs: 0, working: 1, waiting: 2 };
+const ORDER: Record<OpenSibling['state'], number> = { needs: 0, read: 1, working: 2, waiting: 3 };
 
 /**
  * "Still open: 2 of your subtasks: "Bench Mac" (id, Working), "Bench iOS" (id, Needs you: approve the

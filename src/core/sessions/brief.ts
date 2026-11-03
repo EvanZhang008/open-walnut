@@ -49,7 +49,7 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
   const main = owner.org_role === 'main';
   const team = briefTeam(owner, tasks);
   const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : team;
-  const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], working: [], waiting: [] };
+  const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], read: [], working: [], waiting: [] };
   const inTeam = new Set(team.map((t) => t.id));
   for (const t of org) {
     const section = briefSectionOf(t);
@@ -65,6 +65,8 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
           : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
             : `checked ${agoWords(now - checked)} ${by}`;
       words = `${s?.ask ? `"${flat(s.ask).slice(0, 200)}"` : 'needs the user'} (${when})`;
+    } else if (section === 'read') {
+      words = s?.waitingOn ? `to read: ${flat(s.waitingOn).slice(0, 160)}` : 'to read';
     } else if (section === 'waiting') {
       // Snoozed (src/core/snooze.ts, on the status itself): its date, and the ask it holds back.
       const snoozed = (s as { snoozed?: { until?: string; ask?: string } } | undefined)?.snoozed;

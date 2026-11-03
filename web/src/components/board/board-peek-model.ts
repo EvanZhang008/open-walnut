@@ -10,7 +10,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { USER_STATE_LABELS, type UserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, storedUserState, type UserState } from '@open-walnut/user-status';
 
 export type BoardPeekView =
   | { kind: 'own' }
@@ -34,7 +34,7 @@ export const BOARD_PHASE_USER: Record<string, UserState> = {
 export function boardPhaseLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'> | null | undefined): string {
   if (!task) return '';
   if (task.phase === 'COMPLETE' || task.status === 'done') return USER_STATE_LABELS.done;
-  if (task.user_status) return USER_STATE_LABELS[task.user_status.state];
+  if (task.user_status) return USER_STATE_LABELS[storedUserState(task.user_status)];
   const fallback = task.phase ? BOARD_PHASE_USER[task.phase] : undefined;
   return fallback ? USER_STATE_LABELS[fallback] : (task.phase ?? '');
 }

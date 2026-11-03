@@ -19,7 +19,7 @@ import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
 import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
 import { readAskForm, type AskForm } from './org-ask-form';
-import { USER_STATE_LABELS, checkedLine, stateCountLabel, type UserState, type UserStatus } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, checkedLine, stateCountLabel, storedUserState, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
 
@@ -251,7 +251,8 @@ export interface OrgChannels {
 }
 
 function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
-  return { open: a.open + b.open, running: a.running + b.running, needsYou: a.needsYou + b.needsYou, waiting: a.waiting + b.waiting };
+  // `toRead` may be missing from an older server's counts.
+  return { open: a.open + b.open, running: a.running + b.running, needsYou: a.needsYou + b.needsYou, toRead: (a.toRead ?? 0) + (b.toRead ?? 0), waiting: a.waiting + b.waiting };
 }
 
 /** The projects a VP leads, folded into its own: the VP's row covers all their teams. A project
@@ -290,6 +291,8 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const summary = [`${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
   if (working) summary.push(stateCountLabel('working', working));
   if (needYou) summary.push(stateCountLabel('needs', needYou));
+  const toRead = tree.counts.toRead ?? 0;
+  if (toRead) summary.push(stateCountLabel('read', toRead));
   const main: ChannelRow = {
     key: MAIN_KEY,
     kind: 'main',
@@ -398,7 +401,7 @@ export interface TeamColumn {
   items: TeamItem[];
 }
 
-const COLUMN_ORDER: readonly TeamColumnKey[] = ['needs', 'working', 'waiting'];
+const COLUMN_ORDER: readonly TeamColumnKey[] = ['needs', 'read', 'working', 'waiting'];
 
 function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): TeamColumn[] {
   return COLUMN_ORDER
@@ -413,8 +416,8 @@ function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): Te
 /** The task's own status line for its column: its ask, what it does, or what it waits on. */
 function statusNote(task: Task | undefined, column: TeamColumnKey): string | undefined {
   const s = task?.user_status;
-  if (!s || s.state !== column) return undefined;
-  const text = column === 'needs' ? s.ask : column === 'working' ? s.now : (s.waitingOn ?? s.now);
+  if (!s || storedUserState(s) !== column) return undefined;
+  const text = column === 'needs' ? s.ask : column === 'working' ? s.now : column === 'read' ? s.waitingOn : (s.waitingOn ?? s.now);
   return text?.trim() || undefined;
 }
 
@@ -429,7 +432,8 @@ function teamNote(all: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, 
 }
 
 /** A project's teams by the user's status: a team with anything in it that needs the user sits
- *  under Needs you, else one with anything working under Working, else under Waiting. */
+ *  under Needs you, else one with anything to read under To read, else one with anything working
+ *  under Working, else under Waiting. */
 export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn[] {
   if (!row.node) return [];
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
@@ -437,7 +441,8 @@ export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn
   const items = row.node.teams.map((n) => {
     const all = [n, ...flattenNodes(n.workers)];
     const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || x.userState === 'needs') ? 'needs'
-      : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
+      : all.some((x) => x.userState === 'read') ? 'read'
+        : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
     const note = teamNote(all, byId, column);
     // Every running task of the team, also under Needs you (its ask leads; what runs shows below).
     const live = all.flatMap((x, i) => (x.userState === 'working' ? [i === 0 ? { id: x.id } : { id: x.id, title: x.title }] : []));

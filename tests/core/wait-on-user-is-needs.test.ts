@@ -60,7 +60,7 @@ describe('a task never waits on the user', () => {
     const done: StatusReport = { state: 'done', at: iso(NOW - 60_000) }
     for (const phase of ['NEED_ACTION', 'WAITING']) {
       expect(deriveUserStatus({ phase, report: done, hasSession: true, processStatus: 'stopped', phaseChangedAt: iso(NOW - 120_000) }, NOW))
-        .toMatchObject({ state: 'waiting', kind: 'other', toRead: 'result', waitingOn: RESULT_TO_READ })
+        .toMatchObject({ state: 'read', toRead: 'result', waitingOn: RESULT_TO_READ })
       expect(deriveUserStatus({ phase, report: done, hasLeader: true, hasSession: true, processStatus: 'stopped', phaseChangedAt: iso(NOW - 120_000) }, NOW))
         .toMatchObject({ state: 'waiting', kind: 'lead' })
     }

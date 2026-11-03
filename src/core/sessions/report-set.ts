@@ -37,7 +37,7 @@ export class ReportChangeError extends Error {
   }
 }
 
-const WAIT_KINDS: readonly WaitKind[] = ['task', 'time', 'machine', 'outside', 'you', 'lead', 'other'];
+const WAIT_KINDS: readonly WaitKind[] = ['task', 'time', 'machine', 'outside', 'own', 'you', 'lead', 'other'];
 const MAX = 300;
 const text = (v: unknown): string | undefined => {
   if (v === undefined || v === null) return undefined;

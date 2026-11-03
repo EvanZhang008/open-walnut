@@ -61,6 +61,9 @@ describe('boardPhaseLabel', () => {
   it('the stored user status first, the phase for a task not derived yet, an unknown phase passed through', () => {
     expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } })).toBe('Waiting / snoozed');
     expect(boardPhaseLabel({ phase: 'COMPLETE', user_status: { state: 'needs' } })).toBe('Completed');
+    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result' } })).toBe('To read');
+    // An older server stored To read as Waiting with toRead.
+    expect(boardPhaseLabel({ phase: 'WAITING', user_status: { state: 'waiting', toRead: 'answer' } })).toBe('To read');
     expect(boardPhaseLabel({ phase: 'NEED_ACTION' })).toBe('Needs you');
     expect(boardPhaseLabel({ phase: 'SOMETHING_NEW' as never })).toBe('SOMETHING_NEW');
     expect(boardPhaseLabel(undefined)).toBe('');

@@ -115,6 +115,25 @@ export const ICON_SLIDERS = <svg width="15" height="15" viewBox="0 0 16 16" fill
  * (and keeps its per-phase COLOR via .task-phase-*), but the shape stays simple so
  * a task row reads like a plain todo item.
  */
+/** A snoozed row's mark: it sleeps until its date (the row's ▶︎ pill says when). */
+export const ICON_SNOOZE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.5 9.6A5.75 5.75 0 1 1 6.4 2.5a4.6 4.6 0 0 0 7.1 7.1z"/></svg>;
+/** A To read row's mark: there is a result or an answer to read, nothing asked. */
+export const ICON_TO_READ = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3.25" y="1.75" width="9.5" height="12.5" rx="1.5"/><path d="M5.75 5.25h4.5M5.75 8h4.5M5.75 10.75h2.5"/></svg>;
+
+/**
+ * The mark a status section's row wears (2026-11-02, the user: under Waiting / snoozed the rows wore
+ * the needs ring and "looks kike they are waiting for my input"): its section's, never its phase's.
+ * Waiting: the snooze mark when snoozed, else the hourglass; To read: the page; elsewhere the phase's.
+ */
+export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean): ReactNode {
+  if (isDone) return binaryPhaseIcon(true, phase);
+  if (section === 'waiting') return snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING;
+  if (section === 'read') return ICON_TO_READ;
+  // Working (its own build may run while it is parked) and Needs you wear the open ring.
+  if (section === 'working' || section === 'needs') return ICON_PHASE_TODO;
+  return binaryPhaseIcon(false, phase);
+}
+
 export function binaryPhaseIcon(isDone: boolean, phase?: string): ReactNode {
   if (isDone) return ICON_PHASE_NEED_ACTION;
   // The one open phase with its own shape: a Waiting row says it is set aside,

@@ -122,9 +122,10 @@ enum ChatOrgModel {
     private static func rank(_ s: UserState) -> Int {
         switch s {
         case .needs: return 0
-        case .working: return 1
-        case .waiting: return 2
-        case .done: return 3
+        case .read: return 1
+        case .working: return 2
+        case .waiting: return 3
+        case .done: return 4
         }
     }
 

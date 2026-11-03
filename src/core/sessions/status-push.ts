@@ -70,7 +70,7 @@ export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Se
   const done = task.phase === 'COMPLETE' || task.status === 'done';
   const s: UserStatus | undefined = done ? undefined : task.user_status ?? undefined;
   const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
-  const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' ? clip(s?.waitingOn) : '';
+  const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' || state === 'read' ? clip(s?.waitingOn) : '';
   const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
   return { key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}) };
 }
@@ -86,6 +86,7 @@ export function changeLine(c: Change): string {
   if (c.to.state === 'needs' && c.to.words) line += ` It asks the user: "${c.to.words}".`;
   else if (c.from.state === 'needs' && c.from.words) line += ` It no longer asks the user: "${c.from.words}".`;
   else if (c.to.state === 'waiting' && c.to.words) line += ` Waiting on: ${c.to.words}.`;
+  else if (c.to.state === 'read' && c.to.words) line += ` For the user to read: ${c.to.words}.`;
   return line;
 }
 

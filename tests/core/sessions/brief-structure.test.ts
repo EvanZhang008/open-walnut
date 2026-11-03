@@ -26,7 +26,18 @@ describe('the three sections', () => {
       if (state === 'done') continue
       expect(covered.has(state), `user status "${state}" has no Brief section`).toBe(true)
     }
-    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+    expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'To read', 'Working', 'Waiting / snoozed'])
+    // The user's three always stand; To read only while a task is to read (2026-11-02).
+    expect(BRIEF_SECTIONS.filter((s) => !s.optional).map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
+  })
+
+  it('draws To read right under Needs you while a task is to read, and leaves it out when none is', () => {
+    const done = t('rd', { phase: 'NEED_ACTION', user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished' } })
+    const text = structureBrief('### Needs you\n- nothing\n### Working\n- nothing\n### Waiting / snoozed\n- <task-ref id="rd">x</task-ref> finished', lead.id, [done]).text
+    expect(text.indexOf('### To read')).toBeGreaterThan(text.indexOf('### Needs you'))
+    expect(text.indexOf('### To read')).toBeLessThan(text.indexOf('### Working'))
+    expect(text).toMatch(/### To read\n- <task-ref id="rd">/)
+    expect(structureBrief('### Needs you\n- nothing', lead.id, []).text).not.toContain('To read')
   })
 
   it('put a task by its own live status; done has none', () => {

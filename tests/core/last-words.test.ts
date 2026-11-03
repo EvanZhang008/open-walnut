@@ -43,8 +43,8 @@ describe('the words a turn ended with', () => {
 
   it('a hand-back with no report shows those words, and asks nothing', () => {
     const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'stopped', phaseChangedAt: new Date(Date.now() - 60_000).toISOString() }
-    expect(deriveUserStatus(base)).toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: TURN_TO_READ })
-    expect(deriveUserStatus({ ...base, lastWords: 'Friday or Sunday?' })).toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: `${TURN_TO_READ}; its last words: "Friday or Sunday?"` })
+    expect(deriveUserStatus(base)).toMatchObject({ state: 'read', toRead: 'turn', waitingOn: TURN_TO_READ })
+    expect(deriveUserStatus({ ...base, lastWords: 'Friday or Sunday?' })).toMatchObject({ state: 'read', toRead: 'turn', waitingOn: `${TURN_TO_READ}; its last words: "Friday or Sunday?"` })
   })
 })
 
@@ -70,7 +70,7 @@ describe('on a real task', () => {
     expect(await runLastWordsPass(Date.now(), read)).toEqual([id])
     expect(read).toHaveBeenCalledWith(SID)
     await syncUserStatuses(new Set([id]))
-    expect((await getTask(id)).user_status).toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: `${TURN_TO_READ}; its last words: "The seed order has two options: pick one?"` })
+    expect((await getTask(id)).user_status).toMatchObject({ state: 'read', toRead: 'turn', waitingOn: `${TURN_TO_READ}; its last words: "The seed order has two options: pick one?"` })
     // Read once: not again while the words stand.
     expect(await runLastWordsPass(Date.now() + 10 * 60_000, read)).toEqual([])
     // A new hand-back: the old words describe an older turn; the next pass reads the new ones.

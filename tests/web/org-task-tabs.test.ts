@@ -23,6 +23,9 @@ const tasks: Task[] = [
   t('wl', 'Walnut', 'IN_PROGRESS', { org_role: 'lead', title: 'Walnut lead', user_status: { state: 'working', now: 'Planning' } }),
   t('ask', 'Walnut', 'NEED_ACTION', { user_status: { state: 'needs', source: 'session', ask: 'Pick a layout' } }),
   t('run', 'Walnut', 'IN_PROGRESS', { user_status: { state: 'working', now: 'Writing the parser' } }),
+  // To read: nothing asked, only its result (2026-11-02); an older server stored it as Waiting with toRead.
+  t('rd', 'Walnut', 'NEED_ACTION', { user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } }),
+  t('rd-old', 'Walnut', 'NEED_ACTION', { updated_at: at(2), user_status: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your message' } }),
   // Snoozed: the status says Waiting with its date (the one place, src/core/user-status.ts).
   t('snz', 'Walnut', 'NEED_ACTION', { start_date: '2026-11-02', user_status: { state: 'waiting', kind: 'time', waitingOn: 'Snoozed until 2026-11-02' } }),
   t('done1', 'Walnut', 'COMPLETE', { completed_at: at(3) }),
@@ -36,7 +39,7 @@ describe('the Task view tabs', () => {
   const walnut = rows.find((r) => r.project === 'Walnut')!
 
   it('carry the home panel\'s names, in its order', () => {
-    expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'Working', 'Waiting / snoozed', 'Completed'])
+    expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'To read', 'Working', 'Waiting / snoozed', 'Completed'])
     for (const k of ORG_TASK_TABS) expect(ORG_TASK_TAB_LABELS[k]).toBe(STATUS_SECTION_LABELS[k])
   })
 
@@ -46,6 +49,9 @@ describe('the Task view tabs', () => {
     // The VP's own task is its chat (only its ask would be a card), as the org tree counts.
     expect(tabs.working.map((x) => x.id)).toEqual(['run'])
     expect(tabs.waiting.map((x) => x.id)).toEqual(['snz'])
+    // To read is its own tab right under Needs you, never a card.
+    expect(tabs.read.map((x) => x.id)).toEqual(['rd', 'rd-old'])
+    expect(taskTabNote(tabs.read[0]!, 'read')).toBe('It finished, and its result is there to read')
     // Completed within the week only.
     expect(tabs.done.map((x) => x.id)).toEqual(['done1'])
     expect(taskTabNote(tabs.waiting[0]!, 'waiting')).toBe('Snoozed until 2026-11-02')

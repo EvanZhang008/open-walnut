@@ -44,6 +44,15 @@ describe('applyBriefDecorations', () => {
     expect(t2.writes).toBe(before)
   })
 
+  it('stamps a To read pill and the To read heading as read, never needs', () => {
+    const t1 = pill('t1')
+    const head = { ...pill(''), textContent: 'To read' }
+    const letter = { querySelectorAll: (sel: string) => (sel === 'a[data-task-id]' ? [t1] : [head]) }
+    applyBriefDecorations(letter, new Map([['t1', 'read']]))
+    expect(t1.getAttribute('data-user-state')).toBe('read')
+    expect(head.getAttribute('data-brief-section')).toBe('read')
+  })
+
   it('drops a status no longer known', () => {
     const t1 = pill('t1', { 'data-user-state': 'needs' })
     applyBriefDecorations(root([t1]), new Map())

@@ -117,3 +117,12 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    the empty drop zone holds them, so it lays them out as the list does, not as its
    centred placeholder row. */
 .home-navigation-scroll .todo-focus-drop-zone-empty:has(.project-status-folds) { display: block; padding-left: 0; }
+
+/* To read: its own calm mark and tint, never the red of Needs you (2026-11-02). */
+.status-section-read .status-section-heading-icon { color: var(--accent); }
+.status-section-card .pinned-phase-picker[data-row-mark="read"] { color: var(--accent); }
+/* Waiting / snoozed: the row's wait or snooze mark, muted, and an unread dot that does not
+   read as an ask (2026-11-02, the user: "looks kike they are waiting for my input"). */
+.status-section-card .pinned-phase-picker[data-row-mark="waiting"],
+.status-section-card .pinned-phase-picker[data-row-mark="snoozed"] { color: var(--fg-muted); }
+.status-section-card > .task-unread-dot.task-unread-dot-quiet { background: var(--fg-muted); opacity: 0.55; }

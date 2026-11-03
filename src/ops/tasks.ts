@@ -213,8 +213,8 @@ defineOp({
     'with filters or raise limit (max 200) instead of paging by hand. ' +
     'State is `phase`: TODO | IN_PROGRESS | NEED_ACTION | COMPLETE. NEED_ACTION means the agent handed ' +
     'the work back and is waiting on the human (turn finished, permission prompt, or an error) — it is ' +
-    'NOT done. There is no `status` field. What the user reads is `user_state` (needs | working | waiting | ' +
-    'done, the one status every surface shows): say a task needs the user only when user_state is needs. ' +
+    'NOT done. There is no `status` field. What the user reads is `user_state` (needs | read | working | waiting | ' +
+    'done, the one status every surface shows; read = nothing asked, a result or an answer to read; working includes its own build or test run going on): say a task needs the user only when user_state is needs. ' +
     'Every row carries `user_status` too: its ask, what it waits on, its words (now) and when they were ' +
     'written (at) and checked (checkedAt); that is the live answer, never a summary. ' +
     'A snoozed task (snoozed_until: its start date is still to come) is never needs before that date: do ' +
@@ -725,7 +725,7 @@ const REPORT_CHANGE = z.object({
   state: z.enum(['needs', 'working', 'waiting']).describe('needs = the user must decide or do something (ask required); waiting = on whom or what (waiting_on required); working = it carries on'),
   ask: z.string().max(300).optional().describe('With needs: the one concrete thing the user must decide or do'),
   waiting_on: z.string().max(300).optional().describe('With waiting: on whom or what exactly ("its lead, to land commit abc", "the CI run on main")'),
-  waiting_kind: z.enum(['task', 'time', 'machine', 'outside', 'you', 'lead', 'other']).optional().describe('With waiting: what kind of thing it waits on'),
+  waiting_kind: z.enum(['task', 'time', 'machine', 'outside', 'own', 'you', 'lead', 'other']).optional().describe('With waiting: what kind of thing it waits on (own: its own build, test run or deploy, which reads Working)'),
   next: z.string().max(300).optional().describe('Who does what next, one sentence'),
   ask_kind: z.enum(['yes_no', 'single', 'multi', 'text']).optional()
     .describe('With needs: how the user answers. Prefer yes_no, then single (pick one) or multi (pick several), over text'),

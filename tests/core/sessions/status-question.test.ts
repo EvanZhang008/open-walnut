@@ -20,6 +20,7 @@ import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.
 import { FOR_USER_PROMPT, buildSelfReportPrompt, runTriage, __resetTriageRateLimiter } from '../../../src/core/session-hooks/builtins.js'
 import { armStatusQuestion, askStatus, buildStatusPrompt, cancelStatusQuestion, statusQuestionOwns, STATUS_SETTLE_MS, __resetStatusQuestion } from '../../../src/core/sessions/status-question.js'
 import { isReportPending } from '../../../src/core/sessions/report-pending.js'
+import { STATUS_RULE_VERSION } from '../../../src/core/user-status.js'
 import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/types.js'
 import type { Task } from '../../../src/core/types.js'
 
@@ -182,7 +183,9 @@ describe('the reconcile loop', () => {
     const now = Date.parse('2026-10-31T18:00:00Z')
     const iso = (min: number) => new Date(now - min * 60_000).toISOString()
     const idle = { process_status: 'idle', last_status_change: iso(10), provider: 'cli' } as const
-    const t = (reportMin: number | null) => ({ phase: 'WAITING', status: 'in_progress', ...(reportMin === null ? {} : { status_report: { at: iso(reportMin), turn_ended_at: iso(reportMin), state: 'waiting' } }) }) as never
+    // Reports asked under the current rules (a wait under the old ones is asked once again:
+    // working-means-own-work.test.ts).
+    const t = (reportMin: number | null) => ({ phase: 'WAITING', status: 'in_progress', ...(reportMin === null ? {} : { status_report: { at: iso(reportMin), turn_ended_at: iso(reportMin), state: 'waiting', rule: STATUS_RULE_VERSION } }) }) as never
     expect(statusMissed(t(30), idle, now)).toBe(Date.parse(iso(10)))
     expect(statusMissed(t(null), idle, now)).toBe(Date.parse(iso(10)))
     // Its answer covers the last turn.

@@ -72,10 +72,42 @@ struct OrgCountsWire: Decodable, Equatable {
     var running = 0
     var needsYou = 0
     var waiting = 0
+    /// To read: finished or answered with nothing asked (additive, 2026-11-02). Absent from an
+    /// older server, which counts those tasks under `waiting`.
+    var toRead: Int? = nil
+
+    /// What there is to read; 0 from a server that sends no such count.
+    var read: Int { toRead ?? 0 }
+
+    private enum CodingKeys: String, CodingKey {
+        case open, running, needsYou, waiting, toRead
+        case readAlias = "read"
+    }
+
+    init(open: Int = 0, running: Int = 0, needsYou: Int = 0, waiting: Int = 0, toRead: Int? = nil) {
+        self.open = open
+        self.running = running
+        self.needsYou = needsYou
+        self.waiting = waiting
+        self.toRead = toRead
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        open = try c.decode(Int.self, forKey: .open)
+        running = try c.decode(Int.self, forKey: .running)
+        needsYou = try c.decode(Int.self, forKey: .needsYou)
+        waiting = try c.decode(Int.self, forKey: .waiting)
+        // The server names it `toRead`; `read` is read too, so either spelling counts.
+        toRead = (try? c.decodeIfPresent(Int.self, forKey: .toRead))
+            ?? (try? c.decodeIfPresent(Int.self, forKey: .readAlias)) ?? nil
+    }
 
     static func + (a: OrgCountsWire, b: OrgCountsWire) -> OrgCountsWire {
-        OrgCountsWire(open: a.open + b.open, running: a.running + b.running,
-                      needsYou: a.needsYou + b.needsYou, waiting: a.waiting + b.waiting)
+        // Absent on both sides stays absent: an older server's counts never read "0 To read".
+        let read: Int? = a.toRead == nil && b.toRead == nil ? nil : a.read + b.read
+        return OrgCountsWire(open: a.open + b.open, running: a.running + b.running,
+                             needsYou: a.needsYou + b.needsYou, waiting: a.waiting + b.waiting, toRead: read)
     }
 }
 

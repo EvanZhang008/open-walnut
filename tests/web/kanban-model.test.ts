@@ -97,6 +97,18 @@ describe('status line (C15, C57)', () => {
     expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000), user_status: { state: 'needs', ask: 'x' } })).status.tone).toBe('green');
   });
 
+  it('To read words a card in a calm tone, never Needs you; own work going on reads Working', () => {
+    const ended = { phase: 'NEED_ACTION' as const };
+    const read = vm(mkTask({ ...ended, user_status: { state: 'read', toRead: 'result', waitingOn: 'It finished, and its result is there to read' } }));
+    expect(read.status).toMatchObject({ text: 'It finished, and its result is there to read', tone: 'blue', kind: 'to-read' });
+    expect(read.needsYou).toBe(false);
+    // An older server stored To read as Waiting with toRead.
+    expect(vm(mkTask({ ...ended, user_status: { state: 'waiting', toRead: 'answer', waitingOn: 'It answered your message' } })).status)
+      .toMatchObject({ text: 'It answered your message', tone: 'blue', kind: 'to-read' });
+    expect(vm(mkTask({ phase: 'IN_PROGRESS', user_status: { state: 'working', carriesOn: 'process', now: 'Its test run goes on' } })).status)
+      .toMatchObject({ text: 'Working: Its test run goes on', tone: 'amber', kind: 'carries-on' });
+  });
+
   it('Start follows the task, whatever words its status line carries (C75)', () => {
     const states: Array<Task['user_status']> = [
       undefined,

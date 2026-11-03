@@ -11,10 +11,11 @@ import { STATUS_SECTION_LABELS, isWatched, sortSectionTasks } from '@/components
 import { readStatusLine } from './org-ask-form';
 import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 
-export type OrgTaskTab = 'needs' | 'working' | 'waiting' | 'done';
-export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'working', 'waiting', 'done'];
+// To read sits right under Needs you (2026-11-02): nothing asked, only something to read.
+export type OrgTaskTab = 'needs' | 'read' | 'working' | 'waiting' | 'done';
+export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'read', 'working', 'waiting', 'done'];
 export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
-  needs: STATUS_SECTION_LABELS.needs, working: STATUS_SECTION_LABELS.working,
+  needs: STATUS_SECTION_LABELS.needs, read: STATUS_SECTION_LABELS.read, working: STATUS_SECTION_LABELS.working,
   waiting: STATUS_SECTION_LABELS.waiting, done: STATUS_SECTION_LABELS.done,
 };
 
@@ -34,7 +35,7 @@ export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'w
 
 /** Each status tab's dot. */
 export const TAB_DOT: Record<OrgTaskTab, string> = {
-  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+  needs: 'var(--error, #FF3B30)', read: '#6d5bd0', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
 
 /** Completed work stays listed this long (the Board's Status view and the phone use the same). */
@@ -45,6 +46,8 @@ export interface OrgTaskTabs {
   watching: Task[];
   /** The cards: every ask in the node's work. */
   needs: OrgAlertView[];
+  /** Nothing asked, only something to read (its words in user_status.waitingOn). */
+  read: Task[];
   working: Task[];
   waiting: Task[];
   done: Task[];
@@ -75,7 +78,7 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
     ? dedupe([...row.alerts, ...rows.flatMap((r) => r.alerts)])
     : row.alerts;
   const newest = (a: Task, b: Task) => taskTime(b) - taskTime(a);
-  const of = (state: 'working' | 'waiting') => [...open.values()].filter((t) => userStateOf(t) === state).sort(newest);
+  const of = (state: 'read' | 'working' | 'waiting') => [...open.values()].filter((t) => userStateOf(t) === state).sort(newest);
   const cutoff = now - ORG_DONE_WINDOW_DAYS * 24 * 60 * 60_000;
   const done = tasks
     .filter((t) => userStateOf(t) === 'done' && !t.plugin_only && projects.has(projectKey(t.project)) && doneAt(t) >= cutoff)
@@ -83,7 +86,7 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
   // Watched, done or not: on the CEO every one Home's Watching lists, on a VP those of its projects.
   const watching = sortSectionTasks('watching', tasks.filter((t) => isWatched(t) && !t.plugin_only
     && (row.kind === 'main' || projects.has(projectKey(t.project)))));
-  return { watching, needs, working: of('working'), waiting: of('waiting'), done };
+  return { watching, needs, read: of('read'), working: of('working'), waiting: of('waiting'), done };
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
@@ -118,6 +121,7 @@ export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   // The task's own line for the state it is in (user_status.line), when it has one.
   const own = readStatusLine(s);
   if (own && tab !== 'done') return own.text;
+  if (tab === 'read') return s?.waitingOn?.trim() ?? '';
   if (tab === 'working') return s?.now?.trim() ?? '';
   if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
   return '';

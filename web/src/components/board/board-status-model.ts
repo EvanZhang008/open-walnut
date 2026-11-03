@@ -1,16 +1,17 @@
 /**
  * The Board's Status view (BoardStatusView.tsx): every task of the team in ONE list, by the
- * one status the user sees (src/core/user-status.ts), the same four states and the same
+ * one status the user sees (src/core/user-status.ts), the same five states and the same
  * counts as the Org page, the task list and the phone. Pure: no React, no DOM. Unit-pinned
  * in tests/web/board-status-model.test.ts.
  *
- * Order, top down: Needs you (newest first), Working (latest activity first), Waiting (stuck
- * first, then by what it waits on, not started last), Done (the recent window, newest first).
+ * Order, top down: Needs you (newest first), To read (newest first), Working (latest activity
+ * first), Waiting (stuck first, then by what it waits on, not started last), Done (the recent
+ * window, newest first).
  * A worker under another worker is listed flat and says whom it is under.
  */
 import type { Task } from '@open-walnut/core';
 import {
-  USER_STATES, countUserStates, dueAtMs, fallbackUserState, stateCountLabel,
+  USER_STATES, countUserStates, dueAtMs, fallbackUserState, stateCountLabel, storedUserState,
   type UserState, type UserStatus, type UserStatusCounts, type WaitKind,
 } from '@open-walnut/user-status';
 import { teamChildren, walkTeam } from './board-overview-model';
@@ -34,14 +35,18 @@ export interface StatusBoard {
 /** The stored status, else what the phase alone says (a task the server has not derived yet). */
 export function userStatusOf(task: Task): UserStatus {
   if (task.phase === 'COMPLETE' || task.status === 'done') return { state: 'done' };
-  if (task.user_status) return task.user_status;
+  // A To read an older server stored as Waiting with `toRead` reads as To read (storedUserState).
+  if (task.user_status) {
+    const state = storedUserState(task.user_status);
+    return state === task.user_status.state ? task.user_status : { ...task.user_status, state };
+  }
   const state = fallbackUserState(task.phase, task.status);
   // Not derived yet (an older server): a hand back reads as an older Walnut meant it.
   return state === 'needs' ? { state, ask: 'Open it: its session handed the task back.' } : { state };
 }
 
 const WAIT_ORDER: Record<WaitKind, number> = {
-  stuck: 0, you: 1, task: 2, lead: 3, outside: 4, machine: 4, time: 5, other: 6, 'not-started': 9,
+  stuck: 0, you: 1, task: 2, lead: 3, outside: 4, machine: 4, own: 4, time: 5, other: 6, 'not-started': 9,
 };
 
 const ms = (iso: string | null | undefined): number => {
@@ -70,7 +75,7 @@ export function buildStatusBoard(input: {
   ];
   const titleOf = new Map(input.tasks.map((t) => [t.id, t.title] as const));
   const cutoff = input.now - input.doneWindowDays * 24 * 60 * 60_000;
-  const groups: Record<UserState, StatusRow[]> = { needs: [], working: [], waiting: [], done: [] };
+  const groups: Record<UserState, StatusRow[]> = { needs: [], read: [], working: [], waiting: [], done: [] };
   for (const m of members) {
     const status = userStatusOf(m.task);
     if (status.state === 'done' && ms(m.task.completed_at ?? m.task.updated_at) < cutoff) continue;
@@ -92,6 +97,7 @@ export function buildStatusBoard(input: {
     return order(a, b);
   };
   groups.needs.sort(byDue(newest));
+  groups.read.sort(newest);
   groups.working.sort(byDue(newest));
   groups.done.sort(newest);
   groups.waiting.sort(byDue((a, b) => {
@@ -132,18 +138,19 @@ export function statusBrief(board: StatusBoard): StatusBrief {
   };
 }
 
-/** "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
+/** "2 To read, 10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
 export function briefCountsLine(b: StatusBrief): string {
   const extra = [b.stuck ? `${b.stuck} with nothing to wake it` : '', b.notStarted ? `${b.notStarted} not started` : ''].filter(Boolean).join(', ');
   const waiting = `${stateCountLabel('waiting', b.counts.waiting)}${extra ? ` (${extra})` : ''}`;
-  return `${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
+  const read = b.counts.read ? `${stateCountLabel('read', b.counts.read)}, ` : '';
+  return `${read}${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
 }
 
 export type StatusFilter = 'open' | UserState;
 export const isStatusFilter = (v: unknown): v is StatusFilter => v === 'open' || (USER_STATES as readonly unknown[]).includes(v);
 
-/** The rows a filter shows, in the table's order: Needs you, Working, Waiting (open), or one state. */
+/** The rows a filter shows, in the table's order: Needs you, To read, Working, Waiting (open), or one state. */
 export function filteredRows(board: StatusBoard, filter: StatusFilter): StatusRow[] {
-  if (filter === 'open') return [...board.groups.needs, ...board.groups.working, ...board.groups.waiting];
+  if (filter === 'open') return [...board.groups.needs, ...board.groups.read, ...board.groups.working, ...board.groups.waiting];
   return board.groups[filter];
 }

@@ -52,7 +52,7 @@ describe('hand-back settle hold', () => {
     expect((await getTask(t.id)).user_status?.state).toBe('working')
 
     await syncUserStatuses(new Set([t.id]), moved + HANDBACK_SETTLE_MS + 1)
-    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: TURN_TO_READ })
+    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'read', toRead: 'turn', waitingOn: TURN_TO_READ })
   })
 
   it('never writes Needs you for a hand-back a new turn undoes inside the hold', async () => {

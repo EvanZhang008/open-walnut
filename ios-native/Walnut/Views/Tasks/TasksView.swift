@@ -984,14 +984,14 @@ struct TasksView: View {
         )
     }
 
-    /// The board under its status sections: Watching and Needs you, the Working heading over
+    /// The board under its status sections: Watching, Needs you and To read, the Working heading over
     /// the bands, then Waiting / snoozed and Completed (`BoardStatusSections`).
     @ViewBuilder
     private func statusBoard(
         _ sections: BoardStatusSections, entries: [BoardCollapse.Entry], isEmpty: Bool
     ) -> some View {
         let open = BoardStatusSectionPrefs.decode(sectionsOpenRaw)
-        ForEach([BoardStatusSection.watching, .needs].filter { sections.isShown($0) }) { key in
+        ForEach([BoardStatusSection.watching, .needs, .read].filter { sections.isShown($0) }) { key in
             statusSection(key, sections: sections, open: open[key] ?? key.defaultOpen)
         }
         BoardWorkingHeading(

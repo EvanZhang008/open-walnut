@@ -57,6 +57,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
+import { storedUserState } from '../../core/user-status.js'
 import {
   BoardError,
   boardHasContent,
@@ -244,7 +245,7 @@ async function resolveRefs(ids: string[]): Promise<BoardRef[]> {
     if (ref.length < 4) continue
     const task = await getTask(ref).catch(() => undefined)
     if (!task) continue
-    const user = task.phase === 'COMPLETE' || task.status === 'done' ? 'done' : task.user_status?.state
+    const user = task.phase === 'COMPLETE' || task.status === 'done' ? 'done' : task.user_status ? storedUserState(task.user_status) : undefined
     out.push({ ref, id: task.id, title: task.title, phase: task.phase, status: task.status, ...(user ? { user } : {}) })
   }
   return out

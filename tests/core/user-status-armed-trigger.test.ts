@@ -73,7 +73,7 @@ describe('an armed trigger of its own wakes the task', () => {
     expect(deriveUserStatus({ ...base, phase: 'IN_PROGRESS', processStatus: 'stopped', triggers: [] }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it' })
     expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', hasLeader: false, triggers: [] }, NOW))
-      .toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: expect.stringContaining('its turn ended') })
+      .toMatchObject({ state: 'read', toRead: 'turn', waitingOn: expect.stringMatching(/its turn ended/i) })
     expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', processStatus: 'stopped', triggers: [] }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'lead' })
   })

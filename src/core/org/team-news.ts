@@ -59,6 +59,7 @@ const PLAIN_WAITS: ReadonlySet<string> = new Set(['you', 'lead', 'not-started', 
 export function statusWords(s: TeamNewsTask['user_status'], state: UserState): string {
   if (!s || s.state !== state) return '';
   if (state === 'needs') return clean(s.ask || s.now);
+  if (state === 'read') return clean(s.now || s.waitingOn);
   const waits = state === 'waiting' && !PLAIN_WAITS.has(s.kind ?? '') ? s.waitingOn : '';
   return clean(s.now || waits);
 }

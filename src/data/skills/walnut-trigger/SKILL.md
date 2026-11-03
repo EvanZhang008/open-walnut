@@ -294,6 +294,15 @@ armed (no trigger of the task, no unanswered request, no subtask at work, no
 a turn-end report that waits on nothing outside puts the task back on the
 user's list. A trigger with `watches` (the user's ask or a letter) never parks.
 
+**Your own build is still your work.** A build, test run, CI run, deploy or land
+of your own change, which you act on when it ends, is not a wait: the user reads
+the task as Working (2026-11-02, the user: "wait is just actually waiting, if it
+is running it should be in progress"). Arm the trigger on it and park as usual
+so the session can go idle, and say so in the turn-end report:
+`FOR_USER_STATE: working`, with what runs in `FOR_USER_NOW` (or
+`FOR_USER_WAITING_ON: own: the build of my change`), never `outside:`. Waiting
+is for a real block: a person's review or reply, another team, a set time.
+
 **Use it on your own.** When the rest of the work waits on something outside
 this session (a review, a merge, a deploy, a build, a CI run, a reply from a
 person), do not ask the user to watch it or to "make a trigger": write the

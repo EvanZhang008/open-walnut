@@ -10,7 +10,10 @@
  *   waiting      WAITING      only for a wait outside Walnut and the user (outside-wait.ts): one it
  *                             names (outside, task, lead, machine), or one the task has armed (a
  *                             trigger of its own, a request out, an open subtask); else NEED_ACTION
- *   working      IN_PROGRESS  it carries on by itself, and its process is still there
+ *   working      IN_PROGRESS  it carries on by itself, and its process is still there; a task parked
+ *                             on a trigger stays WAITING, and its status reads Working (user-status.ts
+ *                             ownWork: its own build, test run or deploy, 2026-11-02)
+ *   waiting own  WAITING      its own build, test run or deploy runs: parked on it, read as Working
  *   done         WAITING      with a leader, which checks and closes it; without one it stays handed back
  *
  * Main and a lead never move to NEED_ACTION (Needs you is only ever an individual task, 2026-10-31):

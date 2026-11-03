@@ -129,6 +129,7 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
 const EMPTY: Record<OrgRailTab, string> = {
   watching: 'Nothing watched here. Watch a task with the eye on its row to keep it in view, here and on Home.',
   needs: 'Nothing needs you here.',
+  read: 'Nothing to read here.',
   working: 'Nothing is working here.',
   waiting: 'Nothing is waiting or snoozed here.',
   done: 'Nothing completed in the last week.',

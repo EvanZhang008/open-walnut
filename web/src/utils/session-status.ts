@@ -7,6 +7,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, TaskPhase } from '@/types/session';
+import { storedUserState } from '@open-walnut/user-status';
 
 // ── Session ID resolution ──
 
@@ -40,7 +41,7 @@ export function taskNeedsAction(task: Task): boolean {
   return task.phase === 'NEED_ACTION';
 }
 
-export type TaskUserState = 'needs' | 'working' | 'waiting' | 'done';
+export type TaskUserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
 /**
  * The one user state of a task on the web: the server's `user_status` (src/core/user-status.ts,
@@ -51,7 +52,7 @@ export type TaskUserState = 'needs' | 'working' | 'waiting' | 'done';
  */
 export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status'>, snoozed = false): TaskUserState {
   if (task.status === 'done' || task.phase === 'COMPLETE') return 'done';
-  if (task.user_status) return task.user_status.state;
+  if (task.user_status) return storedUserState(task.user_status);
   if (task.phase === 'NEED_ACTION') return snoozed ? 'waiting' : 'needs';
   // Working stays Working while snoozed, as on the server (user-status.ts snoozeOf).
   return task.phase === 'IN_PROGRESS' ? 'working' : 'waiting';
