@@ -194,7 +194,7 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onOpen: (row) => { void openMailMessage(row.accountId, row.messageId); },
           onReply: reply,
           onForward: forward,
-          onTalkToCeo: (row) => { void talkToCeo(mailContentItem(row)).catch(() => { /* toasted */ }); },
+          onTalkToCeo: (row) => { void talkToCeo(mailContentItem(row)).catch(() => { /* no app shell yet */ }); },
           onNewTask: (row) => { void newTaskFromContent(mailContentItem(row)); },
           onOpenTask: (taskId) => { openTaskOnHome(taskId, navigate); },
           onSearchSender: (address) => { void runMailSearch(address); },

@@ -5,7 +5,9 @@
  * A plugin never turns content into a task itself. It describes the content as a `ContentItem`
  * and Walnut gives the person exactly two choices, the same in every plugin:
  *
- *   - Talk to CEO: the content, with its context, goes to the main agent's chat.
+ *   - Talk to CEO: a box opens where the person clicked; they write what they want to tell the
+ *     CEO, and Send puts their words, with the content attached as context, into the main
+ *     agent's chat. Nothing is sent before Send.
  *   - New task: the ordinary new-task draft opens with the content's title and context filled
  *     in; the person writes the first prompt, picks a project and a host, and nothing exists
  *     until they press Send.
@@ -43,15 +45,22 @@ export interface ContentAction {
   label: string
   /** A sentence for a tooltip. */
   description: string
-  /** Do it. Talk to CEO resolves once the message is sent; New task once the draft is open. */
-  run(): Promise<void>
+  /**
+   * Do it. Talk to CEO opens the box and resolves once it is sent (true) or closed without
+   * sending (false); New task resolves once the draft is open.
+   */
+  run(): Promise<unknown>
 }
 
 export interface ContentActionsService {
   /** The two choices for this content, in the order Walnut shows them. */
   actions(item: ContentItem): ContentAction[]
-  /** Send it to the main agent's chat. Walnut shows the outcome with a way to open that chat. */
-  talkToCeo(item: ContentItem): Promise<void>
+  /**
+   * Open the Talk to CEO box (at the person's last click): they write to the CEO and Send it with
+   * the content attached. Resolves true once it is sent, false when they closed it without
+   * sending; Walnut shows the outcome with a way to open that chat.
+   */
+  talkToCeo(item: ContentItem): Promise<boolean>
   /** Open the new-task draft filled in with it. Nothing is created until the person sends. */
   newTask(item: ContentItem): Promise<void>
 }

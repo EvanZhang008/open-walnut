@@ -76,6 +76,21 @@ describe('content never becomes a task on its own', () => {
     expect(Object.keys(ALLOWED).filter((key) => !found.has(key))).toEqual([])
   })
 
+  it('nothing goes to the CEO without words the person wrote in the Talk to CEO box', () => {
+    // 2026-11-03, the user: "I definitely have something to say ... at least give me an input box".
+    // The one web caller of the route is sendToCeo, which the box calls on Send with the note; any
+    // other place in the app or a plugin surface posting it would send without the person's words.
+    const callers = ['web/src', 'src/integrations', 'plugin-store', 'examples/plugins'].flatMap((dir) => files(dir))
+      .filter((rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').includes('/api/v1/content/ceo'))
+      .filter((rel) => !/\.(test|spec)\.tsx?$/.test(rel))
+    expect(callers).toEqual(['web/src/utils/content-actions.ts'])
+    const src = fs.readFileSync(path.join(ROOT, callers[0]), 'utf8')
+    expect(src.match(/'\/api\/v1\/content\/ceo'/g)).toHaveLength(1)
+    expect(src).toMatch(/apiPost<CeoAnswer>\('\/api\/v1\/content\/ceo', \{ item, note: words \}/)
+    // talkToCeo (buttons, menus, plugins) only opens the box.
+    expect(src).toMatch(/export function talkToCeo\(raw: ContentItem\): Promise<boolean> \{\n  return openCeoComposer\(raw\);\n\}/)
+  })
+
   it('the matcher sees each member of the class and skips a sync push', () => {
     const cases: Array<[string, boolean]> = [
       ['const task = await walnut.tasks.create({ title })', true],

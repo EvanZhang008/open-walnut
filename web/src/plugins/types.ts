@@ -348,7 +348,7 @@ export interface WalnutWebApiHost {
   /** Talk to CEO and New task for one piece of content (utils/content-actions.ts). */
   readonly content: {
     actions(item: ContentItem): ContentAction[]
-    talkToCeo(item: ContentItem): Promise<void>
+    talkToCeo(item: ContentItem): Promise<boolean>
     newTask(item: ContentItem): Promise<void>
   }
   readonly ui: {

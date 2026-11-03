@@ -32,6 +32,7 @@ import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 import { IMAGE_ACCEPT, MAX_IMAGES, imageFilesOf, pastedImageFiles, readImageFile } from '@/components/common/image-attachments';
+import { focusWhenShown } from '@/utils/focus-when-shown';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -431,13 +432,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // everything the user typed next was lost. The caller reveals the composer
     // in the same state batch; these retries cover the frames where a parent
     // animates/mounts it slightly later.
-    let frames = 0;
-    let raf = 0;
-    const tryFocus = () => {
-      const el = textareaRef.current;
-      if (!el) return;
-      if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
-      el.focus();
+    const placeCaret = (el: HTMLTextAreaElement | HTMLInputElement) => {
       // End of the text for an append or a stacked quote (the block landed at the
       // end); end of the injected block otherwise, measured in
       // its inline form because a tag shrinks to its token.
@@ -446,12 +441,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         : Math.min(inlineRefs(prefillText, split.table).body.length, split.body.length);
       el.setSelectionRange(caret, caret);
       el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
-      // Still not focused (a competing focus handler won the frame) → one retry.
-      if (document.activeElement !== el && frames++ < 20) raf = requestAnimationFrame(tryFocus);
+      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el as HTMLTextAreaElement)) + 'px';
     };
-    raf = requestAnimationFrame(tryFocus);
-    return () => cancelAnimationFrame(raf);
+    // A competing focus handler that wins a frame is retried too (focusWhenShown checks activeElement).
+    return focusWhenShown(() => textareaRef.current, placeCaret);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
 
@@ -461,18 +454,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // goes to the END of whatever is already typed.
   useEffect(() => {
     if (!focusNonce) return;
-    let frames = 0;
-    let raf = 0;
-    const tryFocus = () => {
-      const el = textareaRef.current;
-      if (!el) return;
-      if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-      if (document.activeElement !== el && frames++ < 20) raf = requestAnimationFrame(tryFocus);
-    };
-    raf = requestAnimationFrame(tryFocus);
-    return () => cancelAnimationFrame(raf);
+    return focusWhenShown(() => textareaRef.current, (el) => el.setSelectionRange(el.value.length, el.value.length));
   }, [focusNonce]);
 
   // Close the "+" and send dropdowns on outside click / Escape.

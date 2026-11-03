@@ -77,6 +77,7 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
+import { focusWhenShown } from '@/utils/focus-when-shown';
 import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
@@ -503,17 +504,12 @@ export function DraftSessionPanel({
   // Focus the textarea AFTER paint, and query inside rootRef only: several draft
   // columns can be open at once, so a document-level query would grab whichever
   // one happens to be first in the DOM.
+  // Retried until shown: a draft opened from another page mounts while Home is still hidden.
   useEffect(() => {
     if (!autoFocus) return;
-    const raf = requestAnimationFrame(() => {
-      const el = getComposer();
-      if (!el) return;
-      el.focus();
-      // A restored or seeded draft ("Snooze this task until: ") goes on where its text ends;
-      // a bare focus() leaves the caret at 0, so typing landed in front of it.
-      el.setSelectionRange(el.value.length, el.value.length);
-    });
-    return () => cancelAnimationFrame(raf);
+    // A restored or seeded draft ("Snooze this task until: ") goes on where its text ends;
+    // a bare focus() leaves the caret at 0, so typing landed in front of it.
+    return focusWhenShown(getComposer, (el) => el.setSelectionRange(el.value.length, el.value.length));
   }, [autoFocus, getComposer]);
 
   // Owner asked for the folder picker (a Start with no cwd that reached MainPage —

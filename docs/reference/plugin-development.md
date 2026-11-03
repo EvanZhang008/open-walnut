@@ -1217,7 +1217,7 @@ Each tab of the browser shows its own `useView` values too: when the user has yo
 
 When your App shows content (an email, a chat message, a post), Walnut offers the person the same two choices on it as everywhere else in Walnut, and your plugin never makes a task out of it itself:
 
-- **Talk to CEO** sends the content, with its context, into the main agent's chat as the person's message. A toast says it was sent and opens that chat.
+- **Talk to CEO** opens a box where the person clicked. They write what they want to tell the CEO, the content rides along as attached context, and nothing is sent until they press Send. Their words, then the content, go into the main agent's chat as their message; a toast says it was sent and opens that chat.
 - **New task** opens the home page's new-task draft with the content's title on the first line and its context below. The person writes the first prompt, picks a project and a host, and presses Send; nothing exists until then.
 
 Describe the content as a `ContentItem` and hand it over:

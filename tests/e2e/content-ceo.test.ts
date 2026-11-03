@@ -4,7 +4,9 @@
  *   - Main with no session is started with the message; Main with a live session gets it in its
  *     queue as the person's message; Main waiting on a prompt is not sent to (held)
  *   - the message is built by the server from the item: title line, frame, data note, Walnut link
- *   - an item with nothing to say is refused before any send
+ *   - the person's own words (`note`) lead the message and are its personText; a blank or
+ *     oversized note, or an item with nothing to say, is refused before any send; an older client
+ *     with no note gets the fixed hand-over line
  *   - a marked test run talks to a stand-in test task, never the real Main, and reuses it
  * The session start is stubbed (it would spawn a CLI).
  */
@@ -77,22 +79,31 @@ describe('POST /api/v1/content/ceo', () => {
     expect((await post({ item: { source: 'Mail' } })).status).toBe(400)
     expect((await post({ item: 'x' })).status).toBe(400)
     expect((await post({})).status).toBe(400)
+    for (const note of ['   \n ', 42, 'x'.repeat(8001)]) {
+      const r = await post({ item: ITEM, note })
+      expect(r.status).toBe(400)
+      expect((await r.json() as { code: string }).code).toBe('bad_note')
+    }
     expect(starts).toHaveLength(0)
   })
 
-  it('starts Main with the framed content when it has no session', async () => {
-    const res = await post({ item: ITEM })
+  it("starts Main with the person's words and the framed content when it has no session", async () => {
+    const note = 'Can you check whether I already picked a plan?\r\nIf not, remind me Thursday.'
+    const res = await post({ item: ITEM, note: `  ${note}  ` })
     expect(res.status).toBe(200)
-    const body = await res.json() as { taskId: string; started: boolean; testRun?: boolean }
+    const body = await res.json() as { taskId: string; started: boolean; noted?: boolean; testRun?: boolean }
     expect(body.started).toBe(true)
+    expect(body.noted).toBe(true)
     expect(body.testRun).toBeUndefined()
     expect((await getTask(body.taskId)).org_role).toBe('main')
     expect(starts).toHaveLength(1)
     const message = String(starts[0].message)
-    expect(message.split('\n')[0]).toMatch(/^Please take over this Mail item/)
-    // The content rides a Walnut notice: the row is the person's, its own words the request line alone.
-    expect(message).toContain('<walnut-message kind="notification" from="Walnut" outcome="handed-over"')
-    expect(personTextOf(message)).toBe(message.split('\n')[0])
+    const words = 'Can you check whether I already picked a plan?\nIf not, remind me Thursday.'
+    expect(message.startsWith(`${words}\n\n`)).toBe(true)
+    expect(message).not.toContain('Please take over')
+    // The content rides a Walnut notice: the row is the person's, its own words theirs alone.
+    expect(message).toContain('<walnut-message kind="notification" from="Walnut" title="Attached Mail: Benefits enrollment closes Nov 15" outcome="handed-over"')
+    expect(personTextOf(message)).toBe(words)
     expect(message).toContain('<external-content source="Mail">')
     expect(message).toContain('Title: Benefits enrollment closes Nov 15')
     expect(message.match(/<\/external-content>/g)).toHaveLength(1)
@@ -108,8 +119,10 @@ describe('POST /api/v1/content/ceo', () => {
     await updateSessionRecord(sid, { process_status: 'idle' } as never)
     starts.length = 0
 
+    // An older client sends no note: the fixed hand-over line stands in for it.
     const sent = await (await post({ item: { source: 'Slack', title: 'Can you review the deploy plan?', where: '#team-deploy', url: 'https://example.slack.com/archives/C1/p1' } })).json() as Record<string, unknown>
     expect(sent).toMatchObject({ taskId: mainId, sessionId: sid, started: false })
+    expect(sent.noted).toBeUndefined()
     expect(starts).toHaveLength(0)
     const queue = await getQueue(sid)
     const queued = queue[queue.length - 1]
@@ -130,7 +143,7 @@ describe('POST /api/v1/content/ceo', () => {
     {
       starts.length = 0
       const headers = { 'x-walnut-test-run': 'content-ceo-probe' }
-      const res = await post({ item: ITEM }, headers)
+      const res = await post({ item: ITEM, note: 'What should I do about this?' }, headers)
       expect(res.status).toBe(200)
       const body = await res.json() as { taskId: string; testRun?: boolean; started: boolean }
       expect(body.testRun).toBe(true)
@@ -140,7 +153,11 @@ describe('POST /api/v1/content/ceo', () => {
       expect(standIn.plugin_only).toBe('@test-run')
       expect(starts).toHaveLength(1)
       expect(starts[0].taskIdPrefix).toBe(body.taskId)
-      expect(String(starts[0].message)).toMatch(/^Test run: you stand in for the CEO/)
+      // The person's words lead; the test note rides as a Walnut notice, never as their words.
+      const message = String(starts[0].message)
+      expect(personTextOf(message)).toBe('What should I do about this?')
+      expect(message).toContain('outcome="test-run"')
+      expect(message).toContain('Test run: you stand in for the CEO')
       // The same test run finds the same stand-in again, also for two clicks at once.
       const both = await Promise.all([post({ item: ITEM }, headers), post({ item: ITEM }, headers)])
       for (const one of both) expect((await one.json() as { taskId: string }).taskId).toBe(body.taskId)

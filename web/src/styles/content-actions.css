@@ -35,3 +35,93 @@
 .content-actions-compact [data-state='done'] {
   color: var(--success, var(--fg));
 }
+.content-action-btn[data-state='open'],
+.content-actions-compact [data-state='open'] {
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+
+/* The Talk to CEO box (components/content/CeoComposer.tsx). */
+.ceo-composer {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: 420px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg, #fff);
+  color: var(--fg);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+}
+.ceo-composer-centered {
+  top: 18vh;
+  max-height: calc(82vh - 16px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.ceo-composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.ceo-composer-close {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ceo-composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--fg);
+  font: inherit;
+  line-height: 1.45;
+}
+.ceo-composer-input:focus {
+  outline: none;
+  border-color: var(--accent, var(--fg-muted));
+}
+.ceo-composer-attached {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+}
+.ceo-composer-attached svg { flex: none; color: var(--fg-muted, var(--fg)); }
+.ceo-composer-source { flex: none; font-weight: 600; }
+.ceo-composer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ceo-composer-from { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted, var(--fg)); }
+.ceo-composer-error { color: var(--error, #ff3b30); font-size: 12px; }
+.ceo-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ceo-composer-hint { margin-right: auto; color: var(--fg-muted, var(--fg)); font-size: 11px; }
+.ceo-composer-send:not(:disabled) {
+  border-color: var(--accent, var(--fg));
+  background: var(--accent, var(--fg));
+  color: #fff;
+}
