@@ -5,15 +5,20 @@ import Foundation
 ///
 ///   rows    a project under another project's VP folds into that VP's row (its counts are the
 ///           VP's), so a VP leading five projects is one row; the Inbox has no VP and no row here
-///   state   needs    something in the row needs the user: a task's status (`user_status`) or,
-///                    on a VP's own row, the VP itself
+///   threads the CEO's and a VP's own Threads (the user's own requests to it, `user_status.threads`)
+///           come first: the row's line names them ("1 thread: <title>", "3 threads") while one
+///           waits on him, or while no task under the row asks him anything (a thread that only
+///           shows an answer never hides a task's ask); the ones waiting on him lead its badge
+///   state   needs    something in the row needs the user: a thread waiting on him, a task's
+///                    status (`user_status`) or, on a VP's own row, the VP itself
 ///           working  a task in the row is Working (the web counts the team, not the VP)
 ///           waiting  anything else
 ///   order   needs, working, waiting; inside one state the newest move first (the VP or any task
 ///           in the row, by `updated_at`), then by project name, as the Org page sorts
 ///
-/// The CEO's row is its own state (it waits on the user itself), else Working while any VP's
-/// team works, as on the web.
+/// The CEO's row is its own state (its threads or a wait on the user itself), else Working while
+/// any VP's team works, as on the web. A node whose status reads Needs you because of its threads
+/// (`source: "thread"`) counts as those threads, never once more as an ask of its own.
 enum ChatOrgModel {
     struct Row: Identifiable, Equatable {
         enum Kind: Equatable { case ceo, vp }
@@ -35,9 +40,38 @@ enum ChatOrgModel {
         let ledProjects: [String]
         /// One line under the name.
         let line: String
+        /// The node's own Threads that hold something for the user (nil = none shown).
+        var threads: WalnutThreadCounts? = nil
     }
 
     static let ceoName = "CEO"
+
+    /// "1 thread", "3 threads": the words every surface counts them in (web `threadCountLabel`).
+    static func threadCountLabel(_ n: Int) -> String {
+        "\(n) thread\(n == 1 ? "" : "s")"
+    }
+
+    /// A row's line about its Threads: how many his view shows (the number the Threads tab
+    /// counts), then the newest waiting on him, else the newest shown (web `threadLine`).
+    static func threadLine(_ c: WalnutThreadCounts) -> String {
+        let label = threadCountLabel(c.shown)
+        guard let title = c.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return label }
+        return "\(label): \(title)"
+    }
+
+    /// The node's own Threads when they hold something for the user (web `threadsOf`).
+    static func threadsOf(_ id: String?, tasks: [String: WalnutTask]) -> WalnutThreadCounts? {
+        guard let id, let c = tasks[id]?.userStatus?.threads, c.shown > 0 else { return nil }
+        return c
+    }
+
+    /// Needs you on the node itself, apart from its threads: a status whose source is its threads
+    /// is those threads, counted once (web `collectFlatAlerts`).
+    static func ownNeeds(_ id: String?, phase: String?, tasks: [String: WalnutTask]) -> Int {
+        guard ownState(id, phase: phase, tasks: tasks) == .needs else { return 0 }
+        if let id, tasks[id]?.userStatus?.source == "thread" { return 0 }
+        return 1
+    }
 
     static func projectKey(_ project: String?) -> String {
         (project ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -57,24 +91,30 @@ enum ChatOrgModel {
     static func rows(tree: OrgTreeWire, tasks: [WalnutTask]) -> [Row] {
         let byId = Dictionary(tasks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let vps = vpRows(tree.projects, tasks: byId)
-        // What needs the user under the VPs listed here. The web also counts the Inbox, which is a
-        // row there; on the phone the CEO's line adds up to the rows below it.
-        let teamNeeds = vps.reduce(0) { $0 + $1.needs }
+        // What the tasks under the VPs listed here ask the user. The web also counts the Inbox,
+        // which is a row there; on the phone the CEO's line adds up to the rows below it. A VP's
+        // own threads are counted as threads on its row, never as a Needs you here.
+        let teamNeeds = vps.reduce(0) { $0 + $1.needs - ($1.threads?.needs ?? 0) }
         return [ceoRow(tree, vpCount: vps.count, teamNeeds: teamNeeds, tasks: byId)] + vps
     }
 
     private static func ceoRow(_ tree: OrgTreeWire, vpCount: Int, teamNeeds: Int, tasks: [String: WalnutTask]) -> Row {
-        let own = tree.main.map { ownState($0.id, phase: $0.phase, tasks: tasks) } ?? .waiting
-        let ownNeeds = own == .needs ? 1 : 0
-        let state: UserState = ownNeeds > 0 ? .needs : tree.counts.running > 0 ? .working : .waiting
-        // The web's Main line: how many VPs, what works, and what needs the user under them.
+        let threads = threadsOf(tree.main?.id, tasks: tasks)
+        let needs = (threads?.needs ?? 0)
+            + (tree.main.map { ownNeeds($0.id, phase: $0.phase, tasks: tasks) } ?? 0)
+        let state: UserState = needs > 0 ? .needs : tree.counts.running > 0 ? .working : .waiting
+        // The web's Main line: its own threads first, then how many VPs, what works, and what
+        // needs the user under them. A thread waiting on him names itself in place of the count.
         var parts = ["\(vpCount) \(vpCount == 1 ? "VP" : "VPs")"]
+        if let threads {
+            parts.insert(threads.needs > 0 ? threadLine(threads) : threadCountLabel(threads.shown), at: 0)
+        }
         if tree.counts.running > 0 { parts.append("\(tree.counts.running) working") }
         if teamNeeds > 0 { parts.append("\(teamNeeds) \(teamNeeds == 1 ? "needs" : "need") you") }
         return Row(
             id: "ceo", kind: .ceo, name: ceoName, contactId: tree.main?.id, project: "",
-            state: state, needs: ownNeeds, working: tree.counts.running, open: tree.counts.open,
-            ledProjects: [], line: parts.joined(separator: " · ")
+            state: state, needs: needs, working: tree.counts.running, open: tree.counts.open,
+            ledProjects: [], line: parts.joined(separator: " · "), threads: threads
         )
     }
 
@@ -92,19 +132,25 @@ enum ChatOrgModel {
             if let vp = p.vp.map(projectKey), own.contains(vp) { continue }
             let under = p.vp == nil ? led[projectKey(p.project)] ?? [] : []
             let counts = under.reduce(p.counts) { $0 + $1.counts }
-            // A VP leading several projects waits on the user once, on its own project's row.
-            let leadNeeds = p.lead != nil && p.vp == nil
-                && ownState(p.lead?.id, phase: p.lead?.phase, tasks: tasks) == .needs ? 1 : 0
+            // A VP leading several projects waits on the user once, on its own project's row:
+            // its threads waiting on him first, then the VP itself unless those are its ask.
+            let ownRow = p.lead != nil && p.vp == nil
+            let threads = ownRow ? threadsOf(p.lead?.id, tasks: tasks) : nil
+            let leadNeeds = ownRow ? ownNeeds(p.lead?.id, phase: p.lead?.phase, tasks: tasks) : 0
             // To read is Needs you on the phone: the server counts it apart (`toRead`).
-            let needs = counts.needsYou + counts.read + leadNeeds
+            let asks = counts.needsYou + counts.read + leadNeeds
+            let needs = (threads?.needs ?? 0) + asks
             let state: UserState = needs > 0 ? .needs : counts.running > 0 ? .working : .waiting
+            // Its threads name the row while one waits on him, or while nothing else asks him.
+            let threadsLine = threads.flatMap { $0.needs > 0 || asks == 0 ? threadLine($0) : nil }
             let name = p.lead?.name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? p.project.trimmingCharacters(in: .whitespacesAndNewlines)
             let row = Row(
                 id: "project:\(projectKey(p.project))", kind: .vp, name: name,
                 contactId: p.contactId ?? p.lead?.id, project: p.project,
                 state: state, needs: needs, working: counts.running, open: counts.open,
-                ledProjects: under.map(\.project), line: line(state: state, open: counts.open)
+                ledProjects: under.map(\.project),
+                line: threadsLine ?? line(state: state, open: counts.open), threads: threads
             )
             // The web's `lastAt`: the VP (on its own row) and every task under the row.
             let ids = (p.vp == nil ? [p.lead?.id].compactMap { $0 } : [])
@@ -129,10 +175,10 @@ enum ChatOrgModel {
         }
     }
 
-    /// The row's state in words, with how much is open under it.
+    /// The row's state in words; "Nothing open" for a quiet VP with no work. No "N open" count
+    /// (2026-11-03, the user, on the web's node header: "remove xx open not needed").
     static func line(state: UserState, open: Int) -> String {
-        guard open > 0 else { return state == .waiting ? "Nothing open" : state.label }
-        return "\(state.label) · \(open) open"
+        open > 0 || state != .waiting ? state.label : "Nothing open"
     }
 
     /// The avatar's letters: "WA" for one word, "PL" for "Personal Life".

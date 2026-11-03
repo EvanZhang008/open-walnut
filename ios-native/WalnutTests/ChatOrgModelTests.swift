@@ -159,8 +159,120 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertNil(rows[0].contactId)
         XCTAssertNil(rows[1].contactId)
         XCTAssertEqual(rows[1].state, .working)
-        XCTAssertEqual(rows[1].line, "Working · 2 open")
+        // No "N open" count on a row (the web dropped it from the node header, 2026-11-03).
+        XCTAssertEqual(rows[1].line, "Working")
         XCTAssertEqual(rows[0].line, "1 VP · 1 working")
+    }
+
+    private func node(_ id: String, phase: String = "IN_PROGRESS", status: WalnutUserStatus) -> WalnutTask {
+        WalnutTask(
+            id: id, title: id, status: "in_progress", phase: phase, priority: "none", project: "",
+            dueDate: nil, createdAt: nil, updatedAt: nil, completedAt: nil,
+            starred: nil, pinned: nil, tags: nil, summary: nil,
+            userStatus: status, orgRole: id.hasPrefix("main") ? "main" : "lead"
+        )
+    }
+
+    /// A node waiting on the user through its Threads: the server's status for it.
+    private func threadNeeds(_ title: String, shown: Int, needs: Int) -> WalnutUserStatus {
+        WalnutUserStatus(
+            state: "needs", ask: title, source: "thread", category: "decide",
+            threads: WalnutThreadCounts(shown: shown, needs: needs, title: title, id: "th-1")
+        )
+    }
+
+    /// The words every surface counts threads in (web src/core/org/thread-view.ts).
+    func testThreadWordsMatchTheWeb() {
+        XCTAssertEqual(ChatOrgModel.threadCountLabel(1), "1 thread")
+        XCTAssertEqual(ChatOrgModel.threadCountLabel(3), "3 threads")
+        XCTAssertEqual(ChatOrgModel.threadLine(WalnutThreadCounts(shown: 3, needs: 0, title: "Rename the app")), "3 threads: Rename the app")
+        // Always the shown count, the number the Threads tab and the node header show.
+        XCTAssertEqual(ChatOrgModel.threadLine(WalnutThreadCounts(shown: 3, needs: 1, title: "Pick a host")), "3 threads: Pick a host")
+        XCTAssertEqual(ChatOrgModel.threadLine(WalnutThreadCounts(shown: 2, needs: 0)), "2 threads")
+        XCTAssertEqual(ChatOrgModel.threadLine(WalnutThreadCounts(shown: 1, needs: 0, title: "  ")), "1 thread")
+    }
+
+    /// `user_status.threads` decodes on a node, is nil from an older server, and an odd shape
+    /// never fails the task list.
+    func testDecodesThreadsOnTheUserStatusTolerantly() throws {
+        func status(_ json: String) throws -> WalnutUserStatus {
+            try JSONDecoder().decode(WalnutUserStatus.self, from: Data(json.utf8))
+        }
+        let full = try status(#"{"state":"needs","ask":"Pick a host (and 1 more)","source":"thread","category":"decide","threads":{"shown":3,"needs":2,"title":"Pick a host","id":"th-9"}}"#)
+        XCTAssertEqual(full.source, "thread")
+        XCTAssertEqual(full.threads, WalnutThreadCounts(shown: 3, needs: 2, title: "Pick a host", id: "th-9"))
+        XCTAssertNil(try status(#"{"state":"waiting","waitingOn":"its teams"}"#).threads)
+        XCTAssertNil(try status(#"{"state":"waiting","threads":null}"#).threads)
+        XCTAssertEqual(try status(#"{"state":"waiting","threads":{"shown":2}}"#).threads, WalnutThreadCounts(shown: 2, needs: 0))
+        XCTAssertEqual(try status(#"{"state":"waiting","threads":{"shown":"2","needs":-1,"title":7}}"#).threads, WalnutThreadCounts())
+        XCTAssertEqual(try status(#"{"state":"waiting","threads":"2 threads"}"#).threads, WalnutThreadCounts())
+        // On a task row from the list, as the v1 projection sends it.
+        let row = try JSONDecoder().decode(WalnutTask.self, from: Data(#"""
+        {"id":"lead-p","title":"Personal VP","status":"in_progress","phase":"IN_PROGRESS","priority":"none","project":"Personal",
+         "org_role":"lead","user_status":{"state":"waiting","threads":{"shown":1,"needs":0,"title":"Plan the trip"}}}
+        """#.utf8))
+        XCTAssertEqual(row.userStatus?.threads?.title, "Plan the trip")
+    }
+
+    /// A VP's own Threads lead its row while one waits on him, or while no task asks him
+    /// anything; the badge adds the ones waiting on him to its tasks' asks, and the VP's
+    /// thread-sourced Needs you is those threads, not one more ask.
+    func testAVPRowShowsItsThreadsFirstAndCountsThemOnce() throws {
+        let tasks = [
+            node("lead-p", status: threadNeeds("Pick a host", shown: 2, needs: 1)),
+            node("lead-w", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 3, needs: 0, title: "Rename the app"))),
+            node("lead-o", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 1, needs: 0, title: "Plan the trip"))),
+        ]
+        let rows = ChatOrgModel.rows(tree: try tree(), tasks: tasks)
+        let by = Dictionary(uniqueKeysWithValues: rows.map { ($0.name, $0) })
+        // One waits on him: the thread line, though a task under Personal asks too.
+        let personal = try XCTUnwrap(by["Personal"])
+        XCTAssertEqual(personal.line, "2 threads: Pick a host")
+        // 1 thread waiting on him + 1 task under Personal; the VP itself is not counted again.
+        XCTAssertEqual(personal.needs, 2)
+        XCTAssertEqual(personal.state, .needs)
+        XCTAssertEqual(personal.threads?.needs, 1)
+        // Threads that only show answers never hide a task's ask: Walnut's 3 asks keep its line.
+        let walnut = try XCTUnwrap(by["Walnut"])
+        XCTAssertEqual(walnut.line, "Needs you")
+        XCTAssertEqual(walnut.needs, 3)
+        XCTAssertEqual(walnut.threads?.shown, 3)
+        // Nothing else asks him: the thread line, no badge.
+        let ops = try XCTUnwrap(by["Ops"])
+        XCTAssertEqual(ops.line, "1 thread: Plan the trip")
+        XCTAssertEqual(ops.needs, 0)
+        XCTAssertEqual(ops.state, .waiting)
+        // A project led by another VP never shows that VP's threads on a row of its own.
+        XCTAssertFalse(rows.contains { $0.name == "Garden" })
+        // The CEO counts only the tasks' asks under the VPs, never their threads:
+        // Marina 4 (by the tree's phase) + Personal 1 + Walnut 3.
+        XCTAssertEqual(by["CEO"]?.line, "4 VPs · 9 working · 8 need you")
+        // A count of zero threads is no threads.
+        XCTAssertNil(ChatOrgModel.threadsOf("lead-x", tasks: ["lead-x": node("lead-x", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts()))]))
+    }
+
+    /// The CEO's own Threads lead its line; one waiting on him names itself there and is its
+    /// badge, never counted twice with the status it gives Main.
+    func testTheCEOLineStartsWithItsThreads() throws {
+        let shownOnly = ChatOrgModel.rows(tree: try tree(), tasks: [
+            node("main-1", status: WalnutUserStatus(state: "waiting", threads: WalnutThreadCounts(shown: 2, needs: 0, title: "Weekly plan"))),
+        ])[0]
+        XCTAssertEqual(shownOnly.kind, .ceo)
+        XCTAssertEqual(shownOnly.line, "2 threads · 4 VPs · 9 working · 9 need you")
+        XCTAssertEqual(shownOnly.needs, 0)
+        XCTAssertEqual(shownOnly.state, .working)
+
+        let waiting = ChatOrgModel.rows(tree: try tree(), tasks: [
+            node("main-1", status: threadNeeds("Approve the budget", shown: 3, needs: 2)),
+        ])[0]
+        XCTAssertEqual(waiting.line, "3 threads: Approve the budget · 4 VPs · 9 working · 9 need you")
+        XCTAssertEqual(waiting.needs, 2)
+        XCTAssertEqual(waiting.state, .needs)
+
+        // An older server: no threads, the line and badge as before.
+        let old = ChatOrgModel.rows(tree: try tree(), tasks: [node("main-1", status: WalnutUserStatus(state: "waiting"))])[0]
+        XCTAssertEqual(old.line, "4 VPs · 9 working · 9 need you")
+        XCTAssertNil(old.threads)
     }
 
     func testInitialsAndColorsMatchTheWeb() {
@@ -209,7 +321,7 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(ChatDrawerView.allCases.first, .org)
         XCTAssertEqual(ChatDrawerOrgList.accessibilityText(ChatOrgModel.Row(
             id: "project:marina", kind: .vp, name: "Marina", contactId: "x", project: "Marina",
-            state: .needs, needs: 2, working: 0, open: 5, ledProjects: ["Garden"], line: "Needs you · 5 open"
-        )), "Marina, VP, also leads Garden, Needs you · 5 open, 2 need you")
+            state: .needs, needs: 2, working: 0, open: 5, ledProjects: ["Garden"], line: "1 thread: Pick a host"
+        )), "Marina, VP, also leads Garden, 1 thread: Pick a host, 2 need you")
     }
 }

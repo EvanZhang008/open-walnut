@@ -569,7 +569,8 @@ struct WalnutUserStatus: Codable, Equatable {
     let state: String
     var kind: String? = nil
     var ask: String? = nil
-    /// needs: prompt | letter | choice | error | session (where the ask lives).
+    /// needs: prompt | letter | choice | error | session | thread (where the ask lives). `thread`:
+    /// a CEO or VP whose own Threads wait on the user (`threads`); its ask is that thread's title.
     var source: String? = nil
     var waitingOn: String? = nil
     var now: String? = nil
@@ -601,6 +602,34 @@ struct WalnutUserStatus: Codable, Equatable {
     /// `close`, the word that leads the row's third line. Absent from an older server, which
     /// the phone derives (`TeamStatusModel.needCategory`; additive, 2026-11-03).
     var category: String? = nil
+    /// The CEO or a VP: what its Threads (the user's own requests to it) hold for him. nil on
+    /// other tasks, on a node with none shown, and from an older server (additive, 2026-11-03).
+    var threads: WalnutThreadCounts? = nil
+}
+
+/// `user_status.threads` (server `src/core/org/thread-view.ts` `ThreadCounts`): how many threads
+/// his view shows, how many of those wait on him, and the newest waiting on him (else the newest
+/// shown). Decoded leniently: a missing or odd field reads as 0 or nil, never a failed task list.
+struct WalnutThreadCounts: Codable, Equatable {
+    var shown = 0
+    var needs = 0
+    var title: String? = nil
+    var id: String? = nil
+
+    init(shown: Int = 0, needs: Int = 0, title: String? = nil, id: String? = nil) {
+        self.shown = shown
+        self.needs = needs
+        self.title = title
+        self.id = id
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        shown = max(0, (try? c?.decodeIfPresent(Int.self, forKey: .shown)) ?? 0)
+        needs = max(0, (try? c?.decodeIfPresent(Int.self, forKey: .needs)) ?? 0)
+        title = (try? c?.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        id = (try? c?.decodeIfPresent(String.self, forKey: .id)) ?? nil
+    }
 }
 
 /// `user_status.snoozed`: until when, and the ask it holds back meanwhile. Decoded leniently: a
