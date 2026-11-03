@@ -27,3 +27,10 @@ export function isPhoneLayout(): boolean {
 export function usePhoneLayout(): boolean {
   return useSyncExternalStore(subscribe, isPhoneLayout, () => false);
 }
+
+/** The Home strip this window keeps (layout-record.ts): a phone has its own, so a phone showing one
+ *  column never overwrites the Mac's strip of three. Decided by the device (a touch screen in the
+ *  phone layout), not the width alone: a Mac window opened narrow is still the Mac's strip. */
+export function homeColumnsField(): 'homeColumns' | 'phoneColumns' {
+  return isPhoneLayout() && typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches ? 'phoneColumns' : 'homeColumns';
+}

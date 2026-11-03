@@ -13,7 +13,7 @@ import { ORG_MAIN_NODE, buildOrgTree, orgProjectNode } from '../../src/core/org/
 import { resolvePinNode, watchNodeOf } from '../../src/core/org/org-pins.js'
 import { USER_STATE_LABELS } from '../../src/core/user-status.js'
 import { MAIN_KEY, buildChannels, projectRowKey, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, watchedByRow } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, keptByRow, lockedTaskIds } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -68,7 +68,7 @@ describe('a project another VP leads', () => {
     const { main, rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
     const alpha = rows.find((r) => r.project === 'Alpha')!
     expect(orgTaskTabs(alpha, rows, tasks, NOW).watching.map((x) => x.id)).toEqual(['b1', 'a1'])
-    expect(watchedByRow(main, rows, tasks).get(alpha.key)?.map((x) => x.id)).toEqual(['b1', 'a1'])
+    expect(keptByRow(main, rows, tasks).get(alpha.key)?.map((x) => x.task.id)).toEqual(['b1', 'a1'])
   })
 })
 
@@ -117,11 +117,12 @@ describe('the Watching tab', () => {
   })
 
   it('puts each watched task under one row of the Org list: its VP, the Inbox row for the Inbox', () => {
-    const by = watchedByRow(main, rows, tasks)
-    const all = [...by.values()].flat().map((x) => x.id).sort()
+    const by = keptByRow(main, rows, tasks)
+    const all = [...by.values()].flat().map((x) => x.task.id).sort()
     expect(all).toEqual(['early', 'g1', 'inbox', 'late', 'shipped'])
-    expect(by.get(walnut.key)?.map((x) => x.id)).toEqual(['early', 'shipped', 'late'])
-    expect(by.get(garden.key)?.map((x) => x.id)).toEqual(['g1'])
+    expect(by.get(walnut.key)?.map((x) => x.task.id)).toEqual(['early', 'shipped', 'late'])
+    expect(by.get(garden.key)?.map((x) => x.task.id)).toEqual(['g1'])
+    expect([...by.values()].flat().every((x) => x.watched && !x.locked)).toBe(true)
   })
 
   it('draws each watched task with its own state\'s dot and words, for every user state', () => {
@@ -141,6 +142,57 @@ describe('the Watching tab', () => {
 // The class: a second list of tasks to keep in view, apart from Home's watch. Every Org page file
 // is read; one that reads or writes Task.org_pins, or offers "Pin" / "Unpin" / "Pinned" on a task,
 // brings the second list back.
+// 2026-11-02, the user: "if a taks is lock also show here, show icon of watch or lock".
+describe('a task whose session panel is locked hangs under its row too', () => {
+  const tasks: Task[] = [
+    t('main', 'Ask Walnut', 'IN_PROGRESS', { org_role: 'main', walnut_agent: true, session_id: 's-main' }),
+    t('wl', 'Walnut', 'IN_PROGRESS', { org_role: 'lead', session_id: 's-lead' }),
+    t('w', 'Walnut', 'IN_PROGRESS', { watched_at: at(5), session_id: 's-w' }),
+    t('both', 'Walnut', 'IN_PROGRESS', { watched_at: at(9), session_id: 's-both' }),
+    t('home', 'Walnut', 'TODO', { exec_session_id: 's-exec', session_ids: ['s-old', 's-home'] }),
+    t('org', 'Walnut', 'IN_PROGRESS', { session_id: 's-org' }),
+    t('legacy', '', 'TODO', { legacy_session_ids: ['s-legacy'] }),
+    t('plug', 'Walnut', 'IN_PROGRESS', { plugin_only: 'mail', session_id: 's-plug' }),
+    t('free', 'Walnut', 'IN_PROGRESS', { session_id: 's-free' }),
+  ]
+  // Home's strips name sessions; the Org page's panels `task:` or `session:`.
+  const slots = [
+    { id: 's-home', locked: true },
+    { id: 's-free', locked: false },
+    { id: 'session:s-both', locked: true },
+    { id: 'task:org', locked: true },
+    { id: 's-legacy', locked: true },
+    { id: 's-plug', locked: true },
+    { id: 's-lead', locked: true },
+    { id: 's-old', locked: true },
+    { id: 'draft:1-1', locked: true },
+    { id: 'pending:x', locked: true },
+    { id: 'task:gone', locked: true },
+    { id: 's-unknown', locked: true },
+  ]
+  const { main, rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
+  const walnut = rows.find((r) => r.project === 'Walnut')!
+
+  it('reads every strip\'s locked slot as its task, once, in lock order', () => {
+    expect(lockedTaskIds(slots, tasks)).toEqual(['home', 'both', 'org', 'legacy', 'plug', 'wl'])
+  })
+
+  it('lists the watched first, then the only-locked, each saying why, never a lead\'s own task or a plugin\'s', () => {
+    const by = keptByRow(main, rows, tasks, lockedTaskIds(slots, tasks))
+    expect(by.get(walnut.key)?.map((x) => [x.task.id, x.watched, x.locked])).toEqual([
+      ['both', true, true], ['w', true, false], ['home', false, true], ['org', false, true],
+    ])
+    const inbox = rows.find((r) => r.project === '')
+    expect(by.get(inbox?.key ?? main.key)?.map((x) => [x.task.id, x.watched, x.locked])).toEqual([['legacy', false, true]])
+  })
+
+  it('leaves the list once unlocked, unless still watched', () => {
+    const by = keptByRow(main, rows, tasks, [])
+    expect(by.get(walnut.key)?.map((x) => [x.task.id, x.locked])).toEqual([['both', false], ['w', false]])
+    expect([...by.values()].flat().map((x) => x.task.id)).toEqual(['both', 'w'])
+  })
+})
+
 describe('the Org page keeps one list, the watch', () => {
   const dir = path.resolve(import.meta.dirname, '../../web/src/components/org')
   const files = [

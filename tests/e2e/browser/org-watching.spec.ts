@@ -10,17 +10,25 @@
  *   - Home's Watching lists what the Org page watches; a watch made elsewhere (Home, an agent)
  *     shows on the Org page without a reload
  *   - a refused watch goes back
+ *   - a task whose session panel is locked (beside the Org page, or on Home) hangs under its row
+ *     too, each row saying why with an eye, a lock, or both; unlocked and not watched, it goes
+ *     ("if a taks is lock also show here, show icon of watch or lock")
  * The fixture is shared, so this file makes its own project and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
+import { discoverBrowserFixture } from './codex-test-audit'
+import { lockLeftmostPanel } from './draft-helpers'
+import { openTasksBy } from './org-view-helpers'
+
+const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 const PROJECT = `Org watch ${STAMP}`
 const made: string[] = []
-const ids = { lead: '', a: '', b: '', c: '' }
+const ids = { lead: '', a: '', b: '', c: '', d: '', dSid: '' }
 const NODE = `project:${PROJECT.trim().toLowerCase()}`
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
@@ -58,15 +66,21 @@ const railItem = (page: Page, id: string) => page.getByTestId('org-rail').locato
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(async ({ request }) => {
+  test.setTimeout(150_000)
   ids.a = await createTask(request, `Prune the pear trees ${STAMP}`)
   ids.b = await createTask(request, `Order new ladders ${STAMP}`)
   ids.c = await createTask(request, `Count the hives ${STAMP}`)
   const contact = await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: PROJECT })
   ids.lead = contact.task.id
   made.push(ids.lead)
+  // A task with a session, so its panel can be locked (the mock CLI answers it); the others wait.
+  ids.d = await createTask(request, `Mend the fence ${STAMP}`)
+  const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+  ids.dSid = (await post<{ sessionId: string }>(request, '/api/sessions/quick-start', { cwd: `${fixtureRoot}/projects/walnut`, message: `Fence ready ${STAMP}`, taskId: ids.d })).sessionId
 })
 
 test.afterAll(async ({ request }) => {
+  if (ids.dSid) await request.post(`/api/v1/sessions/${ids.dSid}/terminate`, { data: { force: true } })
   for (const id of made) {
     for (let i = 0; i < 10; i++) {
       const res = await request.delete(`/api/tasks/${id}`)
@@ -186,4 +200,73 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await expect(page.getByTestId('org-rail').getByTestId('org-task-empty')).toContainText('Nothing watched here')
   await expect(page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`)).toHaveCount(0)
   await expect.poll(() => watchedAt(request, ids.c)).toBeNull()
+})
+
+test('a locked session panel hangs its task under the row with a lock; eye and lock when both; unlocked, it goes', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await openNode(page)
+  const kept = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.d}"]`)
+  await expect(kept).toHaveCount(0)
+
+  // Beside the Org page: open the task and lock its panel.
+  await openTasksBy(page, 'team')
+  const side = page.getByTestId('org-side')
+  await expect(async () => {
+    await page.locator(`[data-testid="org-team-item"][data-task-id="${ids.d}"]`).click()
+    await expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 3_000 })
+  }).toPass({ timeout: 30_000 })
+  await side.locator('.session-panel-lock').click()
+  await expect(side).toHaveClass(/is-locked/)
+  await expect(kept).toHaveCount(1)
+  await expect(kept).toHaveAttribute('data-locked', 'true')
+  const why = kept.getByTestId('org-watched-why')
+  await expect(why).toHaveAttribute('data-why', 'lock')
+  // Only a watch has a ×: a lock is undone where it was made.
+  await expect(kept.getByTestId('org-watched-stop')).toHaveCount(0)
+  // The reason sits on the row's guide line, before the state dot, small and apart from it; the
+  // title keeps its place a little in from the row's name.
+  const [whyBox, dot, title, group, name] = await Promise.all([
+    why.boundingBox(), kept.locator('.org-watched-open > i').boundingBox(), kept.locator('.org-watched-title').boundingBox(),
+    page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`).boundingBox(),
+    page.locator(`[data-testid="org-channel"][data-key="${NODE}"] .org-channel-name`).boundingBox(),
+  ])
+  expect(whyBox!.x + whyBox!.width).toBeLessThanOrEqual(dot!.x)
+  expect(whyBox!.height).toBeLessThanOrEqual(16)
+  expect(Math.abs(whyBox!.x + whyBox!.width / 2 - group!.x)).toBeLessThanOrEqual(2)
+  expect(title!.x).toBeLessThan(name!.x)
+
+  // Watched too: the eye and the lock in one glyph, and × stops only the watch.
+  const res = await request.patch(`/api/v1/tasks/${ids.d}`, { data: { watched_at: new Date().toISOString() } })
+  expect(res.ok(), await res.text()).toBe(true)
+  await expect(why).toHaveAttribute('data-why', 'both', { timeout: 30_000 })
+  await kept.hover()
+  await kept.getByTestId('org-watched-stop').click()
+  await expect.poll(() => watchedAt(request, ids.d)).toBeNull()
+  await expect(why).toHaveAttribute('data-why', 'lock')
+  await expect(kept).toHaveCount(1)
+
+  // Unlocked and not watched: gone at once.
+  await side.locator('.session-panel-lock').click()
+  await expect(kept).toHaveCount(0)
+
+  // On Home: a locked column of the task's session hangs it under its row the same way.
+  // One column of the task's session on Home (the saved layout record, written once).
+  await page.evaluate((sid) => localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id: sid, locked: false }] })), ids.dSid)
+  await page.reload()
+  await page.locator('.sidebar-home-group a').first().click()
+  const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.dSid}"]`)
+  await expect(column).toBeVisible({ timeout: 30_000 })
+  await lockLeftmostPanel(page)
+  await expect(column.locator('.session-panel-lock.is-locked')).toBeVisible()
+  await page.getByTestId('sidebar-org').click()
+  await page.getByTestId('org-search').fill(PROJECT)
+  await expect(kept).toHaveCount(1, { timeout: 30_000 })
+  await expect(why).toHaveAttribute('data-why', 'lock')
+  await page.locator('.sidebar-home-group a').first().click()
+  await column.locator('.session-panel-lock').click()
+  await page.getByTestId('sidebar-org').click()
+  await page.getByTestId('org-search').fill(PROJECT)
+  await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toBeVisible()
+  await expect(kept).toHaveCount(0)
 })

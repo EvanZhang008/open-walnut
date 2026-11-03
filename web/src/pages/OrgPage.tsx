@@ -20,11 +20,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { watchedByRow } from '@/components/org/org-task-tabs';
+import { keptByRow, lockedTaskIds } from '@/components/org/org-task-tabs';
 import { buildOrgTree } from '@open-walnut/org-tree';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
-import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { homeColumnsField, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { hydrateTaskSessionStatuses } from '@/api/sessions';
 import { resolveOrgContact, ensureMainTask, startOrgNode } from '@/api/org';
 import { fetchTask } from '@/api/tasks';
@@ -215,9 +215,6 @@ export function OrgPage() {
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;
   const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
-  // The watched tasks (Home's Watching) under each row of the list: the VP whose work holds each.
-  const watched = useMemo(() => watchedByRow(channels.main, channels.rows, shownTasks), [channels.main, channels.rows, shownTasks]);
-  const watchedOf = useCallback((row: ChannelRow) => watched.get(row.key) ?? [], [watched]);
   const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
   const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
@@ -243,6 +240,29 @@ export function OrgPage() {
   // `tasks` too: a task's panel and its session's become one once the tasks are known.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession, tasks]);
+  // Under each row of the list, the tasks the user keeps in view there: the watched ones (Home's
+  // Watching) and the ones whose session panel is locked, on Home (this window's strip, read from the
+  // saved layout: another window's lock arrives with `storage`, and coming back to the page reads it
+  // again) or beside this page (live).
+  const [homeLocks, setHomeLocks] = useState(() => readColumns(homeColumnsField()));
+  useEffect(() => {
+    const reread = () => setHomeLocks((prev) => {
+      const next = readColumns(homeColumnsField());
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+    const onVisible = () => { if (document.visibilityState === 'visible') reread(); };
+    window.addEventListener('storage', reread);
+    window.addEventListener('focus', reread);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('storage', reread);
+      window.removeEventListener('focus', reread);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+  const lockedIds = useMemo(() => lockedTaskIds([...pins, ...homeLocks], shownTasks), [pins, homeLocks, shownTasks]);
+  const kept = useMemo(() => keptByRow(channels.main, channels.rows, shownTasks, lockedIds), [channels.main, channels.rows, shownTasks, lockedIds]);
+  const keptOf = useCallback((row: ChannelRow) => kept.get(row.key) ?? [], [kept]);
   // A phone shows one panel from the URL and never touches the desktop's saved strip.
   const [writeStrip] = useState(() => createStripWriter('orgColumns'));
   useEffect(() => { if (!phone) writeStrip(strip); }, [strip, phone, writeStrip]);
@@ -435,7 +455,7 @@ export function OrgPage() {
           onQuery={setQuery}
           onSelect={select}
           onOpenChart={() => openChart()}
-          watchedOf={watchedOf}
+          keptOf={keptOf}
           onOpenTask={openTask}
           onUnwatch={unwatch}
           now={now}

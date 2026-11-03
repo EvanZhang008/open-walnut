@@ -15,7 +15,7 @@ import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { projectService } from '@/components/tasks/private-task-model';
-import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { homeColumnsField, isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen } from '@/hooks/usePhoneOverlayHistory';
 import { deepLinkBaseUrl, usePhoneRestore } from '@/hooks/usePhoneRestore';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
@@ -149,11 +149,8 @@ const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
 const sessionWidthForCount = (count: number): number =>
   SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)];
 
-/** The strip this window keeps: a phone has its own, so a phone showing one column never
- *  overwrites the Mac's strip of three. Decided by the device (a touch screen in the phone
- *  layout), not the width alone: a Mac window opened narrow is still the Mac's strip. */
-const COLUMNS_FIELD: LayoutField =
-  isPhoneLayout() && typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches ? 'phoneColumns' : 'homeColumns';
+/** The strip this window keeps (homeColumnsField: a phone has its own). */
+const COLUMNS_FIELD: LayoutField = homeColumnsField();
 
 /** Load the saved session columns, with migration from the legacy single-session key. */
 function loadSessionColumns(): SessionSlot[] {

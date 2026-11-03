@@ -182,6 +182,15 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
 }
 .org-watched-open > i { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+/* Why it hangs here: an eye, a lock, or both in one glyph, centred on the guide line like a tree's node
+   (the list's own background cuts the line around it), so the dot and the title keep about their places. Thin
+   and muted: it reads as a label, and the dot stays the state. */
+.org-watched-why {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 15px;
+  margin: 0 -3px 0 -14.25px; background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
+}
+.org-watched-why svg { width: 12px; height: 12px; }
+.org-watched-item:hover .org-watched-why { color: var(--fg); opacity: 1; }
 .org-watched-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-watched-item[data-state="done"] .org-watched-title { color: var(--fg-muted); text-decoration: line-through; }
 .org-watched-open:focus-visible, .org-watched-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 5px; }

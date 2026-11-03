@@ -10,6 +10,8 @@ import { projectKey, userStateOf } from '@open-walnut/org-tree';
 import { STATUS_SECTION_LABELS, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
 import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { isPlaceholderColumnId } from '@/utils/column-ids';
+import type { LayoutSlot } from '@/utils/layout-record';
 
 // To read sits right under Needs you (2026-11-02): nothing asked, only something to read.
 export type OrgTaskTab = 'needs' | 'read' | 'working' | 'waiting' | 'done';
@@ -95,19 +97,55 @@ function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
 }
 
 /**
- * The watched tasks under each row of the Org list, each under one row: the VP whose work holds its
- * project (its own or one it leads), else the CEO. In the order they were watched.
+ * The tasks whose session panel a strip keeps locked (layout-record.ts): a Home column names a session,
+ * an Org panel `task:<id>` or `session:<id>`. A session id leads to the task holding it in any of its
+ * session fields. In the order the strips hold them; a placeholder or an unknown id names none.
  */
-export function watchedByRow(main: ChannelRow | null, rows: readonly ChannelRow[], tasks: readonly Task[]): Map<string, Task[]> {
+export function lockedTaskIds(slots: readonly LayoutSlot[], tasks: readonly Task[]): string[] {
+  if (!slots.some((s) => s.locked)) return [];
+  const bySession = new Map<string, string>();
+  const ids = new Set<string>();
+  for (const t of tasks) {
+    ids.add(t.id);
+    for (const sid of [t.session_id, t.exec_session_id, t.plan_session_id, ...(t.session_ids ?? []), ...(t.legacy_session_ids ?? [])]) {
+      if (sid && !bySession.has(sid)) bySession.set(sid, t.id);
+    }
+  }
+  const out: string[] = [];
+  for (const s of slots) {
+    if (!s.locked || isPlaceholderColumnId(s.id)) continue;
+    const id = s.id.startsWith('task:') ? (ids.has(s.id.slice(5)) ? s.id.slice(5) : undefined)
+      : bySession.get(s.id.startsWith('session:') ? s.id.slice(8) : s.id);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** A task hung under a row of the Org list, and why: the user watches it, its session panel is locked, or both. */
+export interface KeptTask { task: Task; watched: boolean; locked: boolean }
+
+/**
+ * The tasks hung under each row of the Org list (2026-11-02, the user: "if a taks is lock also show here,
+ * show icon of watch or lock"), each under one row: the VP whose work holds its project (its own or one
+ * it leads), else the CEO. The watched ones first in the order they were watched, then the ones only
+ * locked, in their lock order. A lead's or Main's own task is its row already, so a lock alone never
+ * hangs it under one.
+ */
+export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], tasks: readonly Task[], locked: readonly string[] = []): Map<string, KeptTask[]> {
   const rowOf = new Map<string, string>();
   for (const r of rows) for (const p of [r.project, ...(r.led ?? []).map((l) => l.project)]) {
     const k = projectKey(p);
     if (!rowOf.has(k)) rowOf.set(k, r.key);
   }
-  const out = new Map<string, Task[]>();
-  for (const t of sortSectionTasks('watching', tasks.filter((x) => isWatched(x) && !x.plugin_only))) {
+  const lockedSet = new Set(locked);
+  const byId = locked.length ? new Map(tasks.map((t) => [t.id, t])) : new Map<string, Task>();
+  const watched = sortSectionTasks('watching', tasks.filter((x) => isWatched(x) && !x.plugin_only));
+  const lockedOnly = locked.map((id) => byId.get(id))
+    .filter((t): t is Task => !!t && !isWatched(t) && !t.plugin_only && !t.org_role);
+  const out = new Map<string, KeptTask[]>();
+  for (const t of [...watched, ...lockedOnly]) {
     const key = rowOf.get(projectKey(t.project)) ?? main?.key;
-    if (key) out.set(key, [...(out.get(key) ?? []), t]);
+    if (key) out.set(key, [...(out.get(key) ?? []), { task: t, watched: isWatched(t), locked: lockedSet.has(t.id) }]);
   }
   return out;
 }

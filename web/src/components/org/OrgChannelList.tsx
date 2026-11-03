@@ -7,11 +7,13 @@
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
- * Under a row, the tasks the user watches of its work (Home's Watching, org-pins.ts; 2026-10-31, the
- * user, translated: "under a chat ... however many you pin, they all show in there ... you can unpin
- * there too ... they are all its children", then 2026-11-02: "rename this to watching ... same
- * wathcing as regular home pannel"): one short line each, a little indented, its own state's dot; a
- * click opens it beside the page, × stops watching it.
+ * Under a row, the tasks the user keeps in view of its work (2026-10-31, the user, translated: "under a
+ * chat ... however many you pin, they all show in there ... you can unpin there too ... they are all its
+ * children", then 2026-11-02: "rename this to watching ... same wathcing as regular home pannel" and "if
+ * a taks is lock also show here, show icon of watch or lock"): the watched ones (Home's Watching,
+ * org-pins.ts) and the ones whose session panel is locked, one short line each, a little indented, an
+ * eye or a lock (or both) saying why, then its own state's dot; a click opens it beside the page, ×
+ * stops watching it.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
@@ -25,8 +27,8 @@ import { OrgEditableName } from './OrgEditableName';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import type { Task } from '@open-walnut/core';
-import { TAB_DOT, stateTab } from './org-task-tabs';
+import { TAB_DOT, stateTab, type KeptTask } from './org-task-tabs';
+import { ICON_EYE, ICON_LOCK } from '@/components/common/Icons';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -102,34 +104,60 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   );
 }
 
-/** The watched tasks under one row, as its own children. Inside the list's listbox each is an
- *  option of a group (all a listbox may hold): Enter opens it, Delete stops watching it, and the ×
- *  is the pointer's way to the same. */
-function WatchedChildren({ row, tasks, onOpenTask, onUnwatch }: { row: ChannelRow; tasks: readonly Task[]; onOpenTask: (id: string) => void; onUnwatch: (taskId: string) => void }) {
-  if (!tasks.length) return null;
+/** Watched and locked in one glyph: the eye, with a small lock on its lower right (cut out of the eye). */
+const ICON_EYE_LOCK = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 7S3.5 3 7 3s6 4 6 4-2.5 4-6 4-6-4-6-4z" />
+    <circle cx="7" cy="7" r="1.8" />
+    <rect x="8.6" y="7.6" width="7.4" height="8.4" rx="1.6" stroke="none" style={{ fill: 'var(--bg-secondary)' }} />
+    <rect x="9.9" y="11.2" width="5.4" height="4" rx="0.9" stroke="none" fill="currentColor" />
+    <path d="M11.2 11.2v-1.1a1.4 1.4 0 012.8 0v1.1" strokeWidth="1.3" />
+  </svg>
+);
+
+/** Why a task hangs under a row, sitting on the row's guide line like a tree's node: an eye (watched), a
+ *  lock (its session panel is locked), or the two in one glyph. Its own small mark, apart from the dot. */
+function KeptWhy({ watched, locked }: { watched: boolean; locked: boolean }) {
+  const why = [watched && 'Watched', locked && 'Its session panel is locked'].filter(Boolean).join(' · ');
+  const kind = watched && locked ? 'both' : watched ? 'eye' : 'lock';
   return (
-    <div className="org-watched" role="group" aria-label={`Watching, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
-      {tasks.map((t) => {
+    <span className="org-watched-why" data-testid="org-watched-why" data-why={kind} title={why} aria-hidden="true">
+      {kind === 'both' ? ICON_EYE_LOCK : kind === 'eye' ? ICON_EYE : ICON_LOCK}
+    </span>
+  );
+}
+
+/** The tasks kept in view under one row (keptByRow), as its own children. Inside the list's listbox each
+ *  is an option of a group (all a listbox may hold): Enter opens it; on a watched one Delete stops
+ *  watching it, and the × is the pointer's way to the same. A task only locked goes once its panel is
+ *  unlocked, where it was locked. */
+function KeptChildren({ row, kept, onOpenTask, onUnwatch }: { row: ChannelRow; kept: readonly KeptTask[]; onOpenTask: (id: string) => void; onUnwatch: (taskId: string) => void }) {
+  if (!kept.length) return null;
+  return (
+    <div className="org-watched" role="group" aria-label={`Kept in view, under ${row.vpName ?? row.name}`} data-testid="org-watched" data-key={row.key}>
+      {kept.map(({ task: t, watched, locked }) => {
         const st = stateTab(t);
         const title = orgDisplayTitle(t);
+        const why = [watched && 'watched', locked && 'locked'].filter(Boolean).join(' and ');
         return (
-          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-task-id={t.id} data-state={st}>
+          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined}>
             <button
               type="button"
               role="option"
               aria-selected={false}
-              aria-label={`${title}: ${USER_STATE_LABELS[st]}. Delete stops watching it`}
-              aria-keyshortcuts="Delete"
+              aria-label={`${title}: ${USER_STATE_LABELS[st]}, ${why}${watched ? '. Delete stops watching it' : ''}`}
+              aria-keyshortcuts={watched ? 'Delete' : undefined}
               className="org-watched-open"
               data-testid="org-watched-open"
               title={`${title}: ${USER_STATE_LABELS[st]}`}
               onClick={() => onOpenTask(t.id)}
-              onKeyDown={(e) => { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); onUnwatch(t.id); } }}
+              onKeyDown={(e) => { if (watched && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); onUnwatch(t.id); } }}
             >
+              <KeptWhy watched={watched} locked={locked} />
               <i style={{ background: TAB_DOT[st] }} aria-hidden="true" />
               <span className="org-watched-title">{title}</span>
             </button>
-            <button type="button" className="org-watched-stop" data-testid="org-watched-stop" aria-hidden="true" tabIndex={-1} title="Stop watching" onClick={() => onUnwatch(t.id)}>×</button>
+            {watched && <button type="button" className="org-watched-stop" data-testid="org-watched-stop" aria-hidden="true" tabIndex={-1} title="Stop watching" onClick={() => onUnwatch(t.id)}>×</button>}
           </div>
         );
       })}
@@ -198,14 +226,14 @@ interface Props {
   onQuery: (q: string) => void;
   onSelect: (key: string) => void;
   onOpenChart: () => void;
-  /** The watched tasks under a row (watchedByRow), shown under it. */
-  watchedOf?: (row: ChannelRow) => readonly Task[];
+  /** The tasks kept in view under a row (keptByRow: watched or locked), shown under it. */
+  keptOf?: (row: ChannelRow) => readonly KeptTask[];
   onOpenTask?: (taskId: string) => void;
   onUnwatch?: (taskId: string) => void;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, watchedOf: watchedFor, onOpenTask, onUnwatch, now }: Props) {
+export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, keptOf, onOpenTask, onUnwatch, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -234,12 +262,12 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
   const [held, setHeld] = useState<string[] | null>(null);
   const shown = holdOrder(rows, held);
   const keys = [main.key, ...shown.map((r) => r.key)];
-  const watchedOf = (r: ChannelRow) => (watchedFor && onOpenTask && onUnwatch
-    ? <WatchedChildren row={r} tasks={watchedFor(r)} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
+  const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
+    ? <KeptChildren row={r} kept={keptOf(r)} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
     : null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    // Up and Down move between the chats; on a watched task under a row they are left alone.
+    // Up and Down move between the chats; on a task kept under a row they are left alone.
     if ((e.target as HTMLElement).closest('.org-watched')) return;
     e.preventDefault();
     const at = selectedKey ? keys.indexOf(selectedKey) : -1;
@@ -276,12 +304,12 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         onPointerLeave={() => setHeld(null)}
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
-        {watchedOf(main)}
+        {keptUnder(main)}
         <div className="org-list-section" role="presentation">VPs · {total}</div>
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
             <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
-            {watchedOf(r)}
+            {keptUnder(r)}
           </div>
         ))}
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
