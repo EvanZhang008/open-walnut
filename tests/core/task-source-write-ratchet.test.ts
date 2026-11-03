@@ -19,8 +19,9 @@ const SRC = path.join(ROOT, 'src')
 
 /** `<x>.source = <value>` (not a comparison), on any object but the unrelated fields below. */
 const ASSIGN_RE = /\b([A-Za-z_$][\w$]*)\.source\s*=(?!=)\s*([^;\n]+)/g
-/** Objects whose `.source` is not a task's service (an event, a view, a log record, a query). */
-const NOT_A_TASK = new Set(['this', 'entry', 'view', 'rec', 'params', 'options', 'opts', 'meta', 'audio', 'node'])
+/** Objects whose `.source` is not a task's service (an event, a view, a log record, a query, a
+ *  host daemon update's facts, whose source is the daemon file). */
+const NOT_A_TASK = new Set(['this', 'entry', 'view', 'rec', 'params', 'options', 'opts', 'meta', 'audio', 'node', 'facts'])
 /** A project registry row written with a source: `[<name>]: { ...?, source: <value> }`. */
 const ROW_RE = /\]:\s*\{\s*(?:\.\.\.[^,}]+,\s*)?source\b(?:\s*:\s*([^,}\n]+?))?\s*[,}]/g
 

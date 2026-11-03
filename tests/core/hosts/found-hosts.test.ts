@@ -256,9 +256,16 @@ describe('the tunnel placement skips a host waiting for the yes', () => {
   })
 
   it('a found host that is a machine joined on the host network is not offered a second time', () => {
+    // One machine: the found row's local name is the joined machine's name, and the host network is on.
+    const found = withFoundHostAnswer({ hostname: 'always-on-lab.local', label: 'Lab box' }, 'ask')
     const joined = { hostname: 'x.walnut-net.invalid', label: 'always-on-lab', transport: 'net', endpoint: 'c'.repeat(64) }
-    const hosts = { lab: waiting, 'lab-joined': joined } as unknown as Parameters<typeof exposePlaces>[2]
-    expect(exposePlaces(undefined, def, hosts, {})).toEqual([])
+    const hosts = { lab: found, 'lab-joined': joined } as unknown as Parameters<typeof exposePlaces>[2]
+    expect(exposePlaces(undefined, def, hosts, { enabled: true })).toEqual([])
+    // With the host network off the joined row is no machine of this Mac's, so the found one is offered.
+    expect(exposePlaces(undefined, def, hosts, {})).toEqual([
+      { id: 'here', label: 'This computer', alwaysOn: false },
+      { id: 'lab', label: 'Lab box', alwaysOn: true, needsConnect: true },
+    ])
   })
 
   it('a picked host that still waits is not used either; after the yes Auto places there', () => {

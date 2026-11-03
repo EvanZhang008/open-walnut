@@ -19,7 +19,7 @@ const ROOT = path.resolve(__dirname, '../..')
 const LETTER_ASKS: Record<string, string> = {
   // A task on a host the user did NOT register (or one whose grant they revoked) using
   // another; a task on a registered host gets its grant with no letter (exec-grants.ts).
-  'src/core/hosts/host-exec.ts': 'own machines: asks only for an unregistered caller host or a revoked grant',
+  'src/core/hosts/host-exec-grant.ts': 'own machines: asks only for an unregistered caller host or a revoked grant',
   'src/integrations/mail/approvals.ts': 'outward send: an email leaves the user\'s machines',
   'src/integrations/mail/unsubscribe.ts': 'outward send: contacts an outside sender',
   'src/core/plugins/server-api.ts': 'plugin pass-through: the plugin owns its own asks',
@@ -66,7 +66,7 @@ describe('approval prompts for the user', () => {
   })
 
   it('the grant letter is written only after the own-host check', () => {
-    const text = files.find(({ f }) => f === 'src/core/hosts/host-exec.ts')!.text
+    const text = files.find(({ f }) => f === 'src/core/hosts/host-exec-grant.ts')!.text
     const own = text.indexOf('await isOwnHost(caller.host)')
     const letter = text.indexOf('await sendLetter(')
     expect(own).toBeGreaterThan(0)

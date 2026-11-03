@@ -39,7 +39,7 @@ const han = (s: string) => scriptCounts(s).han
 
 describe('(a) every letter send site is decided', () => {
   it('finds the send sites at all', () => {
-    expect(sendSites).toEqual(expect.arrayContaining(['src/core/human-inbox/store.ts', 'src/core/hosts/host-exec.ts', 'src/core/plugins/server-api.ts']))
+    expect(sendSites).toEqual(expect.arrayContaining(['src/core/human-inbox/store.ts', 'src/core/hosts/host-exec-grant.ts', 'src/core/plugins/server-api.ts']))
   })
 
   it('each one is a kind\'s caller or exempt with a reason', () => {

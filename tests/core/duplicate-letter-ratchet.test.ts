@@ -29,7 +29,7 @@ const DIRECT_SENDS: Record<string, string> = {
   'src/core/plugins/server-api.ts': 'a plugin\'s letter (pluginId), the plugin owns its asks',
   'src/core/offline-merge/letter.ts': 'Walnut\'s drain conflict letter, external sender, once per drain',
   'src/core/usage/session-budget.ts': 'Walnut\'s budget notice, once by opKey',
-  'src/core/hosts/host-exec.ts': 'Walnut\'s host grant ask, external sender',
+  'src/core/hosts/host-exec-grant.ts': 'Walnut\'s host grant ask, external sender',
   'src/core/hosts/host-auth-alert.ts': 'Walnut\'s sign-in alert, once by opKey',
   'src/core/hosts/local-network-alert.ts': 'Walnut\'s local network alert, once by opKey',
   'src/integrations/git-sync-secrets.ts': 'Walnut\'s secret-held notice, once by opKey',

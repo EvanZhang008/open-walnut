@@ -318,10 +318,10 @@ export class NetDaemonUpdater {
     const c = this.d.conn
     if (this.stopped || !c.connected) return this.set('skipped', 'the host is not connected')
     this.set('checking', 'checking the host\'s daemon')
-    const f = await this.facts(trigger)
-    const first = decideNetUpdate(f)
+    const facts = await this.facts(trigger)
+    const first = decideNetUpdate(facts)
     if (first.go === false) return this.skipped(first, trigger)
-    const expected = f.expected!
+    const expected = facts.expected!
     const io = createNetUpdateIo(c, {
       ...this.d.io,
       beforeLaunch: () => (!c.connected ? 'the link dropped' : this.d.hold()),
@@ -329,13 +329,13 @@ export class NetDaemonUpdater {
     })
     const held = this.d.hold()
     if (held) return this.postpone(held)
-    const scope = scopeFromStatus(await io.run(`${shq(f.serviceExecutable!)} walnut daemon status 2>/dev/null || true`, 60_000))
+    const scope = scopeFromStatus(await io.run(`${shq(facts.serviceExecutable!)} walnut daemon status 2>/dev/null || true`, 60_000))
     if (!('scope' in scope)) return this.skipped({ go: false, skip: 'unmanaged', why: scope.why }, trigger)
     // Only now the lookups: the probe is one more command, and the walnut file may be a download or a build.
-    f.target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
+    facts.target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
     const say = (message: string) => log.session.info('DaemonConnection: getting the walnut file for a host network daemon', { host: c.host, message })
-    f.source = f.target ? await (this.d.source ?? netDaemonSource)(f.target, expected, say) : { missing: 'unknown system' }
-    const decision = decideNetUpdate(f)
+    facts.source = facts.target ? await (this.d.source ?? netDaemonSource)(facts.target, expected, say) : { missing: 'unknown system' }
+    const decision = decideNetUpdate(facts)
     // A lookup that found nothing waits a cooldown too: it may have been a download.
     this.lastAttempt = { expected, at: (this.d.now ?? Date.now)() }
     if (decision.go !== true) return this.skipped(decision as Extract<NetUpdateDecision, { go: false }>, trigger)

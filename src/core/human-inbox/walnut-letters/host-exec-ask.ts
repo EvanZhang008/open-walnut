@@ -1,6 +1,6 @@
 /**
  * "Let "<task>" use <host>?": a task on a host the user did not register asks to use another of his
- * hosts (hosts/host-exec.ts grantOrAsk), Allow / Deny. The action ids are the grants store's
+ * hosts (hosts/host-exec-grant.ts grantOrAsk), Allow / Deny. The action ids are the grants store's
  * (exec-grants.ts ALLOW_ACTION / DENY_ACTION) and never change with the language.
  *
  * No longer needed (exec-grants.ts execAskSettleReason): its task is complete or gone, the grant
@@ -109,7 +109,7 @@ const OLD_SUBJECT = /^Let "[\s\S]*" (?:use|run commands on) [\s\S]+\?$/;
 export const HOST_EXEC_ASK = letterKind<HostExecAskParams>({
   id: 'host-exec-ask',
   type: 'action_required',
-  callers: ['src/core/hosts/host-exec.ts'],
+  callers: ['src/core/hosts/host-exec-grant.ts'],
   marked: true,
   matchesUnmarked: (l: LetterRecord) => l.sender?.sessionId === 'external' && !l.sender.pluginId
     && l.type === 'action_required' && OLD_SUBJECT.test(l.subject)

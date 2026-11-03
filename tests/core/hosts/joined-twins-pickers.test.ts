@@ -80,6 +80,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/core/config-manager.ts': 'the rows themselves',
     'src/commands/ephemeral-snapshot.ts': "turns off every row's tunnel in a test copy",
     'src/core/sessions/mobile-launch.ts': 'the reserved-alias check (its list is pickableHosts)',
+    'src/core/hosts/found-hosts.ts': 'merges the ~/.ssh/config rows into config.hosts: the rows themselves',
   }
 
   it('a file that walks config.hosts either uses pickableHosts or says why it is no choice', () => {
