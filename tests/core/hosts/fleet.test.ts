@@ -50,6 +50,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, BootStartCheckError, checkHostBootStart, getFleetHost, listFleet } from '../../../src/core/hosts/fleet.js'
 import { judgeHost, type HostLoadView } from '../../../src/core/hosts/placement.js'
 import { readHostProfile } from '../../../src/core/hosts/host-profile.js'
+import { cachedFleet, fleetRefreshIdle, startFleetRefresh } from '../../../src/core/hosts/fleet-refresh.js'
 
 const NOW = Date.now()
 function vitalsReply(running: number) {
@@ -250,4 +251,36 @@ describe('checkHostBootStart (the Overview\'s Set up)', () => {
     expect(err).toMatchObject({ code: 'check_failed', message: 'Walnut could not check Dev box: ssh: connection reset' })
     bootConn.conn = null
   }, 15_000)
+})
+
+describe('a machine in config twice (found in ~/.ssh/config, then joined)', () => {
+  it('is listed and read once, as the joined machine', async () => {
+    // oldbox joined the host network; its own address is the found row's HostName.
+    const hosts = config.hosts as Record<string, unknown>
+    hosts['oldbox-ssh'] = { hostname: '10.20.30.40', discovered: true }
+    ;(config as { net?: unknown }).net = { enabled: true, where: { ['e'.repeat(64)]: { addrs: ['10.20.30.40:5000'], self: ['10.20.30.40:5000'] } } }
+    const found = fake(['host-vitals-v1', 'host-facts-v1'], async (cmd) => cmd === 'host.vitals' ? vitalsReply(2) : facts, 'i-found')
+    __setFleetConnectionsForTesting(() => new Map([
+      ['__local__', [local.conn]], ['devbox', [dev.conn]], ['oldbox', [old.conn]], ['oldbox-ssh', [found.conn]],
+    ]) as never)
+    try {
+      const listed = (await listFleet()).map((h) => h.host)
+      expect(listed).toContain('oldbox')
+      expect(listed).not.toContain('oldbox-ssh')
+      expect(loadAsks.flat()).not.toContain('oldbox-ssh')
+      const { started } = await startFleetRefresh()
+      expect(started).toContain('oldbox')
+      expect(started).not.toContain('oldbox-ssh')
+      await fleetRefreshIdle()
+      expect((await cachedFleet()).hosts.map((h) => h.host)).not.toContain('oldbox-ssh')
+      expect(found.sends).toHaveLength(0) // no list asked it anything
+      // Asked for by its own alias (host_get from a session still on it, Set up), it is still found.
+      expect((await getFleetHost('oldbox-ssh'))?.host).toBe('oldbox-ssh')
+      bootConn.conn = null
+      await expect(checkHostBootStart('oldbox-ssh')).rejects.toMatchObject({ code: 'not_connected' })
+    } finally {
+      delete hosts['oldbox-ssh']
+      delete (config as { net?: unknown }).net
+    }
+  }, 20_000)
 })

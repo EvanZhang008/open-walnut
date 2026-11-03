@@ -6,7 +6,8 @@
  * line (the whole sentence in its tooltip) with a button when Walnut can fix it,
  * and the full key/value table behind Details. A host Walnut is not connected to
  * is one compact row with Connect. Words come from host-fleet-dashboard-model.ts
- * and host-fleet-model.ts.
+ * and host-fleet-model.ts. Each says how old it is and when a read of it runs
+ * (host-fleet-read-model.ts); opening Details reads that host again.
  */
 import { useState } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
@@ -15,6 +16,7 @@ import {
   type Chip, type Gauge, type Spark,
 } from './host-fleet-dashboard-model';
 import { dayTitle, dayTone, fleetRows, statusKind, usd } from './host-fleet-model';
+import { readFailure, readLabel } from './host-fleet-read-model';
 import { SettingsButton } from '../inputs/SettingsButton';
 
 /** A reason names a command in backticks (the same text an agent reads): shown as code. */
@@ -94,6 +96,29 @@ function Details({ host, now }: { host: FleetHost; now: number }) {
   );
 }
 
+/** How old the card is, or that a read of it runs now. */
+function ReadMark({ host, now }: { host: FleetHost; now: number }) {
+  const text = readLabel(host, now);
+  if (!text) return null;
+  return (
+    <span className="hf-read" data-testid="host-fleet-read-age" data-refreshing={host.refreshing ? 'true' : 'false'}
+      title={typeof host.readAt === 'number' ? `Read ${new Date(host.readAt).toLocaleString()}` : undefined}>
+      {text}
+    </span>
+  );
+}
+
+function ReadError({ host, now }: { host: FleetHost; now: number }) {
+  const text = readFailure(host, now);
+  return text ? <p className="hf-read-error" role="status" data-testid="host-fleet-read-error">{text}</p> : null;
+}
+
+/** Details opens and closes; opening it reads the host again (the person is looking at it). */
+function useDetails(host: string, onDetails?: (host: string) => void): [boolean, () => void] {
+  const [open, setOpen] = useState(false);
+  return [open, () => { if (!open) onDetails?.(host); setOpen(!open); }];
+}
+
 function DetailsToggle({ open, onToggle, label }: { open: boolean; onToggle: () => void; label: string }) {
   return (
     <button type="button" className="hf-link" aria-expanded={open} onClick={onToggle} data-testid="host-fleet-details-toggle" aria-label={`${open ? 'Hide' : 'Show'} details of ${label}`}>
@@ -102,11 +127,12 @@ function DetailsToggle({ open, onToggle, label }: { open: boolean; onToggle: () 
   );
 }
 
-export function HostFleetCard({ host, now, action, onBootStart }: {
-  host: FleetHost; now: number; action?: ActionState; onBootStart: (host: string) => void;
+export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
+  host: FleetHost; now: number; action?: ActionState; onBootStart: (host: string) => void; onDetails?: (host: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const problems = problemsOf(host, now);
+  const [open, toggle] = useDetails(host.host, onDetails);
+  // A read that failed says so in its own line, so the stale reading's line would only repeat it.
+  const problems = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale'));
   const first = problems[0];
   const segments = timeline(host, now);
   const charts = sparks(host);
@@ -162,16 +188,17 @@ export function HostFleetCard({ host, now, action, onBootStart }: {
       )}
       {action?.error && <p className="hf-action-error" role="status" data-testid="host-fleet-action-error">{action.error}</p>}
       {action?.note && <p className="hf-action-note" role="status" data-testid="host-fleet-action-note">{action.note}</p>}
-      <div className="hf-card-foot"><DetailsToggle open={open} onToggle={() => setOpen((v) => !v)} label={host.label} /></div>
+      <ReadError host={host} now={now} />
+      <div className="hf-card-foot"><DetailsToggle open={open} onToggle={toggle} label={host.label} /><ReadMark host={host} now={now} /></div>
       {open && <Details host={host} now={now} />}
     </article>
   );
 }
 
-export function HostFleetOfflineRow({ host, now, action, onConnect }: {
-  host: FleetHost; now: number; action?: ActionState; onConnect: (host: string) => void;
+export function HostFleetOfflineRow({ host, now, action, onConnect, onDetails }: {
+  host: FleetHost; now: number; action?: ActionState; onConnect: (host: string) => void; onDetails?: (host: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle] = useDetails(host.host, onDetails);
   const canConnect = host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network';
   return (
     <div className="hf-off" data-testid="host-fleet-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
@@ -179,7 +206,8 @@ export function HostFleetOfflineRow({ host, now, action, onConnect }: {
         <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
         <span className="hf-off-name" title={host.label}>{host.label}</span>
         <span className="hf-off-why" title={host.connection.error ?? undefined}>{offlineLine(host)}</span>
-        <DetailsToggle open={open} onToggle={() => setOpen((v) => !v)} label={host.label} />
+        {host.refreshing && <ReadMark host={host} now={now} />}
+        <DetailsToggle open={open} onToggle={toggle} label={host.label} />
         {canConnect && (
           <SettingsButton busy={action?.busy} busyLabel="Connecting..." onClick={() => onConnect(host.host)} data-testid="host-fleet-connect">
             Connect
@@ -187,6 +215,7 @@ export function HostFleetOfflineRow({ host, now, action, onConnect }: {
         )}
       </div>
       {action?.error && <p className="hf-action-error" role="status" data-testid="host-fleet-action-error">{action.error}</p>}
+      <ReadError host={host} now={now} />
       {open && <Details host={host} now={now} />}
     </div>
   );

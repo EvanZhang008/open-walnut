@@ -6,10 +6,13 @@
  * the repositories sessions used there, and what Walnut learned it is used for
  * (core/hosts/host-learning.ts, from the sessions that ran there). The person can
  * probe it again, name its kind (or hand that back to Walnut) and leave a
- * one-line note. The profile loads on the first open.
+ * one-line note. Each open reads the profile again (what it read before stays
+ * on screen meanwhile) and has the Overview read the host again, since a person
+ * opening it wants it current (HostFleetGroup.tsx follows that read).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchHostProfile, updateHostProfile, type HostKind, type HostProfile } from '@/api/transfer';
+import { refreshFleet } from '@/api/hosts-fleet';
 import { ApiError } from '@/api/client';
 import { OptionPickerFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { hostKindLabel, HOST_KIND_OPTIONS } from '@/components/transfer/transfer-model';
@@ -66,12 +69,13 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   }, []);
 
   useEffect(() => {
-    if (!open || profile) return;
+    if (!open) return;
     let cancelled = false;
     fetchHostProfile(alias).then((r) => { if (!cancelled) apply(r.profile); })
       .catch((err) => { if (!cancelled) setError(message(err)); });
+    void refreshFleet([alias]).catch((err) => log.warn('host-profile', 'fleet refresh failed', { host: alias, error: message(err) }));
     return () => { cancelled = true; };
-  }, [open, profile, alias, apply]);
+  }, [open, alias, apply]);
 
   // The kind picker closes on a press outside it or Escape.
   useEffect(() => {

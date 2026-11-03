@@ -61,8 +61,17 @@ export function dayTitle(b: FleetBucket, bucketMinutes: number): string {
   return `${head}: up ${pct(b.up / b.minutes, 1)}, linked ${pct(b.linked / b.minutes, 1)}`;
 }
 
+/**
+ * The reading is stale because the host did not answer (a live read past its deadline, or a
+ * cached card whose last read failed), not only because the cached card is old: an old card
+ * says its age in its own line ("Read 2 h ago"), and is no host to look at.
+ */
+export function notAnswering(h: FleetHost): boolean {
+  return !!h.now?.stale && (h.readAt === undefined || !!h.readError);
+}
+
 export function statusKind(h: FleetHost): 'connected' | 'failed' | 'off' | 'warn' {
-  if (h.connection.connected) return h.now?.stale ? 'warn' : 'connected';
+  if (h.connection.connected) return notAnswering(h) ? 'warn' : 'connected';
   return h.connection.phase === 'failed' ? 'failed' : 'off';
 }
 

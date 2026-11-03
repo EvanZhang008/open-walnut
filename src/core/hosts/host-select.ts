@@ -53,8 +53,11 @@ export interface HostPick { host: string; label: string; tags: string[]; reason:
  * qualify, in order: the host the task's conversation already runs on (a start
  * elsewhere would be refused as a move), then the caller's own host.
  */
-export function pickFromFleet(cards: FleetHost[], tags: string[], opts: { prefer?: Preference[] } = {}): HostPick {
-  const prefer = (opts.prefer ?? []).filter((p) => !!p.host).map((p) => p.host)
+export function pickFromFleet(cards: FleetHost[], tags: string[], opts: { prefer?: Preference[]; aliasOf?: (host: string) => string } = {}): HostPick {
+  // A preferred host named by a found ~/.ssh/config row is its joined machine, the card the fleet lists.
+  const aliasOf = opts.aliasOf ?? ((h: string) => h)
+  const preferred = (opts.prefer ?? []).filter((p) => !!p.host).map((p) => ({ ...p, host: aliasOf(p.host) }))
+  const prefer = preferred.map((p) => p.host)
   const want = tags.join(', ')
   const having = cards.filter((c) => tags.every((t) => c.capabilities?.tags.includes(t)))
   const ready = having.filter((c) => c.connection.connected)
@@ -83,15 +86,18 @@ export function pickFromFleet(cards: FleetHost[], tags: string[], opts: { prefer
   const pick = sorted[0]
   const others = ready.length - 1
   const reason = `${pick.label} (${pick.host}) has ${want}`
-    + (prefer.includes(pick.host) ? ` and ${opts.prefer!.find((p) => p.host === pick.host)!.why}` : pick.placement.busy ? ', though placement calls it busy' : '')
+    + (prefer.includes(pick.host) ? ` and ${preferred.find((p) => p.host === pick.host)!.why}` : pick.placement.busy ? ', though placement calls it busy' : '')
     + (others ? `; ${others} other connected host${others === 1 ? '' : 's'} also qualif${others === 1 ? 'ies' : 'y'}` : '')
   return { host: pick.host, label: pick.label, tags, reason }
 }
 
 /** Resolve a selector against the live fleet. */
 export async function pickHost(tags: string[], opts: { prefer?: Preference[] } = {}): Promise<HostPick> {
-  const { listFleet } = await import('./fleet.js')
-  return pickFromFleet(await listFleet({ days: 7 }), tags, opts)
+  const [{ listFleet }, { getConfig }, { joinedAliasOf }] = await Promise.all([
+    import('./fleet.js'), import('../config-manager.js'), import('./joined-twins.js'),
+  ])
+  const config = await getConfig()
+  return pickFromFleet(await listFleet({ days: 7 }), tags, { ...opts, aliasOf: joinedAliasOf(config.hosts ?? {}, config.net) })
 }
 
 /**

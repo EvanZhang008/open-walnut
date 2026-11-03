@@ -155,6 +155,17 @@ describe('@tag host selectors', () => {
     expect(pickFromFleet(fleet, ['ios']).reason).toContain('1 other connected host also qualifies')
   })
 
+  it('a preferred host named by its found ~/.ssh/config row is its joined machine', () => {
+    // The task's conversation runs on `mini-ssh`, the row found before the machine joined as `mini`;
+    // the fleet lists it once, as `mini`, so the preference must read the alias the same way.
+    const aliasOf = (h: string) => (h === 'mini-ssh' ? 'mini' : h)
+    const pick = pickFromFleet(fleet, ['ios'], { prefer: [{ host: 'mini-ssh', why: 'is where this task already runs' }, { host: '__local__', why: 'is where the caller runs' }], aliasOf })
+    expect(pick.host).toBe('mini')
+    expect(pick.reason).toContain('and is where this task already runs')
+    // Without the mapping the found alias names no card, and the caller's host wins.
+    expect(pickFromFleet(fleet, ['ios'], { prefer: [{ host: 'mini-ssh', why: 'x' }, { host: '__local__', why: 'y' }] }).host).toBe('__local__')
+  })
+
   it('a busy host goes after an idle one', () => {
     const busy = [card('a', mac(), { score: 0, busy: true }), card('b', mac(), { score: 1 })]
     expect(pickFromFleet(busy, ['ios']).host).toBe('b')

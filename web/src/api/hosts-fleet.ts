@@ -35,6 +35,15 @@ export interface FleetHost {
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
   /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */
   capabilities?: FleetCapabilities;
+  /**
+   * The cached read (`?cached=1`, src/core/hosts/fleet-refresh.ts): when its readings were read
+   * (null: never yet), whether a read of it runs now, and why its last read failed (the readings
+   * are the older ones then). Absent from a live read and from an older server.
+   */
+  readAt?: number | null;
+  refreshing?: boolean;
+  readError?: string | null;
+  readFailedAt?: number | null;
 }
 
 export interface FleetCapabilities {
@@ -50,9 +59,33 @@ export interface FleetCapabilities {
   unknown: string[];
 }
 
-export function fetchFleet(opts?: { signal?: AbortSignal }): Promise<{ hosts: FleetHost[]; checkedAt: number }> {
-  // The server holds each host to 3 s; a little more covers the gathering.
-  return apiGet('/api/v1/hosts', undefined, { signal: opts?.signal, timeoutMs: 12_000, priority: 'low' });
+export interface FleetAnswer { hosts: FleetHost[]; checkedAt: number; refreshing?: boolean }
+
+/**
+ * The Overview's read: every card at once from what each host answered last (the server
+ * never waits on a host for it), `refreshing` while a read started by refreshFleet runs.
+ */
+export function fetchFleet(opts?: { signal?: AbortSignal }): Promise<FleetAnswer> {
+  return apiGet('/api/v1/hosts', { cached: '1' }, { signal: opts?.signal, timeoutMs: 10_000 });
+}
+
+type RefreshListener = (hosts: string[] | null) => void;
+const refreshListeners = new Set<RefreshListener>();
+
+/** Told whenever a read of the hosts starts on this page (the Overview polls while it runs). */
+export function onFleetRefresh(fn: RefreshListener): () => void {
+  refreshListeners.add(fn);
+  return () => { refreshListeners.delete(fn); };
+}
+
+/**
+ * Read these hosts again (every host when none is named): POST /api/v1/hosts/refresh starts
+ * the reads and answers at once; each card changes in the cached read as its own read ends.
+ */
+export async function refreshFleet(hosts?: string[]): Promise<{ started: string[]; refreshing: string[] }> {
+  const r = await apiPost<{ started: string[]; refreshing: string[] }>('/api/v1/hosts/refresh', hosts ? { hosts } : {}, { timeoutMs: 10_000, quietStatuses: [404] });
+  for (const fn of refreshListeners) fn(hosts ?? null);
+  return r;
 }
 
 /**

@@ -15,6 +15,7 @@ describe('the fleet routes on a replica', () => {
       expect(d.why).toBe('fleet_needs_mac')
     }
     expect(classify('POST', '/api/v1/hosts/devbox/boot-start')).toMatchObject({ away: 'needs-leader', why: 'fleet_needs_mac' })
+    expect(classify('POST', '/api/v1/hosts/refresh')).toMatchObject({ away: 'needs-leader', why: 'fleet_needs_mac' })
     expect(NEEDS_LEADER_REASONS.fleet_needs_mac).toBeTruthy()
     // The host profile next to it is unchanged: a plain read.
     expect(classify('GET', '/api/v1/hosts/devbox/profile').away).toBe('read')

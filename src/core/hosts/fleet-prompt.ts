@@ -14,7 +14,6 @@
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
-import { listStatusHosts } from './host-status.js'
 import { readHostProfile } from './host-profile.js'
 
 const LOCAL = '__local__'
@@ -35,9 +34,10 @@ function refreshInBackground(): void {
 
 async function fromProfiles(): Promise<HostCaps[]> {
   const config = await getConfig()
-  const list = [{ host: LOCAL, label: '', local: true, declared: config.local_capabilities as unknown },
-    ...listStatusHosts(config).filter(({ def }) => !def.cloud_box)
-      .map(({ key, def }) => ({ host: key, label: def.label?.trim() || '', local: false, declared: def.capabilities as unknown }))]
+  // The fleet's own list: a found row for a joined machine is that machine, named once.
+  const { fleetEntries } = await import('./fleet.js')
+  const list = fleetEntries(config).filter((e) => e.kind !== 'bridge')
+    .map((e) => ({ host: e.host, label: e.local || e.label === e.host ? '' : e.label, local: e.local, declared: e.declared }))
   return Promise.all(list.slice(0, MAX_HOSTS).map(async (h) => {
     const profile = await readHostProfile(h.host).catch(() => null)
     return { host: h.host, label: h.label, local: h.local, caps: hostCapabilities({ probed: profile?.probed ?? null, kind: profile?.kind ?? null, local: h.local, week: null, declared: h.declared }) }

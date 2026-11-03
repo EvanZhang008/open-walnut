@@ -1,30 +1,44 @@
 /**
- * Settings › Remote Hosts › Overview: the fleet as a dashboard (GET /api/v1/hosts,
- * server: src/core/hosts/fleet.ts). Agents read the same cards with `host_list`.
+ * Settings › Remote Hosts › Overview: the fleet as a dashboard (GET /api/v1/hosts?cached=1,
+ * server: src/core/hosts/fleet-refresh.ts). Agents read the same cards with `host_list`.
  *
  * From the top: a summary strip (hosts online, sessions open, 30 day spend,
  * hosts with a problem), a diagram of how Walnut reaches each host
  * (HostFleetTopology.tsx), one card per live host (HostFleetCard.tsx), then the
  * hosts Walnut is not connected to, one compact row each with Connect. It sits
  * in the section beside the Hosts group, never inside one, so no card is nested
- * in a card. It refreshes every 30 s while the page is visible, and at once when a host
- * connects, drops or is new (useHostLinkChange); a failed refresh keeps the cards it had
- * and says so.
+ * in a card.
+ *
+ * It opens on what each host answered last, at once, and says how old each card is
+ * (2026-11-03, the user: "just show cache and fetch when user click"). The hosts are
+ * read again only on a press: opening the Overview, Refresh, a card's Details, a host's
+ * "What Walnut knows", Connect or Set up. A host never read is read once on its own.
+ * While a read runs the page polls the cached read, so each card changes as its own
+ * read ends; a failed one keeps its card and says why. A host that connects or drops
+ * (useHostLinkChange) reads the cached cards again, which costs no host a round trip:
+ * the server holds the link state itself.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchFleet, setUpBootStart, type FleetHost } from '@/api/hosts-fleet';
+import { fetchFleet, onFleetRefresh, refreshFleet, setUpBootStart, type FleetHost } from '@/api/hosts-fleet';
 import { connectHost } from '@/api/hosts';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 import { useHostLinkChange } from '@/hooks/useHostLinkChange';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { fleetSummary, isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
+import { followRead, markRefreshing, neverRead, newestRead, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
 import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFleetCard';
 import { HostFleetTopology } from './HostFleetTopology';
+import { ChevronGlyph } from '../settings-glyphs';
 import '@/styles/host-status.css';
 import '@/styles/host-fleet.css';
 
-const REFRESH_MS = 30_000;
+/** How often the cached read is asked again while a read of the hosts runs. */
+const POLL_MS = 1_500;
+/** The "read N min ago" words age on this clock; nothing is fetched by it. */
+const TICK_MS = 30_000;
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 
 function errorText(err: unknown): string {
   return (err instanceof ApiError || err instanceof Error ? err.message : String(err)).replace(/[.\s]*$/, '');
@@ -40,69 +54,115 @@ function Stat({ value, label, tone, testId, title }: { value: string; label: str
 }
 
 export function HostFleetGroup() {
+  const [open, setOpen] = usePersistentState<boolean>('walnut-host-fleet-open', true, isBool);
   const [hosts, setHosts] = useState<FleetHost[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [actions, setActions] = useState<Record<string, ActionState>>({});
   const inflight = useRef<AbortController | null>(null);
   // A read asked for while one runs: done once that one ends (never cutting it off).
   const readAgain = useRef(false);
+  const pollTimer = useRef<number | null>(null);
+  // When this page first saw the running read (followRead); null while none runs.
+  const followSince = useRef<number | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  // Hosts never read that this page already asked to read once.
+  const firstReads = useRef(new Set<string>());
 
   const load = useCallback(async (): Promise<void> => {
-    if (inflight.current) return;
+    if (inflight.current) { readAgain.current = true; return; }
     const ctrl = new AbortController();
     inflight.current = ctrl;
     try {
       const r = await fetchFleet({ signal: ctrl.signal });
-      setHosts(r.hosts);
+      // Nothing to show for a host never read: read it once (only while the Overview is open),
+      // marked as being read in this same paint so its empty card never flashes.
+      const unread = openRef.current ? neverRead(r.hosts).filter((h) => !firstReads.current.has(h)) : [];
+      const follow = followRead(followSince.current, r.refreshing === true, Date.now());
+      followSince.current = follow.since;
+      setHosts(unread.length ? markRefreshing(r.hosts, unread) : r.hosts);
+      setRefreshing(follow.poll || unread.length > 0);
       setError(null);
       setNow(Date.now());
+      if (follow.poll && pollTimer.current === null) {
+        pollTimer.current = window.setTimeout(() => { pollTimer.current = null; void load(); }, POLL_MS);
+      }
+      if (unread.length) {
+        for (const h of unread) firstReads.current.add(h);
+        void refreshFleet(unread).catch((err) => {
+          // Not read after all: their cards show as not read yet, and Refresh is back.
+          setRefreshError(errorText(err));
+          setRefreshing(false);
+          setHosts((list) => list?.map((h) => (unread.includes(h.host) ? { ...h, refreshing: false } : h)) ?? list);
+        });
+      }
     } catch (err) {
       if (ctrl.signal.aborted) return;
       const msg = errorText(err);
-      log.warn('host-fleet', 'fleet refresh failed', { error: msg });
+      log.warn('host-fleet', 'fleet read failed', { error: msg });
       setError(msg);
+      // Whether a read still runs is not known now: Refresh is back for the next press.
+      setRefreshing(false);
     } finally {
       if (inflight.current === ctrl) inflight.current = null;
       if (readAgain.current && !inflight.current && !ctrl.signal.aborted) { readAgain.current = false; void load(); }
     }
   }, []);
 
-  const timers = useRef(new Set<number>());
-  /** Read now, even with a periodic read in flight: what a button changed shows at once. */
-  const reload = useCallback(() => {
-    inflight.current?.abort();
-    inflight.current = null;
-    return load();
-  }, [load]);
-  const later = useCallback((ms: number) => {
-    const id = window.setTimeout(() => { timers.current.delete(id); void reload(); }, ms);
-    timers.current.add(id);
-  }, [reload]);
-
   useEffect(() => {
     void load();
-    const tick = () => { if (document.visibilityState === 'visible') void load(); };
-    const timer = window.setInterval(tick, REFRESH_MS);
-    document.addEventListener('visibilitychange', tick);
-    const pending = timers.current;
+    const tick = window.setInterval(() => setNow(Date.now()), TICK_MS);
+    // A read of the hosts started here or by another part of the page ("What Walnut knows"): follow it.
+    const off = onFleetRefresh((names) => {
+      followSince.current = Date.now();
+      setRefreshing(true);
+      setHosts((list) => (list ? markRefreshing(list, names) : list));
+      void load();
+    });
     return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', tick);
-      for (const id of pending) window.clearTimeout(id);
-      pending.clear();
+      window.clearInterval(tick);
+      off();
+      if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
       inflight.current?.abort();
       inflight.current = null;
     };
   }, [load]);
 
-  // A host that connects, drops or is new: read the fleet again now, not at the next refresh,
-  // after a read in flight (hosts reconnecting one by one never keep cutting it off).
-  const readSoon = useCallback(() => {
-    if (inflight.current) readAgain.current = true;
-    else void load();
+  /** Read these hosts again (every host with none named); the cards follow as each read ends. */
+  const refresh = useCallback((names?: string[]) => {
+    setRefreshError(null);
+    void refreshFleet(names).catch((err) => {
+      // An older server has no refresh: its read is live, so read that.
+      if (err instanceof ApiError && err.status === 404) { void load(); return; }
+      const msg = errorText(err);
+      log.warn('host-fleet', 'fleet refresh failed', { hosts: names ?? 'all', error: msg });
+      setRefreshError(msg);
+    });
   }, [load]);
-  useHostLinkChange(readSoon);
+
+  const timers = useRef(new Set<number>());
+  const later = useCallback((ms: number, names: string[]) => {
+    const id = window.setTimeout(() => { timers.current.delete(id); refresh(names); }, ms);
+    timers.current.add(id);
+  }, [refresh]);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => { for (const id of pending) window.clearTimeout(id); pending.clear(); };
+  }, []);
+
+  // A host that connects, drops or is new: the cached read carries the live link, at no host's cost.
+  const readCached = useCallback(() => { void load(); }, [load]);
+  useHostLinkChange(readCached);
+
+  const onToggle = useCallback(() => {
+    const next = !open;
+    setOpen(next);
+    if (next) refresh();
+  }, [open, setOpen, refresh]);
 
   /**
    * One press per button at a time (keyed host and kind, so a card's Set up never shows on its
@@ -112,7 +172,7 @@ export function HostFleetGroup() {
     setActions((a) => ({ ...a, [key]: { busy: true, error: null } }));
     try {
       const { card, note } = await act();
-      if (card) setHosts((list) => list?.map((h) => (h.host === card.host ? card : h)) ?? list);
+      if (card) setHosts((list) => (list ? replaceCard(list, card, Date.now()) : list));
       setActions((a) => ({ ...a, [key]: { busy: false, error: null, note } }));
       setNow(Date.now());
     } catch (err) {
@@ -125,24 +185,26 @@ export function HostFleetGroup() {
   const onConnect = useCallback((host: string) => {
     void run(`${host}:connect`, 'connect', async () => {
       await connectHost(host);
-      await reload();
-      // The link takes a few seconds to come up; read once more when it should be.
-      later(5_000);
+      refresh([host]);
+      // The link takes a few seconds to come up; read it once more when it should be.
+      later(5_000, [host]);
       return { card: null, note: null };
     });
-  }, [run, reload, later]);
+  }, [run, refresh, later]);
 
   const onBootStart = useCallback((host: string) => {
     void run(`${host}:boot`, 'set it up', async () => {
       const card = (await setUpBootStart(host)).host;
       const d = card.daemon;
       // A finished setup hands the daemon to its service, which drops the link for a moment.
-      if (!card.connection.connected) { later(5_000); return { card: null, note: 'Set up. Walnut reconnects to it now.' }; }
-      if (d?.bootStart?.setupRunning) { later(15_000); return { card, note: null }; }
+      if (!card.connection.connected) { later(5_000, [host]); return { card: null, note: 'Set up. Walnut reconnects to it now.' }; }
+      if (d?.bootStart?.setupRunning) { later(15_000, [host]); return { card, note: null }; }
       if (d?.startsAfterReboot) return { card, note: null };
       return { card, note: `Checked just now: ${(d?.reboot ?? 'it still does not start by itself after a reboot').replace(/`/g, '')}.` };
     });
   }, [run, later]);
+
+  const onDetails = useCallback((host: string) => refresh([host]), [refresh]);
 
   const onPick = useCallback((host: string) => {
     const el = document.getElementById(`hf-card-${host}`);
@@ -150,38 +212,58 @@ export function HostFleetGroup() {
     el?.focus({ preventScroll: true });
   }, []);
 
-  const live = hosts?.filter(isLive) ?? [];
-  const off = hosts?.filter((h) => !isLive(h)) ?? [];
-  const sum = hosts ? fleetSummary(hosts, now) : null;
-  const updated = new Date(now).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const shown = hosts ? shownHosts(hosts) : [];
+  const pending = (hosts?.length ?? 0) - shown.length;
+  const live = shown.filter(isLive);
+  const off = shown.filter((h) => !isLive(h));
+  const sum = shown.length ? fleetSummary(shown, now) : null;
+  const newest = hosts ? newestRead(hosts) : null;
 
   return (
-    <section className="hf-dash" data-testid="host-fleet" aria-labelledby="hf-dash-title">
+    <section className="hf-dash" data-testid="host-fleet" data-open={open ? 'true' : 'false'} aria-labelledby="hf-dash-title">
       <div className="hf-dash-head">
-        <h4 className="hf-dash-title" id="hf-dash-title">Overview</h4>
-        {hosts && <span className="hf-dash-updated">Updated {updated}</span>}
+        <h4 className="hf-dash-title" id="hf-dash-title">
+          <button type="button" className="hf-dash-toggle" aria-expanded={open} onClick={onToggle} data-testid="host-fleet-toggle">
+            <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+            Overview
+          </button>
+        </h4>
+        <span className="hf-dash-read">
+          {refreshing ? <span className="hf-refreshing" role="status" data-testid="host-fleet-refreshing">Refreshing...</span> : (
+            <>
+              {newest !== null && <span className="hf-dash-updated" data-testid="host-fleet-read" title={new Date(newest).toLocaleString()}>Read {readAgo(newest, now)}</span>}
+              <button type="button" className="hf-link" onClick={() => refresh()} data-testid="host-fleet-refresh" aria-label="Read every host again">Refresh</button>
+            </>
+          )}
+        </span>
       </div>
-      {error && <p className="hf-error" role="status">Could not refresh the overview: {error}.{hosts ? ' Showing the last cards.' : ''}</p>}
-      {!hosts && !error && <p className="hf-loading">Reading each host...</p>}
-      {hosts && sum && (
+      {open && (
         <>
-          <div className="hf-stats" data-testid="host-fleet-summary">
-            <Stat testId="host-fleet-stat-online" value={`${sum.online}/${sum.total}`} label="Hosts online" tone={sum.online < sum.total ? 'warn' : 'good'} />
-            <Stat testId="host-fleet-stat-sessions" value={sum.sessions === null ? '?' : String(sum.sessions)} label="Sessions open" />
-            <Stat testId="host-fleet-stat-spend" value={sum.spendUsd === null ? '?' : usd(sum.spendUsd)} label="Spend, 30 days" title="At list price, not a bill" />
-            <Stat testId="host-fleet-stat-problems" value={sum.problems ? String(sum.problems) : 'None'} label={sum.problems === 1 ? 'Host needs a look' : 'Hosts need a look'} tone={sum.problems ? 'warn' : 'good'} title="Hosts that are not connected, or have a line under their card" />
-          </div>
-          <div className="hf-panel hf-topo-panel">
-            <HostFleetTopology hosts={hosts} onPick={onPick} />
-          </div>
-          <div className="hf-grid">
-            {live.map((h) => <HostFleetCard key={h.host} host={h} now={now} action={actions[`${h.host}:boot`]} onBootStart={onBootStart} />)}
-          </div>
-          {off.length > 0 && (
-            <div className="hf-panel hf-off-list" data-testid="host-fleet-offline-list">
-              <p className="hf-off-head">Not connected ({off.length})</p>
-              {off.map((h) => <HostFleetOfflineRow key={h.host} host={h} now={now} action={actions[`${h.host}:connect`]} onConnect={onConnect} />)}
-            </div>
+          {error && <p className="hf-error" role="status">Could not read the overview: {error}.{hosts ? ' Showing the last cards.' : ''}</p>}
+          {refreshError && <p className="hf-error" role="status" data-testid="host-fleet-refresh-error">Could not read the hosts again: {refreshError}.{newest !== null ? ` Showing what was read ${readAgo(newest, now)}.` : ''}</p>}
+          {hosts && !shown.length && pending > 0 && <p className="hf-loading" data-testid="host-fleet-reading">Reading each host...</p>}
+          {sum && (
+            <>
+              <div className="hf-stats" data-testid="host-fleet-summary">
+                <Stat testId="host-fleet-stat-online" value={`${sum.online}/${sum.total}`} label="Hosts online" tone={sum.online < sum.total ? 'warn' : 'good'} />
+                <Stat testId="host-fleet-stat-sessions" value={sum.sessions === null ? '?' : String(sum.sessions)} label="Sessions open" />
+                <Stat testId="host-fleet-stat-spend" value={sum.spendUsd === null ? '?' : usd(sum.spendUsd)} label="Spend, 30 days" title="At list price, not a bill" />
+                <Stat testId="host-fleet-stat-problems" value={sum.problems ? String(sum.problems) : 'None'} label={sum.problems === 1 ? 'Host needs a look' : 'Hosts need a look'} tone={sum.problems ? 'warn' : 'good'} title="Hosts that are not connected, or have a line under their card" />
+              </div>
+              <div className="hf-panel hf-topo-panel">
+                <HostFleetTopology hosts={shown} onPick={onPick} />
+              </div>
+              {pending > 0 && <p className="hf-loading hf-loading-more" data-testid="host-fleet-reading">Reading {pending === 1 ? '1 more host' : `${pending} more hosts`}...</p>}
+              <div className="hf-grid">
+                {live.map((h) => <HostFleetCard key={h.host} host={h} now={now} action={actions[`${h.host}:boot`]} onBootStart={onBootStart} onDetails={onDetails} />)}
+              </div>
+              {off.length > 0 && (
+                <div className="hf-panel hf-off-list" data-testid="host-fleet-offline-list">
+                  <p className="hf-off-head">Not connected ({off.length})</p>
+                  {off.map((h) => <HostFleetOfflineRow key={h.host} host={h} now={now} action={actions[`${h.host}:connect`]} onConnect={onConnect} onDetails={onDetails} />)}
+                </div>
+              )}
+            </>
           )}
         </>
       )}

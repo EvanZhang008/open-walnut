@@ -4,12 +4,18 @@
  * the phone and agents (ops `host_list`, `host_get`).
  *
  *   GET /api/v1/hosts?days=30                 → { hosts: FleetHost[], checkedAt }
+ *   GET /api/v1/hosts?cached=1                → { hosts, checkedAt, refreshing }: at once, from the last read
+ *   POST /api/v1/hosts/refresh { hosts? }     → 202 { started, refreshing }: read those hosts again now
  *   GET /api/v1/hosts/:host?days=&bucket=     → { host: FleetHost } (404 unknown)
  *   GET /api/v1/hosts/pick?need=ios           → { pick } (409 no_capable_host): a `@tag` selector resolved
  *   POST /api/v1/hosts/:host/boot-start       → { host: FleetHost }: check (and set up) its start after a reboot now
  *
  * The reads never dial a host; each daemon call has a deadline and a card
  * whose host did not answer in time keeps its last reading, marked stale.
+ * The Overview reads `?cached=1` (core/hosts/fleet-refresh.ts): every card at once
+ * from what each host answered last, with `readAt` / `refreshing` / `readError`,
+ * and reads the hosts again only on a press (POST /hosts/refresh), polling the
+ * cached read while that runs. Without `cached` the read is live, as before.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { normalizeHost } from '../../core/transfer/planner.js'
@@ -25,9 +31,34 @@ function numberParam(v: unknown): number | undefined {
 
 hostsFleetV1Router.get('/hosts', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const days = numberParam(req.query.days)
+    if (req.query.cached === '1' && (days === undefined || Math.round(days) === 30)) {
+      const { cachedFleet } = await import('../../core/hosts/fleet-refresh.js')
+      const { hosts, refreshing } = await cachedFleet()
+      res.json({ hosts, checkedAt: Date.now(), refreshing })
+      return
+    }
     const { listFleet } = await import('../../core/hosts/fleet.js')
-    const hosts = await listFleet({ days: numberParam(req.query.days) })
+    const hosts = await listFleet({ days })
     res.json({ hosts, checkedAt: Date.now() })
+  } catch (err) { next(err) }
+})
+
+// POST /api/v1/hosts/refresh { hosts?: string[] } → 202 { started, refreshing }: the Overview's press. Each named
+// host (every host without a list) is read again in the background, each on its own deadline; the cached read
+// above shows each card as its read ends. A host Walnut does not list is skipped.
+hostsFleetV1Router.post('/hosts/refresh', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const raw = (req.body ?? {}) as { hosts?: unknown }
+    let only: string[] | undefined
+    if (raw.hosts !== undefined) {
+      if (!Array.isArray(raw.hosts) || raw.hosts.length > 64 || !raw.hosts.every((h) => typeof h === 'string' && ALIAS.test(normalizeHost(h)))) {
+        res.status(400).json({ error: 'hosts is a list of host aliases', code: 'bad_host' }); return
+      }
+      only = raw.hosts.map((h) => normalizeHost(h as string))
+    }
+    const { startFleetRefresh } = await import('../../core/hosts/fleet-refresh.js')
+    res.status(202).json(await startFleetRefresh(only))
   } catch (err) { next(err) }
 })
 

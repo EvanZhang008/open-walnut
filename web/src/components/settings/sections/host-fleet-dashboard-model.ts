@@ -6,7 +6,7 @@
  * Shows a host's label only, never its alias.
  */
 import type { FleetHost } from '@/api/hosts-fleet';
-import { gb, pct, span } from './host-fleet-model';
+import { gb, notAnswering, pct, span } from './host-fleet-model';
 
 export type Tone = 'good' | 'warn' | 'bad' | 'muted';
 
@@ -79,7 +79,7 @@ export function problemsOf(h: FleetHost, now: number): Problem[] {
   if (typeof disk === 'number' && (disk > 0 || measured) && disk < DISK_LOW_BYTES) {
     out.push({ key: 'disk', text: `Disk almost full: ${size(disk)} free`, detail: `Only ${size(disk)} of disk is free; a build or a clone may not fit`, tone: 'bad' });
   }
-  if (h.now?.stale) {
+  if (h.now && notAnswering(h)) {
     out.push({ key: 'stale', text: `Last reading ${span(now - h.now.at)} ago`, detail: `The host did not answer in time; this is its reading from ${span(now - h.now.at)} ago`, tone: 'muted' });
   }
   const week = h.history?.windows.find((w) => w.days === 7);

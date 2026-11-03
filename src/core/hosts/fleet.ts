@@ -13,6 +13,13 @@
  * the background every SPEND_TTL_MS. The placement fields are session
  * placement's own view (placement.ts hostLoads, held to PLACEMENT_DEADLINE_MS),
  * so the card shows the room the next start is judged by, never a second score.
+ *
+ * Every answer a host gives for the default window is also kept in the fleet cache
+ * (fleet-cache.ts), which the Overview opens on (fleet-refresh.ts). A row found in
+ * ~/.ssh/config for a machine that has joined the host network (joined-twins.ts) is
+ * the same machine as the joined row: every list (this one, the Overview, the prompt's
+ * host line, a refresh) names and reads it once, as joined. Asked for by its own alias
+ * (`host_get` from a session still on it, Set up), it is still found.
  */
 import { isCompanion } from '../server-role.js'
 import { getConfig } from '../config-manager.js'
@@ -23,6 +30,10 @@ import { hostStatusFrame } from './host-connect-action.js'
 import { listStatusHosts, type HostDef } from './host-status.js'
 import { probeIsStale, readHostProfile, recordProbedFacts, type HostProfile } from './host-profile.js'
 import { buildFleetHost, withPlacement, type FleetBootStart, type FleetConnectionKind, type FleetHost, type FleetInputs } from './fleet-model.js'
+import { joinedTwins } from './joined-twins.js'
+import {
+  __resetFleetCacheForTesting, cachedSpend, recordFleetFailure, recordFleetLoad, recordFleetSpend, recordFleetVitals,
+} from './fleet-cache.js'
 import type { BootStartView } from '../../providers/remote-boot-start-keeper.js'
 import type { HostLoadView } from './placement.js'
 
@@ -37,6 +48,8 @@ const VITALS_CACHE_MAX = 32
 const SPEND_TTL_MS = 5 * 60_000
 const SPEND_FIRST_WAIT_MS = 1_500
 const SPEND_DAYS = 30
+/** The window the Overview shows and the fleet cache keeps. */
+export const DEFAULT_DAYS = 30
 /** placement.ts asks each host for 4 s; a little more covers its session count. */
 const PLACEMENT_DEADLINE_MS = 4_500
 
@@ -46,7 +59,7 @@ let loadsOverride: LoadsFn | null = null
 export function __setFleetLoadsForTesting(fn: LoadsFn | null): void { loadsOverride = fn }
 
 /** Placement's view of these hosts by name; an empty map when it does not answer in time. */
-async function placementViews(hosts: string[]): Promise<Map<string, NonNullable<FleetInputs['load']>>> {
+export async function placementViews(hosts: string[]): Promise<Map<string, NonNullable<FleetInputs['load']>>> {
   const out = new Map<string, NonNullable<FleetInputs['load']>>()
   if (!hosts.length) return out
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -56,7 +69,12 @@ async function placementViews(hosts: string[]): Promise<Map<string, NonNullable<
       ask(hosts),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('placement did not answer in time')), PLACEMENT_DEADLINE_MS); timer.unref?.() }),
     ])
-    for (const v of views) out.set(v.host, { known: v.known, score: v.score, busy: v.busy, reasons: v.reasons, weight: v.weight })
+    for (const v of views) {
+      const view = { known: v.known, score: v.score, busy: v.busy, reasons: v.reasons, weight: v.weight }
+      out.set(v.host, view)
+      // Only a load it read: one it could not read keeps the last one it did.
+      if (v.known) recordFleetLoad(v.host, view)
+    }
   } catch (err) {
     log.web.debug('fleet: placement view unavailable', { error: err instanceof Error ? err.message : String(err) })
   } finally {
@@ -65,7 +83,7 @@ async function placementViews(hosts: string[]): Promise<Map<string, NonNullable<
   return out
 }
 
-interface VitalsConn {
+export interface VitalsConn {
   connected: boolean
   hasCapability(cap: string): boolean
   send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
@@ -92,6 +110,11 @@ async function defaultConnections(): Promise<Map<string, VitalsConn[]>> {
   return dc.listConnectedDaemonsByHost() as unknown as Map<string, VitalsConn[]>
 }
 
+/** Each host's daemon connections (a test's fakes when set). */
+export async function fleetConnections(): Promise<Map<string, VitalsConn[]>> {
+  return connectionsOverride ? connectionsOverride() : defaultConnections()
+}
+
 let spendCache: { at: number; byHost: Map<string, number> | null; from: string } | null = null
 let spendRun: Promise<void> | null = null
 
@@ -104,6 +127,7 @@ export function __setFleetConnectionsForTesting(next: (() => Map<string, VitalsC
   vitalsCache.clear()
   inflight.clear()
   probedInstances.clear()
+  __resetFleetCacheForTesting()
 }
 
 const vitalsCache = new Map<string, { value: HostVitals; at: number }>()
@@ -120,22 +144,35 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   })
 }
 
-/** One host.vitals, at most one in flight per host and window. */
-function askVitals(host: string, conn: VitalsConn, days: number, bucketMinutes?: number): Promise<HostVitals | null> {
+/**
+ * One host.vitals, at most one in flight per host and window. An answer (or why there
+ * was none) for the default window is kept in the fleet cache, whoever asked.
+ */
+export function askVitals(host: string, conn: VitalsConn, days: number, bucketMinutes?: number, sendTimeoutMs = 10_000): Promise<HostVitals | null> {
   const key = vitalsKey(host, days, bucketMinutes)
   const running = inflight.get(key)
   if (running) return running.p
-  const p = conn.send('host.vitals', { days, ...(bucketMinutes ? { bucketMinutes } : {}) }, 10_000)
+  const kept = days === DEFAULT_DAYS && !bucketMinutes
+  const p = conn.send('host.vitals', { days, ...(bucketMinutes ? { bucketMinutes } : {}) }, sendTimeoutMs)
     .then((res) => {
-      if (res.ok === false || !res.stats || !res.history) return null
+      if (res.ok === false || !res.stats || !res.history) {
+        if (kept) recordFleetFailure(host, typeof res.error === 'string' && res.error ? res.error : 'its daemon sent no reading', Date.now())
+        return null
+      }
       const value = res as unknown as HostVitals
+      const at = Date.now()
       vitalsCache.delete(key)
-      vitalsCache.set(key, { value, at: Date.now() })
+      vitalsCache.set(key, { value, at })
       // Bounded: an agent walking windows and bucket sizes, or hosts since removed, evict the oldest.
       while (vitalsCache.size > VITALS_CACHE_MAX) vitalsCache.delete(vitalsCache.keys().next().value as string)
+      if (kept) recordFleetVitals(host, value, at)
       return value
     })
-    .catch((err) => { log.web.debug('fleet: host.vitals failed', { host, error: String(err) }); return null })
+    .catch((err) => {
+      log.web.debug('fleet: host.vitals failed', { host, error: String(err) })
+      if (kept) recordFleetFailure(host, err instanceof Error ? err.message : String(err), Date.now())
+      return null
+    })
     .finally(() => { inflight.delete(key) })
   inflight.set(key, { p, at: Date.now() })
   return p
@@ -158,7 +195,7 @@ async function vitalsFor(host: string, conn: VitalsConn | undefined, days: numbe
 // card then names the system without anyone opening a transfer first, and a probe
 // that failed is tried again the next day.
 const probedInstances = new Set<string>()
-function probeInBackground(host: string, conn: VitalsConn | undefined, profile: HostProfile | null): void {
+export function probeInBackground(host: string, conn: VitalsConn | undefined, profile: HostProfile | null): void {
   if (!conn?.connected || !conn.hasCapability('host-facts-v1')) return
   // A profile probed before the daemon learned host-caps-v1 lacks the capabilities: probe it again.
   const capsMissing = !!profile?.probed && !('mcp' in profile.probed) && conn.hasCapability(CAPS_CAPABILITY)
@@ -192,6 +229,7 @@ function refreshSpend(): Promise<void> {
     const byHost = new Map<string, number>()
     for (const line of report.groups?.find((g) => g.id === 'host')?.lines ?? []) byHost.set(line.key, line.costUsd)
     spendCache = { at: Date.now(), byHost, from }
+    recordFleetSpend({ at: spendCache.at, from, byHost: Object.fromEntries(byHost) })
   })().catch((err) => {
     // Remembered as unknown for the TTL, so a failing report never costs every read its wait.
     spendCache = { at: Date.now(), byHost: null, from: '' }
@@ -209,12 +247,32 @@ async function spend(now: number): Promise<{ byHost: Map<string, number>; from: 
   return spendCache?.byHost ? { byHost: spendCache.byHost, from: spendCache.from } : null
 }
 
-interface HostEntry { host: string; def: HostDef | null; label: string; local: boolean; kind: FleetConnectionKind; declared?: unknown }
+export type FleetSpendNow = Awaited<ReturnType<typeof spend>>
 
-function entries(config: Config): HostEntry[] {
+/** The spend known now, never waiting: this process's last report, else the cached one. */
+export function spendSnapshot(): FleetSpendNow {
+  if (spendCache?.byHost) return { byHost: spendCache.byHost, from: spendCache.from }
+  const kept = cachedSpend()
+  return kept ? { byHost: new Map(Object.entries(kept.byHost)), from: kept.from } : null
+}
+
+/** Read the spend again in the background when it is older than its TTL (a person asked). */
+export function refreshSpendIfOld(now = Date.now()): void {
+  if (!spendCache || now - spendCache.at > SPEND_TTL_MS) void refreshSpend()
+}
+
+export interface HostEntry { host: string; def: HostDef | null; label: string; local: boolean; kind: FleetConnectionKind; declared?: unknown }
+
+/**
+ * Every host the fleet lists, this Mac first; a found row for a joined machine is left out
+ * unless `withTwins` (a lookup by alias, never a list).
+ */
+export function fleetEntries(config: Config, opts: { withTwins?: boolean } = {}): HostEntry[] {
   // This machine has no hosts entry: its own tags are `local_capabilities`.
   const out: HostEntry[] = [{ host: LOCAL_HOST, def: null, label: 'This computer', local: true, kind: 'local', declared: config.local_capabilities }]
+  const twins = new Set(opts.withTwins ? [] : joinedTwins(config.hosts ?? {}, config.net).map((t) => t.alias))
   for (const { key, def } of listStatusHosts(config)) {
+    if (twins.has(key)) continue
     out.push({ host: key, def, label: def.label?.trim() || key, local: false, kind: def.cloud_box ? 'bridge' : def.transport === 'net' ? 'host-network' : 'ssh-tunnel', declared: def.capabilities })
   }
   return out
@@ -235,9 +293,15 @@ async function serverOf(host: string, def: HostDef | null): Promise<FleetInputs[
   }
 }
 
-async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number, now: number, spendNow: Awaited<ReturnType<typeof spend>>, loads: Map<string, NonNullable<FleetInputs['load']>>, bucketMinutes?: number): Promise<FleetHost> {
-  const conn = (conns.get(e.host) ?? [])[0]
-  let status: { connected: boolean; phase: string; phaseLabel: string; connectedAt?: number; error?: string | null }
+/** What a card says that this server holds itself: the link, the profile, the host's Walnut server. No host is asked. */
+export interface LocalParts {
+  status: FleetInputs['status']
+  profile: HostProfile | null
+  server: FleetInputs['server']
+}
+
+export async function localParts(e: HostEntry, conn: VitalsConn | undefined): Promise<LocalParts> {
+  let status: LocalParts['status']
   if (e.local) {
     status = conn?.connected
       ? { connected: true, phase: 'connected', phaseLabel: 'Running on this Mac' }
@@ -246,16 +310,23 @@ async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number
     const f = hostStatusFrame(e.host, e.def!)
     status = { connected: f.connected, phase: f.phase, phaseLabel: f.phaseLabel, connectedAt: f.connectedAt, error: f.error ?? f.lastError ?? null }
   }
-  const [profile, vitals, server] = await Promise.all([
+  const [profile, server] = await Promise.all([
     readHostProfile(e.host).catch(() => null),
-    vitalsFor(e.host, conn, days, now, bucketMinutes),
     serverOf(e.host, e.def).catch(() => null),
   ])
-  probeInBackground(e.host, conn, profile)
+  return { status, profile, server }
+}
+
+/** The card from the local parts and the readings (live or cached). */
+export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: LocalParts, got: {
+  vitals: FleetInputs['vitals']; load: FleetInputs['load']; spend: FleetSpendNow; now: number
+}): FleetHost {
+  const { status, profile, server } = parts
+  const spendNow = got.spend
   return withPlacement(buildFleetHost({
     host: e.host, label: e.label, local: e.local, kind: e.kind, status,
     rttMs: conn?.roundTripMs ?? null,
-    profile, vitals, load: loads.get(e.host) ?? null,
+    profile, vitals: got.vitals, load: got.load ?? null,
     spendUsd: spendNow ? (spendNow.byHost.get(e.host) ?? 0) : null,
     spendFrom: spendNow?.from ?? null,
     server,
@@ -265,8 +336,15 @@ async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number
       bootStart: fleetBootStart(conn.bootStart ?? null),
     } : null,
     declaredCapabilities: e.declared,
-    now,
+    now: got.now,
   }))
+}
+
+async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number, now: number, spendNow: FleetSpendNow, loads: Map<string, NonNullable<FleetInputs['load']>>, bucketMinutes?: number): Promise<FleetHost> {
+  const conn = (conns.get(e.host) ?? [])[0]
+  const [parts, vitals] = await Promise.all([localParts(e, conn), vitalsFor(e.host, conn, days, now, bucketMinutes)])
+  probeInBackground(e.host, conn, parts.profile)
+  return assembleCard(e, conn, parts, { vitals, load: loads.get(e.host) ?? null, spend: spendNow, now })
 }
 
 /** Every host, the Mac first. `days` is the history window (1 to 31; default 30, day buckets). */
@@ -277,8 +355,8 @@ export async function listFleet(opts: { days?: number } = {}): Promise<FleetHost
   // The companion holds no daemon link: its cards come from the bridges. A host replica never
   // runs this route (the route table forwards it to the Mac, or answers needs-leader).
   if (isCompanion()) return cloudFleet(config, now)
-  const conns = connectionsOverride ? connectionsOverride() : await defaultConnections()
-  const all = entries(config)
+  const conns = await fleetConnections()
+  const all = fleetEntries(config)
   const [spendNow, loads] = await Promise.all([spend(now), placementViews(placeable(all))])
   const cards = await Promise.all(all.map((e) => card(e, conns, days, now, spendNow, loads)))
   lastFleet = { at: now, cards }
@@ -292,11 +370,11 @@ export function lastFleetRead(): { at: number; cards: FleetHost[] } | null { ret
 /** One host with its history at the asked resolution; null for a host Walnut does not know. */
 export async function getFleetHost(host: string, opts: { days?: number; bucketMinutes?: number } = {}): Promise<FleetHost | null> {
   const config = await getConfig()
-  const e = entries(config).find((x) => x.host === host)
+  const e = fleetEntries(config, { withTwins: true }).find((x) => x.host === host)
   if (!e) return null
   const now = Date.now()
   if (isCompanion()) return (await cloudFleet(config, now)).find((h) => h.host === host) ?? null
-  const conns = connectionsOverride ? connectionsOverride() : await defaultConnections()
+  const conns = await fleetConnections()
   const bucket = Number.isFinite(opts.bucketMinutes) && (opts.bucketMinutes as number) >= 5 ? Math.round(opts.bucketMinutes as number) : undefined
   const [spendNow, loads] = await Promise.all([spend(now), placementViews(placeable([e]))])
   return card(e, conns, clampDays(opts.days), now, spendNow, loads, bucket)
@@ -323,7 +401,7 @@ const BOOT_CHECK_DEADLINE_MS = 10_000
 export async function checkHostBootStart(host: string): Promise<FleetHost> {
   if (isCompanion()) throw new BootStartCheckError('Ask your Mac: the companion holds no host link', 'companion')
   const config = await getConfig()
-  const e = entries(config).find((x) => x.host === host)
+  const e = fleetEntries(config, { withTwins: true }).find((x) => x.host === host)
   if (!e) throw new BootStartCheckError('Walnut has no such host', 'unknown_host')
   if (e.local || e.kind === 'bridge') throw new BootStartCheckError('Only a host Walnut reaches over SSH or the host network has a boot start Walnut sets up', 'not_remote')
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
@@ -350,9 +428,9 @@ function clampDays(days: number | undefined): number {
 }
 
 /** The companion holds no daemon link of its own: each host's bridge says whether it is there. */
-async function cloudFleet(config: Config, now: number): Promise<FleetHost[]> {
+export async function cloudFleet(config: Config, now: number): Promise<FleetHost[]> {
   const { bridgeForHost } = await import('../../web/ws/bridge-registry.js')
-  return entries(config).filter((e) => !e.local).map((e) => {
+  return fleetEntries(config).filter((e) => !e.local).map((e) => {
     const connected = bridgeForHost(e.host).connected
     return withPlacement(buildFleetHost({
       host: e.host, label: e.label, local: false, kind: 'bridge',

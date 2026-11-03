@@ -1806,7 +1806,25 @@ answer in time keeps its last reading with `now.stale: true`, and a host whose
 daemon predates the capability has `now` and `history` null.
 
 - `GET /api/v1/hosts?days=30` → `200 { hosts: FleetHost[], checkedAt }`, this Mac
-  (`__local__`) first, then each enabled host in config order.
+  (`__local__`) first, then each enabled host in config order. A row found in
+  `~/.ssh/config` for a machine that has since joined the host network is the same
+  machine as its joined row: the fleet lists it once, as the joined host.
+- `GET /api/v1/hosts?cached=1` (additive, 2026-11) → `200 { hosts, checkedAt, refreshing }`
+  at once, never waiting on a host: each card is what this Mac holds itself (the link,
+  the profile, the host's Walnut server, all live) plus what the host answered at its
+  last read, which the Mac keeps on disk (`WALNUT_HOME/local/fleet-cache.json`, never
+  synced) across restarts. Each card adds `readAt` (ms; when its readings were read,
+  null before the first read), `refreshing` (a read of it runs now), `readError` and
+  `readFailedAt` (why its last read failed and when; the readings are then the older
+  ones, with `now.stale: true`). `refreshing` at the top is true while any read runs.
+  Only the 30 day window is cached; another `days` reads live as below.
+- `POST /api/v1/hosts/refresh { hosts?: string[] }` (additive, 2026-11) → `202 { started,
+  refreshing }` at once: reads the named hosts again (every host without `hosts`) in the
+  background, each in parallel with its own deadline (25 s), and each card changes in the
+  cached read when its own read ends. A host already being read is not read twice; a host
+  the fleet does not list is skipped; `400 bad_host` for a malformed list. The Settings
+  Overview reads only on a press (opening it, Refresh, a card's Details, a host's "What
+  Walnut knows", Connect, Set up) and polls the cached read while `refreshing`.
 - `GET /api/v1/hosts/:host?days=&bucket=` → `200 { host: FleetHost }` with its
   history over `days` (1 to 31, default 30) in buckets of `bucket` minutes (at
   least 5; default 1440, or 60 when `days` is 1); `400 bad_host`, `404 unknown_host`.
