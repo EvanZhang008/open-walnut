@@ -12,7 +12,9 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildPathsIn, moduleRoots } from '../../scripts/binary-build-checks.mjs'
 import { CLI_FAST_FILES, CLI_FAST_PRAGMA, bundleCliFast, installCliFast } from '../../scripts/build-cli-fast.mjs'
+import { publishDist } from '../../scripts/publish-serve-root-dist.mjs'
 import { BYTECODE_PROBE_ENV, bytecodeHit } from '../../src/binary/selftest.js'
+import { topLevelAwaits } from '../helpers/top-level-await.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version as string
@@ -24,7 +26,7 @@ let home = ''
 /** A package layout (bin/, dist/) holding the build, or a variant of it. */
 function layout(name: string): string {
   const dir = path.join(cache, name)
-  installCliFast(built, path.join(dir, 'dist'))
+  installCliFast(built, path.join(dir, 'dist'), { probe: null })
   fs.writeFileSync(path.join(dir, 'dist', 'build-info.json'), JSON.stringify(STAMP))
   fs.mkdirSync(path.join(dir, 'bin'), { recursive: true })
   fs.copyFileSync(path.join(ROOT, 'bin/open-walnut.js'), path.join(dir, 'bin/open-walnut.js'))
@@ -66,11 +68,27 @@ describe('dist/cli-fast.js as bun builds it', () => {
     const js = built.get('cli-fast.js')!.toString('utf8')
     const [first, second] = js.split('\n')
     expect(first).toBe(CLI_FAST_PRAGMA)
-    expect(second).toMatch(/^\(function\(exports, require, module, __filename, __dirname\) \{/)
+    // Strict, as an ES bundle is (tests/scripts/cli-fast-build-ratchet.test.ts runs a fixture of it).
+    expect(second).toMatch(/^\(function\(exports, require, module, __filename, __dirname\) \{"use strict";var __walnutBundleUrl = /)
     expect(built.get('cli-fast.js.jsc')!.length).toBeGreaterThan(1024 * 1024)
     expect(js.endsWith('//# sourceMappingURL=cli-fast.js.map\n')).toBe(true)
     const roots = [ROOT, fs.realpathSync(ROOT), ...moduleRoots(ROOT).map((r: { real: string }) => r.real), os.homedir()]
     expect([...buildPathsIn(built.get('cli-fast.js')!, roots).keys()]).toEqual([])
+  })
+
+  it('has no top-level await in any Walnut module it takes in (CommonJS has none)', () => {
+    const map = JSON.parse(built.get('cli-fast.js.map')!.toString('utf8')) as { sources: string[] }
+    const own = map.sources.filter((s) => /^(src|packages)\/.*\.(ts|tsx|js|mjs)$/.test(s))
+    expect(own.length).toBeGreaterThan(500)
+    expect(own).toContain('src/cli-fast.ts')
+    expect(own.flatMap((rel) => topLevelAwaits(path.join(ROOT, rel), ROOT))).toEqual([])
+  })
+
+  it('passes the probe the build and the publish run on it, from its bytecode', () => {
+    const dir = path.join(cache, 'probe')
+    const said = installCliFast(built, path.join(dir, 'dist'))
+    expect(said).toMatchObject({ fromBytecode: true })
+    expect(said!.version).toMatch(new RegExp(`^${VERSION.replace(/\./g, '\\.')}`))
   })
 
   it('starts from its bytecode: the speed is the point', () => {
@@ -151,6 +169,25 @@ describe('bin/open-walnut.js on the CommonJS entry', () => {
     const missing = run(bin, ['tools', 'list'])
     expect(missing.status).toBe(70)
     expect(missing.stderr).toMatch(/^walnut: cannot read \.\.\/dist\/cli-fast\.js: /)
+  })
+
+  it('is published into a checkout when it runs, and refused, the old CLI kept, when it does not', () => {
+    const from = path.join(layout('publish-from'), 'dist')
+    fs.writeFileSync(path.join(from, 'cli.js'), "console.log('full cli')\n")
+    const checkout = path.join(cache, 'publish-checkout')
+    fs.mkdirSync(path.join(checkout, 'dist'), { recursive: true })
+    fs.writeFileSync(path.join(checkout, 'package.json'), '{}')
+    fs.writeFileSync(path.join(checkout, 'dist', 'cli-fast.js'), 'old fast\n')
+    const { order } = publishDist(from, path.join(checkout, 'dist'))
+    expect(order.at(-1)).toBe('cli-fast.js.jsc')
+    // Buffer.equals: toEqual walks 18 MB a byte at a time, for minutes.
+    expect(fs.readFileSync(path.join(checkout, 'dist', 'cli-fast.js')).equals(built.get('cli-fast.js')!)).toBe(true)
+
+    const full = built.get('cli-fast.js')!
+    fs.writeFileSync(path.join(from, 'cli-fast.js'), full.subarray(0, Math.floor(full.length / 2)))
+    fs.writeFileSync(path.join(checkout, 'dist', 'cli-fast.js'), 'old fast\n')
+    expect(() => publishDist(from, path.join(checkout, 'dist'))).toThrow(/the new CLI does not run, so it is not published/)
+    expect(fs.readFileSync(path.join(checkout, 'dist', 'cli-fast.js'), 'utf8')).toBe('old fast\n')
   })
 
   it('leaves the build as three files: entry, bytecode, source map', () => {

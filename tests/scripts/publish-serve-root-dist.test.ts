@@ -14,6 +14,9 @@ import { publishDist } from '../../scripts/publish-serve-root-dist.mjs'
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'publish-serve-root-dist.mjs')
 const DEV_PROD = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.sh'), 'utf-8')
 const roots: string[] = []
+// The new build's cli-fast.js: just enough of the CLI to answer the publish's
+// probe (scripts/cli-fast-probe.mjs: `--version`, then `tools list`).
+const NEW_FAST = "const [a] = process.argv.slice(2)\nconsole.log(a === '--version' ? '9.9.9 (new)' : 'Available operations:\\n  task_list')\n"
 afterEach(() => {
   vi.restoreAllMocks()
   for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true })
@@ -34,7 +37,7 @@ function fixture() {
   const to = path.join(checkout, 'dist')
   write(path.join(checkout, 'package.json'), '{}')
   write(path.join(from, 'cli.js'), 'new cli\n')
-  write(path.join(from, 'cli-fast.js'), 'new fast\n')
+  write(path.join(from, 'cli-fast.js'), NEW_FAST)
   write(path.join(from, 'build-info.json'), '{"commit":"new"}')
   write(path.join(from, 'data', 'skills', 'walnut-trigger', 'SKILL.md'), 'new skill\n')
   write(path.join(from, 'daemon-binaries', 'daemon-darwin-arm64'), 'bin', 0o755)
@@ -60,7 +63,7 @@ describe('publishDist', () => {
     const { from, to } = fixture()
     const { order, pruned } = publishDist(from, to)
     expect(read(path.join(to, 'cli.js'))).toBe('new cli\n')
-    expect(read(path.join(to, 'cli-fast.js'))).toBe('new fast\n')
+    expect(read(path.join(to, 'cli-fast.js'))).toBe(NEW_FAST)
     expect(read(path.join(to, 'data', 'skills', 'walnut-trigger', 'SKILL.md'))).toBe('new skill\n')
     expect(read(path.join(to, 'data', '\u7b14\u8bb0.md'))).toBe('unicode\n')
     expect(read(path.join(to, 'build-info.json'))).toContain('"new"')
@@ -95,7 +98,7 @@ describe('publishDist', () => {
     write(path.join(to, 'cli-fast.js.jsc'), 'bytecode of a newer build')
     publishDist(from, to)
     expect(fs.existsSync(path.join(to, 'cli-fast.js.jsc'))).toBe(false)
-    expect(read(path.join(to, 'cli-fast.js'))).toBe('new fast\n')
+    expect(read(path.join(to, 'cli-fast.js'))).toBe(NEW_FAST)
   })
 
   it('mirrors web/static and data exactly, as a build empties both first', () => {
@@ -147,7 +150,7 @@ describe('publishDist', () => {
     const { from, to } = fixture()
     fs.rmSync(to, { recursive: true, force: true })
     publishDist(from, to)
-    expect(read(path.join(to, 'cli-fast.js'))).toBe('new fast\n')
+    expect(read(path.join(to, 'cli-fast.js'))).toBe(NEW_FAST)
   })
 
   it('refuses an unfinished build, a non-checkout target and a copy onto itself, writing nothing', () => {
@@ -155,9 +158,22 @@ describe('publishDist', () => {
     fs.writeFileSync(path.join(from, 'cli-fast.js'), '')
     expect(() => publishDist(from, to)).toThrow(/missing or empty/)
     expect(read(path.join(to, 'cli.js'))).toBe('old cli\n')
-    fs.writeFileSync(path.join(from, 'cli-fast.js'), 'new fast\n')
+    fs.writeFileSync(path.join(from, 'cli-fast.js'), NEW_FAST)
     expect(() => publishDist(from, path.join(root, 'nowhere', 'dist'))).toThrow(/not a checkout/)
     expect(() => publishDist(from, from)).toThrow(/onto itself/)
+  })
+
+  it('publishes nothing when the new CLI does not run, so the old one stays', () => {
+    const { from, to } = fixture()
+    const before = fs.readdirSync(to, { recursive: true }).map(String).sort()
+    fs.writeFileSync(path.join(from, 'cli-fast.js'), "throw new Error('a module failed to load')\n")
+    expect(() => publishDist(from, to)).toThrow(/the new CLI does not run, so it is not published: .*--version failed \(exit 1\): .*a module failed to load/)
+    // It answers --version, but its data commands do not work.
+    fs.writeFileSync(path.join(from, 'cli-fast.js'), "if (process.argv[2] === '--version') console.log('9.9.9')\nelse process.exit(3)\n")
+    expect(() => publishDist(from, to)).toThrow(/tools list failed \(exit 3\)/)
+    expect(read(path.join(to, 'cli-fast.js'))).toBe('old fast\n')
+    expect(read(path.join(to, 'cli.js'))).toBe('old cli\n')
+    expect(fs.readdirSync(to, { recursive: true }).map(String).sort()).toEqual(before)
   })
 
   it('runs as a command and reports what it did; a failure exits non-zero', () => {

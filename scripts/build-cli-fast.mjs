@@ -17,13 +17,17 @@
  * its own JavaScriptCore, and parses the source when either differs (another bun
  * version, a .jsc from another build, none at all), so a mismatch costs speed,
  * never correctness. The files still land in an order where a reader never meets
- * an old .jsc: the old one goes first, the new one last, each by rename.
+ * an old .jsc: the old one goes first, the new one last, each by rename. Before
+ * that the new entry is run where it will run (scripts/cli-fast-probe.mjs): one
+ * that cannot answer `--version` and `tools list` fails the build, and the CLI
+ * in place stays.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildPathsIn, moduleRoots } from './binary-build-checks.mjs'
+import { probeCliFast } from './cli-fast-probe.mjs'
 
 export const CLI_FAST_ENTRY = 'src/cli-fast.ts'
 /** What this build writes into the out dir: the entry, its bytecode and its source map. */
@@ -76,20 +80,65 @@ export function checkFromDisk(repo, pkg, fromDisk = CLI_FAST_FROM_DISK) {
 // fixed at build time (file:///<build dir>/src/lib/build-info.ts), which names a
 // clone a deploy deletes. In an ES bundle every module's import.meta.url is the
 // bundle's own URL; this keeps that: one variable, set from __filename at load.
+// Only Walnut's own files may read it (foreignBundleUrlReaders).
 const BUNDLE_URL = '__walnutBundleUrl'
-const BUNDLE_URL_BANNER = `var ${BUNDLE_URL} = require("node:url").pathToFileURL(__filename).href;`
+// "use strict" first: bun's CommonJS wrapper has none, and every ES module (the
+// tsup build, the tests, the compiled file) runs strict.
+const BANNER = `"use strict";var ${BUNDLE_URL} = require("node:url").pathToFileURL(__filename).href;`
+
+// A file's section in a bun bundle starts with a comment line naming it: its path
+// relative to the build's working directory, or a plugin's `namespace:path`.
+const SECTION = /^\/\/ ((?:[\w@.+-]+\/)+[\w@.+-]+|[\w-]+:[^\s/]\S*)$/
+
+/**
+ * The bundled files, not Walnut's own, that read the bundle URL: their
+ * import.meta.url. A dependency that finds a file beside itself that way
+ * (`new URL('./asset.txt', import.meta.url)`) would look in dist/ and fail when
+ * it runs. Walnut's own are `repo`'s src/ and the walnut-ws module; each other
+ * file is named relative to `repo` when it is inside it. Fails closed: code
+ * outside any section counts too.
+ */
+export function foreignBundleUrlReaders(js, { repo = root, cwd = process.cwd() } = {}) {
+  const repos = [...new Set([repo, fs.realpathSync(repo)])]
+  const bases = [...new Set([cwd, fs.realpathSync(cwd)])]
+  const own = (section) => {
+    if (section.startsWith('walnut-ws:')) return true
+    if (/^[\w-]+:/.test(section)) return false
+    return bases.some((base) => repos.some((r) => /^src\//.test(path.relative(r, path.resolve(base, section)))))
+  }
+  const name = (section) => {
+    if (/^[\w-]+:/.test(section)) return section
+    const rel = path.relative(repo, path.resolve(cwd, section))
+    return rel.startsWith('..') ? path.resolve(cwd, section) : rel
+  }
+  const found = new Set()
+  let section = null
+  for (const line of js.split('\n')) {
+    const head = SECTION.exec(line)
+    if (head) { section = head[1]; continue }
+    if (!line.includes(BUNDLE_URL) || line.includes(`var ${BUNDLE_URL} = `)) continue
+    if (!section) found.add('(code before the first file)')
+    else if (!own(section)) found.add(name(section))
+  }
+  return [...found]
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-/** Build cli-fast in memory; returns its files by name. Throws on any build error. */
-export async function bundleCliFast({ repo = root } = {}) {
+/**
+ * Build cli-fast in memory; returns its files by name. Throws on any build error.
+ * `entry` and `fromDisk` exist for the tests' fixture builds.
+ */
+export async function bundleCliFast({ repo = root, entry = CLI_FAST_ENTRY, fromDisk = CLI_FAST_FROM_DISK } = {}) {
   if (typeof Bun === 'undefined') throw new Error('build-cli-fast: run this with bun')
   const pkg = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'))
-  checkFromDisk(repo, pkg)
+  checkFromDisk(repo, pkg, fromDisk)
   const result = await Bun.build({
-    entrypoints: [path.join(repo, CLI_FAST_ENTRY)],
+    entrypoints: [path.join(repo, entry)],
     target: 'bun',
     format: 'cjs',
+    // The names CLI_FAST_FILES lists, whatever the entry is called (the tests build fixtures).
+    naming: { entry: 'cli-fast.[ext]' },
     // Bytecode for each module's top-level code only, as build-binary.mjs does;
     // deeper functions compile from source when first called. Measured against
     // full depth: the same start (`--version` ~160 ms either way, `tools call`
@@ -97,9 +146,9 @@ export async function bundleCliFast({ repo = root } = {}) {
     bytecode: true,
     bytecodeDepth: 0,
     sourcemap: 'linked',
-    banner: BUNDLE_URL_BANNER,
+    banner: BANNER,
     define: { __WALNUT_VERSION__: JSON.stringify(pkg.version), 'import.meta.url': BUNDLE_URL },
-    external: [...BUNDLE_EXTERNAL, ...CLI_FAST_FROM_DISK],
+    external: [...BUNDLE_EXTERNAL, ...fromDisk],
     plugins: [{
       name: 'ws-on-bun',
       setup(build) {
@@ -123,37 +172,48 @@ export async function bundleCliFast({ repo = root } = {}) {
   if (baked.size > 0) {
     throw new Error(`build-cli-fast: cli-fast.js carries paths of the build machine; load the dependency that names them from disk (CLI_FAST_FROM_DISK):\n${[...baked.keys()].map((p) => `  ${p}`).join('\n')}`)
   }
+  const foreign = foreignBundleUrlReaders(js, { repo })
+  if (foreign.length > 0) {
+    throw new Error(`build-cli-fast: these bundled files read import.meta.url, which in cli-fast.js is the bundle's own URL, so they would look for their files in dist/; load their package from disk (CLI_FAST_FROM_DISK):\n${foreign.map((f) => `  ${f}`).join('\n')}`)
+  }
   return files
 }
 
-/** Temp files a killed build left (`cli-fast.js.map.<pid>.tmp`, ~45 MB): a package or a publish would carry them. */
-function removeDeadTemps(outDir) {
+/** A killed build's staging dir (`cli-fast.<pid>.tmp`, ~70 MB): a package or a publish would carry it. */
+function removeDeadStages(outDir) {
   for (const name of fs.readdirSync(outDir)) {
-    const m = /^cli-fast\.js(?:\.jsc|\.map)?\.(\d+)\.tmp$/.exec(name)
+    const m = /^cli-fast\.(\d+)\.tmp$/.exec(name)
     if (!m || Number(m[1]) === process.pid) continue
     try {
       process.kill(Number(m[1]), 0)
     } catch (err) {
-      if (err?.code === 'ESRCH') fs.rmSync(path.join(outDir, name), { force: true })
+      if (err?.code === 'ESRCH') fs.rmSync(path.join(outDir, name), { recursive: true, force: true })
     }
   }
 }
 
 /**
- * Put the built files into `outDir`: each written beside its target and renamed
- * over it, the old .jsc removed first and the new one placed last (see header).
+ * Put the built files into `outDir`. They are written to a staging dir inside it
+ * and `probe` runs the staged entry there (beside the same node_modules, its
+ * bytecode beside it); then each is renamed into place, the old .jsc removed
+ * first and the new one placed last (see header). A failed write or probe leaves
+ * the old files. Returns what the probe said.
  */
-export function installCliFast(files, outDir, { tmpTag = `${process.pid}.tmp` } = {}) {
+export function installCliFast(files, outDir, { probe = probeCliFast, stageName = `cli-fast.${process.pid}.tmp` } = {}) {
   fs.mkdirSync(outDir, { recursive: true })
-  removeDeadTemps(outDir)
+  removeDeadStages(outDir)
   const [js, jsc, map] = CLI_FAST_FILES
-  const tmp = (name) => path.join(outDir, `${name}.${tmpTag}`)
+  const stage = path.join(outDir, stageName)
+  fs.rmSync(stage, { recursive: true, force: true })
+  fs.mkdirSync(stage)
   try {
-    for (const name of CLI_FAST_FILES) fs.writeFileSync(tmp(name), files.get(name))
+    for (const name of CLI_FAST_FILES) fs.writeFileSync(path.join(stage, name), files.get(name))
+    const probed = probe ? probe(path.join(stage, js)) : null
     fs.rmSync(path.join(outDir, jsc), { force: true })
-    for (const name of [map, js, jsc]) fs.renameSync(tmp(name), path.join(outDir, name))
+    for (const name of [map, js, jsc]) fs.renameSync(path.join(stage, name), path.join(outDir, name))
+    return probed
   } finally {
-    for (const name of CLI_FAST_FILES) fs.rmSync(tmp(name), { force: true })
+    fs.rmSync(stage, { recursive: true, force: true })
   }
 }
 
@@ -161,9 +221,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const outDir = path.resolve(process.argv[2] ?? path.join(root, 'dist'))
   try {
     const t0 = Date.now()
-    installCliFast(await bundleCliFast(), outDir)
+    const probed = installCliFast(await bundleCliFast(), outDir)
     const size = (name) => `${(fs.statSync(path.join(outDir, name)).size / 1024 / 1024).toFixed(1)} MB`
-    console.log(`build-cli-fast: ${path.join(outDir, 'cli-fast.js')} (${size('cli-fast.js')}, bytecode ${size('cli-fast.js.jsc')}) in ${Date.now() - t0}ms`)
+    console.log(`build-cli-fast: ${path.join(outDir, 'cli-fast.js')} (${size('cli-fast.js')}, bytecode ${size('cli-fast.js.jsc')}) in ${Date.now() - t0}ms; it answered ${probed.version}`)
+    // Speed only: the same bun just wrote this bytecode, so a miss means a build problem.
+    if (!probed.fromBytecode) console.warn('build-cli-fast: warning: the probe ran cli-fast.js from source, not from its bytecode (slow start)')
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err))
     process.exit(1)

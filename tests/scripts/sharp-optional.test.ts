@@ -24,7 +24,8 @@ describe('sharp is optional', () => {
     expect(BUNDLE_EXTERNAL).toContain('sharp');
     // dist/cli-fast.js is bun's build (scripts/build-cli-fast.mjs): it takes the same list.
     const cliFast = readFileSync(path.join(root, 'scripts/build-cli-fast.mjs'), 'utf8');
-    expect(cliFast).toContain('external: [...BUNDLE_EXTERNAL, ...CLI_FAST_FROM_DISK],');
+    expect(cliFast).toContain('external: [...BUNDLE_EXTERNAL, ...fromDisk],');
+    expect(cliFast).toContain('fromDisk = CLI_FAST_FROM_DISK } = {}) {');
     expect(CLI_FAST_FROM_DISK).not.toContain('sharp');
   });
 });

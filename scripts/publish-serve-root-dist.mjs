@@ -21,11 +21,14 @@
 // (cli-fast.js.jsc, scripts/build-cli-fast.mjs) goes with it: the old one is
 // removed before the entries land and the new one placed after them. bun would
 // refuse a .jsc made from other source anyway; this keeps a reader from ever
-// meeting one. Copies are clonefile where the
+// meeting one. Before anything is written the new cli-fast.js is run
+// (scripts/cli-fast-probe.mjs: `--version` and `tools list`); one that fails
+// it is not published, and the CLI here keeps its build. Copies are clonefile where the
 // filesystem has it (metadata only, nothing for an on-access scanner to read).
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { probeCliFast } from './cli-fast-probe.mjs'
 
 export const ENTRIES = ['cli.js', 'cli-fast.js']
 /** Bytecode bun loads beside an entry; never left beside an entry it was not built with. */
@@ -67,8 +70,8 @@ function place(src, dst, kind, tmpTag) {
   }
 }
 
-/** Copy `from` over `to` (see the header). Returns what it did, in order. */
-export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp` } = {}) {
+/** Copy `from` over `to` (see the header). Returns what it did, in order. `probe: null` skips the run (tests). */
+export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp`, probe = probeCliFast } = {}) {
   const src = path.resolve(from)
   const dst = path.resolve(to)
   if (src === dst) throw new Error(`refusing to publish ${src} onto itself`)
@@ -78,6 +81,13 @@ export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp` } 
   }
   if (!fs.existsSync(path.join(path.dirname(dst), 'package.json'))) {
     throw new Error(`${path.dirname(dst)} is not a checkout (no package.json)`)
+  }
+  if (probe) {
+    try {
+      probe(path.join(src, 'cli-fast.js'))
+    } catch (err) {
+      throw new Error(`the new CLI does not run, so it is not published: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   const items = walk(src)
