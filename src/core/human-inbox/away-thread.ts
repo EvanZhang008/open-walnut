@@ -10,7 +10,8 @@
  *    and nothing of it goes into the thread: a letter's thread holds only that letter's own news, never
  *    a line pointing at another letter (2026-11-03: three "needs your answer, in its own letter" lines
  *    about unrelated decisions sat in the thread of the absence's first letter, about a deadline);
- *  - the phone buzzes once: nothing of the absence pushes while a letter of it is still unread. Once
+ *  - the phone buzzes once: nothing of the absence pushes while a letter of it is still unread, or
+ *    after one of the node's threads buzzed moving into needs this absence (push/thread-push.ts). Once
  *    he has read it, the next turn buzzes again; a decision buzzes when the unread letter that did is
  *    older than DECISION_QUIET_MS, so a night's first letter never silences a morning decision.
  * The absence is "since he was last in the chat": a letter of it was made after that moment (so a
@@ -37,6 +38,8 @@ export function planAwaySend(
   sessionId: string,
   letters: readonly LetterRecord[],
   now: number,
+  /** The latest buzz of one of the node's threads moving into needs this absence (push/thread-push.ts), or null. */
+  threadBuzzAt: number | null = null,
 ): AwayPlan | null {
   if (input.pin === true || input.userAsked === true || input.user_asked === true
     || (Array.isArray(input.items) && input.items.length > 0)) return null;
@@ -46,12 +49,14 @@ export function planAwaySend(
     .sort((a, b) => b.createdAt - a.createdAt);
   const thread = same.find((l) => l.type !== 'action_required' && !l.settled && l.sender.sessionId === sessionId);
   const unread = same.filter((l) => !l.read);
+  // A thread's buzz of this absence is the absence's buzz too: he has not been back since.
+  const threadBuzzed = threadBuzzAt !== null && threadBuzzAt > (mark.since ?? 0);
   if (input.type !== 'action_required') {
     if (thread) return { kind: 'fold', into: thread };
-    return { kind: 'new', mark, quiet: unread.length > 0 };
+    return { kind: 'new', mark, quiet: unread.length > 0 || threadBuzzed };
   }
   // A decision: quiet only while the absence buzzed lately and he has not looked.
-  const quiet = unread.some((l) => now - l.createdAt < DECISION_QUIET_MS);
+  const quiet = unread.some((l) => now - l.createdAt < DECISION_QUIET_MS) || (threadBuzzed && now - threadBuzzAt! < DECISION_QUIET_MS);
   return { kind: 'new', mark, quiet };
 }
 
@@ -104,7 +109,10 @@ export async function sendAway(
     const { userAwayFrom } = await import('../org/user-away.js');
     const state = await userAwayFrom(task, now);
     if (!state?.away) return null;
-    const plan = planAwaySend(input, { taskId, since: state.lastSeenAt }, sender.sessionId, await store.awayLettersOf(taskId), now);
+    const { readThreads } = await import('../org/threads-store.js');
+    const { lastThreadBuzz } = await import('../push/thread-push.js');
+    const threadBuzzAt = lastThreadBuzz((await readThreads(taskId).catch(() => ({ threads: [] }))).threads, state.lastSeenAt);
+    const plan = planAwaySend(input, { taskId, since: state.lastSeenAt }, sender.sessionId, await store.awayLettersOf(taskId), now, threadBuzzAt);
     if (!plan) return null;
     // A new letter repeating one just sent is refused; an update folds into the thread (a turn
     // repeating the thread's latest is refused below).

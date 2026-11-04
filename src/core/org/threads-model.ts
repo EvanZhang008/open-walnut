@@ -190,6 +190,8 @@ export interface OrgThread {
   pinned?: ThreadPinned;
   /** When a node last wrote a new summary (reply): the thread's latest result (human-inbox/thread-instead.ts). */
   replied?: { at: string; by: ThreadWriter };
+  /** When its last move into needs buzzed his phone (push/thread-push.ts): one buzz per absence. */
+  needsBuzzedAt?: string;
 }
 
 export interface ThreadsFile {
@@ -715,4 +717,18 @@ export function markClosesTold(file: ThreadsFile, ids: readonly string[]): Threa
   if (!ids.length) return file;
   const set = new Set(ids);
   return { ...file, threads: file.threads.map((t) => (t.closed && set.has(t.id) ? { ...t, closed: { ...t.closed, told: true } } : t)) };
+}
+
+/**
+ * The threads a write moved into needs (a node handed it to the user): needs now, by a node, and
+ * before it was not needs, was closed, or did not exist. His own write never counts (2026-11-04,
+ * Walnut VP: a thread that waits on him buzzes his phone, once per entry; push/thread-push.ts).
+ */
+export function enteredNeeds(before: ThreadsFile, after: ThreadsFile): OrgThread[] {
+  const was = new Map(before.threads.map((t) => [t.id, t]));
+  return after.threads.filter((t) => {
+    if (t.closed || t.state !== 'needs' || !t.by || t.by === 'human') return false;
+    const prev = was.get(t.id);
+    return !prev || !!prev.closed || prev.state !== 'needs';
+  });
 }

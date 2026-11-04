@@ -15,7 +15,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  emptyThreads, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
+  emptyThreads, enteredNeeds, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadsFile, type ThreadWriter,
 } from './threads-model.js';
 
@@ -41,16 +41,37 @@ export async function readThreads(taskId: string): Promise<ThreadsFile> {
   return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);
 }
 
-/** Locked read-modify-write; `mutate` throwing writes nothing. */
+/**
+ * Locked read-modify-write; `mutate` throwing writes nothing. The ONE place a threads file is
+ * written, so every write path, today's and any later one, hands a thread that just moved into
+ * needs to the phone push (push/thread-push.ts; tests/core/org/thread-needs-push-guard.test.ts).
+ */
 async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { file: ThreadsFile; out: R }): Promise<R> {
   leaderOnly();
   let out: R | undefined;
+  let entered: OrgThread[] = [];
   await updateJsonFile<unknown>(threadsFile(taskId), null, (raw) => {
-    const res = mutate(normalizeThreads(raw, taskId));
+    const cur = normalizeThreads(raw, taskId);
+    const res = mutate(cur);
     out = res.out;
+    entered = enteredNeeds(cur, res.file);
     return res.file;
   });
+  if (entered.length) {
+    const threads = entered;
+    // A push must never fail or slow the write that triggered it.
+    void import('../push/thread-push.js').then((m) => m.onThreadsEnteredNeeds(taskId, threads)).catch(() => {});
+  }
   return out as R;
+}
+
+/** The phone buzzed for this thread's move into needs (push/thread-push.ts). Quiet: nothing he sees changed. */
+export async function markNeedsBuzzed(taskId: string, threadId: string, at: string): Promise<void> {
+  if (isCompanion()) return;
+  await mutateThreads(taskId, (cur) => ({
+    file: { ...cur, threads: cur.threads.map((t) => (t.id === threadId ? { ...t, needsBuzzedAt: at } : t)) },
+    out: undefined,
+  }));
 }
 
 export async function fileThreadMessage(taskId: string, input: FileMessageInput): Promise<FileMessageResult> {

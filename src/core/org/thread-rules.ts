@@ -40,7 +40,7 @@ export const THREADS_OPEN_RULE =
 export const THREAD_ONE_PLACE_RULE =
   'One place per update, the thread first: a result, answer or update about one of his threads goes to that thread only '
   + '(thread_update: its summary and state; Walnut files your chat reply under his message), whether he is in your chat or away, '
-  + 'never also a letter; a decision about it is that thread\'s needs state (with user_kind), not a letter. His inbox is only for '
+  + 'never also a letter; a decision about it is that thread\'s needs state (with user_kind), not a letter: Walnut buzzes his phone for it when he is away. His inbox is only for '
   + 'what needs him and has no thread. Walnut refuses a letter from you about an open thread (409 thread_instead): one naming a '
   + 'task of the thread, or a report naming no task right after you put a result in a thread.';
 
