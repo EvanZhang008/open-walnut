@@ -32,20 +32,35 @@ const SESSION_ID = 'pw-phone-touch-scroll-session'
 const TASK_ID = 'pw-phone-touch-scroll-task'
 const TOTAL = 240
 
+// The latest turn (the last two rows) is short, so as opened it fits the screen
+// with room to spare and the phone's open-time landing (a turn taller than the
+// screen opens at its start, C69) stays at the bottom: these cases are about
+// following a reply, and a tail a few pixels from the screen's height left the
+// landing to a composer or banner that happened to be up.
 function row(i: number) {
   return {
     role: i % 2 === 0 ? 'user' : 'assistant',
-    text: `Phone message ${i}\n\n${'a reasonably long line of transcript text '.repeat(5)}`,
+    text: i >= TOTAL - 2 ? `Phone message ${i}` : `Phone message ${i}\n\n${'a reasonably long line of transcript text '.repeat(5)}`,
     msgId: `m${i}`,
     timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
   }
 }
 
-async function mockSession(page: Page) {
+/**
+ * `fullHistoryDelayMs` holds back the full history (the second read, after the
+ * quick `source=streams` one), as a slow host does; `fullHistoryLanded` resolves
+ * once it has been answered.
+ */
+async function mockSession(page: Page, opts: { fullHistoryDelayMs?: number } = {}) {
   const all = Array.from({ length: TOTAL }, (_, i) => row(i))
-  await page.route(`**/api/sessions/${SESSION_ID}/history**`, (route) => route.fulfill({
-    json: { messages: all, total: TOTAL, cursor: TOTAL, delta: false },
-  }))
+  let landed!: () => void
+  const fullHistoryLanded = new Promise<void>((r) => { landed = r })
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route, request) => {
+    const full = !request.url().includes('source=streams')
+    if (full && opts.fullHistoryDelayMs) await new Promise((r) => setTimeout(r, opts.fullHistoryDelayMs))
+    await route.fulfill({ json: { messages: all, total: TOTAL, cursor: TOTAL, delta: false } })
+    if (full) landed()
+  })
   await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
     if (request.url().includes('/history')) return route.fallback()
     await route.fulfill({
@@ -58,6 +73,7 @@ async function mockSession(page: Page) {
       },
     })
   })
+  return { fullHistoryLanded }
 }
 
 /**
@@ -71,7 +87,7 @@ async function mockSession(page: Page) {
  * thread never went idle and the test's own reads of the page (a bounding box,
  * a scroll offset) waited out the whole test (2026-11-01: 6 of 7 CI runs).
  */
-async function startStreaming(page: Page) {
+async function startStreaming(page: Page, repeat = 1) {
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __capturedWs?: WebSocket }).__capturedWs
     return ws && ws.readyState === WebSocket.OPEN
@@ -83,20 +99,26 @@ async function startStreaming(page: Page) {
     }))
     send('')
     let n = 0
-    const next = () => requestAnimationFrame(() => setTimeout(() => { n += 1; send(`Streamed sentence ${n} of the running turn. `); next() }, 120))
+    const next = () => requestAnimationFrame(() => setTimeout(() => { n += 1; send(`Streamed sentence ${n} of the running turn. `.repeat(args.repeat)); next() }, 120))
     next()
-  }, { sid: SESSION_ID, task: TASK_ID })
+  }, { sid: SESSION_ID, task: TASK_ID, repeat })
 }
 
 async function gapFromBottom(page: Page) {
   return page.locator('.session-history').evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight))
 }
 
-/** A finger dragged DOWN the screen by `dy` (the transcript pans up). */
+/** A finger dragged DOWN the screen by `dy` (the transcript pans up); a negative `dy` drags it up. */
 async function panDown(page: Page, dy: number) {
   const box = (await page.locator('.session-history').boundingBox())!
   const x = box.x + box.width / 2
-  const y0 = box.y + box.height * 0.3
+  const y0 = box.y + box.height * (dy > 0 ? 0.3 : 0.9)
+  // The finger must land on the transcript, or the pan tests nothing.
+  const under = await page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y)
+    return el?.closest('.session-history') ? null : (el ? `${el.tagName.toLowerCase()}.${String(el.className)}` : 'nothing')
+  }, { x, y: y0 })
+  expect(under, 'what the finger landed on').toBeNull()
   const engine = page.context().browser()?.browserType().name()
   if (engine === 'chromium') {
     const cdp = await page.context().newCDPSession(page)
@@ -172,8 +194,10 @@ test('a pan up while the turn streams stays where the finger left it', async ({ 
 
   await startStreaming(page)
   await expect(history).toContainText('Streamed sentence 3', { timeout: 10_000 })
-  await page.waitForTimeout(300)
-  expect(await gapFromBottom(page), 'following the stream before the pan').toBeLessThanOrEqual(8)
+  // Following: the gap a delta opens closes on the next frame. One read can land
+  // between a delta's commit and that frame (a loaded runner widens it), so ask
+  // until a frame has run; a view the landing moved away never gets back.
+  await expect.poll(() => gapFromBottom(page), { message: 'following the stream before the pan', timeout: 5_000 }).toBeLessThanOrEqual(8)
   await panDown(page, 360)
   await page.waitForTimeout(400)
   const right = await gapFromBottom(page)
@@ -188,12 +212,9 @@ test('a pan up while the turn streams stays where the finger left it', async ({ 
   expect(await gapFromBottom(page)).toBeGreaterThan(right + 100)
 })
 
-test('a flick whose momentum outlasts the finger is not pulled back to the bottom', async ({ page }) => {
-  // iOS Safari: a quick flick is a few touchmoves, and most of the distance is
-  // momentum AFTER the finger lifts, with no input event at all. Follow-bottom
-  // used to treat those late scroll events as its own echo (no input for 500 ms)
-  // and snap the view back to the bottom. Here the drag moves nothing and the
-  // momentum arrives 600 ms later, which is the shape that failed.
+test('a pan back down to the end follows the stream again', async ({ page }) => {
+  // The other half of "only the reader turns following off": the reader turns it
+  // back on by bringing the view back to the end, with no tap on the arrow.
   await mockSession(page)
   await page.goto(`/sessions?id=${SESSION_ID}`)
   const history = page.locator('.session-history')
@@ -201,25 +222,112 @@ test('a flick whose momentum outlasts the finger is not pulled back to the botto
   await page.waitForTimeout(1_200)
   await startStreaming(page)
   await expect(history).toContainText('Streamed sentence 3', { timeout: 10_000 })
-  await history.evaluate(async (el) => {
-    const fire = (type: string, y: number | null) => {
-      const e = new Event(type, { bubbles: true })
-      Object.defineProperty(e, 'touches', { value: y === null ? [] : [{ identifier: 1, clientX: 100, clientY: y }] })
-      el.dispatchEvent(e)
-    }
-    fire('touchstart', 300)
-    fire('touchmove', 315)
-    fire('touchmove', 330)
-    fire('touchend', null)
-    await new Promise((r) => setTimeout(r, 600))
-    for (let i = 0; i < 10; i++) {
-      el.scrollTop -= 45
-      await new Promise((r) => setTimeout(r, 50))
-    }
-  })
+  await panDown(page, 360)
+  await page.waitForTimeout(400)
+  const away = await gapFromBottom(page)
+  expect(away, 'the pan moved the transcript').toBeGreaterThan(200)
+  await page.waitForTimeout(1_000)
+  expect(await gapFromBottom(page), 'not followed while away').toBeGreaterThanOrEqual(away - 8)
+  // A finger moving UP the screen, until the view stops at the end.
+  for (let i = 0; i < 8 && (await gapFromBottom(page)) > 2; i++) {
+    await panDown(page, -300)
+    await page.waitForTimeout(300)
+  }
+  // Following again: the gap each delta opens closes on the next frame.
   await page.waitForTimeout(1_500)
-  expect(await gapFromBottom(page), 'the momentum kept the reader up the transcript').toBeGreaterThan(250)
+  await expect.poll(() => gapFromBottom(page), { message: 'following again after coming back', timeout: 5_000 }).toBeLessThanOrEqual(8)
 })
+
+for (const streaming of [true, false]) {
+  test(`a flick whose momentum outlasts the finger is not pulled back to the bottom (${streaming ? 'while the turn streams' : 'nothing arriving'})`, async ({ page }) => {
+    // iOS Safari: a quick flick is a few touchmoves, and most of the distance is
+    // momentum AFTER the finger lifts, with no input event at all. Follow-bottom
+    // used to treat those late scroll events as its own echo (no input for 500 ms)
+    // and snap the view back to the bottom. Here the drag moves nothing and the
+    // momentum arrives 600 ms later, which is the shape that failed.
+    //
+    // Its first frames stay inside the bottom band (45px of NEAR_BOTTOM_PX's 80),
+    // and a scroll there turned following back on, so the next frame was snapped
+    // back to the bottom (2026-11-03, WebKit: half the runs). While a turn streams,
+    // growth between the lift and the momentum sometimes pushed the gap past the
+    // band first and hid it; with nothing arriving it fails every time.
+    await mockSession(page)
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    const history = page.locator('.session-history')
+    await expect(history).toContainText(`Phone message ${TOTAL - 1}`, { timeout: 30_000 })
+    await page.waitForTimeout(1_200)
+    if (streaming) {
+      await startStreaming(page)
+      await expect(history).toContainText('Streamed sentence 3', { timeout: 10_000 })
+    }
+    await history.evaluate(async (el) => {
+      const fire = (type: string, y: number | null) => {
+        const e = new Event(type, { bubbles: true })
+        Object.defineProperty(e, 'touches', { value: y === null ? [] : [{ identifier: 1, clientX: 100, clientY: y }] })
+        el.dispatchEvent(e)
+      }
+      fire('touchstart', 300)
+      fire('touchmove', 315)
+      fire('touchmove', 330)
+      fire('touchend', null)
+      await new Promise((r) => setTimeout(r, 600))
+      for (let i = 0; i < 10; i++) {
+        el.scrollTop -= 45
+        await new Promise((r) => setTimeout(r, 50))
+      }
+    })
+    await page.waitForTimeout(1_500)
+    expect(await gapFromBottom(page), 'the momentum kept the reader up the transcript').toBeGreaterThan(250)
+  })
+}
+
+for (const shape of [
+  { name: 'the full history is quick', fullHistoryDelayMs: 0 },
+  // The window waits for the full history: here it lands three seconds in, with
+  // the reply already long, which is the open as a slow host makes it.
+  { name: 'the full history lands seconds later', fullHistoryDelayMs: 3_000 },
+]) {
+  test(`a reply that streams from the moment the session opens is followed, never jumped to its turn start (${shape.name})`, async ({ page }) => {
+    // The phone opens a latest turn taller than the screen at its start (C69),
+    // checking for two seconds while the loaded rows lay out. A reply streaming in
+    // those seconds grew the turn past the screen and the view jumped up, away
+    // from the live words, before the reader touched anything (2026-11-03: the
+    // first case above failed on CI 53 to 240px above the bottom, ahead of its
+    // pan). Here the reply starts as soon as the rows show, in long deltas, so the
+    // turn outgrows the screen well inside that window.
+    const { fullHistoryLanded } = await mockSession(page, { fullHistoryDelayMs: shape.fullHistoryDelayMs })
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    const history = page.locator('.session-history')
+    await expect(history).toContainText(`Phone message ${TOTAL - 1}`, { timeout: 30_000 })
+    expect(await gapFromBottom(page), 'opened at the bottom').toBeLessThanOrEqual(4)
+    // Every upward move of the view from now on, on any frame or scroll event.
+    await history.evaluate((el) => {
+      const w = window as unknown as { __drops: number[] }
+      w.__drops = []
+      let last = el.scrollTop
+      const look = () => {
+        if (el.scrollTop < last - 1) w.__drops.push(Math.round(last - el.scrollTop))
+        last = el.scrollTop
+      }
+      el.addEventListener('scroll', look, { passive: true })
+      const frame = () => { look(); requestAnimationFrame(frame) }
+      requestAnimationFrame(frame)
+    })
+    await startStreaming(page, 6)
+    await expect(history).toContainText('Streamed sentence 6', { timeout: 10_000 })
+    await fullHistoryLanded
+    // Past the landing's window, counted from when the full history landed.
+    await page.waitForTimeout(2_500)
+    const turnTaller = await history.evaluate((el) => {
+      const users = el.querySelectorAll<HTMLElement>('[data-msg-role="user"]')
+      const last = users[users.length - 1]!
+      return el.scrollHeight - (last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop) - el.clientHeight
+    })
+    expect(turnTaller, 'the streamed reply made the turn taller than the screen').toBeGreaterThan(200)
+    expect(await page.evaluate(() => (window as unknown as { __drops: number[] }).__drops), 'the view never moved up by itself').toEqual([])
+    await expect.poll(() => gapFromBottom(page), { message: 'following the live words', timeout: 5_000 }).toBeLessThanOrEqual(8)
+  })
+}
 
 test('the document never scrolls on a phone, so a swipe on the composer moves nothing', async ({ page }) => {
   await mockSession(page)

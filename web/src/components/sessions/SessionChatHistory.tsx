@@ -19,6 +19,8 @@ import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
+import { followResumes, type FollowLeave } from './follow-resume';
+import { liveOutputSize, phoneTurnStartStep, PHONE_TURN_START_WINDOW_MS, type TimelineContent } from './phone-turn-start';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
@@ -2184,6 +2186,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // zero user action, parking the view mid-history ("jumps up then down
     // while loading"). Growth may never flip isAtBottom; only people may.
     const markUserInput = () => { lastUserInput.current = Date.now(); };
+    // Where the view stood when the reader last turned following off, and the
+    // highest it has been since (null: following, or turned off by something
+    // else). Following comes back only when the reader brings the view back down
+    // (follow-resume.ts), never on a scroll that did not.
+    let leave: FollowLeave | null = null;
+    const readerLeaves = () => {
+      if (isAtBottom.current || !leave) leave = { leftAt: el.scrollTop, highestSinceLeft: el.scrollTop };
+      isAtBottom.current = false;
+    };
     // Wheel-UP is unambiguous "stop following, I'm reading" intent — honor it
     // SYNCHRONOUSLY (inc-1786690697303: while streaming, debouncedScroll
     // re-arms ignoreScrollUntil every content tick, so the wheel's scroll
@@ -2195,7 +2206,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const onWheel = (e: WheelEvent) => {
       markUserInput();
       if (e.deltaY < 0) {
-        isAtBottom.current = false;
+        readerLeaves();
         ignoreScrollUntil.current = 0; // user input overrides any quiet window
         setShowScrollArrow(el.scrollHeight > el.clientHeight);
       }
@@ -2217,7 +2228,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const y = e.touches[0]?.clientY;
       if (y === undefined || touchY === null) return;
       if (y - touchY > 4 && el.scrollTop > 0) {
-        isAtBottom.current = false;
+        readerLeaves();
         setShowScrollArrow(el.scrollHeight > el.clientHeight);
       }
       touchY = y;
@@ -2226,7 +2237,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // title tap): the same intent as a wheel up, announced by the caller.
     const onReaderScroll = () => {
       markUserInput();
-      isAtBottom.current = false;
+      readerLeaves();
       ignoreScrollUntil.current = 0;
     };
     el.addEventListener(READER_SCROLL_EVENT, onReaderScroll);
@@ -2267,6 +2278,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // Before the gate: whether the newest row is off screen does not depend on
       // whose write moved us there.
       syncArrow();
+      // Following again (the arrow, a send, a pin): the old leaving point is spent.
+      if (isAtBottom.current) leave = null;
+      else if (leave) leave.highestSinceLeft = Math.min(leave.highestSinceLeft, rawTop);
       // Skip scroll events triggered by ResizeObserver-induced geometry shifts
       if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
@@ -2281,14 +2295,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         return; // isAtBottom stays true
       }
       const prev = isAtBottom.current;
-      isAtBottom.current = nearBottom;
+      if (!nearBottom) readerLeaves();
+      else if (prev || followResumes(leave, el.scrollTop, el.scrollHeight - el.scrollTop - el.clientHeight)) { isAtBottom.current = true; leave = null; }
       // Log only on transitions (not every scroll tick)
-      if (nearBottom !== lastLoggedAtBot) {
-        lastLoggedAtBot = nearBottom;
+      if (isAtBottom.current !== lastLoggedAtBot) {
+        lastLoggedAtBot = isAtBottom.current;
         const top = Math.round(el.scrollTop);
         const ch = Math.round(el.clientHeight);
         const sh = Math.round(el.scrollHeight);
-        console.log(`[scroll:${sid8}] handler ${prev}→${nearBottom} top=${top} ch=${ch} sh=${sh}`);
+        console.log(`[scroll:${sid8}] handler ${prev}→${isAtBottom.current} top=${top} ch=${ch} sh=${sh}`);
       }
       syncArrow();
     };
@@ -2458,35 +2473,54 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Phone (spec 4.5, C69): a latest turn taller than the timeline opens at its
   // start (the user's message at the top, the jump pill showing), so a long
   // answer is read from its beginning; a turn that fits stays bottom aligned.
-  // Once per mount, after the load settles; later pins respect isAtBottom.
+  // Once per mount, after the load settles, decided on the transcript as opened:
+  // a row or live output arriving inside the window ends it (phone-turn-start.ts).
   const phoneTurnStartDone = useRef(false);
   const phoneTurnStartFrom = useRef(0);
+  const phoneTurnStartOpened = useRef<TimelineContent | null>(null);
+  // Read by the window's timers: kept current before the landing below runs in
+  // the same commit (layout effects run in declaration order).
+  const timelineContentNow = useRef<TimelineContent>({ rows: 0, live: 0 });
+  // The live output the reader saw when the transcript first showed. The window
+  // opens later, once the full history lands (seconds on a slow host), and a
+  // reply that streamed meanwhile is something the reader watched arrive.
+  const liveAtFirstShow = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const live = isStreaming ? liveOutputSize(blocks) : 0;
+    timelineContentNow.current = { rows: messages.length, live };
+    if (liveAtFirstShow.current === null && messages.length > 0) liveAtFirstShow.current = live;
+  }, [messages, blocks, isStreaming]);
   useLayoutEffect(() => {
     if (phoneTurnStartDone.current || phase2Pending || messages.length === 0 || !isPhoneLayout()) return undefined;
     const el = containerRef.current;
     if (!el) return undefined;
-    if (!phoneTurnStartFrom.current) phoneTurnStartFrom.current = performance.now();
+    if (!phoneTurnStartFrom.current) {
+      phoneTurnStartFrom.current = performance.now();
+      phoneTurnStartOpened.current = { rows: messages.length, live: liveAtFirstShow.current ?? timelineContentNow.current.live };
+    }
     // Rows finish laying out over a few frames (markdown, the run rows): check
     // again while the view is still pinned, and stop for good once the user
-    // has scrolled or the first moments are over.
+    // has scrolled, something new arrived, or the first moments are over.
     const apply = (): boolean => {
       if (phoneTurnStartDone.current) return true;
-      if (!isAtBottom.current || performance.now() - phoneTurnStartFrom.current > 2000) {
-        phoneTurnStartDone.current = true;
-        log.info('session-history', 'phone turn start skipped', { sessionId, atBottom: isAtBottom.current, ms: Math.round(performance.now() - phoneTurnStartFrom.current) });
-        return true;
-      }
-      // R3-01: an unanswered prompt needs the tap, so a timeline that ends in one
-      // stays on it (bottom aligned, its buttons above the composer), like a
-      // chat app landing on the newest bubble; the turn's start is a scroll away.
-      if (el.querySelector('[data-prompt-pending="true"]')) {
-        phoneTurnStartDone.current = true;
-        log.info('session-history', 'phone turn start kept on a pending prompt', { sessionId });
-        return true;
-      }
-      const top = latestTurnStartTop(el);
-      if (top === null || el.scrollHeight - top <= el.clientHeight + 1) return false;
+      const turnTop = latestTurnStartTop(el);
+      const step = phoneTurnStartStep({
+        atBottom: isAtBottom.current,
+        elapsedMs: performance.now() - phoneTurnStartFrom.current,
+        opened: phoneTurnStartOpened.current ?? timelineContentNow.current,
+        now: timelineContentNow.current,
+        pendingPrompt: !!el.querySelector('[data-prompt-pending="true"]'),
+        turnTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      });
+      if (step.act === 'wait') return false;
       phoneTurnStartDone.current = true;
+      if (step.act === 'done') {
+        log.info('session-history', 'phone turn start skipped', { sessionId, why: step.why, atBottom: isAtBottom.current, ms: Math.round(performance.now() - phoneTurnStartFrom.current) });
+        return true;
+      }
+      const top = turnTop ?? 0;
       log.info('session-history', 'phone turn start applied', { sessionId, top: Math.round(top), scrollHeight: el.scrollHeight });
       // Ends the load-window bottom pin, which would otherwise take it back.
       el.dispatchEvent(new Event(READER_SCROLL_EVENT));
@@ -2497,7 +2531,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       return true;
     };
     if (apply()) return undefined;
-    const timers = [60, 180, 400, 800, 1400, 2001].map((ms) => setTimeout(apply, ms));
+    const timers = [60, 180, 400, 800, 1400, PHONE_TURN_START_WINDOW_MS + 1].map((ms) => setTimeout(apply, ms));
     return () => { timers.forEach(clearTimeout); };
   }, [phase2Pending, messages, scrollLog, sessionId]);
 
