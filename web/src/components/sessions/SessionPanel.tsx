@@ -3422,6 +3422,28 @@ function InsetSessionPanel(props: SessionPanelProps) {
  * tooltip. Its own component: a git reading re-renders the chip, not the panel
  * (whose header refits its row on every render).
  */
+/** How many digits each session's Changed count had last time, so the room kept before
+ *  the count lands is its width (a session of 42 files does not push Files over). */
+const COUNT_DIGITS_KEY = 'open-walnut-changed-count-digits';
+const COUNT_DIGITS_MAX = 200;
+function lastCountDigits(sessionId: string): number {
+  try {
+    const n = (JSON.parse(localStorage.getItem(COUNT_DIGITS_KEY) ?? '{}') as Record<string, number>)[sessionId];
+    return typeof n === 'number' && n >= 1 && n <= 4 ? n : 1;
+  } catch { return 1; }
+}
+function rememberCountDigits(sessionId: string, digits: number): void {
+  try {
+    const map = JSON.parse(localStorage.getItem(COUNT_DIGITS_KEY) ?? '{}') as Record<string, number>;
+    if (map[sessionId] === digits) return;
+    delete map[sessionId];
+    map[sessionId] = digits;
+    const ids = Object.keys(map);
+    for (const id of ids.slice(0, Math.max(0, ids.length - COUNT_DIGITS_MAX))) delete map[id];
+    localStorage.setItem(COUNT_DIGITS_KEY, JSON.stringify(map));
+  } catch { /* storage off: one digit's room */ }
+}
+
 const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onToggle }: {
   sessionId: string;
   active: boolean;
@@ -3431,6 +3453,8 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
   const gitGlance = useSessionGitGlance(sessionId);
   const changedFiles = gitGlance?.changedFiles ?? null;
   const count = changedFiles ? compactCount(changedFiles) : null;
+  useEffect(() => { if (changedFiles !== null) rememberCountDigits(sessionId, (count ?? '0').length); }, [sessionId, changedFiles, count]);
+  const pendingText = useMemo(() => '0'.repeat(lastCountDigits(sessionId)), [sessionId]);
   return (
     <button
       className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
@@ -3446,7 +3470,7 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
         ? <span className="session-chip-count" data-testid="session-changed-count">{count}</span>
         // Nothing changed yet reads 0; not counted yet keeps that room (hidden), so the chip
         // is one width from first paint to its count and Files and the rest stay put.
-        : <span className={`session-chip-count ${changedFiles === 0 ? 'is-zero' : 'is-pending'}`} aria-hidden={changedFiles === 0 ? undefined : true} data-testid={changedFiles === 0 ? 'session-changed-count' : undefined}>0</span>}
+        : <span className={`session-chip-count ${changedFiles === 0 ? 'is-zero' : 'is-pending'}`} aria-hidden={changedFiles === 0 ? undefined : true} data-testid={changedFiles === 0 ? 'session-changed-count' : undefined}>{changedFiles === 0 ? '0' : pendingText}</span>}
     </button>
   );
 });

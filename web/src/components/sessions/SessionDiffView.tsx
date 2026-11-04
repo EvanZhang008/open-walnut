@@ -1652,7 +1652,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     // blocking light fetch queued behind the recompute — sat on one HTTP
     // request for the whale's full 50-80s cold parse and DIED at the client's
     // 60s timeout, leaving the tab stuck on a stale list.
-    const POLL_MS = 3000;
+    // The first polls come quickly (a small session's recompute takes well under a second,
+    // and the git strip above already moved), then every 3 s.
+    const pollDelay = (attempt: number): number => [500, 1000, 2000][attempt] ?? 3000;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     // The ↻ is for a read the user asked for (opening the tab, Re-scan); an automatic re-read is quiet.
     const showsSpinner = !soft || all;
@@ -1677,7 +1679,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             settle();
           })
           .catch(() => { if (!ctrl.signal.aborted && spinning) setRefreshingBg(false); settle(); });
-      }, POLL_MS);
+      }, pollDelay(attempt));
     };
     fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
       .then((res) => {
@@ -2515,10 +2517,20 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       </div>
   );
 
+  // The session's repos now: branch, uncommitted files, +/- lines, unpushed commits.
+  // Known before the list is (a separate, cheaper read), so it shows while the list loads.
+  const gitStrip = gitGlance && gitGlance.repos.length > 0 && (
+    <div className="session-diff-gitstrip" data-testid="session-diff-gitstrip">
+      <GitGlanceLineView glance={gitGlance} words="long" />
+      <GitCheckedAgo at={gitGlance.checkedAt} />
+    </div>
+  );
+
   if (loading && !data) {
     return (
       <div className="session-diff-view" ref={containerRef}>
         {toolbar}
+        {gitStrip}
         <div className="session-diff-loading"><LoadingSpinner /></div>
       </div>
     );
@@ -2555,13 +2567,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     >
       {toolbar}
 
-      {/* The session's repos now: branch, uncommitted files, +/- lines, unpushed commits. */}
-      {gitGlance && gitGlance.repos.length > 0 && (
-        <div className="session-diff-gitstrip" data-testid="session-diff-gitstrip">
-          <GitGlanceLineView glance={gitGlance} words="long" />
-          <GitCheckedAgo at={gitGlance.checkedAt} />
-        </div>
-      )}
+      {gitStrip}
 
       {/* Refresh failed but the cached list is still on screen — say so in a
           slim strip instead of blanking the view. */}
