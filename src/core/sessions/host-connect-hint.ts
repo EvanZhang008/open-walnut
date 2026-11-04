@@ -181,7 +181,16 @@ export interface HostConnectTarget {
   hostname?: string
   port?: number
   user?: string
+  /** A machine on the host network (`transport: net`): no SSH between, so no SSH kind applies. */
+  net?: boolean
 }
+
+/**
+ * What a host network machine's failure can be: Walnut's own sentences (net-link.ts) and the
+ * network's timeout, unreachable and daemon. An SSH kind read into walnut-net's words (a `dns`
+ * that waits 10 minutes, a `runtime` for a word like node) would set the wrong retry pace.
+ */
+const NET_KINDS: ReadonlySet<HostConnectErrorKind> = new Set<HostConnectErrorKind>(['unreachable', 'timeout', 'daemon', 'ephemeral', 'unknown'])
 
 /** The bare hostname inside an ssh target ("-p 2222 alice@devbox" -> "devbox"). */
 function bareHostOf(sshTarget: string): string {
@@ -247,6 +256,10 @@ const WALNUT_SENTENCES: Array<[HostConnectErrorKind, RegExp]> = [
   ['cloud_exec_off', /cloud companion has session hosting turned off/g],
   ['cloud_other_mac', /another mac is connected to this cloud companion/g],
   ['cloud_tunnel', /cloud companion tunnel failed/g],
+  // core/hosts/net-link.ts: a host network machine walnut-net could not reach, or reached
+  // with no daemon answering (before the socket's own words, a reset or a timeout).
+  ['unreachable', /is not online on the host network/g],
+  ['daemon', /is reachable, but the walnut daemon there did not answer/g],
   // providers/daemon-connection.ts (a test server) and providers/remote-sh.ts
   ['ephemeral', /ephemeral server|attach-only/g],
   ['shell_noise', /shell_noise:/g],
@@ -323,6 +336,7 @@ export function classifyHostConnectError(
     const blanked = names.reduce((m, re) => m.replace(re, ' '), text)
     kind = PATTERNS.find(([, re]) => re.test(blanked))?.[0] ?? 'unknown'
   }
+  if (target.net && !NET_KINDS.has(kind)) kind = 'unknown'
   return { kind, hint: hintForKind(kind, sshTarget, target), retryable: RETRYABLE[kind] }
 }
 

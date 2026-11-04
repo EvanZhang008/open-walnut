@@ -333,4 +333,26 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
     await connected(machine)
     expect(await filesOnMachine(machine)).toContain('on-the-machine.txt')
   }, 300_000)
+
+  // 2026-11-04: an offline PC read "WebSocket connection failed: ECONNRESET (url=ws://127.0.0.1:…)",
+  // filed as "The session daemon did not start" (core/hosts/net-link.ts).
+  it('a machine that goes off reads as not online on the host network, and comes back on its own', async () => {
+    await stopChild(hostDaemon)
+    hostDaemon = null
+    let seen: unknown = null
+    const row = await waitFor(async () => {
+      const s = await (await api('/api/hosts/status')).json() as { hosts?: Array<{ host: string; connected: boolean; error?: string; kind?: string; lastError?: string; lastKind?: string; hint?: string; lastHint?: string }> }
+      const h = s.hosts?.find((x) => x.host === machine)
+      seen = h
+      return h && !h.connected && /is not online on the host network/.test(`${h.error ?? ''} ${h.lastError ?? ''}`) ? h : null
+    }, 120_000, 'the machine to read as offline').catch((err: Error) => { throw new Error(`${err.message}; last status: ${JSON.stringify(seen)}`) })
+    const text = JSON.stringify(row)
+    expect(text).not.toContain('127.0.0.1')
+    expect(text).not.toMatch(/ECONNRESET|session daemon/i)
+    expect(row.kind ?? row.lastKind).toBe('unreachable')
+    expect(row.hint ?? row.lastHint).toContain('walnut net status')
+    await startHostDaemon()
+    await connected(machine)
+    expect(await filesOnMachine(machine)).toContain('on-the-machine.txt')
+  }, 300_000)
 })

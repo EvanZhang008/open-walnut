@@ -16,6 +16,7 @@ import {
   CREDENTIAL_WAIT_KINDS,
   RETRYABLE,
   classifyHostConnectError,
+  IN_PROGRESS_PHASES,
   hintForKind,
   connectPhaseNote,
   describeConnectPhase,
@@ -195,7 +196,8 @@ export function buildHostStatus(
     const retryAt = state.retryAt ?? (CREDENTIAL_WAIT_KINDS.has(kind) ? extra.credentialRetryAt : undefined)
     if (typeof retryAt === 'number') status.retryAt = retryAt
   }
-  if (state.phase === 'reconnecting' && !state.connected) {
+  // Also while a dial of the reconnect loop runs (foldReconnectCause): its last failure says why.
+  if ((state.phase === 'reconnecting' || (state.lastError && IN_PROGRESS_PHASES.has(state.phase))) && !state.connected) {
     if (state.reconnectSince) status.reconnectSince = state.reconnectSince
     if (state.lastError) {
       const c = classifyFor(state.lastError, hostKey, hostDef, label)
@@ -251,8 +253,8 @@ function sshTargetOf(def: HostDef): string {
   return def.user ? `${def.user}@${def.hostname}` : def.hostname
 }
 
-function targetOf(def: HostDef, label: string): { label: string; hostname: string; user?: string; port?: number } {
-  return { label, hostname: def.hostname, ...(def.user ? { user: def.user } : {}), ...(def.port ? { port: def.port } : {}) }
+function targetOf(def: HostDef, label: string): { label: string; hostname: string; user?: string; port?: number; net?: boolean } {
+  return { label, hostname: def.hostname, ...(def.user ? { user: def.user } : {}), ...(def.port ? { port: def.port } : {}), ...(def.transport === 'net' ? { net: true } : {}) }
 }
 
 /** The ONE classification call every frame field uses: label, hostname and port all reach the hint. */

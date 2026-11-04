@@ -491,7 +491,7 @@ export class HostWarmup {
       if (this.deps.classify) return this.deps.classify(message, host)
       const t = host.sshTarget
       const target = t?.user ? `${t.user}@${t.hostname}` : t?.hostname ?? host.key
-      return classifyHostConnectError(message, target, [host.key, t?.hostname ?? '', t?.user ?? '']).kind
+      return classifyHostConnectError(message, target, [host.key, t?.hostname ?? '', t?.user ?? ''], { net: !!t?.endpoint }).kind
     } catch { return 'unknown' }
   }
 

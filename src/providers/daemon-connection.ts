@@ -67,7 +67,7 @@ import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { getOpOwner, opNames } from '../ops/registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
-import { classifyHostConnectError, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
+import { classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import {
@@ -5503,9 +5503,13 @@ export class DaemonConnection {
     const endpoint = this.sshTarget?.endpoint
     if (!endpoint) throw new Error(`${this.hostKey} has no host network id; add it again from Settings > Remote Hosts`)
     this.setPhase('tunnel')
-    const { netForwardPort } = await import('../core/hosts/net-link.js')
+    const { netForwardPort, explainNetDialFailure } = await import('../core/hosts/net-link.js')
     const port = await netForwardPort(endpoint, this.hostKey)
-    await this.connectWebSocket(port, { timeoutMs: DaemonConnection.NET_UPGRADE_TIMEOUT_MS })
+    try {
+      await this.connectWebSocket(port, { timeoutMs: DaemonConnection.NET_UPGRADE_TIMEOUT_MS })
+    } catch (err) {
+      throw await explainNetDialFailure(err, endpoint, this.hostKey)
+    }
     this.setPhase('handshake')
     this._capabilities = null // so "no hello at all" is told apart from "hello, missing caps"
     const ok = await this.verifyCapabilities()
@@ -6178,10 +6182,13 @@ export class DaemonConnection {
     // minutes, then every 5) so a login done elsewhere reconnects soon;
     // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
     // A host network machine has no ssh target to read: `this.ssh` throws for it (2026-11-03:
-    // its failed reconnect threw here, and its loop ended unseen). The cloud box's has one.
-    const kind = this.sshTarget && !this.isNetHost
-      ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
-      : 'unknown'
+    // its failed reconnect threw here, and its loop ended unseen), so it is read by its name
+    // alone (an offline one says so, net-link.ts). The cloud box's has one.
+    const kind = this.isNetHost
+      ? classifyHostConnectError(msg, '', [this.hostKey], { net: true }).kind
+      : this.sshTarget
+        ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
+        : 'unknown'
     // Which of these, and the cause every surface reads: daemon-reconnect-cause.ts.
     const now = Date.now()
     const step = decideReconnectStep({
@@ -7859,7 +7866,11 @@ function foldReconnectCause(state: DaemonConnectState, conn: DaemonConnection | 
   if (state.phase === 'reconnecting' && conn?.disconnectedSince) state.reconnectSince = conn.disconnectedSince
   const cause = getReconnectCause(state.host)
   if (!cause || state.connected) return
-  if (state.phase === 'reconnecting') {
+  // A dial of the loop runs through its steps (a host network machine's `tunnel`): the loop's
+  // cause still says why it is not connected. 2026-11-04: an offline PC read only "Reaching
+  // home-pc through the host network" for hours, a dial every 30 s hiding the reason.
+  const loopDial = !!conn?.disconnectedSince && CONNECT_IN_FLIGHT_PHASES.has(state.phase)
+  if (state.phase === 'reconnecting' || loopDial) {
     state.lastError = cause.summary
     state.lastKind = cause.kind
     state.reconnectSince = cause.since

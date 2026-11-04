@@ -6,6 +6,8 @@
  * file through the `@open-walnut/host-problem` alias.
  */
 
+/** A connect step a reconnect loop's dial runs through (host-connect-hint.ts DAEMON_CONNECT_STEPS). */
+export const LOOP_DIAL_PHASES: ReadonlySet<string> = new Set(['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'])
 /** Mirrors HostConnectErrorKind (host-connect-hint.ts), kept local so this file stays import-free. */
 export type HostFailureKind =
   | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy_login' | 'proxy' | 'shell_noise'
@@ -315,7 +317,8 @@ export function hostProblemOf(
       dismissKey: `${status.host}|connect`,
     }
   }
-  if (status.phase === 'reconnecting' && !status.connected) {
+  // A dial of the loop (`tunnel`) is still the loop (2026-11-04: an offline PC said only "Reaching home-pc").
+  if ((status.phase === 'reconnecting' || (!!status.lastError && LOOP_DIAL_PHASES.has(status.phase ?? ''))) && !status.connected) {
     const kind = status.lastKind || undefined
     return {
       type: 'reconnecting',

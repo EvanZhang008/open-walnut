@@ -71,6 +71,18 @@ describe('buildHostStatus — steps and wording per phase', () => {
   });
 });
 
+describe('buildHostStatus — a dial of the reconnect loop keeps its last failure', () => {
+  // 2026-11-04: an offline PC read only "Reaching home-pc through the host network".
+  it('a host network machine dialling again says why the last dial failed, with the host network hint', () => {
+    const pc: HostDef = { hostname: 'home-pc.walnut-net.invalid', label: 'home-pc', transport: 'net', endpoint: 'b'.repeat(64) } as HostDef;
+    const s = buildHostStatus('home-pc', pc, state('tunnel', { lastError: 'home-pc is not online on the host network: this machine could not reach it', lastKind: 'unreachable', reconnectSince: AT - 60_000 }), undefined, AT);
+    expect(s).toMatchObject({ connected: false, phase: 'tunnel', lastError: expect.stringContaining('not online'), lastKind: 'unreachable', reconnectSince: AT - 60_000 });
+    expect(s.lastHint).toContain('walnut net status');
+    // A first connect's step with no failure behind it carries none.
+    expect(buildHostStatus('home-pc', pc, state('tunnel'), undefined, AT).lastError).toBeUndefined();
+  });
+});
+
 describe('buildHostStatus — a failed connect becomes a next step', () => {
   it('classifies an auth failure and quotes the ssh target the user would type', () => {
     const s = buildHostStatus('devbox', devbox, state('failed', {

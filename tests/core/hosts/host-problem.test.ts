@@ -7,10 +7,11 @@ import {
   hostFailureHeadline, hostProblemOf, hostDotOf, hostActionsFor, joinLabels, credentialGroupHeadline,
   formatRetryIn, retryCountdownText, middleTruncatePath, hostGateBody, hostReadySentence,
   autofixProgressText, isClaudeFixAction, sameResultReceipt, firstSentence, listingProblemOf, READINESS_ANSWER_GRACE_MS,
-  BANNER_READINESS_KINDS, BLOCKING_READINESS_KINDS, bannerReadinessProblem,
+  BANNER_READINESS_KINDS, BLOCKING_READINESS_KINDS, bannerReadinessProblem, LOOP_DIAL_PHASES,
   type HostStatusInput,
 } from '../../../src/core/hosts/host-problem.js'
 import { PREFLIGHT_TIMEOUT_MS } from '../../../src/core/hosts/host-readiness.js'
+import { DAEMON_CONNECT_STEPS } from '../../../src/core/sessions/host-connect-hint.js'
 import { isAgentFix } from '../../../src/core/hosts/host-autofix.js'
 
 const L = 'Dev box'
@@ -84,6 +85,19 @@ describe('hostProblemOf: one problem per host, by priority', () => {
     expect(q).toMatchObject({ type: 'connect', kind: 'unknown', retryable: true, hint: '' })
     expect(q).not.toHaveProperty('retryAt')
   })
+  // 2026-11-04: an offline PC read only "Reaching home-pc through the host network" for hours:
+  // each dial of the loop (phase tunnel) hid the reason the one before had failed.
+  it('a dial of the reconnect loop is still reconnecting, with the last failure', () => {
+    const offline = st({ phase: 'tunnel', lastError: 'home-pc is not online on the host network: this machine could not reach it', lastKind: 'unreachable', lastHint: 'Is home-pc on?', reconnectSince: NOW - 60_000 })
+    expect(hostProblemOf(offline)).toMatchObject({ type: 'reconnecting', kind: 'unreachable', hint: 'Is home-pc on?', since: NOW - 60_000 })
+    // A first connect's step, with no failure before it, is no problem.
+    expect(hostProblemOf(st({ phase: 'tunnel' }))).toBeNull()
+  })
+
+  it("the loop's dial steps are every connect step (a new step must be added there)", () => {
+    expect([...LOOP_DIAL_PHASES].sort()).toEqual([...DAEMON_CONNECT_STEPS].sort())
+  })
+
   it('reconnecting carries the last failure and the server start time', () => {
     expect(hostProblemOf(st({ phase: 'reconnecting', lastKind: 'timeout', lastHint: 'VPN?', reconnectSince: NOW - 9000 })))
       .toEqual({ type: 'reconnecting', kind: 'timeout', headline: `Connecting to ${L} timed out`, hint: 'VPN?', since: NOW - 9000 })

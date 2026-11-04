@@ -728,7 +728,7 @@ export async function listSessionDirs(
       const state = getDaemonConnectState(host);
       // Same target facts as the connect path: label, hostname and the port (host_key, C37).
       const { kind, hint, retryable } = classifyHostConnectError(message, sshTargetText, hostNames,
-        { label: hostLabel, hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port });
+        { label: hostLabel, hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port, net: hostDef.transport === 'net' });
       // The picker shows this under a headline for `kind`, with `hint` as the next
       // step. The message is the one plain sentence every host read says when the
       // last dial failed (remote-read-bound.ts); the dial's own words (an errno, a

@@ -41,9 +41,24 @@ describe('classifyHostConnectError', () => {
     ['ephemeral server: no daemon running on devbox and ephemeral sandboxes do not deploy/start remote daemons (attach-only)', 'ephemeral'],
     ["ephemeral server: remote host 'devbox' is off for test servers (set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)", 'ephemeral'],
     ['something nobody has seen before', 'unknown'],
+    // A host network machine (core/hosts/net-link.ts): offline, or online with no daemon.
+    ['home-pc is not online on the host network: this machine could not reach it', 'unreachable'],
+    ['Host network: home-pc is reachable, but the Walnut daemon there did not answer (is Walnut running there?)', 'daemon'],
   ])('%s → %s', (message, kind) => {
     expect(classifyHostConnectError(message, T).kind).toBe(kind);
   });
+
+  it('a host network machine gets no SSH kind: walnut-net words that read like dns or runtime are unknown', () => {
+    const net = (m: string) => classifyHostConnectError(m, '', ['home-pc'], { net: true }).kind
+    expect(net('home-pc is not online on the host network: this machine could not reach it')).toBe('unreachable')
+    expect(net('Host network: home-pc is reachable, but the Walnut daemon there did not answer (is Walnut running there?)')).toBe('daemon')
+    expect(net('Opening handshake has timed out')).toBe('timeout')
+    expect(net('Host network: home-pc did not answer (dns lookup failed: no address associated)')).toBe('unknown')
+    expect(net('Host network: home-pc did not answer (node unreachable)')).toBe('unknown')
+    expect(net('Permission denied (publickey).')).toBe('unknown')
+    // The same words from an SSH host keep their kinds.
+    expect(classifyHostConnectError('dns lookup failed: no address associated', T).kind).toBe('dns')
+  })
 
   it("the host's own names are not evidence: an alias like `nodedev` is not a runtime problem", () => {
     const names = ['nodedev', 'Bun box', 'nodedev.example.test', 'me'];
