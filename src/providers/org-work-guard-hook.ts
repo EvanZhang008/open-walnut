@@ -1,5 +1,5 @@
 /**
- * The hooks that hold Main and a VP (an org lead) to their first rule: never do the work yourself,
+ * The hooks that remind Main and a VP (an org lead) of their first rule: never do the work yourself,
  * at most ORG_SELF_COMMAND_LIMIT commands of your own in a turn, only to look
  * (src/core/org/core-instructions.ts orgSelfWorkRule).
  *
@@ -8,13 +8,14 @@
  * VP's start was refused for a full slot and it ran the investigation itself with host_exec. The rule
  * was in its prompt and restated after the compaction; nothing reminded it at the moment it drifted.
  *
- * It reminds; it refuses only when the user asked for that (the same day, the user: "I think walnut
- * probally shoudo't stoop it, it shudo use prompt and in correct time to avoid forget"). At the
- * ORG_SELF_COMMAND_LIMIT-th command of a turn the hook adds one line of context to that call
- * (`additionalContext`, which Claude Code hands the model with the tool's result): this is your 3rd
- * command, hand the rest on. Once per turn. Settings → Org "Refuse their 4th command"
- * (config `org.block_own_commands`, org-enabled.ts) turns the old refusal back on: past the limit the
- * call is refused with a `deny` that says how to hand the work on. The rule itself rides the prompt
+ * It only reminds, and never refuses a call (the same day, the user: "I think walnut probally shoudo't
+ * stoop it, it shudo use prompt and in correct time to avoid forget"; 2026-11-04, of a switch that
+ * refused the 4th command: "remove this shodln;'t do this at all"). At the ORG_SELF_COMMAND_LIMIT-th
+ * command of a turn the hook adds one line of context to that call (`additionalContext`, which
+ * Claude Code hands the model with the tool's result): this is your 3rd command, hand the rest on.
+ * Once per turn. The refusal switch an older Walnut wrote into config.yaml is ignored, and the hook
+ * prints no permission decision at all (tests/providers/org-work-guard-hook.test.ts fails on one). The
+ * rule itself rides the prompt
  * (core instructions) and the `hand-on` message hint (core/hints/hint-registry.ts) at session start,
  * after a compaction and every few messages.
  *
@@ -37,8 +38,7 @@
  * well, not against one that hides work.
  *
  * POSIX sh + awk, like the other Bash hooks (pattern-kill-guard-hook.ts). WALNUT_ORG_WORK_GUARD=0 on
- * the server turns the reminder and the refusal off. The switch is read when a process starts (its
- * hooks are in its `--settings`), so a change reaches the next process a session starts.
+ * the server turns the reminder off.
  */
 import { TMP_PATH_AWK, shQuoteAwk } from './tmp-path-awk.js'
 import { ORG_SELF_COMMAND_LIMIT, orgHandOn, ordinal, type CoreInstructionRole } from '../core/org/core-instructions.js'
@@ -155,22 +155,9 @@ END {
 
 /** The words at the limit-th command of a turn, per role (English: the model reads it). Short: it
  *  rides a tool result in the middle of the work. */
-export function orgWorkReminder(role: CoreInstructionRole, block = false): string {
+export function orgWorkReminder(role: CoreInstructionRole): string {
   return `Walnut: this is your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command of your own in this turn. `
-    + `Hand the rest to your team now: ${orgHandOn(role)}, with what you saw so far (Walnut's own ops do not count`
-    + `${block ? '; Walnut refuses your next command' : ''}).`
-}
-
-/** The words of a refusal, per role (English: the model reads it). */
-export function orgWorkRefusal(role: CoreInstructionRole): string {
-  const who = role === 'main' ? 'Main, the user\'s main agent' : 'a VP (the lead of a project)'
-  const handOn = orgHandOn(role)
-  return `Walnut refused this call: you are ${who}, and you already ran ${ORG_SELF_COMMAND_LIMIT} commands of your own in this turn. `
-    + `You never do the work yourself past a quick look. Hand it on now: ${handOn}, with what you saw so far in the hand-over. `
-    + 'A full slot is no reason to run it here: the start is queued and Walnut starts it when a slot frees. '
-    + 'Walnut\'s own ops (the walnut CLI, mcp__walnut__ tools) still work; host_exec counts as your own command. '
-    + 'For a long message, write it with the Write tool (or cat <<\'EOF\' > file) into your task directory and pass it as '
-    + 'walnut tools call <op> @file: neither counts.'
+    + `Hand the rest to your team now: ${orgHandOn(role)}, with what you saw so far (Walnut's own ops do not count).`
 }
 
 // Per user: a shared /tmp dir another user made first would turn the guard off for this one.
@@ -178,11 +165,10 @@ const SLOTS = '"${TMPDIR:-/tmp}/walnut-org-work-$(id -u)/$sid"'
 
 const shQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
 
-/** The PreToolUse command for one role: a reminder at the limit-th command, and with `block` a
- *  refusal past it. */
-export function orgWorkGuardCommand(role: CoreInstructionRole, block = false): string {
+/** The PreToolUse command for one role: a reminder at the limit-th command. It never decides a call. */
+export function orgWorkGuardCommand(role: CoreInstructionRole): string {
   const program = shQuoteAwk(DECIDE_AWK.replace(/^[ \t]*#.*\n/gm, ''))
-  const remind = `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\\n' ${shQuote(orgWorkReminder(role, block))}`
+  const remind = `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\\n' ${shQuote(orgWorkReminder(role))}`
   return [
     'in=$(cat 2>/dev/null)',
     `v=$(printf '%s' "$in" | awk -v HOME="$HOME" -v TD="\${WALNUT_TASK_DIR%/}" ${program} 2>/dev/null)`,
@@ -190,10 +176,8 @@ export function orgWorkGuardCommand(role: CoreInstructionRole, block = false): s
     `mkdir -p ${SLOTS} 2>/dev/null || exit 0`,
     // One slot per call: mkdir is atomic, so parallel calls of a turn each get their own number.
     // Only the allowed slots are tried, so a call past them costs no more forks under load. The call
-    // that takes the last one is reminded; past them nothing more is said, unless the user asked
-    // Walnut to refuse.
+    // that takes the last one is reminded; past them nothing more is said.
     `i=1; while [ $i -le ${ORG_SELF_COMMAND_LIMIT} ]; do if mkdir ${SLOTS}/$i 2>/dev/null; then [ $i -eq ${ORG_SELF_COMMAND_LIMIT} ] && ${remind}; exit 0; fi; i=$((i+1)); done`,
-    ...(block ? [`printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\\n' ${shQuote(orgWorkRefusal(role))}`] : []),
     'exit 0',
   ].join('\n')
 }
@@ -211,12 +195,11 @@ END { sid = jstr(in_, "session_id"); gsub(/[^A-Za-z0-9_-]/, "", sid); print sid 
 
 const HOOK_TIMEOUT_SECS = 10
 
-/** `block`: the user's Settings → Org switch (org-enabled.ts orgBlocksOwnCommandsCached), off by default. */
-export function orgWorkGuardHooks(role: CoreInstructionRole | undefined, env: NodeJS.ProcessEnv = process.env, opts: { block?: boolean } = {}): Record<string, unknown> | null {
+export function orgWorkGuardHooks(role: CoreInstructionRole | undefined, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
   if (!role || env.WALNUT_ORG_WORK_GUARD === '0') return null
   const reset = { type: 'command', command: ORG_WORK_RESET_COMMAND, timeout: HOOK_TIMEOUT_SECS }
   return {
-    PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: orgWorkGuardCommand(role, opts.block === true), timeout: HOOK_TIMEOUT_SECS }] }],
+    PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: orgWorkGuardCommand(role), timeout: HOOK_TIMEOUT_SECS }] }],
     // A turn's end, and a process's start (a slot left by one that died mid-turn). Never
     // UserPromptSubmit: Claude Code runs it for every message queued into a running turn too
     // (2026-11-03 on prod: a Walnut notice taken in after the VP's first command reset its count),

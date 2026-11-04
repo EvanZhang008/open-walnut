@@ -219,5 +219,4 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-settings-stops { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
 .org-settings-stops-head { font-weight: 600; }
 .org-settings-stops ul { margin: 0; padding-left: 16px; color: var(--fg-muted); line-height: 1.4; }
-.org-settings-stops-sep { padding-top: 8px; border-top: 1px solid var(--border); }
 .org-settings-all { align-self: flex-start; }

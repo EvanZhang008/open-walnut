@@ -330,13 +330,11 @@ orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: Next
 orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('The org\'s names are changed')
-    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown; enabled?: unknown; blockOwnCommands?: unknown }
+    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown; enabled?: unknown }
     for (const k of ['name', 'founderTitle'] as const) {
       if (body[k] !== undefined && typeof body[k] !== 'string') throw new OrgError('bad_name', 400, `\`${k}\` is a string.`)
     }
     if (body.enabled !== undefined && typeof body.enabled !== 'boolean') throw new OrgError('bad_enabled', 400, '`enabled` is true or false.')
-    if (body.blockOwnCommands !== undefined && typeof body.blockOwnCommands !== 'boolean') throw new OrgError('bad_block', 400, '`blockOwnCommands` is true or false.')
-    if (body.blockOwnCommands !== undefined && await isTestRunRequest(req)) throw new OrgError('test_run', 409, 'A test run does not change the org\'s command rule.')
     // A test window on the real Walnut never turns the user's org off or on.
     if (body.enabled !== undefined && await isTestRunRequest(req)) throw new OrgError('test_run', 409, 'A test run does not change the org switch.')
     const wasOn = (await getOrgSettings()).enabled

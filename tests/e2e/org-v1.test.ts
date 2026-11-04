@@ -714,22 +714,18 @@ describe('/api/v1/org', () => {
       expect((await getConfig()).org).toBeUndefined()
     })
 
-    it('the "refuse their 4th command" switch is off by default; on, the next org session\'s hooks refuse', async () => {
-      // 2026-11-03, the user: "walnut probally shoudo't stoop it": Walnut reminds by default.
-      const { orgBlocksOwnCommandsCached } = await import('../../src/core/org/org-enabled.js')
+    it('there is no switch that refuses Main\'s or a VP\'s own commands; an older Walnut\'s value is ignored and dropped', async () => {
+      // 2026-11-04, the user, of a "Refuse their 4th command" switch: "remove this shodln;'t do this at all".
       const { sessionSettingsHooks } = await import('../../src/providers/session-settings-hooks.js')
       const { getConfig } = await import('../../src/core/config-manager.js')
-      const refuses = () => JSON.stringify(sessionSettingsHooks({}, { orgRole: 'lead', orgBlock: orgBlocksOwnCommandsCached() })).includes('Walnut refused this call: you are')
-      expect((await api('GET', '/org/settings')).json).toMatchObject({ blockOwnCommands: false })
-      expect(refuses()).toBe(false)
-      expect((await api('PUT', '/org/settings', { blockOwnCommands: 'yes' })).status).toBe(400)
-      expect((await api('PUT', '/org/settings', { blockOwnCommands: true })).json).toMatchObject({ blockOwnCommands: true, enabled: true })
-      expect((await getConfig()).org).toEqual({ block_own_commands: true })
-      expect(refuses()).toBe(true)
-      // Off again: nothing is written (off is the default).
-      expect((await api('PUT', '/org/settings', { blockOwnCommands: false })).json).toMatchObject({ blockOwnCommands: false })
+      const { modifyConfigDoc } = await import('../../src/core/config-store.js')
+      // An older Walnut wrote the switch on.
+      await modifyConfigDoc((doc) => { doc.org = { block_own_commands: true }; return { write: true, result: null } })
+      expect((await api('GET', '/org/settings')).json).not.toHaveProperty('blockOwnCommands')
+      expect(JSON.stringify(sessionSettingsHooks({}, { orgRole: 'lead' }))).not.toContain('Walnut refused this call')
+      // An older client still sending it: answered as before, nothing stored.
+      expect((await api('PUT', '/org/settings', { blockOwnCommands: true })).status).toBe(200)
       expect((await getConfig()).org).toBeUndefined()
-      expect(refuses()).toBe(false)
     })
   })
 })

@@ -1,5 +1,5 @@
 /**
- * The org's switches (src/core/org/org-settings.ts), shared by the two places that show them:
+ * The org's switch (src/core/org/org-settings.ts), shared by the two places that show it:
  * Settings → Org (OrgSection) and the Org page's settings panel (OrgSettingsMenu). 2026-11-03,
  * the user: "the setting should also be in the org view". Both read and write the same values
  * through useOrgSettings, so a flip in one shows in the other at once, in every window.
@@ -23,23 +23,14 @@ export function orgSwitchFooter(on: boolean): string {
     : 'Turning it on again starts Main and the VPs that never started, and they hear their teams again.';
 }
 
-export const BLOCK_OWN_LABEL = 'Refuse their 4th command';
-export const BLOCK_OWN_HELP = 'Stop Main or a VP at its 4th command of its own in a turn, instead of only reminding it.';
-
-export function blockOwnFooter(blocks: boolean): string {
-  return blocks
-    ? 'Main and the VPs are reminded at their 3rd command of their own in a turn, and Walnut refuses the 4th. Sessions that start from now on follow this.'
-    : 'Main and the VPs never do the work themselves: at their 3rd command of their own in a turn, Walnut reminds them to hand the rest to their teams. Walnut\'s own ops do not count. A change reaches the sessions that start from now on.';
-}
-
 export interface OrgToggle {
   on: boolean; busy: boolean; error: string | undefined; set: (next: boolean) => void;
   /** Forget the last save's error (a panel opened again starts clean). */
   clearError: () => void;
 }
 
-/** One of the org's boolean settings: `enabled` (on unless off) or `blockOwnCommands` (off unless on). */
-export function useOrgToggle(field: 'enabled' | 'blockOwnCommands'): OrgToggle {
+/** The org's on/off switch: on unless the user turned it off. */
+export function useOrgSwitch(): OrgToggle {
   const { settings, save } = useOrgSettings();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -48,13 +39,10 @@ export function useOrgToggle(field: 'enabled' | 'blockOwnCommands'): OrgToggle {
     if (busy) return;
     setBusy(true);
     setError(undefined);
-    save({ [field]: next })
+    save({ enabled: next })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(false));
   };
-  const on = field === 'enabled' ? settings.enabled !== false : settings.blockOwnCommands === true;
+  const on = settings.enabled !== false;
   return { on, busy, error, set, clearError: () => setError(undefined) };
 }
-
-/** The org's on/off switch. */
-export const useOrgSwitch = (): OrgToggle => useOrgToggle('enabled');

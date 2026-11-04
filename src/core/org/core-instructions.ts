@@ -21,8 +21,8 @@ export type CoreInstructionRole = 'main' | 'lead';
  * never nver do it urslef unless it is under 3 command run ... this si the most improt rule, for a VP or
  * CEO"; a VP whose start was refused for a full slot ran the investigation itself instead). The first
  * line of both defaults, and what src/providers/org-work-guard-hook.ts counts: at this many in a turn
- * the agent is reminded to hand the work on, and refused past it only when the user turned that on
- * (Settings → Org, config `org.block_own_commands`).
+ * the agent is reminded to hand the work on, and never refused (2026-11-04, the user: "remove this
+ * shodln;'t do this at all").
  */
 export const ORG_SELF_COMMAND_LIMIT = 3;
 

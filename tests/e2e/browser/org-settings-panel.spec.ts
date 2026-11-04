@@ -1,6 +1,6 @@
 /**
  * The Org page's own settings (web/src/components/org/OrgSettingsMenu.tsx): the gear beside
- * "Org chart" opens a panel with the org's switches, the same values Settings → Org shows.
+ * "Org chart" opens a panel with the org's switch, the same value Settings → Org shows.
  *   - turning it off in the panel marks the gear "Off" and Settings → Org reads off;
  *   - turning it on in Settings → Org shows on in the panel again;
  *   - Escape closes the panel and "All Org settings" opens Settings → Org;
@@ -77,13 +77,17 @@ test('the Org page opens the org switch in place, and Settings → Org shows the
   // On again in Settings; the Org page's panel shows it on.
   await page.locator('#org-enabled').click()
   await expect(page.locator('#org-enabled')).toBeChecked()
+  await expect(page.getByTestId('org-block-own-commands-row')).toHaveCount(0)
+  await expect(page.locator('#org')).not.toContainText(/Refuse their|4th command/)
   await expect.poll(() => held.writes).toEqual([false, true])
   await page.getByTestId('sidebar-org').click()
   await expect(gear).not.toContainText('Off')
   await gear.click()
   await expect(page.getByTestId('org-settings-menu').locator('#org-settings-enabled')).toBeChecked()
-  // "Refuse their 4th command" is there too, off by default, as in Settings → Org.
-  await expect(page.getByTestId('org-settings-menu').locator('#org-settings-block-own')).not.toBeChecked()
+  // No switch refuses Main's or a VP's own commands, here or in Settings → Org (2026-11-04, the user:
+  // "remove this shodln;'t do this at all").
+  await expect(page.getByTestId('org-settings-menu')).not.toContainText(/Refuse|4th command/)
+  await expect(page.getByTestId('org-settings-menu').locator('#org-settings-block-own')).toHaveCount(0)
 })
 
 test('on a phone the gear and its panel fit the screen', async ({ page }) => {

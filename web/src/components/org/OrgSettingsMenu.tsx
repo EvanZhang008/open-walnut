@@ -1,7 +1,7 @@
 /**
  * The Org page's own settings (2026-11-03, the user: "the setting should also be in the org view,
  * some kind of setting right"): a gear beside "Org chart" opens a small panel with the org's one
- * switch and "Refuse their 4th command" (useOrgSwitch.ts, the same values Settings → Org shows),
+ * switch (useOrgSwitch.ts, the same value Settings → Org shows),
  * what turning the org off stops, and a link to the full Settings page. The gear reads "Off" while the org is off.
  */
 import { useRef, useState } from 'react';
@@ -12,9 +12,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { ICON_GEAR } from '@/components/common/Icons';
 import { log } from '@/utils/log';
-import {
-  BLOCK_OWN_HELP, BLOCK_OWN_LABEL, ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch, useOrgToggle,
-} from './useOrgSwitch';
+import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from './useOrgSwitch';
 import '@/styles/org-rail.css';
 
 export function OrgSettingsMenu() {
@@ -23,7 +21,6 @@ export function OrgSettingsMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const { on, busy, error, set, clearError } = useOrgSwitch();
-  const block = useOrgToggle('blockOwnCommands');
   const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'right', minHeight: 200, onAnchorLost: () => setOpen(false) });
   useOverlayLayer({
     open,
@@ -45,7 +42,7 @@ export function OrgSettingsMenu() {
         aria-expanded={open}
         aria-label={on ? 'Org settings' : 'Org settings: the org is off'}
         title="Org settings"
-        onClick={() => { if (!open) { clearError(); block.clearError(); } setOpen(!open); }}
+        onClick={() => { if (!open) clearError(); setOpen(!open); }}
       >{ICON_GEAR}{!on && <span className="org-settings-off">Off</span>}</button>
       {open && createPortal(
         <div
@@ -71,14 +68,6 @@ export function OrgSettingsMenu() {
             <ul>{ORG_OFF_STOPS.map((line) => <li key={line}>{line}.</li>)}</ul>
             <div className="org-answer-q">{ORG_OFF_STILL}</div>
           </div>
-          <div className="org-settings-row org-settings-stops-sep">
-            <label htmlFor="org-settings-block-own" className="org-settings-label">
-              <strong>{BLOCK_OWN_LABEL}</strong>
-              <span className="org-answer-q">{BLOCK_OWN_HELP}</span>
-            </label>
-            <ToggleSwitch id="org-settings-block-own" data-testid="org-settings-block-own" checked={block.on} busy={block.busy} onChange={block.set} />
-          </div>
-          {block.error && <div className="org-thread-error" role="alert">{block.error}</div>}
           <button type="button" className="btn btn-sm org-settings-all" data-testid="org-settings-all"
             onClick={() => { setOpen(false); navigate('/settings#org'); }}>All Org settings</button>
         </div>,

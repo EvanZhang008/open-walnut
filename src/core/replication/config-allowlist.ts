@@ -124,10 +124,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
 export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   provider: { bedrock_bearer_token: 'a credential' },
   // The org runs on the primary only. Named in the copy, an older replica would refuse the whole org row.
-  org: {
-    enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)',
-    block_own_commands: 'the org command rule, read where Main and the VPs spawn, on the Mac (org/org-enabled.ts)',
-  },
+  org: { enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)' },
   agent: {
     agents: 'agent definitions (prompts, tools) run on the Mac',
     session_organize: 'a background job of the Mac',

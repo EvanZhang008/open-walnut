@@ -18,7 +18,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-org-self-
 import { DEFAULT_ORG_INSTRUCTIONS, ORG_SELF_COMMAND_LIMIT, orgSelfWorkRule } from '../../../src/core/org/core-instructions.js'
 import { coreInstructionsBlock, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { orgRoleOfPrompt } from '../../../src/core/org/org-prompt-role.js'
-import { orgWorkRefusal, orgWorkReminder } from '../../../src/providers/org-work-guard-hook.js'
+import { orgWorkReminder } from '../../../src/providers/org-work-guard-hook.js'
 import { orgHandOnHint } from '../../../src/core/org/core-instructions.js'
 
 /** Words that tell the reader to do the work itself. An org node must read none of them. */
@@ -76,12 +76,9 @@ describe('Main and a VP never do the work themselves', () => {
     expect(coreInstructionsBlock({ project: 'Walnut' })).toBe('')
   })
 
-  it('the refusal, the mid-turn reminder and the hint all name the hand-on, never "do it here"', () => {
+  it('the mid-turn reminder and the hint both name the hand-on, never "do it here"', () => {
     for (const role of ['main', 'lead'] as const) {
-      const words = orgWorkRefusal(role)
-      expect(words).toMatch(/Hand it on now: task_send/)
-      expect(words).toMatch(/the start is queued/)
-      for (const text of [words, orgWorkReminder(role), orgWorkReminder(role, true), orgHandOnHint(role)]) {
+      for (const text of [orgWorkReminder(role), orgHandOnHint(role)]) {
         for (const bad of DO_IT_YOURSELF) expect(text).not.toMatch(bad)
         expect(text).toMatch(/task_create/)
       }
@@ -89,11 +86,13 @@ describe('Main and a VP never do the work themselves', () => {
       expect(orgWorkReminder(role).length).toBeLessThan(300)
       expect(orgHandOnHint(role).length).toBeLessThan(300)
     }
-    // The rule says Walnut reminds, and refuses only when asked.
-    expect(orgSelfWorkRule('lead')).toMatch(/Walnut reminds you at your 3rd command/)
-    expect(orgSelfWorkRule('lead')).not.toMatch(/Walnut refuses/)
-    expect(orgWorkReminder('lead', true)).toMatch(/Walnut refuses your next command/)
-    expect(orgWorkReminder('lead')).not.toMatch(/refuses/)
+    // The rule says Walnut reminds, and never that it refuses (2026-11-04: "remove this shodln;'t do this at all").
+    for (const role of ['main', 'lead'] as const) {
+      expect(orgSelfWorkRule(role)).toMatch(/Walnut reminds you at your 3rd command/)
+      for (const text of [orgSelfWorkRule(role), orgWorkReminder(role), orgHandOnHint(role), defaultInstructions({ org_role: role, project: 'Walnut' })]) {
+        expect(text).not.toMatch(/Walnut refuses (your|the) (next|4th)|refuses? (your|the) 4th/)
+      }
+    }
   })
 })
 
