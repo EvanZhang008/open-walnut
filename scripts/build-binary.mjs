@@ -11,7 +11,8 @@
  * Output: dist-bin/walnut-<target>, nothing else (staging is dist/binary-stage/).
  *
  * What goes in the file:
- *  - the code: src/binary/main.ts and everything it imports, bundled and minified;
+ *  - the code: src/binary/main.ts and everything it imports, bundled and minified,
+ *    with bytecode for its top-level code (compile());
  *  - one compressed archive (src/binary/asset-archive.ts) of the files Walnut reads
  *    from disk, laid out like an installed package. The file unpacks it once per
  *    build (src/binary/runtime-root.ts), and `import.meta.url` of every module is
@@ -392,6 +393,17 @@ async function compile(target, outfile, options, stage) {
     const tmp = path.join(dir, 'walnut')
     const result = await Bun.build({
       ...options,
+      // Bytecode for each module's top-level code, so a start no longer parses the
+      // whole ~19 MB bundle (`walnut --version` on Linux x64: ~720 ms before, ~75 ms
+      // after, for +5.5 MB raw and +2 MB gzip). Deeper functions compile from source
+      // when first called, as before, and the source stays in the file, so
+      // fn.toString() (getDaemonSource) reads the same text. ESM bytecode needs
+      // `compile`, and bun picks CommonJS for bytecode unless told, which has no
+      // top-level await (main.ts uses it). A bun with another JavaScriptCore ignores
+      // the bytecode and parses: `walnut __selftest` reports that as `bytecode`.
+      format: 'esm',
+      bytecode: true,
+      bytecodeDepth: 0,
       compile: {
         target: TARGETS[target],
         outfile: tmp,

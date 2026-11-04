@@ -79,6 +79,15 @@ src/cli.ts` bundles 3638 modules in under one second into a 78 MB file, before
 the web assets. Budget: the core file stays under 150 MB unpacked and under
 60 MB compressed; a CI check fails the build past it.
 
+Start time (2026-11, bun 1.4.4, Linux x64): the bundle is about 19 MB of JS, and
+parsing it was about 650 ms of every start, so each `walnut` call an agent made
+on a host took about 750 ms before any work. The file now carries bytecode for
+each module's top-level code (`bytecode: true, bytecodeDepth: 0` in
+scripts/build-binary.mjs `compile()`): a start takes about 65 ms, for +5.5 MB raw
+and +2 MB compressed. Full-depth bytecode saves about 10 ms more and costs +47 MB.
+`walnut __selftest` reports whether the bundle loaded from its bytecode, and the
+release rehearsal requires it on every target.
+
 ## Components
 
 A component is a versioned, platform-specific archive on a GitHub prerelease

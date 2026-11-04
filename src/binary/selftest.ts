@@ -3,12 +3,15 @@
  * server boot does not reach on a fresh machine, without starting a server:
  * the unpacked tree, SQLite on bun, the worker threads that load code from that
  * tree by path, the daemon source a host without a daemon binary receives, and
- * which optional components are present. One JSON line per check; exit 1 when
- * any required check fails. The release rehearsal and a new host run it first.
+ * which optional components are present, and whether the file starts from its
+ * bytecode. One JSON line per check; exit 1 when any required check fails. The
+ * release rehearsal and a new host run it first.
  */
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { RUNTIME_MARKER } from './runtime-tree.js'
 import { singleFile } from '../lib/single-file.js'
 
@@ -16,6 +19,17 @@ type Check = { name: string; required: boolean; run: () => Promise<string> }
 
 function expectFile(root: string, rel: string): void {
   if (!fs.existsSync(path.join(root, rel))) throw new Error(`missing ${rel}`)
+}
+
+/** With this set, bun prints one stderr line per module it loads: a cache hit or miss. */
+export const BYTECODE_PROBE_ENV = 'BUN_JSC_verboseDiskCache'
+
+/**
+ * Whether a start loaded the bundle from its bytecode (scripts/build-binary.mjs).
+ * bun's builtin modules always miss, so one hit is the bundle itself.
+ */
+export function bytecodeHit(stderr: string): boolean {
+  return /^\[Disk Cache\] Cache hit for sourceCode\s*$/m.test(stderr)
 }
 
 export async function runSelftest(): Promise<number> {
@@ -100,6 +114,17 @@ export async function runSelftest(): Promise<number> {
         const bun = (globalThis as { Bun?: { Transpiler: new (options: { loader: 'js' }) => { scan(code: string): unknown } } }).Bun
         new bun!.Transpiler({ loader: 'js' }).scan(source)
         return `${source.length} bytes, parses`
+      },
+    },
+    {
+      // Not required: a file whose bytecode was rejected still works, it only starts
+      // about 10x slower. The release rehearsal requires it on every target.
+      name: 'bytecode', required: false, run: async () => {
+        const { stderr } = await promisify(execFile)(process.execPath, ['--version'], {
+          env: { ...process.env, [BYTECODE_PROBE_ENV]: '1' }, encoding: 'utf8', timeout: 60_000,
+        })
+        if (!bytecodeHit(stderr)) throw new Error('the bundle was parsed from source: its bytecode is missing or was rejected (slow start)')
+        return 'the bundle starts from its bytecode'
       },
     },
     // Downloaded components: where each feature loads from, and one real call

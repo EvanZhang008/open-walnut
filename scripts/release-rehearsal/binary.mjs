@@ -7,8 +7,9 @@
  * machine needs no Node and no bun for the rehearsal either.
  *
  *   binary          `walnut --version` names the version, `walnut __selftest`
- *                   passes (the file's own parts, src/binary/selftest.ts), and
- *                   the file runs a script as bun (what plugin installs use).
+ *                   passes (the file's own parts, src/binary/selftest.ts) and
+ *                   says the file starts from its bytecode, and the file runs a
+ *                   script as bun (what plugin installs use).
  *   binary-serve    with no node, npm or bun on PATH: health with `claude` found,
  *                   the SPA, /api/v1/status.
  *   binary-task     a task is created and listed (SQLite inside the file).
@@ -56,6 +57,9 @@ export async function rehearseBinary({ work, binary, scenario, walnuts }) {
       const failed = checks.filter((c) => !c.ok).map((c) => `${c.check}: ${c.error ?? c.detail}`).join('; ')
       throw new Error(`__selftest exited ${selftest.status}: ${failed || selftest.stderr.slice(-400)}`)
     }
+    // A target whose bytecode is rejected still runs, only ~10x slower to start: nothing but this notices.
+    const bytecode = checks.find((c) => c.check === 'bytecode')
+    if (!bytecode?.ok) throw new Error(`__selftest bytecode: ${bytecode?.error ?? 'the check is missing'}`)
     return `${printed}; selftest ${checks.filter((c) => c.ok).length}/${checks.length}`
   })
   const served = ok && await scenario('binary-serve', async () => {
