@@ -42,6 +42,20 @@ export function neverRead(hosts: FleetHost[]): string[] {
   return hosts.filter((h) => neverTried(h) && !h.refreshing).map((h) => h.host);
 }
 
+/** A reading older than this is not how the host is now (the server's READING_FRESH_MS). */
+export const READ_OLD_MS = 5 * 60_000;
+
+/**
+ * Hosts to read on their own when the page opens: one never tried, and this computer when its
+ * card is over READ_OLD_MS old (2026-11-04: the Mac's own card sat 19 minutes old with its
+ * sessions as "?"). Reading this computer asks no network, so the page still opens on the cards
+ * it has at once; every other host is read on a press (2026-11-03: "fetch when user click").
+ */
+export function readOnOpen(hosts: FleetHost[], now: number): string[] {
+  return hosts.filter((h) => !h.refreshing && (neverTried(h)
+    || (h.local && typeof h.readAt === 'number' && now - h.readAt > READ_OLD_MS))).map((h) => h.host);
+}
+
 /** When the newest card was read; null with none read (or none that says). */
 export function newestRead(hosts: FleetHost[]): number | null {
   let best: number | null = null;

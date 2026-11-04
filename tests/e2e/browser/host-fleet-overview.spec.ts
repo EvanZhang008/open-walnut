@@ -166,6 +166,31 @@ async function expectNoOverflow(page: Page) {
 
 const MIN = 60_000
 
+/** Every number slot with no number says why beside it, in words (2026-11-04: "why sesison is ?"). */
+async function expectEveryUnknownSaysWhy(page: Page) {
+  const bare = await page.getByTestId('host-fleet').evaluate((root) => {
+    const bad: string[] = []
+    for (const el of root.querySelectorAll<HTMLElement>('[data-num="unknown"]')) {
+      const box = el.closest('.hf-gauge, .hf-numbers > div, .hf-stat') ?? el.parentElement!
+      const why = box.querySelector<HTMLElement>('.hf-why')
+      const host = el.closest('[data-host]')?.getAttribute('data-host') ?? 'summary'
+      if (!why || !why.textContent?.trim() || why.offsetParent === null) bad.push(`${host}: ${box.textContent}`)
+      // The reason stays inside its own slot, never running into the next one.
+      else {
+        const w = why.getBoundingClientRect()
+        const b = box.getBoundingClientRect()
+        if (w.right > b.right + 1 || w.left < b.left - 1) bad.push(`${host}: reason spills out of its slot`)
+      }
+    }
+    // A "?" anywhere outside such a slot is a bare one.
+    for (const el of root.querySelectorAll<HTMLElement>('.hf-gauge-value, .hf-big, .hf-stat-value')) {
+      if (el.textContent?.trim() === '?' && el.getAttribute('data-num') !== 'unknown' && !el.querySelector('[data-num="unknown"]')) bad.push(`bare: ${el.className}`)
+    }
+    return bad
+  })
+  expect(bare).toEqual([])
+}
+
 /** The cached read: each card read 12 minutes ago unless it says otherwise. */
 function serveFleet(page: Page, hosts: () => unknown[], refreshing: () => boolean = () => false) {
   let calls = 0
@@ -200,11 +225,13 @@ test('a fleet of five: summary, diagram, cards for the three live hosts, a row e
   const dash = page.getByTestId('host-fleet')
   await expect(dash.getByTestId('host-fleet-card')).toHaveCount(3, { timeout: 30_000 })
   await expect(dash.getByTestId('host-fleet-card').nth(0)).toHaveAttribute('data-host', '__local__')
-  // The cached cards at once, each saying how old it is; no host was read to show them.
+  // The cached cards at once, each saying how old it is; only this computer's card, 12 minutes
+  // old, is read behind it (no network); no other host is read to show them.
   await expect(dash.getByTestId('host-fleet-read')).toHaveText('Read 12 min ago')
   await expect(dash.locator('[data-testid="host-fleet-card"][data-host="devbox"] [data-testid="host-fleet-read-age"]')).toHaveText('Read 12 min ago')
   await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
-  expect(asks).toEqual([])
+  await expect.poll(() => asks).toEqual([['__local__']])
+  await expectEveryUnknownSaysWhy(page)
   // The dashboard is beside the groups, never inside one (settings-layout.spec.ts F10).
   expect(await dash.evaluate((el) => !!el.closest('.settings-group'))).toBe(false)
 
@@ -300,7 +327,7 @@ test('a fleet of five: summary, diagram, cards for the three live hosts, a row e
   await expect(dev.getByTestId('host-fleet-details')).toHaveCount(0)
   await dev.getByTestId('host-fleet-details-toggle').click()
   await expect(dev.getByTestId('host-fleet-details-toggle')).toHaveAttribute('aria-expanded', 'true')
-  await expect.poll(() => asks).toEqual([['devbox']])
+  await expect.poll(() => asks).toEqual([['__local__'], ['devbox']])
   await expect(dev.locator('[data-row="now"] dd')).toHaveText('CPU 25% · load 6.16 · 96 GB of 128 GB memory free · up 13 d')
   await expect(dev.locator('[data-row="server"] dd')).toHaveText('Replica · running · 0.6.20-abc1234 · phone tunnel connected')
   await expect(dev.getByTestId('host-fleet-days').locator('i')).toHaveCount(30)
@@ -315,7 +342,7 @@ test('a fleet of five: summary, diagram, cards for the three live hosts, a row e
   await home.getByTestId('host-fleet-details-toggle').click()
   await old.getByTestId('host-fleet-details-toggle').click()
   await expect(dash.getByTestId('host-fleet-details')).toHaveCount(0)
-  expect(asks).toEqual([['devbox'], ['homepc'], ['olddev']])
+  expect(asks).toEqual([['__local__'], ['devbox'], ['homepc'], ['olddev']])
 
   // A node in the diagram takes you to its card.
   await topo.locator('[data-testid="host-fleet-topo-node"][data-host="devbox"]').click()
@@ -433,23 +460,28 @@ test('Connect: the row waits, then the host comes back as a card; a refusal stay
   await expect(dash.getByTestId('host-fleet-offline')).toHaveCount(1)
   await expect(dash.getByTestId('host-fleet-stat-online')).toContainText('4/5')
   await expect(dash.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
-  // The connect read that host again, and only it.
-  expect(asks[0]).toEqual(['homepc'])
+  // The connect read that host again, and only it (this computer's old card was read on open).
+  expect(asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
   await shot(page, '5-connected', dash)
 })
 
-test('no host is read while the page is just open; opening the Overview or Refresh reads them', async ({ page }) => {
+test('no other host is read while the page is just open; this computer\'s old card is read once; opening the Overview or Refresh reads them', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.clock.install()
-  serveFleet(page, () => FLEET.slice(0, 2))
+  // One fixed read time: the page's clock runs ahead of the real one, and this computer's own
+  // read on open makes the page read the cache again while it does.
+  const readAt = Date.now() - 12 * MIN
+  serveFleet(page, () => FLEET.slice(0, 2).map((h) => ({ ...(h as object), readAt, refreshing: false, readError: null, readFailedAt: null })))
   const asks = serveRefresh(page)
   await openRemoteHosts(page)
   const dash = page.getByTestId('host-fleet')
   await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2, { timeout: 30_000 })
   // Five minutes on the page (the old page read every host every 30 s): the words age, no host is read.
+  // This computer's card is 12 minutes old: it alone is read, once (no network).
+  await expect.poll(() => asks).toEqual([['__local__']])
   await page.clock.runFor(5 * MIN)
   await expect(dash.getByTestId('host-fleet-read')).toHaveText('Read 17 min ago')
-  expect(asks).toEqual([])
+  expect(asks).toEqual([['__local__']])
 
   // Closing it reads nothing; opening it reads every host.
   const toggle = dash.getByTestId('host-fleet-toggle')
@@ -458,12 +490,61 @@ test('no host is read while the page is just open; opening the Overview or Refre
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
   await expect(dash.getByTestId('host-fleet-card')).toHaveCount(0)
   await expect(dash.getByTestId('host-fleet-read')).toBeVisible() // the age stays in the head
-  expect(asks).toEqual([])
+  expect(asks).toEqual([['__local__']])
   await toggle.click()
   await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2)
-  await expect.poll(() => asks).toEqual([null])
+  await expect.poll(() => asks).toEqual([['__local__'], null])
   await dash.getByTestId('host-fleet-refresh').click()
-  await expect.poll(() => asks).toEqual([null, null])
+  await expect.poll(() => asks).toEqual([['__local__'], null, null])
+})
+
+test('this computer\'s card 19 minutes old: sessions from Walnut\'s records, read again on open; a slot with no number says why', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  let read = false
+  const local = FLEET[0] as Record<string, any>
+  const cloud = FLEET[3] as Record<string, any>
+  serveFleet(page, () => {
+    const at = Date.now()
+    const done = { refreshing: false, readError: null, readFailedAt: null }
+    const mac = read
+      ? { ...local, ...done, readAt: at, now: { ...local.now, at, stale: false }, sessions: { running: 5, source: 'host', why: null } }
+      : { ...local, ...done, readAt: at - 19 * MIN, now: { ...local.now, at: at - 19 * MIN, stale: true }, sessions: { running: 4, source: 'records', why: null } }
+    const box = { ...cloud, ...done, readAt: at - 12 * MIN, sessions: { running: null, source: null, why: 'the cloud box runs no sessions of its own' }, spend: null }
+    return [mac, box]
+  })
+  // Hold the read so the records count can be seen first.
+  let release = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  const asks: Array<string[] | null> = []
+  await page.route('**/api/v1/hosts/refresh', async (route) => {
+    asks.push(((route.request().postDataJSON() ?? {}) as { hosts?: string[] }).hosts ?? null)
+    await held
+    read = true
+    return route.fulfill({ status: 202, json: { started: ['__local__'], refreshing: [] } })
+  })
+  await openRemoteHosts(page)
+  const dash = page.getByTestId('host-fleet')
+  const mac = dash.locator('[data-testid="host-fleet-card"][data-host="__local__"]')
+  const sessions = mac.getByTestId('host-fleet-sessions')
+  // The old reading still gives a count: Walnut's own session records, and the tooltip says so.
+  await expect(sessions.locator('.hf-big')).toHaveText('4', { timeout: 30_000 })
+  await expect(sessions).toHaveAttribute('data-source', 'records')
+  await expect(sessions).toHaveAttribute('title', "From Walnut's session records (its own reading is 19 min old)")
+  await expect(mac.locator('[data-num="unknown"]')).toHaveCount(0)
+  await expect.poll(() => asks).toEqual([['__local__']])
+  // The cloud box has no sessions of its own: its slot says so in words, never a bare "?".
+  const box = dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]')
+  await expect(box.getByTestId('host-fleet-sessions').getByTestId('host-fleet-why')).toHaveText('the cloud box runs no sessions of its own')
+  await expect(box.getByTestId('host-fleet-spend').getByTestId('host-fleet-why')).toHaveText('not counted yet')
+  await expectEveryUnknownSaysWhy(page)
+  await expectNoOverflow(page)
+  await shot(page, '11-stale-local', dash)
+  release()
+  // The read ends: the host's own count, read just now.
+  await expect(sessions.locator('.hf-big')).toHaveText('5', { timeout: 15_000 })
+  await expect(sessions).toHaveAttribute('data-source', 'host')
+  await expect(mac.getByTestId('host-fleet-read-age')).toHaveText('Read just now')
+  expect(asks).toEqual([['__local__']])
 })
 
 test('a read keeps the old cards with a mark on each one being read; each changes as it ends; a failed one says why', async ({ page }) => {
@@ -483,7 +564,8 @@ test('a read keeps the old cards with a mark on each one being read; each change
       return { ...x, ...old, readAt: at }
     })
   }, () => state === 'reading')
-  serveRefresh(page, () => { state = 'reading' })
+  // Only the press reads every host; this computer's own read on open leaves the cards as cached.
+  serveRefresh(page, (hosts) => { if (hosts === null) state = 'reading' })
   await openRemoteHosts(page)
   const dash = page.getByTestId('host-fleet')
   const devCard = dash.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
@@ -577,12 +659,12 @@ test('opening a host\'s "What Walnut knows" reads that host again', async ({ pag
   await openRemoteHosts(page)
   const toggle = page.getByTestId('host-profile-toggle-fixture-remote')
   await expect(toggle).toBeVisible({ timeout: 30_000 })
-  expect(asks).toEqual([])
+  await expect.poll(() => asks).toEqual([['__local__']]) // this computer's 12 minute old card
   await toggle.click()
-  await expect.poll(() => asks).toEqual([['fixture-remote']])
+  await expect.poll(() => asks).toEqual([['__local__'], ['fixture-remote']])
   await toggle.click() // closing reads nothing
   await toggle.click()
-  await expect.poll(() => asks).toEqual([['fixture-remote'], ['fixture-remote']])
+  await expect.poll(() => asks).toEqual([['__local__'], ['fixture-remote'], ['fixture-remote']])
 })
 
 test('the fixture server answers its own fleet: this computer first', async ({ page }) => {

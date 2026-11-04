@@ -1277,6 +1277,28 @@ export async function listSessionsForTaskHandback(taskIds: string[]): Promise<Se
   return sessions;
 }
 
+/**
+ * Sessions open on each host by Walnut's own records (`local` for this Mac): a process
+ * that is running or idle, not an embedded/SDK session, not a side thread. One indexed
+ * read, no liveness probe: the fleet Overview's count when the host's own reading is old
+ * (core/hosts/fleet.ts), so it is never a bare "?".
+ */
+export async function countOpenSessionsByHost(): Promise<Record<string, number>> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return {};
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(host, ''), 'local') AS host, COUNT(*) AS n FROM sessions
+    WHERE archived IS NOT 1 AND process_status IN ('running', 'idle')
+      AND (provider IS NULL OR provider NOT IN ('embedded', 'sdk'))
+      AND (payload IS NULL OR json_valid(payload) = 0 OR COALESCE(json_extract(payload, '$.lane'), '') NOT LIKE 'side:%')
+    GROUP BY 1
+  `).all() as Array<{ host: string; n: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.host] = Number(r.n) || 0;
+  return out;
+}
+
 export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
   await ensureSessionInit();
   const db = getDb();

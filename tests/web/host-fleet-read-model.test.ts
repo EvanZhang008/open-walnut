@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readAgo, readFailure, readLabel, replaceCard, shownHosts,
+  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readAgo, readFailure, readOnOpen, readLabel, replaceCard, shownHosts,
 } from '../../web/src/components/settings/sections/host-fleet-read-model'
 import { fleetSummary, problemsOf } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import { statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
@@ -51,6 +51,19 @@ describe('the first read and what is drawn', () => {
     const failed = host({ host: 'f', readAt: null, readError: 'ssh: connection reset', refreshing: true })
     expect(shownHosts([failed]).map((h) => h.host)).toEqual(['f'])
     expect(neverRead([{ ...failed, refreshing: false }])).toEqual([])
+  })
+
+  it('opening the page reads a never-read host and this computer when its card is over 5 minutes old; others wait for a press', () => {
+    const list = [
+      host({ host: '__local__', local: true, readAt: NOW - 19 * MIN, connection: { ...host().connection, kind: 'local', connected: false } }),
+      host({ host: 'fresh', readAt: NOW - 2 * MIN }),
+      host({ host: 'old', readAt: NOW - 6 * MIN }),
+      host({ host: 'away', readAt: NOW - 60 * MIN, connection: { ...host().connection, connected: false } }),
+      host({ host: 'busy', readAt: NOW - 60 * MIN, refreshing: true }),
+      host({ host: 'new', readAt: null }),
+    ]
+    expect(readOnOpen(list, NOW)).toEqual(['__local__', 'new'])
+    expect(readOnOpen([host({ host: '__local__', local: true, readAt: NOW - 2 * MIN })], NOW)).toEqual([])
   })
 
   it('a card from a live read or an older server (no readAt at all) counts as read', () => {

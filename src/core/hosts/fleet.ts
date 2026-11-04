@@ -127,6 +127,7 @@ export function __setFleetConnectionsForTesting(next: (() => Map<string, VitalsC
   vitalsCache.clear()
   inflight.clear()
   probedInstances.clear()
+  recordCounts = null
   __resetFleetCacheForTesting()
 }
 
@@ -298,6 +299,25 @@ export interface LocalParts {
   status: FleetInputs['status']
   profile: HostProfile | null
   server: FleetInputs['server']
+  /** Sessions open there by Walnut's own records; null when they cannot be read. */
+  recordedSessions: number | null
+}
+
+let recordCounts: { at: number; p: Promise<Record<string, number> | null> } | null = null
+/** Walnut's own count of open sessions per host, read at most every 5 s for a whole page of cards. */
+function openSessionCounts(): Promise<Record<string, number> | null> {
+  const now = Date.now()
+  if (recordCounts && now - recordCounts.at < 5_000) return recordCounts.p
+  const p = import('../session-tracker.js')
+    .then((m) => m.countOpenSessionsByHost())
+    .catch((err) => { log.web.debug('fleet: session count failed', { error: err instanceof Error ? err.message : String(err) }); return null })
+  recordCounts = { at: now, p }
+  return p
+}
+
+function recordedFor(host: string, local: boolean, counts: Record<string, number> | null): number | null {
+  if (!counts) return null
+  return local ? (counts.local ?? 0) + (counts[LOCAL_HOST] ?? 0) : (counts[host] ?? 0)
 }
 
 export async function localParts(e: HostEntry, conn: VitalsConn | undefined): Promise<LocalParts> {
@@ -310,18 +330,20 @@ export async function localParts(e: HostEntry, conn: VitalsConn | undefined): Pr
     const f = hostStatusFrame(e.host, e.def!)
     status = { connected: f.connected, phase: f.phase, phaseLabel: f.phaseLabel, connectedAt: f.connectedAt, error: f.error ?? f.lastError ?? null }
   }
-  const [profile, server] = await Promise.all([
+  const [profile, server, counts] = await Promise.all([
     readHostProfile(e.host).catch(() => null),
     serverOf(e.host, e.def).catch(() => null),
+    // The cloud box runs no Walnut sessions of its own.
+    e.kind === 'bridge' ? Promise.resolve(null) : openSessionCounts(),
   ])
-  return { status, profile, server }
+  return { status, profile, server, recordedSessions: recordedFor(e.host, e.local, counts) }
 }
 
 /** The card from the local parts and the readings (live or cached). */
 export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: LocalParts, got: {
   vitals: FleetInputs['vitals']; load: FleetInputs['load']; spend: FleetSpendNow; now: number
 }): FleetHost {
-  const { status, profile, server } = parts
+  const { status, profile, server, recordedSessions } = parts
   const spendNow = got.spend
   return withPlacement(buildFleetHost({
     host: e.host, label: e.label, local: e.local, kind: e.kind, status,
@@ -336,6 +358,7 @@ export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: 
       bootStart: fleetBootStart(conn.bootStart ?? null),
     } : null,
     declaredCapabilities: e.declared,
+    recordedSessions,
     now: got.now,
   }))
 }

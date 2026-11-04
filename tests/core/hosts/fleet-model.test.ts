@@ -104,6 +104,18 @@ describe('the long-running verdict', () => {
 })
 
 describe('the card', () => {
+  it('counts sessions by the host while its reading is fresh, else by Walnut\'s records, and says why when neither', () => {
+    expect(buildFleetHost(inputs({ recordedSessions: 4 })).sessions).toEqual({ running: 19, source: 'host', why: null })
+    const stale = { value: vitals(), at: NOW - 19 * 60_000, stale: true }
+    expect(buildFleetHost(inputs({ vitals: stale, recordedSessions: 4 })).sessions).toEqual({ running: 4, source: 'records', why: null })
+    expect(buildFleetHost(inputs({ vitals: null, recordedSessions: 0 })).sessions).toEqual({ running: 0, source: 'records', why: null })
+    // Every combination with no number names why.
+    for (const vit of [stale, null]) for (const connected of [true, false]) for (const kind of ['ssh-tunnel', 'bridge'] as const) {
+      const s = buildFleetHost(inputs({ vitals: vit, kind, recordedSessions: null, status: { ...inputs().status, connected } })).sessions
+      expect(s.running).toBeNull()
+      expect(s.why, JSON.stringify({ vit: !!vit, connected, kind })).toBeTruthy()
+    }
+  })
   it('carries the GPU, the disk and the last 12 hours from the daemon, and null from an older one', () => {
     const v = vitals({ gpuUtil: 0.4, disk: { totalBytes: 1000 * GB, freeBytes: 300 * GB } })
     const recent = { from: NOW - 12 * 3_600_000, stepMinutes: 15, up: [15], cpu: [0.2], mem: [0.5], gpu: [0.4], disk: [0.7], sessions: [3] }

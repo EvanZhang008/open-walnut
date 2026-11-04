@@ -136,7 +136,7 @@ describe('listFleet', () => {
     ;(dev.conn as { connected: boolean }).connected = false
     const devbox = (await listFleet()).find((h) => h.host === 'devbox')!
     expect(devbox.now).toMatchObject({ cpuUtil: 0.5, stale: true })
-    expect(devbox.sessions.running).toBeNull()
+    expect(devbox.sessions).toMatchObject({ running: 0, source: "records" }) // an old reading counts by Walnut's records, never "?"
     expect(dev.sends.filter((s) => s.cmd === 'host.vitals')).toHaveLength(1)
   }, 20_000)
 

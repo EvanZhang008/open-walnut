@@ -60,8 +60,12 @@ export interface FleetHost {
     /** The last 12 hours in 15 minute steps (absent from an older daemon). */
     recent?: VitalsRecent
   } | null
-  /** Claude Code sessions whose process is alive on the host (idle ones included; ACP workers not counted). */
-  sessions: { running: number | null }
+  /**
+   * Sessions open on the host: its own count (Claude Code processes alive there, idle ones
+   * included) while its reading is fresh, else Walnut's session records (`source`). `why`
+   * says in words why there is no number, whenever `running` is null.
+   */
+  sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null }
   /** Model spend of the sessions that ran there, last 30 days, at public list prices (not a bill). */
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null
   /** The Walnut server the host runs for this Mac (replica or plain host server); null for the Mac and the cloud box. */
@@ -183,7 +187,21 @@ export interface FleetInputs {
   daemon: Omit<NonNullable<FleetHost['daemon']>, 'startsAfterReboot' | 'reboot'> | null
   /** The user's own tags for the host (config `hosts.<key>.capabilities`). */
   declaredCapabilities?: unknown
+  /** Sessions open there by Walnut's own records (null: not known, absent: not asked). */
+  recordedSessions?: number | null
   now: number
+}
+
+/** The host's own count while its reading is fresh, else Walnut's records; never a number with no source. */
+function fleetSessions(i: FleetInputs): FleetHost['sessions'] {
+  const v = i.vitals
+  if (v && !v.stale) return { running: v.value.stats.running, source: 'host', why: null }
+  if (typeof i.recordedSessions === 'number') return { running: i.recordedSessions, source: 'records', why: null }
+  const why = i.kind === 'bridge' ? 'the cloud box runs no sessions of its own'
+    : !i.status.connected ? 'Walnut is not connected to it'
+    : v ? 'its reading is old and Walnut could not read its session records'
+    : 'not read yet'
+  return { running: null, source: null, why }
 }
 
 function fleetDaemon(d: NonNullable<FleetInputs['daemon']>, kind: FleetConnectionKind): NonNullable<FleetHost['daemon']> {
@@ -243,7 +261,7 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
     label: i.label,
     ...base,
     now,
-    sessions: { running: v && !i.vitals!.stale ? v.stats.running : null },
+    sessions: fleetSessions(i),
     spend: i.spendUsd === null ? null : { last30dUsd: Math.round(i.spendUsd * 100) / 100, from: i.spendFrom ?? '', basis: 'list-price' },
     placement: i.load?.known
       ? { score: i.load.score, busy: i.load.busy, reasons: i.load.reasons, weight: i.load.weight ?? null, longRunning: { ok: false, reasons: [] } }

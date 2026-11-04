@@ -27,9 +27,10 @@ import { useHostLinkChange } from '@/hooks/useHostLinkChange';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import { fleetSummary, isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
-import { followRead, markRefreshing, neverRead, newestRead, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
+import { followRead, markRefreshing, newestRead, readOnOpen, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
 import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFleetCard';
 import { HostFleetTopology } from './HostFleetTopology';
+import { FleetNumber } from './FleetNumber';
 import { ChevronGlyph } from '../settings-glyphs';
 import '@/styles/host-status.css';
 import '@/styles/host-fleet.css';
@@ -44,10 +45,10 @@ function errorText(err: unknown): string {
   return (err instanceof ApiError || err instanceof Error ? err.message : String(err)).replace(/[.\s]*$/, '');
 }
 
-function Stat({ value, label, tone, testId, title }: { value: string; label: string; tone?: string; testId: string; title?: string }) {
+function Stat({ value, label, tone, testId, title, why }: { value: string | null; label: string; tone?: string; testId: string; title?: string; why?: string }) {
   return (
     <div className="hf-stat" data-testid={testId} data-tone={tone} title={title}>
-      <span className="hf-stat-value">{value}</span>
+      <FleetNumber className="hf-stat-value" value={value} unknown={value === null ? { why: why ?? 'not known yet', title: title ?? label } : null} />
       <span className="hf-stat-label">{label}</span>
     </div>
   );
@@ -78,9 +79,9 @@ export function HostFleetGroup() {
     inflight.current = ctrl;
     try {
       const r = await fetchFleet({ signal: ctrl.signal });
-      // Nothing to show for a host never read: read it once (only while the Overview is open),
-      // marked as being read in this same paint so its empty card never flashes.
-      const unread = openRef.current ? neverRead(r.hosts).filter((h) => !firstReads.current.has(h)) : [];
+      // A host never read, or one whose card is old, is read once (only while the Overview is
+      // open), marked as being read in this same paint so its empty card never flashes.
+      const unread = openRef.current ? readOnOpen(r.hosts, Date.now()).filter((h) => !firstReads.current.has(h)) : [];
       const follow = followRead(followSince.current, r.refreshing === true, Date.now());
       followSince.current = follow.since;
       setHosts(unread.length ? markRefreshing(r.hosts, unread) : r.hosts);
@@ -246,8 +247,8 @@ export function HostFleetGroup() {
             <>
               <div className="hf-stats" data-testid="host-fleet-summary">
                 <Stat testId="host-fleet-stat-online" value={`${sum.online}/${sum.total}`} label="Hosts online" tone={sum.online < sum.total ? 'warn' : 'good'} />
-                <Stat testId="host-fleet-stat-sessions" value={sum.sessions === null ? '?' : String(sum.sessions)} label="Sessions open" />
-                <Stat testId="host-fleet-stat-spend" value={sum.spendUsd === null ? '?' : usd(sum.spendUsd)} label="Spend, 30 days" title="At list price, not a bill" />
+                <Stat testId="host-fleet-stat-sessions" value={sum.sessions === null ? null : String(sum.sessions)} label="Sessions open" why={sum.online ? 'no host counted yet' : 'no host connected'} />
+                <Stat testId="host-fleet-stat-spend" value={sum.spendUsd === null ? null : usd(sum.spendUsd)} label="Spend, 30 days" title="At list price, not a bill" why="not counted yet" />
                 <Stat testId="host-fleet-stat-problems" value={sum.problems ? String(sum.problems) : 'None'} label={sum.problems === 1 ? 'Host needs a look' : 'Hosts need a look'} tone={sum.problems ? 'warn' : 'good'} title="Hosts that are not connected, or have a line under their card" />
               </div>
               <div className="hf-panel hf-topo-panel">

@@ -146,7 +146,44 @@ export function timeline(h: FleetHost, now: number): Segment[] {
   return out;
 }
 
-export interface Gauge { key: 'cpu' | 'mem' | 'gpu' | 'disk'; label: string; share: number | null; tone: Tone; title: string; sub?: string; subLow?: boolean }
+/**
+ * A ring: `share` drawn as its arc and its number; `text` instead of a number (the disk's
+ * free space when its size is not known); with neither, `why` says in words why not.
+ */
+export interface Gauge { key: 'cpu' | 'mem' | 'gpu' | 'disk'; label: string; share: number | null; tone: Tone; title: string; text?: string; why?: string; sub?: string; subLow?: boolean }
+
+/** Why a host has no reading now, in a few words (never a bare "?"). */
+export function readingWhy(h: FleetHost): string {
+  if (!h.local && !h.connection.connected) return 'not connected';
+  if (h.daemon && !h.daemon.vitals) return 'older daemon';
+  if (!h.now) return 'not read yet';
+  // An older server sends a stale reading's sessions as null with no why of its own.
+  if (h.now.stale) return 'its reading is old';
+  return 'not reported';
+}
+
+/** A number slot that has no number: what to say instead. */
+export interface Unknown { why: string; title: string }
+
+export function sessionsUnknown(h: FleetHost): Unknown | null {
+  if (h.sessions.running !== null) return null;
+  const why = h.sessions.why ?? readingWhy(h);
+  return { why, title: `Sessions open: not known (${why})` };
+}
+
+export function spendUnknown(h: FleetHost): Unknown | null {
+  return h.spend ? null : { why: 'not counted yet', title: 'Spend is counted from the usage records every few minutes' };
+}
+
+/** Where the session count came from, for its tooltip. */
+export function sessionsTitle(h: FleetHost, now: number): string {
+  if (h.sessions.running === null) return sessionsUnknown(h)!.title;
+  if (h.sessions.source === 'records') {
+    const age = h.now ? `its own reading is ${span(now - h.now.at)} old` : 'it sent no reading';
+    return `From Walnut's session records (${age})`;
+  }
+  return 'Counted by the host itself';
+}
 
 function load(share: number | null): Tone {
   if (share === null) return 'muted';
@@ -181,6 +218,7 @@ export function gauges(h: FleetHost): Gauge[] {
     { key: 'cpu', label: 'CPU', share: cpu, tone: load(cpu), title: cpu === null ? 'No CPU reading' : `CPU ${pct(cpu)} busy${n?.load ? `, load ${n.load[0]}` : ''}${n ? ` on ${n.cpus} CPUs` : ''}` },
     { key: 'mem', label: 'Memory', share: mem, tone: load(mem), title: mem === null || !n ? 'No memory reading' : `${gb(n.memTotalBytes - (n.memAvailBytes ?? 0))} of ${gb(n.memTotalBytes)} in use` },
   ];
+  const why = readingWhy(h);
   if (typeof n?.gpuUtil === 'number') out.push({ key: 'gpu', label: 'GPU', share: n.gpuUtil, tone: load(n.gpuUtil), title: `GPU ${pct(n.gpuUtil)} busy` });
   const d = n?.disk && n.disk.totalBytes > 0 ? n.disk : null;
   const free = diskFree(h);
@@ -190,8 +228,10 @@ export function gauges(h: FleetHost): Gauge[] {
     // Red goes by what is left, not the share: 10% of a 4 TB disk is plenty.
     tone: used === null ? 'muted' : free?.low ? 'bad' : used >= 0.9 ? 'warn' : 'good',
     title: d ? `${size(d.totalBytes - d.freeBytes)} of ${size(d.totalBytes)} in use, ${size(d.freeBytes)} free` : free ? `${free.text} free (its daemon does not report the disk size yet)` : 'No disk reading',
-    ...(free ? { sub: `${free.text} free`, subLow: free.low } : {}),
+    // Its size not known: the ring says the free space, which is known.
+    ...(used === null && free ? { text: free.text, sub: 'free', subLow: free.low } : free ? { sub: `${free.text} free`, subLow: free.low } : {}),
   });
+  for (const g of out) if (g.share === null && !g.text) g.why = why;
   return out;
 }
 
@@ -204,8 +244,8 @@ export function sparks(h: FleetHost): Spark[] {
   // The rings say now; a chart's number says the most of its 12 hours, so the two never read as one value.
   const peak = (list: Array<number | null>) => list.reduce<number>((m, v) => (v !== null && v > m ? v : m), 0);
   const share = (key: Spark['key'], label: string, list: Array<number | null>): Spark => ({
-    key, label, values: list, max: 1, value: list.some((v) => v !== null) ? `max ${pct(peak(list))}` : '?',
-    title: `${label} over the last 12 hours, in ${r.stepMinutes} minute steps: peak ${pct(peak(list)) ?? '?'}`,
+    key, label, values: list, max: 1, value: list.some((v) => v !== null) ? `max ${pct(peak(list))}` : 'no data',
+    title: list.some((v) => v !== null) ? `${label} over the last 12 hours, in ${r.stepMinutes} minute steps: peak ${pct(peak(list))}` : `${label}: no reading in the last 12 hours`,
   });
   const out = [share('cpu', 'CPU', r.cpu), share('mem', 'Memory', r.mem)];
   if (r.gpu) out.push(share('gpu', 'GPU', r.gpu));

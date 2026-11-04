@@ -269,3 +269,10 @@
 .hf-error { color: var(--warning); }
 .hf-dash .hf-error, .hf-dash .hf-loading { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
 .hf-dash .hf-error { color: var(--settings-error-text); }
+
+/* Why a number slot has no number (FleetNumber.tsx, a ring's why): always visible beside it. */
+.hf-why { font-size: 10.5px; line-height: 14px; color: var(--settings-help-fg); white-space: nowrap; }
+.hf-gauge .hf-why { text-align: center; }
+/* Beside a big number the reason may be a sentence: it wraps in its own half of the card. */
+.hf-numbers .hf-why, .hf-stat .hf-why { white-space: normal; overflow-wrap: anywhere; }
+.hf-gauge-value[data-text="true"] { font-size: 10.5px; }

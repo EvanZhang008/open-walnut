@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  capabilityChips, clip, diskFree, fleetSummary, gauges, isLive, linkLabel, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
+  capabilityChips, clip, readingWhy, sessionsTitle, sessionsUnknown, spendUnknown, diskFree, fleetSummary, gauges, isLive, linkLabel, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
 } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import type { FleetHost } from '../../web/src/api/hosts-fleet'
 
@@ -167,7 +167,7 @@ describe('gauges, disk and chips', () => {
     expect(cpu).toMatchObject({ key: 'cpu', share: 0.25, tone: 'good' })
     expect(mem).toMatchObject({ key: 'mem', share: 0.75, tone: 'warn' })
     // An older daemon reports no disk size: the ring has no share, its label says what is free.
-    expect(disk).toMatchObject({ key: 'disk', share: null, sub: '400 GB free', subLow: false })
+    expect(disk).toMatchObject({ key: 'disk', share: null, text: '400 GB', sub: 'free', subLow: false })
     expect(gauges(host()).map((g) => g.key)).toEqual(['cpu', 'mem', 'disk'])
     expect(gauges(host({ now: null })).map((g) => g.share)).toEqual([null, null, null])
     const gpu = host({ now: { ...host().now!, gpuUtil: 0.62, disk: { totalBytes: 1000 * GB, freeBytes: 250 * GB } } })
@@ -205,6 +205,31 @@ describe('gauges, disk and chips', () => {
       mcp: [{ name: 'a' }, { name: 'b', plugin: 'P' }], clis: [], declared: ['gpu', 'cloud'], unknown: ['mcp', 'system'],
     }
     expect(capabilityChips(h).map((c) => c.text)).toEqual(['iOS simulator', 'Browser', 'Docker', 'MCP × 2', 'gpu', 'MCP?'])
+  })
+})
+
+describe('a number slot with no number says why', () => {
+  it('sessions: the host\'s count, Walnut\'s records, or why there is none', () => {
+    expect(sessionsUnknown(host())).toBeNull()
+    expect(sessionsTitle(host({ sessions: { running: 4, source: 'host', why: null } }), NOW)).toBe('Counted by the host itself')
+    const fromRecords = host({ sessions: { running: 4, source: 'records', why: null }, now: { ...host().now!, at: NOW - 19 * 60_000, stale: true } })
+    expect(sessionsTitle(fromRecords, NOW)).toBe("From Walnut's session records (its own reading is 19 min old)")
+    expect(sessionsUnknown(host({ sessions: { running: null, why: 'Walnut is not connected to it' } }))?.why).toBe('Walnut is not connected to it')
+    // An older server sends no why: the card names one itself.
+    expect(sessionsUnknown(offline({ sessions: { running: null } }))?.why).toBe('not connected')
+  })
+  it('spend and rings', () => {
+    expect(spendUnknown(host())).toBeNull()
+    expect(spendUnknown(host({ spend: null }))?.why).toBe('not counted yet')
+    for (const h of [host({ now: null }), offline(), host({ daemon: { ...host().daemon!, vitals: false }, now: null })]) {
+      for (const g of gauges(h)) expect(g.share !== null || !!g.text || !!g.why, `${h.host} ${g.key}`).toBe(true)
+    }
+    expect(readingWhy(offline())).toBe('not connected')
+    expect(readingWhy(host({ now: null, daemon: { ...host().daemon!, vitals: false } }))).toBe('older daemon')
+    expect(readingWhy(host({ now: null }))).toBe('not read yet')
+    expect(sessionsUnknown(host({ sessions: { running: null }, now: { ...host().now!, stale: true } }))?.why).toBe('its reading is old')
+    // A disk whose size an older daemon does not report: the ring says the free space instead.
+    expect(gauges(host()).find((g) => g.key === 'disk')).toMatchObject({ share: null, text: '400 GB', sub: 'free' })
   })
 })
 

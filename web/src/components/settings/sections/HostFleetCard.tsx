@@ -12,12 +12,13 @@
 import { useState } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import {
-  capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sparkPaths, sparks, systemLine, timeline,
+  capabilityChips, sessionsTitle, sessionsUnknown, spendUnknown, gauges, offlineLine, problemsOf, problemTitle, roleChips, sparkPaths, sparks, systemLine, timeline,
   type Chip, type Gauge, type Spark,
 } from './host-fleet-dashboard-model';
 import { dayTitle, dayTone, fleetRows, statusKind, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
 
 /** A reason names a command in backticks (the same text an agent reads): shown as code. */
 function withCode(text: string) {
@@ -39,9 +40,12 @@ function Ring({ g }: { g: Gauge }) {
           <circle className="hf-gauge-fill" cx="26" cy="26" r={r} strokeDasharray={`${share * c} ${c}`} transform="rotate(-90 26 26)" />
         )}
       </svg>
-      <span className="hf-gauge-value">{g.share === null ? '?' : `${Math.round(share * 100)}%`}</span>
+      <span className="hf-gauge-value" data-num={g.share === null && !g.text ? 'unknown' : 'known'} data-text={g.text ? 'true' : undefined}>
+        {g.share !== null ? `${Math.round(share * 100)}%` : g.text ?? UNKNOWN_MARK}
+      </span>
       <span className="hf-gauge-label">{g.label}</span>
       {g.sub && <span className="hf-gauge-sub" data-low={g.subLow ? 'true' : 'false'} data-testid="host-fleet-disk-free">{g.sub}</span>}
+      {g.why && <span className="hf-why" data-testid="host-fleet-why">{g.why}</span>}
     </div>
   );
 }
@@ -166,12 +170,12 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
         </div>
       </div>
       <div className="hf-numbers">
-        <div data-testid="host-fleet-sessions">
-          <span className="hf-big">{host.sessions.running ?? '?'}</span>
+        <div data-testid="host-fleet-sessions" data-source={host.sessions.source ?? undefined} title={sessionsTitle(host, now)}>
+          <FleetNumber className="hf-big" value={host.sessions.running} unknown={sessionsUnknown(host)} />
           <span className="hf-big-label">{host.sessions.running === 1 ? 'Session open' : 'Sessions open'}</span>
         </div>
         <div data-testid="host-fleet-spend" title={host.spend ? 'At list price, not a bill' : 'Not counted yet'}>
-          <span className="hf-big">{host.spend ? usd(host.spend.last30dUsd) : '?'}</span>
+          <FleetNumber className="hf-big" value={host.spend ? usd(host.spend.last30dUsd) : null} unknown={spendUnknown(host)} />
           <span className="hf-big-label">Spend, 30 days</span>
         </div>
       </div>
