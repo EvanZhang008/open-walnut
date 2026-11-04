@@ -313,7 +313,7 @@ function handleRequest(p: PendingConnect, req: http.IncomingMessage, res: http.S
   const error = url.searchParams.get('error');
   if (error) {
     const msg = deniedMessage(error, url.searchParams.get('error_description'));
-    reply(200, 'Google Drive was not connected', msg);
+    reply(200, 'Google Drive was not connected', `${msg} You can close this tab and go back to Walnut.`);
     finish(p, { ok: false, error: msg });
     return;
   }
@@ -329,7 +329,7 @@ function handleRequest(p: PendingConnect, req: http.IncomingMessage, res: http.S
     },
     (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      reply(200, 'Google Drive was not connected', msg);
+      reply(200, 'Google Drive was not connected', `${msg} You can close this tab and go back to Walnut.`);
       finish(p, { ok: false, error: msg });
     },
   );

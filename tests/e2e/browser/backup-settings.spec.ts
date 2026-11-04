@@ -197,6 +197,7 @@ test.describe('Backup settings', () => {
     connectBody = null
     await connect.click()
     await expect.poll(() => connectBody).toMatchObject({ client_id: '1234-abc.apps.googleusercontent.com' })
+    await section.getByTestId('backup-gdrive-paste-help').click()
     await section.locator('#backup-gdrive-paste').fill('http://127.0.0.1:5555/?state=s&code=c')
     await section.getByTestId('backup-gdrive-finish').click()
     await expect(section.getByTestId('backup-gdrive-connected')).toContainText('someone@example.com')
@@ -223,6 +224,7 @@ test.describe('Backup settings', () => {
     await expect(section.getByRole('alert')).toContainText('whole number of hours')
     await section.locator('#backup-interval').blur()
     await expect(section.locator('#backup-interval')).toHaveValue('24')
+    await expect(section.getByRole('alert')).toContainText('0 hours is not 1 to 168: kept 24 hours.')
     await section.getByTestId('backup-service-gdrive').click()
     await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
@@ -240,6 +242,24 @@ test.describe('Backup settings', () => {
     await expect(section.locator('#backup-r2-bucket')).toHaveValue('my-bucket')
     await expect(section.getByTestId('backup-test-connection')).toHaveText('Test connection')
     await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('Drive in use with the R2 tab open after a reload: backups still read as running', async ({ page }) => {
+    await page.addInitScript(() => sessionStorage.setItem('walnut.backup.tab', 'r2'))
+    await holdConfigWrites(page, {
+      enabled: true, interval_hours: 24, recovery_key_saved_at: '2026-11-01T00:00:00Z',
+      destination: { type: 'gdrive' }, other_destinations: [{ type: 'r2', bucket: 'b', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AK', secret_access_key: '••••abcd' }],
+    })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', lastBackupAt: '2026-11-04T10:00:00Z', lastFileCount: 24 })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'me@example.com', folderName: 'Walnut Backup', pending: false })
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-service-r2')).toHaveAttribute('aria-checked', 'true')
+    await expect(section.getByTestId('backup-service-gdrive')).toHaveClass(/backup-service-in-use/)
+    await expect(section.getByTestId('backup-enabled-row')).toContainText('Encrypted on this computer first')
+    await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
+    await expect(section.getByTestId('backup-run-now')).toBeEnabled()
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 

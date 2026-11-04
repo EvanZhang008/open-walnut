@@ -65,6 +65,10 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
     }
   }, [onConnectedChange])
   useEffect(() => { void refresh() }, [refresh])
+  // A reload while the Google page is still open: the row keeps waiting, never offers a second sign-in.
+  useEffect(() => {
+    void apiGet<DriveStatus>('/api/backup/gdrive/status').then((s) => { if (s.pending && !s.connected) setWaiting(true) }).catch(() => {})
+  }, [])
 
   const signedIn = useCallback(() => {
     setWaiting(false)
@@ -191,7 +195,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
     <>
       <SettingsRow label="Client ID" htmlFor="backup-gdrive-client-id" control={
         <input id="backup-gdrive-client-id" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
-          className="settings-input settings-input--short" placeholder="e.g. 123-abc.apps.googleusercontent.com"
+          className="settings-input settings-input--short" placeholder="....apps.googleusercontent.com"
           value={dest.client_id ?? ''} onChange={(e) => onChange({ ...dest, client_id: e.target.value })} />
       } />
       <SettingsRow label="Client secret" htmlFor="backup-gdrive-client-secret" control={
@@ -248,22 +252,24 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         )}
       />
       {waiting && (
-        <SettingsRow
-          label="Signed in on another device?"
-          htmlFor="backup-gdrive-paste"
-          indent
-          wide
-          help="Paste the whole address the browser showed at the end (it starts with http://127.0.0.1)."
-          control={
-            <span className="settings-inline-pair">
-              <input id="backup-gdrive-paste" type="text" data-no-draft="autosave" className="settings-input"
-                value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1:...?code=..." />
-              <SettingsButton onClick={finish} busy={finishing} busyLabel="Finishing..." disabled={!pasted.trim()} data-testid="backup-gdrive-finish">
-                Finish
-              </SettingsButton>
-            </span>
-          }
-        />
+        // Rare (the browser on another device): folded, so the usual sign-in shows one row.
+        <SettingsDisclosure id="backup-gdrive-paste-help" label="Signed in on another device?" data-testid="backup-gdrive-paste-help">
+          <SettingsRow
+            label="Address it ended on"
+            htmlFor="backup-gdrive-paste"
+            wide
+            help="Paste the whole address the browser showed at the end (it starts with http://127.0.0.1)."
+            control={
+              <span className="settings-inline-pair">
+                <input id="backup-gdrive-paste" type="text" data-no-draft="autosave" className="settings-input"
+                  value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1..." />
+                <SettingsButton onClick={finish} busy={finishing} busyLabel="Finishing..." disabled={!pasted.trim()} data-testid="backup-gdrive-finish">
+                  Finish
+                </SettingsButton>
+              </span>
+            }
+          />
+        </SettingsDisclosure>
       )}
       {!needsOwnClient && (
         <SettingsDisclosure id="backup-gdrive-own-client" label="Use your own Google client (optional)" defaultOpen={hasOwnClient}

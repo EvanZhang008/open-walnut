@@ -43,7 +43,8 @@ export function R2Fields({ dest, onChange }: Props) {
   return (
     <>
       <TextRow id="backup-r2-account" label="Account ID" value={dest.account_id} onChange={(v) => set({ account_id: v })}
-        placeholder={dest.endpoint?.trim() ? 'Not needed with an endpoint' : '32 letters and digits'} />
+        placeholder={dest.endpoint?.trim() ? 'Not needed with an endpoint' : '32 letters and digits'}
+        help={dest.endpoint?.trim() ? undefined : 'Not needed when you set a custom endpoint under Advanced.'} />
       <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. my-walnut-backup" />
       <TextRow id="backup-r2-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
       <SettingsRow
@@ -99,6 +100,9 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
       {!custom && (
         <SettingsRow
           label="Credentials"
+          help={auth.method === 'profile' ? 'A named profile from ~/.aws on this computer.'
+            : auth.method === 'access_keys' ? 'An access key ID and secret that may use this bucket.'
+            : 'The AWS sign-in already set up on this computer (aws configure, SSO or environment).'}
           control={
             <SegmentedControl
               id="backup-s3-auth"
@@ -106,9 +110,9 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
               value={auth.method ?? 'aws_chain'}
               onChange={(v) => setAuth({ method: v })}
               options={[
-                { value: 'aws_chain', label: 'Default chain', title: 'The default AWS credential chain', testId: 'backup-auth-aws_chain' },
-                { value: 'profile', label: 'AWS profile', title: 'A profile from ~/.aws', testId: 'backup-auth-profile' },
                 { value: 'access_keys', label: 'Access keys', testId: 'backup-auth-access_keys' },
+                { value: 'profile', label: 'AWS profile', title: 'A profile from ~/.aws', testId: 'backup-auth-profile' },
+                { value: 'aws_chain', label: 'This computer', title: 'The AWS sign-in already set up on this computer', testId: 'backup-auth-aws_chain' },
               ]}
             />
           }

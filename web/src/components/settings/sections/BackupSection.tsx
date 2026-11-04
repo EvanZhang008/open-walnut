@@ -99,7 +99,8 @@ const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationC
   return {
     r2: { type: 'r2' },
     gdrive: { type: 'gdrive' },
-    s3: { type: 's3', auth: { method: 'aws_chain' } },
+    // A new S3 setup starts with keys: most people have no AWS sign-in on the computer.
+    s3: { type: 's3', auth: { method: 'access_keys' } },
     ...typed,
     ...Object.fromEntries(others.map((o) => [o.type, withTyped(o, typed[o.type])])),
     ...(saved ? { [saved.type]: withTyped(saved, typed[saved.type]) } : {}),
@@ -130,6 +131,8 @@ export function BackupSection({ config, onSave }: Props) {
   const [enabled, setEnabled] = useState(saved.enabled ?? false)
   // Empty while the user retypes it; a save falls back to 24.
   const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24)
+  // Said after a value out of range was put back, until the next edit (never a silent change).
+  const [intervalNote, setIntervalNote] = useState<string | null>(null)
   // A value out of range is shown as an error and never saved (no silent change to it).
   const intervalOk = Number.isInteger(Number(intervalHours)) && Number(intervalHours) >= 1 && Number(intervalHours) <= MAX_INTERVAL_HOURS
   const intervalToSave = intervalOk ? Number(intervalHours) : (saved.interval_hours ?? 24)
@@ -146,7 +149,9 @@ export function BackupSection({ config, onSave }: Props) {
   const [adopting, setAdopting] = useState(false)
   const [enablingVersioning, setEnablingVersioning] = useState(false)
   const [keyRefresh, setKeyRefresh] = useState(0)
-  const [driveConnected, setDriveConnected] = useState(false)
+  // null until read: not known is never said as "not connected" (no flash of Paused).
+  const [driveConnected, setDriveConnected] = useState<boolean | null>(null)
+  const driveOk = driveConnected !== false
   const [keyState, setKeyState] = useState<KeyState>({ hasKey: false, needsKey: false })
 
   // A config refresh re-seeds only what its SAVED value moved, so the refresh
@@ -176,6 +181,13 @@ export function BackupSection({ config, onSave }: Props) {
   const loadStatus = useCallback(() => {
     apiGet<BackupStatus>('/api/backup/status').then(setStatus).catch(() => {})
   }, [])
+  // Drive's sign-in is read here too, whichever tab is open: whether backups can run must
+  // never depend on the tab looked at (Drive in use, the R2 tab open after a reload).
+  const loadDrive = useCallback(() => {
+    apiGet<{ connected: boolean }>('/api/backup/gdrive/status').then((d) => setDriveConnected(d.connected)).catch(() => {})
+  }, [])
+  useEffect(() => { loadDrive() }, [loadDrive])
+  useEvent('backup:gdrive', useCallback(() => loadDrive(), [loadDrive]))
   useEffect(() => {
     loadStatus()
     fetchAwsProfiles().then(setProfiles).catch(() => {})
@@ -395,12 +407,12 @@ export function BackupSection({ config, onSave }: Props) {
 
   const otherWriter = !legacyMode && status?.errorCode === 'other_writer'
   const keyMismatch = !legacyMode && status?.errorCode === 'key_mismatch'
-  const destReady = !legacyMode && !!savedDest && missingFields(savedDest).length === 0 && (savedDest.type !== 'gdrive' || driveConnected)
+  const destReady = !legacyMode && !!savedDest && missingFields(savedDest).length === 0 && (savedDest.type !== 'gdrive' || driveOk)
   const blocked = blockedReason({
     legacyMode,
     legacyBucket: legacy.bucket,
     saved: savedDest,
-    driveConnected,
+    driveConnected: driveOk,
     needsKey: keyState.needsKey || keyMismatch,
     hasKey: keyState.hasKey,
     keySaved: Boolean(saved.recovery_key_saved_at),
@@ -449,6 +461,8 @@ export function BackupSection({ config, onSave }: Props) {
     }
     if (testResult) return testHelp(testResult, false)
     if (draftIsSaved) return 'Backups go here. Test again any time.'
+    // Edits to a saved service (kept across a reload) are said to be edits, not saved settings.
+    if (kept && !draftIsKept) return `Edited, not saved yet. "${savedDest?.type === type ? 'Test and save' : `Use ${labelOf(type)}`}" checks and saves it; Cancel goes back to the saved settings.`
     return savedDest && savedDest.type !== type
       ? `Not in use now. "Use ${labelOf(type)}" checks it first, then backups go here instead of ${labelOf(savedDest.type)}.`
       : '"Test and save" writes, reads back and deletes a small test file, then backups go here.'
@@ -594,13 +608,19 @@ export function BackupSection({ config, onSave }: Props) {
           htmlFor="backup-interval"
           help={!enabled ? 'Turn on Back up automatically to choose how often.'
             : legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
-          error={intervalOk ? undefined : `Use a whole number of hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
+          error={intervalOk ? (intervalNote ?? undefined) : `Use a whole number of hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
           data-testid="backup-interval-row"
           disabled={!enabled}
           control={
-            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} disabled={!enabled}
-              // A value never saved does not stay on screen: leaving the field shows the one in use again.
-              onBlur={() => { if (!intervalOk) setIntervalHours(saved.interval_hours ?? 24) }} />
+            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours}
+              onChange={(v) => { setIntervalHours(v); setIntervalNote(null) }} disabled={!enabled}
+              // A value never saved does not stay on screen: leaving the field shows the one in use again, and says so.
+              onBlur={() => {
+                if (intervalOk) return
+                const kept = saved.interval_hours ?? 24
+                setIntervalNote(`${intervalHours === undefined ? 'An empty value' : `${intervalHours} hours`} is not 1 to ${MAX_INTERVAL_HOURS}: kept ${kept} hours.`)
+                setIntervalHours(kept)
+              }} />
           }
         />
         {otherWriter && (
@@ -628,7 +648,7 @@ export function BackupSection({ config, onSave }: Props) {
           dest={legacyMode ? null : savedDest ?? null}
           destLabel={inUse ?? undefined}
           others={legacyMode ? [] : (saved.other_destinations ?? [])
-            .filter((o) => missingFields(o).length === 0 && (o.type !== 'gdrive' || driveConnected))
+            .filter((o) => missingFields(o).length === 0 && (o.type !== 'gdrive' || driveConnected === true))
             .map((o) => ({ label: labelOf(o.type), dest: o }))}
           restore={status?.restore}
           dataDir={status?.dataDir}

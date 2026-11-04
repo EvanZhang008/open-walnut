@@ -237,7 +237,7 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
           },
         });
         setRestore({
-          ...status, running: false, snapshotId: r.snapshot.id, doneBytes: r.restoredBytes, totalBytes: r.restoredBytes,
+          ...status, running: false, snapshotId: r.snapshot.id, snapshotAt: r.snapshot.createdAt, doneBytes: r.restoredBytes, totalBytes: r.restoredBytes,
           doneFiles: r.restoredFiles, totalFiles: r.restoredFiles, finishedAt: new Date().toISOString(),
         });
         log.web.info('backup: restore complete', { files: r.restoredFiles, bytes: r.restoredBytes });
@@ -377,7 +377,9 @@ async function driveClientFor(body: unknown): Promise<OAuthClient | null> {
 
 // GET /api/backup/gdrive/status
 encryptedBackupRouter.get('/gdrive/status', async (_req: Request, res: Response) => {
-  const dest = (await getConfig()).backup?.destination;
+  // Drive's own settings, in use or kept for later (another service in use).
+  const backup = (await getConfig()).backup;
+  const dest = backup?.destination?.type === 'gdrive' ? backup.destination : backup?.other_destinations?.find((o) => o.type === 'gdrive');
   const client = resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret });
   const builtin = resolveOAuthClient({});
   const tokens = await readDriveTokens(WALNUT_HOME);

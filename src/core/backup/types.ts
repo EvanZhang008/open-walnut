@@ -146,6 +146,8 @@ export interface RestoreStatus {
   targetDir?: string;
   /** Where the backup came from, as the user reads it ("Cloudflare R2"). */
   source?: string;
+  /** When the backup restored was made. */
+  snapshotAt?: string;
   doneBytes?: number;
   totalBytes?: number;
   doneFiles?: number;

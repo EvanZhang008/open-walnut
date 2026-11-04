@@ -14,7 +14,7 @@ const r2 = { type: 'r2' as const, bucket: 'b', account_id: 'a', access_key_id: '
 
 describe('missingFields', () => {
   it('names each empty field of a bucket destination', () => {
-    expect(missingFields({ type: 'r2' })).toEqual(['account ID', 'bucket', 'access key ID', 'secret access key']);
+    expect(missingFields({ type: 'r2' })).toEqual(['account ID (or a custom endpoint under Advanced)', 'bucket', 'access key ID', 'secret access key']);
     expect(missingFields(r2)).toEqual([]);
     expect(missingFields({ type: 'r2', bucket: 'b', endpoint: 'http://x', access_key_id: 'k', secret_access_key: 's' })).toEqual([]);
     expect(missingFields({ type: 's3', bucket: 'b', auth: { method: 'access_keys', aws_access_key_id: 'k' } })).toEqual(['access keys']);

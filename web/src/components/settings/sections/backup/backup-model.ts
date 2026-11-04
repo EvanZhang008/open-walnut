@@ -81,7 +81,7 @@ export function cleanDestination(d: BackupDestinationConfig): BackupDestinationC
 export function missingFields(d: BackupDestinationConfig): string[] {
   const m: string[] = []
   // In the order the form shows them.
-  if (d.type === 'r2' && !trimmed(d.account_id) && !trimmed(d.endpoint)) m.push('account ID')
+  if (d.type === 'r2' && !trimmed(d.account_id) && !trimmed(d.endpoint)) m.push('account ID (or a custom endpoint under Advanced)')
   if (d.type === 'r2' || d.type === 's3') if (!trimmed(d.bucket)) m.push('bucket')
   if (d.type === 'r2') {
     if (!trimmed(d.access_key_id)) m.push('access key ID')

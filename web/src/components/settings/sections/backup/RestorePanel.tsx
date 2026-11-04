@@ -20,6 +20,7 @@ export interface RestoreStatus {
   snapshotId?: string
   targetDir?: string
   source?: string
+  snapshotAt?: string
   doneBytes?: number
   totalBytes?: number
   doneFiles?: number
@@ -90,6 +91,11 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt ? restore : undefined
   // The picker opened: bring its last row (the folder and Restore) into view.
   const entryRef = useRef<HTMLDivElement>(null)
+  // A refused start says why where the eye is: the message is brought into view.
+  const startErrorRef = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    if (startError) startErrorRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [startError])
   useEffect(() => {
     if (items && items.length > 0) entryRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [items])
@@ -179,7 +185,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     <>
       <SettingsRow
         label="Restore"
-        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder, once the first row of this group is done.' : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
+        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder. Set up backups above first.' : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
@@ -241,7 +247,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             </SettingsButton>
           </div>
           {/* Under the field it is about, not above it. */}
-          {startError && <p className="settings-row-error settings-row-error-indent" role="alert" data-testid="backup-restore-target-error">{startError}</p>}
+          {startError && <p ref={startErrorRef} className="settings-row-error settings-row-error-indent" role="alert" data-testid="backup-restore-target-error">{startError}</p>}
           {target.trim().length > 40 && !startError && (
             // A long path's end (the folder's own name) never hides inside the field.
             <p className="settings-row settings-row-indent backup-restore-target-full" data-testid="backup-restore-target-full">
@@ -293,7 +299,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             label="Restored"
             wide
             data-testid="backup-restore-done"
-            help={<>{restore.source ? `From ${restore.source}: ` : ''}{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>. Your Walnut data is unchanged until you choose to use them.</>}
+            help={<>{restore.source ? `From ${restore.source}${restore.snapshotAt ? `, the backup of ${whenOf(restore.snapshotAt)}` : ''}: ` : ''}{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>. Your Walnut data is unchanged until you choose to use them.</>}
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>
