@@ -8,7 +8,8 @@
  *   - a VP that asked the task something hears the edge from its request's own notice, not twice;
  *   - a watch set over the API, refused on a completed task, and a watch that runs out on a task with
  *     no live session restarts quietly; a completion ends it.
- * Only the Claude CLI is mocked (no CLI runs: messages wait in the queue).
+ * Only the Claude CLI is mocked: a message to an idle session starts a turn of the mock, whose process
+ * exits when that turn ends (so a case that needs a VP that can hear makes its own, freshVp).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -39,6 +40,22 @@ async function until(what: string, ok: () => Promise<boolean>): Promise<void> {
     if (Date.now() > end) throw new Error(`timed out: ${what}`)
     await new Promise((r) => setTimeout(r, 100))
   }
+}
+
+/**
+ * A project of its own with its VP and the VP's idle session, for a case that needs a VP that can
+ * hear. A message to an idle session starts a turn of the mocked CLI, whose process exits when that
+ * turn ends, and from then on its daemon keeps the record stopped, over any write a test makes. So
+ * the Garden VP, messaged in the first case, can hear nothing afterwards; a later case that leaned
+ * on it passed only while that first turn still ran (2026-11-04, CI: lost on a loaded runner).
+ */
+let vpCount = 0
+async function freshVp(project: string): Promise<{ id: string; sid: string }> {
+  const id = (await ensureProjectLead(project)).id
+  const sid = `55555555-6666-4777-8888-${String(++vpCount).padStart(12, '0')}`
+  await createSessionRecord(sid, id, project, WALNUT_HOME)
+  await updateSessionRecord(sid, { process_status: 'idle' })
+  return { id, sid }
 }
 
 async function put(id: string, payload: unknown): Promise<Response> {
@@ -99,38 +116,47 @@ describe('a VP follows its top-level tasks', () => {
   }, 30_000)
 
   it('its completion rides too, and the watch ends with it; a completed task takes no new watch', async () => {
-    await updateSessionRecord(TOP_SID, { process_status: 'idle' })
-    await updateTask(topId, { phase: 'COMPLETE' })
-    await until('the completion rides the VP session', async () => ridingKeys(VP_SID).includes(topId))
-    await sendMessageToSession(VP_SID, 'And now?', { source: 'ui' } as never)
-    expect((await getQueue(VP_SID)).at(-1)!.message).toContain('completed its task')
-    expect(watchDueAt(await getTask(topId))).toBeNull()
-    expect((await put(topId, { every: '30m', for: vpId })).status).toBe(409)
+    const vp = await freshVp('Orchard')
+    const task = (await addTask({ title: 'Prune the rows', project: 'Orchard' })).task.id
+    await updateTaskRaw(task, { phase: 'IN_PROGRESS' }, { emitEvent: true, source: 'test' })
+    const sid = '66666666-7777-4888-9999-bbbbbbbbbbbb'
+    await createSessionRecord(sid, task, 'Orchard', WALNUT_HOME)
+    await updateSessionRecord(sid, { process_status: 'idle' })
+    expect((await put(task, { every: '30m', for: vp.id })).status).toBe(200)
+    expect(watchDueAt(await getTask(task))).not.toBeNull()
+    await updateTask(task, { phase: 'COMPLETE' })
+    await until('the completion rides the VP session', async () => ridingKeys(vp.sid).includes(task))
+    await sendMessageToSession(vp.sid, 'And now?', { source: 'ui' } as never)
+    expect((await getQueue(vp.sid)).at(-1)!.message).toContain('completed its task')
+    expect(watchDueAt(await getTask(task))).toBeNull()
+    expect((await put(task, { every: '30m', for: vp.id })).status).toBe(409)
   }, 30_000)
 
   it('a VP that asked the task hears its edge once, from the request\'s own notice', async () => {
-    const asked = (await addTask({ title: 'Answer the VP', project: 'Garden' })).task.id
+    const vp = await freshVp('Meadow')
+    const asked = (await addTask({ title: 'Answer the VP', project: 'Meadow' })).task.id
     const sid = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
     await updateTaskRaw(asked, { phase: 'IN_PROGRESS' }, { emitEvent: true, source: 'test' })
-    await createSessionRecord(sid, asked, 'Garden', WALNUT_HOME)
+    await createSessionRecord(sid, asked, 'Meadow', WALNUT_HOME)
     await updateSessionRecord(sid, { process_status: 'idle' })
-    await createSessionRequest({ fromSessionId: VP_SID, toSessionId: sid, toTaskId: asked, text: 'Is it done?' })
+    await createSessionRequest({ fromSessionId: vp.sid, toSessionId: sid, toTaskId: asked, text: 'Is it done?' })
     await updateTask(asked, { phase: 'NEED_ACTION' })
     await new Promise((r) => setTimeout(r, 1_500))
-    expect(ridingKeys(VP_SID)).not.toContain(asked)
+    expect(ridingKeys(vp.sid)).not.toContain(asked)
   }, 30_000)
 
   it('a worker under a leader is its leader\'s, never the VP\'s', async () => {
-    const leader = (await addTask({ title: 'Ship the parser', project: 'Garden' })).task.id
+    const vp = await freshVp('Grove')
+    const leader = (await addTask({ title: 'Ship the parser', project: 'Grove' })).task.id
     // Its leader has a session, so even its status lines stop there.
-    await createSessionRecord('88888888-9999-4aaa-bbbb-cccccccccccc', leader, 'Garden', WALNUT_HOME)
+    await createSessionRecord('88888888-9999-4aaa-bbbb-cccccccccccc', leader, 'Grove', WALNUT_HOME)
     await updateSessionRecord('88888888-9999-4aaa-bbbb-cccccccccccc', { process_status: 'idle' })
-    const worker = (await addTask({ title: 'Write the lexer', project: 'Garden', parent_task_id: leader } as never)).task.id
+    const worker = (await addTask({ title: 'Write the lexer', project: 'Grove', parent_task_id: leader } as never)).task.id
     await updateTaskRaw(worker, { phase: 'IN_PROGRESS', parent_task_id: leader }, { emitEvent: true, source: 'test' })
-    await createSessionRecord('77777777-8888-4999-aaaa-bbbbbbbbbbbb', worker, 'Garden', WALNUT_HOME)
+    await createSessionRecord('77777777-8888-4999-aaaa-bbbbbbbbbbbb', worker, 'Grove', WALNUT_HOME)
     await updateSessionRecord('77777777-8888-4999-aaaa-bbbbbbbbbbbb', { process_status: 'idle' })
     await updateTask(worker, { phase: 'NEED_ACTION' })
     await new Promise((r) => setTimeout(r, 1_500))
-    expect(ridingKeys(VP_SID)).not.toContain(worker)
+    expect(ridingKeys(vp.sid)).not.toContain(worker)
   }, 30_000)
 })
