@@ -4,7 +4,7 @@
  * Run for real against a fake `vitest` bin that writes a canned JSON report, so
  * every verdict is the script's own: a known failure passes, a new one fails
  * with its reason, a crashed or truncated run never passes, a file that fails
- * to load counts, and a --shard run neither calls the rest of the baseline
+ * to load counts, a file whose hook failed while none of its tests did counts, and a --shard run neither calls the rest of the baseline
  * "fixed" nor loses its own failures (WALNUT_BASELINE_RUN_OUT keeps them).
  * The fake also answers `vitest list`: every listed file this run covers must
  * report. test-baseline-shard-cut.test.ts checks the --shard cut against the
@@ -218,6 +218,30 @@ describe('test-baseline.mjs check', () => {
     expect(r.code).toBe(1)
     expect(r.out).toContain(`${B} :: <file failed to load or collect>`)
     expect(r.out).toContain('Cannot find module x')
+  })
+
+  it('counts a file whose hook failed while none of its tests did', async () => {
+    // A beforeAll that throws: every test reads skipped, the file failed.
+    const hooked = report([A, B]) as { testResults: FileResult[] }
+    hooked.testResults[1] = { name: `/runner/work/repo/${B}`, status: 'failed', message: 'Error: no manifest: build first\n    at y',
+      assertionResults: [{ fullName: 'suite one', status: 'skipped' }, { fullName: 'suite two', status: 'skipped' }] }
+    // An afterAll that throws after every test passed.
+    const after = report([A, C]) as { testResults: FileResult[] }
+    after.testResults[1] = { name: `/runner/work/repo/${C}`, status: 'failed', message: 'AggregateError: cleanup was not confirmed',
+      assertionResults: [{ fullName: 'suite ok', status: 'passed' }] }
+    for (const [r, file, why] of [[hooked, B, 'no manifest'], [after, C, 'cleanup was not confirmed']] as const) {
+      const out = await run('check', { report: r, baseline: baseline([]) })
+      expect(out.code).toBe(1)
+      expect(out.out).toContain(`${file} :: <file failed outside its tests>`)
+      expect(out.out).toContain(why)
+      // Baselined, it passes like any known failure.
+      expect((await run('check', { report: r, baseline: baseline([`${file} :: <file failed outside its tests>`]) })).code).toBe(0)
+    }
+    // A file with a failed test gets that test's key, never a second one.
+    const both = report([A, B], { [B]: ['suite broke'] }) as { testResults: FileResult[] }
+    const out = await run('check', { report: both, baseline: baseline([]) })
+    expect(out.out).toContain(`${B} :: suite broke`)
+    expect(out.out).not.toContain('<file failed outside its tests>')
   })
 
   it('never passes a run that wrote no report (a crashed worker pool)', async () => {

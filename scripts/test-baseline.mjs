@@ -183,6 +183,16 @@ for (const file of report.testResults ?? []) {
     failures.add(key);
     reasons.set(key, firstLine(file.message));
     fullMessages.set(key, wholeMessage(file.message));
+  } else if (file.status === 'failed' && !asserts.some((a) => a.status === 'failed')) {
+    // The same hole one step later: a beforeAll that throws marks every test of the
+    // file skipped, and an afterAll that throws fails a file whose tests all passed.
+    // Neither leaves a failed assertion, so the file failed with no key at all, and CI
+    // read green over four e2e files that had not run a test in weeks (2026-11-04:
+    // session-budget, session-budget-acp, task-cli-lifecycle, replica-console-static).
+    const key = `${rel} :: <file failed outside its tests>`;
+    failures.add(key);
+    reasons.set(key, firstLine(file.message));
+    fullMessages.set(key, wholeMessage(file.message));
   }
 }
 const filesInRun = new Set((report.testResults ?? []).map((file) => fileKey(file.name)));

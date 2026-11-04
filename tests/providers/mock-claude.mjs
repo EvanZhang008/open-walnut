@@ -559,9 +559,11 @@ function stripBanners(text) {
     if (!n || !body.slice(n[0].length).trim()) break;
     body = body.slice(n[0].length);
   }
-  // Walnut's own frame around a send that no person typed (send-frame.ts: a peer-note
-  // from "Walnut (<source>)"): the words inside are the message, so the test prefixes still lead.
-  const framed = body.match(/^\s*<walnut-message kind="peer-note" from="Walnut \([^"]*\)"[^>]*>\n?([\s\S]*?)\n?<\/walnut-message>\s*$/);
+  // The frame around a send that no person typed and no session sent: Walnut's own
+  // (send-frame.ts, from "Walnut (<source>)") and a script's (envelope-kit.ts, from
+  // "automation: <name>", a `walnut` call outside any session). The words inside are the
+  // message, so the test prefixes still lead.
+  const framed = body.match(/^\s*<walnut-message kind="peer-note" from="(?:Walnut \([^"]*\)|automation: [^"]*)"[^>]*>\n?([\s\S]*?)\n?<\/walnut-message>\s*$/);
   if (framed) body = framed[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   return body;
 }

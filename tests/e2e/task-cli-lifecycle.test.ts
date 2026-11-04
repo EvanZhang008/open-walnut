@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { HOST_DAEMON_BINARY } from './fixtures/budget-artifacts.js'
 
 const isolation = vi.hoisted(() => {
   const previous = process.env.WALNUT_DAEMON_DIR
@@ -22,7 +23,8 @@ let daemon: ChildProcess | undefined
 let base: string
 const cliPath = process.env.WALNUT_VERIFY_CLI || path.resolve('src/cli-fast.ts')
 const streamFilePath = (sid: string) => path.join(`${isolation.dir}-streams`, `${sid}.jsonl`)
-const daemonBin = path.join(process.env.WALNUT_VERIFY_DAEMON_DIR || path.resolve('dist/daemon-binaries'), 'daemon-darwin-arm64')
+// This machine's build: the suite runs on the Mac and on CI's Linux runners.
+const daemonBin = path.join(process.env.WALNUT_VERIFY_DAEMON_DIR || path.resolve('dist/daemon-binaries'), HOST_DAEMON_BINARY)
 
 async function cli(name: string, args: Record<string, unknown> = {}) {
   return new Promise<{ code: number; body: any; stderr: string }>((resolve, reject) => {

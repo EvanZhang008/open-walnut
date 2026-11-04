@@ -231,7 +231,8 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       # The tier spawns the session daemon, which the build produces.
-      - run: bun run build
+      # The console replica suite serves the built page (tests/e2e/replica-console-static-e2e.test.ts).
+      - run: bun run build && (cd web && bun x vite build)
       - name: e2e tests
         env:
           WALNUT_BASELINE_CONFIG: vitest.e2e.config.ts

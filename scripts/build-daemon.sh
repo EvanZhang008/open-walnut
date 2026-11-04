@@ -401,6 +401,16 @@ if [ "${WALNUT_BUILD_NET:-0}" = 1 ]; then
     || echo "build-daemon.sh: the walnut-net step failed; continuing (the daemon downloads its release build)." >&2
 fi
 
+# The budget E2Es (tests/e2e/session-budget*.test.ts) run these artifacts only as this
+# build made them: the manifest names their hashes and the sources' version. A sidecars-only
+# build, a machine whose daemon binary this build does not make, or a tree without the
+# tests (a published package), writes none.
+HOST_DAEMON="daemon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/aarch64/arm64/' -e 's/x86_64/x64/')"
+if [ "$SIDECARS_ONLY" != 1 ] && [ -f "$OUTDIR/$HOST_DAEMON.version" ] && [ -f tests/e2e/fixtures/budget-artifacts.ts ]; then
+  BUDGET_MANIFEST_DIR="$OUTDIR" "$BUN" -e "const m = await import('./tests/e2e/fixtures/budget-artifacts.ts'); m.writeBudgetManifest(process.env.BUDGET_MANIFEST_DIR)" \
+    || echo "build-daemon.sh: the budget E2E manifest was not written; those tests will say so." >&2
+fi
+
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.
 rm -f "$OUTDIR"/daemon-linux-*.gz

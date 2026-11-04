@@ -1,8 +1,8 @@
 /**
  * The daemon artifacts a budget E2E runs, tied to the sources they were built
- * from. `writeBudgetManifest` runs right after scripts/build-daemon.sh, in the
- * same command: it records the source version (the hash of the daemon's source
- * files) and the sha256 of every artifact. `checkBudgetArtifacts` fails the test
+ * from. `writeBudgetManifest` runs at the end of scripts/build-daemon.sh: it
+ * records the source version (the hash of the daemon's source files) and the
+ * sha256 of every artifact. `checkBudgetArtifacts` fails the test
  * when an artifact is missing, its bytes differ from the manifest, or the
  * sources moved since that build. Nothing here relies on file times.
  */
