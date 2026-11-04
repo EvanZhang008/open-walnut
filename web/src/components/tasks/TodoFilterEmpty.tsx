@@ -11,6 +11,7 @@
 import { memo, type PointerEvent, type MouseEvent } from 'react';
 import type { FilterDim } from './filter-bar-types';
 import { hiddenByText, type HiddenReason } from './filter-predicate';
+import { ICON_CLOSE } from '../common/Icons';
 
 export interface TodoFilterEmptyProps {
   onClear(): void;
@@ -85,16 +86,21 @@ export interface OffViewNoteProps {
 /** A task opened from outside (a chat reference, Locate, a new task) that this tab does not draw. */
 export const OffViewNote = memo(function OffViewNote({ title, here, there, onShow, onDismiss }: OffViewNoteProps) {
   return (
-    <div className="todo-offview-note" data-testid="todo-offview-note" role="status">
+    <div className="todo-offview-note" data-testid="todo-offview-note" role="status" title={`${title} is not in ${here}.`}>
+      {/* Only the title shortens; "is not in <tab>." always shows. A narrow panel puts the
+          buttons on a line of their own rather than cut the sentence. */}
       <span className="todo-offview-text">
-        <span className="todo-offview-title">{title}</span> is not in {here}.
+        <span className="todo-offview-title">{title}</span>
+        <span className="todo-offview-where">{` is not in ${here}.`}</span>
       </span>
-      <button type="button" className="todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
-        Show in {there}
-      </button>
-      <button type="button" className="todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
-        ×
-      </button>
+      <span className="todo-offview-actions">
+        <button type="button" className="todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
+          Show in {there}
+        </button>
+        <button type="button" className="todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
+          {ICON_CLOSE}
+        </button>
+      </span>
     </div>
   );
 });
