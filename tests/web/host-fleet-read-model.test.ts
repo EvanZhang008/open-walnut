@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readAgo, readFailure, readOnOpen, readLabel, replaceCard, shownHosts,
+  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readAgo, readFailure, ownReadKey, readOnOpen, readLabel, replaceCard, shownHosts,
 } from '../../web/src/components/settings/sections/host-fleet-read-model'
 import { fleetSummary, problemsOf } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import { statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
@@ -64,6 +64,20 @@ describe('the first read and what is drawn', () => {
     ]
     expect(readOnOpen(list, NOW)).toEqual(['__local__', 'new'])
     expect(readOnOpen([host({ host: '__local__', local: true, readAt: NOW - 2 * MIN })], NOW)).toEqual([])
+  })
+
+  // 2026-11-04: a Mac read while it was away, then connected, kept "not read yet" until a press.
+  it('a host read before it connected is read again on open, once per link', () => {
+    const joined = host({ host: 'joined', readAt: NOW - 3 * MIN, connection: { ...host().connection, since: NOW - MIN } })
+    const after = host({ host: 'after', readAt: NOW - MIN / 2, connection: { ...host().connection, since: NOW - MIN } })
+    const away = host({ host: 'away', readAt: NOW - 3 * MIN, connection: { ...host().connection, connected: false, since: NOW - MIN } })
+    const noSince = host({ host: 'nosince', readAt: NOW - 3 * MIN, connection: { ...host().connection, since: null } })
+    expect(readOnOpen([joined, after, away, noSince], NOW)).toEqual(['joined'])
+    expect(readOnOpen([{ ...joined, refreshing: true }], NOW)).toEqual([])
+    // The page's once-per-host memory is keyed by the link: a new link is a new first read.
+    expect(ownReadKey(joined)).toBe(ownReadKey({ ...joined, readAt: NOW }))
+    expect(ownReadKey(joined)).not.toBe(ownReadKey({ ...joined, connection: { ...joined.connection, since: NOW } }))
+    expect(ownReadKey(away)).toBe(ownReadKey({ ...away, connection: { ...away.connection, since: NOW } }))
   })
 
   it('a card from a live read or an older server (no readAt at all) counts as read', () => {

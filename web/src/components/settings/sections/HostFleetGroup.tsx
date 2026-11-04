@@ -30,7 +30,7 @@ import { useHostLinkChange } from '@/hooks/useHostLinkChange';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import { fleetSummary, isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
-import { followRead, markRefreshing, newestRead, READ_OLD_MS, readOnOpen, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
+import { followRead, markRefreshing, newestRead, READ_OLD_MS, ownReadKey, readOnOpen, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
 import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFleetCard';
 import { HostFleetTopology } from './HostFleetTopology';
 import { FleetNumber } from './FleetNumber';
@@ -91,7 +91,8 @@ export function HostFleetGroup() {
       const r = await fetchFleet({ signal: ctrl.signal });
       // A host never read, or one whose card is old, is read once (only while the Overview is
       // open), marked as being read in this same paint so its empty card never flashes.
-      const unread = openRef.current ? readOnOpen(r.hosts, Date.now()).filter((h) => !askedOnOpen(h, Date.now())) : [];
+      const keyOf = new Map(r.hosts.map((h) => [h.host, ownReadKey(h)]));
+      const unread = openRef.current ? readOnOpen(r.hosts, Date.now()).filter((h) => !askedOnOpen(keyOf.get(h) ?? h, Date.now())) : [];
       const follow = followRead(followSince.current, r.refreshing === true, Date.now());
       followSince.current = follow.since;
       setHosts(unread.length ? markRefreshing(r.hosts, unread) : r.hosts);
@@ -103,7 +104,7 @@ export function HostFleetGroup() {
         pollTimer.current = window.setTimeout(() => { pollTimer.current = null; void load(); }, POLL_MS);
       }
       if (unread.length) {
-        for (const h of unread) openAsks.set(h, Date.now());
+        for (const h of unread) openAsks.set(keyOf.get(h) ?? h, Date.now());
         void refreshFleet(unread).catch((err) => {
           // Not read after all: their cards show as not read yet, and Refresh is back.
           setRefreshError(errorText(err));

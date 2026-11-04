@@ -20,7 +20,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting } from '../../src/core/hosts/fleet.js'
-import { __setFleetRefreshDeadlinesForTesting, fleetRefreshIdle } from '../../src/core/hosts/fleet-refresh.js'
+import { __setFleetRefreshDeadlinesForTesting, fleetRefreshIdle, readHostsOnConnect } from '../../src/core/hosts/fleet-refresh.js'
 import { __resetFleetCacheForTesting, flushFleetCacheNow } from '../../src/core/hosts/fleet-cache.js'
 
 let server: HttpServer
@@ -264,5 +264,101 @@ describe('the cached overview', () => {
     expect(b.body).toMatchObject({ started: [], refreshing: ['devbox'] })
     await fleetRefreshIdle()
     expect(dev.asks).toBe(2)
+  }, 30_000)
+})
+
+/**
+ * 2026-11-04: a Mac that joined while the Overview was open read "not read yet" with no
+ * profile until someone pressed Refresh: its only read had run while it was away, and
+ * nothing read it again once it connected (readHostsOnConnect, fleet-refresh.ts).
+ */
+describe('a host that connects is read once', () => {
+  function connects() {
+    let fire: (host: string) => void = () => {}
+    let subscribed = 0
+    const onConnected = (cb: (host: string) => void) => { fire = cb; subscribed++; return () => { fire = () => {}; subscribed-- } }
+    return { onConnected, fire: (h: string) => fire(h), subscribed: () => subscribed }
+  }
+
+  it('read while away, then connected: its card fills without a press', async () => {
+    __setFleetRefreshDeadlinesForTesting({ sendMs: 5_000, hostMs: 1_000, connectReadDelayMs: 10 })
+    dev.conn.connected = false
+    await api('POST', '/api/v1/hosts/refresh', { hosts: ['devbox'] })
+    await fleetRefreshIdle()
+    const before = byHost((await cached()).body).get('devbox')
+    expect(before.readAt).toEqual(expect.any(Number))
+    expect(before.now).toBeNull()
+    expect(dev.asks).toBe(0)
+
+    const c = connects()
+    const off = readHostsOnConnect(c.onConnected)
+    dev.conn.connected = true
+    c.fire('devbox')
+    await vi.waitFor(() => expect(dev.asks).toBe(1), { timeout: 5_000 })
+    await fleetRefreshIdle()
+    expect(byHost((await cached()).body).get('devbox')).toMatchObject({ now: { cpuUtil: 0.5, stale: false } })
+    // The other hosts were not read for it.
+    expect(mac.asks + slow.asks).toBe(0)
+    off()
+    expect(c.subscribed()).toBe(0)
+  }, 30_000)
+
+  // 2026-11-04 review: the throttle was set before the read, so a host that dropped inside the
+  // delay was not read for 5 minutes after it came back.
+  it('a host that drops again before its read is read when it comes back', async () => {
+    __setFleetRefreshDeadlinesForTesting({ sendMs: 5_000, hostMs: 1_000, connectReadDelayMs: 10 })
+    const c = connects()
+    const off = readHostsOnConnect(c.onConnected)
+    const asked = dev.asks
+    dev.conn.connected = false
+    c.fire('devbox')
+    await new Promise((r) => setTimeout(r, 100))
+    await fleetRefreshIdle()
+    expect(dev.asks).toBe(asked)
+    dev.conn.connected = true
+    c.fire('devbox')
+    await vi.waitFor(() => expect(dev.asks).toBe(asked + 1), { timeout: 5_000 })
+    await fleetRefreshIdle()
+    off()
+  }, 30_000)
+
+  it('a fresh card is not read again, a host that keeps reconnecting is read once per window, and an unsubscribe cancels a read not yet started', async () => {
+    __setFleetRefreshDeadlinesForTesting({ sendMs: 5_000, hostMs: 1_000, connectReadDelayMs: 10 })
+    await api('POST', '/api/v1/hosts/refresh', { hosts: ['devbox'] })
+    await fleetRefreshIdle()
+    expect(dev.asks).toBe(1)
+    const c = connects()
+    const off = readHostsOnConnect(c.onConnected)
+    c.fire('devbox')
+    await new Promise((r) => setTimeout(r, 100))
+    await fleetRefreshIdle()
+    expect(dev.asks).toBe(1)
+
+    // An older daemon with no host.vitals never reads fresh: one read per window, not one per flap.
+    slow.conn.hasCapability = () => false
+    let slowReads = 0
+    __setFleetLoadsForTesting(async (hosts) => {
+      if (hosts.includes('slowbox')) slowReads++
+      return hosts.map((h) => ({ host: h, label: h, known: false, score: 0, busy: true, reasons: [], weight: 50, running: 0, runningLimit: 10 }) as never)
+    })
+    c.fire('slowbox')
+    await new Promise((r) => setTimeout(r, 100))
+    await fleetRefreshIdle()
+    c.fire('slowbox')
+    c.fire('slowbox')
+    await new Promise((r) => setTimeout(r, 100))
+    await fleetRefreshIdle()
+    expect(byHost((await cached()).body).get('slowbox').readAt).toEqual(expect.any(Number))
+    expect(slowReads).toBe(1)
+    off()
+
+    __setFleetRefreshDeadlinesForTesting({ sendMs: 5_000, hostMs: 1_000, connectReadDelayMs: 200 })
+    const again = connects()
+    const off2 = readHostsOnConnect(again.onConnected)
+    again.fire('__local__')
+    off2()
+    await new Promise((r) => setTimeout(r, 400))
+    await fleetRefreshIdle()
+    expect(mac.asks).toBe(0)
   }, 30_000)
 })

@@ -104,6 +104,52 @@ export async function startFleetRefresh(only?: readonly string[]): Promise<{ sta
   return { started, refreshing: [...running.keys()] }
 }
 
+/** How long after a host's hello its read on connect starts: its capabilities and status settle. */
+let connectReadDelayMs = 1_000
+
+/**
+ * A host that connects is read once when its card holds nothing from this link: it was never
+ * read, its last read found it away, or that read is over READING_FRESH_MS old. Its profile
+ * probe rides that read (probeInBackground). 2026-11-04: a Mac that joined while the Overview
+ * was open read "not read yet" with no profile until someone pressed Refresh, and host_list
+ * named no system for it. A host that keeps reconnecting is read on each connect, which costs one
+ * call and is skipped while its last read is fresh; only a host whose daemon has no host.vitals
+ * (it never reads fresh) is read at most once per READING_FRESH_MS. A read that found the host
+ * away again throttles nothing (2026-11-04 review: a throttle set before the read kept a host
+ * that dropped inside the delay unread for 5 minutes after it came back). Returns the unsubscribe.
+ */
+export function readHostsOnConnect(onConnected: (cb: (hostKey: string) => void) => () => void): () => void {
+  const timers = new Set<NodeJS.Timeout>()
+  const oldDaemonReadAt = new Map<string, number>()
+  const off = onConnected((host) => {
+    const last = oldDaemonReadAt.get(host)
+    if (last !== undefined && Date.now() - last < READING_FRESH_MS) return
+    const timer = setTimeout(() => {
+      timers.delete(timer)
+      void readIfNothingFresh(host)
+        .then((daemon) => { if (daemon === 'no-vitals') oldDaemonReadAt.set(host, Date.now()); else oldDaemonReadAt.delete(host) })
+        .catch((err) => log.web.debug('fleet: read on connect failed', { host, error: String(err) }))
+    }, connectReadDelayMs)
+    timer.unref?.()
+    timers.add(timer)
+  })
+  return () => { off(); for (const t of timers) clearTimeout(t); timers.clear() }
+}
+
+/** Read `host` unless its card is fresh; says whether its daemon answers host.vitals at all. */
+async function readIfNothingFresh(host: string): Promise<'vitals' | 'no-vitals' | 'away'> {
+  if (isCompanion()) return 'away'
+  await loadFleetCache()
+  const conn = (await fleetConnections()).get(host)?.[0]
+  const daemon = !conn?.connected ? 'away' : conn.hasCapability(VITALS_CAPABILITY) ? 'vitals' : 'no-vitals'
+  const kept = fleetCacheEntry(host)
+  const fresh = !!kept?.vitals && !kept.stale && kept.readAt !== null && Date.now() - kept.readAt <= READING_FRESH_MS
+  if (fresh || daemon === 'away') return daemon
+  const { started } = await startFleetRefresh([host])
+  if (started.length) log.web.info('fleet: reading a host that connected', { host, readBefore: kept?.readAt ?? null })
+  return daemon
+}
+
 function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(fallback), ms)
@@ -131,9 +177,10 @@ async function readHost(e: HostEntry, conn: VitalsConn | undefined): Promise<Rea
 }
 
 /** Test seams: shorter deadlines, and a wait for every read in flight. */
-export function __setFleetRefreshDeadlinesForTesting(next: { sendMs?: number; hostMs?: number } | null): void {
+export function __setFleetRefreshDeadlinesForTesting(next: { sendMs?: number; hostMs?: number; connectReadDelayMs?: number } | null): void {
   sendMs = next?.sendMs ?? 20_000
   hostMs = next?.hostMs ?? 25_000
+  connectReadDelayMs = next?.connectReadDelayMs ?? 1_000
 }
 export async function fleetRefreshIdle(): Promise<void> {
   while (running.size) await Promise.all([...running.values()])

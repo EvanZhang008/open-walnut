@@ -713,6 +713,7 @@ let localDaemonLane: { stop(): void } | null = null
 let localDaemonLaneOwner = 0
 /** The Mac telling the companion a delivery path for held phone sends came up (send-path-announce.ts). */
 let unsubscribeSendPathAnnounce: (() => void) | null = null
+let unsubscribeFleetConnectRead: (() => void) | null = null
 /** Daily error-notification reconcile (expiry + settled-receipt prune). */
 let notificationReconcileTimer: ReturnType<typeof setInterval> | null = null
 let localProviderTimer: ReturnType<typeof setInterval> | null = null
@@ -4228,6 +4229,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeSendPathAnnounce?.()
     const { startSendPathAnnouncements } = await import('../core/send-path-announce.js')
     unsubscribeSendPathAnnounce = startSendPathAnnouncements(addOnDaemonHostConnected)
+    // A host that connects with nothing fresh on its Overview card is read once (its profile too).
+    unsubscribeFleetConnectRead?.()
+    const { readHostsOnConnect } = await import('../core/hosts/fleet-refresh.js')
+    unsubscribeFleetConnectRead = readHostsOnConnect(addOnDaemonHostConnected)
     // Scoped to this boot, like the lane: the session runner's teardown disconnects every daemon
     // after stopServer returns, and each of those edges would read config.yaml while the next
     // boot (or a test) may be writing it.
@@ -6724,6 +6729,8 @@ export async function stopServer(opts: { dropConnections?: boolean } = {}): Prom
   } catch { /* never started */ }
   unsubscribeSendPathAnnounce?.()
   unsubscribeSendPathAnnounce = null
+  unsubscribeFleetConnectRead?.()
+  unsubscribeFleetConnectRead = null
   if (unsubscribeHostRecovery) {
     unsubscribeHostRecovery()
     unsubscribeHostRecovery = null

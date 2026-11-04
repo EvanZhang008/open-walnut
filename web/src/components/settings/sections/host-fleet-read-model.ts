@@ -46,14 +46,30 @@ export function neverRead(hosts: FleetHost[]): string[] {
 export const READ_OLD_MS = 5 * 60_000;
 
 /**
- * Hosts to read on their own when the page opens: one never tried, and this computer when its
- * card is over READ_OLD_MS old (2026-11-04: the Mac's own card sat 19 minutes old with its
- * sessions as "?"). Reading this computer asks no network, so the page still opens on the cards
- * it has at once; every other host is read on a press (2026-11-03: "fetch when user click").
+ * A connected host whose last read ended before this link came up: it was read while it was
+ * away, so its card holds nothing from now (2026-11-04: a Mac that joined while the Overview was
+ * open read "not read yet" and "Not probed yet" until someone pressed Refresh).
+ */
+function readBeforeItConnected(h: FleetHost): boolean {
+  const since = h.connection.connected ? h.connection.since : null;
+  return typeof since === 'number' && typeof h.readAt === 'number' && h.readAt < since;
+}
+
+/**
+ * Hosts to read on their own when the page opens or a host connects: one never tried, one read
+ * only before its link came up, and this computer when its card is over READ_OLD_MS old
+ * (2026-11-04: the Mac's own card sat 19 minutes old with its sessions as "?"). Reading this
+ * computer asks no network, so the page still opens on the cards it has at once; every other host
+ * is read on a press (2026-11-03: "fetch when user click").
  */
 export function readOnOpen(hosts: FleetHost[], now: number): string[] {
-  return hosts.filter((h) => !h.refreshing && (neverTried(h)
+  return hosts.filter((h) => !h.refreshing && (neverTried(h) || readBeforeItConnected(h)
     || (h.local && typeof h.readAt === 'number' && now - h.readAt > READ_OLD_MS))).map((h) => h.host);
+}
+
+/** What a read on its own is remembered by: once per host and per link it came up on. */
+export function ownReadKey(h: FleetHost): string {
+  return `${h.host}\u0000${h.connection.connected ? h.connection.since ?? '' : ''}`;
 }
 
 /** When the newest card was read; null with none read (or none that says). */
