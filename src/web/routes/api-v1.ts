@@ -176,9 +176,11 @@ apiV1Router.post('/devices/self', async (req: Request, res: Response, next: Next
  * build. 'asks' = this server can serve GET /api/v1/asks. On a REPLICA that
  * means it relays the list; it promises nothing about the primary behind it.
  * Whether New chat can LAUNCH an ask is the `launch` field of the /asks answer,
- * which the primary computes itself.
+ * which the primary computes itself. 'host-exec-pinned-v1' = this server serves
+ * POST /api/v1/host-exec/grants/:id/exec (a run under one named grant, rechecked
+ * before it is sent); a REPLICA answers it 404 leader_only like every host_exec route.
  */
-const V1_CAPABILITIES: readonly string[] = ['asks']
+const V1_CAPABILITIES: readonly string[] = ['asks', 'host-exec-pinned-v1']
 
 apiV1Router.get('/status', async (_req: Request, res: Response) => {
   // mode: LIVE = talking to the primary (Mac at home); REPLICA = the cloud

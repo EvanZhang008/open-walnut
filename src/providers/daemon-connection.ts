@@ -937,9 +937,12 @@ export class DaemonConnection {
     return this._netUpdaterInstance
   }
 
-  /** Update this host's daemon to this build now (host_daemon_update); null when this kind of host updates another way. */
-  requestDaemonUpdate(): Promise<NetUpdateState> | null {
-    return this.netUpdater?.request() ?? null
+  /**
+   * Update this host's daemon to this build now (host_daemon_update); null when this kind of host
+   * updates another way. `gate` throws once the asker may no longer have it run (the task's grant).
+   */
+  requestDaemonUpdate(gate?: () => void): Promise<NetUpdateState> | null {
+    return this.netUpdater?.request(undefined, gate) ?? null
   }
 
   /** No SSH to this host at all: the cloud box, or a machine on the host network. */

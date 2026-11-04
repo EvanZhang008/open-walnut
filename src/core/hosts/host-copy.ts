@@ -20,7 +20,8 @@
  *     dialog on that Mac's screen, and the copy would wait in it (409 may_prompt);
  *   - one copy at a time onto one file of one host (409 target_busy);
  *   - the copy runs here as a job, at most 2 at once per task and 4 on this server,
- *     stopped at its 1-hour deadline or when a grant it uses is revoked. The call waits
+ *     stopped at its 1-hour deadline, or when a grant it uses is revoked or the user closes a
+ *     host it uses, read right before every part it sends either way. The call waits
  *     up to a minute, or what the caller's own deadline leaves (src/lib/answer-by.ts: a
  *     session on another host, whose gateway gives up at 20 s), then answers `running`
  *     with its copyId for host_copy_result. The caller may name the id (`copy_id`, the
@@ -50,14 +51,13 @@ const REPLY_MARGIN_MS = 1_000
 /** Under the 4 MB part limit, and well under the frame size some proxies cut. */
 const CHUNK_BYTES = 2 * 1024 * 1024
 const CLEANUP_MS = 5_000
-const GRANT_CHECK_EVERY_MS = 5_000
 /** The final part: the receiver hashes and syncs the whole file before it answers. */
 const FINAL_PART_BASE_MS = 60_000
 const FINAL_PART_BYTES_PER_S = 25 * 1024 * 1024
 const COPY_ID_RE = /^hc-[A-Za-z0-9_-]{4,64}$/
 const LOCAL = '__local__'
 
-const DEFAULT_TUNING = { deadlineMs: COPY_MAX_MS, grantCheckMs: GRANT_CHECK_EVERY_MS, chunkBytes: CHUNK_BYTES }
+const DEFAULT_TUNING = { deadlineMs: COPY_MAX_MS, chunkBytes: CHUNK_BYTES }
 let tuning = { ...DEFAULT_TUNING }
 
 /** Tests: a short deadline, a frequent grant check, small chunks (null = back to the defaults). */
@@ -78,6 +78,8 @@ interface CopyJob {
   to: string
   total: number | null
   sent: number
+  /** A part was sent toward the receiver (it may hold a partial file even with nothing acknowledged). */
+  wroteAny?: boolean
   startedAt: number
   endedAt?: number
   /** The file this copy holds while it writes it (targets). */
@@ -193,7 +195,7 @@ function durationText(ms: number): string {
 }
 
 class CopyStopped extends Error {
-  constructor(public why: 'deadline' | 'revoked', public host?: string) {
+  constructor(public why: 'deadline' | 'revoked' | 'closed', public host?: string) {
     super(why)
     this.name = 'CopyStopped'
   }
@@ -211,9 +213,9 @@ export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 
   const untouched = `Nothing was written at ${where(job.toHost, job.to)}.`
   const progress = job.total !== null ? ` after ${sizeText(job.sent)} of ${sizeText(job.total)}` : ''
   if (err instanceof CopyStopped) {
-    return err.why === 'deadline'
-      ? new HostExecError(`The copy stopped at its ${durationText(tuning.deadlineMs)} deadline${progress}. ${untouched} Copy a smaller file (split it), or ask the user.`, 504, 'copy_deadline')
-      : new HostExecError(`The user revoked this task's grant for ${await hostName(err.host ?? '')}; the copy stopped${progress}. ${untouched}`, 403, 'exec_grant_revoked')
+    if (err.why === 'deadline') return new HostExecError(`The copy stopped at its ${durationText(tuning.deadlineMs)} deadline${progress}. ${untouched} Copy a smaller file (split it), or ask the user.`, 504, 'copy_deadline')
+    if (err.why === 'closed') return new HostExecError(`The user closed ${await hostName(err.host ?? '')} to tasks on other hosts (Settings › Remote Hosts); the copy stopped${progress}. ${untouched}`, 403, 'exec_host_closed')
+    return new HostExecError(`The user revoked this task's grant for ${await hostName(err.host ?? '')}; the copy stopped${progress}. ${untouched}`, 403, 'exec_grant_revoked')
   }
   if (err instanceof TransferHostOfflineError) {
     return new HostExecError(`Walnut is not connected to ${await hostName(err.host)} right now. ${untouched} Try again when host_list shows it connected.`, 503, 'host_offline')
@@ -285,18 +287,29 @@ async function dropStaging(job: CopyJob): Promise<'removed' | 'left'> {
 }
 
 /** The copy itself, as a job: read both ends, refuse what it cannot copy, hold the target, relay, record the answer. */
-async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, foreign: string[]): Promise<void> {
+async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, grantIds: Map<string, string>): Promise<void> {
+  const grants = await import('./exec-grants.js')
   const abort = new AbortController()
   const deadline = setTimeout(() => abort.abort(new CopyStopped('deadline')), tuning.deadlineMs)
   deadline.unref?.()
+  // Right before every read or write leaves for either host (the probes that size the source and
+  // plan the target too): a revoke or the user closing a host since the grant sends nothing more.
+  // The reads are synchronous, so nothing waits between this look and the send.
+  const gate = (_host?: string, command?: string) => {
+    for (const h of grantIds.keys()) {
+      if (grants.isHostClosed(h)) throw new CopyStopped('closed', h)
+      if (!grants.findGrant(job.taskId, h)) throw new CopyStopped('revoked', h)
+    }
+    if (command === 'fs.writePart') job.wroteAny = true
+  }
   try {
     const name = path.posix.basename(trimSlashes(job.from))
     const [size, plan] = await Promise.all([
-      sourceSize(job.fromHost, job.from, mine.from),
+      sourceSize(job.fromHost, job.from, mine.from, gate),
       planTarget(job.toHost, job.to, name, async (p) => {
         // Every place the target side reads, the one inside a folder `to` names included.
         if (!job.allowPrompts) await refuseMacPlace(job.toHost, p, job.macs.to, 'write')
-        return (await probe(job.toHost, p)).at
+        return (await probe(job.toHost, p, gate)).at
       }),
     ])
     if (size > MAX_COPY_BYTES) {
@@ -315,21 +328,13 @@ async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, forei
     job.lockKey = lockKey
     job.to = plan.path
     job.total = size
-    const grants = await import('./exec-grants.js')
-    let checked = Date.now()
     const { relayFile } = await import('../transfer/daemon-transfer-client.js')
+    // Once more now (the target lock and the imports took time), then before every part.
+    gate()
     const r = await relayFile(job.fromHost, job.from, job.toHost, job.to, {
-      size, chunkBytes: tuning.chunkBytes, signal: abort.signal,
+      size, chunkBytes: tuning.chunkBytes, signal: abort.signal, gate,
       finalPartTimeoutMs: FINAL_PART_BASE_MS + Math.ceil(size / FINAL_PART_BYTES_PER_S) * 1000,
-      onProgress: (p) => {
-        job.sent = p.sent
-        // Every few seconds, and always before the last part: revoking a grant stops the copy.
-        const lastNext = p.total - p.sent > 0 && p.total - p.sent <= tuning.chunkBytes
-        if (!lastNext && Date.now() - checked < tuning.grantCheckMs) return
-        checked = Date.now()
-        const gone = foreign.find((h) => !grants.findGrant(job.taskId, h))
-        if (gone) abort.abort(new CopyStopped('revoked', gone))
-      },
+      onProgress: (p) => { job.sent = p.sent },
     })
     job.answer = {
       copyId: job.id, running: false, from_host: job.fromHost, to_host: job.toHost, from: job.from, to: job.to,
@@ -344,9 +349,13 @@ async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, forei
       .catch(() => new HostExecError(`The copy failed: ${err instanceof Error ? err.message : String(err)}`, 502, 'copy_failed'))
     failure.data = { ...failure.data, copyId: job.id }
     if (job.lockKey) {
-      // A host whose grant was just revoked is not touched again.
-      const cut = err instanceof CopyStopped && err.why === 'revoked' && err.host === job.toHost
-      const left = cut ? 'left' : await mayHaveStaged(err, job).then((m) => (m ? dropStaging(job) : 'removed' as const), () => 'left' as const)
+      // A receiver whose grant is revoked now, or that the user closed, is not touched again, whatever
+      // stopped the copy: what a part already sent there may have left is named, not removed. Every
+      // write passes the gate first, so a copy that never wrote staged nothing.
+      const refused = grantIds.has(job.toHost) && (grants.isHostClosed(job.toHost) || !grants.findGrant(job.taskId, job.toHost))
+      const left = !job.wroteAny ? 'removed' as const
+        : refused ? 'left' as const
+        : await mayHaveStaged(err, job).then((m) => (m ? dropStaging(job) : 'removed' as const), () => 'left' as const)
       if (left === 'left') {
         const partial = `${job.to}.walnut-part`
         const how = mine.to ? 'with your own Bash' : `with host_exec on ${job.toHost}`
@@ -453,7 +462,7 @@ export async function copyBetweenHosts(params: CopyParams, callerSid: string | u
   }
   jobs.set(job.id, job)
   // `mine` only words the hints (your own Bash or host_exec); the grants are grantIds.
-  job.done = runCopy(job, { from: fromHost === def, to: toHost === def }, [...grantIds.keys()])
+  job.done = runCopy(job, { from: fromHost === def, to: toHost === def }, grantIds)
   void import('./exec-grants.js').then((g) => { for (const id of grantIds.values()) void g.noteRun(id, preview) }).catch(() => {})
   await waitFor(job, holdFor(caller, t0))
   return answerOf(job)

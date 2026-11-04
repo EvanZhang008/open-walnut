@@ -211,6 +211,32 @@ describe('relayFile', () => {
     expect(old.sent).toEqual([])
   })
 
+  it('its gate is asked right before each send, after the link lookup; a refusal sends nothing more and is never retried', async () => {
+    // 2026-11-04: host_copy looked at the grant only between parts, so a revoke while a link was
+    // looked up again let the next part go, and a small file's one part was the whole file.
+    const small = crypto.randomBytes(300)
+    const a = fakeHost({ file: small })
+    const b = fakeHost({})
+    let read = false
+    let revoked = false
+    // The receiver's link is looked up again for the write (a redial looks the same); the revoke lands then.
+    __setTransferConnectionResolverForTesting(async (h) => {
+      if (h === 'b' && read) revoked = true
+      return h === 'a' ? [a.conn] : [b.conn]
+    })
+    const asked: string[] = []
+    const no = new Error('revoked')
+    const gate = (host: string, command: string) => {
+      asked.push(`${host} ${command}`)
+      if (revoked) throw no
+      if (command === 'fs.readRange') read = true
+    }
+    await expect(relayFile('a', '/src', 'b', path.join(tmp, 'r11', 'x'), { size: small.length, chunkBytes, retryDelayMs: 0, gate })).rejects.toBe(no)
+    expect(asked).toEqual(['a fs.readRange', 'b fs.writePart'])
+    expect(b.sent).toEqual([])
+    expect(fs.existsSync(path.join(tmp, 'r11', 'x'))).toBe(false)
+  })
+
   it('a signal stops it before its next chunk, with the signal\'s reason, and is never retried', async () => {
     const a = fakeHost({ file: body })
     const b = fakeHost({})

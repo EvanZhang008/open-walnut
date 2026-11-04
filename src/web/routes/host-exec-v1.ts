@@ -44,11 +44,11 @@ function leaderOnly(res: Response): boolean {
  * deadline when its self-call carries one (src/lib/answer-by.ts: a session on another host,
  * whose gateway gives up at 20 s), so a hold lets go in time for the answer to get back.
  */
-async function answer(req: Request, res: Response, next: NextFunction, work: () => Promise<unknown>): Promise<void> {
+async function answer(req: Request, res: Response, next: NextFunction, work: () => Promise<unknown>, hostAsked?: string): Promise<void> {
   const [{ HostExecError, sameMachineNote }, { ANSWER_BY_HEADER, parseAnswerBy, withAnswerBy }] = await Promise.all([
     import('../../core/hosts/host-exec.js'), import('../../lib/answer-by.js'),
   ])
-  const asked = param(req.params.host)
+  const asked = hostAsked ?? param(req.params.host)
   // Read while the work runs: [its note when it ran, its note when it was refused].
   const notes: Promise<[string | null, string | null]> = asked
     ? Promise.all([sameMachineNote(asked), sameMachineNote(asked, true)]).catch(() => [null, null])
@@ -79,11 +79,9 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-hostExecV1Router.post('/hosts/:host/exec', (req: Request, res: Response, next: NextFunction) => {
-  if (leaderOnly(res)) return
-  const b = (req.body ?? {}) as Record<string, unknown>
-  void answer(req, res, next, async () => (await import('../../core/hosts/host-exec.js')).execOnHost({
-    host: param(req.params.host),
+/** The run a body asks for, the same on both ways in. */
+function runBody(b: Record<string, unknown>) {
+  return {
     ...(typeof b.command === 'string' ? { command: b.command } : {}),
     ...(Array.isArray(b.argv) ? { argv: b.argv.map(String) } : {}),
     ...(typeof b.cwd === 'string' ? { cwd: b.cwd } : {}),
@@ -92,7 +90,41 @@ hostExecV1Router.post('/hosts/:host/exec', (req: Request, res: Response, next: N
     allow_prompts: b.allow_prompts === true,
     strict: b.strict === true,
     ...(typeof b.job_id === 'string' ? { job_id: b.job_id } : {}),
+  }
+}
+
+hostExecV1Router.post('/hosts/:host/exec', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  const b = (req.body ?? {}) as Record<string, unknown>
+  // A run under one named grant has its own route, which an older server answers with 404; here
+  // the field would be the only difference, and an older server drops it without a word.
+  if (b.grant_id !== undefined) {
+    res.status(400).json({ error: 'grant_id is not a field here: run under one grant with POST /api/v1/host-exec/grants/:id/exec', code: 'bad_request' })
+    return
+  }
+  void answer(req, res, next, async () => (await import('../../core/hosts/host-exec.js')).execOnHost({
+    host: param(req.params.host), ...runBody(b),
   }, callerSid(req)))
+})
+
+/*
+ * POST /api/v1/host-exec/grants/:id/exec { host, command | argv, cwd?, timeout_ms?, background?,
+ * allow_prompts?, strict?, job_id? }: the same run, under that grant only (host-exec.ts grant_id).
+ * No grant is made and no letter sent; the grant must be the calling task's on `host`, live, and
+ * the host open, at the start and again right before the run is sent. GET /api/v1/status lists
+ * `host-exec-pinned-v1` on a server that has this route.
+ */
+hostExecV1Router.post('/host-exec/grants/:id/exec', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  const b = (req.body ?? {}) as Record<string, unknown>
+  const host = typeof b.host === 'string' ? b.host.trim() : ''
+  if (!host) {
+    res.status(400).json({ error: 'host is required: the host the grant is for', code: 'bad_request' })
+    return
+  }
+  void answer(req, res, next, async () => (await import('../../core/hosts/host-exec.js')).execOnHost({
+    host, ...runBody(b), grant_id: param(req.params.id),
+  }, callerSid(req)), host)
 })
 
 hostExecV1Router.get('/hosts/:host/exec', (req: Request, res: Response, next: NextFunction) => {

@@ -104,8 +104,12 @@ async function connectionFor(host: string, capability: string): Promise<Transfer
   return able
 }
 
-async function call<T>(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs: number): Promise<T> {
+/** Called right before a command leaves for `host`, after its link was found; a throw sends nothing. */
+export type SendGate = (host: string, command: string) => void
+
+async function call<T>(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs: number, gate?: SendGate): Promise<T> {
   const conn = await connectionFor(host, capability)
+  gate?.(host, command)
   const res = await conn.send(command, params, timeoutMs)
   if (res.ok === false) {
     const { ok: _ok, id: _id, error, code, ...data } = res
@@ -193,14 +197,14 @@ export interface WritePartOptions {
 }
 
 /** One chunk of a file onto `host` (data as bytes, or as base64 text already). */
-export function writePart(host: string, opts: WritePartOptions): Promise<WritePartReply> {
+export function writePart(host: string, opts: WritePartOptions, gate?: SendGate): Promise<WritePartReply> {
   const { attempt, timeoutMs, ...rest } = opts
   const data = typeof opts.data === 'string' ? opts.data : opts.data.toString('base64')
   const wait = timeoutMs ?? PART_RPC_MS
   if (attempt !== undefined) {
-    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, wait)
+    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, wait, gate)
   }
-  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, wait)
+  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, wait, gate)
 }
 
 export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
@@ -226,9 +230,11 @@ export async function assertPrivateStage(host: string): Promise<void> {
  * One daemon command on `host`, its reply as it came (an `ok:false` refusal
  * included), for a caller that reads the refusal itself (host-copy-paths.ts reads
  * ENOENT / ENOTFILE / ENOTDIR from fs.readRange). Offline and a missing capability throw as above.
+ * `gate`, when given, is asked after the dial and right before the send, as in relayFile.
  */
-export async function hostCommand(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs = READ_RPC_MS): Promise<Record<string, unknown>> {
+export async function hostCommand(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs = READ_RPC_MS, gate?: SendGate): Promise<Record<string, unknown>> {
   const conn = await connectionFor(host, capability)
+  gate?.(host, command)
   return conn.send(command, params, timeoutMs)
 }
 
@@ -317,12 +323,19 @@ export interface RelayOptions {
   signal?: AbortSignal
   /** How long the final part may take (the receiver hashes and syncs the whole file then); default 60 s. */
   finalPartTimeoutMs?: number
+  /**
+   * Called synchronously right before each read or write leaves, after its link was found (a
+   * redial included), so nothing awaits between it and the send. A throw stops the relay at
+   * once with that error, never retried (host-copy.ts: the grant and the host's stop).
+   */
+  gate?: SendGate
 }
 
 export interface RelayResult { bytes: number; sha256: string; chunks: number; retries: number; path?: string }
 
-async function readChunk(host: string, path: string, start: number, length: number): Promise<{ data: string; bytesRead: number; fileSize: number }> {
+async function readChunk(host: string, path: string, start: number, length: number, gate?: SendGate): Promise<{ data: string; bytesRead: number; fileSize: number }> {
   const conn = await connectionFor(host, READ_RANGE_CAPABILITY)
+  gate?.(host, 'fs.readRange')
   const res = await conn.send('fs.readRange', { path, start, length }, READ_RPC_MS)
   if (res.ok === false) {
     throw new TransferCommandError(String(res.error ?? 'fs.readRange failed'), host, 'fs.readRange', 'read_failed')
@@ -357,6 +370,11 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   const hasher = opts.sha256 ? null : crypto.createHash('sha256')
   let hashedTo = 0
   let deliveredTo = 0
+  // The caller's gate refusing is final: kept here so the retry below never takes it for a lost link.
+  let stopped: { err: unknown } | null = null
+  const gate: SendGate | undefined = opts.gate && ((host, command) => {
+    try { opts.gate!(host, command) } catch (err) { stopped = { err }; throw err }
+  })
   // Both ends are checked up front, so a missing capability fails before any byte moves.
   await connectionFor(toHost, opts.privateAttempt !== undefined ? PRIVATE_STAGE_CAPABILITY : WRITE_PART_CAPABILITY)
   await connectionFor(fromHost, READ_RANGE_CAPABILITY)
@@ -376,7 +394,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       // An empty file is read once too, so a source that is not empty after all is caught.
       if (total === null || total - offset > 0 || offset === 0) {
         const left = total === null ? 0 : total - offset
-        const got = await readChunk(fromHost, fromPath, offset, left > 0 ? Math.min(chunk, left) : chunk)
+        const got = await readChunk(fromHost, fromPath, offset, left > 0 ? Math.min(chunk, left) : chunk, gate)
         if (!(got.fileSize >= 0)) throw new TransferCommandError(`${fromPath}: no file size in the read reply`, fromHost, 'fs.readRange', 'read_failed')
         if (total === null) total = got.fileSize
         if (got.fileSize !== total) throw new TransferCommandError(`${fromPath} is ${got.fileSize} bytes now, expected ${total}`, fromHost, 'fs.readRange', 'source_changed')
@@ -393,7 +411,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
         path: toPath, offset, data: bytes, ...(final ? { final: true, size: total, sha256 } : {}),
         ...(opts.privateAttempt !== undefined ? { attempt: opts.privateAttempt } : {}),
         ...(final && opts.finalPartTimeoutMs !== undefined ? { timeoutMs: opts.finalPartTimeoutMs } : {}),
-      })
+      }, gate)
       chunks++
       failures = 0
       if (hasher && fresh && !final) { hasher.update(fresh); hashedTo = offset + bytes.length }
@@ -405,6 +423,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       opts.onProgress?.({ sent: offset, total })
       if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retried, ...(reply.path ? { path: reply.path } : {}) }
     } catch (err) {
+      if (stopped) throw (stopped as { err: unknown }).err
       if (err instanceof TransferCommandError && err.command === 'fs.writePart' && err.code === 'gap') {
         // The receiver lost bytes (a restart, a cleared staging file): resume where it stands.
         const have = Number(err.data.have)

@@ -63,7 +63,7 @@ export function shapeOf(reply: Record<string, unknown>, known: RunShape = {}): R
 }
 
 /** What exec.run sends for this line, and what the answer can say about it that the host will not. */
-export async function runRequest(conn: Awaited<ReturnType<typeof dial>>, host: string, caller: Caller, params: ExecParams, line: string): Promise<{ send: Record<string, unknown>; known: RunShape }> {
+export async function runRequest(conn: Awaited<ReturnType<typeof dial>>, host: string, caller: Caller, params: ExecParams, line: string): Promise<{ send: Record<string, unknown>; known: RunShape; before?: () => void }> {
   const { WALNUT_HOME } = await import('../../constants.js')
   const original = typeof params.command === 'string' && params.command.trim() !== '' ? { command: params.command } : { argv: params.argv }
   // The host runs it in bash with WALNUT_TASK_DIR set, and names both (host-exec-core.ts).
@@ -76,8 +76,11 @@ export async function runRequest(conn: Awaited<ReturnType<typeof dial>>, host: s
       : `The Walnut daemon on ${await hostName(host)} keeps no task directory for this task, so WALNUT_TASK_DIR would be empty there; nothing ran.`, 409, 'task_dir_unset', taskDir ? { taskDir } : {})
   }
   // Its marker, naming this Walnut, so the task directory is cleaned up like any other (task-dir-sweep.ts).
-  if (taskDir && argv && conn.hasCapability('task-dir-v1')) void conn.send('taskdir.ensure', { taskId: caller.taskId, home: WALNUT_HOME }, 10_000).catch(() => {})
+  // Sent by the caller right before the run, after its last look at the grant: nothing reaches a host first.
+  const before = taskDir && argv && conn.hasCapability('task-dir-v1')
+    ? () => { void conn.send('taskdir.ensure', { taskId: caller.taskId, home: WALNUT_HOME }, 10_000).catch(() => {}) }
+    : undefined
   return argv
-    ? { send: { argv }, known: { shell: 'bash', loginShell: null, taskDir } }
+    ? { send: { argv }, known: { shell: 'bash', loginShell: null, taskDir }, ...(before ? { before } : {}) }
     : { send: original, known: { shell: null, loginShell: null, taskDir: null } }
 }

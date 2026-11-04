@@ -46,6 +46,8 @@ import type { DaemonLinkKind } from './daemon-update-paths.js'
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
   | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'recent' | 'platform-unknown' | 'no-binary'
+  // The task that asked for it may no longer have it run (its grant was revoked, the host closed).
+  | 'refused'
 
 /** Daemon commands the update runs on the host. */
 export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const
@@ -282,8 +284,13 @@ export class NetDaemonUpdater {
     this.timer = null
   }
 
-  /** Run it now (host_daemon_update): past the host setting's hold and the cooldown. Answers once it is decided or started. */
-  async request(waitMs = 8_000): Promise<NetUpdateState> {
+  /**
+   * Run it now (host_daemon_update): past the host setting's hold and the cooldown. Answers once it
+   * is decided or started. `gate` (the asking task's grant) is read right before the run starts, before
+   * the upload and before the handover: it throws once the asker may no longer have it run, and a
+   * refusal there changes nothing on the host.
+   */
+  async request(waitMs = 8_000, gate?: () => void): Promise<NetUpdateState> {
     const now = this.d.now ?? Date.now
     const until = now() + waitMs
     if (this.inFlight) {
@@ -293,7 +300,8 @@ export class NetDaemonUpdater {
       // Read again: the wait may have ended it.
       if (this.busy() || ['running', 'updated', 'failed'].includes(this.state.phase)) return this.state
     }
-    const run = this.check('request')
+    gate?.()
+    const run = this.check('request', gate)
     const started = new Promise<void>((r) => { this.waiters.push(r) })
     await this.within(Promise.race([run, started]), Math.max(0, until - now()))
     return this.state
@@ -324,9 +332,9 @@ export class NetDaemonUpdater {
     return this.state
   }
 
-  private check(trigger: 'auto' | 'request'): Promise<NetUpdateState> {
+  private check(trigger: 'auto' | 'request', gate?: () => void): Promise<NetUpdateState> {
     if (this.inFlight) return this.inFlight
-    const run = this.attempt(trigger).catch((err) => this.set('failed', err instanceof Error ? err.message : String(err)))
+    const run = this.attempt(trigger, gate).catch((err) => this.set('failed', err instanceof Error ? err.message : String(err)))
       .finally(() => { this.inFlight = null })
     this.inFlight = run
     return run
@@ -351,8 +359,11 @@ export class NetDaemonUpdater {
     }
   }
 
-  private async attempt(trigger: 'auto' | 'request'): Promise<NetUpdateState> {
+  private async attempt(trigger: 'auto' | 'request', gate?: () => void): Promise<NetUpdateState> {
     const c = this.d.conn
+    const refused = (): string | null => {
+      try { gate?.(); return null } catch (err) { return err instanceof Error ? err.message : String(err) }
+    }
     if (this.stopped || !c.connected) return this.set('skipped', 'the host is not connected')
     this.set('checking', 'checking the host\'s daemon')
     const facts = await this.facts(trigger)
@@ -361,7 +372,7 @@ export class NetDaemonUpdater {
     const expected = facts.expected!
     const io = createNetUpdateIo(c, {
       ...this.d.io,
-      beforeLaunch: async () => (!c.connected ? 'the link dropped' : this.d.hold() ?? await this.hostBusy()),
+      beforeLaunch: async () => (!c.connected ? 'the link dropped' : refused() ?? this.d.hold() ?? await this.hostBusy()),
       cancelled: () => this.stopped,
     })
     const held = this.d.hold() ?? await this.hostBusy()
@@ -377,6 +388,9 @@ export class NetDaemonUpdater {
     this.lastAttempt = { expected, at: (this.d.now ?? Date.now)() }
     if (decision.go !== true) return this.skipped(decision as Extract<NetUpdateDecision, { go: false }>, trigger)
     const src = decision.source
+    // The status and the lookups took time: the asker's grant is read again before the upload.
+    const no = refused()
+    if (no) return this.skipped({ go: false, skip: 'refused', why: no }, trigger)
     const from = c.daemonVersion
     log.session.info('DaemonConnection: updating a host network machine\'s daemon over its link', {
       host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,

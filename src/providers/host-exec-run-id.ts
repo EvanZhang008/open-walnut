@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto'
 /** Ops whose run a lost answer must not lose: the op, its id field, and the op that reads the run. */
 const RUN_OPS: Record<string, { field: string; prefix: string; read: string; copy?: true }> = {
   host_exec: { field: 'job_id', prefix: 'hx-', read: 'host_exec_read' },
+  host_exec_pinned: { field: 'job_id', prefix: 'hx-', read: 'host_exec_read' },
   // A copy between two hosts runs on the server (core/hosts/host-copy.ts), so its read names no host.
   host_copy: { field: 'copy_id', prefix: 'hc-', read: 'host_copy_result', copy: true },
 }

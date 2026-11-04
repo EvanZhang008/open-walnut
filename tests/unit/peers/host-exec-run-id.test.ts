@@ -99,6 +99,8 @@ describe('the rule', () => {
     expect(callerRunId('host_exec', args, () => 'abcd-1234')).toBe('hx-abcd-1234')
     expect(args.job_id).toBe('hx-abcd-1234')
     expect(callerRunId('host_exec', { host: 'h', job_id: 'hx-mine-0001' })).toBe('hx-mine-0001')
+    // A run under one named grant is a host_exec run too.
+    expect(callerRunId('host_exec_pinned', { host: 'h', grant_id: 'xg-0000', command: 'true' }, () => 'abcd-1234')).toBe('hx-abcd-1234')
     const read: Record<string, unknown> = { host: 'h', job_id: 'hx-x' }
     expect(callerRunId('host_exec_read', read)).toBeNull()
     expect(callerRunId('task_get', {})).toBeNull()

@@ -64,7 +64,8 @@ defineOp({
     + '`host` is an alias or a capability selector ("@ios"); never your own host (use your Bash tool). A host found in ~/.ssh/config '
     + 'that also joined over the host network is one machine: Walnut uses its joined row and `note` says so. '
     + 'The first call for this task on a host asks the user by letter (403 exec_grant_required): do other work, you get a notice '
-    + 'when they allow it; the grant lasts until they revoke it. A Mac runs it in the user\'s session, so a dialog shows on their '
+    + 'when they allow it; the grant lasts until they revoke it, and a revoke or the host closed while the call waited answers 403 '
+    + 'with nothing run (host_exec_pinned runs under one named grant only, never asking). A Mac runs it in the user\'s session, so a dialog shows on their '
     + 'screen and the run waits there for someone: a keychain read (`security`), `osascript ... with administrator privileges`, and '
     + 'any read of a place macOS guards (Desktop, Documents, Downloads, Pictures, Movies, Music, Mail, Messages, iCloud Drive, app '
     + 'containers, /Volumes, or a walk such as du, find or grep -r over ~, ~/Library or ~/Library/Caches). Walnut refuses those '
@@ -88,6 +89,35 @@ defineOp({
     job_id: z.string().regex(/^hx-[A-Za-z0-9_-]{4,64}$/).optional().describe('The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one'),
   },
   bind: { method: 'POST', path: '/hosts/:host/exec' },
+  timeoutMs: 11 * 60_000,
+  mapResult: ({ body }) => runOutcome(body),
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  name: 'host_exec_pinned',
+  title: 'Run a command on another host under one named grant',
+  description:
+    'host_exec under ONE grant the user already gave, named by its id: nothing else counts. Walnut makes no grant (not even for a '
+    + 'task on the user\'s own host) and sends no letter, so a refusal asks no one. The grant must be this task\'s, for `host`, and '
+    + 'live, and the host open (not closed in Settings > Remote Hosts), when the call starts and again right before the run is sent '
+    + '(after any wait for a slot or for the host): otherwise it answers 403 with nothing run there: exec_grant_mismatch (not this '
+    + 'task\'s grant on that host), exec_grant_revoked, exec_host_closed. Everything else is host_exec\'s: the run, its deadline, '
+    + 'its answer, job_id, and host_exec_read/host_exec_stop for its job. A server that has this op lists host-exec-pinned-v1 in '
+    + 'GET /api/v1/status capabilities; an older one answers 404.',
+  input: {
+    grant_id: z.string().regex(/^xg-[A-Za-z0-9-]{4,64}$/).describe('The grant to run under (xg-...; GET /api/v1/host-exec/grants lists them): this task\'s, on this host'),
+    host: z.string().min(1).describe('The host the grant is for (an alias; "__local__" = the Mac)'),
+    command: z.string().optional().describe('A shell line, run by bash on that host after the user\'s login shell set up the environment'),
+    argv: z.array(z.string()).optional().describe('Instead of command: the program and its arguments, passed with no shell parsing'),
+    cwd: z.string().optional().describe('Working directory on that host (absolute or ~/...; default the user\'s home)'),
+    timeout_ms: z.number().int().min(1).max(7_200_000).optional().describe('Deadline in ms (default 120000; at most 600000, or 7200000 with background)'),
+    background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),
+    allow_prompts: z.boolean().optional().describe('The user agreed this command may show a dialog on that host\'s screen (a 409 may_prompt asked for it)'),
+    strict: z.boolean().optional().describe('Stop at the first command that fails (set -e, pipefail) and name it in failedStep: {exitCode, command, line, pipeStatus}'),
+    job_id: z.string().regex(/^hx-[A-Za-z0-9_-]{4,64}$/).optional().describe('The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one'),
+  },
+  bind: { method: 'POST', path: '/host-exec/grants/:grant_id/exec' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body }) => runOutcome(body),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

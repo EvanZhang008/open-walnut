@@ -108,6 +108,11 @@ export function findGrant(taskId: string, host: string): ExecGrant | undefined {
   return read().grants.find((g) => g.taskId === taskId && g.host === host && !g.revokedAt)
 }
 
+/** The grant with this id, live or revoked, if any. */
+export function grantById(id: string): ExecGrant | undefined {
+  return read().grants.find((g) => g.id === id)
+}
+
 /** Whether the user ever revoked a grant of this task on this host: then it asks by letter again. */
 export function wasRevoked(taskId: string, host: string): boolean {
   return read().grants.some((g) => g.taskId === taskId && g.host === host && !!g.revokedAt)

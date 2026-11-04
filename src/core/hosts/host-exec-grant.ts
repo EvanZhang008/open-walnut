@@ -22,6 +22,71 @@ export async function grantFor(caller: Caller, host: string, preview: string | n
   return mine
 }
 
+/** The shape of a grant id (exec-grants.ts `grant`), for a caller that names one. */
+export const GRANT_ID_RE = /^xg-[A-Za-z0-9-]{4,64}$/
+
+/**
+ * A call that names the grant it may use (`grant_id`): only that grant, never another. It makes
+ * no grant (not even the own-host one) and asks no one, so a call refused here sends no letter
+ * (2026-11-04: a task that must run only under a grant the user gave checked the grant first, and
+ * a revoke between that check and its call made the call ask the user again by letter).
+ */
+export async function pinnedGrant(caller: Caller, host: string, grantId: string): Promise<string> {
+  const grants = await import('./exec-grants.js')
+  const name = await hostName(host)
+  if (grants.isHostClosed(host)) {
+    throw new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts); nothing ran. Walnut asked no one.`, 403, 'exec_host_closed')
+  }
+  const g = grants.grantById(grantId)
+  if (!g || g.taskId !== caller.taskId || g.host !== host) {
+    throw new HostExecError(`Grant ${grantId} is not this task's grant on ${name}; nothing ran. Walnut made no grant and asked no one.`, 403, 'exec_grant_mismatch', { grantId })
+  }
+  if (g.revokedAt) {
+    throw new HostExecError(`Grant ${grantId} for ${name} was revoked; nothing ran. Walnut made no grant and asked no one.`, 403, 'exec_grant_revoked', { grantId })
+  }
+  return g.id
+}
+
+/**
+ * Right before a call's work leaves for the host, after its wait for a slot and its dial (each can
+ * take seconds): the grant it came in under still stands and the host is still open, so a revoke
+ * or the hard stop that came while it waited starts nothing there. `pinned`: only that grant
+ * counts; otherwise any live grant of the task on that host does (one the user gave again in the
+ * meantime). Never asks anyone and never makes a grant. Every grantFor that lets work start has
+ * this check before the work is sent (ratchet: tests/core/hosts/grant-recheck-ratchet.test.ts).
+ */
+export async function assertStillGranted(taskId: string, host: string, grantId: string, pinned = false): Promise<string> {
+  const grants = await import('./exec-grants.js')
+  // The reads are synchronous and nothing is awaited between them and the return, so a revoke
+  // the user's route finished before this point is seen.
+  const live = liveGrant(grants, taskId, host, grantId, pinned)
+  if (live) return live
+  throw grantRefusal(grants, taskId, host, grantId, pinned, await hostName(host))!
+}
+
+type Grants = typeof import('./exec-grants.js')
+
+/** The grant id the call may still use (the named one when pinned, else the task's live grant), or null. Synchronous. */
+function liveGrant(grants: Grants, taskId: string, host: string, grantId: string, pinned: boolean): string | null {
+  if (grants.isHostClosed(host)) return null
+  const g = pinned ? grants.grantById(grantId) : grants.findGrant(taskId, host)
+  return g && !g.revokedAt && g.taskId === taskId && g.host === host ? g.id : null
+}
+
+/**
+ * assertStillGranted for a caller that must not await between the check and its send (a gate
+ * read again at each step of a longer job): the refusal, or null while the grant stands.
+ */
+export function grantRefusal(grants: Grants, taskId: string, host: string, grantId: string, pinned: boolean, name: string): HostExecError | null {
+  if (liveGrant(grants, taskId, host, grantId, pinned)) return null
+  const closed = grants.isHostClosed(host)
+  log.session.info('host exec: refused at dispatch', { taskId, host, grantId, pinned, closed })
+  if (closed) {
+    return new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts) while this call waited; nothing ran there.`, 403, 'exec_host_closed')
+  }
+  return new HostExecError(`This task's grant to use ${name} was revoked while this call waited; nothing ran there.`, 403, 'exec_grant_revoked', { grantId })
+}
+
 /**
  * A host the user registered: this Mac, or a host in Settings > Remote Hosts (the
  * cloud companion is one). A task there uses the user's other hosts without a letter.

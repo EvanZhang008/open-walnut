@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { log } from '../../logging/index.js'
-import { HostExecError, budgetLeft, callerOf, dial, grantFor, redact, targetHost, type Caller } from './host-exec.js'
+import { HostExecError, assertStillGranted, budgetLeft, callerOf, dial, grantFor, redact, targetHost, type Caller } from './host-exec.js'
 import { saveCallImages } from './host-mcp-images.js'
 
 export const MAX_CALLS_PER_TASK = 4
@@ -101,8 +101,9 @@ export async function listHostMcp(params: { host: string; cwd?: string }, caller
   const t0 = Date.now()
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller, SAME_HOST)
-  if (params.cwd) await grantFor(caller, host, `MCP: list the servers for ${params.cwd}`)
+  const grantId = params.cwd ? await grantFor(caller, host, `MCP: list the servers for ${params.cwd}`) : null
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000, CAP, WHAT)
+  if (grantId !== null) await assertStillGranted(caller.taskId, host, grantId)
   const reply = await ask(conn, host, 'mcp.list', params.cwd ? { cwd: params.cwd } : {}, Math.min(LIST_MS, Math.max(1_000, budgetLeft(caller, t0) - 1_000)))
   if (reply.ok !== true) throw await daemonError(reply, 'the host could not list its MCP servers')
   return { host, servers: reply.servers ?? [] }
@@ -117,6 +118,8 @@ async function start(caller: Caller, host: string, cmd: 'mcp.tools' | 'mcp.call'
   // The link first, then how long the host may hold the answer: a slow dial leaves less of the
   // relayed caller's budget, and an answer that cannot get back in time must not start anything.
   const conn = await dial(host, budgetLeft(caller, t0) - 4_000, CAP, WHAT)
+  // The dial took time: a revoke or the host's stop since the grant starts nothing there.
+  const used = await assertStillGranted(caller.taskId, host, grantId)
   const wait = holdFor(caller, deadlineMs, t0)
   if (wait < 1_000) throw new HostExecError(`${host} answered too slowly to start the call in time; nothing ran. Try again.`, 503, 'host_offline')
   inFlight.set(callId, { taskId: caller.taskId, until: Date.now() + deadlineMs + REPLY_MARGIN_MS })
@@ -128,7 +131,7 @@ async function start(caller: Caller, host: string, cmd: 'mcp.tools' | 'mcp.call'
     throw err
   }
   if (reply.ok === false) inFlight.delete(callId)
-  else void import('./exec-grants.js').then((g) => g.noteRun(grantId, preview))
+  else void import('./exec-grants.js').then((g) => g.noteRun(used, preview))
   const out = await answerOf(caller, host, reply, t0)
   log.session.info('host mcp', {
     taskId: caller.taskId, fromHost: caller.host, host, cmd, callId, server: params.server, tool: params.tool ?? null,

@@ -10,6 +10,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { HostExecError } from './host-exec.js'
+import type { SendGate } from '../transfer/daemon-transfer-client.js'
 
 const PROBE_MS = 15_000
 
@@ -135,10 +136,10 @@ export async function refuseMacPlace(host: string, p: string, mac: MacSide | nul
 /** What one probe found at a path on a host. */
 export type Probe = 'file' | 'missing' | 'not_file' | 'parent_not_dir' | { error: string }
 
-/** One `fs.readRange` of a byte, read for what is at `p` (its size when it is a file). */
-export async function probe(host: string, p: string): Promise<{ at: Probe; size?: number }> {
+/** One `fs.readRange` of a byte, read for what is at `p` (its size when it is a file). `gate`: as hostCommand's. */
+export async function probe(host: string, p: string, gate?: SendGate): Promise<{ at: Probe; size?: number }> {
   const { hostCommand } = await import('../transfer/daemon-transfer-client.js')
-  const r = await hostCommand(host, 'fs.readRange', 'fs.readRange', { path: p, start: 0, length: 1 }, PROBE_MS)
+  const r = await hostCommand(host, 'fs.readRange', 'fs.readRange', { path: p, start: 0, length: 1 }, PROBE_MS, gate)
   if (r.ok !== false) {
     const size = Number(r.fileSize)
     return Number.isSafeInteger(size) && size >= 0 ? { at: 'file', size } : { at: { error: 'no file size in the reply' } }
@@ -172,15 +173,15 @@ function folderRefusal(host: string, p: string, own: boolean): HostExecError {
 }
 
 /** The source's size; refuses a missing file, a folder (with how to pack it) and anything not a regular file. */
-export async function sourceSize(host: string, from: string, own: boolean): Promise<number> {
+export async function sourceSize(host: string, from: string, own: boolean, gate?: SendGate): Promise<number> {
   const p = trimSlashes(from)
-  const { at, size } = await probe(host, p)
+  const { at, size } = await probe(host, p, gate)
   if (at === 'file') return size!
   if (at === 'missing') throw new HostExecError(`No file at ${host}:${from}.`, 404, 'source_missing')
   if (at === 'parent_not_dir') throw new HostExecError(`No file at ${host}:${from} (a part of that path is a file, not a folder).`, 404, 'source_missing')
   if (at === 'not_file') {
     // `dir/.` is a folder too; under a pipe, socket or device it is ENOTDIR.
-    if ((await probe(host, p === '/' ? '/.' : `${p}/.`)).at === 'not_file') throw folderRefusal(host, p, own)
+    if ((await probe(host, p === '/' ? '/.' : `${p}/.`, gate)).at === 'not_file') throw folderRefusal(host, p, own)
     throw new HostExecError(`${host}:${from} is not a regular file (a pipe, socket or device); host_copy copies one regular file.`, 400, 'not_a_file')
   }
   throw new HostExecError(`${host} could not read ${from}: ${at.error}`, 502, 'read_failed')

@@ -17,6 +17,8 @@
  * daemon and, shaped by the server, on an older one (zsh as its login shell); a run the caller
  * named (job_id) is read after its answer was lost and never runs twice; a relayed call answers
  * inside its deadline; a read from an offset is not "truncated"; host_exec_list lists a task's jobs.
+ * And (2026-11-04): a run under one named grant (POST /host-exec/grants/:id/exec, op host_exec_pinned,
+ * listed as host-exec-pinned-v1 in /status) runs only under it, makes no grant and sends no letter; a revoke or the hard stop while a call waits for a slot or the host starts nothing.
  *
  * Real: the server, the inbox and its answer route, the grants file, the op
  * executor, and the host side (host-exec-core.ts with a real /bin/sh). Fake:
@@ -44,6 +46,7 @@ import { updateConfig } from '../../src/core/config-manager.js'
 import { ANSWER_RETURN_MS, resetHostExecForTest } from '../../src/core/hosts/host-exec.js'
 import { onLetterAnswered, recordAsk, settleOwnHostAsks } from '../../src/core/hosts/exec-grants.js'
 import { isOwnHost } from '../../src/core/hosts/host-exec.js'
+import * as grantGate from '../../src/core/hosts/host-exec-grant.js'
 import { answerLetter, getLetter, sendLetter, settleLetter } from '../../src/core/human-inbox/store.js'
 import * as sendCore from '../../src/core/sessions/session-send-core.js'
 import { commandLine } from '../../src/providers/host-exec-core.js'
@@ -803,4 +806,158 @@ describe('host_exec', () => {
     const listed = await api('GET', '/api/v1/hosts/tccmac/exec', undefined, OWN_SID)
     expect(listed.body.jobs[0]).toMatchObject({ jobId: blocked.result.jobId, state: 'blocked', blocked: { reason: 'password_prompt' } })
   }, 30_000)
+
+  // 2026-11-04: a task that must run only under a grant the user gave checked the grant, then
+  // called; the call waited for a slot and the host, never looked again, and a revoke in between
+  // would have run the command anyway or sent the user a new letter.
+  async function pinTask(title: string, sid: string, host = 'devbox'): Promise<string> {
+    const made = await api('POST', '/api/v1/tasks', { title })
+    const id = made.body.task?.id ?? made.body.id
+    await createSessionRecord(sid, id, '', '/home/me/pin', { ...(host ? { host } : {}), title, initialProcessStatus: 'stopped' } as never)
+    return id
+  }
+  const askLetters = async () => (await letters()).filter((l) => l.subject.includes('" use ')).length
+  const grantsOf = async (task: string) => ((await api('GET', '/api/v1/host-exec/grants?all=1')).body.grants as any[]).filter((g) => g.taskId === task)
+  const ranJob = (jobId: string) => sent.some((m) => m.cmd === 'exec.run' && m.params.jobId === jobId)
+  /** A run under one named grant: its own route, which a server without it answers 404. */
+  const pinnedRun = (grant: string, body: Record<string, unknown>, sid: string, host = 'macbox') =>
+    api('POST', `/api/v1/host-exec/grants/${grant}/exec`, { host, ...body }, sid)
+
+  it('a call naming its grant runs only under that grant, and never makes a grant or asks the user', async () => {
+    const PIN_SID = 'host-exec-e2e-pin'
+    const pinned = await pinTask('Read only under my grant', PIN_SID)
+    const other = await pinTask('Another granted task', 'host-exec-e2e-pin-other')
+    const before = await askLetters()
+    const call = (body: Record<string, unknown>, host = 'macbox') => api('POST', `/api/v1/hosts/${host}/exec`, body, PIN_SID)
+    const pin = (grant: string, body: Record<string, unknown>, host = 'macbox') => pinnedRun(grant, body, PIN_SID, host)
+    // The server says it has the route, so a caller never sends a run an older server would take another way.
+    expect((await api('GET', '/api/v1/status')).body.capabilities).toContain('host-exec-pinned-v1')
+    // The ordinary route refuses the field instead of dropping it; the pinned one needs its host.
+    expect(await call({ command: 'true', grant_id: 'xg-000000000000' })).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect(await api('POST', '/api/v1/host-exec/grants/xg-000000000000/exec', { command: 'true' }, PIN_SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect(await pin('nope', { command: 'true' })).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    // No grant yet, on the user's own host: an ordinary call would make one; this one does not.
+    const none = await pin('xg-000000000000', { command: 'echo no', job_id: 'hx-pin-none-1' })
+    expect(none).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch', grantId: 'xg-000000000000' } })
+    expect(await grantsOf(pinned)).toEqual([])
+    expect(ranJob('hx-pin-none-1')).toBe(false)
+    const mine = (await api('POST', '/api/v1/host-exec/grants', { task_id: pinned, host: 'macbox' })).body.grant
+    const theirs = (await api('POST', '/api/v1/host-exec/grants', { task_id: other, host: 'macbox' })).body.grant
+    expect(await pin(mine.id, { command: 'echo pinned' })).toMatchObject({ status: 200, body: { exitCode: 0, output: 'pinned\n' } })
+    // The op reaches the same route (the walnut CLI picks its job_id, as for host_exec).
+    const viaOp = await executeOp('host_exec_pinned', { grant_id: mine.id, host: 'macbox', command: 'echo op' },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: PIN_SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp).toMatchObject({ ok: true, result: { exitCode: 0, output: 'op\n' } })
+    await until(async () => (await grantsOf(pinned)).some((g) => g.id === mine.id && g.runs === 2), 'the runs counted on that grant')
+    // Another task's grant, and this task's grant on another host, are not this call's.
+    expect(await pin(theirs.id, { command: 'true' })).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch' } })
+    expect(await pin(mine.id, { command: 'true' }, 'oldmac')).toMatchObject({ status: 403, body: { code: 'exec_grant_mismatch' } })
+    expect((await grantsOf(pinned)).map((g) => g.host)).toEqual(['macbox'])
+    // The hard stop wins over the grant.
+    await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true })
+    expect(await pin(mine.id, { command: 'true' })).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
+    await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })
+    // Revoked: refused, still no letter and no new grant.
+    expect((await api('DELETE', `/api/v1/host-exec/grants/${mine.id}`)).status).toBe(200)
+    const revoked = await pin(mine.id, { command: 'echo late', job_id: 'hx-pin-revoked-1' })
+    expect(revoked).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked', grantId: mine.id } })
+    expect(ranJob('hx-pin-revoked-1')).toBe(false)
+    expect((await grantsOf(pinned)).filter((g) => !g.revokedAt)).toEqual([])
+    expect(await askLetters()).toBe(before)
+    // A call without grant_id behaves as before: a revoked task asks by letter.
+    expect(await call({ command: 'true' })).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
+    expect(await askLetters()).toBe(before + 1)
+  }, 30_000)
+
+  it('a revoke or the hard stop while a call waits for a slot or the host starts nothing there', async () => {
+    // A caller on this Mac: its call may wait the full 20 s for a slot, so nothing here races a clock.
+    const WAIT_SID = 'host-exec-e2e-pin-wait'
+    const task = await pinTask('Wait for a slot', WAIT_SID, '')
+    const call = (body: Record<string, unknown>) => api('POST', '/api/v1/hosts/macbox/exec', body, WAIT_SID)
+    const grantNow = async () => (await api('POST', '/api/v1/host-exec/grants', { task_id: task, host: 'macbox' })).body.grant.id as string
+    const revoke = async (id: string) => expect((await api('DELETE', `/api/v1/host-exec/grants/${id}`)).status).toBe(200)
+    const lists = () => sent.filter((m) => m.cmd === 'exec.list' && m.host === 'macbox').length
+    const jobs: string[] = []
+    const fill = async () => {
+      for (let i = 0; i < 4; i++) {
+        const r = await call({ command: 'sleep 30', background: true })
+        expect(r.body.running).toBe(true)
+        jobs.push(r.body.jobId)
+      }
+    }
+    // A call at the task's cap of four asks the host which runs still go (exec.list) while it
+    // waits: seen, it is past its grant check and waiting. The user revokes; then the slots free.
+    // `regrant`: the user gives the task a new grant right after the revoke, before the slots free.
+    const revokedWhileWaiting = async (body: Record<string, unknown>, pinnedTo: string | null, jobId: string, regrant = false) => {
+      const grant = pinnedTo ?? await grantNow()
+      await fill()
+      const before = lists()
+      const waiting = pinnedTo ? pinnedRun(pinnedTo, { ...body, job_id: jobId }, WAIT_SID) : call({ ...body, job_id: jobId })
+      await until(async () => lists() > before, 'the call waiting at the cap')
+      await revoke(grant)
+      const again = regrant ? await grantNow() : null
+      expect(again).not.toBe(grant)
+      resetHostExecForTest() // the four runs no longer count: the waiting call takes a slot and dials
+      const r = await waiting
+      if (again && !pinnedTo) {
+        // An ordinary call runs under whatever grant the task holds now, and counts it there.
+        expect(r).toMatchObject({ status: 200, body: { exitCode: 0 } })
+        expect(ranJob(jobId)).toBe(true)
+        await until(async () => (await grantsOf(task)).some((g) => g.id === again && g.runs === 1), 'the run counted on the new grant')
+        return
+      }
+      expect(r).toMatchObject({ status: 403, body: { code: 'exec_grant_revoked' } })
+      expect(r.body.error).toContain('was revoked while this call waited')
+      expect(ranJob(jobId)).toBe(false)
+    }
+    // 1. Pinned to its grant.
+    await revokedWhileWaiting({ command: 'echo should-not-run' }, await grantNow(), 'hx-pin-wait-0001')
+    // 2. Without grant_id: the revoke stands too, and no letter goes out.
+    const letters0 = await askLetters()
+    await revokedWhileWaiting({ command: 'echo should-not-run' }, null, 'hx-pin-wait-0002')
+    expect(await askLetters()).toBe(letters0)
+    // 3. A new grant came while it waited: a pinned call keeps to the grant it named, never another;
+    // an ordinary call runs under the new one.
+    await revokedWhileWaiting({ command: 'echo should-not-run' }, await grantNow(), 'hx-pin-wait-0004', true)
+    await revokedWhileWaiting({ command: 'echo ran' }, null, 'hx-pin-wait-0005', true)
+    expect(await askLetters()).toBe(letters0)
+    // 4. Pinned, the host closed while Walnut dials it: every dial to macbox waits at a gate once
+    // the call is past its start, so the close lands before the call's last look.
+    const grant = await grantNow()
+    for (const j of jobs.splice(0)) await api('POST', `/api/v1/hosts/macbox/exec/${j}/stop`, undefined, WAIT_SID)
+    const spy = vi.mocked(daemonConnections.getDaemonConnection)
+    const real = spy.getMockImplementation()!
+    // Past its start: the call's own check of the grant answered (a dial before that is not the call's).
+    const firstCheck = grantGate.pinnedGrant
+    let past = false
+    const started = vi.spyOn(grantGate, 'pinnedGrant').mockImplementation(async (...a) => {
+      const id = await firstCheck(...a)
+      past = true
+      return id
+    })
+    let dialing = false
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    spy.mockImplementation(async (key, target) => {
+      if (key === 'macbox' && past) { dialing = true; await gate }
+      return real(key, target)
+    })
+    try {
+      const waiting = pinnedRun(grant, { command: 'echo should-not-run', job_id: 'hx-pin-wait-0003' }, WAIT_SID)
+      await until(async () => dialing, 'the dial to start')
+      await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true })
+      open()
+      const r = await waiting
+      expect(r).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
+      expect(r.body.error).toContain('while this call waited')
+      expect(ranJob('hx-pin-wait-0003')).toBe(false)
+    } finally {
+      open()
+      spy.mockImplementation(real)
+      started.mockRestore()
+      await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })
+    }
+    // Open again, the same grant runs.
+    expect(await pinnedRun(grant, { command: 'echo open' }, WAIT_SID)).toMatchObject({ status: 200, body: { output: 'open\n' } })
+  }, 90_000)
 })

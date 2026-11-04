@@ -364,7 +364,9 @@ REPLICA it means the companion relays the list; it does not promise that the
 primary behind it can list or launch asks (a primary that predates the list
 answers `400 session_control_needs_upgrade`). Whether New chat can launch an ask
 is the `launch` field of the `GET /api/v1/asks` answer, which the primary
-computes itself.
+computes itself. `"host-exec-pinned-v1"` (2026-11-04): this server serves
+`POST /api/v1/host-exec/grants/:grantId/exec`, a command run under one named grant
+(see "Commands on another host"); a REPLICA answers it `404 leader_only`.
 
 ### GET /api/v1/agents
 
@@ -1967,7 +1969,20 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   (the caller's own host: use its own shell), `404 unknown_host`, `400 bad_request`,
   `403 exec_grant_required { letterId }` (no grant yet: ONE letter asks the user, the session
   is told when they allow it), `403 exec_grant_denied`, `429 busy` (2 runs per task, 4 per
-  host), `409 daemon_upgrade`, `503 host_offline`, `400 cwd_missing`.
+  host), `409 daemon_upgrade`, `503 host_offline`, `400 cwd_missing`. The grant and the host's
+  hard stop are read again right before the run is sent: a revoke or a stop while the call
+  waited for a slot or the host answers `403 exec_grant_revoked` or `403 exec_host_closed`
+  with nothing run (also for `host_mcp`, `host_http`, `host_copy` and `host_daemon_update`).
+  A body with `grant_id` is refused (`400 bad_request`): a run under one grant has its own route.
+- `POST /api/v1/host-exec/grants/:grantId/exec { host, command | argv, cwd?, timeout_ms?,
+  background?, allow_prompts?, strict?, job_id? }` (op `host_exec_pinned`, additive,
+  2026-11-04; the server lists `host-exec-pinned-v1` in `GET /api/v1/status` `capabilities`,
+  and an older one answers `404`) → the same run and answer as `POST /hosts/:host/exec`, under
+  that grant only. Walnut makes no grant (not the own-host one either) and sends no letter. The
+  grant must be the calling task's, for `host`, and live, and the host open, when the call starts
+  and again right before the run is sent: `403 exec_grant_mismatch { grantId }` (not this task's
+  grant on that host), `403 exec_grant_revoked { grantId }` (revoked, also during the wait),
+  `403 exec_host_closed`, each with nothing run there; `400 bad_request` without `host`.
 - `GET /api/v1/hosts/:host/exec/:jobId?offset=&wait_ms=` → the job's output from `offset`
   (else its tail) with `nextOffset`, in whole lines; `wait_ms` (at most 60000, about 15000
   for a session on another host) waits for it to end. Only the task that started a job

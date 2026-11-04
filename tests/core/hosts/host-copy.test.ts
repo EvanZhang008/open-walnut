@@ -39,6 +39,7 @@ vi.mock('../../../src/core/hosts/host-exec.js', async (importOriginal) => {
       gate.asked.push({ host, preview })
       const r = gate.refuse.get(host)
       if (r) throw new real.HostExecError(`no grant for ${host}`, 403, r.code, r.letterId ? { letterId: r.letterId } : {})
+      grantsLater.afterGrant?.(host)
       return `g-${host}`
     },
     hostName: async (h: string) => h,
@@ -65,8 +66,12 @@ vi.mock('../../../src/core/hosts/host-profile.js', () => ({
 vi.mock('../../../src/core/hosts/host-readiness-store.js', () => ({ store: systems.preflight }))
 
 const revoked = vi.hoisted(() => new Set<string>())
+/** Hosts the user closed to tasks on other hosts, and what happens right after a grant is taken. */
+const grantsLater = vi.hoisted(() => ({ closed: new Set<string>(), afterGrant: null as null | ((host: string) => void) }))
 vi.mock('../../../src/core/hosts/exec-grants.js', () => ({
   findGrant: (taskId: string, host: string) => (revoked.has(host) ? undefined : { id: `g-${host}`, taskId, host }),
+  grantById: (id: string) => ({ id, taskId: 'task-1', host: id.slice(2), ...(revoked.has(id.slice(2)) ? { revokedAt: 1 } : {}) }),
+  isHostClosed: (host: string) => grantsLater.closed.has(host),
   noteRun: async () => {},
 }))
 
@@ -101,6 +106,8 @@ beforeEach(() => {
   gate.refuse.clear()
   gate.asked.length = 0
   revoked.clear()
+  grantsLater.closed.clear()
+  grantsLater.afterGrant = null
   systems.profiles.clear()
   systems.preflight.clear()
 })
@@ -423,28 +430,61 @@ describe('host_copy', () => {
     expect(await copyBetweenHosts({ from: '~/e.bin', to_host: 'macbox', to: '~/e.bin' }, SID)).toMatchObject({ running: false })
   })
 
-  it('a revoked grant stops the copy before its last part, and the revoked host is not touched again', async () => {
-    setHostCopyTuningForTest({ chunkBytes: 1024, grantCheckMs: 60_000 }) // only the check before the last part
+  it('a revoked grant stops the copy before its next part, and the revoked host is not touched again', async () => {
+    setHostCopyTuningForTest({ chunkBytes: 1024 })
     put('devbox', 'r.bin', crypto.randomBytes(10 * 1024))
     hosts.devbox!.knobs.afterRead = (_p, start) => { if (start === 2048) revoked.add('macbox') }
     const r = await refusal(copyBetweenHosts({ from: '~/r.bin', to_host: 'macbox', to: '~/r.bin' }, SID))
     expect(r).toMatchObject({ status: 403, code: 'exec_grant_revoked', data: { partialLeft: '~/r.bin.walnut-part' } })
-    // Nine parts went (the throttled check let them), the last never did.
-    expect(writes('macbox').length).toBe(9)
+    // Two parts went before the revoke; the part read right after it never left.
+    expect(writes('macbox').length).toBe(2)
     expect(writes('macbox').some((s) => s.params.final)).toBe(false)
     expect(hosts.macbox!.sent.some((s) => s.cmd === 'fs.rm')).toBe(false)
     expect(fs.existsSync(path.join(hosts.macbox!.home, 'r.bin'))).toBe(false)
   })
 
-  it('a revoked sender stops it at the next check, and the receiver\'s partial file goes', async () => {
-    setHostCopyTuningForTest({ chunkBytes: 1024, grantCheckMs: 0 })
+  it('a revoked sender stops it before its next part, and the receiver\'s partial file goes', async () => {
+    setHostCopyTuningForTest({ chunkBytes: 1024 })
     put('macbox', 'r.bin', crypto.randomBytes(10 * 1024))
     hosts.macbox!.knobs.afterRead = (_p, start) => { if (start === 2048) revoked.add('macbox') }
     const r = await refusal(copyBetweenHosts({ from_host: 'macbox', from: '~/r.bin', to: '~/r.bin' }, SID))
     expect(r).toMatchObject({ status: 403, code: 'exec_grant_revoked' })
     expect(r.data.partialLeft).toBeUndefined()
-    expect(writes('devbox').length).toBe(3)
+    expect(writes('devbox').length).toBe(2)
     expect(fs.existsSync(path.join(hosts.devbox!.home, 'r.bin.walnut-part'))).toBe(false)
+  })
+
+  it('a grant revoked after the call took it, while it sizes and plans, moves no byte', async () => {
+    put('devbox', 'r.bin', crypto.randomBytes(4 * 1024))
+    grantsLater.afterGrant = (host) => { if (host === 'macbox') revoked.add('macbox') }
+    const r = await refusal(copyBetweenHosts({ from: '~/r.bin', to_host: 'macbox', to: '~/r.bin' }, SID))
+    expect(r).toMatchObject({ status: 403, code: 'exec_grant_revoked' })
+    expect(r.data.partialLeft).toBeUndefined() // nothing was sent there, so nothing is left there
+    // Not even the probes that plan the target: the revoked host hears nothing more.
+    expect(hosts.macbox!.sent.map((s) => s.cmd)).toEqual([])
+    expect(fs.existsSync(path.join(hosts.macbox!.home, 'r.bin'))).toBe(false)
+  })
+
+  it('between two other hosts, a receiver refused along with the sender is not sent a cleanup', async () => {
+    setHostCopyTuningForTest({ chunkBytes: 1024 })
+    put('macbox', 'r.bin', crypto.randomBytes(10 * 1024))
+    // The user revokes both grants at once; the sender's refusal is the one the gate meets first.
+    hosts.macbox!.knobs.afterRead = (_p, start) => { if (start === 2048) { revoked.add('macbox'); revoked.add('linuxbox') } }
+    const r = await refusal(copyBetweenHosts({ from_host: 'macbox', from: '~/r.bin', to_host: 'linuxbox', to: '~/r.bin' }, SID))
+    expect(r).toMatchObject({ status: 403, code: 'exec_grant_revoked', data: { partialLeft: '~/r.bin.walnut-part' } })
+    expect(writes('linuxbox').length).toBe(2)
+    expect(hosts.linuxbox!.sent.some((s) => s.cmd === 'fs.rm')).toBe(false)
+  })
+
+  it('a host the user closes mid-copy stops it before its next part, and that host is not touched again', async () => {
+    setHostCopyTuningForTest({ chunkBytes: 1024 })
+    put('devbox', 'r.bin', crypto.randomBytes(10 * 1024))
+    hosts.devbox!.knobs.afterRead = (_p, start) => { if (start === 2048) grantsLater.closed.add('macbox') }
+    const r = await refusal(copyBetweenHosts({ from: '~/r.bin', to_host: 'macbox', to: '~/r.bin' }, SID))
+    expect(r).toMatchObject({ status: 403, code: 'exec_host_closed', data: { partialLeft: '~/r.bin.walnut-part' } })
+    expect(writes('macbox').length).toBe(2)
+    expect(hosts.macbox!.sent.some((s) => s.cmd === 'fs.rm')).toBe(false)
+    expect(fs.existsSync(path.join(hosts.macbox!.home, 'r.bin'))).toBe(false)
   })
 
   it('stops at its deadline', async () => {

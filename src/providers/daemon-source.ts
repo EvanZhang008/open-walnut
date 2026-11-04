@@ -1092,7 +1092,7 @@ function runWnMinimal(argv, stdinText) {
   var wnSpilledArgsFile;
   // Mirror of host-exec-run-id.ts: a host_exec or host_copy run's id is chosen here, so an
   // answer lost on the way back (hub_timeout) still leaves an id to read the run by.
-  var wnRunOps = { host_exec: { field: 'job_id', prefix: 'hx-' }, host_copy: { field: 'copy_id', prefix: 'hc-' } };
+  var wnRunOps = { host_exec: { field: 'job_id', prefix: 'hx-' }, host_exec_pinned: { field: 'job_id', prefix: 'hx-' }, host_copy: { field: 'copy_id', prefix: 'hc-' } };
   var wnRunId = null;
   var wnShellWord = function (t) { return "'" + t.replace(/'/g, "'\\\\''") + "'"; };
   var wnLostRun = function () {
@@ -1122,7 +1122,7 @@ function runWnMinimal(argv, stdinText) {
     var missed = local ? "this host's Walnut daemon" : 'the Walnut server';
     var short = local ? "this host's daemon" : 'the server';
     if (args.name === 'host_copy') errOut('walnut: host_copy did not reach ' + missed + ', so nothing was copied; call it again once ' + short + ' answers.');
-    else if (args.name === 'host_exec') errOut('walnut: host_exec did not reach ' + missed + ', so nothing ran on ' + host + '; call it again once ' + short + ' answers.');
+    else if (args.name === 'host_exec' || args.name === 'host_exec_pinned') errOut('walnut: ' + args.name + ' did not reach ' + missed + ', so nothing ran on ' + host + '; call it again once ' + short + ' answers.');
     else if (args.name === 'host_exec_read' || args.name === 'host_exec_stop' || args.name === 'host_exec_list') {
       errOut('walnut: a job host_exec already started on ' + host + " keeps running meanwhile, and its log stays in your task's directory there"
         + (typeof call.job_id === 'string' ? ' (host-exec/' + call.job_id + '.log)' : '') + '; read it once ' + short + ' answers.');

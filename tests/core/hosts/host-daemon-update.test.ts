@@ -10,10 +10,16 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-host-daem
 
 const gate = vi.hoisted(() => ({
   grant: null as null | { status: number; code: string },
+  /** The grant's state when it is read again after the dial: null = still live. */
+  recheck: null as null | { status: number; code: string },
+  rechecked: [] as Array<{ taskId: string; host: string; grantId: string }>,
   asked: [] as Array<{ host: string; preview: string | null }>,
   dialed: [] as string[],
   kind: 'net' as string,
   requests: 0,
+  /** The gate the update was handed, and what the grant reads like when the updater asks it later. */
+  handed: null as null | (() => void),
+  later: null as null | { status: number; code: string },
 }))
 
 vi.mock('../../../src/core/hosts/host-exec.js', async (importOriginal) => {
@@ -33,6 +39,12 @@ vi.mock('../../../src/core/hosts/host-exec-grant.js', () => ({
     return 'g-1'
   },
   isOwnHost: async () => true,
+  assertStillGranted: async (taskId: string, host: string, grantId: string) => {
+    gate.rechecked.push({ taskId, host, grantId })
+    if (gate.recheck) throw Object.assign(new Error('This task\'s grant was revoked while this call waited; nothing ran there.'), gate.recheck)
+    return grantId
+  },
+  grantRefusal: () => (gate.later ? Object.assign(new Error('This task\'s grant was revoked while this call waited; nothing ran there.'), gate.later) : null),
 }))
 vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: async () => ({ hosts: { 'studio-mac': { transport: 'net' }, devbox: {} } }) }))
 vi.mock('../../../src/core/hosts/link.js', () => ({
@@ -40,9 +52,10 @@ vi.mock('../../../src/core/hosts/link.js', () => ({
     gate.dialed.push(host)
     return {
       linkKind: gate.kind,
-      requestDaemonUpdate: () => {
+      requestDaemonUpdate: (g?: () => void) => {
         if (gate.kind !== 'net') return null
         gate.requests += 1
+        gate.handed = g ?? null
         return Promise.resolve({ phase: 'running', host, running: 'walnut-daemon-a', expected: 'walnut-daemon-b', message: 'uploading', at: 1 })
       },
     }
@@ -53,10 +66,14 @@ import { requestHostDaemonUpdate } from '../../../src/core/hosts/host-daemon-upd
 
 beforeEach(() => {
   gate.grant = null
+  gate.recheck = null
+  gate.rechecked = []
   gate.asked = []
   gate.dialed = []
   gate.kind = 'net'
   gate.requests = 0
+  gate.handed = null
+  gate.later = null
 })
 
 describe('host_daemon_update', () => {
@@ -64,6 +81,24 @@ describe('host_daemon_update', () => {
     expect(await requestHostDaemonUpdate('studio-mac', 's1')).toMatchObject({ host: 'studio-mac', phase: 'running', expected: 'walnut-daemon-b' })
     expect(gate.asked).toEqual([{ host: 'studio-mac', preview: expect.stringContaining('walnut daemon update') }])
     expect(gate.requests).toBe(1)
+    expect(gate.rechecked).toEqual([{ taskId: 'task-1', host: 'studio-mac', grantId: 'g-1' }])
+  })
+
+  it('the update is handed a gate that refuses once the grant is gone; the user\'s own ask has none', async () => {
+    await requestHostDaemonUpdate('studio-mac', 's1')
+    expect(gate.handed).toBeTypeOf('function')
+    expect(() => gate.handed!()).not.toThrow()
+    gate.later = { status: 403, code: 'exec_grant_revoked' }
+    expect(() => gate.handed!()).toThrow(/was revoked while this call waited/)
+    await requestHostDaemonUpdate('studio-mac', undefined)
+    expect(gate.handed).toBeNull()
+  })
+
+  it('a grant revoked while Walnut dials the host starts no update', async () => {
+    gate.recheck = { status: 403, code: 'exec_grant_revoked' }
+    await expect(requestHostDaemonUpdate('studio-mac', 's1')).rejects.toMatchObject({ code: 'exec_grant_revoked' })
+    expect(gate.dialed).toEqual(['studio-mac'])
+    expect(gate.requests).toBe(0)
   })
 
   it('a session without the grant asks the user and changes nothing', async () => {

@@ -11,7 +11,7 @@
  * handover take minutes); asking again tells how it went.
  */
 import { HostExecError, callerOf, hostName, targetHost } from './host-exec.js'
-import { grantFor } from './host-exec-grant.js'
+import { assertStillGranted, grantFor, grantRefusal } from './host-exec-grant.js'
 
 const LOCAL = '__local__'
 /** A session on another host reaches this through its gateway, which gives up at 20 s: dial plus decision stay under it. */
@@ -27,10 +27,11 @@ const OTHER_PATH: Record<string, string> = {
 
 export async function requestHostDaemonUpdate(raw: string, callerSid: string | undefined): Promise<Record<string, unknown>> {
   let host: string
+  let granted: { taskId: string; grantId: string } | null = null
   if (callerSid) {
     const caller = await callerOf(callerSid)
     host = await targetHost(raw, caller, 'ask from a session on another host, or the user asks from the Mac')
-    await grantFor(caller, host, `walnut daemon update (to this server's build) on ${host}`)
+    granted = { taskId: caller.taskId, grantId: await grantFor(caller, host, `walnut daemon update (to this server's build) on ${host}`) }
   } else {
     host = raw.trim() === 'local' ? LOCAL : raw.trim()
     if (host !== LOCAL) {
@@ -47,7 +48,17 @@ export async function requestHostDaemonUpdate(raw: string, callerSid: string | u
   ]).catch(async (err) => {
     throw new HostExecError(`Walnut cannot reach ${name} right now (${err instanceof Error ? err.message : String(err)}).`, 503, 'host_offline')
   }).finally(() => clearTimeout(timer))
-  const run = conn.requestDaemonUpdate()
+  // The dial took time: a revoke or the host's stop since the grant starts no update.
+  let gate: (() => void) | undefined
+  if (granted) {
+    await assertStillGranted(granted.taskId, host, granted.grantId)
+    // The update itself waits too (an automatic check in flight, the host's status, the upload):
+    // the updater reads this again before it starts, uploads and hands over.
+    const grants = await import('./exec-grants.js')
+    const { taskId, grantId } = granted
+    gate = () => { const no = grantRefusal(grants, taskId, host, grantId, false, name); if (no) throw no }
+  }
+  const run = conn.requestDaemonUpdate(gate)
   if (!run) {
     throw new HostExecError(`Nothing to ask for ${name}: ${OTHER_PATH[conn.linkKind] ?? 'its daemon is updated another way'}.`, 409, 'updates_itself', { kind: conn.linkKind })
   }

@@ -10,7 +10,7 @@
  * host a request gets about 12 s (its gateway gives up at 20 s).
  */
 import { log } from '../../logging/index.js'
-import { HostExecError, budgetLeft, callerOf, dial, grantFor, redact, targetHost } from './host-exec.js'
+import { HostExecError, assertStillGranted, budgetLeft, callerOf, dial, grantFor, redact, targetHost } from './host-exec.js'
 
 export const MAX_REQUESTS_PER_TASK = 4
 const DEFAULT_MS = 30_000
@@ -46,8 +46,11 @@ export async function httpOnHost(params: HttpParams, callerSid: string | undefin
   // Counted before the dial, so requests that arrive together cannot all pass the cap.
   running.set(caller.taskId, (running.get(caller.taskId) ?? 0) + 1)
   let reply: Record<string, unknown>
+  let used = grantId
   try {
     const conn = await dial(host, left - timeoutMs, 'host-http-v1', 'make web requests')
+    // The dial took time: a revoke or the host's stop since the grant sends nothing.
+    used = await assertStillGranted(caller.taskId, host, grantId)
     reply = await conn.send('http.request', {
       url: params.url, method, ...(params.headers ? { headers: params.headers } : {}),
       ...(typeof params.body === 'string' ? { body: params.body } : {}), ...(typeof params.body_base64 === 'string' ? { bodyBase64: params.body_base64 } : {}),
@@ -66,7 +69,7 @@ export async function httpOnHost(params: HttpParams, callerSid: string | undefin
     throw new HostExecError(typeof reply.error === 'string' ? reply.error.replace(/^http\.request failed: /, '') : 'the host could not make the request',
       code === 'bad_request' ? 400 : code === 'timeout' ? 504 : 502, code)
   }
-  void import('./exec-grants.js').then((g) => g.noteRun(grantId, preview))
+  void import('./exec-grants.js').then((g) => g.noteRun(used, preview))
   const headers = (reply.headers ?? {}) as Record<string, string>
   const headerText = await redact(Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n'))
   const safeHeaders: Record<string, string> = {}

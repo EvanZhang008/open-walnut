@@ -8,7 +8,10 @@
  *   - only a task's session asks (the user runs commands in their own terminal);
  *   - never on the caller's own host (that is its own Bash tool);
  *   - only under the user's grant for this task on this host (exec-grants.ts),
- *     asked for once by letter, kept until revoked;
+ *     asked for once by letter, kept until revoked; looked at again right before the run is
+ *     sent, so a revoke or the host's hard stop during the wait for a slot or the dial starts
+ *     nothing; a call naming its grant (`grant_id`) runs under that grant only, and never makes
+ *     a grant or asks the user;
  *   - at most 4 runs at once per task and 8 per host; a call at a cap waits a little for a
  *     slot (takeSlot) before it is refused, so a burst from parallel agents runs, queued;
  *   - a foreground run ends by 10 minutes (the host kills its process group), a
@@ -37,10 +40,10 @@ import type { RunShape } from './host-exec-legacy.js'
 import { redact } from './host-exec-redact.js'
 
 export { redact }
-import { grantFor, isOwnHost } from './host-exec-grant.js'
+import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
 
 // The user's grant for a task on a host (host-exec-grant.ts), for host_mcp and host_http too.
-export { grantFor, isOwnHost }
+export { assertStillGranted, grantFor, isOwnHost }
 
 export const MAX_RUNNING_PER_TASK = 4
 export const MAX_RUNNING_PER_HOST = 8
@@ -95,6 +98,13 @@ export interface ExecParams {
    * still leaves an id to read. The same id again answers that run, never a second one.
    */
   job_id?: string
+  /**
+   * Run only under this grant (an id from GET /api/v1/host-exec/grants): no other grant counts,
+   * none is made (not even a task on the user's own host gets one), and no letter asks the user.
+   * The grant must be this task's on this host and live, and the host open, at the start and
+   * again right before the run is sent; otherwise nothing runs (host-exec-grant.ts pinnedGrant).
+   */
+  grant_id?: string
 }
 
 export interface Caller { sid: string; taskId: string; taskTitle: string; host: string }
@@ -362,6 +372,9 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   if (hasCommand === hasArgv) throw new HostExecError('Give exactly one of command (a shell line) or argv (a program and its arguments)', 400, 'bad_request')
   const asked = typeof params.job_id === 'string' && params.job_id !== '' ? params.job_id : null
   if (asked !== null && !JOB_ID_RE.test(asked)) throw new HostExecError('job_id must be hx- and 4 to 64 letters, digits, - or _ (the walnut CLI picks one)', 400, 'bad_request')
+  // Any grant_id at all is the pinned mode: an empty or malformed one is refused, never read as none.
+  const pinned = params.grant_id !== undefined ? String(params.grant_id) : null
+  if (pinned !== null && !GRANT_ID_RE.test(pinned)) throw new HostExecError('grant_id must be a grant\'s id (xg-..., GET /api/v1/host-exec/grants lists them)', 400, 'bad_request')
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   const preview = hasCommand ? params.command! : params.argv!.join(' ')
@@ -369,7 +382,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const line = hasCommand ? params.command! : 'exec ' + params.argv!.map(shellQuote).join(' ')
   // Before the grant: a command it would refuse asks nothing of the user.
   await screenForPrompts(host, line, params.allow_prompts === true, params.cwd, caller.taskId)
-  const grantId = await grantFor(caller, host, preview)
+  const grantId = pinned !== null ? await pinnedGrant(caller, host, pinned) : await grantFor(caller, host, preview)
   const jobId = asked ?? `hx-${randomUUID()}`
   // The same call again (a retry after a lost answer): its run, never a second one.
   const known = running.get(jobId)
@@ -390,15 +403,24 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   let conn: Awaited<ReturnType<typeof dial>>
   let send: Record<string, unknown>
   let shape: RunShape | undefined
+  let before: (() => void) | undefined
+  // The grant the run counts on: a revoked one the user gave again while this call waited counts the new one.
+  let used = grantId
   try {
+    // Each wait (the slot, the dial) is followed by a look at the grant and the host's stop,
+    // before the time check, so a revoke answers as a revoke.
+    await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     conn = await dial(host, budgetLeft(caller, t0) - START_MIN_LEFT_MS)
+    await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     // Strict shapes the line here, after the dialog guards read the user's own text.
     const strict = params.strict === true && hasCommand
     const { strictLine } = await import('./host-exec-strict.js')
     const runParams = strict ? { ...params, command: strictLine(params.command!) } : params
-    ;({ send, known: shape } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line) : line))
+    ;({ send, known: shape, before } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line) : line))
+    // Last look before anything reaches the host: from here to the send nothing waits.
+    used = await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
   } catch (err) {
     release(jobId) // nothing was sent: the slot is free
     throw err
@@ -408,6 +430,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const noteRun = () => jobs.noteStarted({ jobId, taskId: caller.taskId, host, command: preview, startedAt: Date.now() })
   let reply: Record<string, unknown>
   try {
+    before?.() // an older daemon's task directory marker, then the run
     reply = await ask(conn, host, 'exec.run', {
       jobId, taskId: caller.taskId, ...send,
       ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -439,7 +462,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const entry = running.get(jobId)
   if (entry) entry.at = 0
   noteRun()
-  void import('./exec-grants.js').then((g) => g.noteRun(grantId, preview))
+  void import('./exec-grants.js').then((g) => g.noteRun(used, preview))
   let last = reply
   if (!background) {
     const until = Date.now() + holdBudget(caller, timeoutMs + KILL_GRACE_MS + 2_000, t0)

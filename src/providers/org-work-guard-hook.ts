@@ -69,7 +69,7 @@ function segkind(w, nw, piped,   j, x, b) {
   # Words past this command are an earlier command's: read none of them.
   for (x = nw + 1; x <= j + 3; x++) w[x] = ""
   if (b ~ /^(for|case|done|fi|esac|in|[{}]|select)$/) return "N"
-  if (b == "walnut") return (w[j + 1] == "tools" && w[j + 2] == "call" && w[j + 3] ~ /^(host_exec|host_mcp_call|host_http)$/) ? "X" : "W"
+  if (b == "walnut") return (w[j + 1] == "tools" && w[j + 2] == "call" && w[j + 3] ~ /^(host_exec|host_exec_pinned|host_mcp_call|host_http)$/) ? "X" : "W"
   if (b == "walnut-cloud") return w[j + 1] ~ /^(start|send)$/ ? "W" : "work"
   if (piped && b ~ /^(jq|head|tail|python3|python|sed|grep|egrep|sort|wc|cut|tr|cat|tee|awk|column|uniq|fold|fmt|nl)$/) return "F"
   if (b ~ /^(cd|cat|echo|printf|true|false|:|sleep|mkdir|export|set|unset|local|test|read|wait)$/ || b == "[") return "F"
@@ -133,7 +133,7 @@ function scan(s,   n, i, c, q, cur, w, nw, piped, pipew, anyw, work, r, hd, tab,
 function verdict(   tool, p, op) {
   tool = jstr(in_, "tool_name")
   if (tool ~ /^(ToolSearch|Skill|TodoWrite|TodoRead|TaskStop|TaskOutput|TaskCreate|TaskUpdate|TaskList|TaskGet|BashOutput|KillShell|KillBash|CronCreate|CronDelete|CronList|ScheduleWakeup|SendMessage|AskUserQuestion|EnterPlanMode|ExitPlanMode|ListMcpResourcesTool|ReadMcpResourceTool)$/) return "free"
-  if (tool ~ /^mcp__walnut__/) { op = substr(tool, 14); return op ~ /^(host_exec|host_mcp_call|host_http)$/ ? "count" : "free" }
+  if (tool ~ /^mcp__walnut__/) { op = substr(tool, 14); return op ~ /^(host_exec|host_exec_pinned|host_mcp_call|host_http)$/ ? "count" : "free" }
   if (tool == "Bash") return walnut_only(jstr(in_, "command")) ? "free" : "count"
   if (tool ~ /^(Read|Write|Edit|MultiEdit|NotebookEdit)$/) {
     p = jstr(in_, "file_path"); if (p == "") p = jstr(in_, "notebook_path")

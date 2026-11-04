@@ -233,6 +233,53 @@ describe('NetDaemonUpdater', () => {
     u.stop()
   })
 
+  // 2026-11-04: a task's request checked its grant once, before the dial; the update then waited
+  // for an automatic check, read the host, uploaded and handed over, and a revoke in between still
+  // replaced the daemon. The asker's gate is read before each step that changes the host.
+  describe('the asker\'s gate (host_daemon_update under a task\'s grant)', () => {
+    const revoked = () => { throw new Error('This task\'s grant to use studio-mac was revoked while this call waited; nothing ran there.') }
+
+    it('a gate that refuses when the run would start starts nothing', async () => {
+      const { u, update, conn } = updater({ autofixOff: async () => 'config' })
+      await expect(u.request(undefined, revoked)).rejects.toThrow(/was revoked while this call waited/)
+      expect(update).not.toHaveBeenCalled()
+      expect(conn.sends).toEqual([])
+      u.stop()
+    })
+
+    it('a gate that refuses while the host is read uploads nothing', async () => {
+      let allowed = true
+      const { u, update } = updater({ autofixOff: async () => 'config', target: async () => { allowed = false; return 'darwin-arm64' } })
+      const s = await u.request(undefined, () => { if (!allowed) revoked() })
+      expect(s).toMatchObject({ phase: 'skipped', skip: 'refused', message: expect.stringContaining('was revoked') })
+      expect(update).not.toHaveBeenCalled()
+      u.stop()
+    })
+
+    it('a gate that refuses after the upload holds the handover: the host keeps its daemon', async () => {
+      let allowed = true
+      const base = link()
+      const conn = link({
+        async send(cmd, params) {
+          if (cmd === 'fs.writePart') { base.sends.push(cmd); return { ok: true, done: true, sha256: params?.sha256 } }
+          return base.send(cmd, params)
+        },
+      })
+      const update = vi.fn(async (_src: unknown, _v: string, io: { serviceUpdate?: (o: { command: string; directory: string; executable: string }) => Promise<string> }) => {
+        allowed = false // the upload is on the host; the user revokes now
+        await io.serviceUpdate!({ command: 'walnut daemon update', directory: '/tmp/open-walnut-update.gate1', executable: '/x/walnut' })
+      })
+      const { u } = updater({ autofixOff: async () => 'config', update: update as never, io: { holdWaitMs: 10, sleep: () => new Promise((r) => setTimeout(r, 1)) } }, conn)
+      await u.request(undefined, () => { if (!allowed) revoked() })
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      expect(u.state.message).toContain('was revoked')
+      // The update script was written, the detached start never ran.
+      expect(base.sends).toContain('fs.writePart')
+      expect(base.lines.filter((l) => l.includes('update.sh'))).toEqual([])
+      u.stop()
+    })
+  })
+
   it('touches nothing on a host whose daemon is current, unmanaged, or from a test server', async () => {
     for (const over of [{ conn: link({ daemonVersion: NEW }) }, { conn: link({ daemonStartup: 'on-demand' }) }, { testServer: () => true }] as Array<Partial<NetUpdaterDeps> & { conn?: NetUpdateLink }>) {
       const { u, update } = updater(over, over.conn ?? link())
