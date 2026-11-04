@@ -16,6 +16,7 @@ import { resolveDaemonServiceScope } from './daemon-service-scope.js'
 import { readDaemonBootExecutable } from './daemon-service-boot-script.js'
 import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move.js'
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
+import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
 
 export interface DaemonServiceCliOptions {
   scope?: DaemonServiceScope
@@ -268,6 +269,15 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
   } finally { connection?.terminate() }
 }
 
+/**
+ * After an uninstall with no daemon left running: the stopped service daemon wrote the restart
+ * mark for a successor that is not coming, and every walnut call here would wait its 45 s for
+ * one (daemon-restart-mark.ts). A symlink in its place goes, never what it points at.
+ */
+export async function forgetRestartMark(runtimeDir: string): Promise<void> {
+  await fs.rm(path.join(runtimeDir, RESTART_MARK_NAME), { force: true }).catch(() => {})
+}
+
 async function runtimeDaemonAlive(runtimeDir: string): Promise<boolean> {
   const pid = Number((await fs.readFile(path.join(runtimeDir, 'daemon.pid'), 'utf8').catch(() => '')).trim())
   if (!Number.isSafeInteger(pid) || pid <= 1) return false
@@ -410,6 +420,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       if ((await fs.readFile(marker, 'utf8').catch(() => '')).includes('result=removed')) await fs.rm(marker, { force: true }).catch(() => {})
     }
     if (result.ok && action === 'uninstall' && !(await runtimeDaemonAlive(runtimeDir))) {
+      await forgetRestartMark(runtimeDir)
       await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
     }
     if (result.ok && action === 'uninstall') {

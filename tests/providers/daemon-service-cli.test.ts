@@ -9,7 +9,8 @@ const { run } = vi.hoisted(() => ({ run: vi.fn() }))
 // spawnSync (`id -P` on macOS under bun), so the isolated-home guard compares against the real entry.
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: run }))
 
-import { daemonReady, runDaemonServiceArgs, runDaemonServiceCli, runDaemonServiceCommand } from '../../src/providers/daemon-service-cli.js'
+import { daemonReady, forgetRestartMark, runDaemonServiceArgs, runDaemonServiceCli, runDaemonServiceCommand } from '../../src/providers/daemon-service-cli.js'
+import { RESTART_MARK_NAME } from '../../src/providers/daemon-restart-mark.js'
 import { EventEmitter } from 'node:events'
 
 describe('daemon service CLI mutation boundary', () => {
@@ -166,5 +167,38 @@ describe('daemon service readiness over loopback', () => {
   it('retries a stale response until the new process is ready', async () => {
     const runtime = await setup((attempt) => attempt === 1 ? { ...good(), instanceId: 'old-instance' } : good())
     expect(await daemonReady(runtime, process.execPath, 1500)).toBe(true)
+  })
+})
+
+describe('uninstall forgets the restart mark', () => {
+  // 2026-11-04: an uninstall left <daemon dir>/restarting, so every walnut call on that host
+  // waited 45 s for a daemon that was not coming.
+  it('removes the mark, and is quiet with none', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wn-forget-mark-'))
+    try {
+      await fs.writeFile(path.join(dir, RESTART_MARK_NAME), String(Math.floor(Date.now() / 1000)))
+      await forgetRestartMark(dir)
+      await expect(fs.stat(path.join(dir, RESTART_MARK_NAME))).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(forgetRestartMark(dir)).resolves.toBeUndefined()
+      await expect(forgetRestartMark(path.join(dir, 'no-such-dir'))).resolves.toBeUndefined()
+    } finally { await fs.rm(dir, { recursive: true, force: true }) }
+  })
+
+  it('a symlink in its place goes, never what it points at', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wn-forget-mark-'))
+    try {
+      const target = path.join(dir, 'keep.txt')
+      await fs.writeFile(target, 'keep')
+      await fs.symlink(target, path.join(dir, RESTART_MARK_NAME))
+      await forgetRestartMark(dir)
+      await expect(fs.lstat(path.join(dir, RESTART_MARK_NAME))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await fs.readFile(target, 'utf8')).toBe('keep')
+    } finally { await fs.rm(dir, { recursive: true, force: true }) }
+  })
+
+  it('the uninstall path calls it once no daemon is left running', async () => {
+    const src = await fs.readFile(path.join(__dirname, '../../src/providers/daemon-service-cli.ts'), 'utf8')
+    const branch = src.slice(src.indexOf("action === 'uninstall' && !(await runtimeDaemonAlive(runtimeDir))"))
+    expect(branch.slice(0, 300)).toContain('await forgetRestartMark(runtimeDir)')
   })
 })
