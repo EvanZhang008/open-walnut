@@ -49,7 +49,9 @@ test('the task row shows the branch, uncommitted files, +/- lines and the unpush
   const row = await taskRow(page)
   const pill = row.getByTestId('git-glance-pill')
   await expect(pill).toBeVisible({ timeout: 15_000 })
-  await expect(pill.locator('.git-glance-branch')).toHaveText(GIT_GLANCE_BRANCH)
+  // The row is narrow: the branch may be cut in the middle (its start and end kept); its full name is in the label.
+  await expect(pill.locator('.git-glance-branch')).toHaveText(/^feature.*lance$/)
+  expect(await pill.getAttribute('aria-label')).toContain(`Branch ${GIT_GLANCE_BRANCH}`)
   await expect(pill.getByTestId('git-glance-files')).toHaveText('2')
   // src/app.ts +3 -1, src/feature.ts (new) +3.
   await expect(pill.locator('.git-glance-add')).toHaveText('+6')
@@ -81,6 +83,11 @@ test('the Changed chip counts what its tab lists, and the tab shows the git stri
   await chip.click()
   await expect(diff).toBeHidden()
   await expect(chip.getByTestId('session-changed-count')).toHaveText('2')
+  // A column too narrow for the chip folds it into "...": the number comes along.
+  await panel.evaluate((el) => { el.style.width = '250px'; el.style.maxWidth = '250px'; el.style.flex = 'none' })
+  await expect(panel.locator('[data-header-id="changed"][data-hidden="true"]')).toHaveCount(1, { timeout: 10_000 })
+  await expect(panel.getByTestId('session-header-more-count')).toHaveText('2')
+  expect(await panel.getByTestId('session-header-more-btn').getAttribute('title')).toContain('Changed (2)')
 })
 
 test('an open Changed tab follows the session as it edits, with no Re-scan', async ({ page }) => {

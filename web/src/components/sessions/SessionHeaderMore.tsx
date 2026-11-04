@@ -91,6 +91,8 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  // Changed folded in here keeps its number on the "···" chip (what the session changed, at a glance).
+  const changed = useItemState(rowRef, 'changed');
   const placement = useMenuPlacement(open, buttonRef, menuRef, {
     align: 'left', preferSide: 'down', minHeight: 100, onAnchorLost: () => setOpen(false),
   });
@@ -140,6 +142,8 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
   }
   const views = ids.filter((id) => TOOL_ITEMS[id]?.kind !== 'window');
   const windows = ids.filter((id) => TOOL_ITEMS[id]?.kind === 'window');
+  const changedCount = ids.includes('changed') && /^\d/.test(changed.value) ? changed.value : null;
+  const label = (id: string) => (id === 'changed' && changedCount ? `${nameOf(rowRef.current, id)} (${changedCount})` : nameOf(rowRef.current, id));
   return (
     <>
       <button
@@ -152,9 +156,10 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`More (${ids.length})`}
-        title={`More: ${ids.map((id) => nameOf(rowRef.current, id)).join(', ')}`}
+        title={`More: ${ids.map(label).join(', ')}`}
       >
         <span aria-hidden="true">···</span>
+        {changedCount && <span className="session-chip-count" aria-hidden="true" data-testid="session-header-more-count">{changedCount}</span>}
       </button>
       {open && createPortal(
         <div
