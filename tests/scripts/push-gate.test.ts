@@ -15,10 +15,14 @@ const ROOT = path.resolve(__dirname, '../..')
 const GATE = path.join(ROOT, 'scripts/push-gate.sh')
 const ZERO = '0'.repeat(40)
 const dirs: string[] = []
+let verdictDirs = 0
 
-/** The env every git and gate call gets: no global config, and none of a hook's GIT_DIR and friends. */
+/** The env every git and gate call gets: no global config, none of a hook's GIT_DIR and friends,
+ *  and a verdict store of its own (a case that shares one passes it in `extra`). */
 function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+  const verdicts = path.join(os.tmpdir(), `push-gate-verdicts-${process.pid}-${verdictDirs++}`)
+  dirs.push(verdicts)
+  const e: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', WALNUT_PUSH_GATE_VERDICTS: verdicts }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'WALNUT_PUSH_GATE']) delete e[k]
   return Object.assign(e, extra)
 }
@@ -287,12 +291,51 @@ esac
     expect(fs.readFileSync(g.seen, 'utf8')).not.toContain('refs/heads/gate')
   })
 
-  it('runs the gate for one commit with --run, outside a push', () => {
+  it('runs the gate for a commit\'s files with --run: one new commit on GitHub\'s main, never the commit\'s own history', () => {
     const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
-    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const ghMain = git(g.r, 'rev-parse', 'HEAD')
+    commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const tip = commit(g.r, { 'b.txt': '2\n' }, 'two')
     const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(g.env) })
     expect(out.status, out.stdout + out.stderr).toBe(0)
     expect(out.stdout).toMatch(/Test gate passed\./)
+    const gated = fs.readFileSync(g.seen, 'utf8').match(/commits\/([0-9a-f]{40})\/statuses/)![1]
+    expect(gated).not.toBe(tip)
+    expect(git(g.r, 'rev-parse', `${gated}^`)).toBe(ghMain)
+    expect(git(g.r, 'rev-parse', `${gated}^{tree}`)).toBe(git(g.r, 'rev-parse', `${tip}^{tree}`))
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/heads/gate/${gated.slice(0, 12)}`)
+  })
+
+  it('passes the same files pushed as another commit at once, from the verdict --run kept', () => {
+    const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const verdicts = path.join(path.dirname(g.r), 'verdicts')
+    const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+    const run = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts }) })
+    expect(run.status, run.stdout + run.stderr).toBe(0)
+    git(g.r, 'commit', '-q', '--amend', '-m', 'the same files, replayed')
+    const replay = git(g.r, 'rev-parse', 'HEAD')
+    fs.rmSync(g.seen)
+    const out = spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(replay, g.base), encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts }) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).toMatch(/Test gate passed on these files \(https:\/\/github\.com\/acme\/demo\/actions\/runs\/77\)/)
+    expect(fs.existsSync(g.seen)).toBe(false)
+    // Other files are judged again.
+    const other = commit(g.r, { 'c.txt': '3\n' }, 'three')
+    const again = spawnSync('bash', [GATE, 'origin', URL], { cwd: g.r, input: line(other, g.base), encoding: 'utf8', env: cleanEnv({ ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts }) })
+    expect(again.status, again.stdout + again.stderr).toBe(0)
+    expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/heads/gate/')
+  })
+
+  it('judges nothing with --run when GitHub\'s main already has the files', () => {
+    const g = ghRepo({})
+    const tip = git(g.r, 'rev-parse', 'HEAD')
+    git(g.r, 'push', '-q', URL, 'main:main')
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(g.env) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    expect(out.stdout).toMatch(/already has these files/)
+    expect(fs.existsSync(g.seen)).toBe(false)
   })
 
   it('judges no push to a remote that is not on GitHub, and never prints a token in a URL', () => {

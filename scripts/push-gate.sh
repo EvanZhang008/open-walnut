@@ -39,7 +39,10 @@
 #
 #   push-gate.sh --specs <base> <target>   only print the browser specs <target> touches since
 #                                          <base> (the workflow's browser job uses it)
-#   push-gate.sh --run <remote URL> <commit>   run the GitHub gate for a commit outside a push
+#   push-gate.sh --run <remote URL> <commit>   run the GitHub gate for a commit's files outside a
+#                                              push (as one commit on GitHub's main)
+# A pass is kept by the files it judged (WALNUT_PUSH_GATE_VERDICTS, default
+# ~/.cache/walnut-push-gate/<tree>, 14 days), so the same files pushed as another commit pass.
 set -uo pipefail
 MAX_SPECS=${WALNUT_PUSH_GATE_MAX_SPECS:-30}
 B=tests/e2e/browser
@@ -81,13 +84,22 @@ if [ "${1:-}" = --specs ]; then
   exit 0
 fi
 
-# `--run <remote URL> <commit>`: the GitHub gate for one commit, outside a push. walnut-cloud runs
-# it before it takes its push lock, so the push's own hook finds the verdict and passes at once,
-# and no push waits behind another's 25 minutes of tests.
+# `--run <remote URL> <commit>`: the GitHub gate for one commit's files, outside a push.
+# walnut-cloud runs it before it takes its push lock, so no push waits behind another's 25 minutes
+# of tests. What it pushes to GitHub is the commit's files as ONE new commit on GitHub's main:
+# the Mac's main and GitHub's carry the same files under other commits (walnut-cloud replays
+# them), so the commit itself would put hundreds of commits GitHub never had on a public branch,
+# and its verdict would name a commit the push never sends. The verdict is kept by files (the
+# tree, below), so the push's own hook passes the commit it sends at once.
 if [ "${1:-}" = --run ]; then
   remote_url=${2:-}
   t=$(git rev-parse -q --verify "${3:-}^{commit}") || { echo "push-gate --run: no commit ${3:-}" >&2; exit 2; }
-  b=$(git rev-parse -q --verify refs/remotes/origin/main || echo 0000000000000000000000000000000000000000)
+  b=$(git ls-remote "$remote_url" refs/heads/main 2>/dev/null | cut -f1)
+  [ -n "$b" ] || { echo "push-gate --run: could not read main from $remote_url" >&2; exit 1; }
+  git cat-file -e "$b^{commit}" 2>/dev/null || git fetch -q "$remote_url" main 2>/dev/null || { echo "push-gate --run: could not fetch main from $remote_url" >&2; exit 1; }
+  if [ "$(git rev-parse "$b^{tree}")" = "$(git rev-parse "$t^{tree}")" ]; then echo "Test gate: GitHub's main already has these files; nothing to judge."; exit 0; fi
+  t=$(git commit-tree "$t^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$t")") \
+    || { echo "push-gate --run: could not write the gate commit" >&2; exit 1; }
   refs="refs/heads/main $t refs/heads/main $b"
   # The gate branch is public: what it carries is scanned first, as the pre-push hook scans before
   # its gate (the private scanner walnut.prepushScanner names, where one is set).
@@ -112,6 +124,17 @@ done <<< "$refs"
 [ -n "$target" ] || exit 0
 
 refuse() { echo ""; echo "Push blocked: $*"; echo "Skip once, with a reason in the task: WALNUT_PUSH_GATE=0 git push …"; exit 1; }
+
+# Passing verdicts, kept by the files they judged (the commit's tree) on this machine: the same
+# files pushed as another commit (a replay, a join) pass at once. Written only after GitHub's
+# runners said success.
+verdicts=${WALNUT_PUSH_GATE_VERDICTS:-${XDG_CACHE_HOME:-$HOME/.cache}/walnut-push-gate}
+tree=$(git rev-parse "$target^{tree}")
+if [ -f "$verdicts/$tree" ]; then echo "✓ Test gate passed on these files ($(head -1 "$verdicts/$tree"))."; exit 0; fi
+passed_files() { # the run URL
+  mkdir -p "$verdicts" && printf '%s\n' "$1" > "$verdicts/$tree"
+  find "$verdicts" -type f -mtime +14 -delete 2>/dev/null || true
+}
 
 # The commits this push carries. GitHub's main may be missing here (a new branch, a clone
 # that never fetched it): then only the tip is named and no browser spec is picked.
@@ -145,7 +168,7 @@ if [ -z "$runner" ]; then
   # newest walnut/push-gate status, when it reads success.
   passed=$(gh api "repos/$repo/commits/$target/statuses?per_page=100" 2>"$errf" \
     | jq -r '[.[] | select(.context == "walnut/push-gate")][0] | select(.state == "success") | .target_url // empty' 2>/dev/null)
-  if [ -n "$passed" ]; then echo "✓ Test gate passed on $short ($passed)."; rm -f "$errf"; exit 0; fi
+  if [ -n "$passed" ]; then echo "✓ Test gate passed on $short ($passed)."; passed_files "$passed"; rm -f "$errf"; exit 0; fi
 
   branch=gate/$(git rev-parse --short=12 "$target")
   # The run this push starts (2 minutes of slack for the runners' clock against this one).
@@ -175,7 +198,7 @@ if [ -z "$runner" ]; then
     sleep "${WALNUT_PUSH_GATE_POLL:-30}"
   done
   printf '%s' "$statuses" | jq -r '.[] | select(.context != "walnut/push-gate") | "  \(.state)  \(.context | sub("^walnut/push-gate "; ""))  \(.description // "")"'
-  [ "$state" = success ] && { echo "✓ Test gate passed."; exit 0; }
+  [ "$state" = success ] && { echo "✓ Test gate passed."; passed_files "https://github.com/$repo/actions/runs/$run"; exit 0; }
   [ "$state" != pending ] || blocked "the test gate did not answer within $mins minutes, so nothing was judged ($branch${run:+, run $run})."
   # The failing tests, from each failed tier's job log.
   for tier in $(printf '%s' "$statuses" | jq -r '.[] | select(.state != "success" and .context != "walnut/push-gate") | .context | sub("^walnut/push-gate \\("; "") | sub("\\)$"; "") | gsub(" "; "_")'); do
