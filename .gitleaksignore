@@ -1,0 +1,3 @@
+# Findings checked by hand and known not to be secrets (commit:path:rule:line).
+# "not a key" in base64, a made-up value in a passkey test; the test now builds it at runtime.
+1cc36d94f6df1dde899fc858d7e91a8e32bd7c8f:tests/core/vault/passkey.test.ts:generic-api-key:132
