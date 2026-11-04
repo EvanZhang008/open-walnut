@@ -140,6 +140,10 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
 
   if (status.connected) {
     const who = `${status.email ? ` as ${status.email}` : ''}`
+    const clientId = dest.client_id?.trim()
+    const ownClientNote = status.client === 'custom'
+      ? ` Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
+      : ''
     if (confirmingDisconnect) {
       return (
         <SettingsRow
@@ -163,8 +167,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
       <SettingsRow
         label="Google account"
         help={inUse
-          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.${status.client === 'custom' ? ' Uses your own Google client: a new computer needs the same ID and secret.' : ''}`
-          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
+          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.${ownClientNote}`
+          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.${ownClientNote}`}
         error={error ?? undefined}
         data-testid="backup-gdrive-connected"
         control={
@@ -178,7 +182,11 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   }
 
   const needsOwnClient = !status.builtinClient
-  const hasOwnClient = Boolean(dest.client_id?.trim())
+  const hasId = Boolean(dest.client_id?.trim())
+  const hasSecret = Boolean(dest.client_secret?.trim())
+  // Google's token exchange for a desktop client needs both: never send the user to Google with half of one.
+  const hasOwnClient = hasId && hasSecret
+  const halfClient = hasId !== hasSecret
   const clientRows = (
     <>
       <SettingsRow label="Client ID" htmlFor="backup-gdrive-client-id" control={
@@ -218,18 +226,26 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         label="Google account"
         help={waiting
           ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl && <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>}</>
-          : needsOwnClient && !hasOwnClient
-            ? 'First add a Google client above (once, about 5 minutes).'
-            : 'Sign in with Google and allow Walnut to make its own backup folder.'}
+          : halfClient
+            ? `Add the client ${hasId ? 'secret' : 'ID'} too: Google needs both.`
+            : needsOwnClient && !hasOwnClient
+              ? 'First add a Google client above (once, about 5 minutes).'
+              : 'Sign in with Google and allow Walnut to make its own backup folder.'}
         error={error ?? undefined}
         data-testid="backup-gdrive-row"
-        control={
-          <SettingsButton variant={waiting ? undefined : 'primary'} onClick={connect} busy={busy || waiting} busyLabel={waiting ? 'Waiting for Google...' : 'Opening...'}
-            disabled={needsOwnClient && !hasOwnClient}
+        control={waiting ? (
+          // A closed Google page must not leave the row stuck: Cancel, then Connect starts again with the values shown.
+          <span className="settings-inline-pair">
+            <SettingsButton busy busyLabel="Waiting for Google..." data-testid="backup-gdrive-connect">Connect Google Drive</SettingsButton>
+            <SettingsButton onClick={() => { setWaiting(false); setAuthUrl(null) }} data-testid="backup-gdrive-cancel">Cancel</SettingsButton>
+          </span>
+        ) : (
+          <SettingsButton variant="primary" onClick={connect} busy={busy} busyLabel="Opening..."
+            disabled={(needsOwnClient && !hasOwnClient) || halfClient}
             data-testid="backup-gdrive-connect">
             Connect Google Drive
           </SettingsButton>
-        }
+        )}
       />
       {waiting && (
         <SettingsRow

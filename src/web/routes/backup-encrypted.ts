@@ -143,6 +143,18 @@ function defaultRestoreDir(): string {
   return path.join(path.dirname(path.resolve(WALNUT_HOME)), `open-walnut-restored-${ts}`);
 }
 
+/**
+ * The default folder the pane showed (it names it when the list opens, so the
+ * folder restored into is the one the user read). Only a name of the default's
+ * own shape beside the data folder: anything else is a folder of the user's choice.
+ */
+function suggestedRestoreDir(v: unknown): string | null {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  const p = path.resolve(v.trim());
+  const beside = path.dirname(p) === path.dirname(path.resolve(WALNUT_HOME));
+  return beside && /^open-walnut-restored-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/.test(path.basename(p)) ? p : null;
+}
+
 /** The real path of `p`: its nearest existing ancestor resolved through symlinks, the rest appended. */
 async function realTarget(p: string): Promise<string> {
   const rest: string[] = [];
@@ -180,7 +192,7 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   if ((custom || typedKey || customTarget) && !personOnly(req, res, 'A restore from another destination or key, or into a folder of your choice, is started')) return;
   const targetDir = typeof req.body?.targetDir === 'string' && req.body.targetDir.trim()
     ? req.body.targetDir.trim().replace(/^~(?=\/|$)/, os.homedir())
-    : defaultRestoreDir();
+    : suggestedRestoreDir(req.body?.suggestedDir) ?? defaultRestoreDir();
   const bad = await badTarget(targetDir);
   if (bad) return void res.status(400).json({ error: bad });
   // Said at once, beside the folder field, not later as a failed restore.
@@ -201,7 +213,8 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   const mirror = engineOf(cfg) === 'mirror' && !dest;
   if (!mirror && !dest) return void res.status(400).json({ error: 'Choose where backups go first.' });
 
-  const status: RestoreStatus = { running: true, snapshotId, targetDir };
+  const source = mirror ? 'Amazon S3 (older copy)' : ({ r2: 'Cloudflare R2', gdrive: 'Google Drive', s3: 'Amazon S3' } as const)[dest!.type];
+  const status: RestoreStatus = { running: true, snapshotId, targetDir, source };
   const job = runBackupJob('restore', async () => {
     setRestore(status);
     try {

@@ -53,6 +53,7 @@ interface BackupStatus {
   dataDir?: string
   machineName?: string
   pendingSwitch?: { restored: string; aside: string } | null
+  canRestart?: boolean
   switchError?: string | null
   notice?: string
   lastBackupAt?: string
@@ -105,6 +106,17 @@ const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationC
   }
 }
 
+const TAB_KEY = 'walnut.backup.tab'
+const readTab = (): BackupDestinationType | null => {
+  try {
+    const t = sessionStorage.getItem(TAB_KEY)
+    return DESTINATIONS.some((d) => d.value === t) ? t as BackupDestinationType : null
+  } catch { return null }
+}
+const writeTab = (t: BackupDestinationType): void => {
+  try { sessionStorage.setItem(TAB_KEY, t) } catch { /* private mode: not kept */ }
+}
+
 const legacyOf = (b: BackupConfig): LegacyFields => ({ bucket: b.bucket, region: b.region, prefix: b.prefix, auth: b.auth })
 /** A new, empty folder in the same bucket for backups that start over with a new key. */
 const startOverPrefix = (d: BackupDestinationConfig): string =>
@@ -123,7 +135,8 @@ export function BackupSection({ config, onSave }: Props) {
   const intervalToSave = intervalOk ? Number(intervalHours) : (saved.interval_hours ?? 24)
   const [legacyMode, setLegacyMode] = useState(savedEngine === 'mirror')
   const [legacy, setLegacy] = useState<LegacyFields>(legacyOf(saved))
-  const [type, setType] = useState<BackupDestinationType>(savedDest?.type ?? 'r2')
+  // The tab looked at stays across a reload of this window (a Google sign-in finishing, say).
+  const [type, setType] = useState<BackupDestinationType>(() => readTab() ?? savedDest?.type ?? 'r2')
   const [drafts, setDrafts] = useState<Drafts>(() => emptyDrafts(savedDest, saved.other_destinations))
   const [profiles, setProfiles] = useState<string[]>([])
   const [status, setStatus] = useState<BackupStatus | null>(null)
@@ -173,7 +186,7 @@ export function BackupSection({ config, onSave }: Props) {
   useEvent('backup:status', useCallback((data: unknown) => {
     setStatus((prev) => ({
       primary: prev?.primary, dataDir: prev?.dataDir, machineName: prev?.machineName,
-      pendingSwitch: prev?.pendingSwitch, switchError: prev?.switchError, ...(data as BackupStatus),
+      pendingSwitch: prev?.pendingSwitch, switchError: prev?.switchError, canRestart: prev?.canRestart, ...(data as BackupStatus),
     }))
   }, []))
 
@@ -264,6 +277,7 @@ export function BackupSection({ config, onSave }: Props) {
   }
   const pickType = (t: BackupDestinationType) => {
     setType(t)
+    writeTab(t)
     setEditing(!!keptOf(t) && !!readTyped()[t])
     setTestResult(null)
   }
@@ -303,7 +317,7 @@ export function BackupSection({ config, onSave }: Props) {
   const [runStarting, setRunStarting] = useState(false)
   // The saved bucket's fields, folded to one line until "Edit" (open again after a reload with edits not saved).
   const [editing, setEditing] = useState(() => {
-    const t = savedDest?.type ?? 'r2'
+    const t = readTab() ?? savedDest?.type ?? 'r2'
     return !!readTyped()[t] && (savedDest?.type === t || (saved.other_destinations ?? []).some((o) => o.type === t))
   })
   const handleRunNow = async () => {
@@ -352,7 +366,7 @@ export function BackupSection({ config, onSave }: Props) {
 
   const switchToEncrypted = () => {
     setDrafts((cur) => ({ ...cur, s3: legacyToEncrypted(saved) }))
-    setType('s3')
+    setType('s3'); writeTab('s3')
     setLegacyMode(false)
     setTestResult(null)
   }
@@ -417,7 +431,8 @@ export function BackupSection({ config, onSave }: Props) {
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null
   const lastHelp = status?.notice
-    ?? (runBlocked && !status?.running && !status?.lastBackupAt ? `No backup yet. ${runBlocked}`
+    // The first row of the group says why nothing can run yet; this one does not repeat it.
+    ?? (runBlocked && !status?.running && !status?.lastBackupAt ? (blocked ? 'No backup yet.' : `No backup yet. ${runBlocked}`)
       : inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
   const serviceHelp = !inUse
     ? 'Pick one, then connect it.'
@@ -460,7 +475,11 @@ export function BackupSection({ config, onSave }: Props) {
                   aria-label="Backup service"
                   value={type}
                   onChange={pickType}
-                  options={DESTINATIONS.map((d) => ({ value: d.value, label: d.label, testId: `backup-service-${d.value}` }))}
+                  options={DESTINATIONS.map((d) => ({
+                    value: d.value, label: d.label, testId: `backup-service-${d.value}`,
+                    // The service backups go to now carries a mark, whichever tab is open.
+                    ...(savedDest?.type === d.value && !legacyMode ? { className: 'backup-service-in-use', title: 'In use: backups go here' } : {}),
+                  }))}
                 />
               }
             />
@@ -579,7 +598,9 @@ export function BackupSection({ config, onSave }: Props) {
           data-testid="backup-interval-row"
           disabled={!enabled}
           control={
-            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} disabled={!enabled} />
+            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} disabled={!enabled}
+              // A value never saved does not stay on screen: leaving the field shows the one in use again.
+              onBlur={() => { if (!intervalOk) setIntervalHours(saved.interval_hours ?? 24) }} />
           }
         />
         {otherWriter && (
@@ -616,6 +637,7 @@ export function BackupSection({ config, onSave }: Props) {
           pendingSwitch={status?.pendingSwitch}
           switchError={status?.switchError}
           onSwitchChanged={loadStatus}
+          canRestart={status?.canRestart}
         />
       </SettingsGroup>
     </SectionCard>

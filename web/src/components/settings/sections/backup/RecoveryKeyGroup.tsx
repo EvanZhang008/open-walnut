@@ -189,7 +189,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
       ) : key ? (
         <>
           <SettingsRow
-            label="Recovery key"
+            label="Your key"
             help={accepted ?? (savedAt ? 'Opens your backups. You saved a copy; keep it off this computer.' : 'Opens your backups.')}
             error={error ?? undefined}
             data-testid="backup-key-row"

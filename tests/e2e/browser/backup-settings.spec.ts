@@ -183,11 +183,20 @@ test.describe('Backup settings', () => {
     const connect = section.getByTestId('backup-gdrive-connect')
     await expect(connect).toBeDisabled()
     await section.locator('#backup-gdrive-client-id').fill('1234-abc.apps.googleusercontent.com')
+    // Half a client never goes to Google: its token exchange needs the secret too.
+    await expect(connect).toBeDisabled()
+    await expect(section.getByTestId('backup-gdrive-row')).toContainText('Add the client secret too')
     await section.locator('#backup-gdrive-client-secret').fill('client-secret-example')
     await expect(connect).toBeEnabled()
     await connect.click()
     await expect.poll(() => connectBody).toMatchObject({ client_id: '1234-abc.apps.googleusercontent.com' })
     await expect(section.getByTestId('backup-gdrive-open-link')).toBeVisible()
+    // A closed Google page: Cancel frees the row, and Connect starts again.
+    await section.getByTestId('backup-gdrive-cancel').click()
+    await expect(connect).toBeEnabled()
+    connectBody = null
+    await connect.click()
+    await expect.poll(() => connectBody).toMatchObject({ client_id: '1234-abc.apps.googleusercontent.com' })
     await section.locator('#backup-gdrive-paste').fill('http://127.0.0.1:5555/?state=s&code=c')
     await section.getByTestId('backup-gdrive-finish').click()
     await expect(section.getByTestId('backup-gdrive-connected')).toContainText('someone@example.com')
@@ -206,7 +215,16 @@ test.describe('Backup settings', () => {
     await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: false, email: null, folderName: null, pending: false })
     const section = await openBackup(page)
     await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
+    // The service in use is marked, whichever tab is open.
+    await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
+    await expect(section.getByTestId('backup-service-gdrive')).not.toHaveClass(/backup-service-in-use/)
+    // A value out of range is said, never saved, and leaving the field shows the one in use.
+    await section.locator('#backup-interval').fill('0')
+    await expect(section.getByRole('alert')).toContainText('whole number of hours')
+    await section.locator('#backup-interval').blur()
+    await expect(section.locator('#backup-interval')).toHaveValue('24')
     await section.getByTestId('backup-service-gdrive').click()
+    await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
     await expect(section.getByTestId('backup-gdrive-connect')).toBeEnabled()
     await expect(section.getByTestId('backup-gdrive-own-client')).toBeVisible()

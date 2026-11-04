@@ -132,6 +132,8 @@ describe('encrypted backups through the routes', () => {
     expect((await call('POST', '/restore', { snapshotId: list.body.snapshots[0].id, targetDir: target })).status).toBe(202);
     await until(() => scheduler.health.restore?.running === false && !!scheduler.health.restore.finishedAt);
     expect(scheduler.health.restore?.error).toBeUndefined();
+    // The result says where it came from (the pane may show another service by then).
+    expect(scheduler.health.restore?.source).toBe('Cloudflare R2');
     expect(await sameFile(target, 'notes/trips/kyoto.md')).toBe(true);
     expect(await sameFile(target, 'auth.json')).toBe(true);
     // The recovery key rides inside the (encrypted) backup, so the restored home can keep backing up.
@@ -272,6 +274,20 @@ describe('encrypted backups through the routes', () => {
     await until(() => scheduler.health.restore?.running === false && scheduler.health.restore.targetDir === target);
     expect(scheduler.health.restore?.error).toBeUndefined();
     expect(await sameFile(target, 'notes/trips/kyoto.md')).toBe(true);
+
+    // An empty folder field restores into the folder the pane showed, when it has the default's shape beside the data.
+    const beside = path.dirname(path.resolve(WALNUT_HOME));
+    const shown = path.join(beside, 'open-walnut-restored-2026-11-04T10-00-00');
+    expect((await call('POST', '/restore', { snapshotId: 'latest', suggestedDir: shown })).status).toBe(202);
+    await until(() => scheduler.health.restore?.running === false && scheduler.health.restore.targetDir === shown);
+    expect(await sameFile(shown, 'notes/trips/kyoto.md')).toBe(true);
+    // Any other folder named that way is not taken from it: the default name is used instead.
+    expect((await call('POST', '/restore', { snapshotId: 'latest', suggestedDir: path.join(WALNUT_HOME, 'open-walnut-restored-2026-11-04T10-00-01') })).status).toBe(202);
+    await until(() => scheduler.health.restore?.running === false && scheduler.health.restore.targetDir !== shown);
+    expect(path.dirname(scheduler.health.restore!.targetDir!)).toBe(beside);
+    expect(path.basename(scheduler.health.restore!.targetDir!)).not.toBe('open-walnut-restored-2026-11-04T10-00-01');
+    // A server nobody supervises cannot restart itself: the pane says "next start".
+    expect((await call('GET', '/status')).body).toMatchObject({ canRestart: false });
 
     const d = await call('POST', '/gdrive/disconnect', {});
     expect(d.body).toMatchObject({ ok: true });

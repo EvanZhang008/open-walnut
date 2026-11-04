@@ -67,3 +67,17 @@
 .backup-restore-commands { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere;
   font-family: var(--font-mono); font-size: 12px; background: var(--bg-secondary); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
 .backup-restore-target-full { margin: 0; padding-top: 0; color: var(--fg-muted); font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* The service backups go to now: a small dot before its name in the Service control. */
+.backup-service-in-use .settings-segment-label::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--success, #34c759);
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}

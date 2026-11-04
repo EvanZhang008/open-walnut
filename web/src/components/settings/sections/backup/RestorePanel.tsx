@@ -19,6 +19,7 @@ export interface RestoreStatus {
   running: boolean
   snapshotId?: string
   targetDir?: string
+  source?: string
   doneBytes?: number
   totalBytes?: number
   doneFiles?: number
@@ -55,6 +56,8 @@ interface Props {
   switchError?: string | null
   /** The switch was asked for or dropped: read the status again. */
   onSwitchChanged?: () => void
+  /** Walnut can restart by itself into the restored data (else the user quits and opens it). */
+  canRestart?: boolean
 }
 
 /** When a backup was made; to the second when another one shares its minute. */
@@ -63,7 +66,7 @@ const whenOf = (iso: string, seconds = false): string =>
     weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
   })
 
-export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, onSwitchChanged }: Props) {
+export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, onSwitchChanged, canRestart }: Props) {
   const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
   const [from, setFrom] = useState(0)
   const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
@@ -71,6 +74,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const [loading, setLoading] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
   const [target, setTarget] = useState('')
+  // The new folder an empty field means, named when the list opens: the restore goes exactly there.
+  const [suggested, setSuggested] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // A refused start (a folder that is not empty) belongs to the folder row, and goes once it is edited.
   const [startError, setStartError] = useState<string | null>(null)
@@ -118,6 +123,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', at ? { destination: at } : {}, { timeoutMs: 60000 })
       setItems(r.snapshots)
       setPicked(r.snapshots[0]?.id ?? null)
+      setSuggested(dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}` : null)
     } catch (err) {
       setError(saveErrorMessage(err))
     } finally {
@@ -130,7 +136,11 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     setStarting(true)
     setStartError(null)
     try {
-      await apiPost('/api/backup/restore', { snapshotId: picked, targetDir: target.trim() || undefined, ...(source ? { destination: source } : {}) })
+      await apiPost('/api/backup/restore', {
+        snapshotId: picked, targetDir: target.trim() || undefined,
+        ...(!target.trim() && suggested ? { suggestedDir: suggested } : {}),
+        ...(source ? { destination: source } : {}),
+      })
       setItems(null)
     } catch (err) {
       setStartError(saveErrorMessage(err))
@@ -169,7 +179,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     <>
       <SettingsRow
         label="Restore"
-        help={blocked && !items && blockedWhy ? `Bring a backup back into a new folder. ${blockedWhy}` : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
+        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder, once the first row of this group is done.' : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
@@ -225,7 +235,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             <input id="backup-restore-target" type="text" data-no-draft="autosave" spellCheck={false}
               className="settings-input settings-input--mono" aria-label="Restore into folder"
               value={target} onChange={(e) => { setTarget(e.target.value); setStartError(null) }}
-              placeholder={dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-${new Date().toISOString().slice(0, 10)}` : 'Optional'} />
+              placeholder={suggested ?? 'Optional'} />
             <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
               Restore
             </SettingsButton>
@@ -265,13 +275,15 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             state="warning"
             wide
             data-testid="backup-restore-use-confirm"
-            help={<>Walnut restarts and runs on <code>{restore.targetDir}</code>. Your current data is kept beside it, renamed, and nothing is deleted.</>}
+            help={canRestart
+              ? <>Walnut restarts and runs on <code>{restore.targetDir}</code>. Your current data is kept beside it, renamed, and nothing is deleted.</>
+              : <>From its next start Walnut runs on <code>{restore.targetDir}</code> (quit Walnut and open it again). Your current data is kept beside it, renamed, and nothing is deleted.</>}
             error={useError ?? undefined}
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={() => { setConfirmUse(false); setUseError(null) }} data-testid="backup-restore-use-cancel">Cancel</SettingsButton>
                 <SettingsButton variant="primary" onClick={() => void useRestored()} busy={using} busyLabel="Switching..." data-testid="backup-restore-use-yes">
-                  Switch and restart
+                  {canRestart ? 'Switch and restart' : 'Switch at next start'}
                 </SettingsButton>
               </span>
             }
@@ -281,7 +293,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             label="Restored"
             wide
             data-testid="backup-restore-done"
-            help={<>{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>. Your Walnut data is unchanged until you choose to use them.</>}
+            help={<>{restore.source ? `From ${restore.source}: ` : ''}{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>. Your Walnut data is unchanged until you choose to use them.</>}
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>

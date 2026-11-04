@@ -139,6 +139,8 @@ backupRouter.get('/status', async (_req: Request, res: Response) => {
     ...scheduler.health, primary: true, dataDir: WALNUT_HOME, machineName: await computerName(),
     // "Use this restored data" asked, not done yet (it is done at the next start), or how the last one failed.
     pendingSwitch: await readPendingSwitch(WALNUT_HOME), switchError: await lastSwitchError(WALNUT_HOME),
+    // Whether "Use this data" can restart Walnut by itself, or the user quits and opens it.
+    canRestart: (await import('../../core/self-update/live-update.js')).hasRestartHandler(),
   });
 });
 
