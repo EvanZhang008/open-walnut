@@ -27,6 +27,10 @@ interface Mac {
   jobGone?: boolean
   /** The job's log file there never gets a result line. */
   logNoResult?: boolean
+  /** Its load at each host_load call in turn (the last one repeats): a Mac that frees up. */
+  loadSeq?: (number | null)[]
+  /** Each run started there in turn ends with these (the last one repeats): busy, then free. */
+  resultSeq?: { exit: number; state: string }[]
 }
 
 /** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call. */
@@ -44,7 +48,9 @@ fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify({ op, args }) + 
 const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0) }
 const mac = (h) => macs.find((m) => m.host === h)
 if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
-if (op === 'host_load') out({ hosts: macs.map((m) => ({ host: m.host, known: m.loadPerCpu != null, loadPerCpu: m.loadPerCpu })) })
+const turn = (name) => { const f = path.join(dir, 'turn-' + name); const n = fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : 0; fs.writeFileSync(f, String(n + 1)); return n }
+const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
+if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; return { host: m.host, known: l != null, loadPerCpu: l } }) }) }
 if (op === 'host_copy') {
   if (args.from_host && args.from.endsWith('.log')) {
     // The job's log file in the task's folder there: the whole run, result line last.
@@ -71,11 +77,13 @@ if (op === 'host_exec') {
     const f = fs.readFileSync(edit, 'utf8')
     fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('\\nset -uo pipefail\\n', '\\n# ' + 'an inserted comment that moves every later line '.repeat(8) + '\\nset -uo pipefail\\n'))
   }
+  if (args.background) fs.writeFileSync(path.join(dir, 'run-' + args.host), String(turn('runs-' + args.host)))
   out(args.background ? { jobId: 'hx-' + args.host, running: true } : { exitCode: 0, running: false })
 }
 if (op === 'host_exec_read') {
   const m = mac(args.host)
-  const r = m.result || { exit: 0, state: 'passed' }
+  const runNo = fs.existsSync(path.join(dir, 'run-' + args.host)) ? Number(fs.readFileSync(path.join(dir, 'run-' + args.host), 'utf8')) : 0
+  const r = (m.resultSeq ? at(m.resultSeq, runNo) : m.result) || { exit: 0, state: 'passed' }
   const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U', xcode: r.xcode || '', runtime: r.runtime || '', startedAt: '2026-11-04T05:53:58Z', endedAt: '2026-11-04T06:00:56Z', secs: 418, ...(r.state === 'busy' ? {} : { passed: 41, failed: 0, skipped: 2, xcodeSecs: 397 }) }) + '\\n'
   // The run ends while 2 more chunks of its log are still unread.
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
@@ -93,10 +101,11 @@ function git(...a: string[]): void {
   if (r.status !== 0) throw new Error(r.stderr)
 }
 
-function run(args: string[], bin: string, script = SCRIPT) {
+function run(args: string[], bin: string, script = SCRIPT, env: Record<string, string> = {}) {
   const r = spawnSync('bash', [script, ...args], {
     cwd: repo, encoding: 'utf8',
-    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0', IOS_FLEET_LOG_POLL_SECS: '0' },
+    // No wait for a free Mac unless a test asks for one (the script's own default is 30 min).
+    env: { HOME: dir, PATH: guardedPath([bin], process.env.PATH ?? '/usr/bin:/bin'), WALNUT_TASK_DIR: taskDir, IOS_FLEET_RETRY_SECS: '0', IOS_FLEET_LOG_POLL_SECS: '0', IOS_FLEET_WAIT_SECS: '0', IOS_FLEET_WAIT_POLL_SECS: '0', ...env },
   })
   const calls = fs.existsSync(path.join(dir, 'calls.jsonl'))
     ? fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { op: string; args: Record<string, unknown> })
@@ -244,7 +253,7 @@ describe('ios-fleet-test.sh', () => {
     ], outTgz())
     const r = run(['ui'], bin)
     expect(r.status).toBe(65)
-    expect(r.stderr).toContain('mac-mini is busy; trying the next Mac')
+    expect(r.stderr).toContain('mac-mini is busy with another run; trying the next Mac')
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
     // Nothing is fetched from the busy one.
     expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host).map((c) => c.args.from_host)).toEqual(['mac-two'])
@@ -340,7 +349,41 @@ describe('ios-fleet-test.sh', () => {
     const r = run(['unit'], bin)
     expect(r.status).toBe(75)
     expect(r.stderr).toContain('no iOS Mac can take a run now')
+    expect(r.stderr).toContain('try again later, or pass --wait or --max-load')
     expect(r.calls.map((c) => c.op)).not.toContain('host_copy')
+  })
+
+  it('every Mac busy: it waits its turn, says so once, and runs on the first Mac that frees up', () => {
+    // 2026-11-04: a UI test run failed at once (exit 75) while another task's run held the
+    // only free Mac; the Macs are shared, so a run queues instead of racing.
+    const bin = fakeWalnut([{ host: 'mac-mini', loadSeq: [2, 2, 2, 0.1] }], outTgz())
+    const r = run(['ui'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60', IOS_FLEET_WAIT_POLL_SECS: '0' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime); waiting for one (up to 1 min, asking again every 0 s; --wait 0 does not wait)')
+    expect(r.stderr.match(/waiting for one/g)).toHaveLength(1)
+    // The same reason is not printed again on every check.
+    expect(r.stderr.match(/not using mac-mini/g)).toHaveLength(1)
+    expect(r.stderr).toMatch(/a Mac is free after \d+ s of waiting/)
+    expect(r.calls.filter((c) => c.op === 'host_load').length).toBeGreaterThanOrEqual(4)
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini'])
+  })
+
+  it('a named Mac busy with another run: the run waits for it and goes there once it is free', () => {
+    const bin = fakeWalnut([{ host: 'mac-two', loadPerCpu: 0.2, resultSeq: [{ exit: 75, state: 'busy' }, { exit: 75, state: 'busy' }, { exit: 0, state: 'passed' }] }], outTgz())
+    const r = run(['--host', 'mac-two', 'unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('every iOS Mac that could take it is busy with another run; waiting for one')
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-two', 'mac-two', 'mac-two'])
+    expect(r.stderr).toContain('results: ')
+  })
+
+  it('the wait has an end: none free within --wait exits 75 and says how long it waited', () => {
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 3 }], outTgz())
+    const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '1', IOS_FLEET_WAIT_POLL_SECS: '0.2' })
+    expect(r.status).toBe(75)
+    expect(r.stderr).toContain('none could take it in the 1 s this run waited; try again later, or pass --wait or --max-load')
+    expect(r.calls.map((c) => c.op)).not.toContain('host_copy')
+    expect(run(['--wait', 'soon', 'unit'], bin).status).toBe(64)
   })
 
   it('--host names the Mac: no picking, and it is used even when busy elsewhere', () => {

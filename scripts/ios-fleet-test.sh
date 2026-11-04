@@ -3,7 +3,9 @@
 # devbox included), the way a Linux test runs anywhere. Walnut does the moving:
 #
 #   1. pick a Mac: host_list's hosts tagged `ios` that are connected, least loaded first
-#      (host_load), skipping any over --max-load per CPU; or the one --host names. The
+#      (host_load), skipping any over --max-load per CPU; or the one --host names. When no
+#      Mac can take it now (each busy, offline, or running another run), it waits its
+#      turn, up to --wait minutes, and asks again every minute. The
 #      Mac Walnut runs on (`__local__`) comes last, after every other Mac, and the run
 #      says when it falls back to it (2026-11-04, the user: iOS tests go to the other
 #      Macs, this one only when none of them can take it);
@@ -28,6 +30,8 @@
 #                    unit tests do not drive the screen, so a unit video shows the app idle
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
 #   --max-load N     refuse a Mac whose load per CPU is over N (default 0.75)
+#   --wait MIN       when no Mac can take the run now, wait up to MIN minutes for one
+#                    (default 30; 0 gives up at once)
 #   --udid U         drive that simulator on the Mac instead of the run's own one
 #   --clean          remove this task's build products on that Mac afterwards
 #   --verbose        print the whole run log (default: the lines that matter; all of it
@@ -38,7 +42,7 @@
 # The Mac may be someone else's computer: see remote-run.sh for how a run stays out of
 # their way (no window, its own simulator, utility priority, refuses when busy).
 #
-# Exit: the tests' own status; 75 no Mac can take a run now; 74 the run ended but its
+# Exit: the tests' own status; 75 no Mac could take the run within --wait; 74 the run ended but its
 # results did not come back (they stay on the Mac, and the line to fetch them is printed);
 # 64 a wrong option.
 set -uo pipefail
@@ -51,7 +55,7 @@ set -uo pipefail
 die() { printf 'ios-fleet: %s\n' "$*" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
-HOST=""; MAX_LOAD=0.75; FLAGS=(); CLEAN=0; VERBOSE=0
+HOST=""; MAX_LOAD=0.75; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
 KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: error: )'
 while [ $# -gt 0 ]; do
   case $1 in
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
     --video|--keep-xcresult) FLAGS+=("$1") ;;
     --udid) FLAGS+=(--udid "$2"); shift ;;
     --max-load) MAX_LOAD=$2; shift ;;
+    --wait) WAIT_MIN=$2; shift ;;
     --clean) CLEAN=1 ;;
     --verbose) VERBOSE=1 ;;
     unit|ui|build|run) break ;;
@@ -67,6 +72,12 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+case $WAIT_MIN in ''|*[!0-9]*) die "--wait takes whole minutes" 64 ;; esac
+# A queue, not a race: the Macs are shared (one is someone else's computer), so a run that
+# finds them all busy waits its turn instead of failing (2026-11-04: a UI test run failed at
+# once while another task's run held the only free Mac). The env knobs are for the tests.
+WAIT_SECS=${IOS_FLEET_WAIT_SECS:-$((WAIT_MIN * 60))}
+WAIT_POLL=${IOS_FLEET_WAIT_POLL_SECS:-60}
 MODE=${1:-}; [ -n "$MODE" ] || die "say what to run: unit, ui, build or run (see --help)" 64
 shift
 [ "${1:-}" = "--" ] && shift
@@ -172,13 +183,39 @@ for per, host, note in sorted(rows, key=lambda r: (r[1] == "__local__", r[0])):
 PY
 }
 
-if [ -n "$HOST" ] && [ "${HOST#@}" = "$HOST" ]; then
-  PICKS=$(printf '%s\tnamed with --host\n' "$HOST")
-else
-  [ -z "$HOST" ] || [ "$HOST" = "@ios" ] || die "only @ios is a selector this script picks from; name a host instead" 64
-  PICKS=$(candidates 2> >(sed 's/^SKIP\t/ios-fleet: not using /' >&2)) || die "could not read the fleet"
-  [ -n "$PICKS" ] || die "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime); try again later or pass --max-load" 75
-fi
+[ -z "$HOST" ] || [ "${HOST#@}" = "$HOST" ] || [ "$HOST" = "@ios" ] || die "only @ios is a selector this script picks from; name a host instead" 64
+# The Macs to try now, into PICKS. The reasons a Mac was passed over are printed when they
+# change, so a long wait does not repeat the same lines every minute.
+SKIPS_SAID=""
+pick() {
+  if [ -n "$HOST" ] && [ "${HOST#@}" = "$HOST" ]; then
+    PICKS=$(printf '%s\tnamed with --host\n' "$HOST"); return
+  fi
+  local skips
+  PICKS=$(candidates 2>"$LOCAL/.skips") || { cat "$LOCAL/.skips" >&2; die "could not read the fleet"; }
+  skips=$(sed 's/^SKIP\t/ios-fleet: not using /' "$LOCAL/.skips")
+  if [ "$skips" != "$SKIPS_SAID" ]; then [ -z "$skips" ] || printf '%s\n' "$skips" >&2; SKIPS_SAID=$skips; fi
+}
+dur() { if [ "$1" -ge 60 ]; then echo "$(($1 / 60)) min"; else echo "$1 s"; fi; }
+WAIT_START=$(date +%s); WAIT_SAID=0
+# No Mac can take the run now ($1 says why): wait a turn, or give up once --wait is spent.
+wait_turn() {
+  local waited=$(( $(date +%s) - WAIT_START ))
+  if [ "$waited" -ge "$WAIT_SECS" ]; then
+    [ "$WAIT_SECS" -gt 0 ] && die "$1, and none could take it in the $(dur "$WAIT_SECS") this run waited; try again later, or pass --wait or --max-load" 75
+    die "$1; try again later, or pass --wait or --max-load" 75
+  fi
+  if [ "$WAIT_SAID" = 0 ]; then
+    say "$1; waiting for one (up to $(dur "$WAIT_SECS"), asking again every ${WAIT_POLL} s; --wait 0 does not wait)"; WAIT_SAID=1
+  fi
+  sleep "$WAIT_POLL"
+}
+pick
+while [ -z "$PICKS" ]; do
+  wait_turn "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime)"
+  pick
+done
+[ "$WAIT_SAID" = 0 ] || say "a Mac is free after $(( $(date +%s) - WAIT_START )) s of waiting"
 
 # The sources: what git tracks plus new files not ignored, under ios-native, the shared
 # script helpers the iOS scripts source, and every repo path the iOS sources name as a
@@ -195,7 +232,8 @@ while IFS= read -r p; do REFS+=("$p"); done < <(repo_refs)
 say "packed $(du -h "$LOCAL/src.tgz" | cut -f1) of sources ($(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" status --porcelain -- ios-native | grep -q . && echo ', with uncommitted changes'))"
 
 q() { printf '%q ' "$@"; }
-STATUS=1; FETCHED=1
+STATUS=1; FETCHED=1; RAN=0
+while :; do
 while IFS=$'\t' read -r H NOTE; do
   [ -n "$H" ] || continue
   say "using $NOTE"
@@ -242,7 +280,9 @@ while IFS=$'\t' read -r H NOTE; do
   [ -n "$RES" ] || die "the run on $H ended without a result line; its log: $LOG"
   STATUS=$(printf '%s' "$RES" | js 'print(d["exit"])')
   STATE=$(printf '%s' "$RES" | js 'print(d["state"])')
-  if [ "$STATE" = busy ] && [ -z "$HOST" ]; then say "$H is busy; trying the next Mac"; continue; fi
+  # Another run holds its simulator: the next Mac, or this one's turn after a wait.
+  if [ "$STATE" = busy ]; then say "$H is busy with another run; trying the next Mac"; continue; fi
+  RAN=1
   VERSIONS=$(printf '%s' "$RES" | js 'print(" and ".join(x for x in (("Xcode " + d["xcode"]) if d.get("xcode") else "", d.get("runtime") or "") if x))')
   [ -z "$VERSIONS" ] || say "ran with $VERSIONS on $H"
   TIMES=$(printf '%s' "$RES" | js 'print("%s s there, %s to %s%s" % (d["secs"], d.get("startedAt", "?"), d.get("endedAt", "?"), (" (xcodebuild %s s)" % d["xcodeSecs"]) if "xcodeSecs" in d else "") if "secs" in d else "")')
@@ -263,8 +303,13 @@ while IFS=$'\t' read -r H NOTE; do
   fi
   break
 done <<< "$PICKS"
+[ "$RAN" = 0 ] || break
+wait_turn "every iOS Mac that could take it is busy with another run"
+pick
+while [ -z "$PICKS" ]; do wait_turn "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime)"; pick; done
+done
 
-rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.op-err" "$LOCAL/.read-err"
+rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.op-err" "$LOCAL/.read-err" "$LOCAL/.skips"
 if [ -f "$LOCAL/out/summary.json" ]; then
   python3 - "$LOCAL/out/summary.json" <<'PY' >&2
 import json, sys
