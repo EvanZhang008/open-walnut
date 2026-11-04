@@ -102,9 +102,19 @@ async function act(page: Page, body: Record<string, unknown>): Promise<{ status:
   return { status: r.status(), body: await r.json() }
 }
 
-async function answer(page: Page, id: string, decision: 'approve' | 'deny'): Promise<void> {
-  const r = await page.request.post(`${base}/api/v1/approvals/${id}/answer`, { data: { decision } })
+async function answer(page: Page, id: string, decision: 'approve' | 'deny', proof = false): Promise<void> {
+  const headers = proof ? { 'x-walnut-vault-session': await vaultSession(page) } : undefined
+  const r = await page.request.post(`${base}/api/v1/approvals/${id}/answer`, { data: { decision }, ...(headers ? { headers } : {}) })
   expect(r.ok(), await r.text()).toBe(true)
+}
+/** The person's proof for an approval that needs one (an agent's buy, send or delete): Passwords unlocked in this window. */
+async function vaultSession(page: Page): Promise<string> {
+  const st = await (await page.request.get(`${base}/api/v1/vault/status`)).json()
+  const r = st.setUp
+    ? await page.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
+    : await page.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
+  expect(r.ok(), await r.text()).toBe(true)
+  return (await r.json()).session.token
 }
 
 async function popup(): Promise<Page> {
@@ -231,7 +241,12 @@ test('read, type, pick and click like a person; a screenshot of the tab', async 
   const send = refOf(s, /button "Place order"/)
   expect((await act(page, { action: 'type', ref: who, text: 'Test Person' })).status).toBe(200)
   expect((await act(page, { action: 'select', ref: bread, value: 'Rye' })).body.selected).toBe('Rye')
-  expect((await act(page, { action: 'click', ref: send })).status).toBe(200)
+  // Placing an order waits for the person's yes (outward-asks.ts); approved with their proof, the same click goes through.
+  const ask = await act(page, { action: 'click', ref: send })
+  expect(ask.status, JSON.stringify(ask.body)).toBe(202)
+  expect(ask.body).toMatchObject({ status: 'needs_ok', code: 'outward_needs_ok', kind: 'buy' })
+  await answer(page, ask.body.request, 'approve', true)
+  expect((await act(page, { action: 'click', ref: send, request: ask.body.request })).status).toBe(200)
   const text = await act(page, { action: 'text' })
   expect(text.body.text).toContain('Ordered for Test Person: rye')
   // What the agent typed is in the page's own field, as the page's framework would see it.
@@ -521,7 +536,8 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
 
 test('real input is off until the person turns it on: trusted, dialog and evaluate say where', async () => {
   const page = ctx.pages()[0]
-  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })).status).toBe(200)
+  const nav = await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })
+  expect(nav.status, JSON.stringify(nav.body)).toBe(200)
   const s = (await act(page, { action: 'snapshot' })).body.snapshot as string
   for (const body of [
     { action: 'click', ref: refOf(s, /button "Place order"/), trusted: true },

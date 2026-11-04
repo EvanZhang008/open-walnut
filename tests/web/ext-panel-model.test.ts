@@ -128,3 +128,55 @@ describe('a tab handed to a conversation stays with it', () => {
     expect(otherOwnerOf('task:t9', 'task:t2', h, true)).toBe(true)
   })
 })
+
+describe('the text a message took from the page', () => {
+  it('is read back from the context it went with, and is nothing when it took none', async () => {
+    const { selectionOfContext } = await import('../../web/src/popout/ext-panel-model')
+    const page = { url: 'https://docs.example.test/a', title: 'A', selection: 'First line\n\nSecond line' }
+    expect(selectionOfContext(pageContextBlock(page, { file: '/tmp/p.md', tab: 4 }))).toBe('First line\n\nSecond line')
+    expect(selectionOfContext(`Web page you are asking about:\n${pageContextBlock(page, {})}`)).toBe('First line\n\nSecond line')
+    expect(selectionOfContext(pageContextBlock({ url: page.url, title: 'A' }, { file: '/tmp/p.md' }))).toBe('')
+    expect(selectionOfContext(actLine(4))).toBe('')
+    expect(selectionOfContext(undefined)).toBe('')
+  })
+})
+
+describe('hints a surface decides when the message goes', () => {
+  it('are asked once per send, under the waiting ones and the send\'s own; a failing source adds nothing', async () => {
+    const ph = await import('../../web/src/utils/pending-hints')
+    let asked = 0
+    ph.setPendingHintsSource('s1', async () => { asked++; return { 'object-context': { arg: 'hc-src' }, other: { arg: 'x' } } })
+    ph.setPendingHints('s1', { other: { arg: 'waiting' } })
+    expect(ph.hasPendingHintsSource('s1')).toBe(true)
+    expect(await ph.takePendingHintsAsync('s1', { question: { arg: 'Q1' } })).toEqual({ 'object-context': { arg: 'hc-src' }, other: { arg: 'waiting' }, question: { arg: 'Q1' } })
+    expect(asked).toBe(1)
+    let words = ''
+    ph.setPendingHintsSource('s2', async (m) => { words = m; return undefined })
+    expect(await ph.takePendingHintsAsync('s2', undefined, 'What does this mean?')).toBeUndefined()
+    expect(words).toBe('What does this mean?')
+    ph.setPendingHintsSource('s2', null)
+    expect(await ph.takePendingHintsAsync('s1')).toEqual({ 'object-context': { arg: 'hc-src' }, other: { arg: 'x' } })
+    ph.setPendingHintsSource('s1', async () => { throw new Error('offline') })
+    expect(await ph.takePendingHintsAsync('s1', { question: { arg: 'Q2' } })).toEqual({ question: { arg: 'Q2' } })
+    ph.setPendingHintsSource('s1', null)
+    expect(ph.hasPendingHintsSource('s1')).toBe(false)
+  })
+})
+
+describe('the selection a conversation already took', () => {
+  it('is remembered per conversation, the newest few only, and an unreadable store forgets it', async () => {
+    const { rememberSent, sentOf } = await import('../../web/src/popout/ext-panel-model')
+    const m = new Map<string, string>()
+    const s = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v) } }
+    rememberSent('web:https://a.example.test/x', 'Selected words', s, 1)
+    expect(sentOf('web:https://a.example.test/x', s)).toBe('Selected words')
+    expect(sentOf('web:https://a.example.test/other', s)).toBe('')
+    for (let i = 0; i < 45; i++) rememberSent(`web:k${i}`, `s${i}`, s, 10 + i)
+    expect(sentOf('web:https://a.example.test/x', s)).toBe('')
+    expect(sentOf('web:k44', s)).toBe('s44')
+    m.set('walnut.ext-panel.sent', '{not json')
+    expect(sentOf('web:k44', s)).toBe('')
+    rememberSent('web:k1', 'again', s, 99)
+    expect(sentOf('web:k1', s)).toBe('again')
+  })
+})

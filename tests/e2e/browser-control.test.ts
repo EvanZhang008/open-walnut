@@ -8,6 +8,7 @@
  * tests/e2e/browser/extension-agent.spec.ts.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -24,6 +25,7 @@ import { siteKey } from '../../src/core/vault/url-match.js'
 import { createDevice } from '../../src/core/device-auth.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { getPairingTargets } from '../../src/core/pairing-targets.js'
+import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
 
 let base = ''
 const AGENT = { 'x-walnut-caller-kind': 'automation' }
@@ -58,6 +60,9 @@ function fakeExtension(token: string, browser = 'chrome') {
       }
       case 'tabs': return { ok: true, result: { tabs: [...tabs].map(([id, t]) => ({ id, url: t.url, owner: t.owner })) } }
       case 'click': {
+        // A button that places an order: the page holds it until the server brings the person's yes.
+        const hold = { kind: 'buy', why: '"Place order" buys or pays', what: 'click button "Place order"', url: 'https://shop.example.test/cart', sig: 'buy|click button "Place order"|https://shop.example.test/cart' }
+        if (c.args.ref === 'e11' && c.args.outward_ok !== hold.sig) return { ok: false, error: { message: 'held', code: 'outward_needs_ok', extra: { hold } } }
         // A click that follows a link to a site not allowed yet.
         const t = tabs.get(c.args.tab)!
         if (c.args.ref === 'e9') {
@@ -154,6 +159,54 @@ describe('agents in the person\'s browser', () => {
     await new Promise((r) => setTimeout(r, 300))
     await answerApproval(asked.body.approvalId, 'approve')
     expect((await held).status).toBe(200)
+  })
+
+  it('a click that places an order waits for the person; a plain local Approve is no proof; it goes through once, after a signed yes', async () => {
+    const ask = await http('POST', '/browser/act', { action: 'click', ref: 'e11' }, AGENT)
+    expect(ask.status).toBe(202)
+    expect(ask.body).toMatchObject({ status: 'needs_ok', code: 'outward_needs_ok', kind: 'buy', what: 'click button "Place order"', waitsMinutes: 10 })
+    expect(ask.body.error).toContain('on shop.example.test')
+    // An agent cannot bring the approval's mark itself.
+    expect((await http('POST', '/browser/act', { action: 'click', ref: 'e11', outward_ok: 'buy|click button "Place order"|https://shop.example.test/cart' }, AGENT)).status).toBe(202)
+    expect(ext.seen.filter((c) => c.action === 'click' && c.args.outward_ok)).toHaveLength(0)
+    // Another step with this ask, or another caller, is refused.
+    expect((await http('POST', '/browser/act', { action: 'click', ref: 'e1', request: ask.body.request }, AGENT)).body.code).toBe('no_such_request')
+    // A plain Approve from this machine (what any process here, the agent too, can send) is no
+    // proof that it is the person: refused, and the step does not run.
+    const forged = await http('POST', `/approvals/${ask.body.request}/answer`, { decision: 'approve' })
+    expect(forged.status).toBe(403)
+    expect(forged.body.code).toBe('proof_needed')
+    expect((await http('POST', '/browser/act', { action: 'click', ref: 'e11', request: ask.body.request }, AGENT)).status).toBe(202)
+    expect(ext.seen.filter((c) => c.action === 'click' && c.args.outward_ok)).toHaveLength(0)
+    // Face ID on the person's phone: its device key signs the answer.
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+    const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const phone = await http('POST', '/api/devices', { name: 'browser-control-e2e-phone' })
+    expect((await http('POST', '/approvals/keys', { publicKey: spki, name: 'Test iPhone', kind: 'iphone' }, { authorization: `Bearer ${phone.body.token}` })).status).toBe(200)
+    const signed = async (id: string) => {
+      const digest = (await http('GET', `/approvals/${id}`)).body.approval.digest as string
+      const signature = crypto.sign('sha256', Buffer.from(answerMessage(digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
+      return http('POST', `/approvals/${id}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature })
+    }
+    // Held for the answer.
+    const held = http('POST', '/browser/act', { action: 'click', ref: 'e11', request: ask.body.request, wait_ms: 10_000 }, AGENT)
+    await new Promise((r) => setTimeout(r, 300))
+    expect((await signed(ask.body.request)).status).toBe(200)
+    const done = await held
+    expect(done.status, JSON.stringify(done.body)).toBe(200)
+    expect(ext.seen.filter((c) => c.action === 'click' && c.args.outward_ok)).toHaveLength(1)
+    // One use.
+    expect((await http('POST', '/browser/act', { action: 'click', ref: 'e11', request: ask.body.request }, AGENT)).body.code).toBe('no_such_request')
+    // A no is refused, and nothing reaches the page.
+    const again = await http('POST', '/browser/act', { action: 'click', ref: 'e11' }, AGENT)
+    expect(again.body.request).not.toBe(ask.body.request)
+    // With a device that signs, the ask is a Face ID or Touch ID one.
+    expect((await http('GET', `/approvals/${again.body.request}`)).body.approval).toMatchObject({ mode: 'biometric', guard: 'person' })
+    await answerApproval(again.body.request, 'deny')
+    const no = await http('POST', '/browser/act', { action: 'click', ref: 'e11', request: again.body.request }, AGENT)
+    expect(no.status).toBe(403)
+    expect(no.body.code).toBe('denied')
+    expect(ext.seen.filter((c) => c.action === 'click' && c.args.outward_ok)).toHaveLength(1)
   })
 
   it('a page that goes to a site not allowed yet asks too; a denial is refused and not asked again', async () => {
@@ -357,6 +410,10 @@ describe('setting the extension up from Walnut, and keeping it current', () => {
     expect(ok.body).toEqual({ dir, build: 'aaaaaa111111', copied: false, opened: false })
     const manifest = () => JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { version_name?: string }
     expect(manifest().version_name).toMatch(/build aaaaaa111111$/)
+    // The folder is marked as this Walnut's, and the panel names its id (only that copy reloads itself).
+    const marker = JSON.parse(fs.readFileSync(path.join(dir, 'walnut-folder.json'), 'utf8')) as { folder: string; browser: string; serverUrl?: string }
+    expect(marker).toMatchObject({ browser: 'chrome', serverUrl: expect.stringMatching(/^http:\/\/localhost:\d+$/) })
+    expect((await http('GET', '/browser/panel')).body.extension).toEqual({ version: '0.6.25', build: 'aaaaaa111111', folder: marker.folder })
     // A newer Walnut: the extension asking which build there is finds the folder already on it.
     process.env.WALNUT_WEB_STATIC_DIR = await staticFor('bbbbbb222222')
     expect((await http('GET', '/browser/panel')).body.extension.build).toBe('bbbbbb222222')

@@ -2,7 +2,7 @@
  * The extension's autofill as a person uses it, beside extension-passwords.spec.ts: the in-page
  * menu worked from the keyboard, one-time codes (the code shown with its countdown, filled into
  * one field or six boxes, copied after a login fill and cleared from the clipboard 30 s later,
- * offered by itself on the code page that follows), the toolbar count, a strong password that
+ * offered on the code page that follows once the person is in the field), the toolbar count, a strong password that
  * fits the field's rules, the popup generator's kept options, the save bar's corrections and
  * its pick of which login to update, the "Never" list in Settings, per-site match rules, an
  * https login on an http page, the auto-lock, and cards and identities.
@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
+import { parseTotp, totpAt } from '../../../src/core/vault/totp'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -275,7 +276,7 @@ test('the toolbar badge counts the logins of the tab; a never login is none', as
   await page.close()
 })
 
-test('a login with a one-time code: its code is copied as it fills, the code page offers it by itself, six boxes take one digit each, the clipboard is cleared after 30 s', async () => {
+test('a login with a one-time code: its code is copied as it fills, the code page offers it once the person is in the field, six boxes take one digit each, the clipboard is cleared after 30 s', async () => {
   test.setTimeout(120_000)
   const page = await ctx.newPage()
   await page.goto(site('login.mfa.test', '/login'))
@@ -285,10 +286,18 @@ test('a login with a one-time code: its code is copied as it fills, the code pag
   const copiedAt = Date.now()
   await expect.poll(clipboard, { timeout: 10_000 }).toMatch(/^\d{6}$/)
   const copied = await clipboard()
-  expect([await totpNow(page, 'mfa')]).toContain(copied)
+  // The code of the moment it was copied: a 30 s window may have turned over since.
+  const params = parseTotp(SEED)!
+  const now = Date.now()
+  const near = await Promise.all([now - 30_000, now].map(async (t) => (await totpAt(params, t)).code))
+  expect([...near, await totpNow(page, 'mfa')]).toContain(copied)
 
-  // The code page right after: the menu opens on the boxes by itself, with the code and its countdown.
+  // The code page right after: the menu waits for the person (it never opens by itself over the
+  // page's Verify button), then offers the code with its countdown.
   await page.goto(site('login.mfa.test', '/code6'))
+  await page.waitForTimeout(1200)
+  expect(page.frames().some((f) => f.url().includes('/menu.html'))).toBe(false)
+  await page.locator('#c1').click()
   const menu = await frameOf(page, 'menu.html')
   const row = menu.getByTestId('menu-item').filter({ hasText: `Mfa ${stamp}` })
   await expect(row.getByTestId('totp-code')).toHaveText(/\d{3} \d{3}\d{1,2}/)
@@ -423,8 +432,9 @@ test('the save bar: a new login with a corrected username; Never for this site i
   const p = await popup()
   await p.getByTestId('popup-settings').click()
   const list = p.getByTestId('never-list')
-  await expect(list).toContainText('rule.test')
-  await list.getByRole('button', { name: 'Remove rule.test' }).click()
+  // Never names the host it was said on (www.rule.test), not the whole rule.test site.
+  await expect(list).toContainText('www.rule.test')
+  await list.getByRole('button', { name: 'Remove www.rule.test' }).click()
   await expect(p.getByTestId('never-list')).not.toContainText('rule.test')
   expect(await sw().evaluate(() => chrome.storage.local.get('neverSave').then((r) => r.neverSave))).toEqual([])
   await p.close()
@@ -501,8 +511,8 @@ test('auto-lock: after the chosen time with no use, the extension locks itself, 
   await expect.poll(() => sw().evaluate(() => chrome.storage.local.get('settings').then((r) => r.settings?.autoLock))).toBe('1')
   await p.close()
   const w = await pageInWindow(site('www.autofill.test', '/login'))
-  // Ada, Bob and the login saved above on new.autofill.test (the same registrable domain).
-  await expect.poll(() => sw().evaluate((t: number) => chrome.action.getBadgeText({ tabId: t }), w.tab), { timeout: 10_000 }).toBe('3')
+  // Ada and Bob: the login saved above on new.autofill.test is another part of the site (tier 2), never counted.
+  await expect.poll(() => sw().evaluate((t: number) => chrome.action.getBadgeText({ tabId: t }), w.tab), { timeout: 10_000 }).toBe('2')
   // Two minutes with no use.
   await sw().evaluate(() => chrome.storage.session.set({ lastActive: Date.now() - 120_000 }))
   const again = await popup()

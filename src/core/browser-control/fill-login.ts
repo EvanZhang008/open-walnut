@@ -69,19 +69,38 @@ async function pick(url: string, named: string | undefined, agents: AgentsSwitch
   const logins = (await agentItems({ site: url, agents, forUse: true })).filter((i) => i.type === 'login' && i.fields.includes('password'))
   const users = new Map((await listItems()).map((s) => [s.id, s.username ?? '']))
   const list = (items: AgentItemView[]) => items.slice(0, 20).map((i) => ({ id: i.id, title: i.title, ...(users.get(i.id) ? { username: users.get(i.id) } : {}) }))
+  // The choices in the words too: a shell sees only the message.
+  const namedList = (items: AgentItemView[]) => list(items).map((l) => `${l.id} "${l.title}"${l.username ? ` (${l.username})` : ''}`).join('; ')
   if (named) {
     const n = named.trim().toLowerCase()
     const hits = logins.filter((i) => i.id === named.trim()).length ? logins.filter((i) => i.id === named.trim())
       : logins.filter((i) => i.title.toLowerCase() === n || (users.get(i.id) ?? '').toLowerCase() === n)
     if (hits.length === 1) return hits[0]
-    if (hits.length > 1) throw new BrowserError(`More than one login for ${site} matches "${named}": name one by its id.`, 409, 'which_login', { logins: list(hits) })
+    if (hits.length > 1) throw new BrowserError(`More than one login for ${site} matches "${named}": name one by its id (item): ${namedList(hits)}.`, 409, 'which_login', { logins: list(hits) })
     const anywhere = (await agentItems({ query: named, agents, forUse: true })).length > 0
     throw anywhere
       ? new BrowserError(`"${named}" is not saved for ${site}: Walnut fills a login only on its own site.`, 409, 'other_site')
       : new BrowserError(`No login "${named}" for ${site} that agents may use.`, 404, 'no_login')
   }
-  if (!logins.length) throw new BrowserError(`No saved login for ${site} that agents may use. Ask the person to add one in Passwords, or to sign in themselves.`, 404, 'no_login')
-  if (logins.length > 1) throw new BrowserError(`${logins.length} logins are saved for ${site}: say which (item).`, 409, 'which_login', { logins: list(logins) })
+  if (!logins.length) {
+    // Saved for another part of the same site (a sibling host, tier 2): never filled here by itself.
+    const { siblingHost } = await import('../vault/url-match.js')
+    const urls = new Map((await listItems()).map((s) => [s.id, s.urls]))
+    const elsewhere = (await agentItems({ agents, forUse: true }))
+      .filter((i) => i.type === 'login' && i.fields.includes('password'))
+      .map((i) => ({ i, host: siblingHost(urls.get(i.id), url) }))
+      .filter((x): x is { i: AgentItemView; host: string } => !!x.host)
+    if (elsewhere.length) {
+      const named = elsewhere.slice(0, 5).map(({ i, host }) => `${i.id} "${i.title}" (saved for ${host})`).join('; ')
+      throw new BrowserError(
+        `No login is saved for ${new URL(url).host} itself; ${elsewhere.length === 1 ? 'one is' : `${elsewhere.length} are`} saved for another part of ${site}: ${named}. `
+          + `Walnut fills such a login here only once its website's match rule is "base" (every host of ${site}): ask the person to set that on the login `
+          + `(in Passwords, its website ending in "#walnut-match=base"), or to sign in themselves.`,
+        404, 'no_login', { otherPart: elsewhere.slice(0, 20).map(({ i, host }) => ({ id: i.id, title: i.title, host })) })
+    }
+    throw new BrowserError(`No saved login for ${site} that agents may use. Ask the person to add one in Passwords, or to sign in themselves.`, 404, 'no_login')
+  }
+  if (logins.length > 1) throw new BrowserError(`${logins.length} logins are saved for ${site}: say which with item (its id, name or username): ${namedList(logins)}.`, 409, 'which_login', { logins: list(logins) })
   return logins[0]
 }
 

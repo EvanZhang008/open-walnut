@@ -2,25 +2,32 @@
  * Which saved logins belong to a page. Pure; shared by the server, the web app and
  * the browser extension.
  *
- * A login matches a page when both sit on the same registrable domain (the public
- * suffix list, private suffixes included, so two github.io or herokuapp.com sites never
- * match each other), and an https:// login never matches an http:// page. Saved sites
- * are normalized at save time (a bare `github.com` becomes `https://github.com`):
+ * Logins match in two tiers, as Chrome's password manager does. Tier 1 (`matchSite`,
+ * `matchItem`): the saved host is the page's host, or one is a parent of the other
+ * (`example.com` and `www.example.com`, `shop.example.com` and `login.shop.example.com`), or the
+ * saved site's own rule says so. Only tier 1 is offered, counted or filled by itself. Tier 2
+ * (`siblingHost`): another host of the same registrable domain (`blog.example.com` for a login of
+ * `shop.example.com`); it is only listed apart, with its saved host, for the person to pick. A
+ * different registrable domain (the public suffix list, private suffixes included, so two
+ * github.io sites never match) gets nothing, and an https:// login never matches an http:// page.
+ * Saved sites are normalized at save time (a bare `github.com` becomes `https://github.com`):
  * iOS AutoFill offers nothing for a site saved without a scheme.
  *
  * A saved site may carry its own match rule, as Bitwarden's per-URI match does, written as a
  * `#walnut-match=<rule>` suffix on the stored URL (`withRule`). A URL with no suffix (every
- * site saved before rules existed) matches by registrable domain, so old items read as they
- * always did, and a client that does not know the suffix still finds the host in it.
+ * site saved before rules existed) matches by the tiers above, and a client that does not know
+ * the suffix still finds the host in it.
  */
 import { parse } from 'tldts'
 
 /**
- * How a saved site matches a page: its registrable domain (the default), the exact host and
- * port, a page whose address starts with the saved one, or never (kept only for the record).
+ * How a saved site matches a page: its host with its parent and child hosts (the default,
+ * `domain`), every host of its registrable domain (`base`, chosen for a site whose sign in moves
+ * between subdomains), the exact host and port, a page whose address starts with the saved one,
+ * or never (kept only for the record).
  */
-export type UrlMatchRule = 'domain' | 'host' | 'starts' | 'never'
-export const URL_MATCH_RULES: readonly UrlMatchRule[] = ['domain', 'host', 'starts', 'never']
+export type UrlMatchRule = 'domain' | 'base' | 'host' | 'starts' | 'never'
+export const URL_MATCH_RULES: readonly UrlMatchRule[] = ['domain', 'base', 'host', 'starts', 'never']
 const RULE_MARK = '#walnut-match='
 
 /** A saved URL and its rule (`domain` when it names none). */
@@ -81,9 +88,13 @@ export function siteKey(raw: string): SiteKey | null {
   return { scheme: u.protocol.replace(':', ''), host, domain }
 }
 
+/** Tier 1 only: the same host, or a parent or child host (or a `base` rule's other host). */
 export type MatchStrength = 'exact_host' | 'domain' | null
 
-/** How well a saved site fits a page: the same host, the same registrable domain, or not at all. */
+/** `a` is `b` or one of its subdomains. */
+const within = (a: string, b: string) => a === b || a.endsWith(`.${b}`)
+
+/** How well a saved site fits a page (tier 1): the same host, a parent or child host, or not at all. */
 export function matchSite(saved: string, page: string): MatchStrength {
   const { url, rule } = splitRule(saved)
   if (rule === 'never') return null
@@ -99,7 +110,32 @@ export function matchSite(saved: string, page: string): MatchStrength {
     const b = normalizePlain(splitRule(page).url)
     return a && b && b.startsWith(a) ? 'exact_host' : null
   }
-  return s.host === p.host ? 'exact_host' : 'domain'
+  if (s.host === p.host) return 'exact_host'
+  return rule === 'base' || within(s.host, p.host) || within(p.host, s.host) ? 'domain' : null
+}
+
+/**
+ * Tier 2: the saved host when a saved site is another host of the page's registrable domain
+ * that tier 1 does not take (a sibling subdomain), else null. Listed apart, never offered first.
+ */
+export function siblingSite(saved: string, page: string): string | null {
+  const { url, rule } = splitRule(saved)
+  if (rule !== 'domain') return null
+  const s = siteKey(url)
+  const p = siteKey(page)
+  if (!s || !p || s.domain !== p.domain) return null
+  if (s.scheme === 'https' && p.scheme === 'http') return null
+  return matchSite(saved, page) ? null : s.host
+}
+
+/** The saved host of an item's first tier-2 site, when none of its sites is tier 1. */
+export function siblingHost(urls: readonly string[] | undefined, page: string): string | null {
+  if (matchItem(urls, page)) return null
+  for (const u of urls ?? []) {
+    const h = siblingSite(u, page)
+    if (h) return h
+  }
+  return null
 }
 
 function portOf(raw: string): string {

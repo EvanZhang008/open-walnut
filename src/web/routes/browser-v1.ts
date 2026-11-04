@@ -181,17 +181,22 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
  * which build of it Walnut ships: a folder Walnut set up (extension-install.ts) is brought up to
  * that build first, so the extension can reload itself from it.
  */
-browserV1Router.get('/browser/panel', (_req, res, next) => {
+browserV1Router.get('/browser/panel', (req, res, next) => {
   void run(res, next, async () => {
     const x = await import('../../core/browser-control/extension-install.js')
     const bundled = x.bundledExtension()
     if (bundled && !ambientTestRun()) {
-      const done = await x.refreshInstalled().catch((err: unknown) => { log.web.warn('browser extension folder refresh failed', { error: err instanceof Error ? err.message : String(err) }); return [] })
+      const done = await x.refreshInstalled(undefined, undefined, ownUrl(req)).catch((err: unknown) => { log.web.warn('browser extension folder refresh failed', { error: err instanceof Error ? err.message : String(err) }); return [] })
       if (done.length) log.web.info('browser extension folder brought up to this build', { browsers: done, build: bundled.build })
     }
-    return { panel: 1, ...(bundled ? { extension: bundled } : {}) }
+    // `folder`: the id the marker in a folder this Walnut keeps carries (only such a copy reloads itself).
+    const folder = bundled ? x.folderId() : null
+    return { panel: 1, ...(bundled ? { extension: { ...bundled, ...(folder ? { folder } : {}) } } : {}) }
   })
 })
+
+/** This server as the extension on this machine reaches it. */
+const ownUrl = (req: Request) => (req.socket.localPort ? `http://localhost:${req.socket.localPort}` : undefined)
 
 /**
  * Settings, Browser extension, Set up in Chrome: the extension into its folder on this machine,
@@ -207,7 +212,7 @@ browserV1Router.post('/browser/extension/setup', (req, res, next) => {
     const x = await import('../../core/browser-control/extension-install.js')
     if (browser !== 'chrome' && browser !== 'firefox') throw new h.BrowserError('browser must be chrome or firefox', 400, 'bad_request')
     if (!x.bundledExtension()) throw new h.BrowserError('This Walnut was built without the browser extension.', 404, 'no_extension_build')
-    const { dir, build } = await x.installExtension(browser)
+    const { dir, build } = await x.installExtension(browser, undefined, undefined, ownUrl(req))
     const { copied, opened } = await x.openForSetup(browser, dir)
     log.web.info('browser extension set up', { browser, dir, build, copied, opened })
     return { dir, build, copied, opened }
@@ -267,6 +272,8 @@ const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
   'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate',
 ])
+/** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person). */
+const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
 const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
 const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, downloads: 40_000, take: 30_000 }
@@ -372,6 +379,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const held = typeof b.device === 'string' ? undefined
       : lastHolds ? last!.device
         : ON_TAB.has(action) || action === 'tabs' || action === 'downloads' ? h.deviceForTab(owner, action === 'downloads' ? undefined : tab) : undefined
+    if (!h.connected().length) await h.waitConnected(3000)
     const c = h.pickController(typeof b.device === 'string' ? b.device : held)
     if (ON_TAB.has(action)) {
       if (tab === undefined) {
@@ -404,21 +412,42 @@ browserV1Router.post('/browser/act', (req, res, next) => {
 
     let f = await s.readSites()
     if (action === 'fill_login') return fillLoginAct(req, res, b, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
+    // A step that buys, sends or deletes the person approved: it goes to the page with the approval's mark.
+    const outward = await import('../../core/browser-control/outward-asks.js')
+    if (OUTWARD_ACTS.has(action) && typeof b.request === 'string' && b.request && tab !== undefined) {
+      const holdMs = Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0, left() - 40_000))
+      const o = await outward.answerOutward({ id: b.request.slice(0, 100), owner, tab, action, args, holdMs })
+      if (!o.ok) { res.status(o.status).json(o.body); return undefined }
+      args.outward_ok = o.sig
+    }
     const go = () => {
       const ms = Math.min(action === 'screenshot' && args.full === true ? FULL_SCREENSHOT_MS : TIMEOUT[action] ?? h.DEFAULT_COMMAND_MS, left())
       if (ms < 5000) throw new h.BrowserError('Out of time for this call: call it again.', 504, 'browser_timeout')
       return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own }, ms)
     }
+    // The page held a step that buys, sends or deletes: the person is asked (outward-asks.ts).
+    const askIfHeld = async (err: unknown): Promise<Record<string, unknown> | null> => {
+      const hold = err instanceof h.BrowserError && err.code === 'outward_needs_ok' && tab !== undefined ? outward.holdOf(err.extra) : null
+      if (!hold) return null
+      log.web.info('browser act waits for the person', { action, device: c.device, owner, tab, kind: hold.kind })
+      return outward.askOutward({ owner, tab: tab!, action, args, hold, requester, testRun: ambientTestRun() })
+    }
     let result: unknown
     try {
       result = await go()
     } catch (err) {
+      const ask = await askIfHeld(err)
+      if (ask) { res.status(202).json(ask); return undefined }
       // The page went to a site not allowed yet (a link, a redirect): ask, as for an open.
       if (err instanceof h.BrowserError && err.code === 'site_not_allowed' && typeof err.extra.url === 'string') {
         const g = await siteGate(req, owner, err.extra.url, 0)
         if (!g.ok) { res.status(g.status).json(g.body); return undefined }
         f = await s.readSites()
-        result = await go()
+        try { result = await go() } catch (again) {
+          const ask2 = await askIfHeld(again)
+          if (ask2) { res.status(202).json(ask2); return undefined }
+          throw again
+        }
       } else throw err
     }
     const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean; opened?: { tab?: unknown } }

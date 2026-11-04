@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-ext-insta
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
-  buildOfVersionName, bundledExtension, installExtension, installRoot, installedBuild, readZip, refreshInstalled,
+  MARKER, buildOfVersionName, bundledExtension, folderId, installExtension, installRoot, installedBuild, readMarker, readZip, refreshInstalled,
 } from '../../../src/core/browser-control/extension-install'
 // @ts-expect-error a plain .mjs script with no types
 import { manifestFor, writeZip } from '../../../scripts/build-extension.mjs'
@@ -91,7 +91,7 @@ describe('the zip and the folder', () => {
     expect(installedBuild('chrome', root)).toBe('dddddd444444')
     // Whole: a file the new build does not have is gone; nothing half-made is left beside it.
     expect(fs.existsSync(path.join(root, 'chrome', 'stale.js'))).toBe(false)
-    expect(fs.readdirSync(root)).toEqual(['chrome'])
+    expect(fs.readdirSync(root).sort()).toEqual(['.walnut-folder-id', 'chrome'])
   })
 
   it('a refresh brings only a folder the person set up to this build', async () => {
@@ -106,5 +106,25 @@ describe('the zip and the folder', () => {
     // A folder set up from an older Walnut, before builds were named, is brought up too.
     fs.writeFileSync(path.join(root, 'chrome', 'manifest.json'), JSON.stringify(manifestFor('chrome')))
     expect(await refreshInstalled(root, downloads('ffffff666666'))).toEqual(['chrome'])
+  })
+
+  it('marks the folder as the one Walnut keeps, with one id kept across refreshes', async () => {
+    const root = tmp('marker')
+    expect(folderId(root)).toBeNull()
+    await installExtension('chrome', root, downloads('aaaaaa111111'), 'http://localhost:3456')
+    const id = folderId(root)
+    expect(id).toMatch(/^[0-9a-f]{24}$/)
+    expect(readMarker(path.join(root, 'chrome'))).toEqual({ folder: id, browser: 'chrome', serverUrl: 'http://localhost:3456' })
+    // A refresh to a new build keeps the id and the address it had.
+    expect(await refreshInstalled(root, downloads('bbbbbb222222'))).toEqual(['chrome'])
+    expect(readMarker(path.join(root, 'chrome'))).toEqual({ folder: id, browser: 'chrome', serverUrl: 'http://localhost:3456' })
+    // A folder an older Walnut set up (no marker) gets one without being replaced.
+    fs.rmSync(path.join(root, 'chrome', MARKER))
+    fs.writeFileSync(path.join(root, 'chrome', 'mine.txt'), 'kept')
+    expect(await refreshInstalled(root, downloads('bbbbbb222222'), 'http://localhost:4000')).toEqual([])
+    expect(readMarker(path.join(root, 'chrome'))).toEqual({ folder: id, browser: 'chrome', serverUrl: 'http://localhost:4000' })
+    expect(fs.existsSync(path.join(root, 'chrome', 'mine.txt'))).toBe(true)
+    // The zip itself never carries a marker: a copy unpacked anywhere else has none.
+    expect(readZip(fs.readFileSync(path.join(downloads('cccccc333333'), 'walnut-extension-chrome.zip'))).some((f) => f.name === MARKER)).toBe(false)
   })
 })

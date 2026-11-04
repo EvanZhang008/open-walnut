@@ -9,8 +9,9 @@ import { more, type NewTab } from './agent-api'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { walnutAddress } from './walnut-address'
 import { pageCheck } from './page-reach'
+import { popupRecord } from './agent-tab-kind'
 import {
-  ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, personsTab, settled, sleep, where,
+  ACTING_MS, AgentError, WALNUT_PAGE, acting, agentTabs, allowed, checkPage, frameOp, loaded, mark, originOf, personsTab, settled, sleep, where,
   walnutCheck, type AgentTab, type WireCommand,
 } from './agent-shared'
 
@@ -111,6 +112,12 @@ async function waitUrl(tabId: number, pattern: string, ms: unknown): Promise<Rec
   throw new AgentError(`The address did not match ${pattern} within ${Math.round(limit / 1000)} s.`, 'wait_timeout')
 }
 
+/** The page held a step for the person's yes (page-ops.ts held). */
+export function outwardHeld(hold: unknown): AgentError {
+  const h = (hold ?? {}) as { what?: string; why?: string }
+  return new AgentError(`That would ${h.what ?? 'act'} (${h.why ?? 'it acts in the person\'s name'}): it waits for the person's yes.`, 'outward_needs_ok', { hold })
+}
+
 // ── tabs an agent's tab opens ──
 
 /** New tabs an agent tab opened lately, for the answer of the action that opened them. */
@@ -119,19 +126,56 @@ const opened: Array<{ tab: number; opener: number; at: number }> = []
 const linking = new Map<number, string>()
 
 async function adoptOpened(tabId: number, rec: AgentTab, url?: string): Promise<void> {
-  const fromPerson = personsTab(rec) || rec.fromPerson === true
-  await agentTabs.set(tabId, { owner: rec.owner, ...(rec.who ? { who: rec.who } : {}), history: url ? [url] : [], popup: true, ...(fromPerson ? { fromPerson } : {}) })
+  await agentTabs.set(tabId, popupRecord(rec, url))
   await loaded(tabId)
   // What loaded may be Walnut itself: never an agent's.
   if ((await pageCheck(tabId))?.walnut) { await agentTabs.delete(tabId); await ext.tabs.remove(tabId).catch(() => undefined); return }
   await mark(tabId, true, rec.who)
 }
 
+/**
+ * New tabs with no opener the browser names (a page's window.open into a new popup window: Chrome
+ * sets openerTabId only within one window), each with the check of which agent tab opened it.
+ */
+const unnamed: Array<{ tab: number; at: number; check: Promise<number | undefined> }> = []
+
+/**
+ * A new window's tab is an agent tab's when one was being acted in just then, and the new page has
+ * an opener and came from that tab's origin (its referrer). Read in the extension's own world.
+ */
+async function openerOf(t: NewTab): Promise<number | undefined> {
+  const now = Date.now()
+  const live = [...acting.entries()].filter(([, until]) => until >= now).sort((a, b) => b[1] - a[1]).map(([id]) => id)
+  const candidates: Array<{ id: number; rec: AgentTab; url: string }> = []
+  for (const id of live) {
+    const rec = await agentTabs.get(id)
+    const tab = rec ? await ext.tabs.get(id).catch(() => null) : null
+    if (rec && tab?.url) candidates.push({ id, rec, url: tab.url })
+  }
+  if (!candidates.length || t.id === undefined || !more.scripting) return undefined
+  await loaded(t.id, 10_000)
+  const [r] = await more.scripting.executeScript({ target: { tabId: t.id }, func: () => ({ referrer: document.referrer, opener: !!window.opener }) }).catch(() => [])
+  const info = r?.result as { referrer?: string; opener?: boolean } | undefined
+  if (!info?.opener || !info.referrer) return undefined
+  const from = originOf(info.referrer)
+  const hit = candidates.find((c) => originOf(c.url) === from)
+  if (!hit) return undefined
+  opened.push({ tab: t.id, opener: hit.id, at: Date.now() })
+  if (opened.length > 50) opened.shift()
+  await adoptOpened(t.id, hit.rec, t.pendingUrl || t.url)
+  return hit.id
+}
+
 /** A tab or window an agent tab opened is the same agent's (the person's own tab only while an agent acts in it). */
 export function watchOpened(): void {
   more.tabs.onCreated.addListener((t: NewTab) => {
     const opener = t.openerTabId
-    if (opener === undefined || t.id === undefined) return
+    if (t.id === undefined) return
+    if (opener === undefined) {
+      unnamed.push({ tab: t.id, at: Date.now(), check: openerOf(t).catch(() => undefined) })
+      if (unnamed.length > 20) unnamed.shift()
+      return
+    }
     const id = t.id
     // One this extension opens itself is set up there (its create may answer after this event).
     if (linking.get(opener) === (t.pendingUrl || t.url)) return
@@ -173,10 +217,17 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
   acting.set(tabId, Date.now() + ms + ACTING_MS)
   try {
     let r = await frameOp(tabId, frameId, c.action, a, c.allow, ms)
+    // A step that buys, sends or deletes: nothing was done, the person is asked (routes/browser-v1.ts).
+    if (r.hold) throw outwardHeld(r.hold)
     if (frameId === 0 && WHOLE_TAB.has(c.action)) r = await wholeTab(c, tabId, r)
     let link: { tab: number; url: string } | undefined
     if (typeof r.newTab === 'string') { link = await openLink(c, tabId, tab, rec, r.newTab); delete r.newTab }
     if (MAY_NAVIGATE.has(c.action)) await settled(tabId)
+    // A window the page opened with no opener named: wait (briefly) to learn whether it was this tab's.
+    if (!link && !opened.some((o) => o.opener === tabId && o.at >= started)) {
+      const checks = unnamed.filter((u) => u.at >= started).map((u) => u.check)
+      if (checks.length) await Promise.race([Promise.all(checks), sleep(8000)])
+    }
     const popup = link ?? opened.find((o) => o.opener === tabId && o.at >= started)
     return { ...r, ...(await where(tabId)), ...(popup ? { opened: { tab: popup.tab, url: 'url' in popup ? popup.url : (await ext.tabs.get(popup.tab).catch(() => ({} as Tab))).url } } : {}) }
   } finally {

@@ -14,9 +14,10 @@ const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : 
 export function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of ['url', 'ref', 'x', 'y', 'text', 'clear', 'submit', 'value', 'key', 'direction', 'amount', 'ms', 'full', 'max',
-    'exact', 'role', 'limit', 'to', 'by', 'textGone', 'all', 'trusted', 'accept', 'expression', 'wait']) {
+    'exact', 'role', 'limit', 'to', 'by', 'textGone', 'all', 'trusted', 'accept', 'expression', 'wait', 'format']) {
     if (b[k] !== undefined) out[k] = b[k]
   }
+  if (out.format !== undefined && out.format !== 'png' && out.format !== 'jpeg') delete out.format
   if (typeof out.text === 'string') out.text = (out.text as string).slice(0, 20_000)
   if (typeof out.textGone === 'string') out.textGone = (out.textGone as string).slice(0, 2000)
   if (typeof out.url === 'string') out.url = (out.url as string).slice(0, 4000)

@@ -15,6 +15,12 @@ const ACTIONS = [
 
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
   if (body.status === 'needs_ok') {
+    if (body.code === 'outward_needs_ok') {
+      return {
+        outcome: String(body.error ?? 'Waiting for the person to approve this step (a notification on their Mac and phone).'),
+        next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,
+      }
+    }
     if (args.action === 'fill_login') {
       return {
         outcome: `Waiting for the person to approve signing in with "${(body.item as { title?: string } | undefined)?.title ?? 'the login'}" (a notification on their Mac and phone).`,
@@ -68,7 +74,10 @@ defineOp({
     + 'dialog {accept, text?} answers an alert, confirm or prompt; evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
     + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), site_denied, not_your_tab, person_is_here, trusted_off, test_run. '
-    + 'Passwords: sign in with fill_login; never type one you read from elsewhere. Ask the user before a step that sends, buys or deletes something in their name.',
+    + 'Passwords: sign in with fill_login; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
+    + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
+    + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
+    + 'or a link that acts on a plain visit (evaluate needs the user\'s real input switch): never use them to take a step the user has not approved.',
   input: {
     action: z.enum(ACTIONS).describe('What to do'),
     tab: z.number().int().optional().describe('The tab id (from open or tabs); default the tab you used last'),
@@ -93,13 +102,14 @@ defineOp({
     to: z.enum(['top', 'bottom']).optional().describe('scroll: to the top or bottom of the page'),
     ms: z.number().int().min(0).max(30_000).optional().describe('wait: how long, when not waiting for text; downloads: how long to wait'),
     full: z.boolean().optional().describe('screenshot: the whole page, not only what is on screen'),
+    format: z.enum(['jpeg', 'png']).optional().describe('screenshot: the image format (default jpeg)'),
     files: z.array(z.object({ name: z.string().max(255), type: z.string().max(200).optional(), base64: z.string().max(14_000_000) })).max(20).optional()
       .describe('upload: the files, their bytes as base64 (10 MB in all)'),
     paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: files on the browser\'s own machine'),
     all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
     item: z.string().max(200).optional().describe('fill_login: the login (its id, name or username) when the site has several'),
-    request: z.string().max(100).optional().describe('fill_login: the request id from needs_ok, to wait for the user\'s approval'),
+    request: z.string().max(100).optional().describe('fill_login, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their approval'),
     purpose: z.string().max(200).optional().describe('fill_login: why, in a few words the user reads on the approval'),
     trusted: z.boolean().optional().describe('click / hover / type / press / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
     accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false)'),
@@ -126,8 +136,9 @@ defineOp({
   input: {},
   bind: { method: 'GET', path: '/browser/status' },
   mapResult: ({ body }) => {
-    const b = (body ?? {}) as { browsers?: Array<{ label: string }>; mode?: string; sites?: Array<{ site: string }> }
-    const names = (b.browsers ?? []).map((x) => x.label)
+    const b = (body ?? {}) as { browsers?: Array<{ label: string; caps?: string[] }>; mode?: string; sites?: Array<{ site: string }> }
+    // A browser whose agents switch is off but where the person handed over a tab from the side panel.
+    const names = (b.browsers ?? []).map((x) => (x.caps?.includes('handed-tabs-only') ? `${x.label} (only the tab the person handed over)` : x.label))
     return withOutcome(b as Record<string, unknown>,
       names.length ? `Connected: ${names.join(', ')}. ${b.mode === 'any' ? 'Any site.' : `A new site asks the person; allowed: ${(b.sites ?? []).map((s) => s.site).join(', ') || 'none yet'}.`}` : 'No browser lets agents in now.',
       names.length ? 'browser with action open to start.' : 'Ask the user to turn on "Let Walnut agents use this browser" in the Walnut extension popup, Settings.')

@@ -6,7 +6,7 @@
 import { ask } from './ext'
 import { h, icon } from './dom'
 import { getSettings, setSettings, type GeneratorPrefs } from './settings'
-import { copySecret, topBar } from './popup-ui'
+import { copySecret, iconButton, topBar } from './popup-ui'
 
 export async function generatorView(root: HTMLElement, back: () => void): Promise<void> {
   const prefs: GeneratorPrefs = (await getSettings()).generator
@@ -74,7 +74,7 @@ export async function generatorView(root: HTMLElement, back: () => void): Promis
     h('div', { class: 'pane' }, kinds, out,
       h('div', { style: 'display:flex;gap:6px;margin-top:10px' },
         h('button', { class: 'btn btn-primary', type: 'button', style: 'flex:1', 'data-testid': 'gen-copy', onclick: () => void copySecret(out.textContent ?? '', 'Password') }, 'Copy'),
-        h('button', { class: 'btn', type: 'button', title: 'Make another', 'aria-label': 'Make another', onclick: () => void make() }, icon('dice'))),
+        iconButton(icon('dice'), 'Make another', () => void make(), { class: 'btn icon-only', 'data-testid': 'gen-again' })),
       options,
       h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut offers a strong password in the field itself (made to fit what the field accepts) and saves it when you send the form.'))))
 }

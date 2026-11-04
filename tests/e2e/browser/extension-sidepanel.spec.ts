@@ -241,7 +241,7 @@ test('a selection asked about later leads the next message', async () => {
 test('turning acting off gives the tab back', async () => {
   await view().getByTestId('ext-panel-act').uncheck()
   await expect.poll(framed, { timeout: 15_000 }).toBe(false)
-  await expect.poll(async () => (await act({ action: 'snapshot', tab: docTab }, askSession)).status, { timeout: 15_000 }).toBe(403)
+  await expect.poll(async () => [403, 409].includes((await act({ action: 'snapshot', tab: docTab }, askSession)).status), { timeout: 15_000 }).toBe(true)
 })
 
 test('Stop on the page takes the tab back, and the panel\'s switch follows', async () => {
@@ -252,7 +252,7 @@ test('Stop on the page takes the tab back, and the panel\'s switch follows', asy
   // The Stop button is the right end of the pill in the bottom right corner (a closed shadow root).
   await doc.mouse.click(vw.w - 14 - 8 - 20, vw.h - 14 - 7 - 11)
   await expect(view().getByTestId('ext-panel-act')).not.toBeChecked({ timeout: 15_000 })
-  await expect.poll(async () => (await act({ action: 'snapshot', tab: docTab }, askSession)).status, { timeout: 15_000 }).toBe(403)
+  await expect.poll(async () => [403, 409].includes((await act({ action: 'snapshot', tab: docTab }, askSession)).status), { timeout: 15_000 }).toBe(true)
 })
 
 test('another page has its own conversation, and the first one comes back', async () => {

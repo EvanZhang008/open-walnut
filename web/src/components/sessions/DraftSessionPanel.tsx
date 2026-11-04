@@ -354,13 +354,21 @@ interface Props {
   repairTarget?: WalnutRepairTarget | null;
   /** A walnut draft's name in the header and placeholder ("Main" for the main agent); default "Ask Walnut". */
   walnutLabel?: string;
+  /**
+   * A plain chat's first message (the browser side panel's Ask, SessionPanel's `plainChat`): no
+   * draft header, no model pill, no slash commands or "@" palette, `placeholder` in the composer.
+   * The host passes no mode fork and no task fields, so none are drawn either.
+   */
+  plainChat?: boolean;
+  /** The composer's placeholder, in place of the draft's own. */
+  placeholder?: string;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -653,12 +661,12 @@ export function DraftSessionPanel({
 
   return (
     <div
-      className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}`}
+      className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}${plainChat ? ' is-plain-chat' : ''}`}
       ref={rootRef}
       data-draft-id={draft.id}
       onKeyDownCapture={showDraftMenu && onTaskFieldChange ? onComposerKeyDown : undefined}
     >
-      <div className="session-panel-header">
+      {!plainChat && <div className="session-panel-header">
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
@@ -700,7 +708,7 @@ export function DraftSessionPanel({
             &times;
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Empty body. On a plain draft it carries the ENTRY FORK, made before
           the first keystroke: two big intent cards (the approved mockup's
@@ -880,18 +888,20 @@ export function DraftSessionPanel({
             onMenuOpen: ensureQuickParseLoaded,
           }] : undefined}
           draftKey={draftComposerKey(draft.id)}
-          placeholder={isFork ? FORK_PLACEHOLDER
+          placeholder={placeholder ?? (isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
               : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
-                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : PLACEHOLDER}
+                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : PLACEHOLDER)}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}
-          sessionCommands={slashCommands}
-          searchSessionCommands={searchSlashCommands}
-          onRefreshSessionCommands={refreshSlashCommands}
-          onSessionCommandsPaletteOpen={onSlashPaletteOpen}
-          sessionCommandsStatus={slashCommandsStatus}
+          {...(plainChat ? {} : {
+            sessionCommands: slashCommands,
+            searchSessionCommands: searchSlashCommands,
+            onRefreshSessionCommands: refreshSlashCommands,
+            onSessionCommandsPaletteOpen: onSlashPaletteOpen,
+            sessionCommandsStatus: slashCommandsStatus,
+          })}
           // The same "@" palette a running session has: Tasks and Files, in
           // every draft. Before a folder is picked the Files group browses the
           // host's home (the server and the daemon both expand `~`), so the
@@ -900,11 +910,11 @@ export function DraftSessionPanel({
           // appends its reference card.
           mentionCwd={draft.cwd || '~'}
           mentionHost={draft.host ?? undefined}
-          enableEntityMention
+          enableEntityMention={!plainChat}
           mentionSelfTaskId={draft.taskId}
           // Shift+Tab cycles the permission mode, as it does in a running session.
           onToggleMode={showModePill ? cycleDraftMode : undefined}
-          controlsSlot={(
+          controlsSlot={plainChat ? undefined : (
             <div className="session-mode-bar draft-actions-bar">
               {/* The row reads like a running session's: mode first, then model.
                   The mode is the one launch choice that changes what the session

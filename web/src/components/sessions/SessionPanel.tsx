@@ -153,6 +153,7 @@ import { SessionHeaderMoreMenu } from './SessionHeaderMore';
 import { SessionHeaderLabels } from './SessionHeaderLabels';
 import { useTitleRowTight } from './useTitleRowTight';
 import '@/styles/session-header-fit.css';
+import '@/styles/session-plain-chat.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
 import { dropSavedColumn } from '@/utils/layout-record';
@@ -368,9 +369,19 @@ interface SessionPanelProps {
   headerSlot?: HTMLElement | null;
   /** With headerSlot: the kebab's Board row opens the host's Board instead of this panel's own. */
   onHostBoard?: () => void;
+  /**
+   * A plain chat (the browser side panel's Ask, about the page the person is on): the
+   * conversation and a composer, nothing of a coding session. No header (the host has its
+   * own), no mode, model or "+" session controls, no slash commands, no unread tint on the
+   * composer, and the live turn reads "Walnut is thinking…". Every other host leaves it off.
+   */
+  plainChat?: boolean;
+  /** A host's pill in the composer, above the text (the side panel's page selection that goes
+   *  with the next message). A question thread's own target pill wins over it. */
+  composerPill?: ReactNode;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -2424,7 +2435,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}${hostHeader ? ' has-host-header' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread && !plainChat ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${plainChat ? ' is-plain-chat' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}${hostHeader ? ' has-host-header' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -3222,6 +3233,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             scrollToBottomNonce={prefillNonce + composerScrollNonce}
             onRequestComposerFocus={requestComposerFocus}
             onQuoteInChat={quoteInChat}
+            {...(plainChat ? { workingText: 'Walnut is thinking…' } : {})}
           />
           </TreeHalfContext.Provider>
           </MessageAboutContext.Provider>
@@ -3269,13 +3281,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).
             onDictationInsert={holdDictationSelection}
-            controlsSlot={session ? (
+            controlsSlot={session && !plainChat ? (
               <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
             ) : undefined}
-            addMenuControls={{ handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
+            addMenuControls={plainChat ? undefined : { handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             contextPill={threads.composerTarget ? (
               <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />
-            ) : undefined}
+            ) : composerPill}
             onSend={handleComposerSend}
             onInterruptSend={handleInterruptSend}
             // Pending quotes and comments are a message by themselves.
@@ -3283,21 +3295,23 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             onStop={handleStopTurn}
             isStreaming={isStreaming}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
-            placeholder={threads.composerPlaceholder ?? (phoneLayer || phoneWidth
+            placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
               ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
               : 'Send a message to this session... (/ for commands)')}
             onValueChange={handleComposerValue}
             showCommands={false}
-            sessionCommands={slashCommands}
-            searchSessionCommands={searchSlashCommands}
-            onRefreshSessionCommands={refreshSlashCommands}
-            onSessionCommandsPaletteOpen={onSlashPaletteOpen}
-            sessionCommandsStatus={slashCommandsStatus}
-            onControlCommand={handleControlCommand}
-            mentionCwd={session?.cwd}
-            mentionHost={session?.host}
-            plusMenuActions={plusActions}
-            enableEntityMention
+            {...(plainChat ? {} : {
+              sessionCommands: slashCommands,
+              searchSessionCommands: searchSlashCommands,
+              onRefreshSessionCommands: refreshSlashCommands,
+              onSessionCommandsPaletteOpen: onSlashPaletteOpen,
+              sessionCommandsStatus: slashCommandsStatus,
+              onControlCommand: handleControlCommand,
+              mentionCwd: session?.cwd,
+              mentionHost: session?.host,
+              plusMenuActions: plusActions,
+              enableEntityMention: true,
+            })}
             sessionMentionSelfId={sessionId}
             // Per page: the root keeps `draft:session:<id>` (old drafts survive),
             // a question page and a pending Ask each have their own.
@@ -3306,7 +3320,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             prefillMode={prefillMode}
-            onToggleMode={session ? () => {
+            onToggleMode={session && !plainChat ? () => {
               if (engineUi.configModes) {
                 const control = sessionControls.find((candidate) => candidate.id === 'mode');
                 const next = nextSessionControlValue(control);

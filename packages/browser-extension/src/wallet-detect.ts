@@ -130,23 +130,57 @@ function pickOption(sel: HTMLSelectElement, value: string, part: WalletPart): bo
   return true
 }
 
-/** Fill a group from part values: a field the item has nothing for stays as it is. */
-export function fillWallet(g: WalletGroup, values: Partial<Record<WalletPart, string>>): number {
-  let filled = 0
-  for (const { el, part } of g.fields) {
-    let v = values[part]
-    // A field that takes month and year as "MM/YY", sized by what it allows.
-    if (part === 'cc-exp' && !v && values['cc-exp-month'] && values['cc-exp-year']) {
-      const mm = values['cc-exp-month'].padStart(2, '0')
-      // "MM/YY", the way card forms ask for it; "MM/YYYY" only where the field says it is that long.
-      const yy = values['cc-exp-year']
-      v = `${mm}/${el instanceof HTMLInputElement && el.maxLength >= 7 && /yyyy/i.test(el.placeholder) ? yy : yy.slice(-2)}`
-    }
-    if (part === 'cc-exp-year' && v && el instanceof HTMLInputElement && el.maxLength === 2) v = v.slice(-2)
-    if (part === 'cc-exp-month' && v && el instanceof HTMLInputElement) v = v.padStart(2, '0')
-    if (!v) continue
-    if (el instanceof HTMLSelectElement) { if (pickOption(el, v, part)) filled++ }
-    else if (!el.value || el.value !== v) { setValue(el, v); filled++ }
+/** The value an item has for one field of a form, shaped the way that field asks for it. */
+function valueFor(el: WalletField, part: WalletPart, values: Partial<Record<WalletPart, string>>): string | undefined {
+  let v = values[part]
+  // A field that takes month and year as "MM/YY", sized by what it allows.
+  if (part === 'cc-exp' && !v && values['cc-exp-month'] && values['cc-exp-year']) {
+    const mm = values['cc-exp-month'].padStart(2, '0')
+    // "MM/YY", the way card forms ask for it; "MM/YYYY" only where the field says it is that long.
+    const yy = values['cc-exp-year']
+    v = `${mm}/${el instanceof HTMLInputElement && el.maxLength >= 7 && /yyyy/i.test(el.placeholder) ? yy : yy.slice(-2)}`
   }
-  return filled
+  if (part === 'cc-exp-year' && v && el instanceof HTMLInputElement && el.maxLength === 2) v = v.slice(-2)
+  if (part === 'cc-exp-month' && v && el instanceof HTMLInputElement) v = v.padStart(2, '0')
+  return v || undefined
+}
+
+/**
+ * Fill a group from part values: a field the item has nothing for stays as it is. `filled` counts
+ * the fields that hold the item's value now (one that already did counts); `missing` names the
+ * parts the form asks for that the item has no value for, or a list with no option that fits.
+ */
+export function fillWallet(g: WalletGroup, values: Partial<Record<WalletPart, string>>): { filled: number; missing: WalletPart[] } {
+  let filled = 0
+  const missing: WalletPart[] = []
+  for (const { el, part } of g.fields) {
+    const v = valueFor(el, part, values)
+    if (!v) { missing.push(part); continue }
+    if (el instanceof HTMLSelectElement) { if (pickOption(el, v, part)) filled++; else missing.push(part) }
+    else { if (el.value !== v) setValue(el, v); filled++ }
+  }
+  return { filled, missing }
+}
+
+const PART_WORDS: Record<WalletPart, string> = {
+  'cc-name': 'name on card', 'cc-number': 'card number', 'cc-exp': 'expiry date', 'cc-exp-month': 'expiry date', 'cc-exp-year': 'expiry date', 'cc-csc': 'security code',
+  name: 'name', 'given-name': 'name', 'family-name': 'name', email: 'email', tel: 'phone', organization: 'company',
+  'address-line1': 'address', 'address-line2': 'address line 2', 'address-line3': 'address line 3', 'street-address': 'address',
+  city: 'city', region: 'state or region', 'postal-code': 'ZIP or postal code', country: 'country',
+}
+
+const OPTIONAL = new Set<WalletPart>(['address-line2', 'address-line3', 'organization'])
+
+/**
+ * What a person reads after a card or address fill that left fields empty: what was filled, and
+ * what this item has no value for. Nothing when every field got its value.
+ */
+export function fillNote(kind: WalletKind, r: { filled: number; missing: WalletPart[] }): string {
+  // Parts most people leave empty (a second address line, a company) are not worth a note.
+  const lacking = [...new Set(r.missing.filter((p) => !OPTIONAL.has(p)).map((p) => PART_WORDS[p]))]
+  if (!lacking.length) return ''
+  const what = kind === 'card' ? 'This card' : 'This identity'
+  const list = lacking.length > 1 ? `${lacking.slice(0, -1).join(', ')} or ${lacking[lacking.length - 1]}` : lacking[0]
+  return r.filled ? `Filled ${r.filled} ${r.filled === 1 ? 'field' : 'fields'}. ${what} has no ${list} saved in Walnut.`
+    : `Nothing filled: ${what.toLowerCase()} has no ${list} saved in Walnut.`
 }

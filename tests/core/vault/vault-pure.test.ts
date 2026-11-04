@@ -90,9 +90,11 @@ describe('site matching', () => {
     expect(normalizeUrl('   ')).toBe('')
   })
 
-  it('matches by registrable domain, never across a private suffix or from https to http', () => {
+  it('matches the host and its parent or child hosts, never a sibling, across a private suffix or from https to http', () => {
     expect(matchSite('https://github.com', 'https://github.com/login')).toBe('exact_host')
-    expect(matchSite('https://accounts.example.co.uk', 'https://www.example.co.uk/')).toBe('domain')
+    expect(matchSite('https://example.co.uk', 'https://www.example.co.uk/')).toBe('domain')
+    // A sibling subdomain is tier 2 (siblingSite), never a match.
+    expect(matchSite('https://accounts.example.co.uk', 'https://www.example.co.uk/')).toBeNull()
     expect(matchSite('https://alice.github.io', 'https://mallory.github.io/')).toBeNull()
     expect(matchSite('https://example.com', 'http://example.com/')).toBeNull()
     expect(matchSite('http://example.com', 'https://example.com/')).toBe('exact_host')

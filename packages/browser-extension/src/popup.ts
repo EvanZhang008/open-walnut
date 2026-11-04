@@ -5,13 +5,14 @@
  * which has the person's click.
  */
 import { ask, ext } from './ext'
-import { avatar, h, icon, totpView } from './dom'
-import { copySecret, errLine, toast } from './popup-ui'
+import { h, icon } from './dom'
+import { errLine, iconButton, popupIcon } from './popup-ui'
 import { generatorView } from './popup-generator'
 import { settingsView } from './popup-settings'
+import { itemRow, type Item, type PopupCtx } from './popup-item'
+import { findWalnut, rememberServer } from './popup-connect'
 import { startClipboardPage } from './clipboard-page'
 
-interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string; sub?: string }
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
 
 const root = document.getElementById('root')!
@@ -23,8 +24,9 @@ const embedded = params.get('embed') === 'panel'
 /** A window of its own (the unlock window), which closes when its work is done. */
 const inWindow = params.has('window') && !embedded
 const panelWindow = embedded ? Number(params.get('window')) || undefined : undefined
-/** How long a password shown in the side panel stays on show. */
-const REVEAL_MS = 20_000
+// The side panel and a window of its own give the view their width; the toolbar popup is 360 px.
+if (embedded || inWindow) document.documentElement.classList.add('wide')
+const ctx: PopupCtx = { root, embedded, inWindow, panelWindow, back: () => void render() }
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
 let windowId: number | undefined
@@ -54,7 +56,23 @@ function busy(b: HTMLButtonElement, on: boolean, label?: string): void {
 // ── not connected ──
 
 function connectView(st: State): HTMLElement {
-  const server = h('input', { class: 'input', id: 'server', value: st.serverUrl ?? 'http://localhost:3456', 'aria-label': 'Walnut address', spellcheck: 'false' })
+  const server = h('input', { class: 'input', id: 'server', value: st.serverUrl ?? 'http://localhost:3456', 'aria-label': 'Walnut address', spellcheck: 'false', autocomplete: 'url' }) as HTMLInputElement
+  // Walnut is looked for at once; what the person types is never replaced.
+  let typed = false
+  server.addEventListener('input', () => { typed = true })
+  const found = h('p', { class: 'found', 'data-testid': 'popup-found', role: 'status' }, 'Looking for Walnut on this computer…')
+  void findWalnut().then((at) => {
+    if (!found.isConnected) return
+    if (at) {
+      if (!typed) server.value = at
+      found.className = 'found ok'
+      found.replaceChildren(popupIcon('check'), h('span', {}, `Found Walnut at ${new URL(at).host}`))
+    } else {
+      found.className = 'found miss'
+      found.textContent = 'No Walnut answered on this computer. Type the address you open Walnut at, such as https://walnut.example.com.'
+      if (!typed && (document.activeElement === document.body || !document.activeElement)) { server.focus(); server.select() }
+    }
+  })
   const err = errLine()
   const go = h('button', { class: 'btn btn-primary btn-block', type: 'button', 'data-testid': 'popup-connect' }, 'Connect')
   go.onclick = async () => {
@@ -62,6 +80,7 @@ function connectView(st: State): HTMLElement {
     const r = await ask({ type: 'start-connect', serverUrl: server.value })
     busy(go, false)
     if (!r.ok) { err.textContent = r.error ?? ''; return }
+    rememberServer(server.value)
     if (!inWindow) window.close()
   }
   const code = h('input', { class: 'input mono', id: 'code', placeholder: 'ABCD-EFGH', 'aria-label': 'Pairing code', autocomplete: 'off', spellcheck: 'false' })
@@ -71,14 +90,15 @@ function connectView(st: State): HTMLElement {
     const r = await ask({ type: 'pair-code', serverUrl: server.value, code: code.value })
     busy(useCode, false)
     if (!r.ok) { err.textContent = r.error ?? ''; return }
+    rememberServer(server.value)
     void render()
   }
   return h('div', { class: 'center' },
-    h('span', { class: 'big-icon' }, icon('plug')),
+    h('span', { class: 'big-icon' }, icon('keyBig')),
     h('h2', {}, 'Connect to Walnut'),
     h('p', {}, 'Fill and save passwords from your Walnut vault. Walnut opens a page that connects this browser.'),
-    h('label', { class: 'field-label', for: 'server', style: 'text-align:left' }, 'Walnut address'), server,
-    h('div', { style: 'height:10px' }), go, err,
+    h('label', { class: 'field-label', for: 'server', style: 'text-align:left' }, 'Walnut address'), server, found,
+    h('div', { style: 'height:12px' }), go, err,
     h('details', { style: 'text-align:left' },
       h('summary', {}, 'Have a pairing code instead?'),
       h('p', { class: 'muted', style: 'font-size:12px;margin:8px 0' }, 'In Walnut: Settings, Devices, Connect a browser.'),
@@ -135,87 +155,6 @@ async function unlockView(st: State): Promise<HTMLElement> {
 
 // ── unlocked ──
 
-async function copy(id: string, field: 'username' | 'password' | 'totp' | 'number' | 'code', what: string): Promise<void> {
-  const r = await ask<{ value: string }>({ type: 'copy-secret', id, field })
-  if (!r.ok) { toast(r.error ?? 'Could not copy.'); return }
-  await copySecret(r.value, what)
-}
-
-async function fillTab(it: Item): Promise<void> {
-  const r = await ask<{ code?: string }>({ type: 'fill-tab', id: it.id, ...(panelWindow ? { windowId: panelWindow } : {}) })
-  if (!r.ok) { toast(r.error ?? 'Could not fill.'); return }
-  // Its one-time code goes on the clipboard (the background had no clipboard of its own here).
-  if (r.code) await copySecret(r.code, 'Code')
-  if (embedded) { if (!r.code) toast('Filled') } else if (!inWindow) setTimeout(() => window.close(), r.code ? 700 : 0)
-}
-
-/** A login's current one-time code with its countdown; a click copies it. */
-function codeChip(it: Item): HTMLElement {
-  const chip = h('button', { class: 'totp-chip', type: 'button', title: 'Copy one-time code', 'aria-label': 'Copy one-time code', 'data-testid': 'popup-totp' }) as HTMLButtonElement
-  const load = async () => {
-    const t = await ask<{ code: string; period: number; remaining: number }>({ type: 'totp-code', id: it.id })
-    if (!t.ok) { chip.remove(); return }
-    chip.replaceChildren(totpView(t, () => { if (chip.isConnected) void load() }))
-    chip.onclick = (e: Event) => { e.stopPropagation(); void copySecret(t.code, 'Code') }
-  }
-  void load()
-  return chip
-}
-
-const isLogin = (it: Item) => !it.type || it.type === 'login'
-
-function itemRow(it: Item, fillable: boolean): HTMLElement {
-  const card = it.type === 'card'
-  const actions = h('div', { class: 'item-actions' },
-    it.username ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy username', 'aria-label': 'Copy username', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'username', 'Username') } }, icon('user')) : null,
-    isLogin(it) || it.type === 'api_key' ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy password', 'aria-label': 'Copy password', 'data-testid': 'copy-password', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'password', 'Password') } }, icon('copy')) : null,
-    card ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy card number', 'aria-label': 'Copy card number', 'data-testid': 'copy-number', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'number', 'Card number') } }, icon('copy')) : null,
-    card ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy security code', 'aria-label': 'Copy security code', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'code', 'Security code') } }, icon('lock')) : null)
-  const subText = it.sub || it.username || it.site || (it.type === 'identity' ? 'Identity' : '')
-  const sub = h('span', { class: 'row-sub' }, subText)
-  // In the side panel there is room to show a password; it hides again on the next click.
-  if (embedded && isLogin(it)) {
-    let shown = false
-    const eye = h('button', { class: 'icon-btn', type: 'button', title: 'Show password', 'aria-label': 'Show password', 'data-testid': 'reveal-password' }, icon('eye')) as HTMLButtonElement
-    let hideTimer: ReturnType<typeof setTimeout> | undefined
-    const hide = () => {
-      clearTimeout(hideTimer)
-      shown = false; sub.textContent = subText; sub.classList.remove('mono'); eye.title = 'Show password'
-      document.removeEventListener('visibilitychange', hide)
-    }
-    eye.onclick = async (e: Event) => {
-      e.stopPropagation()
-      if (shown) { hide(); return }
-      const r = await ask<{ value: string }>({ type: 'copy-secret', id: it.id, field: 'password' })
-      if (!r.ok) { toast(r.error ?? 'Could not show it.'); return }
-      shown = true
-      sub.textContent = r.value
-      sub.classList.add('mono')
-      eye.title = 'Hide password'
-      // Never left on show: hidden again after a while, or once the person leaves this tab.
-      hideTimer = setTimeout(hide, REVEAL_MS)
-      document.addEventListener('visibilitychange', hide)
-    }
-    actions.prepend(eye)
-  }
-  // A card or an identity fills the page's form; a login fills only on its own site.
-  const fills = fillable || it.type === 'card' || it.type === 'identity'
-  const row = h('div', { class: 'row item', tabindex: '0', role: 'button', 'data-testid': 'popup-item', title: fills ? 'Fill on this page' : '' },
-    it.type === 'card' ? h('span', { class: 'avatar', style: 'background:#5b4fa8' }, icon('card')) : it.type === 'identity' ? h('span', { class: 'avatar', style: 'background:#2f7f7a' }, icon('person')) : avatar(it.site ?? it.title),
-    h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), sub),
-    actions,
-    it.hasTotp && isLogin(it) ? codeChip(it) : null,
-    fills ? h('span', { class: 'icon-btn', 'aria-hidden': 'true', style: 'color:var(--accent)' }, icon('fill')) : null)
-  const act = () => {
-    if (fills) void fillTab(it)
-    else if (isLogin(it) || it.type === 'api_key') void copy(it.id, 'password', 'Password')
-    else void ask({ type: 'open-walnut' })
-  }
-  row.onclick = act
-  row.onkeydown = (e) => { if (e.key === 'Enter') act() }
-  return row
-}
-
 async function vaultView(st: State): Promise<HTMLElement> {
   const site = await ask<{ site: string; items: Item[]; insecure?: number }>({ type: 'site-items', ...(panelWindow ? { windowId: panelWindow } : {}) })
   if (!site.ok && (site.code === 'vault_session_needed' || site.code === 'vault_locked')) return unlockView({ ...st, unlocked: false })
@@ -229,7 +168,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
     list.replaceChildren()
     if (site.site) {
       list.append(h('div', { class: 'section-label' }, `For ${site.site}`))
-      if (siteItems.length) for (const it of siteItems) list.append(itemRow(it, true))
+      if (siteItems.length) for (const it of siteItems) list.append(itemRow(it, true, ctx))
       else if (site.insecure) {
         // Saved for the https address: this plain http page does not get it, and the person is told why.
         list.append(h('div', { class: 'notice', 'data-testid': 'popup-insecure' }, icon('warn'),
@@ -241,8 +180,8 @@ async function vaultView(st: State): Promise<HTMLElement> {
     // Cards and identities fill the page's payment or address form.
     const cards = wallet.ok ? wallet.cards.slice(0, 3) : []
     const people = wallet.ok ? wallet.identities.slice(0, 3) : []
-    if (cards.length) { list.append(h('div', { class: 'section-label' }, 'Cards')); for (const it of cards) list.append(itemRow(it, false)) }
-    if (people.length) { list.append(h('div', { class: 'section-label' }, 'Identities')); for (const it of people) list.append(itemRow(it, false)) }
+    if (cards.length) { list.append(h('div', { class: 'section-label' }, 'Cards')); for (const it of cards) list.append(itemRow(it, false, ctx)) }
+    if (people.length) { list.append(h('div', { class: 'section-label' }, 'Identities')); for (const it of people) list.append(itemRow(it, false, ctx)) }
   }
   let seq = 0
   q.oninput = async () => {
@@ -255,7 +194,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
     if (!r.ok) { list.append(errLine(r.error)); return }
     if (!r.items.length) { list.append(h('div', { class: 'empty' }, `Nothing matches "${text}".`)); return }
     const here = new Set(siteItems.map((i) => i.id))
-    for (const it of r.items) list.append(itemRow(it, here.has(it.id)))
+    for (const it of r.items) list.append(itemRow(it, here.has(it.id), ctx))
   }
   q.onkeydown = (e) => {
     if (e.key === 'Enter') (list.querySelector<HTMLElement>('.item'))?.click()
@@ -270,17 +209,18 @@ async function vaultView(st: State): Promise<HTMLElement> {
   showSite()
   setTimeout(() => q.focus(), 30)
 
-  const lock = h('button', { class: 'icon-btn', type: 'button', title: 'Lock Walnut', 'aria-label': 'Lock Walnut', 'data-testid': 'popup-lock' }, icon('lock'))
-  lock.onclick = async () => { await ask({ type: 'lock' }); void render() }
+  const lock = iconButton(icon('lock'), 'Lock Walnut', async () => { await ask({ type: 'lock' }); void render() }, { 'data-testid': 'popup-lock' })
   return h('div', {},
-    h('div', { class: 'top' }, h('span', { class: 'logo' }, icon('key')), h('h1', {}, 'Walnut'), lock),
+    h('div', { class: 'top' }, h('span', { class: 'logo' }, icon('key')), h('h1', {}, 'Walnut'),
+      h('div', { class: 'top-tools' },
+        iconButton(icon('dice'), 'Password generator', () => void generatorView(root, () => void render()), { 'data-testid': 'popup-generator' }),
+        iconButton(popupIcon('gear'), 'Settings', () => void showSettings(st), { 'data-testid': 'popup-settings' }),
+        lock)),
     h('div', { class: 'pane', style: 'padding-bottom:0' }, h('div', { class: 'search' }, icon('search'), q)),
     list,
     h('div', { class: 'foot' },
       askButton(),
-      h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-generator', onclick: () => void generatorView(root, () => void render()) }, 'Generator'),
-      h('button', { class: 'btn', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut'),
-      h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-settings', onclick: () => void showSettings(st) }, 'Settings')))
+      h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-open-walnut', onclick: () => void ask({ type: 'open-walnut' }) }, icon('out'), h('span', {}, 'Open Walnut'))))
 }
 
 function showSettings(st: State): Promise<void> {

@@ -11,7 +11,9 @@ agents use this browser").
 
 - **Tabs it opened, and the tabs those open.** An agent's tabs open in a separate Walnut agent
   window, behind your own windows. A tab or window one of them opens (a link to a new tab, a
-  popup) is the same agent's, and the action that opened it says so (`opened: { tab, url }`).
+  popup window, which Chrome reports with no opener: the extension matches it to the agent tab
+  it was acting in by the new page's opener and referrer) is the same agent's, and the action
+  that opened it says so (`opened: { tab, url }`).
   Each agent tab wears a brown frame and a pill, "Walnut agent is using this tab", with
   **Stop**: Stop gives the tab back to you, and the agent can no longer use it. Only your own
   click counts (a click a page or an agent makes is not trusted and does nothing).
@@ -37,8 +39,26 @@ agents use this browser").
   you remove it; deny, and that task is refused there and not asked again for an hour. A page
   that moves to another site (a link, a redirect) asks the same way, and so does taking one of
   your tabs on a new site. A tab you hand over from the
-  side panel may go on in its own site with no ask. Agents still ask you before a step that
-  sends, buys, posts or deletes in your name, and each password they use is yours to approve.
+  side panel may go on in its own site with no ask. Each password they use is yours to approve.
+- **A step that buys, sends or deletes waits for your yes**, also on a site agents may use
+  freely: an agent's click, Enter or other key on Buy, Pay, Place order, Send, Post, Publish,
+  Delete, Remove or close an account, Cancel a subscription, on the submit of a form with card
+  details, on the submit of a form holding a message (a textarea or an editable box with text), or
+  Enter in a box holding a message (also Control+Enter or Meta+Enter, and a chat box with no form).
+  Enter or Space on a focused button or link counts as clicking it, and typed text that submits or
+  holds a newline counts as Enter. Walnut asks you as for a site (a notification on your Mac and
+  phone, open 10 minutes); the step runs once you approve, and only that step on that page. An
+  agent cannot answer for you: approving needs Face ID on your iPhone, Touch ID in the Mac app, or
+  Passwords unlocked in the window you approve from (a plain Approve from this machine is refused,
+  `proof_needed`). Opening, reading, typing, searching, filtering, Next, signing in and Add to cart
+  never ask (Add to cart: nothing leaves your hands until the order is placed, and that step asks).
+  The rules are in `packages/browser-extension/src/page-agent-outward.ts`.
+  **What this does not cover:** the ask judges only an agent's own click, key or typed text. It
+  does not see `evaluate` (a page script an agent runs), the page's own scripts, a request the
+  page sends by itself (`fetch`), or a link that acts on a plain visit (a GET that deletes or
+  buys). `evaluate` works only after you turn on "Let agents use real mouse and keys" in the
+  extension's Settings, which also lets agents run page scripts in tabs they opened; leave it off
+  unless an agent needs it.
 - **Never Walnut's own pages, nor the browser's** (settings, extension pages, `file:`). Walnut at
   any address (its tunnel, the cloud companion, another machine) is known by the mark its page
   carries; such a tab is closed at once.
@@ -91,7 +111,11 @@ selection, **Ask Walnut about ...**.
   alone: no agent may open that site elsewhere on that click. Only that conversation's task may
   use it; it never closes it (closing gives it back) and never brings it forward for a screenshot.
   Untick the box, press Stop, or **Take it back** (shown when another conversation holds the tab)
-  and it is yours again. Turning it on also turns on Walnut agents in this browser.
+  and it is yours again. It lets agents into that tab only: the browser-wide "Let Walnut agents
+  use this browser" stays as you set it, and with it off no agent may open a new tab, take
+  another or list your tabs (`agents_tab_only`); giving the last such tab back ends it. A window
+  the page in that tab opens counts as that tab (also one it opens in turn); a window from a tab an
+  agent took (`take`) does not (`packages/browser-extension/src/agent-tab-kind.ts`).
 - An ask that runs on another machine gets the page's text in its first message (cut at 30,000
   characters), since it cannot read this machine's file. A Walnut too old for the panel is named
   in the panel ("Update Walnut").
@@ -136,7 +160,7 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `hover` | `ref` or `x, y` | pointer over, enter and move events (menus that open on hover) |
 | `scroll` | `direction` (up, down, left, right), `amount` (screens) or `by` (px), or `to` (top, bottom), or `ref` | answers `scrollTop`, `scrollLeft`, `atTop`, `atBottom` |
 | `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | at most 30 s (`wait_timeout`) |
-| `screenshot` | `full?` | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back |
+| `screenshot` | `full?`, `format?` (`png`, default `jpeg`) | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back |
 | `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
 | `downloads` | `wait?`, `ms?` | downloads started from this task's tabs (filename, url, state, bytes); `wait` for the next to finish |
 | `fill_login` | `item?`, `purpose?`, `request?` | signs in with the saved login for the tab's site; several (`which_login`) list `{ id, title, username }`; an approval answers `needs_ok` with `request`: call again with it |
@@ -161,10 +185,15 @@ seconds; `browser_timeout` means the browser did not answer in time and may stil
 so snapshot before you try again.
 
 A site waiting for your approval answers `needs_ok` (HTTP 202): call the same action again;
-`wait_ms` (up to 25000) holds the call for your answer. The shell command waits by itself, up
-to 10 minutes. Exit codes: 0 done, 1 refused (`site_denied`, `not_your_tab`, `test_run`,
-`which_tab`, `person_is_here`, `trusted_off`, `which_login`), 2 no answer in time
-(`browser_timeout`, or no approval in 10 minutes), 3 any other error.
+`wait_ms` (up to 25000) holds the call for your answer. A step that buys, sends or deletes
+answers `needs_ok` with `code: "outward_needs_ok"`, `request`, `what` and `waitsMinutes`: call
+the same action with the same arguments and `request`; approved, it runs (once), denied answers
+`denied`, unanswered `outward_expired`. The shell command waits by itself, up to 10 minutes, and
+says what it waits for. Exit codes: 0 done, 1 refused (`site_denied`, `not_your_tab`, `test_run`,
+`which_tab`, `person_is_here`, `trusted_off`, `which_login`, `denied`, `agents_tab_only`), 2 no
+answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes), 3 any other
+error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
+under `.jpg`, and it says so.
 
 Input is the page's own DOM events (`isTrusted` false). Nearly every site takes them; a page
 that insists on trusted input (bank-style keystroke checks, some games, some anti-bot checks)
@@ -192,14 +221,15 @@ command carries, so a server mistake cannot reach your tabs either. Code:
 `src/ops/browser.ts`, `packages/browser-extension/src/agent.ts` (commands and tabs),
 `agent-page.ts` (page actions, frames, new tabs), `agent-shot.ts`, `agent-downloads.ts`,
 `agent-trusted.ts` with `cdp.ts` (real input), `page-agent.ts`, `page-agent-forms.ts` and
-`page-ops.ts` (in the page), and `src/core/browser-control/fill-login.ts`; the side
+`page-ops.ts` (in the page), `page-agent-outward.ts` with `src/core/browser-control/outward-asks.ts` (steps
+that wait for the person), and `src/core/browser-control/fill-login.ts`; the side
 panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/PopoutExtPanel.tsx`.
 
 | Method | Path | Who | What |
 |---|---|---|---|
 | POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms? }` |
 | GET | `/api/v1/browser/status` | anyone | `{ browsers, mode, sites }` |
-| GET | `/api/v1/browser/panel` | anyone | `{ panel: 1 }`: this Walnut has the side panel |
+| GET | `/api/v1/browser/panel` | anyone | `{ panel: 1, extension?: { version, build, folder? } }`: this Walnut has the side panel, the extension build it ships, and its folder's id |
 | PUT | `/api/v1/browser/settings` | the person only | `{ mode?: "ask" \| "any", removeSite? }` |
 | POST | `/api/v1/browser/poll` | the extension | `{ browser, version, caps, tabs, waitMs }` → `{ commands }` |
 | POST | `/api/v1/browser/result` | the extension | `{ id, ok, result?, error? }` |
@@ -207,10 +237,19 @@ panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/Popou
 | POST | `/api/v1/browser/page` | anyone | `{ url, title?, text }` → `{ file }` (the side panel) |
 | POST | `/api/v1/browser/adopt` | the extension | `{ tab, task, url }`: the person let that task act in the tab |
 
+The extension Walnut set up in a folder (Settings, Browser extension, Set up in Chrome;
+`src/core/browser-control/extension-install.ts`) reloads itself when Walnut ships a newer build
+(`self-update.ts`), and only that copy: the folder holds Walnut's marker, `walnut-folder.json`
+`{ folder, browser, serverUrl? }`, whose `folder` id the panel route reports, and the folder must
+already hold the new build. A copy loaded from anywhere else (a developer's build, an unpacked
+zip, a browser started with `--load-extension`) never reloads, because Chrome turns off a
+command-line unpacked extension after a reload when Developer mode is off.
+
 Screenshots need the extension's site access (`<all_urls>`, asked at install in Chrome; in
 Firefox the person grants it from the extension's page). The extension also asks for
 `downloads` at install, and `debugger` only as an optional permission when you turn real input
 on. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
 `tests/e2e/browser/extension-agent.spec.ts`, `tests/e2e/browser/extension-sidepanel.spec.ts`,
-`tests/core/browser-control/cdp.test.ts`,
+`tests/core/browser-control/cdp.test.ts`, `tests/core/browser-control/extension-outward.test.ts`,
+`tests/e2e/browser/extension-agent-outward.spec.ts`,
 `tests/web/ext-panel-model.test.ts`.

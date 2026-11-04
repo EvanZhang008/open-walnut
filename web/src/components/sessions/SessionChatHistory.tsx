@@ -337,6 +337,8 @@ interface SessionChatHistoryProps {
   /** A second view of the session (the split's left half) reads them from here
    *  and fetches nothing itself (timeline-share.ts). */
   readTimeline?: TimelineShare;
+  /** The live turn's line in full, in place of "<engine> is working…" (a plain chat says "Walnut is thinking…"). */
+  workingText?: string;
 }
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
@@ -574,7 +576,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -5424,6 +5426,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
           <WorkingIndicator
             label={assistantLabel}
+            {...(workingText ? { text: workingText } : {})}
             tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
             {...(idleCompacting ? { text: IDLE_COMPACTING_TEXT } : {})}
           />

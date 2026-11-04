@@ -56,17 +56,29 @@ export async function idbGetHistory(sid: string): Promise<CachedHistory | null> 
 // Trailing debounce per session: delta merges can write several times per
 // second mid-conversation; one structured-clone put per settle window is
 // plenty for a cache whose only job is surviving the NEXT reload.
-const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; data: CachedHistory }>();
 const DEBOUNCE_MS = 800;
 
 /** Fire-and-forget write-through. Debounced; tail-sliced to the open contract. */
 export function idbSetHistory(sid: string, data: CachedHistory): void {
   const existing = pendingWrites.get(sid);
-  if (existing) clearTimeout(existing);
-  pendingWrites.set(sid, setTimeout(() => {
+  if (existing) clearTimeout(existing.timer);
+  pendingWrites.set(sid, {
+    data,
+    timer: setTimeout(() => {
+      pendingWrites.delete(sid);
+      void writeNow(sid, data);
+    }, DEBOUNCE_MS),
+  });
+}
+
+/** Every debounced write, now: a page about to end (the browser side panel closing) keeps them. */
+export function flushHistoryWrites(): void {
+  for (const [sid, w] of pendingWrites) {
+    clearTimeout(w.timer);
     pendingWrites.delete(sid);
-    void writeNow(sid, data);
-  }, DEBOUNCE_MS));
+    void writeNow(sid, w.data);
+  }
 }
 
 async function writeNow(sid: string, data: CachedHistory): Promise<void> {
@@ -101,7 +113,7 @@ async function writeNow(sid: string, data: CachedHistory): Promise<void> {
  *  or it would re-persist the stale entry after the delete. */
 export async function idbDeleteHistory(sid: string): Promise<void> {
   const pending = pendingWrites.get(sid);
-  if (pending) { clearTimeout(pending); pendingWrites.delete(sid); }
+  if (pending) { clearTimeout(pending.timer); pendingWrites.delete(sid); }
   try {
     await store.delete(sid);
   } catch { /* best effort */ }

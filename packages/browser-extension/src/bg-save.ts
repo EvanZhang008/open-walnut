@@ -6,10 +6,11 @@
  */
 import { ext, type Sender } from './ext'
 import { ApiError, api, connection, vaultSession } from './walnut-api'
-import { displayHost, matchItem } from '../../../src/core/vault/url-match'
+import { displayHost } from '../../../src/core/vault/url-match'
 import { touch } from './bg-autolock'
 import { COVERED, openUnlock, stillShown } from './bg-fill'
-import { PENDING_MS, forget, isWalnutPage, nonce, originOf, siteOf, state, stores, summaries, type Choice, type Pending, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, forget, isWalnutPage, matchesFor, nonce, originOf, siteOf, state, stores, summaries, type Choice, type Pending, type Reply } from './bg-vault'
+import { defaultLoginName, neverCovers, neverEntry, pickUpdate, type UpdateCandidate } from './login-pick'
 
 /** A pending login shows on another site's page only right after it was sent (a sign-in that lands elsewhere). */
 export const ELSEWHERE_MS = 20_000
@@ -23,33 +24,53 @@ export async function neverSites(): Promise<string[]> {
   return Array.isArray(neverSave) ? neverSave as string[] : []
 }
 
+/** What a page sent: the login, and on a change form the password it replaces. */
+interface Sent { username?: string; password: string; current?: string; siteName?: string; title?: string }
+
 /** A login sent on a page: offer to save it, or to update a saved one whose password differs. */
-async function seenLogin(tabId: number, url: string, username: string | undefined, password: string, keep?: { at: number; nonce: string }): Promise<Pending | null> {
+async function seenLogin(tabId: number, url: string, sent: Sent, keep?: { at: number; nonce: string; title?: string }): Promise<Pending | null> {
   const { seenUsername, pendingSave, lastLogin } = stores
   if (!(await connection())) return null
-  if ((await neverSites()).includes(siteOf(url))) return null
+  if (neverCovers(await neverSites(), url)) return null
+  let { username } = sent
+  const { password, current } = sent
   const step = await seenUsername.get(tabId)
   if (step && Date.now() - step.at > PENDING_MS) await seenUsername.sweep((x) => Date.now() - x.at > PENDING_MS)
   if (!username && step && Date.now() - step.at < PENDING_MS && siteOf(step.url) === siteOf(url)) username = step.username
-  let p: Pending = { url, ...(username ? { username } : {}), password, kind: 'save', title: displayHost(url), at: keep?.at ?? Date.now(), checked: false, nonce: keep?.nonce ?? nonce() }
+  const title = keep?.title ?? defaultLoginName({ url, metaName: sent.siteName, title: sent.title })
+  let p: Pending = { url, ...(username ? { username } : {}), password, kind: 'save', title, at: keep?.at ?? Date.now(), checked: false, nonce: keep?.nonce ?? nonce() }
+  if (current) p.current = current
   if (await vaultSession()) {
     try {
-      const matches = (await summaries()).filter((i) => i.type === 'login' && matchItem(i.urls, url)).slice(0, MAX_CHOICES)
+      // Only logins of this host and its parent or child hosts (tier 1), this host's first.
+      const tier1 = (await matchesFor(url)).slice(0, MAX_CHOICES)
+      const exact = new Map(tier1.map((m) => [m.id, m.exact]))
+      const byId = new Map((await summaries()).map((i) => [i.id, i]))
+      const matches = tier1.map((m) => byId.get(m.id)!).filter(Boolean)
       p.checked = true
-      const same = matches.filter((i) => (i.username ?? '') === (username ?? ''))
-      // No username on the page (a password-only step): any login of the site may be the one.
-      const candidates = same.length ? same : !username ? matches : []
-      for (const c of candidates) {
+      const full: UpdateCandidate[] = []
+      for (const c of matches) {
         const item = await api.item(c.id)
-        if (item.password === password) {
-          // Nothing new: the login is a saved one, and its code page may follow.
-          await lastLogin.set(tabId, { itemId: item.id, url, hasTotp: !!item.totp, at: Date.now() })
-          return null
-        }
+        full.push({ id: item.id, ...(item.username ? { username: item.username } : {}), ...(item.password ? { password: item.password } : {}), exact: !!exact.get(item.id), ...(c.usedAt ? { usedAt: c.usedAt } : {}) })
+      }
+      const sameUser = full.filter((i) => (i.username ?? '') === (username ?? ''))
+      // No username on the page (a password-only step, or a change form that hides it): any login of
+      // the site may be the one; a username no saved login has may still be one whose current password this is.
+      const candidates = sameUser.length ? sameUser : !username ? full : current ? full.filter((i) => i.password === current) : []
+      const unchanged = candidates.find((c) => c.password === password)
+      if (unchanged) {
+        // Nothing new: the login is a saved one, and its code page may follow.
+        const item = await api.item(unchanged.id)
+        await lastLogin.set(tabId, { itemId: item.id, url, hasTotp: !!item.totp, at: Date.now() })
+        return null
       }
       const choices: Choice[] = matches.map((i) => ({ id: i.id, title: i.title, ...(i.username ? { username: i.username } : {}) }))
       if (choices.length) p.choices = choices
-      if (candidates.length) p = { ...p, kind: 'update', itemId: candidates[0].id, title: candidates[0].title }
+      const last = await lastLogin.get(tabId)
+      const lastId = last && Date.now() - last.at < CODE_PAGE_MS && siteOf(last.url) === siteOf(url) ? last.itemId : undefined
+      const target = pickUpdate(candidates, current, lastId)
+      // `title` stays the name a new login would get: the bar names the login it updates from `choices`.
+      if (target) p = { ...p, kind: 'update', itemId: target }
     } catch (err) {
       if (!(err instanceof ApiError && (err.code === 'vault_session_needed' || err.code === 'vault_locked'))) throw err
       p = { ...p, kind: 'save', checked: false }
@@ -78,6 +99,11 @@ export async function barNonceFor(tabId: number, page: string): Promise<string |
   return p && Date.now() - p.at < PENDING_MS && (siteOf(p.url) === siteOf(page) || Date.now() - p.at < ELSEWHERE_MS) ? p.nonce : undefined
 }
 
+/** A bar that just saved or updated still shows its confirmation and resizes for it, this long. */
+const DONE_MS = 8_000
+const doneBars = new Map<number, { nonce: string; until: number }>()
+const doneBar = (tabId: number, n: unknown) => { const d = doneBars.get(tabId); return !!d && d.nonce === n && Date.now() < d.until }
+
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : undefined)
 
 export async function handleSave(msg: { type: string; [k: string]: unknown }, sender: Sender): Promise<Reply> {
@@ -93,7 +119,14 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       const made = await generated.get(tabId)
       const ours = !!made && Date.now() - made.at < GENERATED_MS && made.password === msg.password && siteOf(made.url) === siteOf(url)
       if (msg.typed !== true && !ours) return { ok: true, offered: false }
-      const p = await seenLogin(tabId, url, typeof msg.username === 'string' && msg.username ? msg.username : undefined, msg.password)
+      const p = await seenLogin(tabId, url, {
+        ...(typeof msg.username === 'string' && msg.username ? { username: msg.username.slice(0, 500) } : {}),
+        password: msg.password,
+        ...(typeof msg.current === 'string' && msg.current ? { current: msg.current.slice(0, 4000) } : {}),
+        // The name the site gives itself (the page script reads og:site_name or application-name), else its title.
+        ...(typeof msg.siteName === 'string' && msg.siteName ? { siteName: msg.siteName.slice(0, 200) } : {}),
+        ...(sender.tab?.title ? { title: sender.tab.title.slice(0, 300) } : {}),
+      })
       if (ours) await generated.delete(tabId)
       // A page that sends without leaving (a single-page app) gets the bar now; one that leaves gets it on the next page.
       if (p) setTimeout(() => void showSaveBar(tabId), 600)
@@ -109,7 +142,7 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       const st = await state()
       if (st.unlocked && !p.checked) {
         // Seen while locked: now that it is open, is it new, a changed password, or one already saved?
-        const again = await seenLogin(tabId, p.url, p.username, p.password, { at: p.at, nonce: p.nonce })
+        const again = await seenLogin(tabId, p.url, { ...(p.username ? { username: p.username } : {}), password: p.password, ...(p.current ? { current: p.current } : {}) }, { at: p.at, nonce: p.nonce, ...(p.title ? { title: p.title } : {}) })
         if (!again) { await pendingSave.delete(tabId); return { ok: false } }
         p = again
       }
@@ -133,7 +166,9 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       const password = text(msg.password, 4000) || p.password
       if (action === 'never') {
         const list = await neverSites()
-        await ext.storage.local.set({ neverSave: [...new Set([...list, siteOf(p.url)])] })
+        // This host only: a sibling part of the site keeps its offers.
+        const entry = neverEntry(p.url)
+        if (entry) await ext.storage.local.set({ neverSave: [...new Set([...list, entry])] })
       } else if (action === 'save') {
         await api.create({ type: 'login', title: String(msg.title || p.title || displayHost(p.url)).slice(0, 200), ...(username ? { username } : {}), password, urls: [originOf(p.url)] })
         forget()
@@ -149,10 +184,11 @@ export async function handleSave(msg: { type: string; [k: string]: unknown }, se
       await pendingSave.delete(tabId)
       // A save or an update shows its confirmation, then closes itself; the rest close now.
       if (action !== 'save' && action !== 'update') await hide()
+      else doneBars.set(tabId, { nonce: p.nonce, until: Date.now() + DONE_MS })
       return { ok: true }
     }
     case 'savebar-size': {
-      if (tabId !== undefined && await pendingOf(tabId, msg)) await ext.tabs.sendMessage(tabId, { type: 'savebar-size', height: msg.height }, { frameId: 0 }).catch(() => undefined)
+      if (tabId !== undefined && (doneBar(tabId, msg.nonce) || await pendingOf(tabId, msg))) await ext.tabs.sendMessage(tabId, { type: 'savebar-size', height: msg.height }, { frameId: 0 }).catch(() => undefined)
       return { ok: true }
     }
   }

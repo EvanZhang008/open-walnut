@@ -3,8 +3,14 @@
  * extension-install.ts) keeps up with Walnut: Walnut brings the folder up to the build it ships
  * when asked which build that is, and this copy, seeing a newer one, reloads itself from the
  * folder. Only an unpacked copy ("development" install) does; a store copy updates through the
- * store. One reload per build Walnut names, so a copy loaded from some other folder (which stays
- * as it is) never reloads again and again. Pages open at the time get the new copy when reloaded.
+ * store.
+ *
+ * Only the copy in the very folder that Walnut keeps reloads: its own files must hold Walnut's
+ * marker (walnut-folder.json) naming the folder id Walnut reports, and its own manifest on disk
+ * must already be the build Walnut names (the folder was brought up to it). Any other copy (a
+ * developer's build, an unpacked zip, a browser started with --load-extension) never reloads:
+ * Chrome turns a command-line unpacked extension off after a reload when Developer mode is off,
+ * and a reload would not change its files anyway. One reload per build Walnut names.
  */
 import { ext } from './ext'
 import { call, connection } from './walnut-api'
@@ -17,6 +23,14 @@ export function buildOf(versionName: unknown): string | null {
   return m ? m[1] : null
 }
 
+/** One of this copy's own files as it is on disk now (an unpacked copy reads its folder). */
+async function ownFile(name: string): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetch(ext.runtime.getURL(name), { cache: 'no-store' })
+    return r.ok ? await r.json() as Record<string, unknown> : null
+  } catch { return null }
+}
+
 export async function selfUpdate(force = false): Promise<void> {
   if (!force && Date.now() - checkedAt < EVERY_MS) return
   checkedAt = Date.now()
@@ -24,9 +38,14 @@ export async function selfUpdate(force = false): Promise<void> {
   if (!own || !(await connection())) return
   const self = await Promise.resolve(ext.management?.getSelf?.()).catch(() => null)
   if (self?.installType !== 'development') return
-  const r = await call<{ extension?: { build?: unknown } }>('GET', '/browser/panel', undefined, { noSession: true, timeoutMs: 20_000 }).catch(() => null)
+  const r = await call<{ extension?: { build?: unknown; folder?: unknown } }>('GET', '/browser/panel', undefined, { noSession: true, timeoutMs: 20_000 }).catch(() => null)
   const want = typeof r?.extension?.build === 'string' ? r.extension.build : ''
-  if (!want || want === own) return
+  const folder = typeof r?.extension?.folder === 'string' ? r.extension.folder : ''
+  if (!want || want === own || !folder) return
+  // This copy is in the folder Walnut keeps, and that folder now holds the build Walnut names.
+  const marker = await ownFile('walnut-folder.json')
+  if (marker?.folder !== folder) return
+  if (buildOf((await ownFile('manifest.json'))?.version_name) !== want) return
   const { reloadedFor } = await ext.storage.local.get('reloadedFor')
   if (reloadedFor === want) return
   await ext.storage.local.set({ reloadedFor: want })

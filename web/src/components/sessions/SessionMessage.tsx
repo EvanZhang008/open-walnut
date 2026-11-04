@@ -13,6 +13,7 @@ import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { BackgroundTasksChip, type KnownAgent } from './BackgroundTasksPanel';
 import { agentResultText } from './background-ledger';
 import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
+import { UserRowAttachmentsContext } from './user-row-attachments';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
@@ -1317,6 +1318,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     () => riderSplit?.riders.map((envelope) => ({ kind: 'envelope' as const, envelope })) ?? null,
     [riderSplit],
   );
+  // A host's line under the bubble (user-row-attachments.ts): none outside the browser side panel.
+  const attachmentsOf = useContext(UserRowAttachmentsContext);
+  const requestedHints = (message as { requestedHints?: Record<string, { arg?: string }> }).requestedHints;
+  const attached = isUser && attachmentsOf && personWords ? attachmentsOf({ hints: message.hints, requestedHints, text: bodyText }) : null;
 
   const row = (
     <div
@@ -1418,6 +1423,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           />
         )}
       </div>
+      {attached}
       {rowMenu.state && (
         <ContextMenu
           point={rowMenu.state.point}

@@ -20,8 +20,9 @@ export class AgentError extends Error {
  * the person handed this tab over from the side panel, and its site (allowed in this tab alone).
  * `taken`: the person's own tab an agent took (`take`). `popup`: a tab an agent tab opened;
  * `fromPerson`: opened from one of the person's tabs (its page can reach theirs through `opener`).
+ * `viaHanded`: opened from a tab the person handed over (agent-tab-kind.ts), which agents may use as that tab.
  */
-export interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean }
+export interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean }
 export const agentTabs = tabStore<AgentTab>('agentTabs')
 
 /** The person's own tab (handed or taken): given back on close, never closed, never moved. */

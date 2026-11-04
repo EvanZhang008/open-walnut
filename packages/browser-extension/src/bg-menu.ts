@@ -6,7 +6,7 @@
  */
 import { ext, type Sender } from './ext'
 import { api } from './walnut-api'
-import { displayHost, matchItem } from '../../../src/core/vault/url-match'
+import { displayHost, matchItem, siblingHost } from '../../../src/core/vault/url-match'
 import { generate } from '../../../src/core/vault/generator'
 import { generateFitting } from './field-rules'
 import type { FieldRules } from './field-rules'
@@ -14,7 +14,8 @@ import { getSettings } from './settings'
 import { clearLater } from './bg-clipboard'
 import { walletValues } from './bg-wallet'
 import { COVERED, afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock, stillShown } from './bg-fill'
-import { CODE_PAGE_MS, insecureFor, matchesFor, nonce, originOf, siteOf, state, stores, walletItems, type MenuOwner, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, insecureFor, matchesFor, nonce, originOf, siteOf, state, stores, tiersOf, walletItems, type MenuOwner, type Reply } from './bg-vault'
+import { domainOf, stepOneFirst } from './login-pick'
 
 const WALLET = new Set(['card', 'identity'])
 
@@ -59,6 +60,23 @@ async function withCodes(owner: MenuOwner, items: Awaited<ReturnType<typeof matc
   return Promise.all(sorted.slice(0, 8).map(async (i) => ({ ...i, totp: await api.totp(i.id).catch(() => null) })))
 }
 
+const pathOf = (u: string) => { try { const x = new URL(u); return x.origin + x.pathname } catch { return u } }
+
+/**
+ * Step two of a two-step sign in: the account of step one on this tab (picked from the menu, or
+ * typed and sent), when it was on another page of the same site moments ago.
+ */
+async function stepOneHint(owner: MenuOwner): Promise<{ itemId?: string; username?: string } | undefined> {
+  const now = Date.now()
+  const last = await stores.lastLogin.get(owner.tabId)
+  const typed = await stores.seenUsername.get(owner.tabId)
+  const ok = (x: { url: string; at: number } | undefined, ms: number) => !!x && now - x.at < ms && siteOf(x.url) === siteOf(owner.url) && pathOf(x.url) !== pathOf(owner.url)
+  const a = ok(last, CODE_PAGE_MS) ? last : undefined
+  const b = ok(typed, PENDING_MS) ? typed : undefined
+  if (a && (!b || a.at >= b.at)) return { itemId: a.itemId }
+  return b ? { username: b.username } : undefined
+}
+
 export async function handleMenu(msg: { type: string; [k: string]: unknown }, sender: Sender): Promise<Reply> {
   const tabId = sender.tab?.id
   switch (msg.type) {
@@ -74,7 +92,7 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       // The person pressed an arrow key in the field: only the frame that opened the menu moves into it.
       const owner = tabId !== undefined ? await stores.menus.get(tabId) : undefined
       if (!owner || owner.frameId !== sender.frameId) return { ok: false }
-      void ext.runtime.sendMessage({ type: 'menu-focus', nonce: owner.nonce, where: msg.where === 'last' ? 'last' : 'first' }).catch(() => undefined)
+      void ext.runtime.sendMessage({ type: 'menu-focus', nonce: owner.nonce, where: msg.where === 'last' ? 'last' : 'first', pick: msg.pick === true }).catch(() => undefined)
       return { ok: true }
     }
   }
@@ -87,15 +105,18 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       if (!st.connected) return { ...base, state: 'not-connected' }
       if (!st.unlocked) return { ...base, state: 'locked' }
       if (WALLET.has(owner.role)) return { ...base, state: 'unlocked', items: await walletItems(owner.role as 'card' | 'identity') }
-      const items = await matchesFor(owner.url)
-      if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, items) }
-      const insecure = items.length ? 0 : await insecureFor(owner.url)
+      if (owner.role === 'totp') return { ...base, state: 'unlocked', items: await withCodes(owner, await matchesFor(owner.url)) }
+      const { first, others } = await tiersOf(owner.url)
+      const insecure = first.length || others.length ? 0 : await insecureFor(owner.url)
+      // Logins saved for other parts of this site: listed apart, under their own heading.
+      const apart = others.length ? { others, othersDomain: domainOf(owner.url) } : {}
       if (owner.role === 'new-password') {
         owner.suggestion ??= await suggest(owner.rules)
         await stores.menus.set(owner.tabId, owner)
-        return { ...base, state: 'unlocked', items, suggestion: owner.suggestion }
+        return { ...base, state: 'unlocked', items: first, suggestion: owner.suggestion }
       }
-      return { ...base, state: 'unlocked', items, insecure }
+      const { items, more } = stepOneFirst(first, await stepOneHint(owner))
+      return { ...base, state: 'unlocked', items, ...(more.length ? { more } : {}), ...apart, insecure }
     }
     case 'menu-codes': {
       // The countdown ran out: the next codes.
@@ -108,23 +129,28 @@ export async function handleMenu(msg: { type: string; [k: string]: unknown }, se
       if (WALLET.has(owner.role)) {
         if (item.type !== owner.role) return { ok: false, error: 'That item is not for this form.' }
         const filled = await fillWalletFrame(owner.tabId, owner.frameId, walletValues(item) as Record<string, string>, owner.role, owner.url)
-        if (filled) void api.used(item.id)
+        if (!filled) return { ok: false, error: 'Walnut found no field here to put it in.' }
+        void api.used(item.id)
         await closeIt(owner)
-        return filled ? { ok: true } : { ok: false, error: 'Walnut found no field here to put it in.' }
+        return { ok: true }
       }
-      if (!matchItem(item.urls, owner.url)) return { ok: false, error: 'That login is saved for another site, so Walnut does not fill it here.' }
+      // A login of this host (tier 1), or one of another part of the site the person picked from its own list (tier 2).
+      const tier1 = !!matchItem(item.urls, owner.url)
+      if (!tier1 && (owner.role === 'totp' || !siblingHost(item.urls, owner.url))) return { ok: false, error: 'That login is saved for another site, so Walnut does not fill it here.' }
       if (owner.role === 'totp') {
         const filled = await fillFrames(owner.tabId, owner.frameId, { totp: (await api.totp(item.id)).code }, 'totp', owner.url)
-        if (filled) void api.used(item.id)
+        if (!filled) return { ok: false, error: 'Walnut found no code field here to put it in.' }
+        void api.used(item.id)
         await closeIt(owner)
-        return { ok: filled }
+        return { ok: true }
       }
       const filled = await fillFrames(owner.tabId, owner.frameId, credsOf(item), 'login', owner.url)
-      const after = filled ? await afterLoginFill(owner.tabId, owner.frameId, item, owner.url) : {}
+      if (!filled) return { ok: false, error: 'Walnut found no sign-in field here to put it in.' }
+      const after = await afterLoginFill(owner.tabId, owner.frameId, item, owner.url)
       // The menu copies the code itself before it closes (it has the person's click).
       if (after.code) return { ok: true, code: after.code }
       await closeIt(owner)
-      return { ok: filled }
+      return { ok: true }
     }
     case 'menu-generate': {
       if (!(await stillShown(owner.tabId, owner.frameId, 'menu'))) return COVERED

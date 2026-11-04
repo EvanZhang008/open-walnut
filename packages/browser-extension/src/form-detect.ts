@@ -20,6 +20,8 @@ export interface LoginGroup {
   totp?: HTMLInputElement
   /** A code asked one character per box (often six boxes): `totp` is the first. */
   totpBoxes?: HTMLInputElement[]
+  /** A change form that names its account in a hidden field (no username box to type in). */
+  hiddenUsername?: HTMLInputElement
 }
 
 const USER_WORDS = /user|e-?mail|login|account|identifier|phone|mobile|handle|\bid\b/i
@@ -164,6 +166,8 @@ export function findLoginGroups(doc: Document): LoginGroup[] {
     } else if (current || pws.length >= 3 || (OLD_WORDS.test(words(pws[0])) && !isNew(pws[0]))) {
       const cur = current ?? pws[0]
       g = { kind: 'change', root, username, password: cur, newPasswords: pws.filter((p) => p !== cur) }
+      const hidden = username ? undefined : hiddenUsernameOf(root)
+      if (hidden) g.hiddenUsername = hidden
     } else {
       g = { kind: 'signup', root, username, newPasswords: pws }
     }
@@ -214,9 +218,20 @@ export function setValue(el: HTMLInputElement, value: string): void {
   el.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
-/** What the person typed into a group, read when it is sent. */
-export function readGroup(g: LoginGroup): { username?: string; password?: string } {
-  const username = g.username?.value.trim() || undefined
+/** The account a change form names in a hidden field: autocomplete="username", or a name or id that says so. */
+function hiddenUsernameOf(root: Element): HTMLInputElement | undefined {
+  const hidden = Array.from(root.querySelectorAll<HTMLInputElement>('input[type=hidden]')).filter((x) => x.value.trim())
+  return hidden.find((x) => tokens(x).includes('username') || tokens(x).includes('email'))
+    ?? hidden.find((x) => /^(e-?mail|user.?name|login|account)$/i.test(x.name) || /^(e-?mail|user.?name|login)$/i.test(x.id))
+}
+
+/**
+ * What the person typed into a group, read when it is sent: the username (a change form's hidden
+ * one too), the password it sets, and on a change form the current password it replaces.
+ */
+export function readGroup(g: LoginGroup): { username?: string; password?: string; current?: string } {
+  const username = g.username?.value.trim() || g.hiddenUsername?.value.trim() || undefined
   const password = (g.kind === 'signup' || g.kind === 'change') ? (g.newPasswords[0]?.value || undefined) : (g.password?.value || undefined)
-  return { username, password }
+  const current = g.kind === 'change' ? (g.password?.value || undefined) : undefined
+  return { username, password, ...(current ? { current } : {}) }
 }

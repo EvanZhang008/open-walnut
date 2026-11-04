@@ -12,6 +12,8 @@ import { isFirefox, type Tab } from './ext'
 import { CdpError, cdpClick, cdpDialog, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, withDebugger, type Send } from './cdp'
 import { AgentError, checkPage, filledHere, frameOp, nearPerson, noteTampered, reached, settled, where, WALNUT_PAGE, type AgentTab, type WireCommand } from './agent-shared'
 import { downloadedFiles } from './agent-downloads'
+import { outwardHeld } from './agent-page'
+import { trustedOutward } from './page-agent-outward'
 
 export const TRUSTED_OPS = new Set(['click', 'type', 'press', 'hover', 'upload'])
 /** These use the debugger whatever the command says. */
@@ -53,7 +55,12 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   const page = await reached(tabId)
   if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
   await checkPage(c.allow, page.href)
-  const locate = (extra: Record<string, unknown> = {}) => frameOp(tabId, 0, 'locate', { ref: a.ref, x: a.x, y: a.y, ...extra }, c.allow) as Promise<{ x: number; y: number; what: string }>
+  const locate = async (extra: Record<string, unknown> = {}) => {
+    const r = await frameOp(tabId, 0, 'locate', { ref: a.ref, x: a.x, y: a.y, ...(a.outward_ok ? { outward_ok: a.outward_ok } : {}), ...extra }, c.allow)
+    // A step that buys, sends or deletes waits for the person (page-ops.ts held).
+    if (r.hold) throw outwardHeld(r.hold)
+    return r as { x: number; y: number; what: string }
+  }
   let out: Record<string, unknown>
   switch (c.action) {
     case 'evaluate': {
@@ -64,18 +71,21 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
       break
     }
-    case 'click': { const l = await locate(); await run(tabId, rec.owner, (send) => cdpClick(send, l.x, l.y)); out = { clicked: l.what, trusted: true }; break }
+    case 'click': { const l = await locate(trustedOutward('click', a)); await run(tabId, rec.owner, (send) => cdpClick(send, l.x, l.y)); out = { clicked: l.what, trusted: true }; break }
     case 'hover': { const l = await locate(); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y)); out = { hovered: l.what, trusted: true }; break }
     case 'press': {
       const k = String(a.key ?? '')
-      await locate({ active: true })
+      // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
+      await locate({ active: true, ...trustedOutward('press', a) })
       await run(tabId, rec.owner, (send) => cdpPress(send, k))
       out = { pressed: k, trusted: true }
       break
     }
     case 'type': {
       const text = String(a.text ?? '')
-      const l = a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true }) : (await locate({ active: true }), undefined)
+      // Real typing presses Enter for each newline: a newline counts as submit.
+      const enter = trustedOutward('type', a)
+      const l = a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, ...enter }) : (await locate({ active: true, ...enter }), undefined)
       await run(tabId, rec.owner, async (send) => { await cdpType(send, text); if (a.submit === true) await cdpPress(send, 'Enter') })
       out = { typed: `${text.length} characters${l ? ` into ${l.what}` : ''}`, trusted: true }
       break

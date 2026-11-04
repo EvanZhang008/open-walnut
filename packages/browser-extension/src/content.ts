@@ -28,7 +28,7 @@ import { findLoginGroups, groupOfField, readGroup, type LoginGroup } from './for
 import { findWalletGroups, walletGroupOf } from './wallet-detect'
 import { MAY_FILL, SELF, asFill, cs } from './content-state'
 import { dropHost, extFrame, hostHooks, hostStyle, hosts, makeHost, tampered, type Host } from './content-host'
-import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu, reposition, roleOf, setMenuHeight, showIcon, toast } from './content-ui'
+import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu, reposition, roleOf, setMenuHeight, showIcon, toast, typedInField } from './content-ui'
 import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
 import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
@@ -103,9 +103,19 @@ document.addEventListener('input', (e) => {
   if (!e.isTrusted || !(t instanceof HTMLInputElement)) return
   // Whatever its type now: a "show password" switch makes the field text while the person types.
   cs.typed.add(t)
-  // Typing your own value means you are not picking one: the menu goes, and stops covering the form.
-  if (menu && cs.active && t === cs.active.field) closeMenu()
+  // A username narrows the menu to the logins that fit; typing anything else closes it (the
+  // person is not picking one). Closed before (Escape), typing a username opens it again.
+  if (!typedInField(t) && !menu && cs.active?.field === t && cs.active.role === 'username') void reopenTyping(t)
 }, true)
+
+/** The menu again for a username the person is typing, when this site has logins to offer. */
+async function reopenTyping(t: HTMLInputElement): Promise<void> {
+  if (cs.off || !MAY_FILL || openingFor(t) || !t.value) return
+  const st = await ask<PageState>({ type: 'page-init' })
+  if (!st.ok || !st.connected || !st.unlocked || (st.count ?? 0) === 0) return
+  if (menu || document.activeElement !== t || openingFor(t)) return
+  await openMenu(t)
+}
 
 // ── focus: show the icon, and the menu when there is something to pick ──
 
@@ -150,7 +160,8 @@ async function onFocus(e: { target: EventTarget | null }): Promise<void> {
 
 /**
  * The code page right after a sign in Walnut knows (a login with a one-time code, filled or sent
- * here minutes ago): the menu opens on the code field by itself, once, offering that code.
+ * here minutes ago): the code field shows the Walnut icon, and the menu opens once the person is
+ * in the field (or the page put the focus there), never by itself over the page's Verify button.
  */
 let codeOffered = false
 let offerCode = false
@@ -158,8 +169,14 @@ function maybeOfferCode(): void {
   if (!offerCode || codeOffered || cs.off || !MAY_FILL) return
   const g = cs.groups.find((x) => x.kind === 'totp' && x.totp)
   if (!g?.totp || g.totp.value) return
-  codeOffered = true
-  void openMenu(g.totp)
+  if (document.activeElement === g.totp || g.totpBoxes?.includes(document.activeElement as HTMLInputElement)) {
+    codeOffered = true
+    // Already open for it (the person's click opened it): once is enough.
+    const f = document.activeElement as HTMLInputElement
+    if (!(menu && cs.active?.field === f) && !openingFor(f)) void openMenu(f)
+    return
+  }
+  if (!cs.active) { cs.active = { group: g, role: 'totp', field: g.totp }; showIcon(g.totp) }
 }
 
 // ── fills: only into this frame's own login, and only when this is the origin the fill is for ──
@@ -174,10 +191,17 @@ function sending(g: LoginGroup): void {
   const last = sentAt.get(g.root) ?? 0
   if (Date.now() - last < 1500) return
   sentAt.set(g.root, Date.now())
-  const { username, password } = readGroup(g)
+  const { username, password, current } = readGroup(g)
   if (g.kind === 'username-step') { if (username) void ask({ type: 'seen-username', username }); return }
   const fields = g.kind === 'login' ? [g.password] : g.newPasswords
-  if (password) void ask({ type: 'seen-login', username, password, typed: fields.some((f) => !!f && cs.typed.has(f)) })
+  const siteName = siteNameOf()
+  if (password) void ask({ type: 'seen-login', username, password, typed: fields.some((f) => !!f && cs.typed.has(f)), ...(current ? { current } : {}), ...(siteName ? { siteName } : {}) })
+}
+
+/** The name the site gives itself, for a new login's default name. */
+function siteNameOf(): string {
+  const meta = (sel: string) => document.querySelector<HTMLMetaElement>(sel)?.content?.trim() ?? ''
+  return (meta('meta[property="og:site_name"]') || meta('meta[name="application-name"]')).slice(0, 200)
 }
 
 function groupFor(el: Element | null): LoginGroup | undefined {
@@ -198,7 +222,24 @@ function sendsLogin(b: Element): boolean {
   return SEND_WORDS.test(`${b.textContent ?? ''} ${b.getAttribute('aria-label') ?? ''}`)
 }
 
-document.addEventListener('submit', (e) => { if (!e.isTrusted) return; const g = groupFor(e.target as Element); if (g) sending(g) }, true)
+document.addEventListener('submit', (e) => {
+  // The form is going: the menu over it goes too.
+  closeMenu()
+  if (!e.isTrusted) return
+  const g = groupFor(e.target as Element)
+  if (g) sending(g)
+}, true)
+// A send the page's own checks stopped (an email without @): the browser's message shows there, not under the menu.
+document.addEventListener('invalid', () => closeMenu(), true)
+// The field lost the focus to nothing Walnut drew (a page script blurred it, the person clicked
+// away): the menu goes, so it never stays over the page's own buttons.
+document.addEventListener('focusout', (e) => {
+  if (!menu || e.target !== cs.active?.field || cs.filling) return
+  setTimeout(() => {
+    const now = document.activeElement
+    if (menu && !cs.filling && document.hasFocus() && now !== menu.host.el && now !== cs.active?.field) closeMenu()
+  }, 0)
+}, true)
 document.addEventListener('click', (e) => {
   if (!e.isTrusted) return
   const b = (e.target as Element | null)?.closest?.('button, input[type=submit], input[type=button], [role=button]')
@@ -229,9 +270,12 @@ function showBar(nonce: string): void {
   if (bar?.nonce === nonce && bar.host.el.isConnected) return
   hideBar()
   const { host, root } = makeHost(2147483647, 'walnutSavebar')
-  hostStyle(host, 'z-index: 2147483647 !important; top: 12px !important; right: 12px !important; left: auto !important;')
+  hostStyle(host, 'z-index: 2147483647 !important; top: 0 !important; right: 0 !important; left: auto !important;')
   const frame = extFrame('savebar.html', nonce, hideBar)
-  frame.style.cssText = 'all: initial; display: block; width: 360px; height: 150px; border: 0; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.2); color-scheme: normal;'
+  // The bar (360 px) draws its own corners and shadow inside the frame's margin, so the frame
+  // itself is see-through: a moment when it is taller than the bar shows nothing around it.
+  frame.style.cssText = 'all: initial; display: block; width: 392px; height: 190px; border: 0; background: transparent; color-scheme: light dark;'
+  frame.setAttribute('allowtransparency', 'true')
   root.appendChild(frame)
   bar = { host, frame, nonce }
 }
@@ -287,7 +331,12 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'fill-wallet':
       if (!fillsHere(msg.origin)) { sendResponse({ filled: false }); return }
       rescan()
-      sendResponse({ filled: asFill(() => fillWalletForm((msg.values ?? {}) as Record<string, string>, String(msg.kind ?? ''))) }); return
+      {
+        const r = asFill(() => fillWalletForm((msg.values ?? {}) as Record<string, string>, String(msg.kind ?? '')))
+        // A field the item has nothing for stays empty: the person reads why, here on the page.
+        if (r.note) toast(r.note, 6000)
+        sendResponse({ filled: r.filled }); return
+      }
     case 'fill-new-password':
       if (fillsHere(msg.origin)) asFill(() => fillNewPassword(String(msg.password ?? '')))
       sendResponse({ ok: true }); return
@@ -333,7 +382,7 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     case 'hide-savebar': hideBar(); sendResponse({ ok: true }); return
     case 'savebar-size':
-      if (bar) bar.frame.style.height = `${Math.min(480, Math.max(80, Number(msg.height) || 150))}px`
+      if (bar) bar.frame.style.height = `${Math.min(520, Math.max(80, Number(msg.height) || 184))}px`
       sendResponse({ ok: true }); return
     case 'open-menu-here': {
       // The shortcut asks the top page; the context menu asks the frame the person right-clicked in.

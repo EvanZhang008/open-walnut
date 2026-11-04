@@ -19,13 +19,14 @@ import { siteKey } from '../../../src/core/vault/url-match'
 import { pageCheck, reachPage } from './page-reach'
 import {
   AgentError, WALNUT_PAGE, agentTabs, allowFor, checkPage, forgetTampered, loaded, mark, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
-  type WireCommand,
+  type AgentTab, type WireCommand,
 } from './agent-shared'
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
 import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-trusted'
 import { fillFrames } from './bg-fill'
+import { inHandedReach } from './agent-tab-kind'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
 
@@ -33,6 +34,38 @@ const HISTORY_MAX = 30
 
 export async function agentOn(): Promise<boolean> {
   return (await ext.storage.local.get('agentControl')).agentControl === true
+}
+
+
+/** Tabs the person handed over: agents act in those even with the browser-wide switch off. */
+async function handedTabs(): Promise<number[]> {
+  const out: number[] = []
+  for (const id of await agentTabs.keys()) if (inHandedReach(await agentTabs.get(id))) out.push(id)
+  return out
+}
+
+/** Walnut asks for work: the switch is on, or the person let an ask act in one of their tabs. */
+async function agentReach(): Promise<boolean> {
+  return await agentOn() || (await handedTabs()).length > 0
+}
+
+const TAB_ONLY = 'The person let Walnut act only in the tab they handed over from the side panel; agents are off elsewhere in this browser '
+  + '(the extension popup, Settings, "Let Walnut agents use this browser" turns them on).'
+
+/**
+ * With the switch off, a command may only act in a handed tab (or list this owner's tabs): no
+ * new tab, no taking another, no list of the person's tabs.
+ */
+async function tabOnlyCheck(c: WireCommand): Promise<void> {
+  if (await agentOn()) return
+  const a = c.args
+  if (c.action === 'tabs' && a.all !== true) return
+  if (c.action === 'downloads') return
+  const rec = typeof a.tab === 'number' ? await agentTabs.get(a.tab) : undefined
+  if (c.action !== 'open' && c.action !== 'take' && c.action !== 'tabs' && inHandedReach(rec)) return
+  const tabs = await handedTabs()
+  if (!tabs.length) throw new AgentError('The person turned agents off in this browser.', 'browser_off')
+  throw new AgentError(TAB_ONLY, 'agents_tab_only', { tabs })
 }
 
 export async function isAgentTab(tabId: number | undefined): Promise<{ owner: string; who?: string } | undefined> {
@@ -56,10 +89,12 @@ const ownerArg = (a: Record<string, unknown>): string => {
   return a.owner
 }
 
-/** Every normal tab of the browser, the person's too: where it is and who acts in it, never what is in it. */
+/** Every tab of the browser's normal and popup windows, the person's too: where it is and who acts in it, never what is in it. */
 async function allTabs(): Promise<Array<Record<string, unknown>>> {
   const out: Array<Record<string, unknown>> = []
-  for (const t of await more.tabs.query({ windowType: 'normal' }).catch(() => [])) {
+  // Popup windows too: a page's window.open makes one.
+  const found = [...await more.tabs.query({ windowType: 'normal' }).catch(() => []), ...await more.tabs.query({ windowType: 'popup' }).catch(() => [])]
+  for (const t of found) {
     // A private window's tabs are never listed, nor taken.
     if (t.id === undefined || t.incognito) continue
     const rec = await agentTabs.get(t.id)
@@ -78,7 +113,7 @@ async function take(c: WireCommand): Promise<Record<string, unknown>> {
   const tabId = typeof a.tab === 'number' ? a.tab : NaN
   const tab = await more.tabs.get(tabId).catch(() => null)
   const win = tab?.windowId !== undefined ? await more.windows.get(tab.windowId).catch(() => null) : null
-  if (!tab || tab.incognito || !win || win.type !== 'normal') throw new AgentError('No such tab (tabs with all lists them).', 'no_such_tab')
+  if (!tab || tab.incognito || !win || (win.type !== 'normal' && win.type !== 'popup')) throw new AgentError('No such tab (tabs with all lists them).', 'no_such_tab')
   const had = await agentTabs.get(tabId)
   if (had?.owner === owner) return { ...(await where(tabId)), taken: true }
   if (had) throw new AgentError('Another Walnut task is acting in that tab.', 'not_your_tab')
@@ -228,8 +263,8 @@ function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
 async function run(c: WireCommand): Promise<void> {
   let body: Record<string, unknown>
   try {
-    // The person may have turned agents off since this poll left.
-    if (!(await agentOn())) throw new AgentError('The person turned agents off in this browser.', 'browser_off')
+    // The person may have turned agents off since this poll left (or let them in one tab only).
+    await tabOnlyCheck(c)
     body = { id: c.id, ok: true, result: await inTurn(c.args.tab, () => act(c)) }
   } catch (err) {
     body = { id: c.id, ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof AgentError ? err.code : 'browser_error', ...(err instanceof AgentError ? { extra: err.extra } : {}) } }
@@ -257,9 +292,11 @@ export async function agentLoop(): Promise<void> {
   const keep = setInterval(() => { void ext.runtime.getPlatformInfo().catch(() => undefined) }, 20_000)
   let backoff = 1000
   try {
-    while (await agentOn() && await connection()) {
+    while (await agentReach() && await connection()) {
       try {
         const caps = [
+          // Only the tabs the person handed over (the switch is off): Walnut's status says so.
+          ...(await agentOn() ? [] : ['handed-tabs-only']),
           ...((await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false)) ? ['screenshot'] : []),
           ...(await trustedReady() ? ['trusted-input'] : []),
           ...(more.downloads ? ['downloads'] : []),
@@ -292,8 +329,8 @@ const handing = new Map<number, { cancelled: boolean }>()
 
 /**
  * The person let an ask in the side panel act in their tab (their click in the panel): the tab
- * becomes that task's agent tab, with the frame and Stop, its site allowed in this tab alone,
- * and agents turn on in this browser.
+ * becomes that task's agent tab, with the frame and Stop, its site allowed in this tab alone.
+ * Agents may act in this tab only: the browser-wide switch is not touched (tabOnlyCheck).
  */
 export async function adoptTab(tabId: number, task: string, who?: string): Promise<{ ok: boolean; error?: string }> {
   const tab = await ext.tabs.get(tabId).catch(() => null)
@@ -319,7 +356,7 @@ export async function adoptTab(tabId: number, task: string, who?: string): Promi
   }
   if (flight.cancelled) return { ok: false, error: 'Taken back.' }
   await agentTabs.set(tabId, { owner, ...(who ? { who } : {}), history: [url], handed: site })
-  if (!(await agentOn())) await ext.storage.local.set({ agentControl: true })
+  // This tab only: the browser-wide switch stays as the person set it (agent loop runs for the tab).
   void agentLoop()
   await mark(tabId, true, who)
   return { ok: true }
@@ -332,6 +369,12 @@ export async function releaseTab(tabId: number): Promise<void> {
   if (!(await agentTabs.get(tabId))) return
   await agentTabs.delete(tabId)
   await mark(tabId, false)
+  await stopIfNoReach()
+}
+
+/** The last handed tab went back with the switch off: Walnut hears at once that agents are out. */
+async function stopIfNoReach(): Promise<void> {
+  if (!(await agentReach())) await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
 }
 
 /** Who acts in a tab now (its owner key), for the side panel. */
@@ -359,7 +402,7 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
     }
     case 'agent-stop': {
       const id = sender.tab?.id
-      if (id !== undefined) await agentTabs.delete(id)
+      if (id !== undefined) { await agentTabs.delete(id); await stopIfNoReach() }
       return { ok: true }
     }
   }

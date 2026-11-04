@@ -101,6 +101,7 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
 /** Why a biometric approval has no Approve here, in the words the person reads. */
 export function noApproveReason(s: ApprovalsState, a: Approval): string {
   if (a.guard === 'vault') return 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID.';
+  if (a.guard === 'person') return 'Approve it on your iPhone with Face ID or in the Walnut Mac app with Touch ID, or unlock Passwords in this window.';
   if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
   if (a.enrollsKey && a.enrollsKey === s.touchId?.keyId) {
     return 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).';

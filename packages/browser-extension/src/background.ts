@@ -20,7 +20,8 @@ import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
-import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, siteOf, state, stores, summaries, view, walletItems, type Reply } from './bg-vault'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
+import { domainOf } from './login-pick'
 import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
 import { handleMenu } from './bg-menu'
 import { GENERATED_MS, barNonceFor, handleSave, showSaveBar } from './bg-save'
@@ -28,6 +29,7 @@ import { clearLater, initClipboard } from './bg-clipboard'
 import { initAutoLock, lockIfIdle, touch } from './bg-autolock'
 import { clearBadges, initBadge, setBadge } from './bg-badge'
 import { walletValues } from './bg-wallet'
+import { itemDetail, secretField } from './popup-item-data'
 
 const { pendingSave, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -86,7 +88,7 @@ function senderKind(sender: Sender): SenderKind | null {
 const ALLOWED: Record<string, SenderKind> = {
   state: 'popup', 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': 'popup',
   unlock: 'popup', lock: 'popup', 'site-items': 'popup', search: 'popup', 'copy-secret': 'popup', 'fill-tab': 'popup',
-  generate: 'popup', 'open-walnut': 'popup', 'totp-code': 'popup', copied: 'popup', 'wallet-items': 'popup',
+  generate: 'popup', 'open-walnut': 'popup', 'totp-code': 'popup', copied: 'popup', 'wallet-items': 'popup', 'item-detail': 'popup',
   'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'menu-focus': 'content', 'seen-login': 'content', 'seen-username': 'content',
   'connect-hello': 'content', 'connect-code': 'content',
   'menu-data': 'menu', 'menu-codes': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-regenerate': 'menu', 'menu-copied': 'menu',
@@ -97,7 +99,7 @@ const ALLOWED: Record<string, SenderKind> = {
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel',
 }
 /** What a person does with Walnut (not a page loading by itself): it keeps the auto-lock away. */
-const USE = new Set(['unlock', 'site-items', 'search', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
+const USE = new Set(['unlock', 'site-items', 'search', 'item-detail', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
 
 // ── the message router ──
 
@@ -135,6 +137,9 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const owner = await tabOwnerOf(id)
       const base = { ok: true, agents, ...(owner ? { owner } : {}) }
       if (!tab || !tab.url || !/^https?:/.test(tab.url) || await isWalnutPage(tab.url)) return { ...base, page: null }
+      // The panel's first word: the tab's address and title, before the page itself is asked
+      // (a page that does not answer held the panel on "Connecting" for the page's whole timeout).
+      if (msg.quick === true) return { ...base, page: { url: tab.url, title: tab.title ?? '' } }
       // A tab open since before the extension started gets its page script now (page-reach.ts).
       await reachPage(id!, false, { quick: true })
       const r = await toPage<{ ok?: boolean; walnut?: boolean; url?: string; title?: string; selection?: string; text?: string }>(id!, { type: 'page-context', withText: msg.withText === true }, 8000)
@@ -184,10 +189,10 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const tab = await activeTab(windowOf(msg))
       const page = tab?.url ?? ''
       const site = /^https?:/.test(page) && !(await isWalnutPage(page)) ? page : ''
-      const items = site ? await matchesFor(site) : []
+      const { first: items, others } = site ? await tiersOf(site) : { first: [], others: [] }
       // A plain http page whose logins are saved for https: the popup says why none is offered.
       const insecure = site && !items.length ? await insecureFor(site) : 0
-      return { ok: true, site: site ? displayHost(site) : '', items, insecure }
+      return { ok: true, site: site ? displayHost(site) : '', items, ...(others.length ? { others, othersDomain: domainOf(site) } : {}), insecure }
     }
     case 'wallet-items': return { ok: true, cards: await walletItems('card'), identities: await walletItems('identity') }
     case 'search': {
@@ -203,9 +208,8 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       const field = String(msg.field)
       if (field === 'totp') return { ok: true, value: (await api.totp(id)).code }
       const item = await api.item(id)
-      const value = field === 'username' ? item.username : field === 'password' ? item.password
-        : field === 'number' ? item.card?.number : field === 'code' ? item.card?.code : undefined
-      if (!value) return { ok: false, error: `This item has no ${field === 'code' ? 'security code' : field === 'number' ? 'card number' : field}.` }
+      const value = secretField(item, field)
+      if (!value) return { ok: false, error: `This item has no ${field === 'code' ? 'security code' : field === 'number' ? 'card number' : field.startsWith('field:') ? 'such field' : field}.` }
       void api.used(id)
       return { ok: true, value }
     }
@@ -230,9 +234,14 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     }
     // generate() holds the sizes to its own limits.
     case 'generate': return { ok: true, value: generate((msg.options as GeneratorOptions | undefined) ?? DEFAULT_PASSWORD) }
+    // The popup's detail view of one item: what it holds, its secrets only named (popup-item-data.ts).
+    case 'item-detail': return { ok: true, item: itemDetail(await api.item(String(msg.id))) }
     case 'open-walnut': {
       const conn = await connection()
-      await ext.tabs.create({ url: `${conn?.serverUrl ?? DEFAULT_SERVER}/passwords` })
+      // An item opens in Walnut's Passwords; `settings` is the Browser extension pane.
+      const where = msg.to === 'settings' ? '/settings#browser'
+        : typeof msg.item === 'string' && /^[\w-]{1,80}$/.test(msg.item) ? `/passwords?item=${encodeURIComponent(msg.item)}` : '/passwords'
+      await ext.tabs.create({ url: `${conn?.serverUrl ?? DEFAULT_SERVER}${where}` })
       return { ok: true }
     }
 
@@ -242,13 +251,17 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       if (await isWalnutPage(page)) return { ok: true, off: true }
       const st = await state()
       let count = 0
+      /** Logins saved for other parts of this site (tier 2): the menu lists them apart; never counted or offered first. */
+      let others = 0
       let codes = 0
       let cards = 0
       let identities = 0
       if (st.unlocked) {
         try {
-          const m = await matchesFor(page)
+          const t = await tiersOf(page)
+          const m = t.first
           count = m.length
+          others = t.others.length
           codes = m.filter((i) => i.hasTotp).length
           const all = await summaries()
           cards = all.filter((i) => i.type === 'card').length
@@ -276,7 +289,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       }
       // An agent's tab wears its frame and Stop button (top frame only).
       const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
-      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
+      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, ...(others ? { others } : {}), codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }

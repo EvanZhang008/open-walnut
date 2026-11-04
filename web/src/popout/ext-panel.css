@@ -113,3 +113,21 @@
 .ext-task-reply { padding: 0 8px 8px 24px; display: flex; flex-direction: column; gap: 6px; }
 .ext-task-input { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .ext-task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: 13px; color: var(--fg-muted); }
+.ext-tasks-updating { margin: 4px 12px 0; font-size: 12px; color: var(--fg-muted); }
+.ext-task-asked { font-size: 12.5px; line-height: 1.45; color: var(--fg-secondary, var(--fg)); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }
+.ext-task-asked p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-task-asked p + p { margin-top: 4px; }
+.ext-task-asked .ext-task-last { color: var(--fg); }
+
+/* ── the page's selection in a conversation already going (Ask) ── */
+.ext-panel-selection { display: flex; align-items: flex-start; gap: 6px; width: 100%; box-sizing: border-box; padding: 4px 6px 4px 8px; border-left: 3px solid var(--accent, #8a5a2b); border-radius: 4px; background: var(--bg-secondary); font-size: 12px; color: var(--fg); }
+.ext-panel-selection-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-panel-selection-label { color: var(--fg-muted); }
+.ext-panel-selection-drop { flex: 0 0 auto; border: 0; background: none; color: var(--fg-muted); font-size: 15px; line-height: 1; padding: 0 2px; cursor: pointer; border-radius: 4px; }
+.ext-panel-selection-drop:hover { color: var(--fg); background: var(--bg-hover, rgba(0,0,0,.06)); }
+/* Under the person's bubble: what it took from the page. */
+/* Inside the person's (accent) bubble: a quiet inset of what the message took from the page. */
+.ext-panel-attached { margin: 8px 0 0; padding: 6px 9px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); color: inherit; font-size: 12px; line-height: 1.45; text-align: left; }
+.ext-panel-attached figcaption { font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 2px; }
+.ext-panel-attached blockquote { margin: 0; padding: 0 0 0 8px; border-left: 2px solid rgba(255, 255, 255, 0.55); opacity: 0.95; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }

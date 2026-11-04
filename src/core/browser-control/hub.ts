@@ -184,6 +184,15 @@ export function deviceForTab(owner: string, tab?: number): string | undefined {
   return undefined
 }
 
+/**
+ * A moment for a browser to come in: one that just turned agents on (or whose background just
+ * started again) polls within a second or two, and a command sent in that gap should not fail.
+ */
+export async function waitConnected(ms: number): Promise<void> {
+  const until = Date.now() + ms
+  while (!connected().length && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
+}
+
 /** The browser a command goes to: the one named, else the only one, else the most recent. */
 export function pickController(device?: string): ControllerInfo {
   const live = connected()

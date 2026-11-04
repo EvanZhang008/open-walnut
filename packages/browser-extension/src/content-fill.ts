@@ -3,7 +3,7 @@
  * character), a new password into every new-password field, a card or an address.
  */
 import { setValue, type LoginGroup } from './form-detect'
-import { fillWallet, type WalletGroup, type WalletPart } from './wallet-detect'
+import { fillNote, fillWallet, type WalletGroup, type WalletPart } from './wallet-detect'
 import { cs } from './content-state'
 
 export function fillLogin(username: string | undefined, password: string | undefined): boolean {
@@ -38,9 +38,17 @@ export function fillNewPassword(password: string): void {
   for (const f of cs.active?.group?.newPasswords ?? []) setValue(f, password)
 }
 
-/** A card or address into the form the person is in, else (picked in the popup) the first such form here. */
-export function fillWalletForm(values: Partial<Record<WalletPart, string>>, kind: string): boolean {
+/**
+ * A card or address into the form the person is in, else (picked in the popup) the first such
+ * form here. `note` says what the item had no value for, when it left fields empty.
+ */
+export function fillWalletForm(values: Partial<Record<WalletPart, string>>, kind: string): { filled: boolean; note: string } {
   const a = cs.active?.wallet
   const g: WalletGroup | undefined = a && a.root.isConnected && a.kind === kind ? cs.wallets.find((w) => w.root === a.root && w.kind === kind) ?? a : cs.wallets.find((w) => w.kind === kind)
-  return !!g && fillWallet(g, values) > 0
+  if (!g) return { filled: false, note: '' }
+  const r = fillWallet(g, values)
+  // Each value goes in the way typing would (focusing its field): the person ends where they were.
+  const back = cs.active?.field
+  if (r.filled && back?.isConnected && g.fields.some((f) => f.el === back)) back.focus({ preventScroll: true })
+  return { filled: r.filled > 0, note: fillNote(g.kind, r) }
 }

@@ -5,10 +5,13 @@
  */
 import { ext, type Tab } from './ext'
 import { ApiError, DEFAULT_SERVER, api, connection, vaultSession } from './walnut-api'
-import { displayHost, insecureOnly, matchItem, siteKey } from '../../../src/core/vault/url-match'
+import { insecureOnly, siteKey } from '../../../src/core/vault/url-match'
 import type { VaultItemSummary } from '../../../src/core/vault/types'
 import type { FieldRules } from './field-rules'
 import { tabStore } from './tab-store'
+import { recent, tiersFor, view, type MenuItem } from './login-pick'
+
+export { view, type MenuItem }
 
 export type Reply = Record<string, unknown> & { ok: boolean }
 export const fail = (err: unknown): Reply => err instanceof ApiError
@@ -24,27 +27,14 @@ export async function summaries(): Promise<VaultItemSummary[]> {
 }
 export const forget = () => { cache = null }
 
-export interface MenuItem { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact: boolean; type?: string; sub?: string }
-
-export function view(i: VaultItemSummary, page?: string): MenuItem {
-  return {
-    id: i.id, title: i.title, ...(i.username ? { username: i.username } : {}),
-    ...(i.urls?.[0] ? { site: displayHost(i.urls[0]) } : {}), hasTotp: i.hasTotp,
-    exact: !!page && matchItem(i.urls, page) === 'exact_host',
-    ...(i.type === 'card' && i.cardLast4 ? { sub: `•••• ${i.cardLast4}` } : {}),
-  }
+/** Logins offered on a page (tier 1): the same host first, then favorites, then most recently used. */
+export async function matchesFor(page: string): Promise<MenuItem[]> {
+  return tiersFor(await summaries(), page).first
 }
 
-const recent = (a: VaultItemSummary, b: VaultItemSummary) =>
-  Number(!!b.favorite) - Number(!!a.favorite) || (b.usedAt ?? '').localeCompare(a.usedAt ?? '') || a.title.localeCompare(b.title)
-
-/** Logins saved for a page, the same host first, then favorites, then most recently used. */
-export async function matchesFor(page: string): Promise<MenuItem[]> {
-  const all = (await summaries()).filter((i) => i.type === 'login' && matchItem(i.urls, page))
-  return all
-    .map((i) => ({ i, v: view(i, page) }))
-    .sort((a, b) => Number(b.v.exact) - Number(a.v.exact) || recent(a.i, b.i))
-    .map((x) => x.v)
+/** Both tiers: `others` are saved for other parts of the page's site, listed apart, never offered first. */
+export async function tiersOf(page: string): Promise<{ first: MenuItem[]; others: MenuItem[] }> {
+  return tiersFor(await summaries(), page)
 }
 
 /** Logins saved for https only, on this plain http page: said, never offered. */
@@ -113,6 +103,8 @@ export interface Pending {
   url: string
   username?: string
   password: string
+  /** On a change form, the password it replaced: it tells which saved login is being changed. */
+  current?: string
   kind: 'save' | 'update'
   itemId?: string
   title?: string

@@ -246,7 +246,12 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
     let proven = false
     if (target.guard && body.decision === 'approve' && !body.signature) {
       // Unsigned: only a Passwords unlock in this window proves it is the person (vaultApprover).
+      // The same for an agent's buy, send or delete in the browser (`person`).
       if (!(await vaultApprover(req, body, target))) {
+        if (target.guard === 'person') {
+          throw new ApprovalError(403, 'proof_needed', 'Approve it on your iPhone with Face ID or in the Walnut Mac app with Touch ID (or unlock Passwords in this window): '
+            + 'an agent\'s step that buys, sends or deletes needs proof that it is you saying yes.')
+        }
         throw new ApprovalError(403, 'vault_unlock_needed', target.guard === 'vault-sensitive' && target.mode === 'biometric'
           ? 'This item needs Face ID or Touch ID: approve it on your iPhone or in the Walnut Mac app.'
           : 'Unlock Passwords in this window to approve, or approve on your iPhone with Face ID: giving an agent a password needs the master password or a device that signs.')

@@ -148,6 +148,18 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
 
   useEffect(() => { void reload() }, [reload])
 
+  // /passwords?item=<id> (the extension's "Edit in Walnut"): that item opens, once.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const asked = params.get('item')
+    if (!asked) return
+    params.delete('item')
+    const rest = params.toString()
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`)
+    setSection('all')
+    setSelectedId(asked)
+  }, [setSection, setSelectedId])
+
   // Open the selected item; a slower answer for an item no longer selected is dropped.
   useEffect(() => {
     if (!selectedId || isViewSection(section)) { setOpened(null); return }

@@ -10,12 +10,20 @@
  * extension, seeing a newer build, reloads itself from it (background.ts selfUpdate). So an
  * extension set up this way updates with every Walnut deploy.
  *
+ * Each folder carries a marker, walnut-folder.json `{ folder, browser, serverUrl? }`: `folder` is
+ * this install root's own id (made once, kept across refreshes), which the panel route reports
+ * beside the build. The extension reloads only when the marker in its own files names that id:
+ * a copy loaded from any other folder (a developer's build, a zip, a test browser's
+ * command-line copy) never reloads, since Chrome turns a command-line unpacked extension off
+ * after a reload when Developer mode is off.
+ *
  * Where: macOS ~/Library/Application Support/Walnut/Browser Extension/<browser>, Windows
  * %LOCALAPPDATA%\Walnut\Browser Extension\<browser>, else $XDG_DATA_HOME (~/.local/share)/
  * walnut/browser-extension/<browser>: per machine, never synced, never a cache a cleanup
  * may take (the browser loads the extension from it on every start). A throwaway server (an
  * ephemeral one, a data home in a temp dir) uses its own data home instead and opens nothing.
  */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -100,11 +108,41 @@ export function readZip(buf: Buffer): Array<{ name: string; data: Buffer }> {
   return out
 }
 
+export const MARKER = 'walnut-folder.json'
+export interface FolderMarker { folder: string; browser: ExtBrowser; serverUrl?: string }
+
+/** This install root's id, made the first time a folder is set up in it. */
+export function folderId(root = installRoot(), make = false): string | null {
+  const file = path.join(root, '.walnut-folder-id')
+  try {
+    const id = fs.readFileSync(file, 'utf8').trim()
+    if (/^[0-9a-f]{16,64}$/.test(id)) return id
+  } catch { /* none yet */ }
+  if (!make) return null
+  fs.mkdirSync(root, { recursive: true })
+  const id = crypto.randomBytes(12).toString('hex')
+  fs.writeFileSync(file, `${id}\n`)
+  return id
+}
+
+export function readMarker(dir: string): FolderMarker | null {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(dir, MARKER), 'utf8')) as Partial<FolderMarker>
+    return typeof m.folder === 'string' && (m.browser === 'chrome' || m.browser === 'firefox')
+      ? { folder: m.folder, browser: m.browser, ...(typeof m.serverUrl === 'string' && m.serverUrl ? { serverUrl: m.serverUrl } : {}) } : null
+  } catch { return null }
+}
+
+function markerFor(browser: ExtBrowser, root: string, serverUrl: string | undefined, had: FolderMarker | null): FolderMarker {
+  const url = serverUrl ?? had?.serverUrl
+  return { folder: folderId(root, true)!, browser, ...(url ? { serverUrl: url } : {}) }
+}
+
 /** One setup or refresh at a time per folder: two at once would swap one folder twice. */
 const inFlight = new Map<string, Promise<{ dir: string; build: string | null }>>()
 
 /** Puts the extension this server ships into the folder (a whole new folder, swapped in). */
-export function installExtension(browser: ExtBrowser, root = installRoot(), from = downloads()): Promise<{ dir: string; build: string | null }> {
+export function installExtension(browser: ExtBrowser, root = installRoot(), from = downloads(), serverUrl?: string): Promise<{ dir: string; build: string | null }> {
   const key = path.join(root, browser)
   const running = inFlight.get(key)
   if (running) return running
@@ -121,6 +159,7 @@ export function installExtension(browser: ExtBrowser, root = installRoot(), from
       await fsp.mkdir(path.dirname(to), { recursive: true })
       await fsp.writeFile(to, f.data)
     }
+    await fsp.writeFile(path.join(next, MARKER), JSON.stringify(markerFor(browser, root, serverUrl, readMarker(key))))
     // The browser reads the folder at its own times: it moves aside and back in one rename each.
     await fsp.rm(old, { recursive: true, force: true })
     if (fs.existsSync(key)) await fsp.rename(key, old)
@@ -136,14 +175,22 @@ export function installExtension(browser: ExtBrowser, root = installRoot(), from
  * A set-up folder holding an older build gets this server's (no folder: nothing happens, since
  * only the person sets one up). Returns the browsers refreshed.
  */
-export async function refreshInstalled(root = installRoot(), from = downloads()): Promise<ExtBrowser[]> {
+export async function refreshInstalled(root = installRoot(), from = downloads(), serverUrl?: string): Promise<ExtBrowser[]> {
   const bundled = bundledExtension(from)
   if (!bundled) return []
   const done: ExtBrowser[] = []
   for (const b of EXT_BROWSERS) {
-    if (!fs.existsSync(path.join(root, b, 'manifest.json'))) continue
-    if (installedBuild(b, root) === bundled.build) continue
-    await installExtension(b, root, from)
+    const dir = path.join(root, b)
+    if (!fs.existsSync(path.join(dir, 'manifest.json'))) continue
+    if (installedBuild(b, root) === bundled.build) {
+      // A folder an older Walnut set up has no marker yet (or none naming this server): it gets one.
+      const had = readMarker(dir)
+      if (!had || had.folder !== folderId(root) || (serverUrl && had.serverUrl !== serverUrl)) {
+        await fsp.writeFile(path.join(dir, MARKER), JSON.stringify(markerFor(b, root, serverUrl, had)))
+      }
+      continue
+    }
+    await installExtension(b, root, from, serverUrl)
     done.push(b)
   }
   return done

@@ -35,3 +35,47 @@ export function pageTaskInput(page: { url: string; title?: string }): { title: s
   const title = (page.title?.trim() || host).slice(0, 200);
   return { title, description: `From the browser: ${page.url}` };
 }
+
+/**
+ * The lists as the panel last showed them, kept in this browser so the next open shows them at
+ * once while the tasks load (a row's words and its conversation, nothing else). A list newer than
+ * the person's last look is always fetched; this is only what shows before it lands.
+ */
+export interface KeptTaskLists { at: number; needs: ExtTaskRow[]; focus: ExtTaskRow[] }
+const KEPT_KEY = 'walnut.ext-tasks.lists';
+/** Older than this, the kept lists say too little of now to show (the loading line shows instead). */
+export const KEPT_MAX_AGE_MS = 7 * 24 * 3600_000;
+
+type KeptStore = Pick<Storage, 'getItem' | 'setItem'>;
+const keptStore = (): KeptStore | null => { try { return window.localStorage; } catch { return null; } };
+
+/** A row cut to what the list draws and the reply needs. */
+function keptRow(r: ExtTaskRow): ExtTaskRow {
+  const t = r.task;
+  const session = t.session_id || t.exec_session_id || t.plan_session_id || (t.session_ids?.length ? t.session_ids[t.session_ids.length - 1] : undefined);
+  return { state: r.state, label: r.label, line: r.line, task: { id: t.id, title: t.title, ...(session ? { session_id: session } : {}) } as Task };
+}
+
+export function keepTaskLists(lists: { needs: ExtTaskRow[]; focus: ExtTaskRow[] }, s: KeptStore | null = keptStore(), now = Date.now()): void {
+  const kept: KeptTaskLists = { at: now, needs: lists.needs.map(keptRow), focus: lists.focus.map(keptRow) };
+  try { s?.setItem(KEPT_KEY, JSON.stringify(kept)); } catch { /* full or blocked: the next open waits for the list */ }
+}
+
+export function keptTaskLists(s: KeptStore | null = keptStore(), now = Date.now()): KeptTaskLists | null {
+  try {
+    const v = JSON.parse(s?.getItem(KEPT_KEY) ?? 'null') as KeptTaskLists | null;
+    if (!v || typeof v.at !== 'number' || now - v.at > KEPT_MAX_AGE_MS || !Array.isArray(v.needs) || !Array.isArray(v.focus)) return null;
+    const ok = (r: unknown): r is ExtTaskRow => !!r && typeof r === 'object' && typeof (r as ExtTaskRow).task?.id === 'string' && typeof (r as ExtTaskRow).task?.title === 'string';
+    return { at: v.at, needs: v.needs.filter(ok), focus: v.focus.filter(ok) };
+  } catch { return null; }
+}
+
+/** What the open row says the task asked: its status line in full, then its last words when they add to it. */
+export function askedOf(task: Task, line: string): string[] {
+  const out: string[] = [];
+  const full = line.trim();
+  if (full) out.push(full);
+  const last = task.last_words?.text?.replace(/\s+/g, ' ').trim();
+  if (last && !full.includes(last.slice(0, 60))) out.push(last);
+  return out;
+}

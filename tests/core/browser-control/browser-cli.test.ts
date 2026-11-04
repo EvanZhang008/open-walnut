@@ -137,4 +137,54 @@ describe('the newer actions', () => {
     expect(calls[1]).toMatchObject({ request: 'apr-1', wait_ms: 25_000 })
     expect(calls[2]).toMatchObject({ request: 'apr-1' })
   })
+
+  it('a step that waits for the person says what and how long, then goes on with the ask', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    const said: string[] = []
+    let out = ''
+    const ask = { status: 'needs_ok', code: 'outward_needs_ok', request: 'apr-1', what: 'click button "Place order"',
+      error: 'Waiting for the person to approve: click button "Place order" on shop.example.test ("Place order" buys or pays). They are asked on their Mac and phone; the ask stays open 10 minutes.' }
+    const answers = [ask, ask, { tab: 4, url: 'https://shop.example.test/done', clicked: 'button "Place order"' }]
+    const p = parseBrowserArgv(['click', 'e11'])
+    if (!p.ok) throw new Error('parse')
+    const code = await runBrowser(p, { call: async (_n, args) => { calls.push(args); return { ok: true, result: answers.shift() } }, say: (l) => said.push(l), out: (t) => { out += t }, cwd: os.tmpdir() })
+    expect(code).toBe(BROWSER_EXIT.ok)
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain('click button "Place order" on shop.example.test')
+    expect(said[0]).toContain('waits up to 10 minutes')
+    expect(calls[1]).toMatchObject({ action: 'click', ref: 'e11', request: 'apr-1', wait_ms: 25_000 })
+    expect(out).toContain('tab 4')
+  })
+
+  it('a no or no answer in time ends it', async () => {
+    const p = parseBrowserArgv(['click', 'e11'])
+    if (!p.ok) throw new Error('parse')
+    const io = (r: { ok: boolean; code?: string; message?: string }) => ({ call: async () => r, say: () => undefined, out: () => undefined, cwd: os.tmpdir() })
+    expect(await runBrowser(p, io({ ok: false, code: 'denied', message: 'no' }))).toBe(BROWSER_EXIT.refused)
+    expect(await runBrowser(p, io({ ok: false, code: 'outward_expired', message: 'late' }))).toBe(BROWSER_EXIT.timeout)
+  })
+
+  it('a click that opened a window says which tab it is', async () => {
+    let out = ''
+    const p = parseBrowserArgv(['click', 'e2'])
+    if (!p.ok) throw new Error('parse')
+    await runBrowser(p, { call: async () => ({ ok: true, result: { tab: 3, url: 'https://x.test/popup', opened: { tab: 9, url: 'https://x.test/help-window' } } }), say: () => undefined, out: (t) => { out += t }, cwd: os.tmpdir() })
+    expect(out).toContain('Opened a new tab: 9  https://x.test/help-window')
+  })
+
+  it('a .png name asks for a PNG; a JPEG that comes anyway is saved under .jpg, and says so', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-png-'))
+    const png = parseBrowserArgv(['screenshot', 'shot.png'])
+    if (!png.ok) throw new Error('parse')
+    expect(png.args.format).toBe('png')
+    expect(parseBrowserArgv(['screenshot', 'shot.jpg'])).not.toMatchObject({ args: { format: 'png' } })
+    const said: string[] = []
+    const send = (mime: string) => ({ call: async () => ({ ok: true, result: { image: `data:image/${mime};base64,${Buffer.from([1, 2, 3]).toString('base64')}` } }), say: (l: string) => said.push(l), out: () => undefined, cwd: dir })
+    expect(await runBrowser(png, send('png'))).toBe(0)
+    expect(fs.existsSync(path.join(dir, 'shot.png'))).toBe(true)
+    expect(said).toHaveLength(0)
+    expect(await runBrowser(png, send('jpeg'))).toBe(0)
+    expect(fs.existsSync(path.join(dir, 'shot.jpg'))).toBe(true)
+    expect(said[0]).toContain('saved as shot.jpg')
+  })
 })

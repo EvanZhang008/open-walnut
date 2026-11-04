@@ -28,6 +28,9 @@ function base64(buf: ArrayBuffer): string {
   return btoa(s)
 }
 
+/** `format: 'png'` (the CLI asks for it for a .png file), else JPEG. */
+const pngOf = (c: WireCommand) => c.args.format === 'png'
+
 async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: string; height: number; pageHeight: number; cut: boolean }> {
   const m = await frameOp(tabId, 0, 'capture', { step: 'start' }, c.allow, 5000) as { x: number; y: number; w: number; h: number; total: number }
   const height = Math.min(m.total, FULL_MAX_PX)
@@ -59,8 +62,9 @@ async function full(c: WireCommand, tabId: number, tab: Tab): Promise<{ image: s
     ctx.drawImage(bmp, 0, s.y, m.w, m.h)
     bmp.close()
   }
-  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 })
-  return { image: `data:image/jpeg;base64,${base64(await blob.arrayBuffer())}`, height: drawn, pageHeight: m.total, cut: cut || drawn < height }
+  const type = pngOf(c) ? 'image/png' : 'image/jpeg'
+  const blob = await canvas.convertToBlob(pngOf(c) ? { type } : { type, quality: 0.7 })
+  return { image: `data:${type};base64,${base64(await blob.arrayBuffer())}`, height: drawn, pageHeight: m.total, cut: cut || drawn < height }
 }
 
 export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
@@ -86,7 +90,7 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
       const f = await full(c, tabId, tab).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
       out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
     } else {
-      out = { image: await ext.tabs.captureVisibleTab(tab.windowId!, { format: 'jpeg', quality: 70 }) }
+      out = { image: await ext.tabs.captureVisibleTab(tab.windowId!, pngOf(c) ? { format: 'png' } : { format: 'jpeg', quality: 70 }) }
     }
   } finally {
     await maskAll(tabId, false)

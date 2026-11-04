@@ -21,8 +21,11 @@ export interface Approval {
   status: ApprovalStatus;
   answer?: { decision: 'approve' | 'deny'; at: string; mode: ApprovalMode; device: { id?: string; name: string; kind: string } };
   enrollsKey?: string;
-  /** A vault ask: Approve needs a device signature, or (`vault`) this window's Passwords unlock. */
-  guard?: 'vault' | 'vault-sensitive';
+  /**
+   * Approve needs a device signature, or (`vault`, `person`) this window's Passwords unlock: a vault
+   * ask, or (`person`) an agent's step in the browser that buys, sends or deletes.
+   */
+  guard?: 'vault' | 'vault-sensitive' | 'person';
   canceledReason?: string;
   testRun?: string;
 }

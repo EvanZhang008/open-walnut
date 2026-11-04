@@ -23,7 +23,7 @@ export const BROWSER_USAGE = [
   '       walnut browser press <key> [--trusted] [--tab N]',
   '       walnut browser scroll [up|down|left|right|top|bottom|<ref>] [--amount N | --by PX] [--tab N]',
   '       walnut browser wait <text> | --gone <text> | --url <part or /regex/> | --ms N [--tab N]',
-  '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a file in $WALNUT_TASK_DIR/shots)',
+  '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG)',
   '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
   '       walnut browser downloads [--wait] [--ms N]',
   '       walnut browser fill-login [--item <id|name>] [--tab N]   (signs in with the saved login; you never see the password)',
@@ -167,13 +167,17 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'wait':
         if (!rest.length && args.ms === undefined && args.textGone === undefined && args.url === undefined) return { ok: false, error: 'wait needs text, --gone, --url or --ms N' }
         return { ok: true, op: 'browser', args: { action: 'wait', ...(rest.length ? { text: rest.join(' ') } : {}), ...args }, json }
-      case 'screenshot': return { ok: true, op: 'browser', args: { action: 'screenshot', inline: true, ...args }, json, ...(rest[0] ? { file: rest[0] } : {}) }
+      case 'screenshot': {
+        // A file named .png asks the browser for a PNG; anything else is a JPEG (smaller).
+        const png = !!rest[0] && /\.png$/i.test(rest[0])
+        return { ok: true, op: 'browser', args: { action: 'screenshot', inline: true, ...(png ? { format: 'png' } : {}), ...args }, json, ...(rest[0] ? { file: rest[0] } : {}) }
+      }
     }
   } catch (err) { return { ok: false, error: (err as Error).message } }
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -217,13 +221,18 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
     const r = await io.call(p.op, { ...p.args, ...upload, ...(told ? { wait_ms: 25_000 } : {}), ...(request ? { request } : {}) })
     if (!r.ok) {
       io.say(`walnut browser: ${r.message ?? 'failed'}`)
-      return r.code && REFUSED.has(r.code) ? BROWSER_EXIT.refused : r.code === 'browser_timeout' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
+      return r.code && REFUSED.has(r.code) ? BROWSER_EXIT.refused : r.code === 'browser_timeout' || r.code === 'outward_expired' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
     }
     const body = (r.result ?? {}) as Record<string, unknown>
     if (body.status === 'needs_ok') {
       // A sign-in waits on its own ask: the next calls name it.
       if (typeof body.request === 'string') request = body.request
-      if (!told) io.say(request ? `Waiting for the person to approve the sign-in (a notification on their Mac and phone)...` : `Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone)...`)
+      // What it waits for, in the server's words, and how long this command waits.
+      if (!told) {
+        const why = typeof body.error === 'string' ? body.error.replace(/[.\s]+$/, '')
+          : request ? 'Waiting for the person to approve the sign-in (a notification on their Mac and phone)' : `Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone)`
+        io.say(`${why}. This command waits up to 10 minutes for their answer...`)
+      }
       told = true
       if ((io.now?.() ?? Date.now()) > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
       continue
@@ -231,7 +240,14 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
     if (p.args.action === 'screenshot' && typeof body.image === 'string') {
       const m = /^data:image\/(\w+);base64,(.+)$/.exec(body.image)
       if (!m) { io.say('walnut browser: the browser sent no image'); return BROWSER_EXIT.error }
-      const file = path.resolve(io.cwd, p.file ?? defaultShot(io))
+      // The file's name says what is in it: an older extension sends a JPEG even when a PNG was asked.
+      const ext = m[1] === 'png' ? '.png' : '.jpg'
+      let file = path.resolve(io.cwd, p.file ?? defaultShot(io).replace(/\.jpg$/, ext))
+      const named = path.extname(file).toLowerCase()
+      if (named !== ext && !(ext === '.jpg' && named === '.jpeg')) {
+        file = file.slice(0, file.length - named.length) + ext
+        io.say(`walnut browser: the browser sent a ${ext === '.png' ? 'PNG' : 'JPEG'}, so it is saved as ${path.basename(file)}`)
+      }
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, Buffer.from(m[2], 'base64'))
       delete body.image
@@ -248,7 +264,8 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
 /** What a person (or an agent in a shell) reads. */
 function render(action: string | undefined, b: Record<string, unknown>): string {
   if (!action) {
-    const browsers = (b.browsers as Array<{ label: string; browser: string }> | undefined) ?? []
+    const browsers = ((b.browsers as Array<{ label: string; browser: string; caps?: string[] }> | undefined) ?? [])
+      .map((x) => ({ ...x, label: x.caps?.includes('handed-tabs-only') ? `${x.label} (only the tab the person handed over)` : x.label }))
     const sites = (b.sites as Array<{ site: string }> | undefined) ?? []
     return [
       browsers.length ? `Connected: ${browsers.map((x) => x.label).join(', ')}` : 'No browser lets agents in now (the Walnut extension popup, Settings, turns it on).',
@@ -277,5 +294,7 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
   if (action === 'text') return typeof b.text === 'string' ? b.text : ''
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')
-  return `ok${where ? `  ${where}` : ''}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+  const opened = b.opened as { tab?: number; url?: string } | undefined
+  const also = opened && typeof opened.tab === 'number' ? `\nOpened a new tab: ${opened.tab}  ${opened.url ?? ''} (this task's too: --tab ${opened.tab})` : ''
+  return `ok${where ? `  ${where}` : ''}${also}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
 }

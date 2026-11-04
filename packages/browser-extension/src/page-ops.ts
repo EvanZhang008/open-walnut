@@ -5,6 +5,7 @@
  */
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
+import { clickFacts, clickTarget, enterFacts, judgeOutward, outwardHold, pressFacts } from './page-agent-outward'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -57,9 +58,15 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
   // Keys with no element go where the focus is: never into a frame (its site is not checked here).
   if (args.active === true) {
     if (intoFrame(document.activeElement)) throw new pa.PageError('The focus is inside a frame: real input works in the top frame only.', 'trusted_frame')
-    return {}
+    const how = trustedHow(args)
+    const h = how ? held(args, how, document.activeElement) : null
+    return h ?? {}
   }
   const { el, x, y } = pa.target(args)
+  // Checked before the focus moves: a held step leaves the page as it was.
+  const how = trustedHow(args)
+  const h = how ? held(args, how, el) : null
+  if (h) return h
   if (intoFrame(el)) throw new pa.PageError('That point is inside a frame: real input works in the top frame only (use the frame\'s ref without trusted).', 'trusted_frame')
   if (args.focus === true && el instanceof HTMLElement) {
     el.focus()
@@ -76,16 +83,52 @@ function locate(args: Record<string, unknown>): Record<string, unknown> {
   return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"` }
 }
 
+/**
+ * A step that buys, sends or deletes waits for the person (page-agent-outward.ts): the op answers
+ * `hold` and does nothing, unless the approval the server got for exactly this step comes with it
+ * (`outward_ok`, the step's signature; the server never takes it from an agent).
+ * `how`: a click on `el`; Enter in `el` (also typed text that submits or holds a newline, with the
+ * text about to be typed); or a key combo pressed with the focus on `el`.
+ */
+type How = { click: true } | { enter: true; typing?: string } | { key: string }
+function held(args: Record<string, unknown>, how: How, el: Element | null): Record<string, unknown> | null {
+  if (!el) return null
+  const facts = 'click' in how ? clickFacts(el) : 'enter' in how ? enterFacts(el, how.typing) : pressFacts(el, how.key)
+  const o = facts ? judgeOutward(facts) : null
+  if (!o) return null
+  const shown = 'click' in how || el.matches('button, a[href], [role=button], [role=link]') ? clickTarget(el) : el
+  const verb = 'click' in how ? 'click' : `press ${'key' in how ? how.key : 'Enter'} in`
+  const hold = outwardHold(o, `${verb} ${pa.roleOf(shown)} "${pa.clip(pa.nameOf(shown), 60)}"`)
+  return args.outward_ok === hold.sig ? null : { hold }
+}
+
+/**
+ * Typed text that sends: `submit`. (A newline typed here is only text in the field: page events
+ * press no key for it. Real typing presses Enter for each, so agent-trusted.ts counts it as submit.)
+ */
+const typedEnter = (args: Record<string, unknown>): How | null => (args.submit === true ? { enter: true, typing: String(args.text ?? '') } : null)
+
+/** What a trusted step (locate) asks to be judged: `outward` click, enter (with `typing`), or key (with `key`). */
+function trustedHow(args: Record<string, unknown>): How | null {
+  if (args.outward === 'click') return { click: true }
+  if (args.outward === 'enter') return { enter: true, ...(typeof args.typing === 'string' ? { typing: args.typing } : {}) }
+  if (args.outward === 'key' && typeof args.key === 'string') return { key: args.key }
+  return null
+}
+
+/** The element a typed text goes to (as pa.type picks it). */
+const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : document.activeElement)
+
 export async function runPageOp(op: string, args: Record<string, unknown>): Promise<unknown> {
   pa.setFrame(args.frame)
   switch (op) {
     case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
     case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
-    case 'click': return pa.click(args)
+    case 'click': return held(args, { click: true }, pa.target(args).el) ?? pa.click(args)
     case 'hover': return pa.hover(args)
-    case 'type': return pa.type(args)
+    case 'type': { const how = typedEnter(args); return (how ? held(args, how, typeTarget(args)) : null) ?? pa.type(args) }
     case 'select': return pa.select(args)
-    case 'press': return pa.press(args)
+    case 'press': return held(args, { key: String(args.key ?? '') }, document.activeElement) ?? pa.press(args)
     case 'scroll': return pa.scroll(args)
     case 'wait': return pa.wait(args)
     case 'find': return forms.find(args)

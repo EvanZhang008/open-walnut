@@ -63,6 +63,6 @@ describe('Walnut\'s words for the model are hints, not the person\'s words', () 
   it('the side panel never types Walnut\'s note into the person\'s message', () => {
     const panel = fs.readFileSync(path.join(WEB, 'popout/PopoutExtPanel.tsx'), 'utf8')
     expect(panel).not.toMatch(/insertInto\([^)]*act/i)
-    expect(panel).toMatch(/setPendingHints\(/)
+    expect(panel).toMatch(/setPendingHints(Source)?\(/)
   })
 })

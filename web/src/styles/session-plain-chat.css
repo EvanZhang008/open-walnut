@@ -1,0 +1,14 @@
+/* A plain chat (SessionPanel `plainChat`, the browser side panel's Ask): the host draws its own
+   header, so the panel's two header rows take no room and no taps, and nothing pads the
+   conversation for them. They stay in the tree, as with a host header, because the plan
+   window is drawn from inside them. */
+.session-panel.is-plain-chat { --sp-header-h: 0px !important; }
+.session-panel.is-plain-chat:not(.draft-session-panel) > .session-panel-header {
+  visibility: hidden;
+  height: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: visible;
+  pointer-events: none;
+}

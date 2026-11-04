@@ -11,6 +11,7 @@
  */
 import { ext } from './ext'
 import { secrets } from './secret-store'
+import { clearPanelData } from './panel-data'
 import { derivePasswordKey, fromB64, toB64, type KdfParams } from '../../../src/core/vault/crypto'
 import type { VaultItem, VaultItemInput, VaultItemSummary } from '../../../src/core/vault/types'
 
@@ -125,6 +126,8 @@ export async function pair(serverUrl: string, code: string): Promise<Connection>
   // Connecting again (the same Walnut or another): the old device and its token go, best effort.
   const old = await connection()
   if (old && old.deviceId !== done.deviceId) await removeDevice(old)
+  // Another Walnut: the side panel keeps nothing of the one before (panel-data.ts).
+  if (!old || old.serverUrl !== done.serverUrl) await clearPanelData().catch(() => undefined)
   await secrets.set('connection', done)
   await setVaultSession(null)
   return done
@@ -134,6 +137,8 @@ export async function pair(serverUrl: string, code: string): Promise<Connection>
 async function forgetConnection(): Promise<void> {
   await secrets.delete('connection').catch(() => undefined)
   await setVaultSession(null)
+  // The side panel's copy of that Walnut's chat and tasks goes too, and an open panel closes its frames.
+  await clearPanelData().catch(() => undefined)
 }
 
 /** Lock this browser's unlock and remove its device in Walnut (a device may remove itself, devices.ts). */

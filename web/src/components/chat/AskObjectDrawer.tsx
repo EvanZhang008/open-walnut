@@ -82,9 +82,19 @@ export interface AskObjectDrawerProps {
   restoreFocusTo?: string;
   /** Called just before the first question goes out: the context as it is then (the browser side
    *  panel saves the page's text only when a question is really asked). Replaces `contextBlock`. */
-  prepareContext?: (draft: { walnut?: boolean; host?: string | null }) => Promise<string>;
+  prepareContext?: (draft: { walnut?: boolean; host?: string | null }, question: string) => Promise<string>;
   /** The task (and session, once known) this object's conversation runs in. */
   onRecord?: (record: { taskId: string; sessionId?: string }) => void;
+  /**
+   * A plain chat about the object (the browser side panel): always Ask Walnut, with no Start Task
+   * fork, no task fields, no drawer head (the host has its own), and the panels in their plain
+   * chat mode (SessionPanel `plainChat`). Other hosts leave it off and keep the full drawer.
+   */
+  plainChat?: boolean;
+  /** The first question's placeholder in plain chat. */
+  composerPlaceholder?: string;
+  /** In plain chat: a pill in the conversation's composer (SessionPanel `composerPill`). */
+  composerPill?: ReactNode;
 }
 
 type View =
@@ -174,7 +184,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     if (prepareRef.current) {
       setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}) });
       try {
-        block = await prepareRef.current(askDraft.draftRef.current);
+        block = await prepareRef.current(askDraft.draftRef.current, question);
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         if (scopeRef.current === scope) setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}), error: text });
@@ -233,9 +243,24 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // question; StrictMode's second run is harmless because a launch is single-flight per scope and an
   // existing session's preset is only sent by the run still live when its lookup lands.
   const ask = autoSend && preset ? preset : '';
+  // A plain chat opens the conversation it remembers at once and checks it is still there after
+  // (the side panel: each open used to wait on that round trip with an empty "Opening…").
+  const trustRemembered = !!props.plainChat;
   useEffect(() => {
     let live = true;
     const record = readAskSession(scope);
+    if (record?.sessionId && trustRemembered && !ask) {
+      const sessionId = record.sessionId;
+      writeAskSession(scope, withAsked(record, undefined, Date.now()));
+      setView({ kind: 'session', sessionId });
+      void fetchSession(sessionId).then((session) => {
+        if (!live || session) return;
+        log.info('ask-object', 'remembered session is gone, starting over', { objectKey: scope.key, sessionId });
+        forgetAskSession(scope);
+        setView({ kind: 'compose' });
+      }, () => { /* a failed read is not "gone" */ });
+      return () => { live = false; };
+    }
     void (async () => {
       if (record?.sessionId) {
         let exists = true;
@@ -261,7 +286,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       else setView({ kind: 'compose' });
     })();
     return () => { live = false; };
-  }, [scope, ask, openSession, launch]);
+  }, [scope, ask, openSession, launch, trustRemembered]);
 
   // An engine that mints its own session id reports it after the task: the task event first, a poll
   // behind it, and a deadline so the drawer never spins forever.
@@ -451,6 +476,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           focusComposer={!ask}
           {...(backButton ? { headerLeading: backButton } : {})}
           onClose={onClose}
+          {...(props.plainChat ? { plainChat: true, composerPill: props.composerPill } : {})}
         />
       </div>
     );
@@ -465,12 +491,17 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           onStart={onStart}
           onSaveAsTask={onSaveAsTask}
           onClose={onClose}
-          onWalnutToggle={askDraft.onWalnutToggle}
           onPathChange={askDraft.onPathChange}
           onProjectChange={askDraft.onProjectChange}
           onMetaChange={askDraft.onMetaChange}
-          onTaskFieldChange={askDraft.onTaskFieldChange}
-          onReturnFieldToWalnut={askDraft.onReturnFieldToWalnut}
+          {...(props.plainChat ? {
+            plainChat: true,
+            ...(props.composerPlaceholder ? { placeholder: props.composerPlaceholder } : {}),
+          } : {
+            onWalnutToggle: askDraft.onWalnutToggle,
+            onTaskFieldChange: askDraft.onTaskFieldChange,
+            onReturnFieldToWalnut: askDraft.onReturnFieldToWalnut,
+          })}
           isKnownProject={askDraft.isKnownProject}
           {...(saveError ? {
             hostNotice: (
@@ -486,7 +517,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     const failed = view.kind === 'starting' || view.kind === 'linking' ? view.error : undefined;
     body = (
       <div className="ask-object-pending" data-testid="ask-object-pending">
-        <div className="ask-object-head">
+        {!props.plainChat && <div className="ask-object-head">
           {backButton}
           <h2 className="ask-object-title">{props.title}</h2>
           <button
@@ -499,7 +530,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           >
             {ICON_CLOSE}
           </button>
-        </div>
+        </div>}
         {quoteCard}
         <div className="ask-walnut-pending">
           {failed ? (

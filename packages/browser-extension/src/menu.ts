@@ -5,9 +5,16 @@
  * unlock). It asks the background what to show; the background answers from the tab and frame
  * that opened it.
  *
+ * Logins in three parts: this site's (tier 1, first), "Other logins" of this site when step one
+ * of a two-step sign in already named the account, and "Saved for other parts of <domain>"
+ * (tier 2: each row says the host it is saved for; never picked unless the person picks it).
+ * What the person types in the field narrows the rows (content-ui.ts sends it).
+ *
  * Keys: a listbox with aria-activedescendant. The page script moves the keyboard here on
  * ArrowDown (through the background: menu-focus); ArrowUp / ArrowDown / Home / End pick a row,
- * Enter fills it, Escape and Tab close the menu and give the field its focus back.
+ * Enter fills it, Escape and Tab close the menu and give the field its focus back. An Enter that
+ * comes before the keys were handed over (typed fast after the ArrowDown) waits a moment for
+ * them, and then fills the first login of this site, never one of another part of it.
  */
 import { ask as askBackground, ext } from './ext'
 import { avatar, h, icon, totpView } from './dom'
@@ -19,8 +26,14 @@ const ask = <T = Record<string, unknown>>(msg: { type: string; [k: string]: unkn
 const guard = frameGuard()
 
 interface Totp { code: string; period: number; remaining: number }
-interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; sub?: string; totp?: Totp | null }
-interface Data { state: 'not-connected' | 'locked' | 'unlocked'; role: string; kind: string; site?: string; items?: Item[]; suggestion?: string; insecure?: number }
+interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; sub?: string; totp?: Totp | null; tier?: number }
+interface Data {
+  state: 'not-connected' | 'locked' | 'unlocked'; role: string; kind: string; site?: string; items?: Item[]; suggestion?: string; insecure?: number
+  /** This site's other logins, when `items` is the account step one named. */
+  more?: Item[]
+  /** Logins saved for other parts of this site (tier 2), and the site's domain for their heading. */
+  others?: Item[]; othersDomain?: string
+}
 
 const root = document.getElementById('root')!
 /** The rows the keys move through, and the one picked. */
@@ -31,10 +44,32 @@ let list: HTMLElement | null = null
 let armed = false
 let wantFocus: 'first' | 'last' | null = null
 let codeTimer = 0
+/** An Enter that came before the keys were handed over: when, so it still counts a moment later. */
+let pendingPick = 0
+/** What the person typed in the field (content-ui.ts): only the rows that fit it show. */
+let filterText = ''
 
+/**
+ * The height the menu needs, told to the page script, which may give it less (a short frame):
+ * then the list scrolls inside what it got. 0 when every row is filtered out.
+ */
 function size(): void {
-  void ask({ type: 'menu-size', height: Math.ceil(document.body.getBoundingClientRect().height) + 2 })
+  if (list) list.style.maxHeight = ''
+  // Every login filtered out by what was typed: the menu steps out of the way (height 0).
+  const shown = !list || rows.length > 0 || !list.querySelector('[role=option]')
+  const height = shown ? Math.ceil(document.body.getBoundingClientRect().height) + 2 : 0
+  void ask({ type: 'menu-size', height })
+  fit()
 }
+
+/** The frame is shorter than the menu: the list gives up what does not fit, and scrolls. */
+function fit(): void {
+  if (!list) return
+  list.style.maxHeight = ''
+  const over = Math.ceil(document.body.getBoundingClientRect().height) + 2 - innerHeight
+  if (over > 0) list.style.maxHeight = `${Math.max(48, list.clientHeight - over)}px`
+}
+addEventListener('resize', fit)
 
 function stateRow(ic: 'lock' | 'key', title: string, sub: string, button: string, type: string): HTMLElement {
   return h('div', { class: 'menu-state' },
@@ -76,17 +111,55 @@ async function render(): Promise<void> {
     root.append(stateRow('lock', 'Walnut is locked', 'Unlock to fill this login.', 'Unlock', 'menu-unlock'))
   } else {
     const items = d.items ?? []
+    const more = d.more ?? []
+    const others = (d.others ?? []).map((it) => ({ ...it, tier: 2 }))
     const what = d.role === 'card' ? 'cards' : d.role === 'identity' ? 'identities' : d.role === 'totp' ? 'one-time codes' : 'logins'
     list = h('div', { class: 'menu-list', role: 'listbox', tabindex: '0', 'aria-label': `Walnut ${what}` })
     if (d.role === 'new-password') list.append(suggestionRow(d.suggestion ?? ''))
-    for (const it of items) list.append(itemRow(d, it))
+    // An older background sends every login in `items`, tier 2 ones marked: they go under their heading too.
+    const near = items.filter((it) => it.tier !== 2)
+    const far = [...items.filter((it) => it.tier === 2), ...others]
+    for (const it of near) list.append(itemRow(d, it))
+    if (more.length) section(list, 'Other logins', more.map((it) => itemRow(d, it)))
+    if (far.length) section(list, `Saved for other parts of ${d.othersDomain || domainOf(d.site)}`, far.map((it) => itemRow(d, it)))
     rows = [...list.querySelectorAll<HTMLElement>('[role=option]')]
-    if (!items.length && d.role !== 'new-password') list.append(emptyFor(d))
+    if (!near.length && !more.length && d.role !== 'new-password') list.prepend(far.length ? emptyRow(`No login saved for ${d.site}`, 'These are saved for other parts of this site:') : emptyFor(d))
     const head = d.role === 'card' ? 'Walnut · Cards' : d.role === 'identity' ? 'Walnut · Identities' : `Walnut · ${d.site ?? ''}`
     root.append(h('div', { class: 'menu-head' }, icon('key'), head), list)
     scheduleCodes(d, items)
+    if (filterText) applyFilter(filterText, false)
   }
-  requestAnimationFrame(() => { size(); if (wantFocus) focusList(wantFocus) })
+  requestAnimationFrame(() => { size(); if (wantFocus) focusList(wantFocus); tryPendingPick() })
+}
+
+/** A heading in the list, and its rows under it (the heading is no row: the keys skip it). */
+function section(into: HTMLElement, title: string, items: HTMLElement[]): void {
+  into.append(h('div', { class: 'menu-sub', role: 'presentation' }, title), ...items)
+}
+
+/** "lab.test" for "shop.lab.test": the heading's name for the site when the background gives none. */
+function domainOf(host = ''): string {
+  const parts = host.replace(/:\d+$/, '').split('.')
+  return parts.length > 2 ? parts.slice(-2).join('.') : host
+}
+
+/** Only the rows that fit what the person typed (title, username or site); none: the menu steps away. */
+function applyFilter(text: string, resize = true): void {
+  filterText = text
+  if (!list) return
+  const q = text.trim().toLowerCase()
+  const all = [...list.querySelectorAll<HTMLElement>('[role=option]')]
+  for (const r of all) r.hidden = !!q && r.dataset.generate !== '1' && !(r.dataset.match ?? '').includes(q)
+  for (const sub of list.querySelectorAll<HTMLElement>('.menu-sub')) {
+    let n = sub.nextElementSibling
+    let any = false
+    while (n && !n.classList.contains('menu-sub')) { if (n.getAttribute('role') === 'option' && !(n as HTMLElement).hidden) any = true; n = n.nextElementSibling }
+    sub.hidden = !any
+  }
+  rows = all.filter((r) => !r.hidden)
+  if (!rows.includes(all[current])) current = -1
+  if (current < 0 && rows.length && list.getAttribute('aria-activedescendant')) setCurrent(0)
+  if (resize) size()
 }
 
 function emptyFor(d: Data): HTMLElement {
@@ -110,16 +183,22 @@ function suggestionRow(value: string): HTMLElement {
     h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Use a strong password'), shown),
     again)
   row.dataset.testid = 'menu-generate'
+  row.dataset.generate = '1'
   return row
 }
 
 function itemRow(d: Data, it: Item): HTMLElement {
-  const sub = d.role === 'card' ? (it.sub ?? 'Card') : d.role === 'identity' ? 'Fill your details' : d.role === 'totp' ? (it.username ?? 'Fill the one-time code') : it.username
+  const base = d.role === 'card' ? (it.sub ?? 'Card') : d.role === 'identity' ? 'Fill your details' : d.role === 'totp' ? (it.username ?? 'Fill the one-time code') : it.username
+  // A login of another part of the site says which part, so the person knows what they pick.
+  const sub = it.tier === 2 && it.site ? [base, it.site].filter(Boolean).join(' · ') : base
   const code = d.role === 'totp' && it.totp ? totpView(it.totp) : null
-  return option(it.id, () => void fill(it.id),
+  const row = option(it.id, () => void fill(it.id),
     avatar(it.site ?? it.title),
     h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), sub ? h('span', { class: 'row-sub' }, sub) : null),
     code)
+  row.dataset.match = [it.title, it.username, it.site].filter(Boolean).join(' ').toLowerCase()
+  if (it.tier === 2) row.dataset.tier = '2'
+  return row
 }
 
 /** The codes are good until their countdown ends: then the next ones. */
@@ -139,7 +218,11 @@ async function fill(id: string): Promise<void> {
     return
   }
   if (!r.ok && r.error) {
-    root.replaceChildren(h('div', { class: 'menu-state' }, h('span', { class: 'err', role: 'alert' }, r.error)))
+    // The menu stays with the reason; Escape or a click outside closes it.
+    root.replaceChildren(h('div', { class: 'menu-state' }, h('span', { class: 'logo' }, icon('warn')),
+      h('div', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Walnut did not fill this'), h('span', { class: 'err wrap', role: 'alert' }, r.error))))
+    list = null
+    rows = []
     size()
   }
 }
@@ -149,6 +232,19 @@ function focusList(where: 'first' | 'last'): void {
   if (!list || !rows.length) { list?.focus(); return }
   list.focus()
   setCurrent(where === 'last' ? rows.length - 1 : 0)
+}
+
+/**
+ * An Enter that came before the keys were handed over (or one the page script held for us, `pick`):
+ * once they are, and the rows are drawn, it fills the first login of this site. A login saved for
+ * another part of the site is filled only when the person picks it themself.
+ */
+function tryPendingPick(): void {
+  if (!pendingPick) return
+  if (Date.now() - pendingPick > 2500) { pendingPick = 0; return }
+  if (!armed || !rows.length || current < 0) return
+  pendingPick = 0
+  if (rows[current]?.dataset.tier !== '2') pickCurrent()
 }
 
 /** Enter on the picked row: only once the frame may act (frame-guard.ts), waiting the moment out. */
@@ -166,12 +262,17 @@ document.addEventListener('keydown', (e) => {
   if (!e.isTrusted) return
   // Closed when the key comes up, so the whole key press stays in this frame.
   if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); closing = e.key; return }
+  if (e.key === 'Enter' && !rows.length) { e.preventDefault(); pendingPick = Date.now(); return }
   if (!rows.length) return
   if (e.key === 'ArrowDown') { e.preventDefault(); setCurrent(current + 1) }
   else if (e.key === 'ArrowUp') { e.preventDefault(); setCurrent(current - 1) }
   else if (e.key === 'Home') { e.preventDefault(); setCurrent(0) }
   else if (e.key === 'End') { e.preventDefault(); setCurrent(rows.length - 1) }
-  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickCurrent() }
+  else if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    if (armed && current >= 0) pickCurrent()
+    else if (e.key === 'Enter') { pendingPick = Date.now(); tryPendingPick() }
+  }
 })
 let closing = ''
 document.addEventListener('keyup', (e) => {
@@ -184,18 +285,26 @@ document.addEventListener('pointerdown', (e) => { if (e.isTrusted) armed = true 
 addEventListener('blur', () => { armed = false })
 
 // The page script moved the person's keys here (through the background, so a page cannot).
-const pendingFocus: Array<{ nonce: string; where: 'first' | 'last' }> = []
-function applyFocus(m: { nonce: string; where: 'first' | 'last' }): void {
+const pendingFocus: Array<{ nonce: string; where: 'first' | 'last'; pick: boolean }> = []
+function applyFocus(m: { nonce: string; where: 'first' | 'last'; pick: boolean }): void {
   if (m.nonce !== currentNonce()) return
   armed = true
-  if (rows.length || list) focusList(m.where)
+  if (m.pick) pendingPick = Date.now()
+  if (rows.length || list) { focusList(m.where); tryPendingPick() }
   else wantFocus = m.where
 }
-ext.runtime.onMessage.addListener((m: { type?: string; nonce?: string; where?: string }) => {
+ext.runtime.onMessage.addListener((m: { type?: string; nonce?: string; where?: string; pick?: boolean }) => {
   if (m?.type !== 'menu-focus' || typeof m.nonce !== 'string') return
-  const req = { nonce: m.nonce, where: m.where === 'last' ? 'last' as const : 'first' as const }
+  const req = { nonce: m.nonce, where: m.where === 'last' ? 'last' as const : 'first' as const, pick: m.pick === true }
   if (!currentNonce()) pendingFocus.push(req)
   else applyFocus(req)
+})
+
+// What the person types in the field, from the page script that framed this menu.
+addEventListener('message', (e) => {
+  if (e.source !== window.parent) return
+  const t = (e.data as { walnutFilter?: unknown } | null)?.walnutFilter
+  if (typeof t === 'string') applyFilter(t)
 })
 
 // Drawn once the nonce arrives, and again when the vault is unlocked or locked meanwhile.

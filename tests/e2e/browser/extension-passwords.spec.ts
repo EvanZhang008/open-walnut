@@ -340,7 +340,7 @@ test('a single-page app that sends without leaving gets the save bar; Never for 
   const bar = await frameOf(page, 'savebar.html')
   await bar.getByRole('button', { name: 'Never for this site' }).click()
   await noFrame(page, 'savebar.html')
-  // Same registrable domain (example.test): no more offers there.
+  // The same host: no more offers there.
   await page.goto(site('app.example.test', '/spa'))
   await page.locator('#user').fill(`dave-${stamp}`)
   await page.locator('#pass').fill('Dave-pw-5678')

@@ -42,7 +42,13 @@ export interface ApprovalAnswer {
 
 export type ApprovalDeviceKind = 'iphone' | 'mac-app' | 'web' | 'cli'
 
-export type ApprovalGuard = 'vault' | 'vault-sensitive'
+/**
+ * An approval whose unsigned Approve from this machine is not enough (any process here can send
+ * one): `vault`/`vault-sensitive` give an agent a password; `person` lets an agent's step in the
+ * browser buy, send or delete (browser-control/outward-asks.ts). The proof is a device key's
+ * signature, or this window's Passwords unlock (approvals-v1.ts).
+ */
+export type ApprovalGuard = 'vault' | 'vault-sensitive' | 'person'
 
 export interface ApprovalRecord {
   id: string

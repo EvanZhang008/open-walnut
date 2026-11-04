@@ -18,8 +18,10 @@ interface Data { kind: 'save' | 'update' | 'locked'; site: string; username: str
 const root = document.getElementById('root')!
 const NEW = '__new__'
 
+/** The frame's height: the bar and the margin its shadow is drawn in (ui.css body.bar). */
 function size(): void {
-  void ask({ type: 'savebar-size', height: Math.ceil(document.body.getBoundingClientRect().height) + 2 })
+  const b = getComputedStyle(document.body)
+  void ask({ type: 'savebar-size', height: Math.ceil(document.body.getBoundingClientRect().height + parseFloat(b.marginTop) + parseFloat(b.marginBottom)) + 2 })
 }
 
 async function act(action: string, extra: Record<string, unknown> = {}): Promise<void> {
