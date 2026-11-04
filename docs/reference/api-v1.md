@@ -2548,7 +2548,7 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"?, "interrupt"? }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
@@ -2558,7 +2558,7 @@ primary box the same endpoints serve directly — no bridge involved.
     spoken answer first and any detail below a line holding only `---`. Every
     display surface leaves the hint out of the message text. Not a boolean:
     `400 bad_request`. Absent or `false`: unchanged.
-  - `interrupt` (additive, 2026-11) — `true` stops the session's running turn and
+  - `interrupt` (additive, 2026-11, a body field beside these) — `true` stops the session's running turn and
     delivers this message in a fresh one (the console's "Interrupt & send"). Absent
     or `false`: unchanged (the message joins the turn or waits behind it). Not a
     boolean: `400 bad_request`. On the cloud companion the stop is relayed to the
