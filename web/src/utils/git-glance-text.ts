@@ -120,6 +120,8 @@ export function changedChipTitle(glance: SessionGitGlance | null): string {
     head = `This session changed ${plural(glance.changedFiles, 'file')}`;
     if (s) head += s.files === 0 ? ', all committed' : ` (${s.files} still uncommitted in ${s.extraRepos ? 'its repos' : 'its repo'})`;
     head += '. Click to see them in a full-screen diff alongside the chat.';
+  } else if (glance.changedFiles === 0) {
+    head = 'This session has not changed any files yet. Click to open its full-screen diff alongside the chat.';
   }
   return s ? `${head}\n\n${gitGlanceTitle(glance, s)}` : head;
 }

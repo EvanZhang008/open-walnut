@@ -54,10 +54,11 @@ export function SessionRow({ sessionId, record, processStatus, isPlan, onOpen }:
         <span className="todo-detail-session-dot tdp-dot" style={{ background: processColor(processStatus) }} />
         {isPlan && <span className="todo-detail-plan-badge">Plan</span>}
         <span className={`tdp-row-title${record ? '' : ' is-loading'}`}>{title}</span>
-        {/* Its git state (branch, uncommitted files, +/- lines, unpushed commits) on the same line. */}
-        <GitGlanceLine sessionId={sessionId} className="tdp-row-git" />
         {ago && <span className="tdp-row-end">{ago}</span>}
       </div>
+      {/* Its git state (branch, uncommitted files, +/- lines, unpushed commits) on a line
+          of its own: beside the title it left the title no room on a phone. */}
+      <div className="tdp-row-gitline"><GitGlanceLine sessionId={sessionId} className="tdp-row-git" /></div>
       {/* One quiet line: what it is doing now, or what it last did. */}
       {running && record?.activity && <div className="tdp-row-sub">{record.activity}</div>}
       {!running && record && <SessionRecapLine sessionId={sessionId} session={record} className="tdp-row-sub" />}

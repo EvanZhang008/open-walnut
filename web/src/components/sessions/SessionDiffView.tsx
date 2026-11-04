@@ -1600,14 +1600,19 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // files that did not change keep theirs. So the open file, its scroll, an
   // open comment box and the folded folders all survive the session's edits.
   const staleContentRef = useRef(new Map<string, SessionFileChange>());
-  const applyList = useCallback((res: SessionChangesResult, soft: boolean): boolean => {
+  /** Loads still running: the timed re-read never cancels one (a big session's parse outlasts its pace). */
+  const loadsRunningRef = useRef(0);
+  /** A Re-scan (a full re-read) is running: a live re-read waits for it rather than cancelling it. */
+  const rescanRunningRef = useRef(false);
+  // `all` (a Re-scan): every file's content is read again, the old one shown until it lands.
+  const applyList = useCallback((res: SessionChangesResult, soft: boolean, all = false): boolean => {
     const prev = dataRef.current;
-    if (soft && prev && listShape(prev) === listShape(res)) return false;
+    if (soft && !all && prev && listShape(prev) === listShape(res)) return false;
     if (soft && prev) {
       const before = new Map<string, string>();
       for (const g of prev.groups) for (const f of g.files) before.set(f.filePath, fileShape(f));
       for (const g of res.groups) for (const f of g.files) {
-        if (before.get(f.filePath) === fileShape(f)) continue;
+        if (!all && before.get(f.filePath) === fileShape(f)) continue;
         const had = fileContentRef.current.get(f.filePath);
         if (had) staleContentRef.current.set(f.filePath, had);
         fileContentRef.current.delete(f.filePath);
@@ -1621,9 +1626,22 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     return true;
   }, []);
 
-  const load = useCallback((refresh = false, soft = false) => {
+  const load = useCallback((refresh = false, soft = false, all = false) => {
+    // Running until its list (or the last poll for it) lands, fails or is cancelled.
+    loadsRunningRef.current++;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      loadsRunningRef.current--;
+      if (all) rescanRunningRef.current = false;
+    };
+    if (all) rescanRunningRef.current = true;
     if (!soft) setLoading(true);
-    setError(null);
+    // A Re-scan in place: the list stays (and the comment being written with it), the ↻ shows.
+    if (all) setRefreshingBg(true);
+    // A soft re-read keeps an error on screen until it has something better (no "no changes" flash).
+    if (!soft) setError(null);
     const ctrl = new AbortController();
     const light = isSessionBase;
     // Converge by POLLING the SWR endpoint (cheap: cache/stat only) until the
@@ -1634,7 +1652,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     const POLL_MS = 3000;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     const pollUntilFresh = (attempt: number): void => {
-      if (ctrl.signal.aborted) return;
+      if (ctrl.signal.aborted) { settle(); return; }
       setRefreshingBg(true);
       pollTimer = setTimeout(() => {
         fetchSessionChanges(sessionId, { base, scope, light: true, swr: true, signal: ctrl.signal })
@@ -1644,14 +1662,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               // Still recomputing — keep the currently-shown list, poll again
               // (cap ~5min so an abandoned tab doesn't poll forever).
               if (attempt < 100) pollUntilFresh(attempt + 1);
-              else setRefreshingBg(false);
+              else { setRefreshingBg(false); settle(); }
               return;
             }
             rememberChanges(cacheKey, res);
-            applyList(res, soft);
+            applyList(res, soft, all);
             setRefreshingBg(false);
+            settle();
           })
-          .catch(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); });
+          .catch(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); settle(); });
       }, POLL_MS);
     };
     fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
@@ -1659,7 +1678,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         // Cache stale results too — a stale list is exactly what a re-entry
         // wants to paint first; the background poll upgrades it in place.
         rememberChanges(cacheKey, res);
-        if (soft) applyList(res, true);
+        setError(null);
+        if (all && !(res.stale && light)) setRefreshingBg(false);
+        if (soft) applyList(res, true, all);
         else {
           setData(res);
           if (refresh) {
@@ -1669,15 +1690,25 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           }
         }
         if (res.stale && light) pollUntilFresh(0);
+        else settle();
       })
       .catch((err) => {
+        settle();
         if (ctrl.signal.aborted) return;
+        if (all) setRefreshingBg(false);
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
         log.warn('session-changes', 'fetch failed', { sessionId, base, scope, error: msg });
       })
       .finally(() => { if (!ctrl.signal.aborted && !soft) setLoading(false); });
-    return () => { ctrl.abort(); if (pollTimer) clearTimeout(pollTimer); };
+    return () => {
+      const running = !settled;
+      ctrl.abort();
+      if (pollTimer) clearTimeout(pollTimer);
+      settle();
+      // A Re-scan cut short takes its ↻ with it (its own then/poll never runs to clear it).
+      if (all && running) setRefreshingBg(false);
+    };
   }, [sessionId, base, scope, isSessionBase, cacheKey, applyList]);
 
   useEffect(() => {
@@ -1691,14 +1722,26 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // While the tab is open and shown, its repos are re-read every GIT_POLL_MS:
   // an edit by anyone (the session, an editor, a formatter) moves them, and the
   // server's `session:git-status` for that change re-reads the list below.
+  // The list is re-read at the same pace (soft: it changes nothing on screen unless the
+  // session's record moved, which the server checks with one stat): a file the session
+  // rewrote with the same counts changes no git number, so no git event says so.
+  const liveCancelRef = useRef<(() => void) | null>(null);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const isSessionBaseRef = useRef(isSessionBase);
+  isSessionBaseRef.current = isSessionBase;
   useEffect(() => {
     void sessionGitStore.refresh(sessionId);
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible') void sessionGitStore.refresh(sessionId);
+      if (document.visibilityState !== 'visible') return;
+      void sessionGitStore.refresh(sessionId);
+      // The list too, for the session base only (one stat on the server); a git base is a
+      // full diff, and keeps the slower live refresh below.
+      if (!isSessionBaseRef.current || loadsRunningRef.current > 0) return;
+      liveCancelRef.current = loadRef.current(false, true);
     }, GIT_POLL_MS);
     return () => clearInterval(t);
   }, [sessionId]);
-  const liveCancelRef = useRef<(() => void) | null>(null);
   useEffect(() => () => { liveCancelRef.current?.(); liveCancelRef.current = null; }, [load]);
   // The chip counts what this tab lists while it is open (the session base is the chip's count).
   // (Only this session's list: on a switch the old list is still in `data` for one render.)
@@ -1707,6 +1750,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   useEffect(() => { sessionGitStore.setTabCount(sessionId, tabToken, listedCount); }, [sessionId, tabToken, listedCount]);
   useEffect(() => () => { sessionGitStore.setTabCount(sessionId, tabToken, null); }, [sessionId, tabToken]);
   useChangedLiveRefresh(sessionId, () => {
+    // A Re-scan running reads everything anyway: let it finish.
+    if (rescanRunningRef.current) { void sessionGitStore.refresh(sessionId); return; }
     liveCancelRef.current?.();
     liveCancelRef.current = load(false, true);
     void sessionGitStore.refresh(sessionId);
@@ -2452,7 +2497,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             aria-pressed={aiSummaryOn}
           >✦ AI</button>
           <SessionCommitButton sessionId={sessionId} disabled={!data || empty} onCommitted={() => load(true)} />
-          <button className="session-diff-refresh" onClick={() => load(true)} title="Re-scan changes">
+          <button className="session-diff-refresh" onClick={() => { liveCancelRef.current?.(); liveCancelRef.current = load(true, true, true); }} title="Re-scan changes">
             {ICON_REFRESH}
           </button>
         </div>

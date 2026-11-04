@@ -3429,7 +3429,8 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
   onToggle: (view: 'changed') => void;
 }) {
   const gitGlance = useSessionGitGlance(sessionId);
-  const count = gitGlance?.changedFiles ? compactCount(gitGlance.changedFiles) : null;
+  const changedFiles = gitGlance?.changedFiles ?? null;
+  const count = changedFiles ? compactCount(changedFiles) : null;
   return (
     <button
       className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
@@ -3441,7 +3442,11 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
       data-header-value={count ?? undefined}
     >
       Changed
-      {count && <span className="session-chip-count" data-testid="session-changed-count">{count}</span>}
+      {count
+        ? <span className="session-chip-count" data-testid="session-changed-count">{count}</span>
+        // Nothing changed yet reads 0; not counted yet keeps that room (hidden), so the chip
+        // is one width from first paint to its count and Files and the rest stay put.
+        : <span className={`session-chip-count ${changedFiles === 0 ? 'is-zero' : 'is-pending'}`} aria-hidden={changedFiles === 0 ? undefined : true} data-testid={changedFiles === 0 ? 'session-changed-count' : undefined}>0</span>}
     </button>
   );
 });

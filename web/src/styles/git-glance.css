@@ -39,7 +39,7 @@
 .git-glance-branch-head { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A pill keeps its +/- lines only while its branch still shows a readable start
    (6 characters); past that the lines go first and the branch takes their room. */
-.git-glance-pill:not(.git-glance-fit-1):not(.git-glance-fit-2) .git-glance-branch-head:not(.is-cut) { min-width: 7ch; }
+.git-glance-pill:not(.git-glance-fit-1) .git-glance-branch-head:not(.is-cut) { min-width: 7ch; }
 /* The cut name never shrinks below what it shows (head minimum + the 5-character tail):
    when even that does not fit, the pill overflows and gives way (usePillFit). */
 .git-glance-pill .git-glance-branch.git-glance-branch-split { min-width: 12ch; flex-shrink: 1; }
@@ -47,11 +47,12 @@
 .git-glance-line .git-glance-branch.git-glance-branch-split { min-width: 8ch; }
 /* Cut by BranchName at a whole character: it keeps that width. */
 .git-glance-branch-head.is-cut { flex: none; min-width: 0; text-overflow: clip; }
-/* A pill giving way (usePillFit): first the +/- lines, then the branch. */
+/* A pill giving way (usePillFit): first the +/- lines; then the branch, the lines
+   taking its room back; then both. */
 .git-glance-pill.git-glance-fit-1 > .git-glance-lines,
-.git-glance-pill.git-glance-fit-2 > .git-glance-lines,
-.git-glance-pill.git-glance-fit-2 > .git-glance-icon,
-.git-glance-pill.git-glance-fit-2 > .git-glance-branch { display: none; }
+.git-glance-pill:is(.git-glance-fit-2, .git-glance-fit-3) > :is(.git-glance-icon, .git-glance-branch),
+.git-glance-pill.git-glance-fit-3 > .git-glance-lines { display: none; }
+.git-glance-detached { font-variant-numeric: normal; }
 .git-glance-branch-tail { flex: none; }
 .git-glance-lines { display: inline-flex; gap: 3px; }
 .git-glance-add { color: var(--git-glance-add); }
@@ -63,8 +64,8 @@
 .git-glance.is-stale { opacity: 0.6; }
 
 /* Task row pill: one look wherever a task row shows it (a Home card, a search
-   row, a list row), the size of the list's other pills (row-pills.css: 16px, 10px
-   text). The branch name gives way first, to the room the row has; the counts
+   row, a list row), the height of the list's other pills (row-pills.css: 16px), its
+   text a size up (11px) to read in a long list. The branch name gives way first, to the room the row has; the counts
    never shrink. */
 .git-glance-pill {
   box-sizing: border-box;
@@ -74,15 +75,16 @@
   border-radius: 8px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
-  line-height: 12px;
+  line-height: 14px;
   max-width: 100%;
   flex-shrink: 1;
   overflow: hidden;
   cursor: default;
 }
-.git-glance-pill .git-glance-branch { flex: 0 1 auto; min-width: 4ch; max-width: 24ch; }
+.git-glance-pill .git-glance-branch { flex: 0 1 auto; min-width: 4ch; max-width: 24ch; color: var(--fg); }
+.git-glance-pill .git-glance-icon { opacity: 0.85; }
 .git-glance-pill > :not(.git-glance-branch) { flex-shrink: 0; }
 .git-glance-files { display: inline-flex; align-items: center; gap: 2px; }
 .git-glance-file-icon { opacity: 0.7; }
@@ -108,7 +110,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   border-radius: 8px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 15px;
   gap: 3px;
 }
@@ -117,7 +119,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 .status-card-meta:has(.git-glance-pill) .todo-recent-ago { flex-shrink: 0; }
 /* A card gives way by what fits (usePillFit), not a width: once the branch is down
    to a few characters, the +/- lines go, then the branch; the counts stay. */
-.status-card-meta .git-glance-pill.git-glance-fit-2 { flex-shrink: 0; }
+.status-card-meta .git-glance-pill:is(.git-glance-fit-2, .git-glance-fit-3) { flex-shrink: 0; }
 
 /* Session row line and the Changed tab's strip. */
 .git-glance-line {
@@ -128,8 +130,12 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 .git-glance-line .git-glance-branch { max-width: 220px; }
 .git-glance-word { font-weight: 400; }
 
-.tdp-row-git { flex: 0 1 auto; margin-left: 6px; }
-.tdp-row-git .git-glance-branch { max-width: 200px; }
+.tdp-row-gitline { margin-left: 15px; line-height: 18px; min-width: 0; overflow: hidden; }
+.tdp-row-gitline:empty { display: none; }
+.tdp-row-git .git-glance-branch { max-width: 260px; }
+/* A line giving way (GitGlanceLineView): its words became icons (fit 1), then its +/- lines go. */
+.git-glance-line { overflow: hidden; vertical-align: top; }
+.git-glance-line.git-glance-fit-2 > .git-glance-lines { display: none; }
 
 /* The Changed chip's count: what the tab lists. */
 .session-chip-count {
@@ -146,6 +152,11 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+/* Room kept for the count before it is known, so the chips beside it never jump. */
+.session-chip-count.is-pending { visibility: hidden; animation: none; }
+.session-chip-count.is-zero { opacity: 0.55; }
+/* In a menu (the header's "..."), on the menu's own surface in both themes. */
+.task-kebab-item .session-chip-count { background: color-mix(in srgb, var(--accent, #2563eb) 16%, transparent); color: var(--fg); }
 .session-action-chip-active .session-chip-count {
   background: color-mix(in srgb, currentColor 18%, transparent);
   color: inherit;

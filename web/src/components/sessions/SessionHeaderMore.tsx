@@ -200,7 +200,9 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
       data-state={value || undefined}
     >
       <span className="session-header-more-name">{name}</span>
-      {value && <span className="session-header-more-value">{value}</span>}
+      {value && (!id.startsWith(SLOT_ID_PREFIX) && /^\d/.test(value)
+        ? <span className="session-chip-count" data-testid={`session-header-more-item-${id}-count`}>{value}</span>
+        : <span className="session-header-more-value">{value}</span>)}
     </button>
   );
 }

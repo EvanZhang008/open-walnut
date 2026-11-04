@@ -77,7 +77,7 @@ function useRoomVersion(ref: RefObject<HTMLElement | null>): number {
  *  room the row has, cut at a whole character right before the ellipsis (a CSS
  *  ellipsis left a gap before the tail); a short name is one piece. */
 const BRANCH_TAIL = 5;
-function BranchName({ text, split, fit = 0 }: { text: string; split: boolean; fit?: number }) {
+function BranchName({ text, split, fit = 0, detached = false }: { text: string; split: boolean; fit?: number; detached?: boolean }) {
   const headRef = useRef<HTMLSpanElement>(null);
   const room = useRoomVersion(headRef);
   const head = text.slice(0, -BRANCH_TAIL);
@@ -90,6 +90,10 @@ function BranchName({ text, split, fit = 0 }: { text: string; split: boolean; fi
     const ch = el.scrollWidth / Math.max(1, head.length);
     setCut(Math.max(2, Math.floor(el.clientWidth / ch) - 1));
   }, [cut, head, fit, room]);
+  // A detached HEAD on a line: the words read as words, the sha as code.
+  if (detached && text.startsWith('detached at ')) {
+    return <span className="git-glance-detached">detached at <span className="git-glance-branch">{text.slice('detached at '.length)}</span></span>;
+  }
   if (!split || text.length <= BRANCH_TAIL * 2) return <span className="git-glance-branch">{text}</span>;
   return (
     <span className="git-glance-branch git-glance-branch-split">
@@ -102,21 +106,22 @@ function BranchName({ text, split, fit = 0 }: { text: string; split: boolean; fi
 }
 
 /** How much a pill gives way to fit its row (no overflow, no wrap below its row's
- *  project name): 0 everything, 1 without the +/- lines, 2 without the branch too.
- *  The tooltip keeps every number. */
-function usePillFit(ref: RefObject<HTMLElement | null>, contentKey: string): number {
+ *  project name): 0 everything, 1 without the +/- lines, 2 without the branch (the
+ *  lines come back into the room it left), 3 the counts alone. The tooltip keeps
+ *  every number. */
+function usePillFit(ref: RefObject<HTMLElement | null>, contentKey: string, max = 3): number {
   const room = useRoomVersion(ref);
   const [level, setLevel] = useState(0);
   useLayoutEffect(() => { setLevel(0); }, [contentKey, room]);
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || level >= 2) return;
+    if (!el || level >= max) return;
     const overflows = el.scrollWidth > el.clientWidth + 1;
     // A search row: the pill shares the second line with the project name, or wrapped below it.
     const meta = el.closest('.todo-item-content')?.querySelector<HTMLElement>(':scope > .todo-search-meta-row');
     const wrapped = !!meta && el.getBoundingClientRect().top > meta.getBoundingClientRect().top + 4;
     if (overflows || wrapped) setLevel(level + 1);
-  }, [ref, level, contentKey, room]);
+  }, [ref, level, contentKey, room, max]);
   return level;
 }
 
@@ -175,7 +180,7 @@ export const GitGlancePill = memo(function GitGlancePill({ sessionId }: { sessio
 function PillView({ glance, s }: { glance: SessionGitGlance; s: GitGlanceSummary }) {
   const ref = useRef<HTMLSpanElement>(null);
   const text = pillBranchText(s);
-  const fit = usePillFit(ref, `${text}|${s.files}|${s.insertions}|${s.deletions}|${s.ahead}`);
+  const fit = usePillFit(ref, `${text}|${s.files}|${s.insertions}|${s.deletions}|${s.conflicted}|${s.ahead}`);
   return (
     <span
       ref={ref}
@@ -197,20 +202,30 @@ function PillView({ glance, s }: { glance: SessionGitGlance; s: GitGlanceSummary
 export function GitGlanceLineView({ glance, className = '', words = 'short' }: { glance: SessionGitGlance | null; className?: string; words?: 'short' | 'long' }) {
   const s = summarizeGitGlance(glance);
   if (!glance || !s) return null;
+  return <LineView glance={glance} s={s} className={className} words={words} />;
+}
+
+/** A line short of room gives way as a pill does: 1 its words become the pill's
+ *  icons, 2 the +/- lines go too. The tooltip keeps every number. */
+function LineView({ glance, s, className, words }: { glance: SessionGitGlance; s: GitGlanceSummary; className: string; words: 'short' | 'long' }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const fit = usePillFit(ref, `${branchLabel(s)}|${s.files}|${s.insertions}|${s.deletions}|${s.conflicted}|${s.ahead}|${s.behind}|${s.extraRepos}|${s.clean}|${words}`, 2);
   return (
     <span
-      className={`git-glance git-glance-line${s.stale ? ' is-stale' : ''}${className ? ` ${className}` : ''}`}
+      ref={ref}
+      data-fit={fit}
+      className={`git-glance git-glance-line${s.stale ? ' is-stale' : ''}${fit ? ` git-glance-fit-${fit}` : ''}${className ? ` ${className}` : ''}`}
       title={gitGlanceTitle(glance, s)}
       aria-label={ariaOf(s)}
       role="img"
       data-testid="git-glance-line"
     >
       {s.branch ? <BranchIcon /> : <CommitIcon />}
-      <BranchName text={branchLabel(s)} split={!!s.branch} />
+      <BranchName text={branchLabel(s)} split={!!s.branch} fit={fit} detached={!s.branch} />
       {s.extraRepos > 0 && <span className="git-glance-more">+{s.extraRepos} repo{s.extraRepos === 1 ? '' : 's'}</span>}
       {s.clean
         ? <span className="git-glance-clean">{words === 'long' ? `all committed${s.ahead === 0 ? ' and pushed' : ''}` : 'clean'}</span>
-        : <Counts s={s} words={words} />}
+        : <Counts s={s} words={fit ? 'icon' : words} />}
     </span>
   );
 }
