@@ -20,7 +20,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { endRunningTurn, startRunningTurn } from './status-section-helpers'
-import { openTasksBy, expectChatShown } from './org-view-helpers'
+import { openTasksBy, showTasks, expectChatShown } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -130,6 +130,9 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads')
   await expect(counts).not.toContainText('Needs you')
   await expect(counts).toContainText('1 Waiting / snoozed')
+  // A VP opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  await showTasks(detail)
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
   await expect(askRow.getByTestId('org-ask-summary')).toHaveText('Asks you a question')
@@ -180,6 +183,9 @@ test('a lead\'s chat is in the page beside its Board, and its composer sends to 
 test('the name of a task waiting on a question opens its session beside the page', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
+  // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+  await showTasks(page)
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question')
   await alert.getByTestId('org-alert-link').click()
@@ -307,6 +313,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
   await expectChatShown(page)
+  await showTasks(page)
   const alert = page.getByTestId('org-alert').filter({ hasText: `Renewal ${STAMP}` })
   await expect(alert).toHaveAttribute('data-kind', 'needs')
   await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
@@ -347,6 +354,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Lease ${STAMP}: Decide: `))
   await r.click()
   await expectChatShown(page)
+  await showTasks(page)
   const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Sign the lease ${STAMP}`)
   await alert.getByTestId('org-alert-link').click()
@@ -358,6 +366,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
 
   await page.getByTestId('org-search').fill(other)
   await row(page, other).click()
+  await showTasks(page)
   const beside = page.getByTestId('org-alert').filter({ hasText: `Deposit ${STAMP}` })
   await expect(beside.getByTestId('org-ask-summary')).toHaveText(`Send the deposit ${STAMP}`)
   await beside.getByTestId('org-alert-link').click()

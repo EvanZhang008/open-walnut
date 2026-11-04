@@ -196,7 +196,7 @@ const PASSING: Record<string, string> = {
 
 /** The view choices the user named, and where each is kept now. */
 const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: string }> = [
-  { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.top', row\.key,/, what: 'an Org node\'s Task / Brief / Threads view, per node' },
+  { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.view', row\.key,/, what: 'an Org node\'s Threads / Task / Brief view, per node' },
   { file: 'components/org/OrgNodeDetail.tsx', state: 'keptTab', key: /usePageViewOf<KeptRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },
   { file: 'pages/AppsPage.tsx', state: 'kept', key: /usePageView<AppsFilter>\('apps', 'filter'/, what: 'the Apps category chip' },
@@ -368,8 +368,8 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
   });
 
   it('a kept view goes to disk with the other preferences (it survives a restart and cleared browser data)', () => {
-    expect(viewKey('org', 'node.top')).toBe(`${VIEW_PREFIX}org.node.top`);
-    expect(syncable(viewKey('org', 'node.top'))).toBe(true);
+    expect(viewKey('org', 'node.view')).toBe(`${VIEW_PREFIX}org.node.view`);
+    expect(syncable(viewKey('org', 'node.view'))).toBe(true);
     expect(syncable(viewKey('board', 'statusFilter'))).toBe(true);
   });
 });

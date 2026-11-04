@@ -39,7 +39,7 @@ import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
-import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
+import { ORG_TOP_DEFAULT, ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
 import { newsAt, sharedAnswers, threadCountLabel, threadCounts, type ThreadCounts } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
@@ -197,7 +197,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
    *  (OrgBrief), or Threads. Task first (2026-10-30, the user, translated: "by default it shows this status");
    *  after that each node opens on the view it was left on (2026-11-01: "If I was in Threads it puts me back
    *  in Task"), kept per node (utils/view-memory.ts). */
-  const [topPick, setTopPick] = usePageViewOf<OrgTopView>('org', 'node.top', row.key, 'task', oneOf(ORG_TOP_VIEWS));
+  // 'node.view', not the 'node.top' the old order kept: a pick made while Task came first and was the
+  // default is not read as one, so every node opens on Threads once after the change, then on its pick.
+  const [topPick, setTopPick] = usePageViewOf<OrgTopView>('org', 'node.view', row.key, ORG_TOP_DEFAULT, oneOf(ORG_TOP_VIEWS));
   const [briefFolded, setBriefFolded] = useState(readBriefFolded);
   // Main and a lead keep a Brief and Threads. The row says so too, before the node's own task has
   // loaded (a reload paints from the cache first), so a reload does not show Task for a moment

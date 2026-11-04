@@ -11,7 +11,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy } from './org-view-helpers'
+import { openTasksBy, showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -130,6 +130,8 @@ test('a Board chip opens its task beside the page', async ({ page }) => {
 
 test('the name of a task waiting on a question opens it beside the page, question and all', async ({ page }) => {
   await openLead(page)
+  // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+  await showTasks(page)
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question', { timeout: 30_000 })
   await alert.getByTestId('org-alert-link').click()

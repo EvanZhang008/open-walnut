@@ -9,7 +9,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy, expectChatShown } from './org-view-helpers'
+import { openTasksBy, showTasks, expectChatShown } from './org-view-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Snoozeflow ${STAMP}`
@@ -76,6 +76,8 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await expect(counts).toContainText('0 threads')
   await expect(counts).toContainText('Waiting / snoozed')
   await expect(counts).not.toContainText(/needs? you/i)
+  // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+  await showTasks(detail)
   const needsTab = detail.locator('[data-testid="org-task-tab"]').filter({ hasText: /^Needs you/ })
   await expect(needsTab.locator('.org-task-tab-count')).toHaveText('1')
   // Only the plain one is asked of the user.

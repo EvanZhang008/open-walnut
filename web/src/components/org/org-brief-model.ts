@@ -40,10 +40,12 @@ export function applyBriefDecorations(
   return changed;
 }
 
-/** Above an Org node's chat: Task (Latest and its tasks by status, the Needs you cards first,
- *  the view a node first opens on; then the one it was left on), the Brief, or Threads (the user's own requests, OrgThreads). */
-export const ORG_TOP_VIEWS = ['task', 'brief', 'threads'] as const;
+/** Beside an Org node's chat, in this order: Threads (the user's own requests, OrgThreads; the view a
+ *  node first opens on, then the one it was left on), Task (its tasks by status, the Needs you cards
+ *  first), and the Brief. 2026-11-04, the user: "this thread shoudl also be the first ... and default ooen this". */
+export const ORG_TOP_VIEWS = ['threads', 'task', 'brief'] as const;
 export type OrgTopView = typeof ORG_TOP_VIEWS[number];
+export const ORG_TOP_DEFAULT: OrgTopView = 'threads';
 const FOLDED_KEY = 'walnut.org.briefFolded';
 const SEEN_KEY = 'walnut.org.briefSeen';
 const THREADS_SEEN_KEY = 'walnut.org.threadsSeen';

@@ -7,7 +7,8 @@
  *
  * Scenario matrix (2026-10-30, the user: the Brief is only the AI's letter, in three sections, and
  * the Needs you cards belong to the default view, Task, whose four tabs read like the home panel):
- *  1. a lead with a Brief: the node opens on Task, its Needs you tab (Latest, the cards), the switch
+ *  1. a lead with a Brief: the node opens on Threads (tabs Threads, Tasks, Brief); Task shows its
+ *     Needs you tab (Latest, the cards), the switch
  *     offers Brief with a dot for a rewrite not read yet; Brief shows the letter alone, in its three
  *     sections (Needs you, Working, Waiting / snoozed) with each task under its live status, its
  *     pills wearing that status, its time, no Needs you cards; Task brings the cards back; the
@@ -16,7 +17,7 @@
  *     the task's words now, marked as moved, and the head says how many lines moved since; opening
  *     a stale Brief asks the lead for a refresh and the page says it is updating; a task asking the
  *     user that the letter leaves out is added in its own words; a named task that finishes leaves;
- *  3. Fold keeps the first lines and survives a reload; a reload opens on Task again;
+ *  3. Fold keeps the first lines and survives a reload; a reload opens on the view it was left on;
  *  4. the lead rewrites its Brief while the page is open: the new letter shows with no reload, in
  *     its sections, no longer moved or updating; a line with no task is stored with its issue, and
  *     the page shows no notice;
@@ -127,6 +128,11 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
   const top = detail.getByTestId('org-top')
+  // 2026-11-04, the user: "this thread shoudl also be the first ... and default ooen this".
+  await expect(top).toHaveAttribute('data-view', 'threads')
+  expect(await detail.locator('.org-top-tabs .org-top-tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))))
+    .toEqual(['org-top-threads', 'org-top-task', 'org-top-brief'])
+  await detail.getByTestId('org-top-task').click()
   await expect(top).toHaveAttribute('data-view', 'task')
   // Beside the chat (design 10 of the ten the user was shown).
   await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-placement', 'side')
@@ -226,8 +232,8 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
-  // A node seen for the first time opens on Task.
-  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  // A node seen for the first time opens on Threads.
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await detail.getByTestId('org-top-brief').click()
   await detail.getByTestId('org-brief-fold').click()
   await expect(detail.getByTestId('org-brief')).toHaveClass(/is-folded/)
@@ -256,7 +262,8 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   await expect(page.getByTestId('org-brief')).toHaveClass(/is-folded/)
   await page.getByTestId('org-brief-fold').click()
   await expect(page.getByTestId('org-brief')).not.toHaveClass(/is-folded/)
-  // The view is the node's own: Main opens on its own (Task), and the lead's Brief waits for it.
+  // The view is the node's own: Main opens on its own (Task: before Main has started it shows its
+  // tasks alone), and the lead's Brief waits for it.
   await page.getByTestId('org-channel-main').click()
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
@@ -308,6 +315,8 @@ test('a subtask\'s ask sits under its top-level task in the Task view, once', as
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
+  // A node opens on Threads; the asks are in its Tasks.
+  await detail.getByTestId('org-top-task').click()
   const card = detail.locator(`[data-testid="org-alert"][data-task-id="${sub}"]`)
   await expect(card).toHaveCount(1, { timeout: 30_000 })
   await expect(card.getByTestId('org-ask-via')).toHaveText(`Parser ${STAMP} ›`)

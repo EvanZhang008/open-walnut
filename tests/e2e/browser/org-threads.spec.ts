@@ -97,8 +97,7 @@ async function openThreads(page: Page): Promise<void> {
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`).click()
   const detail = page.getByTestId('org-detail')
   await expect(detail).toHaveAttribute('data-key', rowKey(LED))
-  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
-  await detail.getByTestId('org-top-threads').click()
+  // A node never picked a view on opens on Threads (2026-11-04).
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
 }
 
@@ -539,9 +538,11 @@ test('the panel closes and comes back, per node; the Threads tab shows a dot for
   fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify(file))
 
   await isolateUiPrefs(page)
+  const key = rowKey(project)
+  // He left this node on Task (a node never picked opens on Threads, which marks its news seen).
+  await page.addInitScript(([k, v]) => { try { localStorage.setItem(k, v) } catch { /* storage off */ } }, ['open-walnut-view:org.node.view', JSON.stringify([[key, 'task']])] as const)
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
-  const key = rowKey(project)
   await page.locator(`[data-testid="org-channel"][data-key="${key}"]`).click()
   const detail = page.getByTestId('org-detail')
   await expect(detail).toHaveAttribute('data-key', key)

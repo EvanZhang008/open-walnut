@@ -5,11 +5,20 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 
+/** The side bar on Tasks. A Main or lead node opens on its Threads (2026-11-04); a click that lands
+ *  while the picked node is still coming in is tried again. */
+export async function showTasks(scope: Page | Locator): Promise<void> {
+  await expect(async () => {
+    await scope.getByTestId('org-top-task').click()
+    await expect(scope.getByTestId('org-top')).toHaveAttribute('data-view', 'task', { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+}
+
 /** The side bar's Tasks, drawn by status, by team or as the lead's Board. */
 export async function openTasksBy(scope: Page | Locator, mode: 'status' | 'team' | 'board'): Promise<void> {
   const toggle = scope.getByTestId('org-rail-toggle')
   if (await toggle.getAttribute('aria-pressed') === 'false') await toggle.click()
-  await scope.getByTestId('org-top-task').click()
+  await showTasks(scope)
   await scope.getByTestId(`org-task-mode-${mode}`).click()
   await expect(scope.getByTestId('org-task-view')).toHaveAttribute('data-mode', mode)
 }

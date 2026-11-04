@@ -28,6 +28,7 @@ import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { stubSttStatus } from './voice-selection-helpers'
 import { calendarEmptySlotPoint } from './calendar-helpers'
 import { FAKE_MIC_ARGS } from './fake-mic'
+import { showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 /** Shots land here; VOICE_MIC_SHOTS moves them (a remote run keeps them under test-results). */
@@ -496,6 +497,8 @@ test.describe('Org page', () => {
     await page.getByTestId('sidebar-org').click()
     await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
     await page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`).click()
+    // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+    await showTasks(page)
     const card = page.locator(`[data-testid="org-alert"][data-task-id="${asker}"]`)
     await expect(card).toBeVisible({ timeout: 60_000 })
     const bar = card.getByTestId('org-answer-input-box')

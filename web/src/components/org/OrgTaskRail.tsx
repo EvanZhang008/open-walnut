@@ -357,17 +357,20 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
     {FullscreenBackdrop}
     <aside className={`org-rail is-${placement}${isFullscreen ? ' is-wide' : ''}${fullscreenClass}`} data-testid="org-rail" data-placement={placement} {...(isFullscreen ? { 'data-fullscreen': '1' } : {})} {...(width && !isFullscreen ? { style: { width } } : {})}>
       <div className="org-top has-switch" data-testid="org-top" data-view={view}>
-        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? 'Tasks, Brief or Threads' : 'Tasks'}>
+        {/* Threads first (2026-11-04, the user: "this thread shoudl also be the first"), then Tasks and Brief. */}
+        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? 'Threads, Tasks or Brief' : 'Tasks'}>
+          {keepsBrief && (
+            <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
+              Threads{threadsCount > 0 && <span className="org-top-count">{threadsCount}</span>}
+              {threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
+            </button>
+          )}
           <button type="button" aria-pressed={view === 'task'} className={`org-top-tab${view === 'task' ? ' is-on' : ''}`} data-testid="org-top-task" onClick={() => onView('task')}>
             Tasks<span className="org-top-count">{row.counts.open}</span>
           </button>
           {keepsBrief && (<>
             <button type="button" aria-pressed={view === 'brief'} className={`org-top-tab${view === 'brief' ? ' is-on' : ''}`} data-testid="org-top-brief" onClick={() => onView('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
-            </button>
-            <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
-              Threads{threadsCount > 0 && <span className="org-top-count">{threadsCount}</span>}
-              {threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
             </button>
           </>)}
         </div>

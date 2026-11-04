@@ -21,7 +21,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { lockLeftmostPanel } from './draft-helpers'
-import { openTasksBy } from './org-view-helpers'
+import { openTasksBy, showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
@@ -57,6 +57,8 @@ async function openNode(page: Page): Promise<void> {
   await page.getByTestId('org-search').fill(PROJECT)
   await page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`).click()
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
+  // A lead opens on its Threads (2026-11-04); its tasks are in Tasks.
+  await showTasks(page)
 }
 
 const railTab = (page: Page, tab: string) => page.getByTestId('org-rail').locator(`[data-testid="org-task-tab"][data-tab="${tab}"]`)

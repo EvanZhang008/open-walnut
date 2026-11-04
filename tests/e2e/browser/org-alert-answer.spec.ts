@@ -18,6 +18,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -80,6 +81,8 @@ async function openTeam(page: Page, homeColumns: readonly string[] = []): Promis
   await page.getByTestId('org-search').fill(PROJECT)
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"]`).click()
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
+  // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
+  await showTasks(page)
 }
 
 const alertRow = (page: Page, id: string) => page.locator(`[data-testid="org-alert"][data-task-id="${id}"]`)
