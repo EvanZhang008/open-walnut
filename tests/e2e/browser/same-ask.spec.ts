@@ -82,7 +82,9 @@ test('a lead and its subtask asking the same decision show one Needs you row; an
   await expect.poll(async () => (await statusOf(child))?.state, { timeout: 30_000 }).not.toBe('needs')
   await expect(needsRows.locator(`[data-task-id="${child}"]`)).toHaveCount(0, { timeout: 20_000 })
   await expect(needsRows.locator(`[data-task-id="${lead}"]`)).toHaveCount(0)
-  expect((await statusOf(lead))?.sameAsk).toMatchObject({ id: child, answered: true })
+  // The lead re-derives one sync pass after its subtask (a leader reads its subtasks' stored statuses).
+  await expect.poll(async () => (await statusOf(lead))?.sameAsk?.answered, { timeout: 30_000 }).toBe(true)
+  expect((await statusOf(lead))?.sameAsk?.id).toBe(child)
   await expect((await showSectionCard(panel, 'waiting', lead))).toContainText('you answered it there')
   await page.waitForTimeout(1500)
   await panel.screenshot({ path: `/tmp/same-ask/${info.project.name}-3-settled.png` }).catch(() => {})
