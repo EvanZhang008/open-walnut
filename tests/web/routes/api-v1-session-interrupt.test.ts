@@ -148,6 +148,15 @@ describe('POST /api/v1/sessions/:id/messages with interrupt', () => {
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty('interrupt')
   })
 
+  it('a repeat of a send the queue already holds does not stop the turn again', async () => {
+    await session('msg-int-5')
+    await enqueueMessage('msg-int-5', 'stop and do this instead', { id: 'qm-mobile-rep000001' })
+    const res = await request(createApp()).post('/api/v1/sessions/msg-int-5/messages')
+      .send({ text: 'stop and do this instead', messageId: 'qm-mobile-rep000001', interrupt: true })
+    expect(res.status).toBe(202)
+    expect(sendMock.mock.calls[0][2]).not.toHaveProperty('interrupt')
+  })
+
   it('a non-boolean interrupt is 400 and sends nothing', async () => {
     await session('msg-int-4')
     const res = await request(createApp()).post('/api/v1/sessions/msg-int-4/messages').send({ text: 'x', interrupt: 'yes' })

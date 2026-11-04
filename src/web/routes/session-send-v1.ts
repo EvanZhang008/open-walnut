@@ -106,7 +106,12 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       // The relay carries text only, so the stop goes first and the message after it: the
       // runner's send waits out a stop still settling (claude-code-session.ts handleSend).
       // A stop that did not reach the primary sends nothing, so the words stay in the composer.
-      if (interrupt) {
+      // A repeat of a send this box has already seen (the phone's retry after a lost 202) must
+      // not stop the turn that send started.
+      const repeated = interrupt && clientMessageId
+        ? await (await import('../../core/send-queue.js')).sendSeen(sessionId, clientMessageId)
+        : false
+      if (interrupt && !repeated) {
         const { callPrimaryControl } = await import('./v1-control-relay.js')
         const stopped = await callPrimaryControl('interrupt', sessionId, undefined, INTERRUPT_RELAY_TIMEOUT_MS)
         if (!stopped.ok) {
@@ -168,13 +173,17 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       ...(clientMessageId ? { threadKey: clientMessageId } : {}),
     })
     const cliText = outputMode.enqueueText
-    const { sendMessageToSession } = await import('../../core/session-message-queue.js')
+    const { sendMessageToSession, findQueuedMessage, settledLineUuid } = await import('../../core/session-message-queue.js')
+    // The same repeat on the primary: a row still queued or already settled under this id is a
+    // retry, and it must not stop the turn the first send started.
+    const interruptNow = interrupt && !(clientMessageId
+      && ((await findQueuedMessage(clientMessageId)) || (await settledLineUuid(clientMessageId))))
     const msg = await sendMessageToSession(sessionId, text, {
       source: routeSource('mobile', req.headers),
       taskId: record.taskId,
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
-      ...(interrupt ? { interrupt: true } : {}),
+      ...(interruptNow ? { interrupt: true } : {}),
       hinted: true,
     })
     await outputMode.commit()

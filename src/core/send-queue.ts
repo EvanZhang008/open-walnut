@@ -436,6 +436,12 @@ export async function sendStatus(sessionId: string, messageId: string): Promise<
   }
 }
 
+/** Whether this companion already holds the message or has an outcome for it: a repeat of a send it has seen. */
+export async function sendSeen(sessionId: string, messageId: string): Promise<boolean> {
+  if ((await listBankedSends()).some((op) => op.messageId === messageId && op.sessionId === sessionId)) return true;
+  return (await readSendOutcome(sessionId, messageId)) !== null;
+}
+
 /** Pending banked sends (diagnostics/tests). */
 export async function queuedSessionSendCount(): Promise<number> {
   try {

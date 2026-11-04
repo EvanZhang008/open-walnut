@@ -149,6 +149,17 @@ describe('POST /api/v1/sessions/:id/messages with interrupt on a REPLICA', () =>
     expect(sendAt).toBeGreaterThan(stopAt)
   })
 
+  it('a retry of the same message id does not stop the turn again', async () => {
+    const body = { text: 'do this instead', messageId: 'qm-mobile-ci00000009', interrupt: true }
+    expect((await post(body)).status).toBe(202)
+    await flushSendQueue()
+    expect(calls.filter((c) => c === '__local__ session.control interrupt')).toHaveLength(1)
+    // The phone never saw the 202 and sends it again under the same id.
+    expect((await post(body)).status).toBe(202)
+    await flushSendQueue()
+    expect(calls.filter((c) => c === '__local__ session.control interrupt')).toHaveLength(1)
+  })
+
   it('a stop the primary cannot take sends nothing: 503 and no message call', async () => {
     wire('offline')
     const res = await post({ text: 'do this instead', messageId: 'qm-mobile-ci00000002', interrupt: true })

@@ -2563,7 +2563,9 @@ primary box the same endpoints serve directly — no bridge involved.
     or `false`: unchanged (the message joins the turn or waits behind it). Not a
     boolean: `400 bad_request`. On the cloud companion the stop is relayed to the
     primary first and the message follows; when the stop cannot be delivered
-    (`503 bridge_offline`) nothing is sent.
+    (`503 bridge_offline`) nothing is sent. Only the first arrival of a `messageId`
+    stops the turn: a retry under the same id (after a lost `202`) stops nothing
+    again, so it cannot cut off the turn the first send started.
   - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
     `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
     reuses the original id and collapses onto the already-queued/delivered
