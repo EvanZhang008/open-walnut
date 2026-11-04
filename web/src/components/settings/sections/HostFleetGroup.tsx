@@ -14,7 +14,8 @@
  * stays on screen until a newer reading replaces it, however old
  * (2026-11-03, the user: "just show cache and fetch when user click"). The hosts are
  * read again only on a press: opening the Overview, Refresh, a card's Details, a host's
- * "What Walnut knows", Connect or Set up. A host never read is read once on its own.
+ * "What Walnut knows" or Set up. A host never read, or read only before its link came up
+ * (a Connect included), is read once on its own per link.
  * While a read runs the page polls the cached read, so each card changes as its own
  * read ends; a failed one keeps its card and says why. A host that connects or drops
  * (useHostLinkChange) reads the cached cards again, which costs no host a round trip:
@@ -158,10 +159,11 @@ export function HostFleetGroup() {
   }, [load]);
 
   const timers = useRef(new Set<number>());
-  const later = useCallback((ms: number, names: string[]) => {
-    const id = window.setTimeout(() => { timers.current.delete(id); refresh(names); }, ms);
+  const after = useCallback((ms: number, fn: () => void) => {
+    const id = window.setTimeout(() => { timers.current.delete(id); fn(); }, ms);
     timers.current.add(id);
-  }, [refresh]);
+  }, []);
+  const later = useCallback((ms: number, names: string[]) => after(ms, () => refresh(names)), [after, refresh]);
   useEffect(() => {
     const pending = timers.current;
     return () => { for (const id of pending) window.clearTimeout(id); pending.clear(); };
@@ -195,15 +197,22 @@ export function HostFleetGroup() {
     }
   }, []);
 
+  /**
+   * Connect only dials: the host is read once on its new link, by the server when it connects
+   * and by load's once-per-link rule (readOnOpen, ownReadKey), never by the press itself.
+   * 2026-11-04: the press read it at once (while it was still dialing) and again 5 s later, on
+   * top of that per-link read, so one Connect read the host two or three times.
+   */
   const onConnect = useCallback((host: string) => {
     void run(`${host}:connect`, 'connect', async () => {
       await connectHost(host);
-      refresh([host]);
-      // The link takes a few seconds to come up; read it once more when it should be.
-      later(5_000, [host]);
+      void load();
+      // The link takes a few seconds to come up; look at the cached read again when it should
+      // be, in case no link change reached this page.
+      after(5_000, () => { void load(); });
       return { card: null, note: null };
     });
-  }, [run, refresh, later]);
+  }, [run, load, after]);
 
   const onBootStart = useCallback((host: string) => {
     void run(`${host}:boot`, 'set it up', async () => {

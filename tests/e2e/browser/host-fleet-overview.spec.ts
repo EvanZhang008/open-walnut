@@ -430,8 +430,10 @@ test('Set up: the button waits, then the card reads as fixed; a refusal or a che
 
 test('Connect: the row waits, then the host comes back as a card; a refusal stays on its row', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
+  // A clock of its own, so the Connect's look 5 s later runs inside this test.
+  await page.clock.install()
   let homeUp = false
-  serveFleet(page, () => FLEET.map((h) => (homeUp && (h as { host: string }).host === 'homepc'
+  const fleetReads = serveFleet(page, () => FLEET.map((h) => (homeUp && (h as { host: string }).host === 'homepc'
     ? { ...h, connection: { kind: 'ssh-tunnel', connected: true, phase: 'connected', phaseLabel: 'Connected', since: NOW, rttMs: 51, error: null }, now: { ...(h as { now: Record<string, unknown> }).now, stale: false, at: NOW } }
     : h)))
   const asks = serveRefresh(page)
@@ -461,6 +463,13 @@ test('Connect: the row waits, then the host comes back as a card; a refusal stay
   await expect(dash.getByTestId('host-fleet-stat-online')).toContainText('4/5')
   await expect(dash.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
   // The connect read that host again, and only it (this computer's old card was read on open).
+  expect(asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
+  // A connect reads its host once per link (2026-11-04: the press read it at once, again 5 s
+  // later, and the per-link read on top): the look 5 s on reads the cached cards, no host.
+  const before = fleetReads()
+  await page.clock.runFor(6_000)
+  await expect.poll(fleetReads).toBeGreaterThan(before)
+  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="homepc"]')).toBeVisible()
   expect(asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
   await shot(page, '5-connected', dash)
 })
