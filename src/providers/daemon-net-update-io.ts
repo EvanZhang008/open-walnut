@@ -57,10 +57,15 @@ export interface NetUpdateIoOptions {
   now?: () => number
 }
 
-export const RUNNER_TRIES = 30
+/**
+ * Each try of `walnut daemon update` itself asks a busy daemon again for up to 30 s
+ * (daemon-service-cli.ts UPDATE_BUSY_WAIT_MS), so every try with its pause, and the
+ * last try's own swap, fit in the time the server waits for the answer (UPDATE_WAIT_MS).
+ */
+export const RUNNER_TRIES = 8
 export const RUNNER_PAUSE_SECONDS = 10
 const POLL_MS = 5_000
-const WAIT_MS = 15 * 60_000
+export const UPDATE_WAIT_MS = 15 * 60_000
 /** An older daemon's longest argv word (host-exec-line.ts ARG_MAX_CHARS). */
 const ARGV_WORD_MAX = 8 * 1024
 /** exec.run's own cap on a foreground run (host-exec-core.ts FOREGROUND_MAX_MS). */
@@ -216,7 +221,7 @@ export function createNetUpdateIo(conn: NetUpdateConn, opts: NetUpdateIoOptions 
       const said = await run(launcherScript(directory, opts.latestMarker), 30_000).catch((err: Error) => `${err.message}`)
       if (!said.includes(LAUNCHED)) throw new Error(`the update did not start detached from the daemon: ${said.slice(-300)}`)
       // The old daemon exits during the handover: reads fail until the link is back on the new one.
-      const deadline = now() + (opts.waitMs ?? WAIT_MS)
+      const deadline = now() + (opts.waitMs ?? UPDATE_WAIT_MS)
       while (now() < deadline) {
         await sleep(opts.pollMs ?? POLL_MS)
         if (opts.cancelled?.()) throw new Error('nobody waits for the update any more; it may still finish on the host')
@@ -228,7 +233,7 @@ export function createNetUpdateIo(conn: NetUpdateConn, opts: NetUpdateIoOptions 
         if (at < 0) throw new Error(`the update gave no answer Walnut could read (${done.trim()}): ${out.trim().slice(-300)}`)
         return out.slice(at)
       }
-      throw new Error(`the update on the host did not report back within ${Math.round((opts.waitMs ?? WAIT_MS) / 1000)} s; it may still finish there`)
+      throw new Error(`the update on the host did not report back within ${Math.round((opts.waitMs ?? UPDATE_WAIT_MS) / 1000)} s; it may still finish there`)
     },
   }
 }

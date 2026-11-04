@@ -29,7 +29,8 @@ import zlib from 'node:zlib'
 import { spawn, spawnSync } from 'node:child_process'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createTransferCore, type TransferCoreDeps } from '../../src/providers/transfer-core.js'
-import { createNetUpdateIo, launcherScript, runnerScript, type NetUpdateConn, type NetUpdateIoOptions } from '../../src/providers/daemon-net-update-io.js'
+import { createNetUpdateIo, launcherScript, runnerScript, RUNNER_PAUSE_SECONDS, RUNNER_TRIES, UPDATE_WAIT_MS, type NetUpdateConn, type NetUpdateIoOptions } from '../../src/providers/daemon-net-update-io.js'
+import { UPDATE_BUSY_WAIT_MS } from '../../src/providers/daemon-service-cli.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { permissionRisk } from '../../src/providers/host-exec-guards.js'
 import { guardedPath } from '../setup/exec-guard.js'
@@ -196,6 +197,12 @@ describe('the host network update io', () => {
       .rejects.toThrow('Only a managed daemon')
     expect(calls()).toHaveLength(1)
   }, 60_000)
+
+  it('every try, each asking a busy daemon again for its own while, fits in the time the server waits', () => {
+    // Half of it: each try also probes, checks and writes, and the last one swaps the daemon.
+    expect(RUNNER_TRIES * (UPDATE_BUSY_WAIT_MS + RUNNER_PAUSE_SECONDS * 1000)).toBeLessThan(UPDATE_WAIT_MS / 2)
+    expect(RUNNER_TRIES).toBeGreaterThan(1)
+  })
 
   it('stops after the last allowed busy refusal and says the update failed', async () => {
     const binary = fakeDaemon({ refusals: 10 })

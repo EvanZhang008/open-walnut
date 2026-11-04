@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { handoverBusy, requestDaemonServiceHandover, requestRunningDaemonHandover } from '../../src/providers/daemon-service-cli.js'
+import { handoverBusy, requestDaemonServiceHandover, requestDaemonServiceUpdate, requestRunningDaemonHandover } from '../../src/providers/daemon-service-cli.js'
 import { DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError } from '../../src/providers/daemon-service-manager.js'
 
 let runtime: string
@@ -122,6 +122,46 @@ describe('managed daemon update transport', () => {
       socket.close()
     })
     await expect(update()).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
+  })
+  // 2026-11-03: a deploy's update met one relay in flight and gave up at once.
+  const RELAYS = 'service.handover: active ACP workers or relay requests must finish first'
+  const EXEC = 'service.handover: running host_exec jobs must finish first'
+  it.each([RELAYS, EXEC])('asks a busy daemon again until it prepares the update: %s', async (busy) => {
+    let asked = 0
+    await setup((frame) => {
+      if (frame.cmd === 'hello') return managedHello()
+      if (++asked < 3) return { ok: false, error: busy }
+      alive = false
+      return { ok: true, prepared: true, instanceId: 'old-instance' }
+    })
+    const notes: string[] = []
+    await requestDaemonServiceUpdate(runtime, state, { pauseMs: 10, note: (text) => notes.push(text) })
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.update', 'hello', 'service.update', 'hello', 'service.update'])
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toContain(busy)
+  })
+
+  it('gives up on a daemon that stays busy, as the busy refusal it is', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? managedHello() : { ok: false, error: RELAYS })
+    const error = await requestDaemonServiceUpdate(runtime, state, { busyMs: 100, pauseMs: 20, note: () => {} }).catch((reason: Error) => reason)
+    expect(error).toBeInstanceOf(DaemonServiceUpdateRefusedError)
+    expect((error as Error).message).toContain(RELAYS)
+    expect(frames.filter((frame) => frame.cmd === 'service.update').length).toBeGreaterThan(1)
+  })
+
+  it('never asks again after any other refusal, or once the update may have started', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? managedHello() : { ok: false, error: 'service.handover: daemon mode or instance does not match the requested operation' })
+    await expect(requestDaemonServiceUpdate(runtime, state, { pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceUpdateRefusedError)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.update'])
+    for (const socket of server!.clients) socket.terminate()
+    await new Promise<void>((resolve) => server!.close(() => resolve()))
+    frames = []
+    await setup((frame, socket) => {
+      if (frame.cmd === 'hello') return managedHello()
+      socket.close()
+    })
+    await expect(requestDaemonServiceUpdate(runtime, state, { pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.update'])
   })
 })
 

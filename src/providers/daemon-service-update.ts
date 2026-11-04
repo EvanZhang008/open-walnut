@@ -66,7 +66,9 @@ async function stageRemoteDaemonBinary(payload: { binary: string } | { gz: Buffe
     if ('binary' in payload) {
       const compressed = path.join(temporary!, 'daemon.gz')
       await pipeline(fs.createReadStream(payload.binary), createGzip(), fs.createWriteStream(compressed, { mode: 0o600, flags: 'wx' }))
-      chunks = fs.createReadStream(compressed, { highWaterMark: CHUNK_BYTES })
+      // Opened when the upload reads it: a staging dir refused first removes `temporary`,
+      // and a stream opened already would then fail with no one listening.
+      chunks = { [Symbol.asyncIterator]: () => fs.createReadStream(compressed, { highWaterMark: CHUNK_BYTES })[Symbol.asyncIterator]() }
     } else {
       chunks = slices(payload.gz)
     }
@@ -154,13 +156,38 @@ export async function updateRemoteDaemonService(
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
     const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`
-    const output = io.serviceUpdate ? await io.serviceUpdate({ command, directory, executable }) : await io.run(command, 600_000)
+    const output = io.serviceUpdate
+      ? await io.serviceUpdate({ command, directory, executable })
+      : await io.run(command, 600_000).catch((error: unknown) => answerOfFailedRun(error))
     const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }
     if (result.ok !== true) throw new Error(`Managed daemon update failed: ${result.failure?.message ?? output}; ${result.failure?.rollback ?? ''}`)
     return 'applied'
   } finally {
     if (directory) await removeStaging(io, directory)
   }
+}
+
+/**
+ * A refused update exits 1 with its answer on stdout (runDaemonServiceCli), and a run over
+ * SSH throws on that exit with the stdout beside its message: the answer says what happened,
+ * so it is read, never the exit alone. 2026-11-03: a deploy's update met a relay in flight;
+ * the daemon refused it as busy ("must finish first"), the error named only "exited with
+ * code 1", and the server took it as a failed update with a 10-minute cooldown instead of
+ * asking again in a minute (daemon-connection.ts daemonBusyRefusal).
+ */
+function answerOfFailedRun(error: unknown): string {
+  const stdout = (error as { stdout?: unknown } | null)?.stdout
+  if (typeof stdout !== 'string') throw error
+  // Raw stdout: the remote script's markers and whatever the login shell printed sit around
+  // the answer, which the CLI prints as indented JSON: from a line that is `{` to the last `}`.
+  const lines = stdout.split('\n').map((line) => line.replace(/\r$/, ''))
+  const from = lines.indexOf('{')
+  const to = lines.lastIndexOf('}')
+  const answer = from >= 0 && to > from ? lines.slice(from, to + 1).join('\n') : ''
+  try {
+    if ((JSON.parse(answer) as { ok?: unknown } | null)?.ok === false) return answer
+  } catch { /* not the CLI's answer */ }
+  throw error
 }
 
 interface ServiceReply { ok?: boolean; status?: { scope?: string; startup?: string }; failure?: { code?: string; message?: string; rollback?: string } }

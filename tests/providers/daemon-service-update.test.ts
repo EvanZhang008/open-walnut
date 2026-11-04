@@ -5,6 +5,9 @@ import { randomBytes, createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installRemoteDaemonService, updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
+import { RemoteCommandError, runRemoteSh } from '../../src/providers/remote-sh.js'
+import { daemonBusyRefusal } from '../../src/providers/exec-runs-hold.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let root: string
 let binary: string
@@ -119,6 +122,68 @@ describe('managed daemon upload and update', () => {
     const l = lab()
     await expect(updateRemoteDaemonService({ binary }, 'build; invalid', l)).rejects.toThrow('Invalid daemon build version')
     expect(l.run).not.toHaveBeenCalled()
+  })
+  // 2026-11-03: a deploy's update met a relay in flight. The CLI's busy refusal exits 1 with
+  // its answer on stdout, and over SSH that exit throws with the answer only beside the
+  // message, so the server read "exited with code 1" as a failed update (a 10-minute
+  // cooldown) instead of a busy daemon it asks again in a minute.
+  describe('a refusal that exits 1 over ssh', () => {
+    const BUSY = 'Error: service.handover: active ACP workers or relay requests must finish first'
+    let bin: string
+    let savedPath: string | undefined
+    beforeEach(async () => {
+      bin = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-fake-ssh-'))
+      // This machine stands in for the host: the fake ssh runs the wrapped script it is fed.
+      // Its login shell prints a line with a brace before the script runs, as an rc file may.
+      await fs.writeFile(path.join(bin, 'ssh'), "#!/bin/sh\necho 'motd: {welcome}'\nexec sh -s\n", { mode: 0o755 })
+      savedPath = process.env.PATH
+      process.env.PATH = guardedPath([bin])
+    })
+    afterEach(async () => {
+      process.env.PATH = savedPath
+      await fs.rm(bin, { recursive: true, force: true })
+    })
+
+    /** The upload answered as in `lab`; the update line runs through the real runRemoteSh. */
+    function sshLab(update: string) {
+      const upload = uploads()
+      const calls: string[] = []
+      const run = vi.fn(async (command: string) => {
+        calls.push(command)
+        const answered = await upload.answer(command)
+        if (answered !== null) return answered
+        return runRemoteSh(['devbox'], update, 10_000)
+      })
+      return { run, chunk: upload.chunk, calls }
+    }
+    const answers = (failure: Record<string, string>) =>
+      `echo 'walnut daemon: a note first' >&2\nprintf '%s\\n' '${JSON.stringify({ ok: false, failure }, null, 2)}'\nexit 1`
+
+    it('a busy refusal reads as busy, with its words, and the staging dir is removed', async () => {
+      const l = sshLab(answers({ code: 'updateRefused', message: BUSY, rollback: 'the old service config was put back' }))
+      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+      expect(error).not.toBeInstanceOf(RemoteCommandError)
+      expect(String(error)).toContain('must finish first')
+      expect(String(error)).toContain('the old service config was put back')
+      expect(daemonBusyRefusal(error)).toBe(true)
+      expect(l.calls.filter((command) => command.includes('daemon update'))).toHaveLength(1)
+      expect(l.calls.at(-1)).toBe(RM)
+    })
+
+    it('any other refusal keeps its own words and is not busy', async () => {
+      const l = sshLab(answers({ code: 'serviceInactive', message: 'The service was stopped or disabled during staging; nothing was changed' }))
+      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+      expect(String(error)).toContain('The service was stopped or disabled during staging')
+      expect(daemonBusyRefusal(error)).toBe(false)
+    })
+
+    it('an exit with no answer stays the ssh error it was', async () => {
+      const l = sshLab("echo 'walnut: command not found' >&2\nexit 127")
+      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+      expect(error).toBeInstanceOf(RemoteCommandError)
+      expect(String(error)).toContain('command not found')
+      expect(daemonBusyRefusal(error)).toBe(false)
+    })
   })
 })
 

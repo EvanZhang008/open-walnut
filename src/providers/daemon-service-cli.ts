@@ -96,6 +96,11 @@ export async function daemonReady(runtimeDir: string, expectedExecutable?: strin
 
 /** How long an install waits for a busy daemon (its relays, a slow answer) before giving up. */
 export const HANDOVER_BUSY_WAIT_MS = 90_000
+/**
+ * How long an update does: a relay ends within a second, and the server asks again
+ * later anyway, while a longer wait holds its swap open (daemon-connection.ts).
+ */
+export const UPDATE_BUSY_WAIT_MS = 30_000
 
 /**
  * A handover the daemon refused before it changed anything, so asking again is safe: it
@@ -132,6 +137,33 @@ export async function requestDaemonServiceHandover(
       if (!noted) {
         noted = true
         ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error instanceof Error ? error.message : String(error)}); asking again`)
+      }
+      await delay(wait.pauseMs ?? 2000)
+    }
+  }
+}
+
+/**
+ * Prepare a managed daemon's update, asking again (every 2 s, up to UPDATE_BUSY_WAIT_MS)
+ * while it refuses as busy before it changed anything: a relay or a command of its server
+ * in flight lasts a second or so, and a deploy's update that met one gave up at once
+ * (2026-11-03). Nothing else is asked again, a refusal of any other kind included.
+ */
+export async function requestDaemonServiceUpdate(
+  runtimeDir: string, stateDir: string,
+  wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void } = {},
+): Promise<void> {
+  const deadline = Date.now() + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
+  let noted = false
+  for (;;) {
+    try {
+      await requestRunningDaemonHandover(runtimeDir, stateDir, false, true)
+      return
+    } catch (error) {
+      if (!(error instanceof DaemonServiceUpdateRefusedError) || !handoverBusy(error) || Date.now() >= deadline) throw error
+      if (!noted) {
+        noted = true
+        ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error.message}); asking again`)
       }
       await delay(wait.pauseMs ?? 2000)
     }
@@ -347,7 +379,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
         if (!(await runtimeDaemonAlive(runtimeDir))) await reportMoved(await moveDaemonState(unmanagedStateRoot(home), root), 'to the service')
         return handedOver
       },
-      prepareUpdate: async () => { await requestRunningDaemonHandover(runtimeDir, root, false, true) },
+      prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root),
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
         return stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })

@@ -280,6 +280,28 @@ describe('the background update of a service-managed daemon', () => {
     expect(state(c)._lastUpgradeAttempt).toBeNull()
   })
 
+  it('a daemon busy at every ask is asked less often: three times a minute apart, then backing off', async () => {
+    const c = make()
+    stub(c, { probe: MANAGED, version: OLD })
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+      expect(await opts?.onStaged?.()).toBe(true)
+      throw new Error('Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first; the old service config was put back')
+    })
+    live(c)
+    const delays: number[] = []
+    for (let i = 0; i < 6; i++) {
+      warn.mockClear()
+      await priv(c).recheckPostponedUpgrade()
+      const said = warn.mock.calls.find(([m]) => m === 'DaemonConnection: daemon update postponed; checking again')
+      delays.push((said?.[1] as { retryInMs: number }).retryInMs)
+      expect(state(c)._lastUpgradeAttempt).toBeNull()
+    }
+    expect(delays).toEqual([60_000, 60_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000])
+  })
+
   it('a boot-start install waits for host_exec runs too', async () => {
     vi.stubEnv('WALNUT_DAEMON_BOOT_START', '1')
     const c = make()

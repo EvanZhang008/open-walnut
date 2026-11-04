@@ -2949,6 +2949,7 @@ export class DaemonConnection {
       this.reconnectTimer = null
     }
     this.clearUpgradeRecheck()
+    this._busyRefusals = null
     this._handoverArmed = false
     this._handoverUntil = 0
     if (this._handoverTimer) { clearTimeout(this._handoverTimer); this._handoverTimer = null }
@@ -3557,7 +3558,8 @@ export class DaemonConnection {
       remoteVersion = (markAt === -1 ? head : head.slice(0, markAt)).trim()
       const runningServes = markAt === -1 ? null : parseServes(head.slice(markAt + SERVES_MARK.length))
 
-      if (remoteVersion === expected) this.clearUpgradeRecheck()
+      // The new build runs: a later build's busy asks start from the first again.
+      if (remoteVersion === expected) { this.clearUpgradeRecheck(); this._busyRefusals = null }
 
       // No answer about the service: no update now (that needs a stop or a
       // service call), no "run walnut daemon install" either. Ask again later.
@@ -3825,6 +3827,9 @@ export class DaemonConnection {
   /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
   private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
   private _upgradeRecheckAttempt = 0
+  /** Busy refusals of the update to `expected` in a row; after BUSY_STEADY_TRIES the asks back off. */
+  private _busyRefusals: { expected: string; n: number } | null = null
+  private static BUSY_STEADY_TRIES = 3
   /** The re-run in progress: a reconnect waits for it, so the two never stop or deploy at once. */
   private _upgradeRecheckInFlight: Promise<void> | null = null
   /** The unmanaged daemon this connection last stopped itself, and where (see checkDaemonRunning). */
@@ -4095,7 +4100,12 @@ export class DaemonConnection {
       if (daemonBusyRefusal(error)) {
         // Not an attempt: the update's cooldown would otherwise hold the next minute's try off.
         this._lastUpgradeAttempt = null
-        this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion, { steady: true })
+        // A relay in flight ends within a second, so the next minutes ask again; a daemon
+        // busy every time (an idle ACP worker lives up to 2 h) is asked less and less often.
+        const n = this._busyRefusals?.expected === expected ? this._busyRefusals.n + 1 : 1
+        this._busyRefusals = { expected, n }
+        this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion,
+          n <= DaemonConnection.BUSY_STEADY_TRIES ? { steady: true } : { attempt: n - DaemonConnection.BUSY_STEADY_TRIES })
         return 'held'
       }
       // A double without the hook never asked: the attempt still counts against the cooldown.
