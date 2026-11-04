@@ -151,13 +151,13 @@ final class DemoModeTests: XCTestCase {
         _ = try await api.retrySession(id: launched.sessionId)
         // A message sent while a turn runs waits in the queue: edit it, send one now, withdraw one.
         _ = try await api.sendSessionMessage(id: "s-uptime", text: "Also check the logs", messageId: "qm-route-check-2")
-        _ = try await api.sendSessionMessage(id: "s-uptime", text: "And the dashboards", messageId: "qm-route-check-3")
+        _ = try await api.sendSessionMessage(id: "s-uptime", text: "And the graphs", messageId: "qm-route-check-3")
         let waiting = try await api.sessionQueue(id: "s-uptime")
         let checkLogs = try XCTUnwrap(waiting.first { $0.message == "Also check the logs" })
         try await api.editQueuedMessage(sessionId: "s-uptime", messageId: checkLogs.id, text: "edited")
         try await api.deleteQueuedMessage(sessionId: "s-uptime", messageId: checkLogs.id)
-        let dashboards = try XCTUnwrap(waiting.first { $0.message == "And the dashboards" })
-        try await api.sendQueuedNow(messageId: dashboards.id, interrupt: false)
+        let graphs = try XCTUnwrap(waiting.first { $0.message == "And the graphs" })
+        try await api.sendQueuedNow(messageId: graphs.id, interrupt: false)
         // Stop, and a send that interrupts, on the session whose turn runs until it is steered.
         let stopped = try await api.interruptSession(id: "s-index")
         XCTAssertTrue(stopped.wasRunning)
