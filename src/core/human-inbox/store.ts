@@ -64,7 +64,7 @@ export class LetterError extends Error {
   constructor(
     message: string,
     readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
-      | 'duplicate_letter' | 'duplicate_reply',
+      | 'duplicate_letter' | 'duplicate_reply' | 'same_ask',
     readonly status: number,
   ) {
     super(message);

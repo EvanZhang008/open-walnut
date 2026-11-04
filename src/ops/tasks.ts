@@ -743,11 +743,14 @@ const REPORT_CHANGE = z.object({
   ask_more: z.string().max(2000).optional().describe('With needs: the detail behind the ask, shown under More'),
   user_kind: z.enum(USER_KINDS).optional().describe(`With needs, set by a task: required. ${USER_KIND_PARAM}`),
   user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+  same_ask_reason: z.string().max(300).optional()
+    .describe('With needs: only when a task in its tree already asks the user the same (409 same_ask) and this is really a different decision: one line saying why'),
 })
 const REPORT_SET_TEXT = 'Set what a task waits on next, as its own turn-end report would: its line on the Org page, the Board and the phone, '
   + 'recorded as yours (by). For a task you lead, or as its VP or Main; the task\'s next own report replaces it. It moves the '
   + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask, '
-  + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more). A task or lead putting a Needs you on the user names which of their kinds it is (user_kind, user_kind_why; 409 user_kind without them); a person\'s own line is never asked.'
+  + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more). A task or lead putting a Needs you on the user names which of their kinds it is (user_kind, user_kind_why; 409 user_kind without them); a person\'s own line is never asked. '
+  + 'The user sees one decision once: a Needs you that a task below it (or a decision letter in its tree) already asks is refused with 409 same_ask, naming that task: leave the ask to it.'
 
 defineOp({
   name: 'task_update',

@@ -106,6 +106,8 @@ const ERROR_CODES: Record<string, string> = {
   // A session's letter or thread reply repeating its own minutes-old one (duplicate-letter.ts).
   duplicate_letter: 'duplicate_letter',
   duplicate_reply: 'duplicate_reply',
+  // A decision letter asking what a task in the sender's tree already asks the user (same-ask.ts).
+  same_ask: 'same_ask',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }

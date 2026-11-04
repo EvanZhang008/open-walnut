@@ -28,6 +28,8 @@ export interface ReportChange {
   /** needs, set by a task (not a person): which of the user's own kinds the ask is, and why (org/user-kind.ts). */
   user_kind?: string;
   user_kind_why?: string;
+  /** needs: why it asks what a task in its tree already asks the user (same-ask.ts). Never stored. */
+  same_ask_reason?: string;
 }
 
 export class ReportChangeError extends Error {
@@ -132,6 +134,14 @@ export async function setTaskReport(
   if (task.phase === 'COMPLETE' || task.status === 'done') throw new ReportChangeError('the task is complete: reopen it first', 'conflict', 409);
   const by: StatusLineBy = !setter ? 'human' : setter.taskId === task.id ? 'self' : `task:${setter.taskId}`;
   const report = reportOfChange(raw, by, setter && by !== 'self' ? setter.title : undefined, nowMs);
+  // A Needs you its tree already asks the user is not put on them twice (same-ask.ts); a person's own line is never asked.
+  if (report.state === 'needs' && by !== 'human') {
+    const { refuseSameAsk } = await import('../same-ask-tree.js');
+    const { SameAskError } = await import('../same-ask.js');
+    await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>).catch((err) => {
+      throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
+    });
+  }
   await updateTaskRaw(task.id, { status_report: report }, { emitEvent: true, source: 'report-set' });
   // The phase follows as the task's own report would move it (report-phase.ts), written as the
   // deliberate change it is (a lead or a person set it), so a parked task moves too. Not inside a

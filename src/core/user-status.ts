@@ -36,6 +36,7 @@ import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
+import type { SameAskFold } from './same-ask.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -168,6 +169,12 @@ export interface StatusReport {
   by?: StatusLineBy;
   /** The setter task's title, for display. */
   by_name?: string;
+  /** needs: the session said its ask is the same decision as the open ask of this task in its tree
+   *  (FOR_USER_ASK_SAME, same-ask.ts): the user sees it once, from the deeper of the two. */
+  same_as?: string;
+  /** needs: the session said its ask is a different decision from the ones its tree asks
+   *  (FOR_USER_ASK_SAME: different): Walnut's word test never folds it. */
+  ask_distinct?: true;
 }
 
 /** The status rules a report is asked under: 2 = the task's own build, test run, deploy or land is
@@ -386,6 +393,10 @@ export interface UserStatus {
    *  by agents (task_get, task_list rows), so a VP or Main sees every ask below a direct report
    *  without walking its tree; the Org page groups by topLevelOf from the same statuses. */
   asks?: RolledAsk[];
+  /** A task whose own ask a task below it already asks (same-ask.ts foldSameAsk): it reads Waiting
+   *  on that task (kind task), so the user sees the decision once, from the deepest task. Kept while
+   *  it holds the same report, so answering the deeper task settles both. */
+  sameAsk?: SameAskFold;
 }
 
 /** One question a subtask asks the user, as its leader carries it up (2026-10-31, the user: asks
@@ -1066,7 +1077,7 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
 }
 
 /** The keys of the status every agent task read carries (agentStatusView). */
-export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'threads', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'threads', 'kind', 'waitingOn', 'toRead', 'category', 'carriesOn', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed', 'sameAsk'] as const;
 
 /**
  * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,

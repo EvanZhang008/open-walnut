@@ -204,6 +204,17 @@ export async function sendLetterAsCallerOnce(
     log.notif.info('human-inbox: duplicate letter refused', { taskId: sender.taskId, senderSessionId: sender.sessionId, firstLetterId: dup.id });
     throw new LetterError(duplicateLetterMessage(dup, now), 'duplicate_letter', 409);
   };
+  // A decision a task above, below or in its team already asks the user is not asked twice
+  // (same-ask.ts): refused with that ask named, unless same_ask_reason says it is another decision.
+  const sameAskInput = { same_ask_reason: input.same_ask_reason ?? input.sameAskReason };
+  { const { same_ask_reason: _a, sameAskReason: _b, ...rest } = input; input = rest; }
+  if (!opts.opKey && senderKey(sender) !== null && input.type === 'action_required') {
+    const { refuseSameAsk } = await import('../same-ask-tree.js');
+    const { SameAskError } = await import('../same-ask.js');
+    await refuseSameAsk(sender.taskId, subject, 'letter', sameAskInput).catch((err) => {
+      throw err instanceof SameAskError ? new LetterError(err.message, err.code, err.status) : err;
+    });
+  }
   let openAsk: OpenAskHint | undefined;
   if (guarded) {
     // The duplicate itself is refused where the letter would be written: in the away thread a

@@ -198,7 +198,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -397,6 +397,8 @@ export interface ThreadPatch {
   /** With state needs from an agent: which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
+  /** With state needs from an agent: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
+  same_ask_reason?: string;
 }
 
 /**
@@ -535,12 +537,17 @@ function taskList(ids: readonly unknown[]): string[] {
   return [...new Set(ids.filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(x)))].slice(0, THREAD_TASKS_MAX);
 }
 
+/** Whether this patch hands the thread to the user: needs, from a state it was not in, or a closed thread reopened into it. */
+export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch: Pick<ThreadPatch, 'state' | 'reopen'>): boolean {
+  const target = patch.state ?? cur.state;
+  return waitsOnUser(target) && (cur.state !== target || (patch.reopen === true && !!cur.closed && target === 'needs'));
+}
+
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   const cur = find(file, id);
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
-  const target = patch.state ?? cur.state;
-  if (waitsOnUser(target) && (cur.state !== target || (patch.reopen === true && !!cur.closed && target === 'needs'))) checkHandedToUser(by, patch);
+  if (patchHandsToUser(cur, patch)) checkHandedToUser(by, patch);
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
   if (patch.snooze?.trim() && cur.pinned) checkHisPin(cur, by, 'snoozed');
   if (patch.close && !cur.closed) checkHisPin(cur, by, 'closed');
@@ -667,6 +674,8 @@ export interface OpenThreadInput {
   /** With state needs (the default): which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
+  /** With state needs: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
+  same_ask_reason?: string;
 }
 
 /** The node opens a thread itself: its first post is what reached it (thread_create). */

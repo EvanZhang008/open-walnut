@@ -15,7 +15,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  emptyThreads, enteredNeeds, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
+  emptyThreads, enteredNeeds, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadsFile, type ThreadWriter,
 } from './threads-model.js';
 
@@ -85,7 +85,22 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput)
 }
 
 /** The node opens a thread itself (thread_create): its first post is what reached it. */
+/**
+ * A thread a node hands the user is not a second copy of a decision a task in its team already asks
+ * them (same-ask.ts): 409 `same_ask` with that task named, unless same_ask_reason says why. The user's
+ * own writes are never asked. Checked before the write: a race only lets one through.
+ */
+async function refuseSameAskThread(taskId: string, text: string | undefined, by: ThreadWriter, input: { same_ask_reason?: unknown }): Promise<void> {
+  if (by === 'human') return;
+  const { refuseSameAsk } = await import('../same-ask-tree.js');
+  const { SameAskError } = await import('../same-ask.js');
+  await refuseSameAsk(taskId, text, 'thread', input).catch((err) => {
+    throw err instanceof SameAskError ? new ThreadError('same_ask', 409, err.message) : err;
+  });
+}
+
 export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter): Promise<OrgThread> {
+  if ((input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
     const r = openThread(cur, input, by, at);
@@ -96,6 +111,10 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
 }
 
 export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter): Promise<OrgThread> {
+  if (by !== 'human') {
+    const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
+    if (cur && patchHandsToUser(cur, patch)) await refuseSameAskThread(taskId, patch.ask?.trim() || cur.ask || patch.title?.trim() || cur.title, by, patch);
+  }
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
     const r = updateThread(cur, id, patch, by, at);

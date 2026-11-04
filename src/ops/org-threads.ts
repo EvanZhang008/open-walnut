@@ -30,6 +30,10 @@ const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix
 
 interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string } }
 
+/** Every thread op that hands a thread to the user (same-ask.ts). */
+const SAME_ASK_REASON_PARAM = 'With needs: only after a 409 same_ask (a task in your team already asks him this; leave the ask to it and keep the thread working or pending), '
+  + 'when this really is a different decision: one line (10+ characters) saying why. Never stored'
+
 defineOp({
   name: 'thread_list',
   title: 'List Threads',
@@ -64,6 +68,7 @@ defineOp({
     state: z.enum(THREAD_STATES).optional().describe('working (you are on it; out of his sight until your answer), needs (waiting on him), answered (you answered; he may close it), pending (only handed off: hidden even with your answer on it). A new reply without a state sets answered'),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+    same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
@@ -104,6 +109,7 @@ defineOp({
     state: z.enum(['needs', 'answered']).optional().describe('Default needs (it waits on him)'),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+    same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,
   },

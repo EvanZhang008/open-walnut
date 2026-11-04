@@ -419,7 +419,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_OWN', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_OWED', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_OWN', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_OWED', 'FOR_USER_ASK_SAME', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -555,6 +555,12 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
     out.ask = ask;
     if (own?.ok) out.ask_own = { kind: own.kind, why: own.why };
     Object.assign(out, readAskShape(report, read));
+    // Its word on the asks its tree already holds (same-ask.ts): the same as one, or a different one.
+    const same = (read('FOR_USER_ASK_SAME') ?? '').trim();
+    // A task id as Walnut writes them (abcd1234-5678, or a UUID), wherever it stands in the line.
+    const id = /\b([a-z0-9]{8}-[a-z0-9]{4}(?:-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12})?)\b/i.exec(same)?.[1];
+    if (/^different\b/i.test(same)) out.ask_distinct = true;
+    else if (id) out.same_as = id;
   }
   const waiting = read('FOR_USER_WAITING_ON');
   if (state === 'waiting' && waiting) {
@@ -981,9 +987,12 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       // Only config can say which language the tip is in: unlike the diff
       // captions, this runs with no browser locale to fall back on.
       uiLanguage = await configuredUiLanguage();
+      // With the status lines, the asks its tree already holds (same-ask.ts), as the status question carries.
+      const sameAsk = !statusOwned && taskPhase !== 'COMPLETE' && p.taskId
+        ? await import('../same-ask-tree.js').then((m) => m.sameAskQuestionFor(p.taskId!)).catch(() => '') : '';
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}) }) + sameAsk, SELF_REPORT_TIMEOUT_MS,
       ).catch((err: unknown) => {
         // The model reached for a tool and the question was ended (an ACP engine): the labels
         // it wrote first still parse below, and a text with none is skipped there.

@@ -273,6 +273,9 @@ export interface NewLetter {
    */
   resendReason?: string;
   resend_reason?: string;
+  /** Why this decision letter asks what a task in its tree already asks the user (same-ask.ts). Never stored. */
+  sameAskReason?: string;
+  same_ask_reason?: string;
   /** Stamped by the route from the caller's sid, not by the agent. */
   sender: LetterSender;
 }

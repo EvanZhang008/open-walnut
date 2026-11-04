@@ -26,7 +26,7 @@ import fsp from 'node:fs/promises';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
-import { deriveUserStatus, reportIsCurrent, type UserStatus } from './user-status.js';
+import { reportIsCurrent, type UserStatus } from './user-status.js';
 import { snoozedUntil } from './snooze.js';
 
 export type StatusMismatchKind = 'missing' | 'drift' | 'snoozed-needs' | 'parked-on-nothing';
@@ -109,11 +109,14 @@ async function hasOutsideWait(t: Task): Promise<boolean> {
 /** The live check: every open task, with the server's own facts. Read-only. */
 export async function checkStatuses(nowMs = Date.now(), opts: { settleMs?: number } = {}): Promise<StatusMismatch[]> {
   const { listTasks } = await import('./task-manager.js');
-  const { readStatusFacts, statusInputOf, completeStatusFacts } = await import('./user-status-sync.js');
+  const { readStatusFacts, readFoldEvidence, statusOf, childrenByParent, completeStatusFacts } = await import('./user-status-sync.js');
   const all = await listTasks();
   const facts = await readStatusFacts(all.filter(open), all.map((t) => t.id));
   completeStatusFacts(facts, all);
-  return findStatusMismatches(all, { derive: (t) => deriveUserStatus(statusInputOf(t, facts, nowMs), nowMs), outside: hasOutsideWait }, nowMs, opts.settleMs);
+  await readFoldEvidence(facts, all.filter(open));
+  // The status the sync stores (its subtasks' asks carried up, a same ask folded: same-ask.ts).
+  const childrenOf = childrenByParent(all);
+  return findStatusMismatches(all, { derive: (t) => statusOf(t, facts, childrenOf, nowMs).status, outside: hasOutsideWait }, nowMs, opts.settleMs);
 }
 
 /** The note a park with nothing outside brings into its task's session. */

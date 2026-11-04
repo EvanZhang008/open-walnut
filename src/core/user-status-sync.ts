@@ -24,7 +24,8 @@ import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
-import { deriveUserStatus, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
+import { deriveUserStatus, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
+import { askKey, foldSameAsk } from './same-ask.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
@@ -91,6 +92,8 @@ export interface StatusFacts {
   projectLeads?: Set<string>;
   /** Every task by id, for what a task takes from its ancestors (a snooze, snooze.ts). */
   tasksById?: ReadonlyMap<string, Task>;
+  /** Task id -> when a person last wrote to its sessions (ISO), for the tasks a same-ask fold names (readFoldEvidence). */
+  personInputAt?: Map<string, string>;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
   /** Main or a lead -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
@@ -535,6 +538,83 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
 }
 
 /**
+ * When a person last wrote to each task a stored same-ask fold names (same-ask.ts): the evidence
+ * that the user answered the deeper task, so its ancestor's fold may stay once that task asks no more.
+ */
+export async function readFoldEvidence(facts: StatusFacts, targets: readonly Task[]): Promise<void> {
+  const ids = new Set(targets.map((t) => t.user_status?.sameAsk?.id).filter((id): id is string => !!id));
+  facts.personInputAt = new Map();
+  if (!ids.size) return;
+  await safely('fold-evidence', async () => {
+    const { listSessionsForTasks } = await import('./session-tracker.js');
+    const sids = new Set<string>();
+    for (const id of ids) {
+      const t = facts.tasksById?.get(id);
+      if (t?.session_id) sids.add(t.session_id);
+      for (const sid of t?.session_ids ?? []) sids.add(sid);
+    }
+    for (const rec of await listSessionsForTasks(ids, sids)) {
+      const tid = rec.taskId && ids.has(rec.taskId) ? rec.taskId : [...ids].find((id) => facts.tasksById?.get(id)?.session_ids?.includes(rec.claudeSessionId));
+      if (!tid || !rec.humanInputAt) continue;
+      const cur = facts.personInputAt!.get(tid);
+      if (!cur || rec.humanInputAt > cur) facts.personInputAt!.set(tid, rec.humanInputAt);
+    }
+  }, undefined);
+}
+
+/** A task's own word on sameness (FOR_USER_ASK_SAME), only while its shown ask is that report's. */
+function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']>, 'same_as' | 'ask_distinct'> | null {
+  const r = t?.status_report;
+  if (!t || !r || t.user_status?.source !== 'session') return null;
+  return reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at }) ? r : null;
+}
+
+/**
+ * Whether a task still holds `ask` while it is not shown as Needs you: its current report still
+ * asks it (a turn runs on it), its report is on the way, or it is snoozed with it (same-ask.ts).
+ */
+function stillAsksOf(t: Task | undefined, ask: string): boolean {
+  if (!t || t.phase === 'COMPLETE' || t.status === 'done') return false;
+  const key = askKey(ask);
+  const r = t.status_report;
+  if (r?.state === 'needs' && askKey(r.ask) === key && reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
+  const us = t.user_status;
+  return !!us?.transient || (!!us?.snoozed?.ask && askKey(us.snoozed.ask) === key);
+}
+
+/** Its open subtasks by parent id, for statusOf. */
+export function childrenByParent(everything: readonly Task[]): Map<string, Task[]> {
+  const childrenOf = new Map<string, Task[]>();
+  for (const t of everything) if (t.parent_task_id) (childrenOf.get(t.parent_task_id) ?? childrenOf.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
+  return childrenOf;
+}
+
+/**
+ * The status one task shows: derived from its facts, with the questions its subtasks ask carried
+ * up (rollUpAsks; Main and a VP show them on their top-level tasks, never as their own: Needs you is
+ * only ever an individual task), and its own ask folded when a task below it already asks the same
+ * (same-ask.ts: the user sees one decision once, from the deepest task). The one way a stored status
+ * is made: the sync writes it, the consistency check compares against it.
+ */
+export function statusOf(
+  task: Task, facts: StatusFacts, childrenOf: ReadonlyMap<string, readonly Task[]>, nowMs = Date.now(),
+): { input: UserStatusInput; status: UserStatus } {
+  const input = statusInputOf(task, facts, nowMs);
+  const derived = deriveUserStatus(input, nowMs);
+  const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
+  const withAsks = asks.length ? { ...derived, asks } : derived;
+  const status = foldSameAsk(task.id, withAsks, asks, {
+    report: reportIsCurrent(input) ? task.status_report ?? null : null,
+    prev: task.user_status ?? null,
+    declared: (id) => declaredOf(facts.tasksById?.get(id)),
+    personInputAt: (id) => facts.personInputAt?.get(id),
+    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask),
+    nowIso: new Date(nowMs).toISOString(),
+  });
+  return { input, status };
+}
+
+/**
  * Derive and store the status of the given open tasks (all of them when `ids` is null).
  * Returns how many changed. A finished task is never written: every reader reads COMPLETE
  * as Done first, and a write to a COMPLETE row would announce it as completed again
@@ -547,17 +627,12 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   if (!targets.length) return 0;
   const facts = await readStatusFacts(targets, everything.map((t) => t.id));
   completeStatusFacts(facts, everything);
+  await readFoldEvidence(facts, targets);
   let changed = 0;
   const toClose: { task: Task; status: UserStatus }[] = [];
-  const childrenOf = new Map<string, Task[]>();
-  for (const t of everything) if (t.parent_task_id) (childrenOf.get(t.parent_task_id) ?? childrenOf.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
+  const childrenOf = childrenByParent(everything);
   for (const task of targets) {
-    const input = statusInputOf(task, facts, nowMs);
-    const derived = deriveUserStatus(input, nowMs);
-    // The questions its subtasks ask, carried up (rollUpAsks); Main and a VP show them on their
-    // top-level tasks, never as their own (Needs you is only ever an individual task).
-    const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
-    const next = asks.length ? { ...derived, asks } : derived;
+    const { input, status: next } = statusOf(task, facts, childrenOf, nowMs);
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
     // A routine run that ended with nothing for the user closes itself (routines/run-close.ts).
     // A candidate here (a triage run's `turn` too); closeRoutineRun decides with the triage check.

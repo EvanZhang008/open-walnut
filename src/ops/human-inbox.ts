@@ -68,6 +68,8 @@ defineOp({
     + 'One letter per question: the same subject again within 10 minutes is refused (409 duplicate_letter, '
     + 'the first letter named; reply in its thread instead, or pass resend_reason), and a letter asking what '
     + 'your open decision letter already asks comes back with openAsk naming it: reply to or settle that one. '
+    + 'The user sees one decision once: an action_required letter asking what a task above or below yours (or in your team) '
+    + 'already asks the user, in its status or its open decision letter, is refused (409 same_ask, that task named): leave the ask to it. '
     + 'An action_required letter is for a decision that is the user\'s own, and says which kind with user_kind and '
     + 'user_kind_why (409 user_kind without them); undoing what an agent broke and choosing between reasonable options are never the user\'s. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
@@ -113,6 +115,9 @@ defineOp({
     resend_reason: z.string().optional().describe(
       'Only to send again a letter with the same subject as one you sent in the last 10 minutes: one line '
       + '(10+ characters) saying why it must be a new letter. Never stored'),
+    same_ask_reason: z.string().optional().describe(
+      'Only after a 409 same_ask, when this really is a different decision from the one that task asks: one line '
+      + '(10+ characters) saying why. Never stored'),
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => {
