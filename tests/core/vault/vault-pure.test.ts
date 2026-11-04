@@ -69,11 +69,30 @@ describe('generator', () => {
 
   it('passphrases use the word list, the separator and one digit', () => {
     expect(WORDLIST).toHaveLength(1296)
-    const p = generatePassphrase({ kind: 'words', words: 5, separator: '-', capitalize: true, number: true })
-    const parts = p.split('-')
-    expect(parts).toHaveLength(5)
-    expect(parts.every((w) => /^[A-Z]/.test(w))).toBe(true)
-    expect(p.replace(/[^0-9]/g, '')).toHaveLength(1)
+    // Read by the word list, never split on the separator: the EFF list holds "yo-yo", so a
+    // passphrase with it splits into six parts on its dashes (2026-11-04: the split failed CI one run
+    // in about 250).
+    const lower = new Set(WORDLIST)
+    const byLength = [...WORDLIST].sort((x, y) => y.length - x.length)
+    const wordsOf = (p: string): string[] | null => {
+      const out: string[] = []
+      let rest = p
+      while (rest) {
+        const w = byLength.find((c) => rest.toLowerCase().startsWith(c) && /^\d?(-|$)/.test(rest.slice(c.length)))
+        if (!w) return null
+        out.push(rest.slice(0, w.length))
+        rest = rest.slice(w.length).replace(/^\d?-?/, '')
+      }
+      return out
+    }
+    expect(wordsOf('Yo-yo-Acid4-Acorn')).toEqual(['Yo-yo', 'Acid', 'Acorn'])
+    for (let i = 0; i < 200; i++) {
+      const p = generatePassphrase({ kind: 'words', words: 5, separator: '-', capitalize: true, number: true })
+      const words = wordsOf(p)
+      expect(words, p).toHaveLength(5)
+      expect(words!.every((w) => /^[A-Z]/.test(w) && lower.has(w.toLowerCase())), p).toBe(true)
+      expect(p.replace(/[^0-9]/g, ''), p).toHaveLength(1)
+    }
   })
 
   it('randomInt is roughly uniform', () => {
