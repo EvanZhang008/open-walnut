@@ -243,7 +243,7 @@ USAGE
   walnut mcp-server                         serve these same operations as an MCP stdio server
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
   walnut approve "<what>" [--biometric] [--timeout 10m] [--detail file|-]   wait for a person's yes: exit 0 approve, 1 deny, 2 no answer
-  walnut pass list | get <item> --purpose "<why>" | run --purpose "<why>" --env NAME=<item> -- <cmd>   passwords from the vault (run masks them in output)
+  walnut pass list | get <item> --purpose "<why>" | run --purpose "<why>" --env NAME=<item> -- <cmd> | sync-bitwarden (Walnut runs bw)   passwords from the vault (run masks them in output)
   walnut browser open <url> | snapshot | click <ref> | type [<ref>] <text> | screenshot [<file>] | ...   the user's own browser (walnut browser for all actions)
   walnut --help | walnut tools --help
 

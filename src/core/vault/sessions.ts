@@ -3,8 +3,10 @@
  * "Unlocking"). The master password (as its password key) buys a vault session
  * token; every item read or write through the API carries it in
  * `x-walnut-vault-session`. Sessions live in memory only, so a restart locks
- * every client. A session ends after `idleMinutes` without use (the client's
- * auto-lock), after MAX_SESSION_HOURS whatever happens, or on Lock.
+ * every client. A session ends after its idle time without use and after its length whatever
+ * happens (unlock-length.ts: the person's "Keep Passwords unlocked" choice; a plain number of
+ * idle minutes keeps the old rule, MAX_SESSION_HOURS at most), or on Lock. "Until restart"
+ * and "forever" sessions have neither clock.
  *
  * Wrong passwords are slowed down per server: after FREE_FAILURES in a row, each
  * further try waits twice as long as the last (30 s up to an hour). Every check of the
@@ -19,7 +21,7 @@ export const MAX_SESSION_HOURS = 12
 const FREE_FAILURES = 5
 
 /** `device`: the paired device whose token opened it (the browser extension, a paired browser); it holds only for that device. */
-interface Session { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number; device?: string }
+interface Session { hash: string; client: string; createdAt: number; lastUsedAt: number; idleMs: number; maxMs: number; device?: string }
 
 const sessions = new Map<string, Session>()
 
@@ -35,7 +37,7 @@ export function onSessionsExpired(cb: (() => void) | null): void {
 }
 
 function expiryOf(s: Session): number {
-  return Math.min(s.lastUsedAt + s.idleMs, s.createdAt + MAX_SESSION_HOURS * 3_600_000)
+  return Math.min(s.lastUsedAt + s.idleMs, s.createdAt + s.maxMs)
 }
 
 function schedule(): void {
@@ -43,6 +45,7 @@ function schedule(): void {
   if (!onExpire || sessions.size === 0) return
   let next = Infinity
   for (const s of sessions.values()) next = Math.min(next, expiryOf(s))
+  if (next === Infinity) return // only sessions with no clock: nothing runs out by itself
   timer = setTimeout(() => {
     timer = null
     const left = liveSessionCount()
@@ -66,17 +69,31 @@ function hashOf(token: string): string {
   return crypto.createHash('sha256').update(`walnut-vault-session\0${token}`).digest('hex')
 }
 
-export function createSession(client: string, idleMinutes: number, device?: string): { token: string; expiresAt: string; idleMinutes: number } {
+/**
+ * A new window unlock. `length`: idle minutes (the old rule: that long unused, MAX_SESSION_HOURS
+ * at most), or the person's choice as limits (unlock-length.ts; Infinity = no such clock).
+ * `expiresAt` is null for a session with no clock.
+ */
+export function createSession(client: string, length: number | { idleMs: number; maxMs: number }, device?: string): { token: string; expiresAt: string | null; idleMinutes: number | null } {
   const token = crypto.randomBytes(32).toString('base64url')
   const now = Date.now()
-  const idle = Math.max(1, Math.min(MAX_SESSION_HOURS * 60, Math.round(idleMinutes || DEFAULT_IDLE_MINUTES)))
-  sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs: idle * 60_000, ...(device ? { device } : {}) })
+  let idleMs: number
+  let maxMs: number
+  if (typeof length === 'number') {
+    idleMs = Math.max(1, Math.min(MAX_SESSION_HOURS * 60, Math.round(length || DEFAULT_IDLE_MINUTES))) * 60_000
+    maxMs = MAX_SESSION_HOURS * 3_600_000
+  } else {
+    idleMs = length.idleMs > 0 ? length.idleMs : DEFAULT_IDLE_MINUTES * 60_000
+    maxMs = length.maxMs > 0 ? length.maxMs : MAX_SESSION_HOURS * 3_600_000
+  }
+  sessions.set(hashOf(token), { hash: hashOf(token), client: client.slice(0, 80), createdAt: now, lastUsedAt: now, idleMs, maxMs, ...(device ? { device } : {}) })
   schedule()
-  return { token, expiresAt: new Date(now + idle * 60_000).toISOString(), idleMinutes: idle }
+  const end = Math.min(now + idleMs, now + maxMs)
+  return { token, expiresAt: Number.isFinite(end) ? new Date(end).toISOString() : null, idleMinutes: Number.isFinite(idleMs) ? Math.round(idleMs / 60_000) : null }
 }
 
 function live(s: Session, now: number): boolean {
-  return now - s.lastUsedAt <= s.idleMs && now - s.createdAt <= MAX_SESSION_HOURS * 3_600_000
+  return now - s.lastUsedAt <= s.idleMs && now - s.createdAt <= s.maxMs
 }
 
 /**

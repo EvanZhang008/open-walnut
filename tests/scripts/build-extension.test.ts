@@ -26,10 +26,13 @@ describe('extension manifests', () => {
     expect(c.version).toMatch(/^\d+(\.\d+){0,3}$/)
   })
 
-  it('asks for storage, alarms, the context menu and web pages, and exposes only the two framed pages', () => {
+  it('asks for storage, alarms, the context menu, downloads, the clipboard, idle and web pages, the debugger only as optional, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', ...(b === 'chrome' ? ['sidePanel'] : [])])
+      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle', ...(b === 'chrome' ? ['sidePanel', 'offscreen'] : [])])
+      // The debugger is never asked at install: only when the person turns real input on (Chrome only).
+      expect(m.permissions).not.toContain('debugger')
+      expect(m.optional_permissions).toEqual(b === 'chrome' ? ['debugger'] : undefined)
       expect(m.host_permissions).toEqual(['<all_urls>'])
       expect(m.web_accessible_resources).toEqual([{ resources: ['menu.html', 'savebar.html'], matches: ['http://*/*', 'https://*/*'] }])
       expect(m.content_scripts[0].all_frames).toBe(true)

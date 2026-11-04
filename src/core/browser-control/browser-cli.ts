@@ -8,19 +8,29 @@ import path from 'node:path'
 
 export const BROWSER_USAGE = [
   'usage: walnut browser status',
-  '       walnut browser tabs',
+  '       walnut browser tabs [--all]                    (--all: every tab of the browser, title and address)',
+  '       walnut browser take <tab>                      (act in one of the person\'s tabs; close gives it back)',
   '       walnut browser open <url>',
   '       walnut browser navigate <url> [--tab N]      (also: go)',
   '       walnut browser back | close [--tab N]',
-  '       walnut browser snapshot | text [--tab N]',
-  '       walnut browser click <ref> | --at X,Y [--tab N]',
-  '       walnut browser type [<ref>] <text> [--clear] [--submit] [--tab N]',
+  '       walnut browser snapshot | text | form-values [--tab N]',
+  '       walnut browser find <text> [--exact] [--role R] [--limit N] [--tab N]',
+  '       walnut browser click <ref> | --at X,Y [--trusted] [--tab N]',
+  '       walnut browser hover <ref> | --at X,Y [--trusted] [--tab N]',
+  '       walnut browser type [<ref>] <text> [--clear] [--submit] [--trusted] [--tab N]',
+  '       walnut browser fill-form <ref-or-label>=<value> ... [--tab N]',
   '       walnut browser select <ref> <value> [--tab N]',
-  '       walnut browser press <key> [--tab N]',
-  '       walnut browser scroll [up|down|<ref>] [--amount N] [--tab N]',
-  '       walnut browser wait <text> | --ms N [--tab N]',
-  '       walnut browser screenshot [<file>] [--tab N]   (default: a file in $WALNUT_TASK_DIR/shots)',
-  '  --json prints the whole result. A site agents have not used yet waits for the person to approve it only when they chose "Ask me first" in Settings.',
+  '       walnut browser press <key> [--trusted] [--tab N]',
+  '       walnut browser scroll [up|down|left|right|top|bottom|<ref>] [--amount N | --by PX] [--tab N]',
+  '       walnut browser wait <text> | --gone <text> | --url <part or /regex/> | --ms N [--tab N]',
+  '       walnut browser screenshot [<file>] [--full] [--tab N]   (default: a file in $WALNUT_TASK_DIR/shots)',
+  '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
+  '       walnut browser downloads [--wait] [--ms N]',
+  '       walnut browser fill-login [--item <id|name>] [--tab N]   (signs in with the saved login; you never see the password)',
+  '       walnut browser dialog accept|dismiss [--text T] [--tab N]   (real input)',
+  '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
+  '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
+  '  person only when they chose "Ask me first" in Settings. Real input (--trusted, dialog, evaluate) needs the person to turn it on in the extension.',
   'Exit: 0 done; 1 refused (the person said no, not your tab); 2 no answer in time; 3 an error.',
 ].join('\n')
 
@@ -37,10 +47,12 @@ export interface BrowserIo {
 }
 
 export type ParsedBrowser =
-  | { ok: true; op: 'browser' | 'browser_status'; args: Record<string, unknown>; json: boolean; file?: string }
+  | { ok: true; op: 'browser' | 'browser_status'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[] }
   | { ok: false; error: string }
 
-const REFS = /^e\d+$/
+const REFS = /^(f\d+:)?e\d+$/
+/** What an upload may carry in all: the server's own cap (act-args.ts), kept apart so the CLI loads no server code. */
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   const words: string[] = []
@@ -57,6 +69,23 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--amount') args.amount = Number(val())
       else if (w === '--ms') args.ms = Number(val())
       else if (w === '--device') args.device = val()
+      else if (w === '--all') args.all = true
+      else if (w === '--full') args.full = true
+      else if (w === '--exact') args.exact = true
+      else if (w === '--trusted') args.trusted = true
+      else if (w === '--wait') args.wait = true
+      else if (w === '--role') args.role = val()
+      else if (w === '--limit') args.limit = Number(val())
+      else if (w === '--by') args.by = Number(val())
+      else if (w === '--gone') args.textGone = val()
+      else if (w === '--url') args.url = val()
+      else if (w === '--text') args.dialogText = val()
+      else if (w === '--item') args.item = val()
+      else if (w === '--ref') args.ref = val()
+      else if (w === '--file' || w === '--path') {
+        const key = w === '--file' ? 'files' : 'paths'
+        args[key] = [...((args[key] as string[] | undefined) ?? []), val()]
+      }
       else if (w === '--at') {
         const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(val())
         if (!m) return { ok: false, error: '--at takes X,Y' }
@@ -73,6 +102,46 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'status': return { ok: true, op: 'browser_status', args: {}, json }
       case 'tabs': case 'back': case 'close': case 'snapshot': case 'text':
         return { ok: true, op: 'browser', args: { action: verb, ...args }, json }
+      case 'form-values': case 'form_values': return { ok: true, op: 'browser', args: { action: 'form_values', ...args }, json }
+      case 'downloads': return { ok: true, op: 'browser', args: { action: 'downloads', ...args }, json }
+      case 'fill-login': case 'fill_login': return { ok: true, op: 'browser', args: { action: 'fill_login', ...args }, json }
+      case 'take': {
+        const n = Number(rest[0] ?? args.tab)
+        if (!Number.isInteger(n)) return { ok: false, error: 'take needs a tab id (tabs --all lists them)' }
+        return { ok: true, op: 'browser', args: { action: 'take', ...args, tab: n }, json }
+      }
+      case 'find':
+        if (!rest.length) return { ok: false, error: 'find needs the text' }
+        return { ok: true, op: 'browser', args: { action: 'find', text: rest.join(' '), ...args }, json }
+      case 'hover':
+        if (args.x === undefined && !rest[0] && !args.ref) return { ok: false, error: 'hover needs a ref (e12) or --at X,Y' }
+        return { ok: true, op: 'browser', args: { action: 'hover', ...(rest[0] ? { ref: rest[0] } : {}), ...args }, json }
+      case 'fill-form': case 'fill_form': {
+        const fields = rest.map((pair) => {
+          const i = pair.indexOf('=')
+          if (i <= 0) throw new Error(`fill-form takes <ref-or-label>=<value>, not "${pair}"`)
+          const k = pair.slice(0, i)
+          return { ...(REFS.test(k) ? { ref: k } : { label: k }), value: pair.slice(i + 1) }
+        })
+        if (!fields.length) return { ok: false, error: 'fill-form needs <ref-or-label>=<value> pairs' }
+        return { ok: true, op: 'browser', args: { action: 'fill_form', fields, ...args }, json }
+      }
+      case 'upload': {
+        const ref = typeof args.ref === 'string' ? args.ref : rest[0]
+        const files = [...(typeof args.ref === 'string' ? rest : rest.slice(1)), ...((args.files as string[] | undefined) ?? [])]
+        const { files: _f, ...a } = args
+        if (!ref || !REFS.test(ref)) return { ok: false, error: 'upload needs the ref of the file field (e5)' }
+        if (!files.length && !a.paths) return { ok: false, error: 'upload needs a file' }
+        return { ok: true, op: 'browser', args: { action: 'upload', ...a, ref }, json, ...(files.length ? { upload: files } : {}) }
+      }
+      case 'dialog': {
+        if (rest[0] !== 'accept' && rest[0] !== 'dismiss') return { ok: false, error: 'dialog takes accept or dismiss' }
+        const { dialogText, ...a } = args
+        return { ok: true, op: 'browser', args: { action: 'dialog', accept: rest[0] === 'accept', ...(typeof dialogText === 'string' ? { text: dialogText } : {}), ...a }, json }
+      }
+      case 'evaluate': case 'eval':
+        if (!rest.length) return { ok: false, error: 'evaluate needs an expression' }
+        return { ok: true, op: 'browser', args: { action: 'evaluate', expression: rest.join(' '), ...args }, json }
       case 'open': return { ok: true, op: 'browser', args: { action: 'open', url: one('a URL'), ...args }, json }
       case 'navigate': case 'go': return { ok: true, op: 'browser', args: { action: 'navigate', url: one('a URL'), ...args }, json }
       case 'click':
@@ -90,12 +159,13 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       case 'press': return { ok: true, op: 'browser', args: { action: 'press', key: one('a key'), ...args }, json }
       case 'scroll': {
         const a: Record<string, unknown> = { action: 'scroll', ...args }
-        if (rest[0] === 'up' || rest[0] === 'down') a.direction = rest[0]
+        if (['up', 'down', 'left', 'right'].includes(rest[0])) a.direction = rest[0]
+        else if (rest[0] === 'top' || rest[0] === 'bottom') a.to = rest[0]
         else if (rest[0]) a.ref = rest[0]
         return { ok: true, op: 'browser', args: a, json }
       }
       case 'wait':
-        if (!rest.length && args.ms === undefined) return { ok: false, error: 'wait needs text or --ms N' }
+        if (!rest.length && args.ms === undefined && args.textGone === undefined && args.url === undefined) return { ok: false, error: 'wait needs text, --gone, --url or --ms N' }
         return { ok: true, op: 'browser', args: { action: 'wait', ...(rest.length ? { text: rest.join(' ') } : {}), ...args }, json }
       case 'screenshot': return { ok: true, op: 'browser', args: { action: 'screenshot', inline: true, ...args }, json, ...(rest[0] ? { file: rest[0] } : {}) }
     }
@@ -103,7 +173,29 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab'])
+const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site'])
+
+const MIME: Record<string, string> = {
+  '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.txt': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.html': 'text/html', '.zip': 'application/zip',
+  '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.md': 'text/markdown', '.svg': 'image/svg+xml',
+}
+
+/** The files of an upload, read here (the CLI runs where the agent works) and sent as base64. */
+function readUpload(paths: string[], cwd: string): { files: Array<{ name: string; type: string; base64: string }> } | { error: string } {
+  const files: Array<{ name: string; type: string; base64: string }> = []
+  let total = 0
+  for (const p of paths) {
+    const file = path.resolve(cwd, p)
+    let buf: Buffer
+    try { buf = fs.readFileSync(file) } catch (err) { return { error: `cannot read ${p}: ${(err as Error).message}` } }
+    total += buf.length
+    if (total > UPLOAD_MAX_BYTES) return { error: `the files come to more than ${UPLOAD_MAX_BYTES / 1024 / 1024} MB` }
+    files.push({ name: path.basename(file), type: MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream', base64: buf.toString('base64') })
+  }
+  return { files }
+}
 
 /** Where a screenshot goes when no file is named. */
 function defaultShot(io: BrowserIo): string {
@@ -114,15 +206,24 @@ function defaultShot(io: BrowserIo): string {
 export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: BrowserIo): Promise<number> {
   const deadline = (io.now?.() ?? Date.now()) + 10 * 60_000
   let told = false
+  let request: string | undefined
+  let upload: Record<string, unknown> = {}
+  if (p.upload?.length) {
+    const u = readUpload(p.upload, io.cwd)
+    if ('error' in u) { io.say(`walnut browser: ${u.error}`); return BROWSER_EXIT.error }
+    upload = { files: u.files }
+  }
   for (;;) {
-    const r = await io.call(p.op, { ...p.args, ...(told ? { wait_ms: 25_000 } : {}) })
+    const r = await io.call(p.op, { ...p.args, ...upload, ...(told ? { wait_ms: 25_000 } : {}), ...(request ? { request } : {}) })
     if (!r.ok) {
       io.say(`walnut browser: ${r.message ?? 'failed'}`)
       return r.code && REFUSED.has(r.code) ? BROWSER_EXIT.refused : r.code === 'browser_timeout' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
     }
     const body = (r.result ?? {}) as Record<string, unknown>
     if (body.status === 'needs_ok') {
-      if (!told) io.say(`Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone)...`)
+      // A sign-in waits on its own ask: the next calls name it.
+      if (typeof body.request === 'string') request = body.request
+      if (!told) io.say(request ? `Waiting for the person to approve the sign-in (a notification on their Mac and phone)...` : `Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone)...`)
       told = true
       if ((io.now?.() ?? Date.now()) > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
       continue
@@ -155,9 +256,24 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
     ].join('\n')
   }
   if (action === 'tabs') {
-    const tabs = (b.tabs as Array<{ id: number; url?: string; title?: string; active?: boolean }> | undefined) ?? []
+    const tabs = (b.tabs as Array<{ id: number; url?: string; title?: string; active?: boolean; owner?: string }> | undefined) ?? []
+    if (b.all) return tabs.map((t) => `${t.id}  [${t.owner ?? 'person'}${t.active ? ', on screen' : ''}]  ${t.title ?? ''}  ${t.url ?? ''}`).join('\n') || 'No tabs.'
     return tabs.length ? tabs.map((t) => `${t.id}  ${t.title ?? ''}  ${t.url ?? ''}`).join('\n') : 'No tab of this task (open one).'
   }
+  if (action === 'find') {
+    const m = (b.matches as Array<{ ref: string; role: string; name: string; text: string }> | undefined) ?? []
+    return m.length ? m.map((x) => `[${x.ref}] ${x.role} "${x.name}"${x.text && x.text !== x.name ? `  ${x.text}` : ''}`).join('\n') : 'Nothing found.'
+  }
+  if (action === 'form_values') {
+    const f = (b.fields as Array<{ ref: string; label: string; type: string; value: string; checked?: boolean; name?: string }> | undefined) ?? []
+    return f.length ? f.map((x) => `[${x.ref}] ${x.type} "${x.label}"${x.name ? ` name=${x.name}` : ''}${x.checked !== undefined ? (x.checked ? ' checked' : ' unchecked') : ` = "${x.value}"`}`).join('\n') : 'No fields.'
+  }
+  if (action === 'downloads') {
+    const d = (b.downloads as Array<{ filename: string; state: string; bytes: number; url: string }> | undefined) ?? []
+    const f = b.finished as { filename?: string } | undefined
+    return `${f ? `Finished: ${f.filename}\n` : ''}${d.map((x) => `${x.state}  ${x.bytes} bytes  ${x.filename || x.url}`).join('\n') || 'No downloads of this task.'}`
+  }
+  if (action === 'evaluate') return b.json !== undefined ? String(b.json) : JSON.stringify(b.value)
   if (action === 'snapshot') return typeof b.snapshot === 'string' ? b.snapshot : JSON.stringify(b)
   if (action === 'text') return typeof b.text === 'string' ? b.text : ''
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')

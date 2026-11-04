@@ -100,19 +100,19 @@ describe('vault writes', () => {
     const body = JSON.parse(fs.readFileSync(file, 'utf8'))
     body.data.ct = Buffer.from('sealed under a key that is gone').toString('base64')
     fs.writeFileSync(file, JSON.stringify(body))
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+    expect(await readPolicy()).toMatchObject({ agents: 'allow' })
     await writePolicy({ agents: 'off' })
     expect(fs.existsSync(`${file}.next`)).toBe(false)
-    expect(await readPolicy()).toEqual({ agents: 'off' })
+    expect(await readPolicy()).toMatchObject({ agents: 'off' })
   })
 
   it('side files survive a rekey (agents-while-away off, a new master password)', async () => {
     await writePolicy({ agents: 'allow' })
     await setAgentsWhileAway(false, pwKey)
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+    expect(await readPolicy()).toMatchObject({ agents: 'allow' })
     expect(fs.readdirSync(dir).filter((n) => n.endsWith('.next'))).toEqual([])
     await reopen()
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+    expect(await readPolicy()).toMatchObject({ agents: 'allow' })
   })
 
   it('a machine key that no longer opens the vault is not fatal: the password still opens it', async () => {

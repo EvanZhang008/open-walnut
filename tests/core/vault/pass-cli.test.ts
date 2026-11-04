@@ -61,7 +61,9 @@ describe('pass runs', () => {
     if (!p.ok) throw new Error(p.error)
     expect(await runPass(p, t.io)).toBe(PASS_EXIT.ok)
     expect(t.out()).toBe('kT7-fake-Pass\n')
-    expect(t.calls[0]).toMatchObject({ name: 'password_use', args: { item: 'GitHub', fields: ['password'], purpose: 'push the fix', scope: 'once' } })
+    // An explicit reveal; no scope, so an approval covers the task for the person's grant length.
+    expect(t.calls[0]).toMatchObject({ name: 'password_use', args: { item: 'GitHub', fields: ['password'], purpose: 'push the fix', use: 'reveal' } })
+    expect(t.calls[0].args).not.toHaveProperty('scope')
   })
 
   it('waits for the person, then goes on; a denial exits 1', async () => {

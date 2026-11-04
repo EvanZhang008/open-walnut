@@ -3,8 +3,15 @@
  * and the hosts' CLI (providers/wn-cli.ts), which differ only in how they call an op.
  *
  *   walnut pass list [words] [--site <url>] [--json]
- *   walnut pass get <item> --purpose "<why>" [--field password|username|totp|<name>]... [--task] [--json]
- *   walnut pass run --purpose "<why>" --env NAME=<item>[:field] [--env <item>]... [--task] -- <command> [args...]
+ *   walnut pass get <item> --purpose "<why>" [--field password|username|totp|<name>]... [--once] [--json]
+ *   walnut pass run --purpose "<why>" --env NAME=<item>[:field] [--env <item>]... [--once] -- <command> [args...]
+ *   walnut pass sync-bitwarden [--json]
+ *
+ * An approval covers this task for the person's grant length (`--once`: this use only; `--task`
+ * is the default now and kept for older scripts). `get` reveals the plaintext (logged so);
+ * `run` never shows it. `sync-bitwarden` asks Walnut to run the Bitwarden sync now (Walnut runs
+ * `bw` itself, bitwarden-run.ts); it takes no export: only a person's unlocked window may hand
+ * Walnut export text.
  *
  * `run` gives the command its secrets as environment variables and replaces every one of them
  * in what the command prints with ********, so a secret reaches the command and never the
@@ -18,8 +25,9 @@ export const PASS_EXIT = { ok: 0, denied: 1, timeout: 2, error: 3, interrupted: 
 
 export const PASS_USAGE = [
   'usage: walnut pass list [words] [--site <url>] [--json]',
-  '       walnut pass get <item> --purpose "<why>" [--field <name>]... [--task] [--json]',
-  '       walnut pass run --purpose "<why>" --env NAME=<item>[:field] [--env <item>]... [--task] -- <command> [args...]',
+  '       walnut pass get <item> --purpose "<why>" [--field <name>]... [--once] [--json]',
+  '       walnut pass run --purpose "<why>" --env NAME=<item>[:field] [--env <item>]... [--once] -- <command> [args...]',
+  '       walnut pass sync-bitwarden [--json]   (Walnut runs bw itself; nothing on stdin)',
   '',
   'Exit: 0 ok; before the command runs, 1 refused or denied, 2 no answer in time, 3 an error,',
   '130 interrupted. Once it runs, run exits with the command\'s own code (128+n for signal n).',
@@ -49,8 +57,9 @@ export interface EnvSpec { name?: string; item: string; field?: string }
 
 export type ParsedPass =
   | { ok: true; kind: 'list'; query?: string; site?: string; json: boolean }
-  | { ok: true; kind: 'get'; item: string; fields: string[]; purpose: string; task: boolean; json: boolean }
-  | { ok: true; kind: 'run'; env: EnvSpec[]; purpose: string; task: boolean; cmd: string; args: string[] }
+  | { ok: true; kind: 'get'; item: string; fields: string[]; purpose: string; task: boolean; once?: boolean; json: boolean }
+  | { ok: true; kind: 'run'; env: EnvSpec[]; purpose: string; task: boolean; once?: boolean; cmd: string; args: string[] }
+  | { ok: true; kind: 'sync-bitwarden'; json: boolean }
   | { ok: false; error: string }
 
 /** `NAME=item:field`, `NAME=item`, `item` (an API key's own env var). A colon inside an item name needs the NAME= form and :field. */
@@ -67,6 +76,11 @@ export function parseEnvSpec(raw: string): EnvSpec | null {
 
 export function parsePassArgv(argv: readonly string[]): ParsedPass {
   const [sub, ...rest] = argv
+  if (sub === 'sync-bitwarden') {
+    const bad = rest.find((a) => a !== '--json')
+    if (bad) return { ok: false, error: `unknown option ${bad}` }
+    return { ok: true, kind: 'sync-bitwarden', json: rest.includes('--json') }
+  }
   if (sub !== 'list' && sub !== 'get' && sub !== 'run') return { ok: false, error: sub ? `unknown command: pass ${sub}` : 'missing command' }
   const words: string[] = []
   const fields: string[] = []
@@ -74,6 +88,7 @@ export function parsePassArgv(argv: readonly string[]): ParsedPass {
   let purpose = ''
   let site: string | undefined
   let task = false
+  let once = false
   let json = false
   let i = 0
   for (; i < rest.length; i++) {
@@ -87,6 +102,7 @@ export function parsePassArgv(argv: readonly string[]): ParsedPass {
       else if (a === '--site') site = val()
       else if (a === '--env' || a === '-e') { const e = parseEnvSpec(val()); if (!e) return { ok: false, error: 'empty --env' }; env.push(e) }
       else if (a === '--task') task = true
+      else if (a === '--once') once = true
       else if (a === '--json') json = true
       else if (a.startsWith('-')) return { ok: false, error: `unknown option ${a}` }
       else if (sub === 'run') return { ok: false, error: 'put the command after --' }
@@ -99,12 +115,12 @@ export function parsePassArgv(argv: readonly string[]): ParsedPass {
   if (purpose.trim().length < 4) return { ok: false, error: '--purpose "<why>" is required: the person reads it before approving' }
   if (sub === 'get') {
     if (words.length !== 1) return { ok: false, error: 'name one item (quote a name with spaces)' }
-    return { ok: true, kind: 'get', item: words[0], fields: fields.length ? fields : ['password'], purpose, task, json }
+    return { ok: true, kind: 'get', item: words[0], fields: fields.length ? fields : ['password'], purpose, task, ...(once ? { once } : {}), json }
   }
   const cmd = rest[i]
   if (!cmd) return { ok: false, error: 'missing the command after --' }
   if (!env.length) return { ok: false, error: 'give at least one --env NAME=<item>' }
-  return { ok: true, kind: 'run', env, purpose, task, cmd, args: rest.slice(i + 1) }
+  return { ok: true, kind: 'run', env, purpose, task, ...(once ? { once } : {}), cmd, args: rest.slice(i + 1) }
 }
 
 interface Released { item: { id: string; title: string; envName?: string }; values: Record<string, string> }
@@ -114,10 +130,12 @@ function errLine(r: OpResult): string {
 }
 
 /** One password_use, waiting for the person when it asks; null when it was not released. */
-async function useItem(io: PassIo, args: { item: string; fields: string[]; purpose: string; task: boolean; command?: string }, stop: { interrupted: boolean; wake: Promise<null> }): Promise<{ released?: Released; exit?: number }> {
+async function useItem(io: PassIo, args: { item: string; fields: string[]; purpose: string; task: boolean; once?: boolean; use: 'reveal' | 'env'; command?: string }, stop: { interrupted: boolean; wake: Promise<null> }): Promise<{ released?: Released; exit?: number }> {
   const sleep = io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const first = await io.call('password_use', {
-    item: args.item, fields: args.fields, purpose: args.purpose, scope: args.task ? 'task' : 'once',
+    item: args.item, fields: args.fields, purpose: args.purpose, use: args.use,
+    // Absent: an approval covers this task for the person's grant length.
+    ...(args.once ? { scope: 'once' } : args.task ? { scope: 'task' } : {}),
     ...(io.cwd ? { cwd: io.cwd } : {}), ...(args.command ? { command: args.command } : {}),
   })
   if (!first.ok) {
@@ -176,6 +194,17 @@ export async function runPass(p: Exclude<ParsedPass, { ok: false }>, io: PassIo)
     return PASS_EXIT.ok
   }
 
+  if (p.kind === 'sync-bitwarden') {
+    // Walnut runs bw itself; stdin is never read, so a piped export goes nowhere.
+    const r = await io.call('password_sync_bitwarden', {})
+    if (!r.ok) { io.say(`walnut pass: ${errLine(r)}`); return exitFor(r.code) }
+    const b = (r.result ?? {}) as { summary?: string; report?: { ok?: boolean; error?: string } }
+    if (p.json) io.out(JSON.stringify(b.report ?? null) + '\n')
+    else if (b.report && b.report.ok === false) { io.say(`walnut pass: Bitwarden not synced: ${b.report.error ?? 'unknown'}`); return PASS_EXIT.error }
+    else io.out(`Synced from Bitwarden: ${b.summary ?? 'done'}\n`)
+    return b.report && b.report.ok === false ? PASS_EXIT.error : PASS_EXIT.ok
+  }
+
   let interrupted = false
   let wakeFn: () => void = () => undefined
   const wake = new Promise<null>((resolve) => { wakeFn = () => resolve(null) })
@@ -183,7 +212,7 @@ export async function runPass(p: Exclude<ParsedPass, { ok: false }>, io: PassIo)
   const off = io.onInterrupt?.(() => { interrupted = true; wakeFn() })
   try {
     if (p.kind === 'get') {
-      const r = await useItem(io, { item: p.item, fields: p.fields, purpose: p.purpose, task: p.task }, stop)
+      const r = await useItem(io, { item: p.item, fields: p.fields, purpose: p.purpose, task: p.task, once: p.once, use: 'reveal' }, stop)
       if (!r.released) return r.exit ?? PASS_EXIT.error
       if (p.json) io.out(JSON.stringify(r.released.values) + '\n')
       else io.out(p.fields.map((f) => r.released!.values[f]).join('\n') + '\n')
@@ -202,7 +231,7 @@ export async function runPass(p: Exclude<ParsedPass, { ok: false }>, io: PassIo)
     const secrets: string[] = []
     const command = [p.cmd, ...p.args].join(' ').slice(0, 200)
     for (const [item, g] of byItem) {
-      const r = await useItem(io, { item, fields: [...g.fields], purpose: p.purpose, task: p.task, command }, stop)
+      const r = await useItem(io, { item, fields: [...g.fields], purpose: p.purpose, task: p.task, once: p.once, use: 'env', command }, stop)
       if (!r.released) return r.exit ?? PASS_EXIT.error
       for (const s of g.specs) {
         const name = s.name ?? r.released.item.envName

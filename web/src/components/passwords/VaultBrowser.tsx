@@ -21,6 +21,7 @@ import { ItemEditor } from './ItemEditor'
 import { ImportDialog } from './ImportDialog'
 import { GeneratorPanel } from './GeneratorPanel'
 import { AgentActivity } from './AgentActivity'
+import { RecentAgentUse } from './RecentAgentUse'
 import {
   GridIcon, StarIcon, UserKeyIcon, ClockIcon, CodeIcon, NoteIcon, CardIcon, ShieldIcon, TrashIcon, PlusIcon, SearchIcon,
   LockIcon, ImportIcon, DiceIcon, KeyIcon, RobotIcon,
@@ -159,20 +160,23 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
     })
   }, [selectedId, section, onLocked, setSelectedId])
 
-  // Auto-lock: after the configured minutes with no key or pointer in this page.
+  // Auto-lock: after the configured minutes with no key or pointer in this page. A length with no
+  // idle lock (1 h, 12 h, 48 h, until restart, forever) is ended by the server, never here.
+  const idleMinutes = status.unlockFor ? status.lockAfterIdleMinutes ?? null : status.autoLockMinutes
   useEffect(() => {
+    if (!idleMinutes) return
     let last = Date.now()
     const touch = () => { last = Date.now() }
     const t = window.setInterval(() => {
-      if (Date.now() - last > status.autoLockMinutes * 60_000) {
-        log.info('passwords', 'auto-lock after idle', { minutes: status.autoLockMinutes })
+      if (Date.now() - last > idleMinutes * 60_000) {
+        log.info('passwords', 'auto-lock after idle', { minutes: idleMinutes })
         void vaultApi.lock().finally(onLocked)
       }
     }, 15_000)
     window.addEventListener('pointerdown', touch, true)
     window.addEventListener('keydown', touch, true)
     return () => { window.clearInterval(t); window.removeEventListener('pointerdown', touch, true); window.removeEventListener('keydown', touch, true) }
-  }, [status.autoLockMinutes, onLocked])
+  }, [idleMinutes, onLocked])
 
   const counts = useMemo(() => sectionCounts(items ?? []), [items])
   const shownItems = useMemo(() => sortItems((items ?? []).filter((i) => inSection(i, section) && matchesQuery(i, query)), sort), [items, section, query, sort])
@@ -269,6 +273,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
           <div className="pw-detail pw-empty">
             <KeyIcon size={40} />
             <p>{items?.length ? 'Pick an item to see it.' : 'Your vault is empty.'}</p>
+            {!!items?.length && <RecentAgentUse onSeeAll={() => pickSection('agents')} />}
             {!items?.length && (
               <div className="pw-gate-actions-row">
                 <button type="button" className="pw-btn pw-btn-primary" onClick={() => setEditing({ kind: 'new', type: 'login' })}><PlusIcon size={15} /> New login</button>

@@ -26,10 +26,10 @@ export async function toPage<T = Record<string, unknown>>(tabId: number, msg: Re
   }
 }
 
-/** The page's own word on what it is: Walnut, and the address of the document now loaded. */
-export async function pageCheck(tabId: number, ms = 4000): Promise<{ walnut: boolean; href: string } | null> {
-  const r = await toPage<{ ok?: boolean; walnut?: boolean; href?: string }>(tabId, { type: 'agent-check' }, ms)
-  return r?.ok ? { walnut: r.walnut === true, href: String(r.href ?? '') } : null
+/** The page's own word on what it is: Walnut, the address of the document now loaded, and that document's id (a new load, a new id). */
+export async function pageCheck(tabId: number, ms = 4000): Promise<{ walnut: boolean; href: string; doc?: string } | null> {
+  const r = await toPage<{ ok?: boolean; walnut?: boolean; href?: string; doc?: string }>(tabId, { type: 'agent-check' }, ms)
+  return r?.ok ? { walnut: r.walnut === true, href: String(r.href ?? ''), ...(typeof r.doc === 'string' && r.doc ? { doc: r.doc } : {}) } : null
 }
 
 /**
@@ -78,7 +78,7 @@ const UNREACHABLE_MS = 10_000
  * the browser discarded comes back the same way when they click it).
  * `quick`: a tab that failed in the last few seconds fails at once (the side panel's refresh).
  */
-export async function reachPage(tabId: number, wake = true, opts: { deadlineMs?: number; quick?: boolean } = {}): Promise<{ ok: true; walnut: boolean; href: string } | { ok: false; why: ReachError }> {
+export async function reachPage(tabId: number, wake = true, opts: { deadlineMs?: number; quick?: boolean } = {}): Promise<{ ok: true; walnut: boolean; href: string; doc?: string } | { ok: false; why: ReachError }> {
   const end = Date.now() + (opts.deadlineMs ?? 8000)
   const left = () => end - Date.now()
   const fail = (why: ReachError) => { if (why === 'no_script') unreachable.set(tabId, Date.now()); return { ok: false as const, why } }

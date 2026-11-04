@@ -4,7 +4,8 @@
  *
  * Formats (column names as each product exports them):
  *  - Bitwarden JSON (unencrypted): logins (URIs, TOTP, custom fields, passkeys kept),
- *    notes, cards; folders become tags; `reprompt` becomes sensitive.
+ *    notes, cards, identities (as custom fields); folders become tags; `reprompt` becomes
+ *    sensitive. parseBitwardenExport keeps each item's Bitwarden id (bitwarden-sync.ts).
  *  - Bitwarden CSV: folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
  *  - 1Password CSV: Title,Website,Username,Password,One-time password,Favorite,Archived,Tags,Notes
  *  - Apple Passwords CSV: Title,URL,Username,Password,Notes,OTPAuth
@@ -30,6 +31,8 @@ export interface ImportResult {
   items: VaultItemInput[]
   skipped: Array<{ row: number; title?: string; reason: string }>
   passkeys: number
+  /** Bitwarden JSON: each item's own id and revision, beside `items` (same order), for a later sync to adopt. */
+  sources?: Array<{ id?: string; revisionDate?: string }>
 }
 
 export class ImportError extends Error {
@@ -184,22 +187,48 @@ function fromCsv(format: Exclude<ImportFormat, 'bitwarden_json'>, text: string):
 
 interface BwField { name?: string; value?: string; type?: number }
 interface BwItem {
+  id?: string; revisionDate?: string
   type?: number; name?: string; notes?: string; favorite?: boolean; folderId?: string | null; reprompt?: number
   fields?: BwField[]
   login?: { uris?: Array<{ uri?: string }>; username?: string; password?: string; totp?: string; fido2Credentials?: Array<Record<string, unknown>> }
   card?: { cardholderName?: string; brand?: string; number?: string; expMonth?: string; expYear?: string; code?: string }
+  identity?: Record<string, string | null | undefined>
 }
 
-function fromBitwardenJson(text: string): ImportResult {
+/** One item of a Bitwarden JSON export: its own id and revision (sync uses them), and what Walnut makes of it. */
+export interface BitwardenEntry {
+  row: number
+  /** Bitwarden's item id (absent in a hand-made file). */
+  id?: string
+  revisionDate?: string
+  title?: string
+  item?: VaultItemInput
+  /** Why it was not taken (an SSH key, an unknown type). */
+  skip?: string
+  passkeys: number
+}
+
+/** The identity fields Bitwarden exports, as Walnut custom fields, in this order. */
+const IDENTITY_FIELDS: Array<[string, string]> = [
+  ['title', 'Title'], ['firstName', 'First name'], ['middleName', 'Middle name'], ['lastName', 'Last name'],
+  ['username', 'Username'], ['company', 'Company'], ['email', 'Email'], ['phone', 'Phone'],
+  ['address1', 'Address 1'], ['address2', 'Address 2'], ['address3', 'Address 3'], ['city', 'City'], ['state', 'State'],
+  ['postalCode', 'Postal code'], ['country', 'Country'], ['ssn', 'Social security number'], ['passportNumber', 'Passport number'], ['licenseNumber', 'License number'],
+]
+const IDENTITY_HIDDEN = new Set(['ssn', 'passportNumber', 'licenseNumber'])
+
+/** Parse an unencrypted Bitwarden JSON export into one entry per item (import and sync share it). */
+export function parseBitwardenExport(text: string): BitwardenEntry[] {
   let j: { encrypted?: boolean; folders?: Array<{ id: string; name: string }>; items?: BwItem[] }
   try { j = JSON.parse(text) } catch { throw new ImportError('The file is not valid JSON') }
+  if (!j || typeof j !== 'object') throw new ImportError('The file is not a Bitwarden export')
   if (j.encrypted) throw new ImportError('This is an encrypted Bitwarden export. Export again with "File format: .json" (not encrypted), import it, then delete the file.')
+  if (!Array.isArray(j.items)) throw new ImportError('The file is not a Bitwarden export (no items)')
   const folders = new Map((j.folders ?? []).map((f) => [f.id, f.name]))
-  const items: VaultItemInput[] = []
-  const skipped: ImportResult['skipped'] = []
-  let passkeys = 0
-  ;(j.items ?? []).forEach((it, idx) => {
-    const n = idx + 1
+  return j.items.map((it, idx): BitwardenEntry => {
+    const row = idx + 1
+    const meta = { row, ...(typeof it?.id === 'string' && it.id ? { id: it.id } : {}), ...(typeof it?.revisionDate === 'string' ? { revisionDate: it.revisionDate } : {}), title: clean(it?.name) }
+    if (!it || typeof it !== 'object') return { ...meta, skip: 'not an item', passkeys: 0 }
     const tags = it.folderId && folders.get(it.folderId) ? [folders.get(it.folderId)!] : undefined
     const fields = (it.fields ?? []).filter((f) => f.name && f.type !== 3).map((f) => ({ name: f.name!, value: f.value ?? '', ...(f.type === 1 ? { hidden: true } : {}) }))
     const base = { ...(clean(it.notes) ? { notes: it.notes!.trim() } : {}), ...(it.favorite ? { favorite: true } : {}), ...(tags ? { tags } : {}), ...(fields.length ? { fields } : {}), ...(it.reprompt === 1 ? { sensitive: true } : {}) }
@@ -207,18 +236,34 @@ function fromBitwardenJson(text: string): ImportResult {
       const l = it.login ?? {}
       const item = login({ title: clean(it.name), username: clean(l.username), password: l.password ?? undefined, url: urls(...(l.uris ?? []).map((u) => u.uri)), totp: clean(l.totp) })
       const pk = (l.fido2Credentials ?? []).filter((c) => c && typeof c === 'object')
-      passkeys += pk.length
-      items.push({ ...item, ...base, ...(pk.length ? { passkeys: pk } : {}) })
-    } else if (it.type === 2) {
-      items.push({ type: 'note', title: clean(it.name) ?? 'Untitled note', ...base })
-    } else if (it.type === 3) {
-      const c = it.card ?? {}
-      items.push({ type: 'card', title: clean(it.name) ?? 'Card', card: { holder: clean(c.cardholderName), brand: clean(c.brand), number: clean(c.number), expMonth: clean(c.expMonth), expYear: clean(c.expYear), code: clean(c.code) }, ...base })
-    } else {
-      skipped.push({ row: n, title: clean(it.name), reason: it.type === 4 ? 'identities come in a later version' : it.type === 5 ? 'SSH keys come in a later version' : `unknown item type ${it.type}` })
+      return { ...meta, item: { ...item, ...base, ...(pk.length ? { passkeys: pk } : {}) }, passkeys: pk.length }
     }
+    if (it.type === 2) return { ...meta, item: { type: 'note', title: clean(it.name) ?? 'Untitled note', ...base }, passkeys: 0 }
+    if (it.type === 3) {
+      const c = it.card ?? {}
+      return { ...meta, item: { type: 'card', title: clean(it.name) ?? 'Card', card: { holder: clean(c.cardholderName), brand: clean(c.brand), number: clean(c.number), expMonth: clean(c.expMonth), expYear: clean(c.expYear), code: clean(c.code) }, ...base }, passkeys: 0 }
+    }
+    if (it.type === 4) {
+      const id = it.identity ?? {}
+      const own = IDENTITY_FIELDS.map(([k, label]) => ({ name: label, value: clean(id[k] ?? undefined) ?? '', ...(IDENTITY_HIDDEN.has(k) ? { hidden: true } : {}) })).filter((f) => f.value)
+      const all = [...own, ...(base.fields ?? [])]
+      return { ...meta, item: { type: 'identity', title: clean(it.name) ?? 'Identity', ...base, ...(all.length ? { fields: all } : {}) }, passkeys: 0 }
+    }
+    return { ...meta, skip: it.type === 5 ? 'SSH keys come in a later version' : `unknown item type ${it.type}`, passkeys: 0 }
   })
-  return { format: 'bitwarden_json', items, skipped, passkeys }
+}
+
+function fromBitwardenJson(text: string): ImportResult {
+  const entries = parseBitwardenExport(text)
+  const items: VaultItemInput[] = []
+  const skipped: ImportResult['skipped'] = []
+  let passkeys = 0
+  const sources: Array<{ id?: string; revisionDate?: string }> = []
+  for (const e of entries) {
+    if (e.item) { items.push(e.item); sources.push({ ...(e.id ? { id: e.id } : {}), ...(e.revisionDate ? { revisionDate: e.revisionDate } : {}) }); passkeys += e.passkeys }
+    else skipped.push({ row: e.row, title: e.title, reason: e.skip ?? 'skipped' })
+  }
+  return { format: 'bitwarden_json', items, skipped, passkeys, sources }
 }
 
 export function parseImport(text: string, format?: ImportFormat, fileName?: string): ImportResult {

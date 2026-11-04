@@ -26,7 +26,7 @@ import {
 export { VAULT_FORMAT, VAULT_VERSION, VaultError, closeVault, isOpen, openKey, resetVaultForTest } from './state.js'
 export type { VaultFile } from './state.js'
 export {
-  allItems, cleanInput, createItems, deleteItem, getItem, listItems, markUsed, restoreItem, setFavorite, trashItem, updateItem,
+  allItems, cleanInput, createItems, deleteItem, getItem, listItems, markUsed, patchItem, restoreItem, setFavorite, trashItem, updateItem,
 } from './items.js'
 
 export interface VaultStatus {
@@ -92,7 +92,7 @@ export function defaultKdf(): KdfParams {
 export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agentsWhileAway: boolean }): Promise<{ secretKey: string; recoveryCode: string; vaultId: string }> {
   checkKdf(p.kdf)
   const pw = pwKeyBytes(p.passwordKey)
-  return serial(async () => {
+  const made = await serial(async () => {
     if (await loadFile()) throw new VaultError('A vault is already set up here', 409, 'vault_exists')
     const id = crypto.randomUUID()
     const secretKey = newSecretKey()
@@ -122,6 +122,10 @@ export async function setupVault(p: { passwordKey: string; kdf: KdfParams; agent
     setOpen(key, new Map())
     return { secretKey, recoveryCode, vaultId: id }
   })
+  // A new vault's agent switch is written, never read from a default (policy.ts).
+  const { writeNewVaultPolicy } = await import('./policy.js')
+  await writeNewVaultPolicy()
+  return made
 }
 
 /** Check the master password (as its password key) against the vault; the vault key on success. */

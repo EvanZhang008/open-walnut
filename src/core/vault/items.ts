@@ -10,6 +10,7 @@ import {
   type VaultItem, type VaultItemInput, type VaultItemSummary,
 } from './types.js'
 import { normalizeUrl } from './url-match.js'
+import { mergePasskeys } from './passkey.js'
 
 
 function clip(s: unknown, max: number): string | undefined {
@@ -122,8 +123,9 @@ export async function updateItem(id: string, input: VaultItemInput, expectedUpda
     if (prev.password && prev.password !== clean.password) {
       history = [{ password: prev.password, replacedAt: now }, ...history].slice(0, PASSWORD_HISTORY_MAX)
     }
-    // A client that does not know passkeys (an older one, an agent) never drops them: only an explicit list replaces them.
-    const passkeys = input.passkeys === undefined ? prev.passkeys : clean.passkeys
+    // A client that does not know passkeys (an older one, an agent) never drops them: only an
+    // explicit list removes some. Clients never hold their keys, so each keeps its stored one.
+    const passkeys = Array.isArray(input.passkeys) ? mergePasskeys(prev.passkeys, input.passkeys.slice(0, 50)) : prev.passkeys
     const { passkeys: _p, ...rest } = clean
     const item: VaultItem = {
       ...rest, id, createdAt: prev.createdAt, updatedAt: now,
@@ -138,7 +140,8 @@ export async function updateItem(id: string, input: VaultItemInput, expectedUpda
   })
 }
 
-async function patch(id: string, fn: (it: VaultItem) => VaultItem | null): Promise<VaultItem | null> {
+/** Change one item in place (null deletes it), under the vault's write lock. */
+export async function patchItem(id: string, fn: (it: VaultItem) => VaultItem | null): Promise<VaultItem | null> {
   return mutate(async ({ f, key, items }) => {
     const prev = items.get(id)
     if (!prev) throw new VaultError('No such item', 404, 'not_found')
@@ -155,23 +158,23 @@ async function patch(id: string, fn: (it: VaultItem) => VaultItem | null): Promi
 }
 
 export async function trashItem(id: string): Promise<VaultItem> {
-  return (await patch(id, (it) => ({ ...it, trashedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })))!
+  return (await patchItem(id, (it) => ({ ...it, trashedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })))!
 }
 
 export async function restoreItem(id: string): Promise<VaultItem> {
-  return (await patch(id, (it) => { const { trashedAt: _t, ...rest } = it; return { ...rest, updatedAt: new Date().toISOString() } }))!
+  return (await patchItem(id, (it) => { const { trashedAt: _t, ...rest } = it; return { ...rest, updatedAt: new Date().toISOString() } }))!
 }
 
 /** Delete for good: only from the trash. */
 export async function deleteItem(id: string): Promise<void> {
-  await patch(id, (it) => {
+  await patchItem(id, (it) => {
     if (!it.trashedAt) throw new VaultError('Move the item to the trash first', 409, 'not_in_trash')
     return null
   })
 }
 
 export async function setFavorite(id: string, favorite: boolean): Promise<VaultItem> {
-  return (await patch(id, (it) => {
+  return (await patchItem(id, (it) => {
     const { favorite: _f, ...rest } = it
     return { ...rest, ...(favorite ? { favorite: true } : {}), updatedAt: new Date().toISOString() }
   }))!
@@ -179,5 +182,5 @@ export async function setFavorite(id: string, favorite: boolean): Promise<VaultI
 
 /** Record a fill or copy (no new updatedAt: it is not an edit). */
 export async function markUsed(id: string): Promise<void> {
-  await patch(id, (it) => ({ ...it, usedAt: new Date().toISOString() }))
+  await patchItem(id, (it) => ({ ...it, usedAt: new Date().toISOString() }))
 }

@@ -61,12 +61,12 @@ describe('recovery code', () => {
     expect(next.secretKey).toBe(kit.secretKey)
     expect(next.recoveryCode).not.toBe(kit.recoveryCode)
     expect((await getItem(item.id)).password).toBe('kept-fake-Pass-1')
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+    expect(await readPolicy()).toMatchObject({ agents: 'allow' })
     resetVaultForTest(dir)
     expect(await code(unlockVault({ passwordKey: pwKey }))).toBe('wrong_password')
     await unlockVault({ passwordKey: newPwKey })
     expect((await listItems()).map((i) => i.title)).toEqual(['Kept'])
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+    expect(await readPolicy()).toMatchObject({ agents: 'allow' })
   })
 
   it('a kit reads unsaved until the person confirms it, and again after every new code', async () => {

@@ -22,7 +22,12 @@ export interface VaultStatus {
   hasSecretKey: boolean
   kdf?: KdfParams
   itemCount?: number
+  /** For older clients: minutes; a new client reads unlockFor and lockAfterIdleMinutes. */
   autoLockMinutes: number
+  /** "Keep Passwords unlocked" in effect (src/core/vault/unlock-length.ts); `always` = Forever (the machine key). */
+  unlockFor?: UnlockFor
+  /** Minutes unused before this window locks itself, or null when only the length ends it. */
+  lockAfterIdleMinutes?: number | null
   waitMs: number
   /** Nobody else reads the link to the server (https, this machine, Tailscale). */
   privateLink?: boolean
@@ -38,15 +43,34 @@ export interface RecoveryKit { secretKey: string; recoveryCode: string }
 export interface SecurityReport { weak: string[]; reused: string[][]; old: string[]; insecureUrl: string[] }
 
 export type AgentsSwitch = 'off' | 'ask' | 'allow'
-export interface AgentGrant { asker: string; itemId: string; until: string }
-export interface AgentPolicy { agents: AgentsSwitch; grants: AgentGrant[] }
+export type UnlockFor = 'idle' | '1h' | '12h' | '48h' | 'restart' | 'always'
+/** An approved ask's grant length: 0 once, 1 h, 12 h, 48 h (default), -1 forever (until revoked). */
+export const GRANT_LENGTHS = [0, 3_600_000, 43_200_000, 172_800_000, -1] as const
+export interface AgentGrant {
+  id: string; asker: string; itemId: string; itemTitle?: string
+  /** null: until revoked. */
+  until: string | null
+  grantedAt?: string; fields?: string[]; host?: string; taskId?: string; taskTitle?: string; sessionId?: string; approvedBy?: string
+  /** What the person approved: reveal covers env and fill; fill or env only itself. */
+  use?: 'fill' | 'env' | 'reveal'
+}
+export interface AgentPolicy { agents: AgentsSwitch; grantMs: number; grants: AgentGrant[] }
 export interface AgentLogEntry {
   at: string
-  kind: 'released' | 'asked' | 'denied' | 'refused' | 'expired'
+  kind: 'released' | 'fill' | 'asked' | 'denied' | 'refused' | 'expired' | 'listed' | 'revoked' | 'synced'
   itemId?: string; itemTitle?: string; fields?: string[]; purpose?: string
   via?: 'allow' | 'grant' | 'approval'; reason?: string; approvalId?: string
-  taskId?: string; taskTitle?: string; host?: string; command?: string
+  taskId?: string; taskTitle?: string; sessionId?: string; host?: string; command?: string
+  /** How the value was used: reveal (shown to the agent), env (a command), fill (a browser page), list. */
+  use?: 'reveal' | 'env' | 'fill' | 'list'
+  approvedBy?: string; count?: number; summary?: string
 }
+export interface SyncCounts { added: number; updated: number; trashed: number; conflicts: number; unchanged: number; ambiguous?: number }
+export interface BitwardenSyncReport {
+  at: string; ok: boolean; trigger: string; counts: SyncCounts; byType: Record<string, SyncCounts>
+  bitwarden: Record<string, number>; linked: Record<string, number>; error?: string
+}
+export interface BitwardenSyncStatus { daily: boolean; last: BitwardenSyncReport | null; summary?: string }
 
 export interface ImportReport {
   format: string
@@ -199,7 +223,13 @@ export const vaultApi = {
     call<{ dryRun: boolean; report: ImportReport; added?: number }>('POST', '/vault/import', { text, fileName, dryRun, ...(format ? { format } : {}) }, 120_000),
   agentPolicy: () => call<AgentPolicy>('GET', '/vault/agent/policy'),
   setAgentsSwitch: (agents: AgentsSwitch) => call<AgentPolicy>('PUT', '/vault/agent/policy', { agents }),
+  setGrantLength: (grantMs: number) => call<AgentPolicy>('PUT', '/vault/agent/policy', { grantMs }),
   endAgentGrants: () => call<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
+  revokeGrant: (id: string) => call<{ revoked: AgentGrant }>('POST', `/vault/agent/grants/${encodeURIComponent(id)}/revoke`),
+  bitwardenSync: () => call<BitwardenSyncStatus>('GET', '/vault/sync/bitwarden'),
+  runBitwardenSync: (allowMassTrash = false) => call<{ report: BitwardenSyncReport; summary: string }>('POST', '/vault/sync/bitwarden/run', allowMassTrash ? { allowMassTrash: true } : {}, 400_000),
+  keychain: () => call<{ available: boolean; present: boolean; service: string }>('GET', '/vault/keychain'),
+  removeKeychain: () => call<{ removed: boolean }>('DELETE', '/vault/keychain'),
   agentLog: () => call<{ entries: AgentLogEntry[] }>('GET', '/vault/agent/log').then((r) => r.entries),
 
   /** Turning agents-while-away on or off asks for the master password again; off brings a new recovery kit. */

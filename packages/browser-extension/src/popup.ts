@@ -5,9 +5,13 @@
  * which has the person's click.
  */
 import { ask, ext } from './ext'
-import { avatar, h, icon } from './dom'
+import { avatar, h, icon, totpView } from './dom'
+import { copySecret, errLine, toast } from './popup-ui'
+import { generatorView } from './popup-generator'
+import { settingsView } from './popup-settings'
+import { startClipboardPage } from './clipboard-page'
 
-interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string }
+interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string; sub?: string }
 interface State { connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }
 
 const root = document.getElementById('root')!
@@ -24,7 +28,8 @@ const REVEAL_MS = 20_000
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
 let windowId: number | undefined
-void ext.windows.getCurrent().then((w) => { windowId = w.id }).catch(() => undefined)
+// (The offscreen clipboard document, popup.html?clipboard=1, has no windows API.)
+if (!params.has('clipboard')) void ext.windows.getCurrent().then((w) => { windowId = w.id }).catch(() => undefined)
 
 /** Walnut in the side panel, about the page this window shows. */
 function askButton(): HTMLElement | null {
@@ -39,18 +44,6 @@ function askButton(): HTMLElement | null {
     if (!inWindow) window.close()
   }
   return b as HTMLElement
-}
-
-function toast(text: string): void {
-  let t = document.querySelector<HTMLElement>('.toast')
-  if (!t) { t = h('div', { class: 'toast', role: 'status' }); document.body.append(t) }
-  t.textContent = text
-  t.classList.add('on')
-  setTimeout(() => t!.classList.remove('on'), 1600)
-}
-
-function errLine(text?: string): HTMLElement {
-  return h('p', { class: 'err', role: 'alert' }, text ?? '')
 }
 
 function busy(b: HTMLButtonElement, on: boolean, label?: string): void {
@@ -142,33 +135,52 @@ async function unlockView(st: State): Promise<HTMLElement> {
 
 // ── unlocked ──
 
-async function copy(id: string, field: 'username' | 'password' | 'totp', what: string): Promise<void> {
+async function copy(id: string, field: 'username' | 'password' | 'totp' | 'number' | 'code', what: string): Promise<void> {
   const r = await ask<{ value: string }>({ type: 'copy-secret', id, field })
   if (!r.ok) { toast(r.error ?? 'Could not copy.'); return }
-  await navigator.clipboard.writeText(r.value)
-  toast(`${what} copied`)
+  await copySecret(r.value, what)
 }
 
 async function fillTab(it: Item): Promise<void> {
-  const r = await ask({ type: 'fill-tab', id: it.id, ...(panelWindow ? { windowId: panelWindow } : {}) })
-  if (r.ok) { if (embedded) toast('Filled'); else if (!inWindow) window.close(); return }
-  toast(r.error ?? 'Could not fill.')
+  const r = await ask<{ code?: string }>({ type: 'fill-tab', id: it.id, ...(panelWindow ? { windowId: panelWindow } : {}) })
+  if (!r.ok) { toast(r.error ?? 'Could not fill.'); return }
+  // Its one-time code goes on the clipboard (the background had no clipboard of its own here).
+  if (r.code) await copySecret(r.code, 'Code')
+  if (embedded) { if (!r.code) toast('Filled') } else if (!inWindow) setTimeout(() => window.close(), r.code ? 700 : 0)
 }
 
+/** A login's current one-time code with its countdown; a click copies it. */
+function codeChip(it: Item): HTMLElement {
+  const chip = h('button', { class: 'totp-chip', type: 'button', title: 'Copy one-time code', 'aria-label': 'Copy one-time code', 'data-testid': 'popup-totp' }) as HTMLButtonElement
+  const load = async () => {
+    const t = await ask<{ code: string; period: number; remaining: number }>({ type: 'totp-code', id: it.id })
+    if (!t.ok) { chip.remove(); return }
+    chip.replaceChildren(totpView(t, () => { if (chip.isConnected) void load() }))
+    chip.onclick = (e: Event) => { e.stopPropagation(); void copySecret(t.code, 'Code') }
+  }
+  void load()
+  return chip
+}
+
+const isLogin = (it: Item) => !it.type || it.type === 'login'
+
 function itemRow(it: Item, fillable: boolean): HTMLElement {
+  const card = it.type === 'card'
   const actions = h('div', { class: 'item-actions' },
     it.username ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy username', 'aria-label': 'Copy username', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'username', 'Username') } }, icon('user')) : null,
-    (!it.type || it.type === 'login') ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy password', 'aria-label': 'Copy password', 'data-testid': 'copy-password', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'password', 'Password') } }, icon('copy')) : null,
-    it.hasTotp ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy one-time code', 'aria-label': 'Copy one-time code', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'totp', 'Code') } }, icon('clock')) : null)
-  const sub = h('span', { class: 'row-sub' }, it.username || it.site || '')
+    isLogin(it) || it.type === 'api_key' ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy password', 'aria-label': 'Copy password', 'data-testid': 'copy-password', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'password', 'Password') } }, icon('copy')) : null,
+    card ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy card number', 'aria-label': 'Copy card number', 'data-testid': 'copy-number', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'number', 'Card number') } }, icon('copy')) : null,
+    card ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy security code', 'aria-label': 'Copy security code', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'code', 'Security code') } }, icon('lock')) : null)
+  const subText = it.sub || it.username || it.site || (it.type === 'identity' ? 'Identity' : '')
+  const sub = h('span', { class: 'row-sub' }, subText)
   // In the side panel there is room to show a password; it hides again on the next click.
-  if (embedded && (!it.type || it.type === 'login')) {
+  if (embedded && isLogin(it)) {
     let shown = false
     const eye = h('button', { class: 'icon-btn', type: 'button', title: 'Show password', 'aria-label': 'Show password', 'data-testid': 'reveal-password' }, icon('eye')) as HTMLButtonElement
     let hideTimer: ReturnType<typeof setTimeout> | undefined
     const hide = () => {
       clearTimeout(hideTimer)
-      shown = false; sub.textContent = it.username || it.site || ''; sub.classList.remove('mono'); eye.title = 'Show password'
+      shown = false; sub.textContent = subText; sub.classList.remove('mono'); eye.title = 'Show password'
       document.removeEventListener('visibilitychange', hide)
     }
     eye.onclick = async (e: Event) => {
@@ -186,21 +198,29 @@ function itemRow(it: Item, fillable: boolean): HTMLElement {
     }
     actions.prepend(eye)
   }
-  const row = h('div', { class: 'row item', tabindex: '0', role: 'button', 'data-testid': 'popup-item', title: fillable ? 'Fill on this page' : '' },
-    avatar(it.site ?? it.title),
+  // A card or an identity fills the page's form; a login fills only on its own site.
+  const fills = fillable || it.type === 'card' || it.type === 'identity'
+  const row = h('div', { class: 'row item', tabindex: '0', role: 'button', 'data-testid': 'popup-item', title: fills ? 'Fill on this page' : '' },
+    it.type === 'card' ? h('span', { class: 'avatar', style: 'background:#5b4fa8' }, icon('card')) : it.type === 'identity' ? h('span', { class: 'avatar', style: 'background:#2f7f7a' }, icon('person')) : avatar(it.site ?? it.title),
     h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), sub),
     actions,
-    fillable ? h('span', { class: 'icon-btn', 'aria-hidden': 'true', style: 'color:var(--accent)' }, icon('fill')) : null)
-  const act = () => { if (fillable) void fillTab(it); else void copy(it.id, 'password', 'Password') }
+    it.hasTotp && isLogin(it) ? codeChip(it) : null,
+    fills ? h('span', { class: 'icon-btn', 'aria-hidden': 'true', style: 'color:var(--accent)' }, icon('fill')) : null)
+  const act = () => {
+    if (fills) void fillTab(it)
+    else if (isLogin(it) || it.type === 'api_key') void copy(it.id, 'password', 'Password')
+    else void ask({ type: 'open-walnut' })
+  }
   row.onclick = act
   row.onkeydown = (e) => { if (e.key === 'Enter') act() }
   return row
 }
 
 async function vaultView(st: State): Promise<HTMLElement> {
-  const site = await ask<{ site: string; items: Item[] }>({ type: 'site-items', ...(panelWindow ? { windowId: panelWindow } : {}) })
+  const site = await ask<{ site: string; items: Item[]; insecure?: number }>({ type: 'site-items', ...(panelWindow ? { windowId: panelWindow } : {}) })
   if (!site.ok && (site.code === 'vault_session_needed' || site.code === 'vault_locked')) return unlockView({ ...st, unlocked: false })
   if (!site.ok && site.code && DISCONNECTED.has(site.code)) return connectView({ connected: false, unlocked: false, serverUrl: st.serverUrl })
+  const wallet = await ask<{ cards: Item[]; identities: Item[] }>({ type: 'wallet-items' })
   const q = h('input', { class: 'input', type: 'search', id: 'q', placeholder: 'Search Walnut', 'aria-label': 'Search Walnut', autocomplete: 'off' })
   const list = h('div', { class: 'pane', style: 'padding-top:4px' })
   const siteItems = site.ok ? site.items : []
@@ -210,10 +230,19 @@ async function vaultView(st: State): Promise<HTMLElement> {
     if (site.site) {
       list.append(h('div', { class: 'section-label' }, `For ${site.site}`))
       if (siteItems.length) for (const it of siteItems) list.append(itemRow(it, true))
-      else list.append(h('div', { class: 'empty' }, 'No saved login for this site. Sign in and Walnut offers to save it.'))
+      else if (site.insecure) {
+        // Saved for the https address: this plain http page does not get it, and the person is told why.
+        list.append(h('div', { class: 'notice', 'data-testid': 'popup-insecure' }, icon('warn'),
+          h('span', {}, `This page is not secure (http). Your ${site.insecure === 1 ? 'login is' : `${site.insecure} logins are`} saved for the https address of ${site.site}, so Walnut does not fill ${site.insecure === 1 ? 'it' : 'them'} here.`)))
+      } else list.append(h('div', { class: 'empty' }, 'No saved login for this site. Sign in and Walnut offers to save it.'))
     } else {
       list.append(h('div', { class: 'empty' }, 'Search your vault, or open a site to see its logins here.'))
     }
+    // Cards and identities fill the page's payment or address form.
+    const cards = wallet.ok ? wallet.cards.slice(0, 3) : []
+    const people = wallet.ok ? wallet.identities.slice(0, 3) : []
+    if (cards.length) { list.append(h('div', { class: 'section-label' }, 'Cards')); for (const it of cards) list.append(itemRow(it, false)) }
+    if (people.length) { list.append(h('div', { class: 'section-label' }, 'Identities')); for (const it of people) list.append(itemRow(it, false)) }
   }
   let seq = 0
   q.oninput = async () => {
@@ -249,98 +278,13 @@ async function vaultView(st: State): Promise<HTMLElement> {
     list,
     h('div', { class: 'foot' },
       askButton(),
-      h('button', { class: 'btn', type: 'button', onclick: () => void showGenerator(st) }, 'Generator'),
+      h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-generator', onclick: () => void generatorView(root, () => void render()) }, 'Generator'),
       h('button', { class: 'btn', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut'),
-      h('button', { class: 'btn', type: 'button', onclick: () => void showSettings(st) }, 'Settings')))
+      h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-settings', onclick: () => void showSettings(st) }, 'Settings')))
 }
 
-// ── the generator ──
-
-function showGenerator(st: State): void {
-  let words = false
-  let length = 20
-  let symbols = true
-  const out = h('div', { class: 'gen-out mono', 'data-testid': 'gen-out', 'aria-live': 'polite' })
-  const make = async () => {
-    const options = words
-      ? { kind: 'words', words: Math.max(3, Math.min(12, Math.round(length / 4))), separator: '-', capitalize: true, number: true }
-      : { kind: 'random', length, upper: true, lower: true, digits: true, symbols, avoidAmbiguous: true }
-    const r = await ask<{ value: string }>({ type: 'generate', options })
-    out.textContent = r.ok ? r.value : r.error ?? ''
-  }
-  const lenLabel = h('span', { class: 'muted' }, '')
-  const slider = h('input', { type: 'range', min: '8', max: '64', value: String(length), style: 'width:100%', 'aria-label': 'Length' })
-  const syncLabel = () => { lenLabel.textContent = words ? `${Math.max(3, Math.min(12, Math.round(length / 4)))} words` : `${length} characters` }
-  slider.oninput = () => { length = Number(slider.value); syncLabel(); void make() }
-  const sym = h('input', { type: 'checkbox', id: 'sym', checked: true })
-  sym.onchange = () => { symbols = sym.checked; void make() }
-  const kind = h('input', { type: 'checkbox', id: 'kind' })
-  kind.onchange = () => { words = kind.checked; syncLabel(); void make() }
-  syncLabel()
-  void make()
-  root.replaceChildren(h('div', {},
-    h('div', { class: 'top' },
-      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Back', onclick: () => void render() }, '‹'),
-      h('h1', {}, 'Password generator')),
-    h('div', { class: 'pane' }, out,
-      h('div', { style: 'display:flex;gap:6px;margin-top:10px' },
-        h('button', { class: 'btn btn-primary', type: 'button', style: 'flex:1', onclick: async () => { await navigator.clipboard.writeText(out.textContent ?? ''); toast('Password copied') } }, 'Copy'),
-        h('button', { class: 'btn', type: 'button', onclick: () => void make() }, icon('dice'))),
-      h('div', { style: 'display:flex;justify-content:space-between;margin-top:16px' }, h('span', {}, 'Length'), lenLabel), slider,
-      h('label', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, sym, 'Symbols'),
-      h('label', { style: 'display:flex;gap:8px;align-items:center;margin-top:6px' }, kind, 'Words instead of characters'),
-      h('p', { class: 'muted', style: 'font-size:12px;margin-top:14px' }, 'On a sign-up page, Walnut offers a strong password in the field itself and saves it when you send the form.'))))
-  void st
-}
-
-// ── settings ──
-
-/** Agents in this browser: off until the person turns it on here. */
-async function agentSection(): Promise<HTMLElement> {
-  const st = await ask<{ on: boolean; tabs: number; screenshots: boolean }>({ type: 'agent-get' })
-  const box = h('input', { type: 'checkbox', id: 'agents', 'data-testid': 'popup-agents', role: 'switch' }) as HTMLInputElement
-  box.checked = !!st.on
-  const note = h('p', { class: 'muted', style: 'margin:6px 4px 0;font-size:12px' },
-    st.on
-      ? `On. Agents open their own tabs in a separate Walnut window${st.tabs ? ` (${st.tabs} open now)` : ''}, never yours. They ask you before sending, buying, posting or deleting anything in your name. Which sites they may use: Walnut, Settings, Browser extension.`
-      : 'Turning this on lets your Walnut agents open web pages in this browser (signed in as you), read them, click and type, with no ask per site. They use only tabs they open, in their own window, and ask you before sending, buying, posting or deleting in your name.')
-  const err = errLine()
-  box.onchange = async () => {
-    err.textContent = ''
-    if (box.checked) {
-      const r = await ask({ type: 'agent-on' })
-      if (!r.ok) { box.checked = false; err.textContent = r.error ?? 'Could not turn it on.'; return }
-    } else {
-      await ask({ type: 'agent-off' })
-    }
-    const fresh = await agentSection()
-    wrap.replaceWith(fresh)
-  }
-  const wrap = h('div', {},
-    h('div', { class: 'section-label' }, 'Agents'),
-    h('label', { class: 'row switch-row', for: 'agents' },
-      h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let Walnut agents use this browser'), h('span', { class: 'row-sub' }, st.on ? 'On' : 'Off')),
-      box),
-    note, err)
-  return wrap
-}
-
-async function showSettings(st: State): Promise<void> {
-  const off = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-disconnect' }, 'Disconnect this browser')
-  off.onclick = async () => { await ask({ type: 'disconnect' }); void render() }
-  const agents = await agentSection()
-  root.replaceChildren(h('div', {},
-    h('div', { class: 'top' },
-      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Back', onclick: () => void render() }, '‹'),
-      h('h1', {}, 'Settings')),
-    h('div', { class: 'pane' },
-      h('div', { class: 'section-label' }, 'Connected to'),
-      h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
-        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ?? ''), h('span', { class: 'row-sub' }, st.device ?? ''))),
-      agents,
-      h('div', { class: 'section-label' }, 'Fill shortcut'),
-      h('p', { class: 'muted', style: 'margin:0 4px' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page, or opens the menu when there are several.'),
-      h('div', { style: 'height:16px' }), off)))
+function showSettings(st: State): Promise<void> {
+  return settingsView(root, st, () => void render())
 }
 
 // ── start ──
@@ -355,11 +299,13 @@ async function render(): Promise<void> {
   root.replaceChildren(view)
 }
 
-void render()
+// popup.html?clipboard=1 is Chrome's offscreen document for the clipboard (bg-clipboard.ts), not a view.
+if (params.has('clipboard')) startClipboardPage()
+else void render()
 
 // In the side panel the view stays open while the person moves on: it follows the page in its
 // window (another tab, another address), unless they are typing in it.
-if (embedded && panelWindow) {
+if (embedded && panelWindow && !params.has('clipboard')) {
   let timer: ReturnType<typeof setTimeout> | undefined
   const follow = () => {
     clearTimeout(timer)

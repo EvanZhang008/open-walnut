@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseBrowserArgv, runBrowser, BROWSER_EXIT } from '../../../src/core/browser-control/browser-cli'
+import { parseBrowserArgv, runBrowser, BROWSER_EXIT, UPLOAD_MAX_BYTES } from '../../../src/core/browser-control/browser-cli'
 
 describe('parseBrowserArgv', () => {
   it('maps each action to the op', () => {
@@ -76,5 +76,65 @@ describe('runBrowser', () => {
     const io = (r: { ok: boolean; code?: string; message?: string }) => ({ call: async () => r, say: () => undefined, out: () => undefined, cwd: os.tmpdir() })
     expect(await runBrowser(p, io({ ok: false, code: 'not_your_tab', message: 'no' }))).toBe(BROWSER_EXIT.refused)
     expect(await runBrowser(p, io({ ok: false, message: 'boom' }))).toBe(BROWSER_EXIT.error)
+  })
+})
+
+describe('the newer actions', () => {
+  it('parses find, fill-form, hover, the scroll and wait forms, tabs --all, take, downloads, fill-login, dialog and evaluate', () => {
+    expect(parseBrowserArgv(['find', 'Place', 'order', '--role', 'button', '--exact', '--limit', '3'])).toMatchObject({ args: { action: 'find', text: 'Place order', role: 'button', exact: true, limit: 3 } })
+    expect(parseBrowserArgv(['form-values'])).toMatchObject({ args: { action: 'form_values' } })
+    expect(parseBrowserArgv(['fill-form', 'Full name=Test Person', 'f3:e7=yes=no', 'e2=']))
+      .toMatchObject({ args: { action: 'fill_form', fields: [{ label: 'Full name', value: 'Test Person' }, { ref: 'f3:e7', value: 'yes=no' }, { ref: 'e2', value: '' }] } })
+    expect(parseBrowserArgv(['fill-form', 'nothing'])).toMatchObject({ ok: false })
+    expect(parseBrowserArgv(['hover', 'f2:e9', '--trusted'])).toMatchObject({ args: { action: 'hover', ref: 'f2:e9', trusted: true } })
+    expect(parseBrowserArgv(['type', 'f2:e9', 'hi'])).toMatchObject({ args: { action: 'type', ref: 'f2:e9', text: 'hi' } })
+    expect(parseBrowserArgv(['scroll', 'bottom'])).toMatchObject({ args: { action: 'scroll', to: 'bottom' } })
+    expect(parseBrowserArgv(['scroll', 'right', '--by', '300'])).toMatchObject({ args: { action: 'scroll', direction: 'right', by: 300 } })
+    expect(parseBrowserArgv(['wait', '--gone', 'Loading'])).toMatchObject({ args: { action: 'wait', textGone: 'Loading' } })
+    expect(parseBrowserArgv(['wait', '--url', '/done=1$/'])).toMatchObject({ args: { action: 'wait', url: '/done=1$/' } })
+    expect(parseBrowserArgv(['screenshot', '--full'])).toMatchObject({ args: { action: 'screenshot', full: true } })
+    expect(parseBrowserArgv(['tabs', '--all'])).toMatchObject({ args: { action: 'tabs', all: true } })
+    expect(parseBrowserArgv(['take', '12'])).toMatchObject({ args: { action: 'take', tab: 12 } })
+    expect(parseBrowserArgv(['take'])).toMatchObject({ ok: false })
+    expect(parseBrowserArgv(['downloads', '--wait', '--ms', '9000'])).toMatchObject({ args: { action: 'downloads', wait: true, ms: 9000 } })
+    expect(parseBrowserArgv(['fill-login', '--item', 'Shop'])).toMatchObject({ args: { action: 'fill_login', item: 'Shop' } })
+    expect(parseBrowserArgv(['dialog', 'dismiss'])).toMatchObject({ args: { action: 'dialog', accept: false } })
+    expect(parseBrowserArgv(['dialog', 'accept', '--text', 'yes'])).toMatchObject({ args: { action: 'dialog', accept: true, text: 'yes' } })
+    expect(parseBrowserArgv(['dialog'])).toMatchObject({ ok: false })
+    expect(parseBrowserArgv(['evaluate', 'document.title'])).toMatchObject({ args: { action: 'evaluate', expression: 'document.title' } })
+    expect(parseBrowserArgv(['upload', 'e5', 'a.pdf', 'b.png'])).toMatchObject({ args: { action: 'upload', ref: 'e5' }, upload: ['a.pdf', 'b.png'] })
+    expect(parseBrowserArgv(['upload', '--ref', 'e5', '--file', 'a.pdf'])).toMatchObject({ args: { action: 'upload', ref: 'e5' }, upload: ['a.pdf'] })
+    expect(parseBrowserArgv(['upload', 'e5', '--trusted', '--path', '/x/a.pdf'])).toMatchObject({ args: { action: 'upload', ref: 'e5', trusted: true, paths: ['/x/a.pdf'] } })
+    expect(parseBrowserArgv(['upload', 'a.pdf'])).toMatchObject({ ok: false })
+  })
+
+  it('upload reads the files here and sends their bytes; too much is refused before anything is sent', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-up-'))
+    fs.writeFileSync(path.join(dir, 'a.pdf'), Buffer.from('%PDF-1.4 test'))
+    const calls: Array<Record<string, unknown>> = []
+    const p = parseBrowserArgv(['upload', 'e5', 'a.pdf'])
+    if (!p.ok) throw new Error('parse')
+    const io = { call: async (_n: string, a: Record<string, unknown>) => { calls.push(a); return { ok: true, result: { uploaded: ['a.pdf (13 bytes)'] } } }, say: () => undefined, out: () => undefined, cwd: dir }
+    expect(await runBrowser(p, io)).toBe(BROWSER_EXIT.ok)
+    expect(calls[0].files).toEqual([{ name: 'a.pdf', type: 'application/pdf', base64: Buffer.from('%PDF-1.4 test').toString('base64') }])
+    fs.writeFileSync(path.join(dir, 'big.bin'), Buffer.alloc(UPLOAD_MAX_BYTES + 1))
+    const big = parseBrowserArgv(['upload', 'e5', 'big.bin'])
+    if (!big.ok) throw new Error('parse')
+    const said: string[] = []
+    expect(await runBrowser(big, { ...io, say: (l: string) => said.push(l) })).toBe(BROWSER_EXIT.error)
+    expect(said.join(' ')).toContain('MB')
+    expect(calls).toHaveLength(1)
+  })
+
+  it('fill-login waits out the person\'s approval by its request id', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    const answers = [{ status: 'needs_ok', request: 'apr-1', item: { title: 'Shop' } }, { status: 'needs_ok', request: 'apr-1' }, { filled: true, fields: ['username', 'password'], item: { id: 'i1', title: 'Shop' }, tab: 4 }]
+    const p = parseBrowserArgv(['fill-login'])
+    if (!p.ok) throw new Error('parse')
+    const code = await runBrowser(p, { call: async (_n, a) => { calls.push(a); return { ok: true, result: answers.shift() } }, say: () => undefined, out: () => undefined, cwd: os.tmpdir() })
+    expect(code).toBe(BROWSER_EXIT.ok)
+    expect(calls[0].request).toBeUndefined()
+    expect(calls[1]).toMatchObject({ request: 'apr-1', wait_ms: 25_000 })
+    expect(calls[2]).toMatchObject({ request: 'apr-1' })
   })
 })

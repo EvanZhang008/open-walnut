@@ -24,18 +24,16 @@
  * extension off) it does nothing but the connect handshake.
  */
 import { ext, ask } from './ext'
-import { findLoginGroups, groupOfField, readGroup, setValue, type LoginGroup } from './form-detect'
+import { findLoginGroups, groupOfField, readGroup, type LoginGroup } from './form-detect'
+import { findWalletGroups, walletGroupOf } from './wallet-detect'
+import { MAY_FILL, SELF, asFill, cs } from './content-state'
+import { dropHost, extFrame, hostHooks, hostStyle, hosts, makeHost, tampered, type Host } from './content-host'
+import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu, reposition, roleOf, setMenuHeight, showIcon, toast } from './content-ui'
+import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
 import * as pageAgent from './page-agent'
+import { runPageOp } from './page-ops'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
-
-const SELF = (() => {
-  try {
-    if (window === window.top) return 'top'
-    return window.top!.location.origin === location.origin ? 'same-origin-frame' : 'other'
-  } catch { return 'other' }
-})()
-const MAY_FILL = SELF !== 'other' && location.origin !== 'null' && /^https?:$/.test(location.protocol)
 
 /**
  * This copy still talks to a running extension. One left behind by an update or a reload keeps
@@ -47,32 +45,23 @@ const live = (): boolean => { try { return !!ext.runtime?.id } catch { return fa
 // What a copy left behind drew (its icon, menu, save bar, the agent frame) goes: this copy draws its own.
 for (const el of document.querySelectorAll('walnut-ext')) el.remove()
 
-/** Off until the background answers, and for good on Walnut's own pages. */
-let off = true
 const isWalnutApp = () => !!document.querySelector('meta[name="walnut-app"]')
-let groups: LoginGroup[] = []
-let active: { group: LoginGroup; role: string; field: HTMLInputElement } | null = null
+/** This document's id, made once in the extension's own world (the page can neither read nor change it): a new load is a new id. */
+const DOC_ID = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('')
 
 let reported: boolean | null = null
 function rescan(): void {
   pageAgent.notePasswords()
-  groups = findLoginGroups(document)
-  const hasLogin = groups.length > 0
-  if (!off && MAY_FILL && hasLogin !== reported) {
+  cs.groups = findLoginGroups(document)
+  cs.wallets = findWalletGroups(document)
+  const hasLogin = cs.groups.length > 0
+  if (!cs.off && MAY_FILL && hasLogin !== reported) {
     reported = hasLogin
     void ask({ type: 'frame-ready', hasLogin })
   }
 }
 
 // ── hosts with a closed shadow root and !important styles; a change to them closes what they hold ──
-
-interface Host { el: HTMLElement; expected: string }
-const hosts = new Set<Host>()
-
-function hostStyle(host: Host, extra: string): void {
-  host.el.style.cssText = `all: initial !important; position: fixed !important; display: block !important; opacity: 1 !important; visibility: visible !important; filter: none !important; transform: none !important; clip-path: none !important; mix-blend-mode: normal !important; pointer-events: auto !important; ${extra}`
-  host.expected = host.el.style.cssText
-}
 
 const closeAll = () => { closeMenu(); hideBar(); hideIcon(true) }
 const watcher = new MutationObserver((records) => {
@@ -90,245 +79,114 @@ const watcher = new MutationObserver((records) => {
   }
 })
 
-/** The host's own pseudo-elements, which a page rule could draw over the frame: !important in a shadow root wins. */
-const SHADOW_STYLE = ':host::before, :host::after { content: none !important; display: none !important; }'
-
-/**
- * Checked right before a fill or a save: is the page faded or hidden around the host, or
- * does something in the top layer (a popover, a modal dialog, full screen) lie over it?
- */
-function tampered(h: Host): boolean {
-  for (const el of [document.documentElement, document.body]) {
-    if (!el) continue
-    const cs = getComputedStyle(el)
-    if (Number(cs.opacity) < 1 || cs.visibility !== 'visible' || /opacity|blur|brightness\(0|contrast\(0/.test(cs.filter)) return true
-  }
-  const r = h.el.getBoundingClientRect()
-  for (const sel of [':popover-open', 'dialog:modal', ':fullscreen']) {
-    let found: Element[] = []
-    try { found = [...document.querySelectorAll(sel)] } catch { continue }
-    for (const el of found) {
-      const o = el.getBoundingClientRect()
-      if (o.right > r.left && o.left < r.right && o.bottom > r.top && o.top < r.bottom) return true
-    }
-  }
-  return false
-}
-
-function makeHost(z: number, mark?: 'walnutMenu' | 'walnutSavebar'): { host: Host; root: ShadowRoot } {
-  const el = document.createElement('walnut-ext')
-  el.dataset.walnutHost = '1'
-  if (mark) el.dataset[mark] = '1' // set before the watch starts: a later attribute change is the page's
-  const host: Host = { el, expected: '' }
-  hostStyle(host, `z-index: ${z} !important; top: 0 !important; left: 0 !important;`)
-  const root = el.attachShadow({ mode: 'closed' })
-  const style = document.createElement('style')
-  style.textContent = SHADOW_STYLE
-  root.appendChild(style)
-  document.documentElement.appendChild(el)
-  hosts.add(host)
-  watcher.observe(el, { attributes: true })
+// Each host Walnut draws is watched: a change to it, or something put after it, closes them all.
+hostHooks.made = (h) => {
+  watcher.observe(h.el, { attributes: true })
   watcher.observe(document.documentElement, { childList: true })
-  return { host, root }
-}
-
-function dropHost(h: Host): void {
-  hosts.delete(h)
-  h.el.remove()
-}
-
-/**
- * An extension page in a frame, given its nonce once it has loaded, by postMessage to the
- * extension's own origin. A second load means the page navigated the frame: `onAgain` closes it.
- */
-function extFrame(page: string, nonce: string, onAgain: () => void): HTMLIFrameElement {
-  const frame = document.createElement('iframe')
-  const url = ext.runtime.getURL(page)
-  let loads = 0
-  frame.addEventListener('load', () => {
-    if (++loads > 1) { onAgain(); return }
-    frame.contentWindow?.postMessage({ walnutNonce: nonce }, new URL(url).origin)
-  })
-  frame.src = url
-  return frame
-}
-
-const ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a5a2b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg>'
-
-let icon: { host: Host; button: HTMLButtonElement; shown: boolean } | null = null
-let menu: { host: Host; frame: HTMLIFrameElement; height: number } | null = null
-
-const px = (n: number) => `${Math.round(n)}px`
-
-function place(h: Host, field: HTMLInputElement, where: 'icon' | 'menu', height = 0): void {
-  const r = field.getBoundingClientRect()
-  let top: number
-  let left: number
-  if (where === 'icon') {
-    top = r.top + (r.height - 22) / 2
-    left = r.right - 26
-  } else {
-    const w = 320
-    const below = r.bottom + 4
-    top = below + height > innerHeight && r.top - height - 4 > 0 ? r.top - height - 4 : below
-    left = Math.max(4, Math.min(r.left, innerWidth - w - 4))
-  }
-  hostStyle(h, `z-index: ${where === 'icon' ? 2147483646 : 2147483647} !important; top: ${px(top)} !important; left: ${px(left)} !important;`)
-}
-
-function showIcon(field: HTMLInputElement): void {
-  if (!icon) {
-    const { host, root } = makeHost(2147483646)
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.title = 'Walnut'
-    button.setAttribute('aria-label', 'Fill with Walnut')
-    button.append(document.importNode(new DOMParser().parseFromString(ICON_SVG, 'image/svg+xml').documentElement, true))
-    button.style.cssText = 'all: initial; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; cursor: pointer; background: #fff8ef; box-shadow: 0 0 0 1px rgba(138,90,43,.35);'
-    // Keep the field focused: the click opens the menu, it does not blur the login.
-    button.addEventListener('mousedown', (e) => e.preventDefault())
-    button.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation()
-      if (e.isTrusted && active) void openMenu(active.field)
-    })
-    root.appendChild(button)
-    icon = { host, button, shown: true }
-  }
-  icon.shown = true
-  place(icon.host, field, 'icon')
-}
-
-function hideIcon(remove = false): void {
-  if (!icon) return
-  if (remove) { dropHost(icon.host); icon = null; return }
-  icon.shown = false
-  hostStyle(icon.host, 'display: none !important;')
-}
-
-async function openMenu(field: HTMLInputElement): Promise<void> {
-  const hit = groupOfField(groups, field)
-  if (!hit || off) return
-  active = { group: hit.group, role: hit.role, field }
-  const r = await ask<{ nonce: string }>({ type: 'open-menu', role: hit.role, kind: hit.group.kind })
-  if (!r.ok || !r.nonce) return
-  closeMenu()
-  const { host, root } = makeHost(2147483647, 'walnutMenu')
-  // The nonce ties this frame to the open menu: a page that frames menu.html itself has none.
-  const frame = extFrame('menu.html', r.nonce, closeMenu)
-  frame.style.cssText = 'all: initial; display: block; width: 320px; height: 120px; border: 0; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); background: transparent; color-scheme: normal;'
-  frame.setAttribute('allowtransparency', 'true')
-  root.appendChild(frame)
-  menu = { host, frame, height: 120 }
-  place(host, field, 'menu', menu.height)
-}
-
-function closeMenu(): void {
-  if (menu) { dropHost(menu.host); menu = null }
-}
-
-function reposition(): void {
-  if (!active) return
-  if (!active.field.isConnected) { hideIcon(); closeMenu(); active = null; return }
-  if (icon?.shown) place(icon.host, active.field, 'icon')
-  if (menu) place(menu.host, active.field, 'menu', menu.height)
 }
 
 // ── what the person did: a click or a Tab into a field, typing in a password field ──
 
 let lastPointer: { el: EventTarget | null; at: number } = { el: null, at: 0 }
 let lastTab = 0
-const typed = new WeakSet<HTMLInputElement>()
 
+/** The last press landed on the field that already had the focus (so no focus event follows). */
+let clickOnFocused = false
 document.addEventListener('pointerdown', (e) => {
   if (e.isTrusted) lastPointer = { el: e.target, at: Date.now() }
+  clickOnFocused = e.target === document.activeElement
   const path = e.composedPath()
-  if (menu && !path.includes(menu.host.el) && !(active && path.includes(active.field))) closeMenu()
+  if (menu && !path.includes(menu.host.el) && !(cs.active && path.includes(cs.active.field))) closeMenu()
 }, true)
 document.addEventListener('input', (e) => {
   const t = e.target
   if (!e.isTrusted || !(t instanceof HTMLInputElement)) return
   // Whatever its type now: a "show password" switch makes the field text while the person types.
-  typed.add(t)
+  cs.typed.add(t)
   // Typing your own value means you are not picking one: the menu goes, and stops covering the form.
-  if (menu && active && t === active.field) closeMenu()
+  if (menu && cs.active && t === cs.active.field) closeMenu()
 }, true)
 
 // ── focus: show the icon, and the menu when there is something to pick ──
 
-/** Set while Walnut fills: the focus moves a fill makes never open the menu again. */
-let filling = false
-function asFill<T>(work: () => T): T {
-  filling = true
-  try { return work() } finally { setTimeout(() => { filling = false }, 0) }
-}
+/** What the background says of this page: counts of what may be offered here. */
+interface PageState { connected: boolean; unlocked: boolean; count: number; codes?: number; cards?: number; identities?: number; offerCode?: boolean }
+
+// A click into the field that already had the focus (after Escape, say) opens the menu again.
+document.addEventListener('click', (e) => {
+  const t = e.target
+  if (e.isTrusted && !menu && t instanceof HTMLInputElement && t === document.activeElement && clickOnFocused) void onFocus({ target: t })
+}, true)
 
 async function onFocus(e: { target: EventTarget | null }): Promise<void> {
   const t = e.target
-  if (off || !MAY_FILL || !(t instanceof HTMLInputElement)) return
-  if (!live()) { off = true; closeAll(); return }
+  // The focus moves a fill makes are Walnut's own: the menu that asked for the fill stays until it is done.
+  if (!cs.filling) focusMoved(t)
+  if (cs.off || !MAY_FILL || !(t instanceof HTMLInputElement)) return
+  if (!live()) { cs.off = true; closeAll(); return }
   rescan()
-  const hit = groupOfField(groups, t)
-  if (!hit) return
-  active = { group: hit.group, role: hit.role, field: t }
+  const what = roleOf(t)
+  if (!what) return
+  const hit = groupOfField(cs.groups, t)
+  cs.active = hit ? { group: hit.group, role: hit.role, field: t } : { wallet: walletGroupOf(cs.wallets, t) ?? undefined, role: what.role, field: t }
   showIcon(t)
   // Read now, before the await: a fill's focus moves, and whether the person brought focus here.
-  const fromFill = filling
+  const fromFill = cs.filling
   const byPerson = (lastPointer.el === t && Date.now() - lastPointer.at < 1500) || Date.now() - lastTab < 600
-  const st = await ask<{ connected: boolean; unlocked: boolean; count: number }>({ type: 'page-init' })
+  const st = await ask<PageState>({ type: 'page-init' })
   if (!st.ok || document.activeElement !== t) return
   if (fromFill || !byPerson || t.value) return
-  const offerNew = hit.role === 'new-password' && st.connected && st.unlocked
-  if (offerNew || (st.unlocked && st.count > 0)) void openMenu(t)
+  if (!st.connected || !st.unlocked) return
+  // Already open for this field, or on its way (an arrow key opened it meanwhile).
+  if ((menu && cs.active?.field === t) || openingFor(t)) return
+  // Something to pick for this field: a login, a code, a card, an address, or a new password to make.
+  const offer = what.role === 'new-password' ? true
+    : what.role === 'totp' ? (st.codes ?? 0) > 0
+      : what.role === 'card' ? (st.cards ?? 0) > 0
+        : what.role === 'identity' ? (st.identities ?? 0) > 0
+          : st.count > 0
+  if (offer) void openMenu(t)
+}
+
+/**
+ * The code page right after a sign in Walnut knows (a login with a one-time code, filled or sent
+ * here minutes ago): the menu opens on the code field by itself, once, offering that code.
+ */
+let codeOffered = false
+let offerCode = false
+function maybeOfferCode(): void {
+  if (!offerCode || codeOffered || cs.off || !MAY_FILL) return
+  const g = cs.groups.find((x) => x.kind === 'totp' && x.totp)
+  if (!g?.totp || g.totp.value) return
+  codeOffered = true
+  void openMenu(g.totp)
 }
 
 // ── fills: only into this frame's own login, and only when this is the origin the fill is for ──
 
-function fill(username: string | undefined, password: string | undefined): boolean {
-  rescan()
-  const g = active && active.group.root.isConnected ? (groups.find((x) => x.root === active!.group.root) ?? active.group) : groups.find((x) => x.kind === 'login') ?? groups.find((x) => x.kind === 'username-step')
-  if (!g) return false
-  let did = false
-  if (username && g.username) { setValue(g.username, username); did = true }
-  if (password && g.password) { setValue(g.password, password); typed.delete(g.password); did = true }
-  if (did) (g.password ?? g.username)?.focus()
-  return did
-}
-
-function fillTotp(code: string): boolean {
-  rescan()
-  const field = active?.role === 'totp' ? active.field : groups.find((g) => g.totp)?.totp
-  if (!field) return false
-  setValue(field, code)
-  return true
-}
-
-function fillNew(password: string): void {
-  if (!active) return
-  for (const f of active.group.newPasswords) setValue(f, password)
-}
-
-const fillsHere = (origin: unknown) => !off && MAY_FILL && origin === location.origin
+const fillsHere = (origin: unknown) => !cs.off && MAY_FILL && origin === location.origin
 
 // ── a login being sent: offer to save or update it ──
 
 const sentAt = new WeakMap<Element, number>()
 function sending(g: LoginGroup): void {
-  if (off || !MAY_FILL) return
+  if (cs.off || !MAY_FILL) return
   const last = sentAt.get(g.root) ?? 0
   if (Date.now() - last < 1500) return
   sentAt.set(g.root, Date.now())
   const { username, password } = readGroup(g)
   if (g.kind === 'username-step') { if (username) void ask({ type: 'seen-username', username }); return }
   const fields = g.kind === 'login' ? [g.password] : g.newPasswords
-  if (password) void ask({ type: 'seen-login', username, password, typed: fields.some((f) => !!f && typed.has(f)) })
+  if (password) void ask({ type: 'seen-login', username, password, typed: fields.some((f) => !!f && cs.typed.has(f)) })
 }
 
 function groupFor(el: Element | null): LoginGroup | undefined {
   if (!el) return undefined
   rescan()
-  return groups.find((g) => g.kind !== 'totp' && (g.root === el || g.root.contains(el)))
+  const a = cs.active?.group
+  return cs.groups.find((g) => g.kind !== 'totp' && (g.root === el || g.root.contains(el)))
     // A page that hides its form as it sends: the group the person was typing in.
-    ?? (active && active.group.kind !== 'totp' && active.group.root.contains(el) ? active.group : undefined)
+    ?? (a && a.kind !== 'totp' && a.root.contains(el) ? a : undefined)
 }
 
 const SEND_WORDS = /log.?in|sign.?in|sign.?up|log on|continue|next|submit|create|register|join|save|change|update|verify/i
@@ -350,6 +208,7 @@ document.addEventListener('click', (e) => {
   if (g) setTimeout(() => sending(g), 0)
 }, true)
 document.addEventListener('keydown', (e) => {
+  if (onFieldKey(e)) return
   if (e.key === 'Escape') { closeMenu(); return }
   if (!e.isTrusted) return
   if (e.key === 'Tab') { lastTab = Date.now(); return }
@@ -365,7 +224,7 @@ addEventListener('resize', reposition)
 
 let bar: { host: Host; frame: HTMLIFrameElement; nonce: string } | null = null
 function showBar(nonce: string): void {
-  if (off || SELF !== 'top' || !nonce) return
+  if (cs.off || SELF !== 'top' || !nonce) return
   // Asked twice for the same login (the send, then the page it led to): keep the one shown.
   if (bar?.nonce === nonce && bar.host.el.isConnected) return
   hideBar()
@@ -417,31 +276,25 @@ const markWatch = new MutationObserver(() => {
   if (agentMark && !agentMark.el.isConnected) document.documentElement.appendChild(agentMark.el)
 })
 
-async function agentOp(op: string, args: Record<string, unknown>): Promise<unknown> {
-  switch (op) {
-    case 'snapshot': return pageAgent.snapshot(typeof args.max === 'number' ? args.max : undefined)
-    case 'text': return pageAgent.text(typeof args.max === 'number' ? args.max : undefined)
-    case 'click': return pageAgent.click(args)
-    case 'type': return pageAgent.type(args)
-    case 'select': return pageAgent.select(args)
-    case 'press': return pageAgent.press(args)
-    case 'scroll': return pageAgent.scroll(args)
-    case 'wait': return pageAgent.wait(args)
-  }
-  throw new pageAgent.PageError(`Unknown page action ${op}.`, 'bad_action')
-}
-
 // ── messages from the background ──
 
 ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg?.type) {
     case 'fill':
       if (!fillsHere(msg.origin)) { sendResponse({ filled: false }); return }
-      sendResponse({ filled: asFill(() => msg.mode === 'totp' ? fillTotp(String(msg.totp ?? '')) : fill(msg.username, msg.password)) }); return
+      rescan()
+      sendResponse({ filled: asFill(() => msg.mode === 'totp' ? fillCode(String(msg.totp ?? '')) : fillLogin(msg.username, msg.password)) }); return
+    case 'fill-wallet':
+      if (!fillsHere(msg.origin)) { sendResponse({ filled: false }); return }
+      rescan()
+      sendResponse({ filled: asFill(() => fillWalletForm((msg.values ?? {}) as Record<string, string>, String(msg.kind ?? ''))) }); return
     case 'fill-new-password':
-      if (fillsHere(msg.origin)) asFill(() => fillNew(String(msg.password ?? '')))
+      if (fillsHere(msg.origin)) asFill(() => fillNewPassword(String(msg.password ?? '')))
       sendResponse({ ok: true }); return
-    case 'close-menu': closeMenu(); sendResponse({ ok: true }); return
+    case 'toast':
+      if (!cs.off && typeof msg.text === 'string') toast(msg.text.slice(0, 120))
+      sendResponse({ ok: true }); return
+    case 'close-menu': closeMenu(msg.refocus === true); sendResponse({ ok: true }); return
     case 'check-shown': {
       const h = msg.which === 'bar' ? bar?.host : menu?.host
       const ok = !!h && h.el.isConnected && !tampered(h)
@@ -449,23 +302,22 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok }); return
     }
     case 'menu-size':
-      if (menu) { menu.height = Math.min(420, Math.max(60, Number(msg.height) || 120)); menu.frame.style.height = `${menu.height}px`; reposition() }
+      setMenuHeight(Number(msg.height))
       sendResponse({ ok: true }); return
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
     case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined); sendResponse({ ok: true }); return
-    case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href }); return
+    case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href, doc: DOC_ID }); return
     case 'page-context':
       // The side panel asks about the page the person is on: the top frame answers.
       if (SELF !== 'top') { sendResponse({ ok: false }); return }
       sendResponse({ ok: true, walnut: isWalnutApp(), ...pageAgent.pageContext(msg.withText === true) }); return
     case 'agent-mask':
-      if (SELF !== 'top') { sendResponse({ ok: false }); return }
+      // Each frame of the tab is asked (a password in an embedded sign-in is drawn as dots too).
       if (msg.on === true) sendResponse({ ok: true, masked: pageAgent.maskSecrets() })
       else { pageAgent.unmask(); sendResponse({ ok: true }) }
       return
     case 'agent': {
-      // The background sends these only to the top frame of a tab an agent opened.
-      if (SELF !== 'top') { sendResponse({ ok: false, error: { message: 'Not the top frame.', code: 'bad_frame' } }); return }
+      // The background sends these only to the frames of an agent's tab (agent.ts); each frame checks its own site.
       // Checked again here, against this document: the page may have moved on since the background looked.
       const allow = msg.allow as { any?: boolean; sites?: string[]; walnut?: string[] } | undefined
       if (isWalnutApp() || walnutAddress(allow?.walnut, location.href)) { sendResponse({ ok: false, error: { message: 'Agents never use Walnut\'s own pages in the browser.', code: 'walnut_page' } }); return }
@@ -474,20 +326,21 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: false, error: { message: 'That site is not allowed for agents yet.', code: 'site_not_allowed', extra: { url: location.href, site: here } } })
         return
       }
-      agentOp(String(msg.op), (msg.args ?? {}) as Record<string, unknown>).then(
+      runPageOp(String(msg.op), (msg.args ?? {}) as Record<string, unknown>).then(
         (result) => sendResponse({ ok: true, result }),
         (err) => sendResponse({ ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof pageAgent.PageError ? err.code : 'page_error' } }))
       return true
     }
     case 'hide-savebar': hideBar(); sendResponse({ ok: true }); return
     case 'savebar-size':
-      if (bar) bar.frame.style.height = `${Math.min(300, Math.max(80, Number(msg.height) || 150))}px`
+      if (bar) bar.frame.style.height = `${Math.min(480, Math.max(80, Number(msg.height) || 150))}px`
       sendResponse({ ok: true }); return
     case 'open-menu-here': {
-      if (off || SELF !== 'top' || !MAY_FILL) { sendResponse({ ok: false }); return }
+      // The shortcut asks the top page; the context menu asks the frame the person right-clicked in.
+      if (cs.off || !MAY_FILL || (SELF !== 'top' && msg.here !== true)) { sendResponse({ ok: false }); return }
       rescan()
-      const focused = document.activeElement instanceof HTMLInputElement && groupOfField(groups, document.activeElement) ? document.activeElement : undefined
-      const g = groups.find((x) => x.kind === 'login' || x.kind === 'username-step')
+      const focused = document.activeElement instanceof HTMLInputElement && groupOfField(cs.groups, document.activeElement) ? document.activeElement : undefined
+      const g = cs.groups.find((x) => x.kind === 'login' || x.kind === 'username-step')
       const field = focused ?? g?.username ?? g?.password
       if (field) { field.focus(); void openMenu(field) }
       sendResponse({ ok: !!field }); return
@@ -519,13 +372,15 @@ if (SELF === 'top') {
 
 function start(): void {
   if (isWalnutApp()) return
-  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string } }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
+  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string }; offerCode?: boolean }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
     if (!r.ok || r.off) return
-    off = false
+    cs.off = false
+    offerCode = r.offerCode === true
     if (r.agent) showAgentMark(true, r.agent.who)
     reported = null
     rescan()
     if (r.barNonce) showBar(r.barNonce)
+    maybeOfferCode()
     // The person clicked into a field while this was still starting: act on that focus now.
     if (document.activeElement instanceof HTMLInputElement) void onFocus({ target: document.activeElement })
   })
@@ -551,6 +406,6 @@ start()
 addEventListener('pageshow', (e) => { if (e.persisted) start() })
 let pending = 0
 new MutationObserver(() => {
-  if (pending || off) return
-  pending = window.setTimeout(() => { pending = 0; rescan(); reposition() }, 400)
+  if (pending || cs.off) return
+  pending = window.setTimeout(() => { pending = 0; rescan(); reposition(); maybeOfferCode() }, 400)
 }).observe(document.documentElement, { childList: true, subtree: true })

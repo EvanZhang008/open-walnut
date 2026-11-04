@@ -1,8 +1,9 @@
 /**
- * What an agent does inside a page it opened (content.ts runs it in the top frame of an agent
- * tab only; the background sends nothing else here). A snapshot lists what a person could act
- * on, each with a ref (e12) that holds as long as the element does, and the page's headings and
- * text; the actions find an element by its ref and act on it as a person would.
+ * What an agent does inside a page it opened (content.ts runs it in each frame of an agent tab;
+ * the background sends nothing else here). A snapshot lists what a person could act on, each
+ * with a ref (e12) that holds as long as the element does, and the page's headings and text;
+ * the actions find an element by its ref and act on it as a person would. A frame's refs carry
+ * its frame id (f3:e12), set by the background for each op (setFrame).
  *
  * Input here is the page's own DOM events (isTrusted false), so it never counts as the person:
  * the password menu and save bar ignore it, and nothing an agent types is offered for saving.
@@ -13,29 +14,35 @@ import { walnutFilled } from './form-detect'
 const refs = new Map<string, WeakRef<Element>>()
 const refOf = new WeakMap<Element, string>()
 let next = 1
+/** This frame's prefix on its refs ("f3:"; none in the top frame), for the op running now. */
+let framePrefix = ''
 
-function refFor(el: Element): string {
+export function setFrame(frame: unknown): void {
+  framePrefix = typeof frame === 'string' && /^f\d+$/.test(frame) ? `${frame}:` : ''
+}
+
+export function refFor(el: Element): string {
   let r = refOf.get(el)
   if (!r) { r = `e${next++}`; refOf.set(el, r); refs.set(r, new WeakRef(el)) }
-  return r
+  return framePrefix + r
 }
 
 export class PageError extends Error {
   constructor(message: string, readonly code: string) { super(message) }
 }
 
-function byRef(ref: unknown): Element {
-  const el = typeof ref === 'string' ? refs.get(ref)?.deref() : undefined
+export function byRef(ref: unknown): Element {
+  const el = typeof ref === 'string' ? refs.get(ref.replace(/^f\d+:/, ''))?.deref() : undefined
   if (!el || !el.isConnected) throw new PageError(`No element ${String(ref)} on the page now: snapshot again.`, 'stale_ref')
   return el
 }
 
 // ── reading the page ──
 
-const INTERACTIVE = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [contenteditable=""], [contenteditable=true], '
+export const INTERACTIVE = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [contenteditable=""], [contenteditable=true], '
   + '[role=button], [role=link], [role=checkbox], [role=radio], [role=switch], [role=tab], [role=menuitem], [role=option], [role=combobox], [role=textbox], [role=searchbox], [tabindex]:not([tabindex="-1"])'
 
-function visible(el: Element): boolean {
+export function visible(el: Element): boolean {
   const r = el.getBoundingClientRect()
   if (r.width < 1 || r.height < 1) return false
   const cs = getComputedStyle(el)
@@ -43,15 +50,15 @@ function visible(el: Element): boolean {
 }
 
 /** Every element, open shadow roots included. */
-function all(root: Document | ShadowRoot | Element, sel: string, out: Element[] = []): Element[] {
+export function all(root: Document | ShadowRoot | Element, sel: string, out: Element[] = []): Element[] {
   for (const el of root.querySelectorAll(sel)) out.push(el)
   for (const el of root.querySelectorAll('*')) if (el.shadowRoot) all(el.shadowRoot, sel, out)
   return out
 }
 
-const clip = (s: string, n: number) => { const t = s.replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t }
+export const clip = (s: string, n: number) => { const t = s.replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t }
 
-function roleOf(el: Element): string {
+export function roleOf(el: Element): string {
   const r = el.getAttribute('role')
   if (r) return r
   const t = el.tagName.toLowerCase()
@@ -79,7 +86,7 @@ function labelText(label: HTMLLabelElement | undefined): string {
   return copy.textContent ?? ''
 }
 
-function nameOf(el: Element): string {
+export function nameOf(el: Element): string {
   const aria = el.getAttribute('aria-label')
   if (aria) return aria
   const by = el.getAttribute('aria-labelledby')
@@ -115,7 +122,7 @@ export function notePassword(el: EventTarget | null): void {
  * A value no agent reads: a password (also one the page's "show" button turned to text), a
  * one-time code, and anything Walnut filled from the vault.
  */
-function secret(el: HTMLInputElement): boolean {
+export function secret(el: HTMLInputElement): boolean {
   if (el.type === 'password' || walnutFilled.has(el) || wasPassword.has(el)) return true
   const ac = (el.getAttribute('autocomplete') ?? '').toLowerCase()
   if (/\b(current-password|new-password|one-time-code|cc-number|cc-csc)\b/.test(ac)) return true
@@ -141,7 +148,7 @@ export function unmask(): void {
   masked = []
 }
 
-function stateOf(el: Element): string {
+export function stateOf(el: Element): string {
   const parts: string[] = []
   if (el instanceof HTMLInputElement) {
     if (el.type === 'checkbox' || el.type === 'radio') parts.push(el.checked ? 'checked' : 'unchecked')
@@ -219,51 +226,68 @@ export function pageContext(withText: boolean, maxText = 200_000): { url: string
 
 // ── acting ──
 
-function centerOf(el: Element): { x: number; y: number } {
+export function centerOf(el: Element): { x: number; y: number } {
   el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' as ScrollBehavior })
   const r = el.getBoundingClientRect()
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
 }
 
-function mouse(el: Element, type: string, x: number, y: number): void {
+export function mouse(el: Element, type: string, x: number, y: number): void {
   const init = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: type.endsWith('down') ? 1 : 0, view: window }
   el.dispatchEvent(type.startsWith('pointer') ? new PointerEvent(type, { ...init, pointerType: 'mouse', isPrimary: true }) : new MouseEvent(type, init))
 }
 
-export function click(args: { ref?: unknown; x?: unknown; y?: unknown }): { clicked: string } {
-  let el: Element | null
-  let x: number
-  let y: number
+/** The element a ref or a point names, and the point a pointer would use on it (refused when something covers it). */
+export function target(args: { ref?: unknown; x?: unknown; y?: unknown }): { el: Element; x: number; y: number } {
   if (typeof args.x === 'number' && typeof args.y === 'number') {
-    x = args.x; y = args.y
-    el = document.elementFromPoint(x, y)
-    if (!el) throw new PageError(`Nothing at ${x},${y}.`, 'nothing_there')
-  } else {
-    el = byRef(args.ref)
-    ;({ x, y } = centerOf(el))
-    // What is really under the point (a cookie banner, an overlay) is what a click would hit.
-    const top = document.elementFromPoint(x, y)
-    if (top && top !== el && !el.contains(top) && !top.contains(el)) {
-      throw new PageError(`${String(args.ref)} is covered by ${roleOf(top)} "${clip(nameOf(top), 60)}" (${top.tagName.toLowerCase()}): close or scroll it first.`, 'covered')
-    }
+    const el = document.elementFromPoint(args.x, args.y)
+    if (!el) throw new PageError(`Nothing at ${args.x},${args.y}.`, 'nothing_there')
+    return { el, x: args.x, y: args.y }
   }
+  const el = byRef(args.ref)
+  const { x, y } = centerOf(el)
+  // What is really under the point (a cookie banner, an overlay) is what a click would hit.
+  const top = document.elementFromPoint(x, y)
+  if (top && top !== el && !el.contains(top) && !top.contains(el)) {
+    throw new PageError(`${String(args.ref)} is covered by ${roleOf(top)} "${clip(nameOf(top), 60)}" (${top.tagName.toLowerCase()}): close or scroll it first.`, 'covered')
+  }
+  return { el, x, y }
+}
+
+export function click(args: { ref?: unknown; x?: unknown; y?: unknown }): { clicked: string; newTab?: string } {
+  const { el, x, y } = target(args)
   for (const t of ['pointerover', 'pointerenter', 'mouseover', 'pointerdown', 'mousedown']) mouse(el, t, x, y)
   if (el instanceof HTMLElement) el.focus({ preventScroll: true })
   for (const t of ['pointerup', 'mouseup']) mouse(el, t, x, y)
+  const clicked = `${roleOf(el)} "${clip(nameOf(el), 60)}"`
+  // A link to a new tab: the browser blocks a new tab from a click that is not the person's, so
+  // the background opens it (as the same agent's tab) instead.
+  const a = el.closest('a[href]')
+  if (a instanceof HTMLAnchorElement && /^_blank$/i.test(a.target) && /^https?:/i.test(a.href) && !a.hasAttribute('download')) return { clicked, newTab: a.href }
   // click() runs the element's default action (a link follows, a checkbox toggles, a form sends).
   if (el instanceof HTMLElement) el.click()
   else mouse(el, 'click', x, y)
-  return { clicked: `${roleOf(el)} "${clip(nameOf(el), 60)}"` }
+  return { clicked }
+}
+
+/** The pointer comes over the element (or point), as a person's mouse would: hover menus open on it. */
+export function hover(args: { ref?: unknown; x?: unknown; y?: unknown }): { hovered: string } {
+  const { el, x, y } = target(args)
+  for (const t of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']) {
+    const init = { bubbles: !t.endsWith('enter'), cancelable: true, composed: true, clientX: x, clientY: y, view: window }
+    el.dispatchEvent(t.startsWith('pointer') ? new PointerEvent(t, { ...init, pointerType: 'mouse', isPrimary: true }) : new MouseEvent(t, init))
+  }
+  return { hovered: `${roleOf(el)} "${clip(nameOf(el), 60)}"` }
 }
 
 /** The value set the way a person's typing sets it, so frameworks (React and the like) see it. */
-function setNative(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+export function setNative(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
   if (setter) setter.call(el, value); else el.value = value
 }
 
-function key(el: Element, k: string, type: 'keydown' | 'keyup' | 'keypress'): boolean {
+export function key(el: Element, k: string, type: 'keydown' | 'keyup' | 'keypress'): boolean {
   const code = k.length === 1 ? `Key${k.toUpperCase()}` : k
   return el.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true, composed: true }))
 }
@@ -324,23 +348,62 @@ export function press(args: { key?: unknown }): { pressed: string } {
   return { pressed: k }
 }
 
-export function scroll(args: { ref?: unknown; direction?: unknown; amount?: unknown }): { scrolled: string } {
-  if (args.ref !== undefined) { centerOf(byRef(args.ref)); return { scrolled: `to ${String(args.ref)}` } }
-  const n = typeof args.amount === 'number' && args.amount > 0 ? Math.min(args.amount, 20) : 1
-  const dy = (args.direction === 'up' ? -1 : 1) * n * innerHeight * 0.85
-  scrollBy({ top: dy, behavior: 'instant' as ScrollBehavior })
-  return { scrolled: `${args.direction === 'up' ? 'up' : 'down'} ${n} screen(s); at ${Math.round(scrollY)} of ${Math.round(document.documentElement.scrollHeight - innerHeight)}` }
+/** What scrolls: the page, or (an app whose page does not) its largest scrolling box. */
+function scroller(): Element {
+  const doc = document.scrollingElement ?? document.documentElement
+  if (doc.scrollHeight > innerHeight + 2 || doc.scrollWidth > innerWidth + 2) return doc
+  let best: Element = doc
+  let area = 0
+  for (const el of all(document, 'div, main, section, article, ul, [role=main], [role=list], [role=feed]')) {
+    if (el.scrollHeight <= el.clientHeight + 2 && el.scrollWidth <= el.clientWidth + 2) continue
+    const o = getComputedStyle(el).overflowY + getComputedStyle(el).overflowX
+    if (!/auto|scroll/.test(o) || !visible(el)) continue
+    const a = el.clientWidth * el.clientHeight
+    if (a > area) { area = a; best = el }
+  }
+  return best
 }
 
-export async function wait(args: { text?: unknown; ms?: unknown }): Promise<{ waited: string }> {
-  if (typeof args.text === 'string' && args.text) {
-    const want = args.text.toLowerCase()
+export function scroll(args: { ref?: unknown; direction?: unknown; amount?: unknown; to?: unknown; by?: unknown }): Record<string, unknown> {
+  if (args.ref !== undefined) { centerOf(byRef(args.ref)); return { scrolled: `to ${String(args.ref)}`, ...where(scroller()) } }
+  const box = scroller()
+  const flat = { behavior: 'instant' as ScrollBehavior }
+  const sideways = args.direction === 'left' || args.direction === 'right'
+  let said: string
+  if (args.to === 'top' || args.to === 'bottom') {
+    box.scrollTo({ top: args.to === 'top' ? 0 : box.scrollHeight, ...flat })
+    said = `to the ${args.to}`
+  } else {
+    const sign = args.direction === 'up' || args.direction === 'left' ? -1 : 1
+    const screen = sideways ? (box === document.scrollingElement ? innerWidth : box.clientWidth) : (box === document.scrollingElement ? innerHeight : box.clientHeight)
+    const n = typeof args.amount === 'number' && args.amount > 0 ? Math.min(args.amount, 20) : 1
+    const px = typeof args.by === 'number' && args.by > 0 ? Math.min(args.by, 100_000) : n * screen * 0.85
+    box.scrollBy({ [sideways ? 'left' : 'top']: sign * px, ...flat })
+    said = `${sideways ? (sign < 0 ? 'left' : 'right') : (sign < 0 ? 'up' : 'down')} ${typeof args.by === 'number' && args.by > 0 ? `${Math.round(px)} px` : `${n} screen(s)`}`
+  }
+  const w = where(box)
+  return { scrolled: `${said}; at ${w.scrollTop} of ${w.maxTop}`, ...w }
+}
+
+function where(box: Element): { scrollTop: number; scrollLeft: number; maxTop: number; atTop: boolean; atBottom: boolean } {
+  const maxTop = Math.max(0, Math.round(box.scrollHeight - box.clientHeight))
+  const top = Math.round(box.scrollTop)
+  return { scrollTop: top, scrollLeft: Math.round(box.scrollLeft), maxTop, atTop: top <= 1, atBottom: top >= maxTop - 1 }
+}
+
+const bodyText = () => (document.body?.innerText ?? '').toLowerCase()
+
+export async function wait(args: { text?: unknown; textGone?: unknown; ms?: unknown }): Promise<{ waited: string }> {
+  const gone = typeof args.textGone === 'string' && args.textGone ? args.textGone : undefined
+  const want = typeof args.text === 'string' && args.text ? args.text : undefined
+  if (want || gone) {
     const until = Date.now() + 30_000
     while (Date.now() < until) {
-      if ((document.body?.innerText ?? '').toLowerCase().includes(want)) return { waited: `"${args.text}" is on the page` }
+      if (want && bodyText().includes(want.toLowerCase())) return { waited: `"${want}" is on the page` }
+      if (gone && !bodyText().includes(gone.toLowerCase())) return { waited: `"${gone}" is gone from the page` }
       await new Promise((r) => setTimeout(r, 250))
     }
-    throw new PageError(`"${args.text}" did not show within 30 s.`, 'wait_timeout')
+    throw new PageError(want ? `"${want}" did not show within 30 s.` : `"${gone}" was still on the page after 30 s.`, 'wait_timeout')
   }
   const ms = typeof args.ms === 'number' ? Math.max(0, Math.min(30_000, args.ms)) : 1000
   await new Promise((r) => setTimeout(r, ms))

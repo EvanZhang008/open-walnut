@@ -6,7 +6,8 @@ description: >-
   enter a 2FA code. Use it whenever a step needs a credential the user keeps, instead of
   asking them to paste it. `walnut pass run` gives a command its secrets as env vars
   without them entering your context; `password_use` returns values when you must type
-  them yourself. Each use is the user's to approve unless the item allows agents.
+  them yourself. The user picks whether agents use items at once (Any, the default), ask
+  each time (Ask) or not at all (Off); a sensitive item always asks.
 ---
 
 # Passwords for agents
@@ -14,12 +15,16 @@ description: >-
 The user keeps logins, API keys, one-time codes and cards in Walnut's password vault. You
 never open the vault yourself: you name an item and say why, and Walnut decides.
 
-- An item the user set to **without asking** is given at once.
-- An item set to **ask** (the default) sends the user a notification on their Mac and phone;
-  they approve or deny it. A **sensitive** item needs Face ID or Touch ID.
+- The user's switch is **Any** (the default: an item is given at once), **Ask** (every use
+  sends the user a notification on their Mac and phone to approve or deny) or **Off** (you list
+  nothing; an ask that names one item still reaches the user). An item set to **without asking**
+  is given under Ask too.
+- A **sensitive** item always asks, with Face ID or Touch ID.
 - An item set to **never** is never given: ask the user to do that step themselves.
-- The user can turn agent access off entirely. Every ask, use and refusal is logged where they
-  see it (Passwords, Agent Activity).
+- A yes lasts as long as the user picked (48 hours by default, or once, or until they revoke
+  it), for this task and session and the fields you asked for.
+- Every list, use and refusal is logged where the user sees it (Passwords, Agent Activity),
+  with how you used it: showed plaintext, gave it to a command, filled it into a page.
 - Never ask the user for their master password, Secret Key or recovery code, and never read
   their recovery kit: nothing an agent does needs them. A user who forgot the master password
   uses "Forgot master password?" on the Passwords lock screen with the kit's recovery code.
@@ -68,14 +73,22 @@ the id.
   call.
 - **A denial means no.** Do not ask again in this task unless the user tells you to; after
   three denials the task's asks pause for 30 minutes (`agent_paused`).
-- **`scope: "task"` / `--task`** asks to use the item for an hour without asking again, in
-  this session, for the fields you asked for. Ask for it only when the work will need the item
-  several times, and ask for every field you will need in that first ask.
+- **One ask covers the work.** An approval lasts the user's grant length (48 hours by default)
+  for this task and session and the fields you asked for, so ask for every field you will need
+  in that first ask. Ask for less with `scope: "once"` / `--once` when you need it one time.
+- **Say how you use it**: `password_use` with `use: "reveal"` (you see the value) or
+  `use: "env"` (a command gets it); `walnut pass get` and `run` say so for you.
 - **Never repeat a value** in a reply, a file, a commit, a log, a Board post or a message to
   another task. Use it for the step you named and nothing else.
 - **Locked** (`vault_locked`): the vault opens only while the user has Passwords unlocked (or
   allowed agents while away). Tell the user in your reply; do not retry in a loop.
-- **Off** (`agents_off`) or **never** (`agent_never`): the user decided. Ask them to do the
-  step, or to change the setting if they want you to.
+- **Never** (`agent_never`), a denial, or a sync refused while access is Off (`agents_off`):
+  the user decided. Ask them to do the step, or to change the setting if they want you to.
 - Never ask the user to paste a password into the chat when the vault can hold it: suggest
   they add it in Passwords and set who may use it.
+- **Bitwarden.** The vault can follow the user's Bitwarden one way (Settings, Passwords, "Sync
+  from Bitwarden daily" or "Sync now"). If the user asks you to sync it now: `walnut pass
+  sync-bitwarden` (or the op `password_sync_bitwarden`). Walnut runs `bw` itself on the Mac and
+  the export never reaches you; you never pipe or post an export (only the user's own unlocked
+  window may, `export_person_only`). Never run `bw export` yourself. A refused mass trash
+  (`sync_mass_trash`) is the user's to confirm in Settings.

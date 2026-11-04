@@ -13,6 +13,9 @@
  *   POST   /api/v1/vault/items/:id/{trash,restore,favorite,used}                (session)
  *   DELETE /api/v1/vault/items/:id                 (session; only from the trash)
  *   GET    /api/v1/vault/items/:id/totp            → { code, period, remaining } (session)
+ *   POST   /api/v1/vault/passkeys/match            { origin, rpId?, allow? } → { passkeys }        (session, quiet)
+ *   POST   /api/v1/vault/passkeys/create           { origin, rpId?, rpName?, user, clientDataJSON, exclude?, itemId? } (session)
+ *   POST   /api/v1/vault/passkeys/assert           { origin, rpId?, credentialId, clientDataJSON } → signature (session)
  *   POST   /api/v1/vault/import                    { text, format?, fileName?, dryRun } (session)
  *   GET    /api/v1/vault/report                    → security report            (session)
  *   POST   /api/v1/vault/settings                  { agentsWhileAway, passwordKey | password } → status + recoveryKit? (session)
@@ -40,7 +43,7 @@ import { ambientTestRun } from '../../core/test-run.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { currentExposeStatus } from '../../core/expose/status.js'
 import { derivePasswordKey, toB64, type KdfParams } from '../../core/vault/crypto.js'
-import type { VaultItemInput } from '../../core/vault/types.js'
+import type { VaultItem, VaultItemInput } from '../../core/vault/types.js'
 
 export const vaultV1Router = Router()
 
@@ -110,10 +113,28 @@ async function needSession(req: Request, res: Response, touch = true): Promise<b
   return false
 }
 
-async function autoLockMinutes(): Promise<number> {
+/** A new vault keeps windows unlocked 48 hours, written down (an install with no choice keeps the old idle lock); a choice already made stays. */
+async function writeNewVaultUnlockLength(): Promise<void> {
+  const { getConfig, updateConfig } = await import('../../core/config-manager.js')
+  const { NEW_VAULT_UNLOCK_FOR } = await import('../../core/vault/unlock-length.js')
+  const cur = (await getConfig()).passwords ?? {}
+  if (cur.unlock_for) return
+  await updateConfig({ passwords: { ...cur, unlock_for: NEW_VAULT_UNLOCK_FOR } })
+}
+
+/** "Keep Passwords unlocked" in effect (core/vault/unlock-length.ts): the session limits and what the status reports. */
+async function unlockLength(machineKeyOn?: boolean) {
   const { getConfig } = await import('../../core/config-manager.js')
-  const m = (await getConfig()).passwords?.auto_lock_minutes
-  return typeof m === 'number' && m > 0 ? m : 15
+  const { unlockChoice } = await import('../../core/vault/unlock-length.js')
+  const away = machineKeyOn ?? (await (await store()).vaultStatus()).agentsWhileAway
+  return unlockChoice((await getConfig()).passwords, away)
+}
+
+/** An item as a client gets it: its passkeys without their private keys, which never leave Walnut. */
+async function shown(item: VaultItem | null): Promise<VaultItem | null> {
+  if (!item?.passkeys?.length) return item
+  const { publicPasskey } = await import('../../core/vault/passkey.js')
+  return { ...item, passkeys: item.passkeys.map(publicPasskey) }
 }
 
 /** A route that already answered (a brake's refusal) returns this, and run() sends nothing more. */
@@ -129,6 +150,8 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
     const { ImportError } = await import('../../core/vault/import.js')
     if (err instanceof VaultError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
     if (err instanceof ImportError) { res.status(400).json({ error: err.message, code: 'bad_import' }); return }
+    const { PasskeyError } = await import('../../core/vault/passkey.js')
+    if (err instanceof PasskeyError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
     next(err)
   }
 }
@@ -267,7 +290,8 @@ vaultV1Router.get('/vault/status', async (req, res, next) => {
     const unlocked = !!s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))
     await closeIfNobody()
     const st = await (await store()).vaultStatus()
-    return { ...st, unlocked, autoLockMinutes: await autoLockMinutes(), waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
+    const u = await unlockLength(st.agentsWhileAway)
+    return { ...st, unlocked, autoLockMinutes: u.autoLockMinutes, unlockFor: u.unlockFor, lockAfterIdleMinutes: u.lockAfterIdleMinutes, waitMs: s.unlockWaitMs(), privateLink: privateLink(req) }
   })
 })
 
@@ -278,11 +302,12 @@ vaultV1Router.post('/vault/setup', async (req, res, next) => {
     const body = (req.body ?? {}) as { kdf?: KdfParams; agentsWhileAway?: boolean }
     const kdf = body.kdf ?? st.defaultKdf()
     st.checkKdf(kdf)
-    const minutes = await autoLockMinutes()
     const s = await sessions()
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, kdf)
       const made = await st.setupVault({ passwordKey, kdf, agentsWhileAway: body.agentsWhileAway === true })
+      await writeNewVaultUnlockLength()
+      const minutes = (await unlockLength()).limits
       return { ...made, session: s.createSession(clientName(req), minutes, deviceOf(req)) }
     })
     return r ? r.value : SENT
@@ -301,7 +326,7 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
       throw new st.VaultError('The master password was changed in another window: try again.', 409, 'kdf_changed')
     }
     const s = await sessions()
-    const minutes = await autoLockMinutes()
+    const minutes = (await unlockLength()).limits
     // The session is made inside the check, so no close can run between the open and it.
     const r = await attempt(res, async () => {
       const passwordKey = await passwordKeyOf(req, req.body ?? {}, status.kdf)
@@ -338,20 +363,20 @@ vaultV1Router.post('/vault/items', async (req, res, next) => {
   if (!gate(req, res) || !(await needSession(req, res))) return
   await run(res, next, async () => {
     const [item] = await (await store()).createItems([(req.body as { item: VaultItemInput }).item])
-    return { item }
+    return { item: await shown(item) }
   })
 })
 
 vaultV1Router.get('/vault/items/:id', async (req, res, next) => {
   if (!gate(req, res) || !(await needSession(req, res))) return
-  await run(res, next, async () => ({ item: await (await store()).getItem(param(req.params.id)) }))
+  await run(res, next, async () => ({ item: await shown(await (await store()).getItem(param(req.params.id))) }))
 })
 
 vaultV1Router.put('/vault/items/:id', async (req, res, next) => {
   if (!gate(req, res) || !(await needSession(req, res))) return
   await run(res, next, async () => {
     const body = req.body as { item: VaultItemInput; expectedUpdatedAt?: string }
-    return { item: await (await store()).updateItem(param(req.params.id), body.item, body.expectedUpdatedAt) }
+    return { item: await shown(await (await store()).updateItem(param(req.params.id), body.item, body.expectedUpdatedAt)) }
   })
 })
 
@@ -361,9 +386,9 @@ for (const action of ['trash', 'restore', 'favorite', 'used'] as const) {
     await run(res, next, async () => {
       const st = await store()
       const id = param(req.params.id)
-      if (action === 'trash') return { item: await st.trashItem(id) }
-      if (action === 'restore') return { item: await st.restoreItem(id) }
-      if (action === 'favorite') return { item: await st.setFavorite(id, (req.body as { favorite?: boolean })?.favorite !== false) }
+      if (action === 'trash') return { item: await shown(await st.trashItem(id)) }
+      if (action === 'restore') return { item: await shown(await st.restoreItem(id)) }
+      if (action === 'favorite') return { item: await shown(await st.setFavorite(id, (req.body as { favorite?: boolean })?.favorite !== false)) }
       await st.markUsed(id)
       return { ok: true }
     })
@@ -387,6 +412,34 @@ vaultV1Router.get('/vault/items/:id/totp', async (req, res, next) => {
     const p = item.totp ? parseTotp(item.totp) : null
     if (!p) throw new st.VaultError('This item has no usable one-time code', 404, 'no_totp')
     return totpAt(p, Date.now())
+  })
+})
+
+// ── passkeys (core/vault/passkey-store.ts): the browser extension signs in and registers with them ──
+
+vaultV1Router.post('/vault/passkeys/match', async (req, res, next) => {
+  // Looked up as the person browses (a site asking for a passkey): quiet, like the logins of a page.
+  if (!gate(req, res) || !(await needSession(req, res, false))) return
+  await run(res, next, async () => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const { matchPasskeys } = await import('../../core/vault/passkey-store.js')
+    return { passkeys: await matchPasskeys({ origin: b.origin, rpId: b.rpId, allow: b.allow }) }
+  })
+})
+
+vaultV1Router.post('/vault/passkeys/create', async (req, res, next) => {
+  if (!gate(req, res) || !(await needSession(req, res))) return
+  await run(res, next, async () => {
+    const { createPasskey } = await import('../../core/vault/passkey-store.js')
+    return createPasskey((req.body ?? {}) as Parameters<typeof createPasskey>[0])
+  })
+})
+
+vaultV1Router.post('/vault/passkeys/assert', async (req, res, next) => {
+  if (!gate(req, res) || !(await needSession(req, res))) return
+  await run(res, next, async () => {
+    const { signInWithPasskey } = await import('../../core/vault/passkey-store.js')
+    return signInWithPasskey((req.body ?? {}) as Parameters<typeof signInWithPasskey>[0])
   })
 })
 
@@ -453,6 +506,10 @@ vaultV1Router.post('/vault/password', async (req, res, next) => {
     })
     if (!r) return SENT
     const s = await sessions()
+    // A new master password ends every agent grant too.
+    const { endAllGrants } = await import('../../core/vault/agent.js')
+    const { endAgentAccess } = await import('./vault-agent-v1.js')
+    await endAgentAccess(endAllGrants())
     return { ok: true, otherWindowsLocked: s.endOtherSessions(header(req, s.SESSION_HEADER)), ...(r.value.kit ? { recoveryKit: r.value.kit } : {}) }
   })
 })
@@ -486,7 +543,7 @@ vaultV1Router.post('/vault/recover', async (req, res, next) => {
     // The code opens the vault by itself on this machine: it crosses only a link nobody else reads.
     if (!privateLink(req)) throw new st.VaultError('Open Walnut over https or Tailscale to use a recovery code from this device: plain http would send it readable on the network.', 400, 'insecure_link')
     const s = await sessions()
-    const minutes = await autoLockMinutes()
+    const minutes = (await unlockLength()).limits
     const r = await attempt(res, async () => {
       const newPasswordKey = await passwordKeyOf(req, { passwordKey: body.newPasswordKey, password: body.newPassword }, kdf)
       const kit = await st.recoverVault({

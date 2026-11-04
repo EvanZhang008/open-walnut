@@ -11,11 +11,11 @@ import path from 'node:path'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { createItems, resetVaultForTest, setupVault, VaultError } from '../../../src/core/vault/store.js'
 import {
-  agentItems, agentUse, agentWait, endAllGrants, resetAgentStateForTest, DENY_MAX, RELEASE_MAX,
+  agentItems, agentUse, agentWait, endAllGrants, listGrants, resetAgentStateForTest, DENY_MAX, RELEASE_MAX,
   type AgentRequester, type ApprovalCreator, type ApprovalWaiter,
 } from '../../../src/core/vault/agent.js'
 import { readAgentLog } from '../../../src/core/vault/agent-log.js'
-import { readPolicy, writePolicy } from '../../../src/core/vault/policy.js'
+import { readPolicy, resetPolicyForTest, writePolicy } from '../../../src/core/vault/policy.js'
 
 let dir = ''
 const ids: Record<string, string> = {}
@@ -79,7 +79,9 @@ describe('what an agent sees', () => {
     expect(items.find((i) => i.title === 'GitHub')).toMatchObject({ fields: ['password', 'username', 'totp'], access: 'ask', sites: ['github.com'] })
     expect((await agentItems({ agents: 'ask', site: 'https://github.com/login' })).map((i) => i.title)).toEqual(['GitHub'])
     expect((await agentItems({ agents: 'ask', query: 'stripe' })).map((i) => i.envName)).toEqual(['STRIPE_API_KEY'])
-    expect(await code(agentItems({ agents: 'off' }))).toBe('agents_off')
+    // Off: no list at all (an agent may still ask for one item it names, below).
+    expect(await agentItems({ agents: 'off' })).toEqual([])
+    expect((await agentItems({ agents: 'off', forUse: true })).length).toBe(items.length)
   })
 })
 
@@ -106,12 +108,17 @@ describe('the policy', () => {
     const w = await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)
     expect(w).toMatchObject({ status: 'released', via: 'approval', values: { username: 'bot@example.test' } })
     if (w.status === 'released') expect(w.values.totp).toMatch(/^\d{6}$/)
-    // The next use asks again.
-    expect((await use('GitHub')).status).toBe('pending')
+    // An approval gives the grant length by default: the same fields come without asking.
+    expect(await use('GitHub', 'ask', { fields: ['username'] })).toMatchObject({ status: 'released', via: 'grant' })
+    // `scope: "once"`: only that use.
+    const once = await use('github.com', 'ask', { fields: ['password'], scope: 'once' })
+    if (once.status !== 'pending') throw new Error('expected pending')
+    await agentWait(once.requestId, once.waitToken, 0, 'ask', waiter)
+    expect((await use('GitHub', 'ask', { fields: ['password'] })).status).toBe('pending')
   })
 
-  it('a task grant lets this task use the item for an hour without asking, and Lock all ends it', async () => {
-    const r = await use('GitHub', 'ask', { scope: 'task' })
+  it('a task grant lets this task use the item without asking, and Lock all ends it', async () => {
+    const r = await use('GitHub', 'ask', { scope: 'task', grantMs: 3_600_000 })
     if (r.status !== 'pending') throw new Error('expected pending')
     const w = await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)
     expect(w).toMatchObject({ status: 'released', grantedUntil: expect.any(String) })
@@ -131,6 +138,24 @@ describe('the policy', () => {
     // Another field, or the same task in another session, asks again.
     expect((await agentUse({ item: 'GitHub', fields: ['password'], purpose: 'sign in as the bot', requester: inSession, agents: 'ask' }, create)).status).toBe('pending')
     expect((await agentUse({ item: 'GitHub', fields: ['username'], purpose: 'read the bot name', requester: { ...task, sessionId: 's-2' }, agents: 'ask' }, create)).status).toBe('pending')
+  })
+
+  it('a grant covers the use approved: fill never reveals, reveal covers env and fill, and the grant says its use', async () => {
+    const inSession = { ...task, sessionId: 's-use' }
+    const ask = (use: 'fill' | 'env' | 'reveal') => agentUse({ item: 'GitHub', purpose: 'sign in to the test git host', requester: inSession, agents: 'ask', use }, create)
+    const r = await ask('fill')
+    if (r.status !== 'pending') throw new Error('expected pending')
+    await agentWait(r.requestId, r.waitToken, 0, 'ask', waiter)
+    expect(listGrants()).toEqual([expect.objectContaining({ itemId: ids.GitHub, use: 'fill' })])
+    expect(await ask('fill')).toMatchObject({ status: 'released', via: 'grant' })
+    // The fill grant gives nothing back to the agent, nor into a command.
+    expect((await ask('reveal')).status).toBe('pending')
+    expect((await ask('env')).status).toBe('pending')
+    resetAgentStateForTest()
+    const rv = await ask('reveal')
+    if (rv.status !== 'pending') throw new Error('expected pending')
+    await agentWait(rv.requestId, rv.waitToken, 0, 'ask', waiter)
+    for (const u of ['reveal', 'env', 'fill'] as const) expect(await ask(u)).toMatchObject({ status: 'released', via: 'grant' })
   })
 
   it('an approval that comes back after Lock all gives nothing', async () => {
@@ -179,6 +204,15 @@ describe('the policy', () => {
     expect(asked[0].detail).toContain('For: this one use')
   })
 
+  it('the approval card says how long the grant lasts and how the value is used', async () => {
+    await use('GitHub', 'ask', { grantMs: 172_800_000, use: 'env' })
+    expect(asked[0].detail).toContain('For: this task, for 48 hours')
+    expect(asked[0].detail).toContain('Use: given to a command, never shown to the agent')
+    await use('GitHub', 'ask', { grantMs: -1 })
+    expect(asked[1].detail).toContain('For: this task, until you revoke it')
+    expect(asked[1].detail).toContain('Use: shown to the agent')
+  })
+
   it('never gives an item kept from agents, whatever the switch', async () => {
     expect(await code(use('Bank'))).toBe('agent_never')
     expect(await code(use('Bank', 'allow'))).toBe('agent_never')
@@ -190,8 +224,20 @@ describe('the policy', () => {
     expect(asked[0].biometric).toBe(true)
   })
 
-  it('the switch: off refuses everything, allow releases items set to ask', async () => {
-    expect(await code(use('Stripe test key', 'off'))).toBe('agents_off')
+  it('the switch: off asks for each item (even one that allows agents), allow releases items set to ask', async () => {
+    const r = await use('Stripe test key', 'off')
+    expect(r.status).toBe('pending')
+    expect(asked[0].detail).toContain('Agent access is Off')
+    if (r.status !== 'pending') return
+    // Approved under Off: the item comes, and the grant holds as under Ask.
+    expect(await agentWait(r.requestId, r.waitToken, 0, 'off', waiter)).toMatchObject({ status: 'released', values: { password: 'sk_test_fake_0000' } })
+    expect(await use('Stripe test key', 'off')).toMatchObject({ status: 'released', via: 'grant' })
+    // Never stays never; an ambiguous name lists nothing under Off.
+    expect(await code(use('Bank', 'off'))).toBe('agent_never')
+    let msg = ''
+    try { await use('shop.example.test', 'off') } catch (err) { msg = (err as Error).message }
+    expect(msg).toMatch(/More than one item/)
+    expect(msg).not.toMatch(/Shop A|Shop B/)
     expect(await use('GitHub', 'allow')).toMatchObject({ status: 'released', via: 'allow' })
   })
 
@@ -245,14 +291,34 @@ describe('the log and the switch, sealed', () => {
     expect(raw).not.toContain('Stripe')
   })
 
-  it('keeps the switch sealed beside the vault, reading ask when it is missing or tampered with', async () => {
-    expect(await readPolicy()).toEqual({ agents: 'ask' })
-    await writePolicy({ agents: 'allow' })
-    expect(await readPolicy()).toEqual({ agents: 'allow' })
+  it('keeps the switch sealed beside the vault: setup wrote Any, missing reads ask, tampered reads ask, deleted keeps what it read', async () => {
     const file = path.join(dir, 'policy.json')
+    // A new vault's setup wrote Any and 48 h explicitly.
+    resetPolicyForTest()
+    expect(fs.existsSync(file)).toBe(true)
+    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000 })
+    // No file at all (a vault set up before Any existed): ask, never Any.
+    const written = fs.readFileSync(file, 'utf8')
+    fs.rmSync(file)
+    resetPolicyForTest()
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
+    fs.writeFileSync(file, written)
+    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000 })
+    await writePolicy({ agents: 'ask' })
+    // A file an older Walnut wrote (no grantMs) keeps its switch.
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
+    await writePolicy({ grantMs: 0 })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 0 })
+    await writePolicy({ grantMs: 12345 })
+    expect((await readPolicy()).grantMs).toBe(172_800_000)
+    // Deleted while this server runs: what it last read, never the Any default.
+    const saved = fs.readFileSync(file, 'utf8')
+    fs.rmSync(file)
+    expect((await readPolicy()).agents).toBe('ask')
+    fs.writeFileSync(file, saved)
     const body = JSON.parse(fs.readFileSync(file, 'utf8'))
     body.data.ct = Buffer.from('tampered').toString('base64')
     fs.writeFileSync(file, JSON.stringify(body))
-    expect(await readPolicy()).toEqual({ agents: 'ask' })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
   })
 })

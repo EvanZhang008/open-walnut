@@ -1,8 +1,8 @@
 /**
  * Agents and the vault on a real server (src/web/routes/vault-agent-v1.ts): an agent lists
  * what it may ask for, gets an item that allows agents at once, waits for a person's real
- * approval (approvals-v1.ts) for one that asks, is refused on a denial, a `never` item, the
- * switch off and a test run; Lock all withdraws a waiting ask and closes the vault; the person
+ * approval (approvals-v1.ts) for one that asks, is refused on a denial, a `never` item and a
+ * test run, sees no list and must ask under the switch off; Lock all withdraws a waiting ask and closes the vault; the person
  * reads the sealed log. Fake data only; the vault lives in the test's own data home.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -55,6 +55,9 @@ beforeAll(async () => {
     { type: 'login', title: 'Bank', password: 'bank-fake-Pass', urls: ['bank.example.test'], agentAccess: 'never' },
     { type: 'login', title: 'Payroll', password: 'pay-fake-Pass', urls: ['payroll.example.test'], sensitive: true },
   ]) ids[item.title] = (await person('POST', '/vault/items', { item })).body.item.id
+  // This file walks the Ask switch with one-use approvals; the Any default and grant lengths
+  // are in vault-agent-modes.test.ts.
+  expect((await person('PUT', '/vault/agent/policy', { agents: 'ask', grantMs: 0 })).body).toMatchObject({ agents: 'ask', grantMs: 0 })
 }, 120_000)
 
 afterAll(async () => {
@@ -120,7 +123,7 @@ describe('an agent and the vault', () => {
     expect((await http('GET', `/approvals/${p.requestId}`)).body.approval.status).toBe('canceled')
   })
 
-  it('never gives an item kept from agents, refuses everything with the switch off, and only a person moves the switch', async () => {
+  it('never gives an item kept from agents, lists nothing and asks for each item with the switch off, and only a person moves the switch', async () => {
     expect((await agent('POST', '/vault/agent/use', { item: 'Bank', purpose: 'check the balance' })).body.code).toBe('agent_never')
     expect((await http('PUT', '/vault/agent/policy', { agents: 'allow' }, { ...AGENT, 'x-walnut-vault-session': session })).body.code).toBe('human_only')
     // A plain approval (walnut approve) is not guarded: a tap answers it as before.
@@ -128,8 +131,12 @@ describe('an agent and the vault', () => {
     expect(plain.body.approval.guard).toBeUndefined()
     expect((await http('POST', `/approvals/${plain.body.approval.id}/answer`, { decision: 'approve' })).status).toBe(200)
     expect((await person('PUT', '/vault/agent/policy', { agents: 'off' })).body.agents).toBe('off')
-    expect((await agent('POST', '/vault/agent/use', { item: 'STRIPE_API_KEY', purpose: 'run the billing test suite' })).body.code).toBe('agents_off')
-    expect((await agent('GET', '/vault/agent/items')).body.code).toBe('agents_off')
+    // Off: no list, and even an item that allows agents waits for the person.
+    const off = await agent('POST', '/vault/agent/use', { item: 'STRIPE_API_KEY', purpose: 'run the billing test suite' })
+    expect(off.body.status).toBe('pending')
+    await agent('POST', `/vault/agent/use/${off.body.requestId}/cancel`, { token: off.body.waitToken })
+    expect((await agent('GET', '/vault/agent/items')).body).toMatchObject({ items: [], off: true })
+    expect((await agent('POST', '/vault/agent/use', { item: 'Bank', purpose: 'check the balance' })).body.code).toBe('agent_never')
     expect((await person('PUT', '/vault/agent/policy', { agents: 'allow' })).body.agents).toBe('allow')
     expect((await agent('POST', '/vault/agent/use', { item: 'Git host', purpose: 'merge the test pull request' })).body).toMatchObject({ status: 'released', via: 'allow' })
     expect((await person('PUT', '/vault/agent/policy', { agents: 'ask' })).body.agents).toBe('ask')
@@ -163,7 +170,7 @@ describe('an agent and the vault', () => {
     expect((await agent('GET', '/vault/agent/log')).body.code).toBe('human_only')
     const log = (await person('GET', '/vault/agent/log')).body.entries as Array<{ kind: string; reason?: string; itemTitle?: string }>
     const kinds = log.map((e) => `${e.kind}${e.reason ? `:${e.reason}` : ''}`)
-    expect(kinds).toEqual(expect.arrayContaining(['released', 'asked', 'denied', 'refused:agent_never', 'refused:agents_off']))
+    expect(kinds).toEqual(expect.arrayContaining(['released', 'asked', 'denied', 'refused:agent_never', 'listed']))
     expect(JSON.stringify(log)).not.toMatch(/sk_test_fake|git-fake-Pass/)
   })
 

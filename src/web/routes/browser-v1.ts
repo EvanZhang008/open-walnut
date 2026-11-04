@@ -257,12 +257,21 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 
 // ── an agent's command ──
 
-const ACTIONS = ['tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait', 'screenshot'] as const
+const ACTIONS = [
+  'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
+  'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'dialog', 'evaluate',
+] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
-const ON_TAB = new Set<Action>(['navigate', 'back', 'close', 'snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait', 'screenshot'])
-const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000 }
-
+const ON_TAB = new Set<Action>([
+  'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
+  'screenshot', 'upload', 'fill_login', 'dialog', 'evaluate',
+])
+/** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
+const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
+const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, downloads: 40_000, take: 30_000 }
+/** A full-page screenshot scrolls through the page, two captures a second. */
+const FULL_SCREENSHOT_MS = 50_000
 /** The tab each owner used last, so `tab` may be left out. */
 const lastTab = new Map<string, { device: string; tab: number }>()
 /**
@@ -276,16 +285,6 @@ const tabKey = (device: string, tab: number) => `${device}\0${tab}`
 const siteAsks = new Map<string, string>()
 /** A site the person refused an owner, until when. */
 const siteDenied = new Map<string, number>()
-
-function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const k of ['url', 'ref', 'x', 'y', 'text', 'clear', 'submit', 'value', 'key', 'direction', 'amount', 'ms', 'full', 'max']) {
-    if (b[k] !== undefined) out[k] = b[k]
-  }
-  if (typeof out.text === 'string') out.text = (out.text as string).slice(0, 20_000)
-  if (typeof out.url === 'string') out.url = (out.url as string).slice(0, 4000)
-  return out
-}
 
 /**
  * The site is allowed, or the person is asked: approved → allowed from now on (and this act
@@ -363,7 +362,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const owner = requester.taskId ? `task:${requester.taskId}` : requester.sessionId ? `session:${requester.sessionId}`
       : personCaller(req) ? 'person' : 'agent'
     const s = await sites()
-    const args = cleanArgs(b)
+    const args = (await import('../../core/browser-control/act-args.js')).cleanArgs(b)
 
     let tab: number | undefined = typeof b.tab === 'number' ? b.tab : typeof b.tab === 'string' && /^\d+$/.test(b.tab) ? Number(b.tab) : undefined
     // A tab is in one browser: its commands go there, whichever browser polled last.
@@ -372,7 +371,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const lastHolds = !!last && live.has(last.device) && h.tabOwner(last.device, tab ?? last.tab) === owner
     const held = typeof b.device === 'string' ? undefined
       : lastHolds ? last!.device
-        : ON_TAB.has(action) || action === 'tabs' ? h.deviceForTab(owner, tab) : undefined
+        : ON_TAB.has(action) || action === 'tabs' || action === 'downloads' ? h.deviceForTab(owner, action === 'downloads' ? undefined : tab) : undefined
     const c = h.pickController(typeof b.device === 'string' ? b.device : held)
     if (ON_TAB.has(action)) {
       if (tab === undefined) {
@@ -396,11 +395,17 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         if (!g.ok) { res.status(g.status).json(g.body); return undefined }
       }
     }
-    if (action === 'open') { args.owner = owner; if (requester.taskTitle) args.who = requester.taskTitle.slice(0, 80) }
+    if (action === 'take') {
+      if (tab === undefined) throw new h.BrowserError('Say which tab to take (tabs with all lists them).', 400, 'which_tab')
+      args.tab = tab
+    }
+    if (action === 'open' || action === 'take') { if (requester.taskTitle) args.who = requester.taskTitle.slice(0, 80) }
+    if (action === 'open' || FOR_OWNER.has(action)) args.owner = owner
 
     let f = await s.readSites()
+    if (action === 'fill_login') return fillLoginAct(req, res, b, { device: c.device, label: c.label, owner, tab: tab!, requester, allow: { ...s.allowOf(f), walnut: own } })
     const go = () => {
-      const ms = Math.min(TIMEOUT[action] ?? h.DEFAULT_COMMAND_MS, left())
+      const ms = Math.min(action === 'screenshot' && args.full === true ? FULL_SCREENSHOT_MS : TIMEOUT[action] ?? h.DEFAULT_COMMAND_MS, left())
       if (ms < 5000) throw new h.BrowserError('Out of time for this call: call it again.', 504, 'browser_timeout')
       return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own }, ms)
     }
@@ -416,19 +421,58 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         result = await go()
       } else throw err
     }
-    const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean }
-    if (action === 'open' && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner)
+    const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean; opened?: { tab?: unknown } }
+    if ((action === 'open' || action === 'take') && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner)
     if (action === 'close' && tab !== undefined) { h.releaseTab(c.device, tab); handed.delete(tabKey(c.device, tab)) }
-    const used = action === 'open' ? r.tab : tab
+    // A tab the agent's tab opened (a link to a new tab, a popup window) is the same agent's.
+    if (typeof r.opened?.tab === 'number') h.ownTab(c.device, r.opened.tab, owner)
+    const used = action === 'open' || action === 'take' ? r.tab : tab
     if (typeof used === 'number' && action !== 'close') lastTab.set(owner, { device: c.device, tab: used })
     log.web.info('browser act', { action, device: c.device, owner, tab: used })
     if (action === 'tabs') {
       const all = Array.isArray(r.tabs) ? r.tabs : []
+      for (const t of all) if (t.owner === owner && h.tabOwner(c.device, t.id) !== owner) h.ownTab(c.device, t.id, owner)
+      // Every tab of the browser: whose each is, never another task's key.
+      if (args.all === true) return { browser: c.label, all: true, tabs: all.map(({ owner: o, ...t }) => ({ ...t, owner: o === owner ? 'mine' : o ? 'other task' : 'person' })) }
       return { browser: c.label, tabs: all.filter((t) => t.owner === owner).map(({ owner: _o, ...t }) => t) }
     }
     return { browser: c.label, ...(r as Record<string, unknown>) }
   })
 })
+
+/**
+ * `fill_login`: the vault decides (core/browser-control/fill-login.ts); the login goes to the
+ * extension alone and is never logged or answered. A vault refusal answers as password_use does.
+ */
+async function fillLoginAct(req: Request, res: Response, b: Record<string, unknown>, at: {
+  device: string; label: string; owner: string; tab: number; requester: import('../../core/vault/agent.js').AgentRequester
+  allow: import('../../core/browser-control/hub.js').WireCommand['allow']
+}): Promise<unknown> {
+  const h = await hub()
+  const { isFollower, role } = await import('../../core/server-role.js')
+  if (role() !== 'leader' || isFollower()) throw new h.BrowserError('Passwords are kept on the Mac, which does not answer right now.', 503, 'vault_not_here')
+  const v = await import('./vault-agent-v1.js')
+  const { fillLogin } = await import('../../core/browser-control/fill-login.js')
+  const { VaultError } = await import('../../core/vault/store.js')
+  const { ApprovalError } = await import('../../core/approvals/store.js')
+  const str = (x: unknown, n: number) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, n) : undefined)
+  try {
+    const out = await fillLogin({
+      owner: at.owner, tab: at.tab, item: str(b.item, 200), request: str(b.request, 100), purpose: str(b.purpose, 200),
+      waitMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0)), requester: at.requester, testRun: ambientTestRun(),
+    }, {
+      send: (action, args, ms) => h.send(at.device, action, args, at.allow, ms),
+      agents: v.agentsSwitch, createApproval: v.createApproval, waitApproval: v.waitApproval,
+    })
+    log.web.info('browser act', { action: 'fill_login', device: at.device, owner: at.owner, tab: at.tab, status: out.status })
+    lastTab.set(at.owner, { device: at.device, tab: at.tab })
+    if (out.status === 202) { res.status(202).json(out.body); return undefined }
+    return { browser: at.label, ...out.body }
+  } catch (err) {
+    if (err instanceof VaultError || err instanceof ApprovalError) throw new h.BrowserError(err.message, err.status, err.code)
+    throw err
+  }
+}
 
 export function _resetBrowserRoutesForTesting(): void {
   ownCache = null

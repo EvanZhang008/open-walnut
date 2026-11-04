@@ -10,7 +10,18 @@ import { isOpen, openSide, updateSide } from './state.js'
 export const LOG_MAX = 500
 const FILE = 'agent-log.json'
 
-export type AgentLogKind = 'released' | 'asked' | 'denied' | 'refused' | 'expired'
+/**
+ * `fill`: a login Walnut put into a browser page for an agent (browser fill_login), the agent never seeing it.
+ * `listed`: an agent read the list of items it may ask for. `revoked`: the person ended a grant.
+ * `synced`: a Bitwarden sync changed the vault (counts only).
+ */
+export type AgentLogKind = 'released' | 'fill' | 'asked' | 'denied' | 'refused' | 'expired' | 'listed' | 'revoked' | 'synced'
+
+/**
+ * How the value was used: `reveal` (the plaintext went back to the agent), `env` (into a
+ * command's environment, `walnut pass run`), `fill` (into a browser page), `list` (no value).
+ */
+export type AgentUseKind = 'reveal' | 'env' | 'fill' | 'list'
 
 export interface AgentLogEntry {
   at: string
@@ -27,8 +38,15 @@ export interface AgentLogEntry {
   /** Who asked. */
   taskId?: string
   taskTitle?: string
+  sessionId?: string
   host?: string
   command?: string
+  use?: AgentUseKind
+  /** Who approved it (the device, with Face ID or Touch ID when it signed). */
+  approvedBy?: string
+  /** A listing: how many items it showed. A sync: what it changed. */
+  count?: number
+  summary?: string
 }
 
 export async function appendAgentLog(entry: Omit<AgentLogEntry, 'at'>): Promise<void> {

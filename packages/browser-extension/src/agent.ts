@@ -3,36 +3,33 @@
  * the person turns it on in the popup. Then the background asks Walnut for work (a long poll
  * with its device token), runs each command, and posts the result.
  *
- * What an agent can reach: only tabs it opened, in one Walnut agent window of their own (the
- * person's tabs are never listed or touched), only on sites the person allowed (each command
- * carries the list, checked here against the tab's real address), never Walnut's own pages or
- * the browser's. Each agent tab wears a frame and a Stop button; Stop gives the tab back.
+ * What an agent can reach: tabs it opened, in one Walnut agent window of their own, and the tabs
+ * those open; a tab of the person's only when they handed it over (the side panel) or the agent
+ * took it with `take` (never the one they are on); only on sites the person allowed (each command
+ * carries the list, checked here against the tab's and each frame's real address), never Walnut's
+ * own pages or the browser's. Each agent tab wears a frame and a Stop button; Stop gives the tab
+ * back. `tabs {all}` lists the person's tabs by title and address only, never what is in them.
+ * Page actions are in agent-page.ts, screenshots in agent-shot.ts, downloads in
+ * agent-downloads.ts, and real input (off by default) in agent-trusted.ts.
  */
-import { ext, isFirefox, type Sender, type Tab } from './ext'
+import { ext, isFirefox, type Sender } from './ext'
+import { more } from './agent-api'
 import { ApiError, call, connection } from './walnut-api'
 import { siteKey } from '../../../src/core/vault/url-match'
-import { tabStore } from './tab-store'
-import { walnutAddress } from './walnut-address'
-import { pageCheck, reachPage, toPage, type ReachError } from './page-reach'
+import { pageCheck, reachPage } from './page-reach'
+import {
+  AgentError, WALNUT_PAGE, agentTabs, allowFor, checkPage, forgetTampered, loaded, mark, noteFilled, ownTab, personsTab, reached, sleep, tabLoading, tamperedNow, walnutCheck, where,
+  type WireCommand,
+} from './agent-shared'
+import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
+import { screenshot } from './agent-shot'
+import { downloadsAction, watchDownloads } from './agent-downloads'
+import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-trusted'
+import { fillFrames } from './bg-fill'
 
-interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
+export { setTrustedInput, trustedInputState } from './trusted-switch'
 
-class AgentError extends Error {
-  constructor(message: string, readonly code: string, readonly extra: Record<string, unknown> = {}) { super(message) }
-}
-
-/**
- * The agent tabs and who opened each (a task's owner key) and its name for the frame. `handed`:
- * the person handed this tab over from the side panel, and its site (allowed in this tab alone).
- */
-interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string }
-const agentTabs = tabStore<AgentTab>('agentTabs')
 const HISTORY_MAX = 30
-const PAGE_OPS = new Set(['snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait'])
-/** After these the page may load something new: wait for it before answering. */
-const MAY_NAVIGATE = new Set(['click', 'press', 'type', 'select'])
-
-let isWalnutPage: (url: string) => Promise<boolean> = async () => false
 
 export async function agentOn(): Promise<boolean> {
   return (await ext.storage.local.get('agentControl')).agentControl === true
@@ -42,53 +39,7 @@ export async function isAgentTab(tabId: number | undefined): Promise<{ owner: st
   return tabId === undefined ? undefined : agentTabs.get(tabId)
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-function allowed(allow: WireCommand['allow'], url: string): boolean {
-  const site = siteKey(url)?.domain
-  if (!site) return false
-  return allow.any || allow.sites.includes(site)
-}
-
-/** What a tab may use: the allowed sites, and the site of a tab the person handed over. */
-function allowFor(allow: WireCommand['allow'], rec: AgentTab | undefined): WireCommand['allow'] {
-  return rec?.handed && !allow.sites.includes(rec.handed) ? { ...allow, sites: [...allow.sites, rec.handed] } : allow
-}
-
-/** The page may be an agent's: a web page, not Walnut, on an allowed site. */
-async function checkPage(allow: WireCommand['allow'], url: string): Promise<void> {
-  if (!/^https?:\/\//i.test(url)) throw new AgentError('Agents use web pages only (http or https).', 'not_a_web_page')
-  if (await isWalnutPage(url) || walnutAddress(allow.walnut, url)) throw new AgentError('Agents never use Walnut\'s own pages in the browser.', 'walnut_page')
-  if (!allowed(allow, url)) throw new AgentError('That site is not allowed for agents yet.', 'site_not_allowed', { url, site: siteKey(url)?.domain })
-}
-
-/** Resolves when the tab has finished loading (or after `ms`). */
-function loaded(tabId: number, ms = 30_000): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false
-    const finish = () => { if (done) return; done = true; ext.tabs.onUpdated.removeListener(on); clearTimeout(t); resolve() }
-    const on = (id: number, change: { status?: string }) => { if (id === tabId && change.status === 'complete') finish() }
-    const t = setTimeout(finish, ms)
-    ext.tabs.onUpdated.addListener(on)
-    void ext.tabs.get(tabId).then((tab) => { if (tab.status === 'complete') setTimeout(() => void ext.tabs.get(tabId).then((t2) => { if (t2.status === 'complete') finish() }).catch(finish), 150) }).catch(finish)
-  })
-}
-
-/** A page action may start a navigation: wait a moment for one, and for it to load. */
-function settled(tabId: number): Promise<void> {
-  return new Promise((resolve) => {
-    let loading = false
-    const on = (id: number, change: { status?: string }) => { if (id === tabId && change.status === 'loading') loading = true }
-    ext.tabs.onUpdated.addListener(on)
-    setTimeout(() => {
-      ext.tabs.onUpdated.removeListener(on)
-      if (loading) void loaded(tabId, 15_000).then(resolve)
-      else resolve()
-    }, 700)
-  })
-}
-
-async function agentWindow(url: string): Promise<Tab> {
+async function agentWindow(url: string) {
   const { agentWindow: id } = await ext.storage.session.get('agentWindow')
   if (typeof id === 'number') {
     const w = await ext.windows.get(id).catch(() => null)
@@ -100,33 +51,55 @@ async function agentWindow(url: string): Promise<Tab> {
   return w.tabs?.[0] ?? (await ext.tabs.query({ active: true, windowId: w.id }))[0] ?? {}
 }
 
-async function mark(tabId: number, on: boolean, who?: string): Promise<void> {
-  await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}) }, 4000)
+const ownerArg = (a: Record<string, unknown>): string => {
+  if (typeof a.owner !== 'string' || !a.owner) throw new AgentError('No owner for the tab.', 'bad_request')
+  return a.owner
 }
 
-const UNREACHED: Record<ReachError, string> = {
-  gone: 'That tab was closed.',
-  not_web: 'Agents use web pages only (http or https).',
-  no_script: 'Walnut could not reach this page (the browser keeps the extension out of it, or it stopped answering): reload the tab and try again.',
+/** Every normal tab of the browser, the person's too: where it is and who acts in it, never what is in it. */
+async function allTabs(): Promise<Array<Record<string, unknown>>> {
+  const out: Array<Record<string, unknown>> = []
+  for (const t of await more.tabs.query({ windowType: 'normal' }).catch(() => [])) {
+    // A private window's tabs are never listed, nor taken.
+    if (t.id === undefined || t.incognito) continue
+    const rec = await agentTabs.get(t.id)
+    out.push({ id: t.id, title: t.title, url: t.url, active: t.active === true, windowId: t.windowId, ...(rec ? { owner: rec.owner } : {}) })
+  }
+  return out.slice(0, 500)
 }
 
-/** The page's script answers, put in first when the tab had none (page-reach.ts). */
-async function reached(tabId: number): Promise<{ walnut: boolean; href: string }> {
-  const r = await reachPage(tabId)
-  if (!r.ok) throw new AgentError(UNREACHED[r.why], r.why === 'gone' ? 'not_your_tab' : 'page_not_ready')
-  return r
+/**
+ * `take {tab}`: one of the person's tabs becomes the agent's, with the frame and Stop, as a tab
+ * they handed over does. Never the tab they are on now, Walnut's or the browser's own pages.
+ */
+async function take(c: WireCommand): Promise<Record<string, unknown>> {
+  const a = c.args
+  const owner = ownerArg(a)
+  const tabId = typeof a.tab === 'number' ? a.tab : NaN
+  const tab = await more.tabs.get(tabId).catch(() => null)
+  const win = tab?.windowId !== undefined ? await more.windows.get(tab.windowId).catch(() => null) : null
+  if (!tab || tab.incognito || !win || win.type !== 'normal') throw new AgentError('No such tab (tabs with all lists them).', 'no_such_tab')
+  const had = await agentTabs.get(tabId)
+  if (had?.owner === owner) return { ...(await where(tabId)), taken: true }
+  if (had) throw new AgentError('Another Walnut task is acting in that tab.', 'not_your_tab')
+  if (!/^https?:\/\//i.test(tab.url ?? '')) throw new AgentError('That is a browser page: agents use web pages only (http or https).', 'not_a_web_page')
+  const personHere = async () => {
+    const [here] = await ext.tabs.query({ active: true, lastFocusedWindow: true })
+    if (here?.id === tabId) throw new AgentError('The person is on that tab right now: ask them, or have them hand it over from Walnut\'s side panel.', 'person_is_here')
+  }
+  await personHere()
+  await checkPage(c.allow, tab.url ?? '')
+  const page = await reached(tabId)
+  if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
+  await checkPage(c.allow, page.href)
+  // Reaching the page can take a few seconds: the person may have come to it meanwhile.
+  await personHere()
+  if (await agentTabs.get(tabId)) throw new AgentError('Another Walnut task is acting in that tab.', 'not_your_tab')
+  const who = typeof a.who === 'string' ? a.who : undefined
+  await agentTabs.set(tabId, { owner, ...(who ? { who } : {}), history: [page.href], taken: true })
+  await mark(tabId, true, who)
+  return { ...(await where(tabId)), taken: true }
 }
-
-async function ownTab(args: Record<string, unknown>): Promise<{ tabId: number; tab: Tab; rec: AgentTab }> {
-  const tabId = typeof args.tab === 'number' ? args.tab : NaN
-  const rec = await agentTabs.get(tabId)
-  if (!rec) throw new AgentError('That tab is not one an agent opened (or the person took it back with Stop).', 'not_your_tab')
-  const tab = await ext.tabs.get(tabId).catch(() => null)
-  if (!tab) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed.', 'not_your_tab') }
-  return { tabId, tab, rec }
-}
-
-const where = async (tabId: number) => { const t = await ext.tabs.get(tabId).catch(() => ({} as Tab)); return { tab: tabId, url: t.url, title: t.title } }
 
 async function act(cmd: WireCommand): Promise<unknown> {
   const a = cmd.args
@@ -134,6 +107,7 @@ async function act(cmd: WireCommand): Promise<unknown> {
   const c = typeof a.tab === 'number' ? { ...cmd, allow: allowFor(cmd.allow, await agentTabs.get(a.tab)) } : cmd
   switch (c.action) {
     case 'tabs': {
+      if (a.all === true) return { tabs: await allTabs(), all: true }
       const out: Array<{ id: number; url?: string; title?: string; owner: string }> = []
       for (const id of await agentTabs.keys()) {
         const t = await ext.tabs.get(id).catch(() => null)
@@ -143,20 +117,22 @@ async function act(cmd: WireCommand): Promise<unknown> {
       }
       return { tabs: out }
     }
+    case 'take': return take(c)
+    case 'downloads': return downloadsAction(ownerArg(a), a)
     case 'open': {
       const url = String(a.url ?? '')
       await checkPage(c.allow, url)
-      if (typeof a.owner !== 'string' || !a.owner) throw new AgentError('No owner for the tab.', 'bad_request')
+      const owner = ownerArg(a)
       const t = await agentWindow(url)
       if (t.id === undefined) throw new AgentError('The browser did not open the tab.', 'open_failed')
       const who = typeof a.who === 'string' ? a.who : undefined
-      await agentTabs.set(t.id, { owner: a.owner, ...(who ? { who } : {}), history: [url] })
+      await agentTabs.set(t.id, { owner, ...(who ? { who } : {}), history: [url] })
       await loaded(t.id)
       // What loaded may be Walnut itself under another address (its tunnel, a host's own server).
       if ((await pageCheck(t.id))?.walnut) {
         await agentTabs.delete(t.id)
         await ext.tabs.remove(t.id).catch(() => undefined)
-        throw new AgentError('Agents never use Walnut\'s own pages in the browser.', 'walnut_page')
+        throw new AgentError(WALNUT_PAGE, 'walnut_page')
       }
       await mark(t.id, true, who)
       return where(t.id)
@@ -194,53 +170,59 @@ async function act(cmd: WireCommand): Promise<unknown> {
       const { tabId, rec } = await ownTab(a)
       await agentTabs.delete(tabId)
       // The person's own tab is given back, never closed.
-      if (rec.handed) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
+      if (personsTab(rec)) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
       await ext.tabs.remove(tabId).catch(() => undefined)
       return { tab: tabId, closed: true }
     }
     case 'screenshot': {
       const { tabId, tab, rec } = await ownTab(a)
-      // Only the agent window is brought forward for a capture: the person's window stays as they left it.
-      if (rec.handed && !tab.active) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
+      return screenshot(c, tabId, tab, rec)
+    }
+    case 'fill_login': {
+      // The login Walnut's vault released for this page (fill-login.ts on the server): filled the
+      // way the person's own autofill fills it, and never put in the answer.
+      const { tabId, tab } = await ownTab(a)
       await checkPage(c.allow, tab.url ?? '')
-      const before = await reached(tabId)
-      if (before.walnut) throw new AgentError('Agents never use Walnut\'s own pages in the browser.', 'walnut_page')
-      await checkPage(c.allow, before.href)
-      // Only a tab on screen in its window can be captured: bring it up there, in the agent window.
-      await ext.tabs.update(tabId, { active: true })
-      // A password the page shows as text (its "show" button) is drawn as dots for the capture.
-      const mask = await toPage<{ ok?: boolean }>(tabId, { type: 'agent-mask', on: true }, 5000)
-      if (!mask?.ok) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
-      await sleep(250)
-      let image: string
-      try {
-        image = await ext.tabs.captureVisibleTab(tab.windowId!, { format: 'jpeg', quality: 70 })
-      } finally {
-        await toPage(tabId, { type: 'agent-mask', on: false }, 5000)
+      const page = await reached(tabId)
+      if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
+      await checkPage(c.allow, page.href)
+      // An agent's script (evaluate) or real input touched this document since it loaded: what it
+      // left in the page could read the password. A new load (navigate, reload) is a clean page.
+      if (await tamperedNow(tabId, page.doc)) {
+        throw new AgentError('An agent ran its own script or real input in this page since it loaded, so Walnut will not fill a password into it. Reload the page first (navigate to it again), then call fill_login.', 'page_tampered')
       }
-      // What was on screen must still be that tab on that page (not a window the page opened).
-      const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
-      if (shown?.id !== tabId || siteKey(shown.url ?? '')?.domain !== siteKey(before.href)?.domain) {
-        throw new AgentError('The page changed while the screenshot was taken: try again.', 'page_changed')
-      }
-      return { ...(await where(tabId)), image }
+      const creds = { ...(typeof a.username === 'string' && a.username ? { username: a.username } : {}), ...(typeof a.password === 'string' ? { password: a.password } : {}) }
+      const { rec } = await ownTab(a)
+      // No page JavaScript runs for this owner on this site from now on (it could read the password).
+      await noteFilled(rec.owner, page.href)
+      const filled = await fillFrames(tabId, undefined, creds, 'login', String(a.url ?? ''))
+      return { filled, ...(await where(tabId)) }
     }
   }
+  if (DEBUGGER_OPS.has(c.action) || (a.trusted === true && TRUSTED_OPS.has(c.action))) {
+    const { tabId, tab, rec } = await ownTab(a)
+    // Marks the page for fill_login as the debugger acts (agent-trusted.ts run).
+    return trustedAct(c, tabId, tab, rec)
+  }
   if (PAGE_OPS.has(c.action)) {
-    const { tabId, tab } = await ownTab(a)
+    const { tabId, tab, rec } = await ownTab(a)
     await checkPage(c.allow, tab.url ?? '')
     await reached(tabId)
-    // Within the server's own limit for the command (hub.ts, 30 s; `wait` 40 s), reaching the page
-    // included: an answer after it would be an action the agent was already told failed.
-    const ms = c.action === 'wait' ? 31_000 : 20_000
-    type PageReply = { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } }
-    const r = await toPage<PageReply>(tabId, { type: 'agent', op: c.action, args: a, allow: c.allow }, ms)
-    if (!r) throw new AgentError('The page did not answer in time (it may be busy or frozen): try again.', 'page_not_ready')
-    if (!r.ok) throw new AgentError(r.error?.message ?? 'The page could not do that.', r.error?.code ?? 'page_error', r.error?.extra ?? {})
-    if (MAY_NAVIGATE.has(c.action)) await settled(tabId)
-    return { ...r.result, ...(await where(tabId)) }
+    return pageOp(c, tabId, tab, rec)
   }
   throw new AgentError(`Unknown action ${c.action}.`, 'bad_action')
+}
+
+/** One command at a time per tab: two at once (a full screenshot and a click, two debugger attaches) would trip each other. */
+const perTab = new Map<number, Promise<unknown>>()
+function inTurn<T>(tab: unknown, work: () => Promise<T>): Promise<T> {
+  if (typeof tab !== 'number') return work()
+  const before = perTab.get(tab) ?? Promise.resolve()
+  const mine = before.catch(() => undefined).then(work)
+  const tail = mine.catch(() => undefined)
+  perTab.set(tab, tail)
+  void tail.then(() => { if (perTab.get(tab) === tail) perTab.delete(tab) })
+  return mine
 }
 
 async function run(c: WireCommand): Promise<void> {
@@ -248,7 +230,7 @@ async function run(c: WireCommand): Promise<void> {
   try {
     // The person may have turned agents off since this poll left.
     if (!(await agentOn())) throw new AgentError('The person turned agents off in this browser.', 'browser_off')
-    body = { id: c.id, ok: true, result: await act(c) }
+    body = { id: c.id, ok: true, result: await inTurn(c.args.tab, () => act(c)) }
   } catch (err) {
     body = { id: c.id, ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof AgentError ? err.code : 'browser_error', ...(err instanceof AgentError ? { extra: err.extra } : {}) } }
   }
@@ -277,7 +259,11 @@ export async function agentLoop(): Promise<void> {
   try {
     while (await agentOn() && await connection()) {
       try {
-        const caps = (await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false)) ? ['screenshot'] : []
+        const caps = [
+          ...((await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false)) ? ['screenshot'] : []),
+          ...(await trustedReady() ? ['trusted-input'] : []),
+          ...(more.downloads ? ['downloads'] : []),
+        ]
         const r = await call<{ commands: WireCommand[] }>('POST', '/browser/poll', {
           browser: isFirefox ? 'firefox' : 'chrome', version: ext.runtime.getManifest().version, caps, tabs: await report(), waitMs: 25_000,
         }, { noSession: true, timeoutMs: 40_000 })
@@ -316,7 +302,7 @@ export async function adoptTab(tabId: number, task: string, who?: string): Promi
   if (!tab || !/^https?:\/\//i.test(url) || !site) return { ok: false, error: 'Walnut acts in web pages only.' }
   // The person's tab may be older than the extension (open before an install or an update): its script is put in now.
   const page = await reachPage(tabId, false)
-  if (await isWalnutPage(url) || (page.ok && page.walnut)) return { ok: false, error: 'Agents never use Walnut\'s own pages.' }
+  if (await walnutCheck.isWalnutPage(url) || (page.ok && page.walnut)) return { ok: false, error: 'Agents never use Walnut\'s own pages.' }
   const owner = `task:${task}`
   const had = await agentTabs.get(tabId)
   // A tab the person handed over is theirs to hand to another of their conversations (New chat in
@@ -381,8 +367,11 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
 }
 
 export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean> }): void {
-  isWalnutPage = deps.isWalnutPage
-  ext.tabs.onRemoved.addListener((tabId) => { void agentTabs.delete(tabId) })
+  walnutCheck.isWalnutPage = deps.isWalnutPage
+  watchOpened()
+  watchDownloads()
+  ext.tabs.onRemoved.addListener((tabId) => { void agentTabs.delete(tabId); void forgetTampered(tabId) })
+  ext.tabs.onUpdated.addListener((tabId, change: { status?: string }) => { if (change.status === 'loading') void tabLoading(tabId) })
   // Each agent tab's own list of addresses, for Back when the browser skips one.
   ext.tabs.onUpdated.addListener((tabId, change: { url?: string }) => {
     const url = change.url

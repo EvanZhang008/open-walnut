@@ -2498,6 +2498,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const taskDirSweep = startTaskDirSweep()
     // Removal of test runs' tasks, sessions and projects once idle (core/test-run-sweep.ts).
     const testRunSweep = (await import('../core/test-run-sweep.js')).startTestRunSweep()
+    // Passwords: unlock from this Mac's keychain at start when asked, and the daily Bitwarden sync (core/vault/background.ts).
+    const vaultBackground = (await import('../core/vault/background.js')).startVaultBackground()
     // Org pins become watches, Home's one Watching list (core/org/org-pins.ts); off the boot path.
     void import('../core/org/org-pins.js').then((m) => m.carryPinsToWatch()).catch((err) => log.web.warn('org pin carry-over failed', { error: String(err) }))
     // The companion's copy of the task store (core/replication/task-replica.ts).
@@ -2517,7 +2519,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const copies = (await import('../core/replication/kinds/index.js')).startCopyKinds()
     // A config.yaml edited outside Walnut reaches them like a Settings save (core/config-file-watch.ts).
     const configFile = (await import('../core/config-file-watch.js')).startConfigFileWatch()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskDirSweep.stop(); testRunSweep.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskDirSweep.stop(); testRunSweep.stop(); vaultBackground.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
     log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's

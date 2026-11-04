@@ -37,14 +37,54 @@ export const ICONS = {
   search: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   dice: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="8.5" cy="15.5" r="1"/></svg>',
   out: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+  card: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>',
+  person: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M17 3.5l2 2"/></svg>',
+  globe: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>',
+  x: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  warn: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4"/><path d="M12 17h.01"/></svg>',
   plug: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M6 8h12v4a6 6 0 0 1-12 0z"/><path d="M12 18v4"/></svg>',
 }
 
 /** One of this file's own SVGs as nodes (parsed, never innerHTML). */
 export function svg(markup: string): Element {
-  return document.importNode(new DOMParser().parseFromString(markup, 'image/svg+xml').documentElement, true)
+  // Parsed as XML, an <svg> with no namespace is no SVG at all and draws nothing.
+  const xml = markup.includes('xmlns=') ? markup : markup.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ')
+  return document.importNode(new DOMParser().parseFromString(xml, 'image/svg+xml').documentElement, true)
 }
 
 export function icon(name: keyof typeof ICONS): HTMLElement {
   return h('span', { 'aria-hidden': 'true', style: 'display:inline-grid' }, svg(ICONS[name]))
+}
+
+/** "123456" as "123 456", the way a code is read out. */
+export function spacedCode(code: string): string {
+  return code.length >= 6 ? `${code.slice(0, Math.ceil(code.length / 2))} ${code.slice(Math.ceil(code.length / 2))}` : code
+}
+
+/**
+ * A one-time code with the ring that counts down its seconds; `onExpire` when it runs out.
+ * It stops counting once it is off the page.
+ */
+export function totpView(t: { code: string; period: number; remaining: number }, onExpire?: () => void): HTMLElement {
+  const R = 7
+  const C = 2 * Math.PI * R
+  const ring = svg(`<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="${R}" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-width="2.2"/><circle class="totp-arc" cx="9" cy="9" r="${R}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" transform="rotate(-90 9 9)" stroke-dasharray="${C.toFixed(2)}"/></svg>`)
+  const secs = h('span', { class: 'totp-secs' }, '')
+  const el = h('span', { class: 'totp', 'data-testid': 'totp-code', title: 'One-time code' }, h('span', { class: 'totp-code mono' }, spacedCode(t.code)), h('span', { class: 'totp-ring' }, ring, secs))
+  let left = Math.max(0, Math.round(t.remaining))
+  const period = Math.max(1, t.period || 30)
+  const draw = () => {
+    ;(ring.querySelector('.totp-arc') as SVGCircleElement | null)?.setAttribute('stroke-dashoffset', String((C * (1 - left / period)).toFixed(2)))
+    secs.textContent = String(left)
+    el.classList.toggle('soon', left <= 5)
+    el.setAttribute('aria-label', `One-time code ${t.code}, ${left} seconds left`)
+  }
+  draw()
+  const timer = setInterval(() => {
+    if (!el.isConnected && left < t.remaining) { clearInterval(timer); return }
+    left = Math.max(0, left - 1)
+    draw()
+    if (left === 0) { clearInterval(timer); onExpire?.() }
+  }, 1000)
+  return el
 }

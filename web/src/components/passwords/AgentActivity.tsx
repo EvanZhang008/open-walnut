@@ -1,8 +1,11 @@
 /**
  * Agent Activity: what agents may use, the grants a task holds now, and every time an agent
  * asked, got an item, or was refused (the sealed agent log, core/vault/agent-log.ts). The
- * switch is the person's, the same three as in Settings: Ask me first (each item's own setting
- * decides), Give it without asking (sensitive ones still ask), or Never.
+ * switch is the person's, the same three as in Settings: Any (agents list and use; sensitive
+ * items still ask), Ask (each use asks; an approval lasts the grant length), or Off (no list; an
+ * agent may only ask for one item, which the person approves or not). Each grant can be ended
+ * here, and every use says how the value went: shown as plaintext, given to a command, filled
+ * into a page.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { vaultApi, VaultApiError, isLockedError, type AgentLogEntry, type AgentPolicy, type AgentsSwitch, type VaultItemSummary } from '@/api/vault'
@@ -11,11 +14,17 @@ import { RobotIcon } from './pw-icons'
 import { ago } from './passwords-model'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
 
-const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
-  { value: 'ask', label: 'Ask me first', help: 'You approve each use on your Mac or phone (an item can say otherwise in its own settings).' },
-  { value: 'allow', label: 'Give it without asking', help: 'Given at once. Items marked sensitive still ask for Face ID or Touch ID; items set to never stay never.' },
-  { value: 'off', label: 'Never', help: 'No agent gets any password. Asks are refused.' },
+export const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
+  { value: 'allow', label: 'Any', help: 'Agents see the list and use what they need. Items marked sensitive still ask for Face ID or Touch ID; items set to never stay never.' },
+  { value: 'ask', label: 'Ask', help: 'Agents see the list; each use asks you on your Mac or phone, and an approval lasts the grant length.' },
+  { value: 'off', label: 'Off', help: 'Agents see nothing. One may only ask you for one item it names; if you approve, it gets it for the grant length.' },
 ]
+
+const USE_TEXT: Record<string, string> = { reveal: 'showed plaintext', env: 'gave it to a command', fill: 'filled it into a page' }
+
+function untilText(until: string | null): string {
+  return until === null ? 'until you revoke it' : `until ${new Date(until).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+}
 
 const REASON: Record<string, string> = {
   agent_never: 'the item is never given to agents',
@@ -27,7 +36,11 @@ const REASON: Record<string, string> = {
 function line(e: AgentLogEntry): { verb: string; tone: 'ok' | 'ask' | 'bad' } {
   const what = e.fields?.length && !(e.fields.length === 1 && e.fields[0] === 'password') ? e.fields.join(', ') : 'the password'
   switch (e.kind) {
-    case 'released': return { verb: `got ${what}${e.via === 'allow' ? ' (allowed without asking)' : e.via === 'grant' ? ' (task grant)' : ' (you approved)'}`, tone: 'ok' }
+    case 'released': return { verb: `got ${what}${e.use && e.use !== 'list' ? `, ${USE_TEXT[e.use]}` : ''}${e.via === 'allow' ? ' (allowed without asking)' : e.via === 'grant' ? ' (task grant)' : ` (you approved${e.approvedBy ? ` on ${e.approvedBy}` : ''})`}`, tone: 'ok' }
+    case 'listed': return { verb: `read the list (${e.count ?? 0} item${e.count === 1 ? '' : 's'})`, tone: 'ask' }
+    case 'revoked': return { verb: 'lost its grant (you ended it)', tone: 'bad' }
+    case 'synced': return { verb: e.summary ?? 'synced from Bitwarden', tone: 'ok' }
+    case 'fill': return { verb: `had the login filled into a browser page without seeing it${e.via === 'allow' ? ' (allowed without asking)' : e.via === 'grant' ? ' (task grant)' : ' (you approved)'}`, tone: 'ok' }
     case 'asked': return { verb: `asked for ${what}`, tone: 'ask' }
     case 'denied': return { verb: `was denied ${what}`, tone: 'bad' }
     case 'expired': return { verb: 'asked; nobody answered in time', tone: 'bad' }
@@ -58,6 +71,10 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
     setError(''); setNote('')
     vaultApi.setAgentsSwitch(v).then((p) => { setPolicy(p); setNote(v === 'off' ? 'Agent access is off. Every grant ended.' : '') }).catch(fail)
   }
+  const revoke = (id: string) => {
+    setError(''); setNote('')
+    vaultApi.revokeGrant(id).then(() => { setNote('Grant ended.'); load() }).catch(fail)
+  }
   const endGrants = () => {
     vaultApi.endAgentGrants().then((r) => { setNote(`Ended ${r.grants} grant${r.grants === 1 ? '' : 's'}${r.asks ? ` and withdrew ${r.asks} ask${r.asks === 1 ? '' : 's'}` : ''}.`); load() }).catch(fail)
   }
@@ -65,7 +82,7 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
   const counts = useMemo(() => {
     const day = Date.now() - 86_400_000
     const recent = (log ?? []).filter((e) => Date.parse(e.at) > day)
-    return { got: recent.filter((e) => e.kind === 'released').length, asked: recent.filter((e) => e.kind === 'asked').length, refused: recent.filter((e) => e.kind === 'denied' || e.kind === 'refused').length }
+    return { got: recent.filter((e) => e.kind === 'released' || e.kind === 'fill').length, asked: recent.filter((e) => e.kind === 'asked').length, refused: recent.filter((e) => e.kind === 'denied' || e.kind === 'refused').length }
   }, [log])
 
   return (
@@ -104,9 +121,13 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
           {policy.grants.map((g) => {
             const it = byId.get(g.itemId)
             return (
-              <div key={`${g.asker}-${g.itemId}`} className="pw-agent-row">
+              <div key={g.id ?? `${g.asker}-${g.itemId}`} className="pw-agent-row" data-testid="pw-grant">
                 {it && <SiteTile item={it} size={26} />}
-                <span className="pw-agent-text"><b>{it?.title ?? 'An item'}</b><span>{g.asker.startsWith('host:') ? `a script on ${hostLabel(g.asker.slice(5))}` : g.asker.replace(/^task:/, 'task ')} · until {new Date(g.until).toLocaleTimeString()}</span></span>
+                <span className="pw-agent-text">
+                  <b>{it?.title ?? g.itemTitle ?? 'An item'}</b>
+                  <span>{g.taskTitle ?? (g.asker.startsWith('host:') ? `a script on ${hostLabel(g.asker.slice(5))}` : g.asker.replace(/^task:/, 'task '))}{g.fields?.length ? ` · ${g.fields.join(', ')}` : ''}{g.use ? ` · ${g.use === 'reveal' ? 'shown to it' : g.use === 'env' ? 'in a command' : 'filled in a page'}` : ''} · {untilText(g.until)}{g.approvedBy ? ` · approved on ${g.approvedBy}` : ''}</span>
+                </span>
+                {g.id && <button type="button" className="pw-btn pw-btn-small" onClick={() => revoke(g.id)} data-testid="pw-grant-revoke">Revoke</button>}
               </div>
             )
           })}
@@ -130,7 +151,7 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
                   <span className="pw-agent-why">{e.purpose ? `“${e.purpose}”` : ''}{e.purpose && e.command ? ' · ' : ''}{e.command && <code title={e.command}>{e.command}</code>}</span>
                 )}
               </span>
-              <span className="pw-agent-when" title={new Date(e.at).toLocaleString()}>{ago(e.at)}</span>
+              <span className="pw-agent-when" title={`${new Date(e.at).toLocaleString()}${e.sessionId ? ` · session ${e.sessionId}` : ''}`}>{ago(e.at)}</span>
             </div>
           )
         })}

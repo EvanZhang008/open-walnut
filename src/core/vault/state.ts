@@ -5,7 +5,7 @@
  *   { format, version, id, rev, kdf, aukSalt, wraps: { password, machine?, recovery? }, recoveryFor?, items: { <id>: { key, data, updatedAt } } }
  * machine.json (0600) holds what only this machine keeps: the Secret Key, and the machine key
  * while the person lets agents ask with nobody at the vault. Side files (agent-log.json,
- * policy.json) are sealed with the vault key and resealed when it changes.
+ * policy.json, agent-grants.json, bitwarden-sync.json) are sealed with the vault key and resealed when it changes.
  *
  * The vault key (VK) stays in this process's memory while the vault is open. Opening it is
  * not a person's unlock: every item read through the API needs a person's vault session.
@@ -31,7 +31,7 @@ export const VAULT_FORMAT = 'walnut-vault'
 export const VAULT_VERSION = 1
 const BACKUPS_KEPT = 14
 /** Files beside vault.json sealed with the vault key; a key change reseals each. */
-export const SIDE_FILES = ['agent-log.json', 'policy.json'] as const
+export const SIDE_FILES = ['agent-log.json', 'policy.json', 'agent-grants.json', 'bitwarden-sync.json'] as const
 export type SideFile = typeof SIDE_FILES[number]
 
 export interface StoredItem { key: Sealed; data: Sealed; updatedAt: string }

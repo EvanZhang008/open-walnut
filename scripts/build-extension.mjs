@@ -58,7 +58,15 @@ export function manifestFor(browser, build) {
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
     // contextMenus: "Ask Walnut about ..." on a selection or a page, which opens the side panel.
-    permissions: ['storage', 'alarms', 'contextMenus', 'scripting', ...(browser === 'chrome' ? ['sidePanel'] : [])],
+    // downloads: an agent sees the downloads it started (agent-downloads.ts).
+    // clipboardRead/Write: a copied password or code is cleared after 30 s only if it is still
+    // there (bg-clipboard.ts); offscreen: Chrome writes the clipboard from an offscreen page.
+    // idle: Passwords lock when the computer locks or goes idle (bg-autolock.ts).
+    permissions: ['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle',
+      ...(browser === 'chrome' ? ['sidePanel', 'offscreen'] : [])],
+    // Real mouse and keys for agents (agent-trusted.ts): Chrome's debugger, only once the person
+    // turns it on in Settings (the browser asks them then). Firefox gives extensions none.
+    ...(browser === 'chrome' ? { optional_permissions: ['debugger'] } : {}),
     // Every web page (the same warning as http and https alone): a screenshot of an agent's
     // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.
     host_permissions: ['<all_urls>'],

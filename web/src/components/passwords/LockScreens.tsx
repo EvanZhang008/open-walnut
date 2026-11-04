@@ -9,6 +9,7 @@ import { copySecret, vaultApi, VaultApiError, type RecoveryKit, type VaultStatus
 import { passwordStrength, type StrengthLevel } from '../../../../src/core/vault/strength'
 import { KeyIcon, LockIcon, CopyIcon, CheckIcon } from './pw-icons'
 import { log } from '@/utils/log'
+import { unlockFootText } from './unlock-words'
 
 const LEVEL_TEXT: Record<StrengthLevel, string> = {
   very_weak: 'Very weak', weak: 'Weak', fair: 'Fair', strong: 'Strong', very_strong: 'Very strong',
@@ -186,7 +187,6 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
   const [error, setError] = useState('')
   const { waitS, slowFor } = useWait(status.waitMs)
   const input = useRef<HTMLInputElement>(null)
-
   const unlock = async () => {
     if (!pw || busy) return
     setBusy(true); setError('')
@@ -224,7 +224,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
         <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? 'Unlocking…' : 'Unlock'}</button>
         <button type="button" className="pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
-        <p className="pw-gate-foot">Locks again after {status.autoLockMinutes} minutes unused.</p>
+        <p className="pw-gate-foot">{unlockFootText(status)}</p>
       </form>
     </div>
   )

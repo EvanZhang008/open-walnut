@@ -186,7 +186,8 @@ describe('import', () => {
         { type: 1, name: 'Site', folderId: 'f1', reprompt: 1, fields: [{ name: 'q', value: 'a', type: 1 }],
           login: { uris: [{ uri: 'site.test' }], username: 'u', password: 'p', totp: 'JBSWY3DPEHPK3PXP', fido2Credentials: [{ credentialId: 'c1', rpId: 'site.test' }] } },
         { type: 3, name: 'Visa', card: { cardholderName: 'A', number: '4111111111111111', expMonth: '1', expYear: '2030', code: '123' } },
-        { type: 4, name: 'Me' },
+        { id: 'bw-me', revisionDate: '2026-01-02T00:00:00.000Z', type: 4, name: 'Me', identity: { firstName: 'Ada', email: 'ada@example.test', ssn: '000-00-0000' } },
+        { type: 5, name: 'Server key' },
       ],
     })
     const r = parseImport(json)
@@ -194,7 +195,11 @@ describe('import', () => {
     expect(r.passkeys).toBe(1)
     expect(r.items[0]).toMatchObject({ tags: ['Home'], sensitive: true, fields: [{ name: 'q', hidden: true }], passkeys: [{ credentialId: 'c1' }] })
     expect(r.items[1]).toMatchObject({ type: 'card', card: { number: '4111111111111111' } })
+    // An identity comes in as custom fields (a number kept hidden); an SSH key is skipped.
+    expect(r.items[2]).toMatchObject({ type: 'identity', title: 'Me', fields: [{ name: 'First name', value: 'Ada' }, { name: 'Email', value: 'ada@example.test' }, { name: 'Social security number', hidden: true }] })
     expect(r.skipped).toHaveLength(1)
+    // Each item's Bitwarden id rides beside it, for a later sync to adopt.
+    expect(r.sources?.[2]).toEqual({ id: 'bw-me', revisionDate: '2026-01-02T00:00:00.000Z' })
     expect(() => parseImport(JSON.stringify({ encrypted: true, items: [] }))).toThrow(/encrypted/)
   })
 

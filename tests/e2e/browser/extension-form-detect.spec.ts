@@ -2,7 +2,8 @@
  * The extension's form reading (packages/browser-extension/src/form-detect.ts) in a real
  * browser, so layout counts (a hidden honeypot field, a zero-size input): the shapes login,
  * sign-up, password-change, two-step and one-time-code pages come in, and the look-alikes that
- * are none of them (a newsletter box, a search box). Each case says what a person sees.
+ * are none of them (a newsletter box, a search box), and the card and address forms
+ * (wallet-detect.ts). Each case says what a person sees.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
@@ -17,24 +18,26 @@ test.beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fd-'))
   const entry = path.join(dir, 'entry.ts')
   const src = path.resolve('packages/browser-extension/src/form-detect.ts')
-  fs.writeFileSync(entry, `import * as fd from ${JSON.stringify(src)}\n;(globalThis as any).walnutFormDetect = fd\n`)
+  const wallet = path.resolve('packages/browser-extension/src/wallet-detect.ts')
+  fs.writeFileSync(entry, `import * as fd from ${JSON.stringify(src)}\nimport * as wd from ${JSON.stringify(wallet)}\n;(globalThis as any).walnutFormDetect = fd\n;(globalThis as any).walnutWalletDetect = wd\n`)
   execFileSync(bunRuntime(), ['build', entry, '--format', 'iife', '--target', 'browser', '--outfile', path.join(dir, 'fd.js')], { stdio: 'pipe' })
   bundle = fs.readFileSync(path.join(dir, 'fd.js'), 'utf8')
 })
 
-interface Seen { kind: string; username?: string; password?: string; newPasswords: string[]; totp?: string }
+interface Seen { kind: string; username?: string; password?: string; newPasswords: string[]; totp?: string; totpBoxes?: string[] }
 
 async function detect(page: Page, html: string): Promise<Seen[]> {
   await page.setContent(`<!doctype html><html><body>${html}</body></html>`)
   await page.addScriptTag({ content: bundle })
   return page.evaluate(() => {
-    const fd = (globalThis as unknown as { walnutFormDetect: { findLoginGroups(d: Document): Array<{ kind: string; username?: HTMLInputElement; password?: HTMLInputElement; newPasswords: HTMLInputElement[]; totp?: HTMLInputElement }> } }).walnutFormDetect
+    const fd = (globalThis as unknown as { walnutFormDetect: { findLoginGroups(d: Document): Array<{ kind: string; username?: HTMLInputElement; password?: HTMLInputElement; newPasswords: HTMLInputElement[]; totp?: HTMLInputElement; totpBoxes?: HTMLInputElement[] }> } }).walnutFormDetect
     return fd.findLoginGroups(document).map((g) => ({
       kind: g.kind,
       ...(g.username ? { username: g.username.id } : {}),
       ...(g.password ? { password: g.password.id } : {}),
       newPasswords: g.newPasswords.map((p) => p.id),
       ...(g.totp ? { totp: g.totp.id } : {}),
+      ...(g.totpBoxes ? { totpBoxes: g.totpBoxes.map((b) => b.id) } : {}),
     }))
   })
 }
@@ -106,6 +109,16 @@ const CASES: Array<{ name: string; html: string; want: Seen[] }> = [
     want: [{ kind: 'totp', totp: 't', newPasswords: [] }],
   },
   {
+    name: 'a one-time code in six boxes of one digit each',
+    html: `<form><div>${[1, 2, 3, 4, 5, 6].map((i) => `<input id="b${i}" maxlength="1" inputmode="numeric">`).join('')}</div><button>Verify</button></form>`,
+    want: [{ kind: 'totp', totp: 'b1', totpBoxes: ['b1', 'b2', 'b3', 'b4', 'b5', 'b6'], newPasswords: [] }],
+  },
+  {
+    name: 'code boxes with autocomplete="one-time-code" on the first box only',
+    html: `<form>${[1, 2, 3, 4, 5, 6].map((i) => `<input id="b${i}" maxlength="1" ${i === 1 ? 'autocomplete="one-time-code"' : ''}>`).join('')}</form>`,
+    want: [{ kind: 'totp', totp: 'b1', totpBoxes: ['b1', 'b2', 'b3', 'b4', 'b5', 'b6'], newPasswords: [] }],
+  },
+  {
     name: 'a newsletter box is no sign in',
     html: `<form><input id="e" type="email" placeholder="Your email"><button>Subscribe</button></form>`,
     want: [],
@@ -125,5 +138,50 @@ const CASES: Array<{ name: string; html: string; want: Seen[] }> = [
 for (const c of CASES) {
   test(`form-detect: ${c.name}`, async ({ page }) => {
     expect(await detect(page, c.html)).toEqual(c.want)
+  })
+}
+
+interface WalletSeen { kind: string; fields: string[] }
+
+async function detectWallet(page: Page, html: string): Promise<WalletSeen[]> {
+  await page.setContent(`<!doctype html><html><body>${html}</body></html>`)
+  await page.addScriptTag({ content: bundle })
+  return page.evaluate(() => {
+    const wd = (globalThis as unknown as { walnutWalletDetect: { findWalletGroups(d: Document): Array<{ kind: string; fields: Array<{ el: HTMLElement; part: string }> }> } }).walnutWalletDetect
+    return wd.findWalletGroups(document).map((g) => ({ kind: g.kind, fields: g.fields.map((f) => `${f.el.id}:${f.part}`) }))
+  })
+}
+
+const WALLET_CASES: Array<{ name: string; html: string; want: WalletSeen[] }> = [
+  {
+    name: 'a card form by autocomplete, with expiry selects',
+    html: `<form><input id="n" autocomplete="cc-name"><input id="c" autocomplete="cc-number"><select id="m" autocomplete="cc-exp-month"><option>01</option></select><select id="y" autocomplete="cc-exp-year"><option>2030</option></select><input id="v" autocomplete="cc-csc"></form>`,
+    want: [{ kind: 'card', fields: ['n:cc-name', 'c:cc-number', 'm:cc-exp-month', 'y:cc-exp-year', 'v:cc-csc'] }],
+  },
+  {
+    name: 'a card form by its words only',
+    html: `<form><input id="c" name="cardnumber" placeholder="Card number"><input id="e" name="exp" placeholder="MM / YY"><input id="v" name="cvc" placeholder="CVC"></form>`,
+    want: [{ kind: 'card', fields: ['c:cc-number', 'e:cc-exp', 'v:cc-csc'] }],
+  },
+  {
+    name: 'a shipping address form',
+    html: `<form><input id="f" autocomplete="shipping given-name"><input id="a" autocomplete="shipping address-line1"><input id="t" name="city"><input id="z" name="zip"><select id="k" name="country"><option>US</option></select></form>`,
+    want: [{ kind: 'identity', fields: ['f:given-name', 'a:address-line1', 't:city', 'z:postal-code', 'k:country'] }],
+  },
+  {
+    name: 'a sign in is no card or address form',
+    html: `<form><input id="u" type="email" name="email" autocomplete="username"><input id="p" type="password"><button>Sign in</button></form>`,
+    want: [],
+  },
+  {
+    name: 'a newsletter email box is no address form',
+    html: `<form><input id="e" type="email" name="email" placeholder="Your email"><button>Subscribe</button></form>`,
+    want: [],
+  },
+]
+
+for (const c of WALLET_CASES) {
+  test(`wallet-detect: ${c.name}`, async ({ page }) => {
+    expect(await detectWallet(page, c.html)).toEqual(c.want)
   })
 }

@@ -18,6 +18,8 @@ export interface LoginGroup {
   /** New password fields (sign up: the password and its confirmation; change: new and confirm). */
   newPasswords: HTMLInputElement[]
   totp?: HTMLInputElement
+  /** A code asked one character per box (often six boxes): `totp` is the first. */
+  totpBoxes?: HTMLInputElement[]
 }
 
 const USER_WORDS = /user|e-?mail|login|account|identifier|phone|mobile|handle|\bid\b/i
@@ -67,6 +69,23 @@ function isTotp(el: HTMLInputElement): boolean {
   if (!isTexty(el) && el.type !== 'number') return false
   const max = el.maxLength
   return TOTP_WORDS.test(words(el)) && !USER_WORDS.test(el.name + ' ' + el.id) && (max <= 0 || (max >= 4 && max <= 10))
+}
+
+/**
+ * A code split into one box per character: four to eight boxes of one character each, one
+ * right after the other on the page, none a password field.
+ */
+function codeBoxes(all: HTMLInputElement[]): HTMLInputElement[] | null {
+  const box = (x: HTMLInputElement) => x.maxLength === 1 && !isPassword(x) && (isTexty(x) || x.type === 'number')
+  for (let i = 0; i < all.length; i++) {
+    if (!box(all[i])) continue
+    let j = i
+    while (j + 1 < all.length && box(all[j + 1])) j++
+    const run = all.slice(i, j + 1)
+    if (run.length >= 4 && run.length <= 8) return run
+    i = j
+  }
+  return null
 }
 
 function usernameScore(el: HTMLInputElement): number {
@@ -152,14 +171,19 @@ export function findLoginGroups(doc: Document): LoginGroup[] {
   }
   // A username asked on its own (step one of two), with no password field anywhere on the page.
   if (!passwords.length) {
-    const step = all.find((x) => isTexty(x) && !isTotp(x) && (usernameScore(x) >= 3 || (usernameScore(x) >= 2 && !!x.form))
+    const step = all.find((x) => isTexty(x) && !isTotp(x) && x.maxLength !== 1 && (usernameScore(x) >= 3 || (usernameScore(x) >= 2 && !!x.form))
       && !(x.form && (x.form.getAttribute('role') === 'search' || NOT_STEP.test(buttonText(x.form) + ' ' + words(x)))))
     if (step) out.push({ kind: 'username-step', root: step.form ?? doc.body, username: step, newPasswords: [] })
   }
-  // A one-time code field.
-  const code = all.find((x) => isTotp(x))
+  // A one-time code field, or a code in boxes of one character.
+  const found = all.find((x) => isTotp(x))
+  const boxes = codeBoxes(all)
+  // The page marked only the first box (autocomplete="one-time-code"): the code still goes in all of them.
+  const code = found && !boxes?.includes(found) ? found : undefined
   if (code && !out.some((g) => g.root.contains(code) && g.kind !== 'totp' && g.password)) {
     out.push({ kind: 'totp', root: code.form ?? doc.body, totp: code, newPasswords: [] })
+  } else if (boxes && !out.some((g) => g.password && g.root.contains(boxes[0]))) {
+    out.push({ kind: 'totp', root: boxes[0].form ?? doc.body, totp: boxes[0], totpBoxes: boxes, newPasswords: [] })
   }
   return out
 }
@@ -170,7 +194,7 @@ export function groupOfField(groups: LoginGroup[], el: Element): { group: LoginG
     if (g.username === el) return { group: g, role: 'username' }
     if (g.password === el) return { group: g, role: 'password' }
     if (g.newPasswords.includes(el as HTMLInputElement)) return { group: g, role: 'new-password' }
-    if (g.totp === el) return { group: g, role: 'totp' }
+    if (g.totp === el || g.totpBoxes?.includes(el as HTMLInputElement)) return { group: g, role: 'totp' }
   }
   return null
 }

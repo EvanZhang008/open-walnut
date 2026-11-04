@@ -2,16 +2,30 @@
 
 The Walnut browser extension (see [Passwords](passwords.md), Browser extension) can also let
 your Walnut agents use your own browser, the one signed in to your sites: open a page, read
-it, click, type, pick from a list, scroll and take a screenshot. It is off until you turn it
-on in the extension's popup (Settings, "Let Walnut agents use this browser").
+it, find things on it, fill forms, click, type, hover, scroll, upload files, follow downloads,
+sign in with your saved logins without seeing them, and take screenshots of the screen or the
+whole page. It is off until you turn it on in the extension's popup (Settings, "Let Walnut
+agents use this browser").
 
 ## What an agent can reach
 
-- **Only tabs it opened.** An agent's tabs open in a separate Walnut agent window, behind your
-  own windows. Your tabs are never listed, read or touched. Each agent tab wears a brown frame
-  and a pill, "Walnut agent is using this tab", with **Stop**: Stop gives the tab back to you,
-  and the agent can no longer use it. Only your own click counts (a click a page or an agent
-  makes is not trusted and does nothing).
+- **Tabs it opened, and the tabs those open.** An agent's tabs open in a separate Walnut agent
+  window, behind your own windows. A tab or window one of them opens (a link to a new tab, a
+  popup) is the same agent's, and the action that opened it says so (`opened: { tab, url }`).
+  Each agent tab wears a brown frame and a pill, "Walnut agent is using this tab", with
+  **Stop**: Stop gives the tab back to you, and the agent can no longer use it. Only your own
+  click counts (a click a page or an agent makes is not trusted and does nothing).
+- **Your own tabs, listed but not read.** `tabs` with `all` lists every tab of the browser by
+  title and address, and whose it is (`mine`, `other task`, `person`), never what is in it. An
+  agent acts in one of your tabs only when you hand it over from the side panel, or when it
+  takes it (`take`): never the tab you are on right now in the window you used last
+  (`person_is_here`), never Walnut's or the browser's own pages. A taken tab wears the same
+  frame and Stop as a handed one, keeps the normal site rules, and `close` gives it back
+  instead of closing it.
+- **Frames too.** A snapshot, the page text, `find` and `form_values` also read the frames in the
+  page, of the same origin or another, each under its own heading; a ref inside a frame carries
+  the frame (`f3:e12`) and an action on it goes there. Each frame's own site is checked: a frame
+  on a site agents may not use is left out and named.
 - **Tabs belong to the task that opened them.** Another task's commands are refused there, and
   no list says whose a tab is. Walnut tells tasks apart by the session id each one's requests
   carry, as it does for every agent request; a process that is not a Walnut task (a script, an
@@ -21,16 +35,33 @@ on in the extension's popup (Settings, "Let Walnut agents use this browser").
   "Ask me first" there and the first time an agent opens a site Walnut asks you (a notification
   on your Mac and phone, like any Walnut approval). Approve, and agents may use that site until
   you remove it; deny, and that task is refused there and not asked again for an hour. A page
-  that moves to another site (a link, a redirect) asks the same way. A tab you hand over from the
+  that moves to another site (a link, a redirect) asks the same way, and so does taking one of
+  your tabs on a new site. A tab you hand over from the
   side panel may go on in its own site with no ask. Agents still ask you before a step that
   sends, buys, posts or deletes in your name, and each password they use is yours to approve.
 - **Never Walnut's own pages, nor the browser's** (settings, extension pages, `file:`). Walnut at
   any address (its tunnel, the cloud companion, another machine) is known by the mark its page
   carries; such a tab is closed at once.
 - **Passwords stay yours.** What an agent types is page input, never yours: the password menu
-  and the save bar ignore it. A snapshot never shows the value of a password field (also one a
-  page's "show" button turned to text), a one-time code, or anything Walnut filled. An agent that
-  needs a sign-in asks for that one login with `password_use` (each use approved by you).
+  and the save bar ignore it. A snapshot or `form_values` never shows the value of a password
+  field (also one a page's "show" button turned to text), a one-time code, or anything Walnut
+  filled. An agent signs in with `fill_login`: Walnut's vault decides exactly as for
+  `password_use` (the agents switch, the item's agent access, sensitive items, task grants, your
+  approval), and then the extension fills the saved login for the tab's site the way its own
+  autofill does. The agent hears only `{ filled, fields, item: { id, title } }`; the password is
+  never in its result, the route's logs or its transcript. Each fill is in the vault's agent
+  activity as a fill. A login saved for another site is never filled there: after your approval
+  the tab must still be on the origin the ask named (scheme, host and port), and right before the
+  fill the item's own sites must still match the page. A page an agent ran `evaluate` or any real
+  input (the debugger) in since it loaded is refused (`page_tampered`: reload it first), since a
+  script it left could read the password; a navigation or reload is a new page.
+- **Real mouse and keys only when you turn them on.** Agents' input is page events by default.
+  "Let agents use real mouse and keys" in the extension's Settings (Chrome only) grants the
+  browser's optional `debugger` permission; then an agent may ask for `trusted` input on a
+  click, hover, type, press or upload, answer a page's alert, confirm or prompt (`dialog`), and
+  run JavaScript in a tab it opened (`evaluate`, never in your own tab). The debugger is
+  attached for that one action and detached right after; Chrome shows its "started debugging"
+  bar while it is. Off, these answer `trusted_off` and say where to turn it on.
 - **No test runs.** A request from a test run (`x-walnut-test-run`) is refused before it
   reaches the browser.
 
@@ -78,19 +109,48 @@ same thing; the shell command saves a screenshot as a file
 walnut browser status                         # browsers that let agents in, the sites
 walnut browser open https://example.com/      # a new tab in the agent window
 walnut browser snapshot                       # the page as text, with element refs
+walnut browser find "Place order" --role button
+walnut browser form-values                    # every field: label, name, type, value
+walnut browser fill-form "Full name=Test Person" "Size=Large" e14=true
 walnut browser type e7 "a search" --submit
 walnut browser click e12
+walnut browser hover e3
 walnut browser select e9 "Rye"
 walnut browser press Escape
-walnut browser scroll down --amount 2
-walnut browser wait "Order placed"
-walnut browser screenshot                     # prints the file it wrote
-walnut browser close
+walnut browser scroll down --amount 2         # also: up, left, right, top, bottom, --by PX
+walnut browser wait "Order placed"            # also: --gone TEXT, --url PART or /regex/, --ms N
+walnut browser screenshot --full              # the whole page; prints the file it wrote
+walnut browser upload e5 ./invoice.pdf        # read here, sent as bytes (10 MB in all)
+walnut browser downloads --wait               # the next download it started, when it finished
+walnut browser fill-login                     # sign in with the saved login for this page
+walnut browser tabs --all                     # every tab of the browser, title and address
+walnut browser take 812                       # act in one of the person's tabs
+walnut browser close                          # closes a tab it opened, gives back one it took
 ```
+
+| Action | Arguments | What it does |
+|---|---|---|
+| `find` | `text`, `exact?`, `role?`, `limit?` (20) | elements whose name or text holds the words: `{ matches: [{ ref, role, name, text }] }` |
+| `form_values` | | every field with its label, name, type, value (secrets as `(hidden)`), options of a list |
+| `fill_form` | `fields: [{ ref or label, value }]` | fills each like `type` does (a checkbox takes true or false, a list its label or value); a field it cannot find fills nothing (`no_field`) |
+| `hover` | `ref` or `x, y` | pointer over, enter and move events (menus that open on hover) |
+| `scroll` | `direction` (up, down, left, right), `amount` (screens) or `by` (px), or `to` (top, bottom), or `ref` | answers `scrollTop`, `scrollLeft`, `atTop`, `atBottom` |
+| `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | at most 30 s (`wait_timeout`) |
+| `screenshot` | `full?` | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back |
+| `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
+| `downloads` | `wait?`, `ms?` | downloads started from this task's tabs (filename, url, state, bytes); `wait` for the next to finish |
+| `fill_login` | `item?`, `purpose?`, `request?` | signs in with the saved login for the tab's site; several (`which_login`) list `{ id, title, username }`; an approval answers `needs_ok` with `request`: call again with it |
+| `tabs` | `all?` | this task's tabs, or with `all` every tab of the browser and whose it is |
+| `take` | `tab` | one of the person's tabs becomes this task's (`person_is_here` when they are on it) |
+| `dialog` | `accept`, `text?` | real input: OK or Cancel on an alert, confirm or prompt |
+| `evaluate` | `expression` | real input, a tab the agent opened only: the value as JSON, cut at 50 KB |
+| any of click, hover, type, press | `trusted: true` | real input through the debugger (top frame only) |
+| `upload` | `trusted: true, paths` | real input: files already on the browser's machine (a download, say) |
 
 `tab` may be left out once a task has used one. A snapshot lists headings, then each element a
 person could act on with its ref, role, name and state (`[e12] button "Place order"`,
-`[e7] textbox "Search" value="rye"`), then the page's visible text; a ref holds while the
+`[e7] textbox "Search" value="rye"`), then the page's visible text, then each frame's own
+elements and text (`[f3:e2] button "Pay"`); a ref holds while the
 element is on the page, so snapshot again after the page changes. A click on an element that
 something else covers (a cookie banner, a dialog) is refused with `covered`, naming what is on
 top, rather than clicking through it.
@@ -103,11 +163,19 @@ so snapshot before you try again.
 A site waiting for your approval answers `needs_ok` (HTTP 202): call the same action again;
 `wait_ms` (up to 25000) holds the call for your answer. The shell command waits by itself, up
 to 10 minutes. Exit codes: 0 done, 1 refused (`site_denied`, `not_your_tab`, `test_run`,
-`which_tab`), 2 no answer in time (`browser_timeout`, or no approval in 10 minutes), 3 any other
-error.
+`which_tab`, `person_is_here`, `trusted_off`, `which_login`), 2 no answer in time
+(`browser_timeout`, or no approval in 10 minutes), 3 any other error.
 
 Input is the page's own DOM events (`isTrusted` false). Nearly every site takes them; a page
-that insists on trusted input (some games, some anti-bot checks) will not respond.
+that insists on trusted input (bank-style keystroke checks, some games, some anti-bot checks)
+needs `trusted: true`, which works once you turned real input on. A link that opens a new tab
+is opened by the extension as the agent's own tab (the browser blocks a page's new tab from an
+input that is not trusted); a page's own `window.open` from a click opens only with trusted
+input. A download is the agent's when it starts from its tab's site while it acts there (or
+right after), or from the very page an agent tab shows: the browser does not say which tab a
+download came from. One with no referrer at all counts only while one agent tab is being acted in
+and only when the file's own address is on the origin of one of that task's agent tabs, so your
+own download from elsewhere at that moment is never the agent's.
 
 ## How it works
 
@@ -121,12 +189,15 @@ tab owners (restored from the extension's own report after a server restart), th
 tab against its own agent-tab list and the page's real address against the allowed sites the
 command carries, so a server mistake cannot reach your tabs either. Code:
 `src/core/browser-control/` (hub, sites, the CLI), `src/web/routes/browser-v1.ts`,
-`src/ops/browser.ts`, `packages/browser-extension/src/agent.ts` and `page-agent.ts`; the side
+`src/ops/browser.ts`, `packages/browser-extension/src/agent.ts` (commands and tabs),
+`agent-page.ts` (page actions, frames, new tabs), `agent-shot.ts`, `agent-downloads.ts`,
+`agent-trusted.ts` with `cdp.ts` (real input), `page-agent.ts`, `page-agent-forms.ts` and
+`page-ops.ts` (in the page), and `src/core/browser-control/fill-login.ts`; the side
 panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/PopoutExtPanel.tsx`.
 
 | Method | Path | Who | What |
 |---|---|---|---|
-| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, clear?, submit?, value?, key?, direction?, amount?, ms?, wait_ms? }` |
+| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms? }` |
 | GET | `/api/v1/browser/status` | anyone | `{ browsers, mode, sites }` |
 | GET | `/api/v1/browser/panel` | anyone | `{ panel: 1 }`: this Walnut has the side panel |
 | PUT | `/api/v1/browser/settings` | the person only | `{ mode?: "ask" \| "any", removeSite? }` |
@@ -137,7 +208,9 @@ panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/Popou
 | POST | `/api/v1/browser/adopt` | the extension | `{ tab, task, url }`: the person let that task act in the tab |
 
 Screenshots need the extension's site access (`<all_urls>`, asked at install in Chrome; in
-Firefox the person grants it from the extension's page), and capture only the visible part of
-the tab. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
+Firefox the person grants it from the extension's page). The extension also asks for
+`downloads` at install, and `debugger` only as an optional permission when you turn real input
+on. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
 `tests/e2e/browser/extension-agent.spec.ts`, `tests/e2e/browser/extension-sidepanel.spec.ts`,
+`tests/core/browser-control/cdp.test.ts`,
 `tests/web/ext-panel-model.test.ts`.

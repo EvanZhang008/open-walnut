@@ -30,7 +30,7 @@ export interface ExtApi {
     onChanged: Event<(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void>
   }
   tabs: {
-    query(q: { active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean; windowId?: number; url?: string | string[] }): Promise<Tab[]>
+    query(q: { status?: string; active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean; windowId?: number; url?: string | string[] }): Promise<Tab[]>
     get(tabId: number): Promise<Tab>
     sendMessage(tabId: number, msg: unknown, opts?: { frameId?: number }): Promise<any>
     create(o: { url: string; active?: boolean; windowId?: number }): Promise<Tab>
@@ -57,13 +57,15 @@ export interface ExtApi {
   scripting?: { executeScript(o: { target: { tabId: number; allFrames?: boolean; frameIds?: number[] }; files: string[] }): Promise<unknown[]> }
   /** getSelf needs no permission. */
   management?: { getSelf?(): Promise<{ installType?: string }> }
-  alarms: { create(name: string, o: { periodInMinutes: number }): Promise<void> | void; onAlarm: Event<(a: { name: string }) => void> }
-  action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; setBadgeBackgroundColor(o: { color: string }): Promise<void> }
+  alarms: { create(name: string, o: { periodInMinutes?: number; delayInMinutes?: number }): Promise<void> | void; clear?(name: string): Promise<boolean>; onAlarm: Event<(a: { name: string }) => void> }
+  action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; getBadgeText?(o: { tabId?: number }): Promise<string>; setBadgeBackgroundColor(o: { color: string; tabId?: number }): Promise<void> }
+  /** The computer's idle and lock state (the auto-lock); needs the `idle` permission. */
+  idle?: { setDetectionInterval(seconds: number): void; onStateChanged: Event<(state: 'active' | 'idle' | 'locked') => void> }
   commands?: { onCommand: Event<(name: string, tab?: Tab) => void> }
   contextMenus?: {
     create(o: { id: string; title: string; contexts: string[] }, cb?: () => void): void
     removeAll(): Promise<void> | void
-    onClicked: Event<(info: { menuItemId: string | number; selectionText?: string; pageUrl?: string }, tab?: Tab) => void>
+    onClicked: Event<(info: { menuItemId: string | number; selectionText?: string; pageUrl?: string; frameId?: number; frameUrl?: string }, tab?: Tab) => void>
   }
   /** Chrome's side panel. */
   sidePanel?: { open(o: { windowId?: number; tabId?: number }): Promise<void> }

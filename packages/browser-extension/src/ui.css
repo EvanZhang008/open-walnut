@@ -99,3 +99,44 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-
 .switch-row input[role=switch]:checked { background: var(--accent); }
 .switch-row input[role=switch]:checked::after { transform: translateX(16px); }
 .switch-row input[role=switch]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── the menu's rows, picked with the keys ── */
+.menu-list:focus { outline: none; }
+.option { cursor: pointer; }
+.option[aria-selected="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.option .icon-btn { flex: none; }
+.suggestion { color: var(--fg2); letter-spacing: .01em; }
+
+/* ── one-time codes with their countdown ── */
+.totp { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--accent); }
+.totp-code { font-size: 14px; font-weight: 600; color: var(--fg); letter-spacing: .06em; }
+.totp-ring { position: relative; width: 18px; height: 18px; display: inline-grid; place-items: center; }
+.totp-ring svg { position: absolute; inset: 0; }
+.totp-secs { font-size: 8px; font-weight: 700; color: var(--muted); }
+.totp.soon { color: var(--bad); }
+.totp-chip { border: 0; background: var(--bg2); border-radius: 8px; padding: 3px 8px; cursor: pointer; }
+.totp-chip:hover { background: var(--accent-soft); }
+
+/* ── the save bar's fields ── */
+.bar-fields { display: grid; grid-template-columns: 1fr; gap: 2px; }
+.pw-wrap { position: relative; }
+.pw-wrap .input { padding-right: 34px; }
+.pw-wrap .icon-btn { position: absolute; right: 3px; top: 3px; }
+.select { width: 100%; height: 34px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; }
+.select:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ── popup settings and generator ── */
+.setting { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+.setting .row-text { flex: 1; }
+.never-row { display: flex; align-items: center; gap: 8px; padding: 4px 10px; }
+.never-row .row-title { flex: 1; font-weight: 500; }
+.gen-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.gen-kinds { display: flex; gap: 4px; background: var(--bg2); padding: 3px; border-radius: 9px; margin-bottom: 10px; }
+.gen-kinds button { flex: 1; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-weight: 500; }
+.gen-kinds button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.gen-sets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; }
+.gen-sets label { display: flex; gap: 8px; align-items: center; }
+.notice { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--bg2); color: var(--fg2); font-size: 12px; margin: 6px 0; text-align: left; }
+.notice svg { flex: none; color: var(--bad); margin-top: 1px; }
+input[type=checkbox], input[type=range] { accent-color: var(--accent); }
+.switch-row .row-sub { white-space: normal; }

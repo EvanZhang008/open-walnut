@@ -1,8 +1,8 @@
 /**
  * Agents and the vault (core/vault/agent.ts, docs/reference/passwords.md "Agents"):
  *
- *   GET  /api/v1/vault/agent/items?q=&site=        → { items }   what an agent may ask for, no secrets
- *   POST /api/v1/vault/agent/use                   { item, fields?, purpose, scope?, cwd?, command? }
+ *   GET  /api/v1/vault/agent/items?q=&site=        → { items }   what an agent may ask for, no secrets (none under Off)
+ *   POST /api/v1/vault/agent/use                   { item, fields?, purpose, scope?, use?: reveal | env, cwd?, command? }
  *                                                  → { status: 'released', values, ... } | { status: 'pending', requestId, waitToken, ... }
  *   POST /api/v1/vault/agent/use/:id/wait          { token, wait_ms? } → released | pending | expired | canceled (403 denied)
  *   POST /api/v1/vault/agent/use/:id/cancel        { token }
@@ -10,9 +10,12 @@
  * and the person's own view of it (a vault session, vault-v1.ts's gate):
  *
  *   GET  /api/v1/vault/agent/log                   → { entries }
- *   GET  /api/v1/vault/agent/policy                → { agents, grants }
- *   PUT  /api/v1/vault/agent/policy                { agents: off | ask | allow }
+ *   GET  /api/v1/vault/agent/policy                → { agents, grantMs, grants }
+ *   PUT  /api/v1/vault/agent/policy                { agents?: off | ask | allow, grantMs?: 0 | 3600000 | 43200000 | 172800000 | -1 }
  *   POST /api/v1/vault/agent/grants/end            → { grants, asks }
+ *   POST /api/v1/vault/agent/grants/:id/revoke     → { revoked } (one grant, by its id in the policy's list)
+ *
+ * Bitwarden sync and the keychain unlock: vault-sync-v1.ts, mounted here.
  *
  * Any caller may ask (a session, a script, a person's shell); who asked is recorded and shown
  * on the approval. A test run is refused: the vault is the person's real one. The companion
@@ -25,8 +28,10 @@ import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import type { ApprovalCreator, ApprovalWaiter } from '../../core/vault/agent.js'
+import { vaultSyncV1Router } from './vault-sync-v1.js'
 
 export const vaultAgentV1Router = Router()
+vaultAgentV1Router.use(vaultSyncV1Router)
 
 function header(req: Request, name: string): string | undefined {
   const raw = req.headers[name]
@@ -78,14 +83,14 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
 }
 
 /** The switch, read from the sealed policy (the vault must be open). */
-async function agentsSwitch() {
+export async function agentsSwitch() {
   const { closeIfNobody } = await import('./vault-v1.js')
   await closeIfNobody()
   const { readPolicy } = await import('../../core/vault/policy.js')
   return (await readPolicy()).agents
 }
 
-const createApproval: ApprovalCreator = async (input) => {
+export const createApproval: ApprovalCreator = async (input) => {
   const { createApproval: create } = await import('../../core/approvals/store.js')
   const { activeKeys } = await import('../../core/approvals/keys.js')
   // Every vault ask is signed with Face ID or Touch ID wherever a device can sign (the phone,
@@ -103,7 +108,7 @@ const createApproval: ApprovalCreator = async (input) => {
   }
 }
 
-const waitApproval: ApprovalWaiter = async (id, token, waitMs) => {
+export const waitApproval: ApprovalWaiter = async (id, token, waitMs) => {
   const { waitApproval: wait } = await import('../../core/approvals/store.js')
   const r = await wait(id, token, waitMs)
   const a = r.approval
@@ -117,7 +122,14 @@ vaultAgentV1Router.get('/vault/agent/items', async (req, res, next) => {
     const { agentItems } = await import('../../core/vault/agent.js')
     const q = typeof req.query.q === 'string' ? req.query.q : undefined
     const site = typeof req.query.site === 'string' ? req.query.site : undefined
-    return { items: await agentItems({ query: q, site, agents: await agentsSwitch() }) }
+    const agents = await agentsSwitch()
+    const items = await agentItems({ query: q, site, agents })
+    const { logAgentListing } = await import('../../core/vault/agent.js')
+    const { requesterOf } = await import('./approvals-v1.js')
+    await logAgentListing(await requesterOf(req, {}), items.length, [q, site].filter(Boolean).join(' ') || undefined).catch(() => undefined)
+    return agents === 'off'
+      ? { items, off: true, note: 'Agent access is Off: no list. Ask for one item by its exact name (password_use); the person approves it or not.' }
+      : { items }
   })
 })
 
@@ -132,7 +144,10 @@ vaultAgentV1Router.post('/vault/agent/use', async (req, res, next) => {
       item: String(body.item ?? ''),
       fields,
       purpose: String(body.purpose ?? ''),
-      scope: body.scope === 'task' ? 'task' : 'once',
+      // Absent: an approval gives the person's grant length; `once` asks for this use only.
+      ...(body.scope === 'once' || body.scope === 'task' ? { scope: body.scope } : {}),
+      // `reveal` (default): the plaintext comes back; `env`: walnut pass run gives it to a command.
+      use: body.use === 'env' ? 'env' : 'reveal',
       requester: await requesterOf(req, body),
       agents: await agentsSwitch(),
     }, createApproval)
@@ -186,9 +201,13 @@ vaultAgentV1Router.put('/vault/agent/policy', async (req, res, next) => {
     const { writePolicy } = await import('../../core/vault/policy.js')
     const { listGrants, endAllGrants, bumpAgentEpoch } = await import('../../core/vault/agent.js')
     const { readPolicy } = await import('../../core/vault/policy.js')
-    const agents = (req.body as { agents?: string } | undefined)?.agents
+    const body = (req.body ?? {}) as { agents?: string; grantMs?: unknown }
     const before = (await readPolicy()).agents
-    const out = await writePolicy({ agents: agents === 'off' || agents === 'allow' ? agents : 'ask' })
+    const { cleanGrantMs } = await import('../../core/vault/policy.js')
+    const patch: { agents?: 'off' | 'ask' | 'allow'; grantMs?: number } = {}
+    if (typeof body.agents === 'string') patch.agents = body.agents === 'off' || body.agents === 'allow' ? body.agents : 'ask'
+    if (body.grantMs !== undefined) patch.grantMs = cleanGrantMs(body.grantMs)
+    const out = await writePolicy(patch)
     // Any move of the switch stops releases still running under the old one.
     if (out.agents !== before) bumpAgentEpoch()
     if (out.agents === 'off') await endAgentAccess(endAllGrants())
@@ -200,8 +219,26 @@ vaultAgentV1Router.put('/vault/agent/policy', async (req, res, next) => {
 export async function endAgentAccess(ended: { grants: number; asks: string[] }): Promise<{ grants: number; asks: number }> {
   const { cancelInternal } = await import('../../core/approvals/store.js')
   for (const id of ended.asks) await cancelInternal(id, 'the person ended agent access to Passwords').catch(() => undefined)
+  // On disk before the caller may close the vault (Lock all): an ended grant never comes back after a restart.
+  const { flushGrants } = await import('../../core/vault/agent-grants.js')
+  await flushGrants()
   return { grants: ended.grants, asks: ended.asks.length }
 }
+
+vaultAgentV1Router.post('/vault/agent/grants/:id/revoke', async (req, res, next) => {
+  if (!here(res) || !(await person(req, res))) return
+  await run(res, next, async () => {
+    const { revokeGrant } = await import('../../core/vault/agent.js')
+    const g = await revokeGrant(param(req.params.id))
+    if (!g) {
+      const { VaultError } = await import('../../core/vault/store.js')
+      throw new VaultError('No such grant (it ended already).', 404, 'not_found')
+    }
+    const { flushGrants } = await import('../../core/vault/agent-grants.js')
+    await flushGrants()
+    return { revoked: g }
+  })
+})
 
 vaultAgentV1Router.post('/vault/agent/grants/end', async (req, res, next) => {
   if (!here(res) || !(await person(req, res))) return

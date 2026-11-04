@@ -7,119 +7,29 @@
  * Secrets: a fill fetches the item and sends its username and password only to frames on the
  * top page's origin that said they hold a login form (or to the one frame whose menu was
  * picked), with that origin, which the frame checks again; it keeps nothing. The summaries
- * (titles, usernames, sites) are cached for 5 s while unlocked, so a Lock elsewhere shows soon.
+ * (titles, usernames, sites) are cached for 5 s while unlocked (bg-vault.ts).
+ *
+ * Its parts: bg-vault.ts (summaries, per-tab state), bg-menu.ts (the in-page menu), bg-save.ts
+ * (the save bar), bg-fill.ts (fills), bg-clipboard.ts (copy and clear), bg-autolock.ts,
+ * bg-badge.ts (the toolbar count).
  */
-import { ext, type Sender, type Tab } from './ext'
+import { ext, type Sender } from './ext'
 import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
-import { displayHost, matchItem, siteKey } from '../../../src/core/vault/url-match'
+import { displayHost, matchItem } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
-import type { VaultItem, VaultItemSummary } from '../../../src/core/vault/types'
-import type { FormKind } from './form-detect'
-import { tabStore } from './tab-store'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
-import { injectOpenTabs, reachPage, sleep, toPage } from './page-reach'
+import { injectOpenTabs, reachPage, toPage } from './page-reach'
+import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, matchesFor, originOf, siteOf, state, stores, summaries, view, walletItems, type Reply } from './bg-vault'
+import { afterLoginFill, credsOf, fillFrames, fillWalletFrame, openUnlock } from './bg-fill'
+import { handleMenu } from './bg-menu'
+import { GENERATED_MS, barNonceFor, handleSave, showSaveBar } from './bg-save'
+import { clearLater, initClipboard } from './bg-clipboard'
+import { initAutoLock, lockIfIdle, touch } from './bg-autolock'
+import { clearBadges, initBadge, setBadge } from './bg-badge'
+import { walletValues } from './bg-wallet'
 
-type Reply = Record<string, unknown> & { ok: boolean }
-const fail = (err: unknown): Reply => err instanceof ApiError
-  ? { ok: false, error: err.message, code: err.code, ...(err.waitMs ? { waitMs: err.waitMs } : {}) }
-  : { ok: false, error: err instanceof Error ? err.message : String(err) }
-
-// ── summaries ──
-
-let cache: { at: number; items: VaultItemSummary[] } | null = null
-async function summaries(): Promise<VaultItemSummary[]> {
-  if (cache && Date.now() - cache.at < 5_000) return cache.items
-  const items = (await api.items()).filter((i) => !i.trashedAt)
-  cache = { at: Date.now(), items }
-  return items
-}
-const forget = () => { cache = null }
-
-export interface MenuItem { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact: boolean }
-
-function view(i: VaultItemSummary, page?: string): MenuItem {
-  return {
-    id: i.id, title: i.title, ...(i.username ? { username: i.username } : {}),
-    ...(i.urls?.[0] ? { site: displayHost(i.urls[0]) } : {}), hasTotp: i.hasTotp,
-    exact: !!page && matchItem(i.urls, page) === 'exact_host',
-  }
-}
-
-/** Logins saved for a page, the same host first, then most recently used. */
-async function matchesFor(page: string): Promise<MenuItem[]> {
-  const all = (await summaries()).filter((i) => i.type === 'login' && matchItem(i.urls, page))
-  return all
-    .map((i) => ({ i, v: view(i, page) }))
-    .sort((a, b) => Number(b.v.exact) - Number(a.v.exact) || (b.i.usedAt ?? '').localeCompare(a.i.usedAt ?? '') || a.i.title.localeCompare(b.i.title))
-    .map((x) => x.v)
-}
-
-async function state(): Promise<{ connected: boolean; unlocked: boolean; serverUrl?: string; device?: string }> {
-  const conn = await connection()
-  if (!conn) return { connected: false, unlocked: false }
-  return { connected: true, unlocked: !!(await vaultSession()), serverUrl: conn.serverUrl, device: conn.device }
-}
-
-const originOf = (url: string): string => { try { return new URL(url).origin } catch { return '' } }
-const nonce = (): string => crypto.getRandomValues(new Uint32Array(4)).join('-')
-
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
-/** The same server under another loopback name (127.0.0.1 for localhost, and so on). */
-function sameServer(a: string, b: string): boolean {
-  if (a === b) return true
-  try {
-    const x = new URL(a)
-    const y = new URL(b)
-    return x.protocol === y.protocol && x.port === y.port && LOOPBACK.has(x.hostname) && LOOPBACK.has(y.hostname)
-  } catch { return false }
-}
-
-/**
- * Walnut's own pages (its lock screen, Settings): the extension stays out of them. Every page of
- * Walnut also says so itself (content.ts reads its marker), which covers the addresses this list
- * does not know (its tunnel, Tailscale).
- */
-async function isWalnutPage(url: string): Promise<boolean> {
-  const conn = await connection()
-  const o = originOf(url)
-  return !!o && (sameServer(o, conn?.serverUrl ?? '') || sameServer(o, DEFAULT_SERVER))
-}
-
-// ── per-tab state (storage.session: it outlives the service worker, and content scripts cannot read it) ──
-
-/** The in-page menu that is open, and the frame that opened it; `nonce` is in its page's URL. */
-interface MenuOwner { tabId: number; frameId: number; url: string; role: string; kind: FormKind; nonce: string }
-
-/** A login seen being sent, offered for save or update. The page never holds it. */
-interface Pending {
-  url: string
-  username?: string
-  password: string
-  kind: 'save' | 'update'
-  itemId?: string
-  title?: string
-  at: number
-  /** Compared with the saved logins (needs the vault open); a login seen while locked is not yet. */
-  checked: boolean
-  /** The save bar's page carries it in its URL; its messages must too. */
-  nonce: string
-}
-const PENDING_MS = 3 * 60_000
-/** A pending login shows on another site's page only right after it was sent (a sign-in that lands elsewhere). */
-const ELSEWHERE_MS = 20_000
-
-const pendingSave = tabStore<Pending>('pendingSave')
-const seenUsername = tabStore<{ url: string; username: string; at: number }>('seenUsername')
-const connecting = tabStore<string>('connecting')
-const menus = tabStore<MenuOwner>('menus')
-/** Frames that may be filled: on the top page's origin, holding a login form. */
-const frames = tabStore<Record<string, { origin: string; at: number }>>('frames')
-/** The strong password the menu last made on a tab: a sign-up sent with it is saved without typing. */
-const generated = tabStore<{ password: string; url: string; at: number }>('generated')
-
-/** The strong password the menu made waits this long for its sign-up to be sent. */
-const GENERATED_MS = 10 * 60_000
+const { pendingSave, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
 /**
  * A typed or generated password is kept only as long as it can still be offered: expired ones
@@ -134,108 +44,29 @@ async function sweep(): Promise<void> {
   await pendingSave.sweep((p) => now - p.at > PENDING_MS)
   await seenUsername.sweep((u) => now - u.at > PENDING_MS)
   await generated.sweep((g) => now - g.at > GENERATED_MS)
+  await lastLogin.sweep((l) => now - l.at > CODE_PAGE_MS)
 }
 
-async function neverSites(): Promise<string[]> {
-  const { neverSave } = await ext.storage.local.get('neverSave')
-  return Array.isArray(neverSave) ? neverSave as string[] : []
-}
-
-function siteOf(url: string): string {
-  return siteKey(url)?.domain ?? new URL(url).hostname
-}
-
-/** A login sent on a page: offer to save it, or to update a saved one whose password differs. */
-async function seenLogin(tabId: number, url: string, username: string | undefined, password: string, keep?: { at: number; nonce: string }): Promise<Pending | null> {
-  if (!(await connection())) return null
-  if ((await neverSites()).includes(siteOf(url))) return null
-  const step = await seenUsername.get(tabId)
-  if (step && Date.now() - step.at > PENDING_MS) await seenUsername.sweep((x) => Date.now() - x.at > PENDING_MS)
-  if (!username && step && Date.now() - step.at < PENDING_MS && siteOf(step.url) === siteOf(url)) username = step.username
-  let p: Pending = { url, ...(username ? { username } : {}), password, kind: 'save', title: displayHost(url), at: keep?.at ?? Date.now(), checked: false, nonce: keep?.nonce ?? nonce() }
-  if (await vaultSession()) {
-    try {
-      const matches = (await summaries()).filter((i) => i.type === 'login' && matchItem(i.urls, url))
-      p.checked = true
-      const same = matches.filter((i) => (i.username ?? '') === (username ?? ''))
-      const candidate = same[0] ?? (!username && matches.length === 1 ? matches[0] : undefined)
-      if (candidate) {
-        const item = await api.item(candidate.id)
-        if (item.password === password) return null // nothing new
-        p = { ...p, kind: 'update', itemId: item.id, title: item.title }
-      }
-    } catch (err) {
-      if (!(err instanceof ApiError && (err.code === 'vault_session_needed' || err.code === 'vault_locked'))) throw err
-      p = { ...p, kind: 'save', checked: false }
-    }
-  }
-  await pendingSave.set(tabId, p)
-  return p
-}
-
-async function showSaveBar(tabId: number): Promise<void> {
-  const p = await pendingSave.get(tabId)
-  if (!p) return
-  await ext.tabs.sendMessage(tabId, { type: 'show-savebar', nonce: p.nonce }, { frameId: 0 }).catch(() => undefined)
-}
-
-/**
- * Send a login to fill: to `frameId` alone (the menu's frame), else to the tab's frames that
- * registered a login form on the top page's origin, top frame first. The tab is read again
- * right before, and every frame checks `origin` against its own.
- */
-async function fillFrames(tabId: number, frameId: number | undefined, creds: { username?: string; password?: string; totp?: string }, mode: 'login' | 'totp', expected: string): Promise<boolean> {
-  const tab = await ext.tabs.get(tabId).catch(() => undefined)
-  const origin = originOf(tab?.url ?? '')
-  if (!origin || origin !== originOf(expected)) return false
-  const msg = { type: 'fill', mode, origin, ...creds }
-  // A tab older than the extension has no page script yet (and so no frames known): put it in first.
-  if (frameId === undefined && !Object.keys((await frames.get(tabId)) ?? {}).length) {
-    // Its frames register as the script starts and finds the login fields: wait for them a little.
-    if ((await reachPage(tabId, false)).ok) {
-      for (let i = 0; i < 10 && !Object.keys((await frames.get(tabId)) ?? {}).length; i++) await sleep(200)
-    }
-  }
-  const targets = frameId !== undefined
-    ? [frameId]
-    : Object.entries((await frames.get(tabId)) ?? {}).filter(([, f]) => f.origin === origin).map(([id]) => Number(id)).sort((a, b) => a - b)
-  for (const id of targets) {
-    const r = await ext.tabs.sendMessage(tabId, msg, { frameId: id }).catch(() => null)
-    if (r?.filled) return true
-  }
-  return false
-}
-
-/** The menu or save bar is still on screen as Walnut drew it (content.ts tampered()); else it is closed. */
-async function stillShown(tabId: number, frameId: number, which: 'menu' | 'bar'): Promise<boolean> {
-  const r = await ext.tabs.sendMessage(tabId, { type: 'check-shown', which }, { frameId }).catch(() => null)
-  return r?.ok === true
-}
-const COVERED = { ok: false, error: 'Something on the page covers Walnut, so it did nothing.' }
-
-function credsOf(item: VaultItem): { username?: string; password?: string } {
-  return { ...(item.username ? { username: item.username } : {}), ...(item.password ? { password: item.password } : {}) }
-}
-
-/** The page the person is on: in the window named (the side panel's), else the last one they used. */
-async function activeTab(windowId?: number): Promise<Tab | undefined> {
-  return (await ext.tabs.query(typeof windowId === 'number' ? { active: true, windowId } : { active: true, lastFocusedWindow: true }))[0]
-}
 const windowOf = (msg: Record<string, unknown>) => (typeof msg.windowId === 'number' && Number.isInteger(msg.windowId) ? msg.windowId : undefined)
-
-/** Open the popup to unlock; where the browser refuses (no user gesture left), a small window. */
-async function openUnlock(): Promise<void> {
-  try {
-    if (ext.action.openPopup) { await ext.action.openPopup(); return }
-  } catch { /* falls through */ }
-  await ext.windows.create({ url: ext.runtime.getURL('popup.html?window=1'), type: 'popup', width: 380, height: 560, focused: true })
-}
 
 async function startConnect(serverUrl: string): Promise<Reply> {
   const origin = cleanServerUrl(serverUrl || DEFAULT_SERVER)
   const tab = await ext.tabs.create({ url: `${origin}/connect-extension`, active: true })
   if (tab.id !== undefined) await connecting.set(tab.id, origin)
   return { ok: true }
+}
+
+/** Lock this browser's unlock (the auto-lock, the popup's Lock): the badges go with it. */
+async function lockNow(): Promise<void> {
+  await api.lock()
+  forget()
+  await clearBadges()
+}
+
+/** The count of logins for a tab's page on its toolbar icon (none while locked or on Walnut's pages). */
+async function badgeFor(tabId: number, url: string | undefined): Promise<void> {
+  if (!url || !/^https?:/.test(url) || !(await vaultSession()) || await isWalnutPage(url)) { await setBadge(tabId, 0); return }
+  await setBadge(tabId, await matchesFor(url).then((m) => m.length, () => 0))
 }
 
 // ── who may send what ──
@@ -255,33 +86,29 @@ function senderKind(sender: Sender): SenderKind | null {
 const ALLOWED: Record<string, SenderKind> = {
   state: 'popup', 'start-connect': 'popup', 'pair-code': 'popup', disconnect: 'popup', 'vault-status': 'popup',
   unlock: 'popup', lock: 'popup', 'site-items': 'popup', search: 'popup', 'copy-secret': 'popup', 'fill-tab': 'popup',
-  generate: 'popup', 'open-walnut': 'popup',
-  'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'seen-login': 'content', 'seen-username': 'content',
+  generate: 'popup', 'open-walnut': 'popup', 'totp-code': 'popup', copied: 'popup', 'wallet-items': 'popup',
+  'page-init': 'content', 'frame-ready': 'content', 'open-menu': 'content', 'menu-focus': 'content', 'seen-login': 'content', 'seen-username': 'content',
   'connect-hello': 'content', 'connect-code': 'content',
-  'menu-data': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
+  'menu-data': 'menu', 'menu-codes': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-regenerate': 'menu', 'menu-copied': 'menu',
+  'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
   'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel',
 }
-
-/** The open menu of the sender's tab, when the message carries its nonce. */
-async function menuOf(tabId: number | undefined, msg: Record<string, unknown>): Promise<MenuOwner | undefined> {
-  const owner = tabId !== undefined ? await menus.get(tabId) : undefined
-  return owner && typeof msg.nonce === 'string' && msg.nonce === owner.nonce ? owner : undefined
-}
-
-async function pendingOf(tabId: number | undefined, msg: Record<string, unknown>): Promise<Pending | undefined> {
-  const p = tabId !== undefined ? await pendingSave.get(tabId) : undefined
-  if (p && Date.now() - p.at > PENDING_MS) { await pendingSave.sweep((x) => Date.now() - x.at > PENDING_MS); return undefined }
-  return p && typeof msg.nonce === 'string' && msg.nonce === p.nonce ? p : undefined
-}
+/** What a person does with Walnut (not a page loading by itself): it keeps the auto-lock away. */
+const USE = new Set(['unlock', 'site-items', 'search', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
 
 // ── the message router ──
 
 async function handle(msg: { type: string; [k: string]: unknown }, sender: Sender): Promise<Reply> {
   const kind = senderKind(sender)
   if (!kind || ALLOWED[msg.type] !== kind) return { ok: false, error: `Not for this page: ${msg.type}` }
+  // The chosen time passed with no use: locked before anything is answered.
+  await lockIfIdle(lockNow).catch(() => false)
+  if (USE.has(msg.type)) void touch()
+  if (kind === 'menu' || msg.type === 'open-menu' || msg.type === 'menu-focus') return handleMenu(msg, sender)
+  if (kind === 'savebar' || msg.type === 'seen-login' || msg.type === 'seen-username') return handleSave(msg, sender)
   const tabId = sender.tab?.id
   switch (msg.type) {
     // popup
@@ -344,47 +171,62 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       forget()
       return { ok: true, serverUrl: conn.serverUrl, device: conn.device }
     }
-    case 'disconnect': await disconnect(); forget(); return { ok: true }
-    case 'vault-status': {
-      return { ok: true, status: await api.status() }
-    }
+    case 'disconnect': await disconnect(); forget(); await clearBadges(); return { ok: true }
+    case 'vault-status': return { ok: true, status: await api.status() }
     case 'unlock': {
       await api.unlock(String(msg.password ?? ''), typeof msg.secretKey === 'string' && msg.secretKey ? msg.secretKey : undefined)
       forget()
+      await touch(true)
       return { ok: true }
     }
-    case 'lock': await api.lock(); forget(); return { ok: true }
+    case 'lock': await lockNow(); return { ok: true }
     case 'site-items': {
       const tab = await activeTab(windowOf(msg))
       const page = tab?.url ?? ''
       const site = /^https?:/.test(page) && !(await isWalnutPage(page)) ? page : ''
-      return { ok: true, site: site ? displayHost(site) : '', items: site ? await matchesFor(site) : [] }
+      const items = site ? await matchesFor(site) : []
+      // A plain http page whose logins are saved for https: the popup says why none is offered.
+      const insecure = site && !items.length ? await insecureFor(site) : 0
+      return { ok: true, site: site ? displayHost(site) : '', items, insecure }
     }
+    case 'wallet-items': return { ok: true, cards: await walletItems('card'), identities: await walletItems('identity') }
     case 'search': {
       const q = String(msg.q ?? '').trim().toLowerCase()
       const all = await summaries()
       const hits = all.filter((i) => !q || [i.title, i.username ?? '', ...(i.urls ?? []).map(displayHost)].some((t) => t.toLowerCase().includes(q)))
       return { ok: true, items: hits.slice(0, 50).map((i) => ({ ...view(i), type: i.type })) }
     }
+    case 'totp-code': return { ok: true, ...(await api.totp(String(msg.id))) }
     case 'copy-secret': {
       // The popup copies it itself (it has the person's click); the value goes nowhere else.
       const id = String(msg.id)
       const field = String(msg.field)
       if (field === 'totp') return { ok: true, value: (await api.totp(id)).code }
       const item = await api.item(id)
-      const value = field === 'username' ? item.username : field === 'password' ? item.password : undefined
-      if (!value) return { ok: false, error: `This item has no ${field}.` }
+      const value = field === 'username' ? item.username : field === 'password' ? item.password
+        : field === 'number' ? item.card?.number : field === 'code' ? item.card?.code : undefined
+      if (!value) return { ok: false, error: `This item has no ${field === 'code' ? 'security code' : field === 'number' ? 'card number' : field}.` }
       void api.used(id)
       return { ok: true, value }
+    }
+    case 'copied': {
+      // The popup put a secret on the clipboard: it is cleared in 30 s if it is still there.
+      if (typeof msg.value === 'string' && msg.value) await clearLater(msg.value.slice(0, 4000))
+      return { ok: true }
     }
     case 'fill-tab': {
       const tab = await activeTab(windowOf(msg))
       if (tab?.id === undefined || !tab.url) return { ok: false, error: 'No page to fill.' }
       const item = await api.item(String(msg.id))
+      if (item.type === 'card' || item.type === 'identity') {
+        const filled = await fillWalletFrame(tab.id, 0, walletValues(item) as Record<string, string>, item.type, tab.url)
+        if (filled) void api.used(item.id)
+        return filled ? { ok: true } : { ok: false, error: item.type === 'card' ? 'No card form found on this page.' : 'No address form found on this page.' }
+      }
       if (!matchItem(item.urls, tab.url)) return { ok: false, code: 'other_site', error: `"${item.title}" is saved for another site; Walnut fills a login only on its own site.` }
       const filled = await fillFrames(tab.id, undefined, credsOf(item), 'login', tab.url)
-      if (filled) void api.used(item.id)
-      return filled ? { ok: true } : { ok: false, error: 'No login form found on this page.' }
+      if (!filled) return { ok: false, error: 'No login form found on this page.' }
+      return { ok: true, ...(await afterLoginFill(tab.id, undefined, item, tab.url)) }
     }
     // generate() holds the sizes to its own limits.
     case 'generate': return { ok: true, value: generate((msg.options as GeneratorOptions | undefined) ?? DEFAULT_PASSWORD) }
@@ -400,11 +242,21 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       if (await isWalnutPage(page)) return { ok: true, off: true }
       const st = await state()
       let count = 0
+      let codes = 0
+      let cards = 0
+      let identities = 0
       if (st.unlocked) {
-        try { count = (await matchesFor(page)).length } catch { /* locked meanwhile */ }
+        try {
+          const m = await matchesFor(page)
+          count = m.length
+          codes = m.filter((i) => i.hasTotp).length
+          const all = await summaries()
+          cards = all.filter((i) => i.type === 'card').length
+          identities = all.filter((i) => i.type === 'identity').length
+        } catch { /* locked meanwhile */ }
       }
-      // The top page of a tab with a login waiting gets the save bar's nonce, to show it.
       let barNonce: string | undefined
+      let offerCode = false
       if (tabId !== undefined && sender.frameId === 0) {
         if (msg.top) {
           // A new top page: frames of another origin can no longer be filled. The rest stay (a
@@ -413,13 +265,18 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
           const all = (await frames.get(tabId)) ?? {}
           for (const [id, f] of Object.entries(all)) if (f.origin !== o) delete all[id]
           await frames.set(tabId, all)
+          void setBadge(tabId, count)
         }
-        const p = await pendingSave.get(tabId)
-        if (p && Date.now() - p.at < PENDING_MS && (siteOf(p.url) === siteOf(page) || Date.now() - p.at < ELSEWHERE_MS)) barNonce = p.nonce
+        barNonce = await barNonceFor(tabId, page)
+      }
+      // The code page after a sign in Walnut filled or saw: its menu offers that login's code.
+      if (tabId !== undefined && codes > 0) {
+        const last = await lastLogin.get(tabId)
+        offerCode = !!last && last.hasTotp && Date.now() - last.at < CODE_PAGE_MS && siteOf(last.url) === siteOf(page)
       }
       // An agent's tab wears its frame and Stop button (top frame only).
       const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
-      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
+      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, codes, cards, identities, ...(offerCode ? { offerCode } : {}), ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }
@@ -430,31 +287,6 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       if (msg.hasLogin) all[String(sender.frameId)] = { origin, at: Date.now() }
       else delete all[String(sender.frameId)]
       await frames.set(tabId, all)
-      return { ok: true }
-    }
-    case 'open-menu': {
-      if (tabId === undefined || sender.frameId === undefined) return { ok: false }
-      const n = nonce()
-      await menus.set(tabId, { tabId, frameId: sender.frameId, url: String(sender.url ?? ''), role: String(msg.role), kind: msg.kind as FormKind, nonce: n })
-      return { ok: true, nonce: n }
-    }
-    case 'seen-login': {
-      if (tabId === undefined || typeof msg.password !== 'string' || !msg.password) return { ok: false }
-      const url = String(sender.url ?? '')
-      if (await isWalnutPage(url)) return { ok: false }
-      // Only what the person typed, or the strong password Walnut just made here, is offered:
-      // a page that fills a field itself and sends the form offers nothing.
-      const made = await generated.get(tabId)
-      const ours = !!made && Date.now() - made.at < GENERATED_MS && made.password === msg.password && siteOf(made.url) === siteOf(url)
-      if (msg.typed !== true && !ours) return { ok: true, offered: false }
-      const p = await seenLogin(tabId, url, typeof msg.username === 'string' && msg.username ? msg.username : undefined, msg.password)
-      if (ours) await generated.delete(tabId)
-      // A page that sends without leaving (a single-page app) gets the bar now; one that leaves gets it on the next page.
-      if (p) setTimeout(() => void showSaveBar(tabId), 600)
-      return { ok: true, offered: !!p }
-    }
-    case 'seen-username': {
-      if (tabId !== undefined && typeof msg.username === 'string' && msg.username) await seenUsername.set(tabId, { url: String(sender.url ?? ''), username: msg.username, at: Date.now() })
       return { ok: true }
     }
     case 'connect-hello': {
@@ -473,96 +305,6 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       forget()
       return { ok: true, device: conn.device }
     }
-
-    // the in-page menu
-    case 'menu-data': {
-      const owner = await menuOf(tabId, msg)
-      if (!owner) return { ok: false }
-      const st = await state()
-      if (!st.connected) return { ok: true, state: 'not-connected', role: owner.role, kind: owner.kind }
-      if (!st.unlocked) return { ok: true, state: 'locked', role: owner.role, kind: owner.kind }
-      const items = await matchesFor(owner.url)
-      return { ok: true, state: 'unlocked', role: owner.role, kind: owner.kind, site: displayHost(owner.url), items: owner.role === 'totp' ? items.filter((i) => i.hasTotp) : items }
-    }
-    case 'menu-fill': {
-      const owner = await menuOf(tabId, msg)
-      if (!owner) return { ok: false }
-      if (!(await stillShown(owner.tabId, owner.frameId, 'menu'))) return COVERED
-      const item = await api.item(String(msg.id))
-      if (!matchItem(item.urls, owner.url)) return { ok: false, error: 'That login is for another site.' }
-      const filled = owner.role === 'totp'
-        ? await fillFrames(owner.tabId, owner.frameId, { totp: (await api.totp(item.id)).code }, 'totp', owner.url)
-        : await fillFrames(owner.tabId, owner.frameId, credsOf(item), 'login', owner.url)
-      if (filled) void api.used(item.id)
-      await menus.delete(owner.tabId)
-      await ext.tabs.sendMessage(owner.tabId, { type: 'close-menu' }, { frameId: owner.frameId }).catch(() => undefined)
-      return { ok: filled }
-    }
-    case 'menu-generate': {
-      const owner = await menuOf(tabId, msg)
-      if (!owner) return { ok: false }
-      if (!(await stillShown(owner.tabId, owner.frameId, 'menu'))) return COVERED
-      const value = generate(DEFAULT_PASSWORD)
-      // Kept until the sign-up is sent: it is saved then, typed or not.
-      await generated.set(owner.tabId, { password: value, url: owner.url, at: Date.now() })
-      await ext.tabs.sendMessage(owner.tabId, { type: 'fill-new-password', password: value, origin: originOf(owner.url) }, { frameId: owner.frameId }).catch(() => undefined)
-      await menus.delete(owner.tabId)
-      await ext.tabs.sendMessage(owner.tabId, { type: 'close-menu' }, { frameId: owner.frameId }).catch(() => undefined)
-      return { ok: true }
-    }
-    case 'menu-unlock': if (!(await menuOf(tabId, msg))) return { ok: false }; await openUnlock(); return { ok: true }
-    // The popup asks for Walnut's address (it may not be this machine's default).
-    case 'menu-connect': if (!(await menuOf(tabId, msg))) return { ok: false }; await openUnlock(); return { ok: true }
-    case 'menu-close': case 'menu-size': {
-      const owner = await menuOf(tabId, msg)
-      if (owner) await ext.tabs.sendMessage(owner.tabId, msg.type === 'menu-close' ? { type: 'close-menu' } : { type: 'menu-size', height: msg.height }, { frameId: owner.frameId }).catch(() => undefined)
-      return { ok: true }
-    }
-
-    // the save bar
-    case 'savebar-data': {
-      let p = await pendingOf(tabId, msg)
-      if (tabId === undefined || !p || Date.now() - p.at > PENDING_MS) return { ok: false }
-      const st = await state()
-      if (st.unlocked && !p.checked) {
-        // Seen while locked: now that it is open, is it new, a changed password, or one already saved?
-        const again = await seenLogin(tabId, p.url, p.username, p.password, { at: p.at, nonce: p.nonce })
-        if (!again) { await pendingSave.delete(tabId); return { ok: false } }
-        p = again
-      }
-      return { ok: true, kind: st.unlocked ? p.kind : 'locked', site: displayHost(p.url), username: p.username ?? '', title: p.title ?? '' }
-    }
-    case 'savebar-action': {
-      if (tabId === undefined) return { ok: false }
-      const action = String(msg.action)
-      const hide = () => ext.tabs.sendMessage(tabId, { type: 'hide-savebar' }, { frameId: 0 }).catch(() => undefined)
-      const p = await pendingOf(tabId, msg)
-      if (action === 'close') { await hide(); return { ok: true } }
-      if (!p) { await hide(); return { ok: false } }
-      if (action === 'unlock') { await openUnlock(); return { ok: true } }
-      // "Not now" needs no check: it only drops the login.
-      if (action !== 'later' && !(await stillShown(tabId, 0, 'bar'))) return COVERED
-      await pendingSave.delete(tabId)
-      if (action === 'never') {
-        const list = await neverSites()
-        await ext.storage.local.set({ neverSave: [...new Set([...list, siteOf(p.url)])] })
-      } else if (action === 'save') {
-        await api.create({ type: 'login', title: String(msg.title || p.title || displayHost(p.url)).slice(0, 200), ...(p.username ? { username: p.username } : {}), password: p.password, urls: [originOf(p.url)] })
-        forget()
-      } else if (action === 'update' && p.itemId) {
-        const item = await api.item(p.itemId)
-        const { id: _i, createdAt: _c, updatedAt, passwordHistory: _h, usedAt: _u, trashedAt: _t, ...rest } = item
-        await api.update(item.id, { ...rest, password: p.password }, updatedAt)
-        forget()
-      }
-      // A save or an update shows its confirmation, then closes itself; the rest close now.
-      if (action !== 'save' && action !== 'update') await hide()
-      return { ok: true }
-    }
-    case 'savebar-size': {
-      if (tabId !== undefined && await pendingOf(tabId, msg)) await ext.tabs.sendMessage(tabId, { type: 'savebar-size', height: msg.height }, { frameId: 0 }).catch(() => undefined)
-      return { ok: true }
-    }
   }
   return { ok: false, error: `Unknown message ${msg.type}` }
 }
@@ -577,38 +319,53 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 })
 
 ext.tabs.onRemoved.addListener((tabId) => {
-  for (const s of [menus, pendingSave, seenUsername, connecting, frames, generated]) void s.delete(tabId)
+  for (const s of [menus, pendingSave, seenUsername, connecting, frames, generated, lastLogin]) void s.delete(tabId)
 })
 
-// After an unlock, the save bar waiting on it in the tab the person is on can save now.
+// The toolbar count follows the tab the person is on.
+ext.tabs.onActivated.addListener((info) => { void ext.tabs.get(info.tabId).then((t) => badgeFor(info.tabId, t.url), () => undefined) })
+ext.tabs.onUpdated.addListener((tabId, change, tab) => { if (change.url || change.status === 'complete') void badgeFor(tabId, tab.url) })
+
+// After an unlock, the save bar waiting on it in the tab the person is on can save now; a lock clears the counts.
 ext.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && 'vaultSession' in changes) {
     forget()
-    if (changes.vaultSession.newValue) void activeTab().then((t) => { if (t?.id !== undefined) void showSaveBar(t.id) })
+    if (changes.vaultSession.newValue) {
+      void activeTab().then((t) => { if (t?.id !== undefined) { void showSaveBar(t.id); void badgeFor(t.id, t.url) } })
+    } else void clearBadges()
   }
 })
 
+/** Fill the login for a tab: the one there is, else its menu (in the frame asked, the top page by default). */
+async function fillFromBrowser(t: { id?: number; url?: string } | undefined, frameId?: number): Promise<void> {
+  if (t?.id === undefined || !t.url || !/^https?:/.test(t.url) || await isWalnutPage(t.url)) return
+  // The chosen idle time passed with no use: locked first, as for every message (handle), so the
+  // shortcut or the context menu never fills from a session the auto-lock should have ended.
+  await lockIfIdle(lockNow).catch(() => false)
+  if (!(await connection()) || !(await vaultSession())) { await openUnlock(); return }
+  void touch()
+  const matches = await matchesFor(t.url)
+  if (matches.length === 1) {
+    const item = await api.item(matches[0].id)
+    if (await fillFrames(t.id, frameId, credsOf(item), 'login', t.url)) await afterLoginFill(t.id, frameId, item, t.url)
+  } else {
+    await ext.tabs.sendMessage(t.id, { type: 'open-menu-here', ...(frameId ? { here: true } : {}) }, { frameId: frameId ?? 0 }).catch(() => undefined)
+  }
+}
+
 ext.commands?.onCommand.addListener((name, tab) => {
   if (name !== 'fill-login') return
-  void (async () => {
-    const t = tab ?? await activeTab()
-    if (t?.id === undefined || !t.url || !/^https?:/.test(t.url) || await isWalnutPage(t.url)) return
-    if (!(await vaultSession())) { await openUnlock(); return }
-    const matches = await matchesFor(t.url)
-    if (matches.length === 1) {
-      const item = await api.item(matches[0].id)
-      if (await fillFrames(t.id, undefined, credsOf(item), 'login', t.url)) void api.used(item.id)
-    } else {
-      // The top page opens its menu; a frame never does from here.
-      await ext.tabs.sendMessage(t.id, { type: 'open-menu-here' }, { frameId: 0 }).catch(() => undefined)
-    }
-  })().catch(() => undefined)
+  // The top page opens its menu; a frame never does from here.
+  void (async () => fillFromBrowser(tab ?? await activeTab()))().catch(() => undefined)
 })
 
 initAgent({ isWalnutPage })
 initSelfUpdate()
+initClipboard()
+initBadge()
+initAutoLock(lockNow)
 
-// ── the side panel: the context menu and the toolbar open it ──
+// ── the side panel and the context menu ──
 
 /** Opens the panel; called straight from the person's click, before anything is awaited. */
 function openPanel(windowId: number | undefined): void {
@@ -618,14 +375,22 @@ function openPanel(windowId: number | undefined): void {
 
 function makeMenus(): void {
   if (!ext.contextMenus) return
+  const done = () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError
   void Promise.resolve(ext.contextMenus.removeAll()).then(() => {
-    ext.contextMenus!.create({ id: 'walnut-ask-selection', title: 'Ask Walnut about "%s"', contexts: ['selection'] }, () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError)
-    ext.contextMenus!.create({ id: 'walnut-ask-page', title: 'Ask Walnut about this page', contexts: ['page'] }, () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError)
+    ext.contextMenus!.create({ id: 'walnut-fill', title: 'Fill with Walnut', contexts: ['editable'] }, done)
+    ext.contextMenus!.create({ id: 'walnut-ask-selection', title: 'Ask Walnut about "%s"', contexts: ['selection'] }, done)
+    ext.contextMenus!.create({ id: 'walnut-ask-page', title: 'Ask Walnut about this page', contexts: ['page'] }, done)
   }).catch(() => undefined)
 }
 makeMenus()
 
 ext.contextMenus?.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'walnut-fill') {
+    // The login for the page (the one, or the list in the frame the person right-clicked in).
+    if (!(tab?.id !== undefined && tab.url)) return
+    if (info.frameId === undefined || info.frameId === 0 || originOf(info.frameUrl ?? '') === originOf(tab.url)) void fillFromBrowser(tab, info.frameId || undefined).catch(() => undefined)
+    return
+  }
   if (info.menuItemId !== 'walnut-ask-selection' && info.menuItemId !== 'walnut-ask-page') return
   openPanel(tab?.windowId)
   const text = info.menuItemId === 'walnut-ask-selection' ? (info.selectionText ?? '').slice(0, 4000) : ''
