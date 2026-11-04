@@ -89,24 +89,44 @@ async function walkSqlite(root: string, rel: string, out: string[]): Promise<voi
   }
 }
 
+/**
+ * This machine's own backup state (local-state.ts): its writer id and run
+ * lock. A restored home must not carry them, or two machines would both pass
+ * as the one writer.
+ */
+const MACHINE_ONLY_FILES = new Set(['local/backup/machine-id', 'local/backup/run.lock']);
+
+/**
+ * The encrypted engine's secrets: the recovery key and the Drive sign-in. They
+ * ride the encrypted backup (sealed by that very key), never the plaintext
+ * S3 mirror.
+ */
+export const BACKUP_SECRETS_DIR = 'local/backup';
+
 export function isExcluded(relPath: string): boolean {
   const first = relPath.split('/')[0];
   if (EXCLUDED_DIRS.has(first)) return true;
+  if (MACHINE_ONLY_FILES.has(relPath)) return true;
   return EXCLUDED_FILE_RE.some((re) => re.test(relPath));
+}
+
+export interface ScanOptions {
+  /** Leave out local/backup/ (the plaintext mirror). */
+  withoutBackupSecrets?: boolean;
 }
 
 /**
  * Walk the data dir and produce manifest entries for every included file.
  * Fully async (fs/promises) — never blocks the event loop.
  */
-export async function scanDataDir(root: string): Promise<ManifestEntry[]> {
+export async function scanDataDir(root: string, opts: ScanOptions = {}): Promise<ManifestEntry[]> {
   const out: ManifestEntry[] = [];
-  await walk(root, '', out);
+  await walk(root, '', out, opts);
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
 
-async function walk(root: string, rel: string, out: ManifestEntry[]): Promise<void> {
+async function walk(root: string, rel: string, out: ManifestEntry[], opts: ScanOptions): Promise<void> {
   const abs = rel ? path.join(root, rel) : root;
   let entries;
   try {
@@ -117,8 +137,9 @@ async function walk(root: string, rel: string, out: ManifestEntry[]): Promise<vo
   for (const entry of entries) {
     const childRel = rel ? `${rel}/${entry.name}` : entry.name;
     if (isExcluded(childRel)) continue;
+    if (opts.withoutBackupSecrets && (childRel === BACKUP_SECRETS_DIR || childRel.startsWith(`${BACKUP_SECRETS_DIR}/`))) continue;
     if (entry.isDirectory()) {
-      await walk(root, childRel, out);
+      await walk(root, childRel, out, opts);
     } else if (entry.isFile()) {
       try {
         const st = await fs.stat(path.join(root, childRel));

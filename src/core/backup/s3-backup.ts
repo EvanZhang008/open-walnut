@@ -210,7 +210,7 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
     // Scan + sqlite snapshots (staging dir is inside excluded tmp/).
     await fs.rm(stagingDir, { recursive: true, force: true });
     await fs.mkdir(stagingDir, { recursive: true });
-    const scanned = await scanDataDir(dataDir);
+    const scanned = await scanDataDir(dataDir, { withoutBackupSecrets: true });
     const snapshots = await snapshotSqliteDbs(dataDir, stagingDir);
     const all = [...scanned, ...snapshots.entries];
 

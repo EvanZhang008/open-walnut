@@ -11,6 +11,7 @@
  * Long work (a restore can take an hour) answers 202 and reports through the
  * `backup:status` event; the Drive sign-in reports through `backup:gdrive`.
  */
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -37,31 +38,46 @@ export const encryptedBackupRouter = Router();
 
 const MASK = '•';
 const SECRET_KEYS = ['access_key_id', 'secret_access_key', 'client_secret'] as const;
+const AUTH_SECRET_KEYS = ['aws_access_key_id', 'aws_secret_access_key'] as const;
 const sameTarget = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
   a.type === b.type && (a.bucket ?? '') === (b.bucket ?? '') && (a.account_id ?? '') === (b.account_id ?? '')
   && (a.endpoint ?? '') === (b.endpoint ?? '') && (a.client_id ?? '') === (b.client_id ?? '');
+const masked = (v: unknown): boolean => typeof v === 'string' && v.includes(MASK);
 
-/** The destination a request means: its own (masks restored for the same target), else the saved one. */
-async function requestDestination(body: unknown): Promise<{ dest?: BackupDestinationConfig; cfg: BackupConfig; error?: string }> {
+/**
+ * The destination a request means: its own (masks restored for the same
+ * target, the nested `auth` keys too), else the saved one. `custom` says the
+ * request named a target other than the saved one.
+ */
+async function requestDestination(body: unknown): Promise<{ dest?: BackupDestinationConfig; cfg: BackupConfig; custom?: boolean; error?: string }> {
   const cfg = (await getConfig()).backup ?? {};
   const saved = cfg.destination;
   const sent = (body as { destination?: BackupDestinationConfig } | undefined)?.destination;
   if (!sent?.type) return { dest: saved, cfg };
-  const dest: BackupDestinationConfig = { ...sent };
+  const dest: BackupDestinationConfig = { ...sent, ...(sent.auth ? { auth: { ...sent.auth } } : {}) };
+  const same = Boolean(saved && sameTarget(saved, dest));
+  const refuse = { cfg, error: 'The saved keys belong to another destination. Type the keys for this one.' };
   for (const k of SECRET_KEYS) {
-    const v = dest[k];
-    if (typeof v !== 'string' || !v.includes(MASK)) continue;
-    if (!saved || !sameTarget(saved, dest)) {
-      return { cfg, error: 'The saved keys belong to another destination. Type the keys for this one.' };
-    }
-    dest[k] = saved[k];
+    if (!masked(dest[k])) continue;
+    if (!same) return refuse;
+    dest[k] = saved![k];
   }
-  return { dest, cfg: { ...cfg, destination: dest } };
+  if (dest.auth) {
+    const auth = dest.auth as Record<string, unknown>;
+    const savedAuth = (saved?.auth ?? {}) as Record<string, unknown>;
+    for (const k of AUTH_SECRET_KEYS) {
+      if (!masked(auth[k])) continue;
+      if (!same) return refuse;
+      auth[k] = savedAuth[k];
+    }
+  }
+  return { dest, cfg: { ...cfg, destination: dest }, custom: !same };
 }
 
-function personOnly(req: Request, res: Response): boolean {
+/** Credentials and where data may go are the user's own steps: only the person at this computer. */
+function personOnly(req: Request, res: Response, what = 'The recovery key is shown and changed'): boolean {
   if (isPersonAtThisMachine(req)) return true;
-  res.status(403).json({ error: 'The recovery key is shown and changed only on the computer Walnut runs on.', code: 'person_at_this_machine' });
+  res.status(403).json({ error: `${what} only by you, on the computer Walnut runs on.`, code: 'person_at_this_machine' });
   return false;
 }
 
@@ -77,9 +93,10 @@ function setRestore(status: RestoreStatus | undefined): void {
 // POST /api/backup/destination/test — write, read back and delete a probe; say whether backups are there.
 encryptedBackupRouter.post('/destination/test', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { dest, error } = await requestDestination(req.body);
+    const { dest, custom, error } = await requestDestination(req.body);
     if (error) return void res.status(400).json({ ok: false, error });
     if (!dest) return void res.status(400).json({ ok: false, error: 'Choose where backups go first.' });
+    if (custom && !personOnly(req, res, 'A new backup destination is tried')) return;
     const result = await testDestination(dest, { dataDir: WALNUT_HOME });
     log.web.info('backup: destination test', { ok: result.ok, type: dest.type, hasBackups: result.hasBackups });
     res.json(result);
@@ -91,8 +108,10 @@ encryptedBackupRouter.post('/destination/test', async (req: Request, res: Respon
 // POST /api/backup/snapshots — the backups at the destination, newest first.
 encryptedBackupRouter.post('/snapshots', async (req: Request, res: Response) => {
   try {
-    const { dest, cfg, error } = await requestDestination(req.body);
+    const { dest, cfg, custom, error } = await requestDestination(req.body);
     if (error) return void res.status(400).json({ error });
+    const typedKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim();
+    if ((custom || typedKey) && !personOnly(req, res, 'Backups elsewhere are listed')) return;
     if (engineOf(cfg) === 'mirror' && !dest) {
       const points = await listRestorePoints(cfg);
       return void res.json({
@@ -120,10 +139,26 @@ function defaultRestoreDir(): string {
   return path.join(path.dirname(path.resolve(WALNUT_HOME)), `.open-walnut-restored-${ts}`);
 }
 
-function badTarget(target: string): string | null {
+/** The real path of `p`: its nearest existing ancestor resolved through symlinks, the rest appended. */
+async function realTarget(p: string): Promise<string> {
+  const rest: string[] = [];
+  let cur = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+async function badTarget(target: string): Promise<string | null> {
   if (!path.isAbsolute(target)) return 'Give the folder as a full path (it starts with /).';
-  const home = path.resolve(WALNUT_HOME);
-  const t = path.resolve(target);
+  const home = await realTarget(WALNUT_HOME);
+  const t = await realTarget(target);
   if (t === home || t.startsWith(home + path.sep)) return 'Restore never writes into the data folder Walnut is running on. Pick a new folder.';
   if (home.startsWith(t + path.sep)) return 'That folder holds the running data folder. Pick a new, empty folder.';
   return null;
@@ -131,13 +166,16 @@ function badTarget(target: string): string | null {
 
 // POST /api/backup/restore — bring one backup back into a new folder (202; progress on backup:status).
 encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
-  const { dest, cfg, error } = await requestDestination(req.body);
+  const { dest, cfg, custom, error } = await requestDestination(req.body);
   if (error) return void res.status(400).json({ error });
   const snapshotId = typeof req.body?.snapshotId === 'string' ? req.body.snapshotId : 'latest';
+  const typedKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim();
+  // Backups from a destination or key the request brings could be anyone's files: the person's step.
+  if ((custom || typedKey) && !personOnly(req, res, 'A restore from another destination or key is started')) return;
   const targetDir = typeof req.body?.targetDir === 'string' && req.body.targetDir.trim()
     ? req.body.targetDir.trim().replace(/^~(?=\/|$)/, os.homedir())
     : defaultRestoreDir();
-  const bad = badTarget(targetDir);
+  const bad = await badTarget(targetDir);
   if (bad) return void res.status(400).json({ error: bad });
   const recoveryKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim() ? req.body.recoveryKey : undefined;
   const mirror = engineOf(cfg) === 'mirror' && !dest;
@@ -185,6 +223,13 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   const refused = await Promise.race([job.then(() => null, (e) => e), new Promise((r) => setTimeout(() => r(null), 20))]);
   if (refused instanceof BackupBusyError) return void res.status(409).json({ error: refused.message });
   res.status(202).json({ started: true, targetDir });
+});
+
+// POST /api/backup/restore/dismiss — the user read the last restore's result: stop showing it.
+encryptedBackupRouter.post('/restore/dismiss', (_req: Request, res: Response) => {
+  const s = getBackupScheduler();
+  if (s?.health.restore && !s.health.restore.running) setRestore(undefined);
+  res.json({ ok: true });
 });
 
 // GET /api/backup/recovery-key — this machine's key (only to the person at it).
@@ -244,7 +289,7 @@ encryptedBackupRouter.post('/adopt', async (_req: Request, res: Response) => {
     await adoptEncryptedBackups(cfg, { dataDir: WALNUT_HOME });
     const s = getBackupScheduler();
     if (s) { s.resetAnchor(); s.health.errorCode = undefined; s.health.error = undefined; s.emitStatus(); }
-    res.json({ ok: true, writer: os.hostname() });
+    res.json({ ok: true });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -258,9 +303,11 @@ async function driveClientFor(body: unknown): Promise<OAuthClient | null> {
   const { dest } = await requestDestination(body);
   const sent = body as { client_id?: string; client_secret?: string } | undefined;
   if (sent?.client_id?.trim()) {
+    const clientId = sent.client_id.trim();
     let secret = sent.client_secret?.trim();
-    if (secret?.includes(MASK)) secret = dest?.client_secret;
-    return resolveOAuthClient({ client_id: sent.client_id.trim(), client_secret: secret });
+    // The saved secret stands in only for the saved client.
+    if (secret?.includes(MASK)) secret = dest?.client_id === clientId ? dest.client_secret : undefined;
+    return resolveOAuthClient({ client_id: clientId, client_secret: secret });
   }
   return resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret });
 }
@@ -284,6 +331,7 @@ encryptedBackupRouter.get('/gdrive/status', async (_req: Request, res: Response)
 
 // POST /api/backup/gdrive/connect — returns Google's sign-in address; the browser opens it.
 encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'Google Drive is connected')) return;
   try {
     const client = await driveClientFor(req.body);
     if (!client) {
@@ -333,6 +381,7 @@ export function setDriveEventEmitter(emit: (name: string, data: unknown) => void
 
 // POST /api/backup/gdrive/complete — the browser was on another device: paste the address it landed on.
 encryptedBackupRouter.post('/gdrive/complete', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'Google Drive is connected')) return;
   const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
   if (!url) return void res.status(400).json({ error: 'Paste the whole address from the browser.' });
   try {
@@ -347,7 +396,8 @@ encryptedBackupRouter.post('/gdrive/complete', async (req: Request, res: Respons
 });
 
 // POST /api/backup/gdrive/disconnect — sign out here (backups already in Drive stay).
-encryptedBackupRouter.post('/gdrive/disconnect', async (_req: Request, res: Response) => {
+encryptedBackupRouter.post('/gdrive/disconnect', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'Google Drive is disconnected')) return;
   await revokeDriveTokens(WALNUT_HOME).catch(() => {});
   getBackupScheduler()?.resetAnchor();
   emitStatus();

@@ -340,6 +340,7 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
       }
     }
     migrateLegacyCompanionKeep(existing);
+    dropLegacyBucketBesideDestination(existing);
     // A whole `hosts` map sent back from a getConfig() read carries the
     // injected cloud box row; it must never reach config.yaml.
     if (existing.hosts && typeof existing.hosts === 'object') {
@@ -347,6 +348,19 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
     }
     return { write: true, result: undefined };
   });
+}
+
+/**
+ * Encrypted backups (`backup.destination`) never keep the legacy mirror's
+ * `backup.bucket` beside them: an older Walnut reads only `bucket`, and would
+ * upload the data home to it unencrypted.
+ */
+function dropLegacyBucketBesideDestination(doc: Record<string, unknown>): void {
+  const backup = doc.backup as Record<string, unknown> | undefined;
+  if (backup && typeof backup === 'object' && backup.destination && 'bucket' in backup) {
+    const { bucket: _bucket, ...rest } = backup;
+    doc.backup = rest;
+  }
 }
 
 /** Atomically patch one Plugin namespace without replacing sibling settings. */

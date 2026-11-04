@@ -2,7 +2,7 @@
  * The encrypted backup repository's on-store format (version 1).
  *
  * Layout under the destination's root:
- *   walnut-backup.json      plaintext: repo id, key check, chunk sizes, writer machine
+ *   walnut-backup.json      plaintext: repo id, key check, chunk sizes, writer id (its name sealed)
  *   packs/<aa>/<packId>     encrypted blobs packed ~16 MB at a time + an encrypted header
  *   index/<id>              encrypted: which blob sits in which pack, at what offset
  *   snapshots/<id>          encrypted: one backup (time, machine, totals, its tree's blob ids)
@@ -42,7 +42,13 @@ export interface RepoConfig {
    * (restore) until the user moves the writer to it (`adopt`), so two machines
    * can never prune each other's packs.
    */
-  writer: { hostname: string; since: string };
+  writer: {
+    /** The writer machine's random id (local-state.ts), never its hostname. */
+    id: string;
+    /** Its name for people to read, sealed (base64): only the key holder sees it. */
+    name: string;
+    since: string;
+  };
 }
 
 export type PackType = 'data' | 'tree';
@@ -56,6 +62,8 @@ export interface PackInfo {
   /** Bytes of the whole pack object. */
   size: number;
   blobs: BlobLocation[];
+  /** No kept backup needed it at the last prune, but it was too new to delete then. */
+  dead?: true;
 }
 
 /** index/<id>: the packs one backup run (or one prune) wrote. */
@@ -74,6 +82,8 @@ export interface TreeEntry {
   m: number;
   /** Blob ids of its chunks, in order (empty for an empty file). */
   b: string[];
+  /** 1 when the file is executable (restored 0700 instead of 0600). */
+  x?: 1;
 }
 
 export interface Snapshot {

@@ -42,10 +42,10 @@ export function R2Fields({ dest, onChange }: Props) {
   const set = (patch: Partial<BackupDestinationConfig>) => onChange({ ...dest, ...patch })
   return (
     <>
-      <TextRow id="backup-r2-account" label="Account ID" mono value={dest.account_id} onChange={(v) => set({ account_id: v })}
-        placeholder="32 letters and digits" />
-      <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="walnut-backup" />
-      <TextRow id="backup-r2-access-key" label="Access key ID" mono value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
+      <TextRow id="backup-r2-account" label="Account ID" value={dest.account_id} onChange={(v) => set({ account_id: v })}
+        placeholder="e.g. 32 letters and digits" />
+      <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. walnut-backup" />
+      <TextRow id="backup-r2-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
       <SettingsRow
         label="Secret access key"
         htmlFor="backup-r2-secret"
@@ -61,14 +61,15 @@ export function R2Fields({ dest, onChange }: Props) {
           <li>Back on the R2 page choose <b>Manage API tokens</b>, then <b>Create Account API token</b>.</li>
           <li>Pick <b>Object Read &amp; Write</b>, limit it to that bucket, and create it.</li>
           <li>Copy the <b>Access Key ID</b> and <b>Secret Access Key</b> into the rows above (Cloudflare shows the secret once).</li>
+          <li>Choose <b>Test and save</b> below.</li>
           <li>The <b>Account ID</b> is on the same page, under Account details.</li>
         </ol>
       </SettingsDisclosure>
       <SettingsDisclosure id="backup-r2-advanced" label="Advanced" data-testid="backup-r2-advanced">
         <TextRow id="backup-r2-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })}
-          placeholder="walnut-backup" />
-        <TextRow id="backup-r2-endpoint" label="Custom endpoint" mono value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
-          placeholder="https://<account>.eu.r2.cloudflarestorage.com"
+          placeholder="Default: walnut-backup" />
+        <TextRow id="backup-r2-endpoint" label="Custom endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
+          placeholder="e.g. https://<account>.eu.r2.cloudflarestorage.com"
           help="Only for an EU bucket or another S3-compatible service." />
       </SettingsDisclosure>
     </>
@@ -82,8 +83,8 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
   const custom = Boolean(dest.endpoint?.trim())
   return (
     <>
-      <TextRow id="backup-s3-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="my-walnut-backup" />
-      <TextRow id="backup-s3-region" label="Region" value={dest.region} onChange={(v) => set({ region: v })} placeholder="us-west-2" />
+      <TextRow id="backup-s3-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. my-walnut-backup" />
+      <TextRow id="backup-s3-region" label="Region" value={dest.region} onChange={(v) => set({ region: v })} placeholder="e.g. us-west-2" />
       {!custom && (
         <SettingsRow
           label="Credentials"
@@ -117,7 +118,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
         <>
           <SettingsRow label="Access key ID" htmlFor="backup-s3-access-key" indent control={
             <input id="backup-s3-access-key" type="text" data-no-draft="autosave" autoComplete="off"
-              className="settings-input settings-input--short settings-input--mono"
+              className="settings-input settings-input--short"
               value={auth.aws_access_key_id ?? ''} onChange={(e) => setAuth({ aws_access_key_id: e.target.value })} />
           } />
           <SettingsRow label="Secret access key" htmlFor="backup-s3-secret" indent control={
@@ -126,12 +127,12 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
         </>
       )}
       <SettingsDisclosure id="backup-s3-advanced" label="Advanced" data-testid="backup-s3-advanced">
-        <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="walnut-backup" />
-        <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" mono value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
+        <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Default: walnut-backup" />
+        <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
           placeholder="https://s3.example.com" help="For MinIO, Backblaze B2 and other S3-compatible services." />
         {custom && (
           <>
-            <TextRow id="backup-s3-ep-access-key" label="Access key ID" mono value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
+            <TextRow id="backup-s3-ep-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
             <SettingsRow label="Secret access key" htmlFor="backup-s3-ep-secret" control={
               <SecretInput id="backup-s3-ep-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />
             } />

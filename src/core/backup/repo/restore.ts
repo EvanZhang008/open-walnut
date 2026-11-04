@@ -46,7 +46,7 @@ export async function restoreRepoSnapshot(
   if (existing && existing.length > 0 && !opts.force) {
     throw new Error(`${target} is not empty. Restore goes into a new, empty folder.`);
   }
-  const repo = await Repository.open(store, rawKey, { hostname: '' });
+  const repo = await Repository.open(store, rawKey);
   let snap: Snapshot;
   if (opts.snapshotId === 'latest') {
     const { snapshots } = await repo.listSnapshots();
@@ -82,12 +82,17 @@ export async function restoreRepoSnapshot(
   for (const e of ordered) {
     const dest = path.resolve(target, restorePathOf(e.p));
     await fs.mkdir(path.dirname(dest), { recursive: true });
-    const fh = await fs.open(dest, 'w', 0o600);
+    const fh = await fs.open(dest, 'w', e.x ? 0o700 : 0o600);
     let written = 0;
     try {
       for (const id of e.b) {
         const chunk = await repo.readBlob(id, index, cache);
-        await fh.write(chunk);
+        // write() may take less than asked: loop until the chunk is all down.
+        for (let off = 0; off < chunk.length;) {
+          const { bytesWritten } = await fh.write(chunk, off, chunk.length - off, written + off);
+          if (bytesWritten <= 0) throw new Error(`Could not write ${dest}.`);
+          off += bytesWritten;
+        }
         written += chunk.length;
       }
     } finally {

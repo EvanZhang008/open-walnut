@@ -22,6 +22,12 @@ export const DESTINATION_NOTE: Record<BackupDestinationType, string> = {
   s3: 'Your own AWS bucket, billed by AWS.',
 }
 
+/** Under the interval: what history is kept (the server's retention). */
+export const RETENTION_NOTE = 'Keeps the last 3, one a day for a week, and one a week for a month.'
+
+/** A week between backups at most. */
+export const MAX_INTERVAL_HOURS = 168
+
 export type Engine = 'mirror' | 'encrypted' | null
 
 export function engineOf(cfg: BackupConfig | undefined): Engine {
@@ -74,9 +80,73 @@ export function missingFields(d: BackupDestinationConfig): string[] {
     if (!trimmed(d.access_key_id)) m.push('access key ID')
     if (!trimmed(d.secret_access_key)) m.push('secret access key')
   }
-  if (d.type === 's3' && trimmed(d.endpoint) && (!trimmed(d.access_key_id) || !trimmed(d.secret_access_key))) m.push('access keys')
+  if (d.type === 's3' && trimmed(d.endpoint)) {
+    const topLevel = trimmed(d.access_key_id) && trimmed(d.secret_access_key)
+    const inAuth = d.auth?.method === 'access_keys' && trimmed(d.auth.aws_access_key_id) && trimmed(d.auth.aws_secret_access_key)
+    if (!topLevel && !inAuth) m.push('access keys')
+  }
+  if (d.type === 's3' && !trimmed(d.endpoint) && d.auth?.method === 'access_keys') {
+    if (!trimmed(d.auth.aws_access_key_id) || !trimmed(d.auth.aws_secret_access_key)) m.push('access keys')
+  }
+  if (d.type === 's3' && !trimmed(d.endpoint) && d.auth?.method === 'profile' && !trimmed(d.auth.profile)) m.push('profile')
   return m
 }
+
+/** The same destination as saved (blanks, key order and the fields of other types never count). */
+export function sameDestination(a: BackupDestinationConfig, b: BackupDestinationConfig): boolean {
+  return stableJson(cleanDestination(a)) === stableJson(cleanDestination(b))
+}
+
+/** The answer of POST /api/backup/destination/test (and the legacy /api/backup/test). */
+export interface DestinationTest {
+  ok: boolean
+  arn?: string
+  versioningEnabled?: boolean
+  hasBackups?: boolean
+  keyMatches?: boolean
+  hasKey?: boolean
+  writer?: string
+  thisWriter?: boolean
+  error?: string
+  /** The pane saved it as the destination after this test. */
+  savedNow?: boolean
+}
+
+/** The Connection row's words after a test. */
+export function testHelp(r: DestinationTest | null, legacy: boolean): string {
+  if (!r) return legacy ? 'Checks the bucket with these credentials.' : 'Writes, reads back and deletes a small test file.'
+  if (!r.ok) return `Couldn't connect. ${r.error ?? ''}`.trim()
+  if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
+  const saved = r.savedNow ? ' Saved: backups go here now.' : ''
+  if (!r.hasBackups) return `Connected. Walnut can write here; no backups yet.${saved}`
+  if (r.keyMatches === false) return `Connected. It holds Walnut backups made with another recovery key.${saved}`
+  if (r.thisWriter === false && r.writer) return `Connected. It holds Walnut backups from the computer "${r.writer}".${saved}`
+  return `Connected. It holds this computer's Walnut backups.${saved}`
+}
+
+/**
+ * Why backing up (and restoring) cannot happen yet, in the order a person
+ * fixes it, or null when it can. The rows that are blocked say this instead
+ * of a grey button with no reason.
+ */
+export function blockedReason(s: {
+  legacyMode: boolean
+  legacyBucket?: string
+  saved?: BackupDestinationConfig
+  driveConnected: boolean
+  needsKey: boolean
+  hasKey: boolean
+}): string | null {
+  if (s.legacyMode) return trimmed(s.legacyBucket) ? null : 'Fill in the bucket above first.'
+  if (!s.saved) return 'Set up "Where backups go" above first.'
+  const missing = missingFields(s.saved)
+  if (missing.length > 0) return `Fill in ${missing.join(', ')} above first.`
+  if (s.saved.type === 'gdrive' && !s.driveConnected) return 'Connect Google Drive above first.'
+  if (s.needsKey) return 'Enter your recovery key above first.'
+  if (!s.hasKey) return 'Waiting for the recovery key above.'
+  return null
+}
+
 
 /** Stable JSON for the autosave's current/baseline compare (key order and blanks never count as an edit). */
 export function stableJson(v: unknown): string {
@@ -110,7 +180,7 @@ export function buildBackupConfig(
     ...(saved.retention ? { retention: saved.retention } : {}),
     ...(saved.recovery_key_saved_at ? { recovery_key_saved_at: saved.recovery_key_saved_at } : {}),
     enabled: form.enabled,
-    interval_hours: Math.max(1, Number(form.intervalHours) || 24),
+    interval_hours: Math.min(MAX_INTERVAL_HOURS, Math.max(1, Math.round(Number(form.intervalHours) || 24))),
   }
   if (form.destination) return { ...base, destination: cleanDestination(form.destination) }
   if (form.legacy) return { ...base, ...form.legacy }

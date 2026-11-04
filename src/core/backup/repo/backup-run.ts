@@ -18,13 +18,14 @@ import { scanDataDir, SQLITE_SNAPSHOT_PREFIX } from '../scan.js';
 import { snapshotSqliteDbs } from '../sqlite-snapshot.js';
 import type { ManifestEntry } from '../types.js';
 import type { BackupStore } from '../stores/types.js';
+import type { WriterIdentity } from '../local-state.js';
 import { chunkStream, SMALL_FILE_BYTES } from './chunker.js';
 import { packIdFromKey, type Snapshot, type TreeEntry } from './format.js';
 import { PackCache, PackWriter, RepoError, Repository, shouldCompress, treeChunks, type LoadedIndex } from './repository.js';
 
 export interface RepoBackupOptions {
   dataDir: string;
-  hostname: string;
+  writer: WriterIdentity;
   /** Bytes read so far of the bytes this run has to read (unchanged files count as read). */
   onProgress?: (doneBytes: number, totalBytes: number) => void;
 }
@@ -46,12 +47,9 @@ export interface RepoBackupResult {
 
 /** The index with packs that are really in the store (a deleted pack must not be deduped against). */
 export async function loadLiveIndex(repo: Repository): Promise<{ index: LoadedIndex; storedPacks: Map<string, number | undefined> }> {
-  const index = await repo.loadIndex();
   const storedPacks = new Map<string, number | undefined>();
   for (const obj of await repo.store.list('packs/')) storedPacks.set(packIdFromKey(obj.key), obj.modifiedAt);
-  for (const [id, ref] of index.blobs) if (!storedPacks.has(ref.pack)) index.blobs.delete(id);
-  for (const id of index.packs.keys()) if (!storedPacks.has(id)) index.packs.delete(id);
-  return { index, storedPacks };
+  return { index: await repo.loadIndex(storedPacks), storedPacks };
 }
 
 export async function runRepoBackup(
@@ -60,11 +58,11 @@ export async function runRepoBackup(
   opts: RepoBackupOptions,
 ): Promise<RepoBackupResult> {
   const start = Date.now();
-  const repo = await Repository.open(store, rawKey, { create: true, hostname: opts.hostname });
-  if (repo.config.writer.hostname !== opts.hostname) {
+  const repo = await Repository.open(store, rawKey, { create: true, writer: opts.writer });
+  if (!repo.isWriter(opts.writer)) {
     throw new RepoError(
       'other_writer',
-      `Backups at ${store.describe()} are written by "${repo.config.writer.hostname}". ` +
+      `Backups at ${store.describe()} are written by "${repo.writerName()}". ` +
         'Choose "Back up from this machine instead" to move them here, or use another folder.',
     );
   }
@@ -140,7 +138,7 @@ export async function runRepoBackup(
         } else {
           for await (const chunk of chunkStream(createReadStream(local, { highWaterMark: 1024 * 1024 }))) await take(chunk);
         }
-        entries.push({ p: file.path, s: size, m: Math.floor(st.mtimeMs), b: blobs });
+        entries.push({ p: file.path, s: size, m: Math.floor(st.mtimeMs), b: blobs, ...(st.mode & 0o111 ? { x: 1 as const } : {}) });
         changedFiles++;
       } catch (err) {
         // A file that vanished or could not be read keeps its previous copy.
@@ -178,9 +176,9 @@ export async function runRepoBackup(
 
     // The writer may have moved to another machine while this ran: then this
     // run's snapshot must not land (its packs are left for prune).
-    const latest = await repo.refreshConfig();
-    if (latest.writer.hostname !== opts.hostname) {
-      throw new RepoError('other_writer', `Backups at ${store.describe()} moved to "${latest.writer.hostname}" during this run.`);
+    await repo.refreshConfig();
+    if (!repo.isWriter(opts.writer)) {
+      throw new RepoError('other_writer', `Backups at ${store.describe()} moved to "${repo.writerName()}" during this run.`);
     }
 
     const createdAt = new Date();
@@ -188,7 +186,7 @@ export async function runRepoBackup(
       version: 1,
       id: repo.newSnapshotId(createdAt),
       createdAt: createdAt.toISOString(),
-      hostname: opts.hostname,
+      hostname: opts.writer.name,
       walnutVersion: getVersion(),
       fileCount: entries.length,
       totalBytes: entries.reduce((n, e) => n + e.s, 0),

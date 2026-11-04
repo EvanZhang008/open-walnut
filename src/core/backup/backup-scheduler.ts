@@ -10,6 +10,7 @@
  * `backup.bucket` is set, encrypted backups when `backup.destination` is.
  */
 import { WALNUT_HOME } from '../../constants.js';
+import { friendlyStoreError } from './errors.js';
 import { log } from '../../logging/index.js';
 import { getConfig } from '../config-manager.js';
 import { describeDestination, engineOf, isDestinationReady } from './destination.js';
@@ -52,6 +53,12 @@ export interface BackupSchedulerHandle {
   emitStatus: () => void;
   /** Forget the schedule anchor (the destination changed): the next tick reads it again. */
   resetAnchor: () => void;
+  /**
+   * The health shows ONE destination's backups. When the configured one is not
+   * the one shown, forget the old one's last backup, error and restore at once,
+   * then read the new one's newest backup in the background. True when it moved.
+   */
+  syncDestination: (cfg: BackupConfig | undefined) => boolean;
 }
 
 /** Ready to run: switched on and the chosen engine has what it needs. */
@@ -152,14 +159,18 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
         },
       };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.session.warn('backup: encrypted run failed', { error: msg });
+      const raw = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof RepoError ? raw : friendlyStoreError(err, cfg.destination!);
+      log.session.warn('backup: encrypted run failed', { error: raw });
       return {
         result: {
           ok: false, uploaded: 0, removed: 0, unchanged: 0, totalBytes: 0, uploadedBytes: 0,
           durationMs: Date.now() - start, versioningEnabled: false, error: msg,
         },
-        errorCode: err instanceof RepoError ? err.code : err instanceof Error && err.name === 'DriveAuthError' ? 'drive_auth' : undefined,
+        errorCode: err instanceof RepoError ? err.code
+          : err instanceof Error && err.name === 'DriveAuthError' ? 'drive_auth'
+          : err instanceof Error && err.name === 'BackupLockedError' ? 'busy'
+          : undefined,
       };
     }
   };
@@ -184,6 +195,13 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
           }),
         };
       }
+      if (outcome.errorCode === 'busy') {
+        // A terminal's `open-walnut backup` holds the lock: not a failure, try at the next tick.
+        health.running = false;
+        health.progress = undefined;
+        emitStatus();
+        return outcome.result;
+      }
       lastRunAtMs = Date.now();
       applyResult(outcome.result, outcome.errorCode);
       return outcome.result;
@@ -193,6 +211,39 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
    *  several times a day; lastRunAtMs alone would make every boot "due"). The
    *  durable anchor is the newest backup at the destination, read once per
    *  process and destination. */
+  const forgetDestination = (at: string | undefined): void => {
+    health.destination = at;
+    health.lastBackupAt = undefined;
+    health.lastDurationMs = undefined;
+    health.lastFileCount = undefined;
+    health.lastTotalBytes = undefined;
+    health.lastUploadedBytes = undefined;
+    health.lastSnapshotId = undefined;
+    health.snapshotCount = undefined;
+    health.versioningEnabled = undefined;
+    health.error = undefined;
+    health.errorCode = undefined;
+    health.consecutiveFailures = 0;
+    notifiedForEpisode = false;
+    if (!health.restore?.running) health.restore = undefined;
+    anchorFor = '';
+    lastRunAtMs = 0;
+  };
+
+  const syncDestination = (cfg: BackupConfig | undefined): boolean => {
+    const at = cfg && engineOf(cfg) ? describe(cfg) : undefined;
+    if (health.destination === at || health.running) return false;
+    forgetDestination(at);
+    emitStatus();
+    if (cfg && at) {
+      void (async () => {
+        if (engineOf(cfg) === 'encrypted' && !(await isDestinationReady(cfg.destination!, dataDir))) return;
+        await readAnchor(cfg);
+      })().catch(() => {});
+    }
+    return true;
+  };
+
   const readAnchor = async (cfg: BackupConfig): Promise<void> => {
     const at = describe(cfg);
     if (anchorFor === at) return;
@@ -229,6 +280,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     try {
       const config = await getConfig();
       const cfg = config.backup;
+      syncDestination(cfg);
       health.configured = await isBackupConfigured(cfg, dataDir);
       if (health.configured && currentBackupJob() === null) {
         await readAnchor(cfg!);
@@ -272,5 +324,6 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     resetAnchor(): void {
       anchorFor = '';
     },
+    syncDestination,
   };
 }

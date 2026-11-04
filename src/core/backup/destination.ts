@@ -35,7 +35,9 @@ export function missingFields(dest: BackupDestinationConfig): string[] {
     if (!dest.secret_access_key?.trim()) missing.push('secret access key');
   }
   if (dest.type === 's3' && dest.endpoint?.trim()) {
-    if (!dest.access_key_id?.trim() || !dest.secret_access_key?.trim()) missing.push('access keys');
+    const topLevel = Boolean(dest.access_key_id?.trim() && dest.secret_access_key?.trim());
+    const inAuth = dest.auth?.method === 'access_keys' && Boolean(dest.auth.aws_access_key_id?.trim() && dest.auth.aws_secret_access_key?.trim());
+    if (!topLevel && !inAuth) missing.push('access keys');
   }
   return missing;
 }

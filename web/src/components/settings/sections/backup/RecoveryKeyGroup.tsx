@@ -4,7 +4,9 @@
  * Shown hidden by default with Show, Copy and Download (a small text kit).
  * Until the user says they saved it, a warning row asks them to. On a new
  * computer, where the destination already holds backups made with another
- * key, the row asks for that key instead and checks it before keeping it.
+ * key, the row asks for that key instead and checks it before keeping it; the
+ * same when this computer has a key but the destination's backups were made
+ * with another one (`mismatch`).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsGroup, SettingsRow } from '../../SettingsSection'
@@ -14,20 +16,30 @@ import { saveErrorMessage } from '../../settings-pane-context'
 import { apiGet, apiPost, apiPut } from '@/api/client'
 import { recoveryKitText, type BackupDestinationConfig } from './backup-model'
 
+export interface KeyState {
+  hasKey: boolean
+  needsKey: boolean
+}
+
 interface Props {
   /** The destination as saved (the key is checked against it). */
   dest: BackupDestinationConfig
   destinationLabel: string
   ready: boolean
+  /** The last backup found the destination's backups made with another key. */
+  mismatch: boolean
   savedAt: string | undefined
   onMarkSaved: () => void
+  /** Told what the pane may do: back up only with a key, and never while one is asked for. */
+  onState: (s: KeyState) => void
   /** Bumped by the pane when something changed that may make a key appear (Drive connected, a save). */
   refreshToken: number
 }
 
-export function RecoveryKeyGroup({ dest, destinationLabel, ready, savedAt, onMarkSaved, refreshToken }: Props) {
+export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, savedAt, onMarkSaved, onState, refreshToken }: Props) {
   const [key, setKey] = useState<string | null>(null)
-  const [needsKey, setNeedsKey] = useState(false)
+  const [askedForKey, setNeedsKey] = useState(false)
+  const needsKey = askedForKey || mismatch
   const [shown, setShown] = useState(false)
   const [typed, setTyped] = useState('')
   const [checking, setChecking] = useState(false)
@@ -56,6 +68,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, savedAt, onMar
   }, [ready, JSON.stringify(dest)])
 
   useEffect(() => { void load() }, [load, refreshToken])
+  useEffect(() => { onState({ hasKey: !!key && !mismatch, needsKey }) }, [key, needsKey, mismatch, onState])
 
   const useTypedKey = async () => {
     setChecking(true)
@@ -97,7 +110,9 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, savedAt, onMar
           htmlFor="backup-key-input"
           wide
           state="warning"
-          help={`${destinationLabel} already has Walnut backups. Type the key you saved when you set them up (it starts with WB1-).`}
+          help={mismatch && key
+            ? `The backups in ${destinationLabel} were made with another recovery key. Type that key (it starts with WB1-). It replaces this computer's key, so keep the old one if other backups use it.`
+            : `${destinationLabel} already has Walnut backups. Type the key you saved when you set them up (it starts with WB1-).`}
           error={error ?? undefined}
           data-testid="backup-key-needed"
           control={
@@ -122,7 +137,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, savedAt, onMar
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={() => setShown(!shown)} reserve={['Show', 'Hide']} data-testid="backup-key-show">{shown ? 'Hide' : 'Show'}</SettingsButton>
-                <CopyButton text={key} data-testid="backup-key-copy" />
+                <CopyButton text={key} bordered data-testid="backup-key-copy" />
                 <SettingsButton onClick={download} data-testid="backup-key-download">Download</SettingsButton>
               </span>
             }

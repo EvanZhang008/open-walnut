@@ -24,10 +24,14 @@ async function setup(opts: Parameters<typeof startFakeGoogleDrive>[0] = {}) {
   token = fake.mintAccessToken();
 }
 
-async function makeStore(): Promise<DriveStore> {
+async function makeStore(extra: Partial<typeof retry> & { timeoutMs?: number } = {}): Promise<DriveStore> {
   const folder = await findOrCreateFolder('Walnut Backup', getAccessToken, endpoints, undefined, retry);
-  return new DriveStore({ folderId: folder.id, folderName: 'Walnut Backup', getAccessToken, endpoints, retry });
+  return new DriveStore({ folderId: folder.id, folderName: 'Walnut Backup', getAccessToken, endpoints, retry: { ...retry, ...extra } });
 }
+
+const folderOf = () => fake.files().find((f) => f.mimeType === 'application/vnd.google-apps.folder')!.id;
+const named = (name: string) => fake.files().filter((f) => f.name === name);
+const creates = () => fake.requests.filter((r) => r.startsWith('POST /upload/drive/v3/files?'));
 
 beforeEach(() => {
   tokenCalls = [];
@@ -143,9 +147,160 @@ describe('DriveStore', () => {
     fake.failNext(1, 403, 'userRateLimitExceeded');
     await store.put('index/r', Buffer.from('retried'));
     expect(sleeps).toHaveLength(4);
-    expect(sleeps[1]).toBeGreaterThanOrEqual(1000);
-    expect(sleeps[3]).toBeGreaterThanOrEqual(4000);
+    expect(sleeps[0]).toBeGreaterThanOrEqual(1000); // throttle 1
+    expect(sleeps[1]).toBeGreaterThanOrEqual(2000); // throttle 2
+    expect(sleeps[2]).toBeGreaterThanOrEqual(500); // failure 1: its own, shorter schedule
+    expect(sleeps[2]).toBeLessThanOrEqual(1000);
+    expect(sleeps[3]).toBeGreaterThanOrEqual(4000); // throttle 3
     expect((await store.get('index/r')).toString()).toBe('retried');
+  });
+
+  it('backs off throttling exponentially up to about 64 s, over up to 8 tries', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.failNext(7, 403, 'rateLimitExceeded');
+    await store.put('index/slow', Buffer.from('finally'));
+    expect(sleeps).toHaveLength(7);
+    for (let i = 0; i < 6; i++) {
+      expect(sleeps[i]).toBeGreaterThanOrEqual(1000 * 2 ** i);
+      expect(sleeps[i]).toBeLessThanOrEqual(1000 * 2 ** i + 1000);
+    }
+    expect(sleeps[6]).toBe(64_000);
+    expect((await store.get('index/slow')).toString()).toBe('finally');
+
+    fake.failNext(8, 429);
+    await expect(store.get('index/never')).rejects.toThrow(/lookup of index\/never failed after 8 tries: 429 rateLimitExceeded/);
+  });
+
+  it('honors Retry-After, in seconds or as a date', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.failNext(1, 429, undefined, undefined, '7');
+    fake.failNext(1, 403, 'userRateLimitExceeded', undefined, new Date(Date.now() + 3000).toUTCString());
+    fake.failNext(1, 503, undefined, undefined, '2');
+    await store.put('index/ra', Buffer.from('x'));
+    expect(sleeps[0]).toBe(7000);
+    expect(sleeps[1]).toBeGreaterThan(0);
+    expect(sleeps[1]).toBeLessThanOrEqual(3000);
+    expect(sleeps[2]).toBe(2000);
+  });
+
+  it('a create that landed but answered 5xx is not repeated', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.failAfterCreate(1, 500);
+    await store.put('index/once', Buffer.from('one copy'));
+    expect(creates()).toHaveLength(1);
+    expect(named('index/once')).toHaveLength(1);
+    expect(sleeps).toHaveLength(1);
+    expect((await store.get('index/once')).toString()).toBe('one copy');
+    // The id of the file found by the lookup is cached: the next put updates it.
+    await store.put('index/once', Buffer.from('v2'));
+    expect(creates()).toHaveLength(1);
+    expect(named('index/once')).toHaveLength(1);
+  });
+
+  it('a create that landed but timed out is not repeated', async () => {
+    await setup();
+    const store = await makeStore({ timeoutMs: 300 });
+    fake.failAfterCreate(1, 'hang');
+    await store.put('index/slow-create', Buffer.from('landed'));
+    expect(creates()).toHaveLength(1);
+    expect(named('index/slow-create')).toHaveLength(1);
+    expect((await store.get('index/slow-create')).toString()).toBe('landed');
+  });
+
+  it('a create that landed but lost its connection is not repeated', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.failAfterCreate(1, 'reset');
+    await store.put('index/reset', Buffer.from('kept'));
+    expect(creates()).toHaveLength(1);
+    expect(named('index/reset')).toHaveLength(1);
+    expect((await store.get('index/reset')).toString()).toBe('kept');
+  });
+
+  it('a resumable create that landed but answered 5xx is not repeated', async () => {
+    await setup();
+    const store = await makeStore();
+    const key = `packs/cd/${'cd'.repeat(32)}`;
+    const big = randomBytes(5 * 1024 * 1024 + 30);
+    fake.failAfterCreate(1, 502);
+    await store.put(key, big);
+    expect(fake.requests.filter((r) => r.startsWith('PUT /upload/drive/v3/files?uploadType=resumable&upload_id='))).toHaveLength(1);
+    expect(sleeps).toHaveLength(1);
+    expect(named(key)).toHaveLength(1);
+    expect((await store.get(key)).equals(big)).toBe(true);
+  });
+
+  it('a create that failed for real is retried, once', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.failNext(1, 503, undefined, /^POST \/upload\//);
+    await store.put('index/retry-create', Buffer.from('made'));
+    expect(creates()).toHaveLength(2);
+    expect(named('index/retry-create')).toHaveLength(1);
+    expect((await store.get('index/retry-create')).toString()).toBe('made');
+  });
+
+  it('a same-name file of another size does not count as landed; the retry leaves one file', async () => {
+    await setup();
+    const key = 'snapshots/race';
+    const store = new DriveStore({
+      folderId: (await findOrCreateFolder('Walnut Backup', getAccessToken, endpoints, undefined, retry)).id,
+      folderName: 'Walnut Backup', getAccessToken, endpoints,
+      // During the backoff another writer adds a file of the same name and a different size.
+      retry: { sleep: async (ms) => { sleeps.push(ms); fake.addFile(key, folderOf(), Buffer.from('other writer')); } },
+    });
+    fake.failNext(1, 500, undefined, /^POST \/upload\//);
+    await store.put(key, Buffer.from('mine'));
+    expect(creates()).toHaveLength(2);
+    expect(named(key)).toHaveLength(1);
+    expect((await store.get(key)).toString()).toBe('mine');
+    expect((await new DriveStore({ folderId: folderOf(), folderName: 'x', getAccessToken, endpoints }).get(key)).toString()).toBe('mine');
+  });
+
+  it('a put on a name with duplicates updates the newest and deletes the rest', async () => {
+    await setup();
+    const store = await makeStore();
+    fake.addFile('walnut-backup.json', folderOf(), Buffer.from('old'));
+    const newest = fake.addFile('walnut-backup.json', folderOf(), Buffer.from('newer'));
+    await store.put('walnut-backup.json', Buffer.from('latest'));
+    expect(named('walnut-backup.json').map((f) => f.id)).toEqual([newest.id]);
+    expect((await store.get('walnut-backup.json')).toString()).toBe('latest');
+
+    // Same through the cache filled by list().
+    fake.addFile('index/dup', folderOf(), Buffer.from('a'));
+    fake.addFile('index/dup', folderOf(), Buffer.from('b'));
+    fake.addFile('index/dup', folderOf(), Buffer.from('c'));
+    const lister = await makeStore();
+    await lister.list('');
+    await lister.put('index/dup', Buffer.from('d'));
+    expect(named('index/dup')).toHaveLength(1);
+    expect((await store.get('index/dup')).toString()).toBe('d');
+  });
+
+  it('delete removes every file with that name, and tolerates copies already gone', async () => {
+    await setup();
+    const store = await makeStore();
+    for (const v of ['a', 'b', 'c']) fake.addFile('index/many', folderOf(), Buffer.from(v));
+    fake.addFile('index/keep', folderOf(), Buffer.from('k'));
+    expect((await store.get('index/many')).toString()).toBe('c'); // caches only the newest lookup result
+    await store.delete('index/many');
+    expect(named('index/many')).toHaveLength(0);
+    expect(named('index/keep')).toHaveLength(1);
+    await expect(store.get('index/many')).rejects.toSatisfy(isNotFound);
+
+    // A cached copy deleted elsewhere answers 404; a new copy the lookup finds is deleted too.
+    fake.addFile('index/many', folderOf(), Buffer.from('x'));
+    fake.addFile('index/many', folderOf(), Buffer.from('y'));
+    const stale = await makeStore();
+    await stale.list('');
+    await store.delete('index/many');
+    fake.addFile('index/many', folderOf(), Buffer.from('z'));
+    await stale.delete('index/many');
+    expect(named('index/many')).toHaveLength(0);
+    expect(fake.requests.filter((r) => r.startsWith('DELETE /drive/v3/files/')).length).toBeGreaterThanOrEqual(6);
   });
 
   it('gives up after five tries with a plain message', async () => {

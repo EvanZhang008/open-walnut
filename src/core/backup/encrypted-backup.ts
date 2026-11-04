@@ -3,10 +3,13 @@
  * place that turns config + the local recovery key into a run, a list of
  * backups, a restore, a connection test, or a writer move.
  */
-import os from 'node:os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { makeStore, describeDestination } from './destination.js';
 import { ensureRecoveryKey, readRecoveryKey } from './recovery-key.js';
+import { localWriter, withBackupLock } from './local-state.js';
+import { friendlyStoreError } from './errors.js';
 import { parseRecoveryKey } from './repo/crypto.js';
 import { runRepoBackup, type RepoBackupResult } from './repo/backup-run.js';
 import { DEFAULT_RETENTION, pruneRepo, type PruneResult } from './repo/prune.js';
@@ -26,6 +29,7 @@ function retentionOf(cfg: BackupConfig) {
   return {
     daily: Math.max(1, cfg.retention?.daily ?? DEFAULT_RETENTION.daily),
     weekly: Math.max(0, cfg.retention?.weekly ?? DEFAULT_RETENTION.weekly),
+    recent: Math.max(1, DEFAULT_RETENTION.recent ?? 1),
   };
 }
 
@@ -42,30 +46,33 @@ export async function runEncryptedBackup(
 ): Promise<EncryptedRunResult> {
   const dest = cfg.destination!;
   const store = opts.store ?? await makeStore(dest, opts.dataDir);
-  // A new key is made only for a destination with no backups yet. One that
-  // holds backups needs the key that made them, typed in by the user.
-  let key = await readRecoveryKey(opts.dataDir);
-  if (!key) {
-    if (await hasRepository(store)) {
-      throw new RepoError('key_mismatch', `${store.describe()} already holds Walnut backups. Enter the recovery key you saved to use them.`);
+  return withBackupLock(opts.dataDir, async () => {
+    // A new key is made only for a destination with no backups yet. One that
+    // holds backups needs the key that made them, typed in by the user.
+    let key = await readRecoveryKey(opts.dataDir);
+    if (!key) {
+      if (await hasRepository(store)) {
+        throw new RepoError('key_mismatch', `${store.describe()} already holds Walnut backups. Enter the recovery key you saved to use them.`);
+      }
+      key = (await ensureRecoveryKey(opts.dataDir)).key;
     }
-    key = (await ensureRecoveryKey(opts.dataDir)).key;
-  }
-  const raw = parseRecoveryKey(key);
-  const result: EncryptedRunResult = await runRepoBackup(store, raw, {
-    dataDir: opts.dataDir,
-    hostname: os.hostname(),
-    onProgress: opts.onProgress,
+    const raw = parseRecoveryKey(key);
+    const writer = await localWriter(opts.dataDir);
+    const result: EncryptedRunResult = await runRepoBackup(store, raw, {
+      dataDir: opts.dataDir,
+      writer,
+      onProgress: opts.onProgress,
+    });
+    try {
+      const repo = await Repository.open(store, raw);
+      result.prune = await pruneRepo(repo, retentionOf(cfg), { writer, mustKeep: result.snapshotId });
+      result.snapshotCount = (await repo.listSnapshotKeys()).length;
+    } catch (err) {
+      // The backup itself landed; a failed prune only means more history kept until next time.
+      result.pruneError = err instanceof Error ? err.message : String(err);
+    }
+    return result;
   });
-  try {
-    const repo = await Repository.open(store, raw, { hostname: os.hostname() });
-    result.prune = await pruneRepo(repo, retentionOf(cfg));
-    result.snapshotCount = (await repo.listSnapshotKeys()).length;
-  } catch (err) {
-    // The backup itself landed; a failed prune only means more history kept until next time.
-    result.pruneError = err instanceof Error ? err.message : String(err);
-  }
-  return result;
 }
 
 async function hasRepository(store: BackupStore): Promise<boolean> {
@@ -91,13 +98,13 @@ export async function listEncryptedBackups(
 ): Promise<BackupListing> {
   const dest = cfg.destination!;
   const store = opts.store ?? await makeStore(dest, opts.dataDir);
-  const repo = await Repository.open(store, await keyFor(opts.dataDir, opts.recoveryKey), { hostname: os.hostname() });
+  const repo = await Repository.open(store, await keyFor(opts.dataDir, opts.recoveryKey));
   const { snapshots, unreadable } = await repo.listSnapshots();
   return {
     destination: describeDestination(dest),
     snapshots: snapshots.map(({ tree: _tree, ...rest }) => rest),
     unreadable: unreadable.length,
-    writer: repo.config.writer.hostname,
+    writer: repo.writerName(),
   };
 }
 
@@ -113,17 +120,29 @@ export async function restoreEncryptedBackup(
   },
 ): Promise<RepoRestoreResult> {
   const store = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
-  return restoreRepoSnapshot(store, await keyFor(opts.dataDir, opts.recoveryKey), opts.targetDir, {
+  const raw = await keyFor(opts.dataDir, opts.recoveryKey);
+  const run = () => restoreRepoSnapshot(store, raw, opts.targetDir, {
     snapshotId: opts.snapshotId,
     onProgress: opts.onProgress,
   });
+  // Held so a prune from another process cannot delete packs mid-restore. Not
+  // on a machine with no data home yet (a terminal restore into ~/.open-walnut
+  // itself): the lock file would make the target non-empty.
+  const home = path.resolve(opts.dataDir);
+  const target = path.resolve(opts.targetDir);
+  const homeExists = await fs.stat(home).then(() => true, () => false);
+  if (!homeExists || target === home || target.startsWith(home + path.sep)) return run();
+  return withBackupLock(opts.dataDir, run);
 }
 
 /** Make this machine the one that writes backups to this destination. */
 export async function adoptEncryptedBackups(cfg: BackupConfig, opts: { dataDir: string; store?: BackupStore }): Promise<void> {
   const store = opts.store ?? await makeStore(cfg.destination!, opts.dataDir);
-  const repo = await Repository.open(store, await keyFor(opts.dataDir), { hostname: os.hostname() });
-  await repo.setWriter(os.hostname());
+  const raw = await keyFor(opts.dataDir);
+  await withBackupLock(opts.dataDir, async () => {
+    const repo = await Repository.open(store, raw);
+    await repo.setWriter(await localWriter(opts.dataDir));
+  });
 }
 
 export interface DestinationTestResult {
@@ -138,6 +157,8 @@ export interface DestinationTestResult {
   /** This machine has a recovery key at all. */
   hasKey?: boolean;
   writer?: string;
+  /** This machine is the one that writes them. */
+  thisWriter?: boolean;
   error?: string;
 }
 
@@ -160,10 +181,11 @@ export async function testDestination(
     out.hasKey = Boolean(key);
     try {
       const raw = key ? parseRecoveryKey(key) : Buffer.alloc(32);
-      const repo = await Repository.open(store, raw, { hostname: os.hostname() });
+      const repo = await Repository.open(store, raw);
       out.hasBackups = true;
       out.keyMatches = Boolean(key);
-      out.writer = repo.config.writer.hostname;
+      out.writer = repo.writerName();
+      out.thisWriter = repo.isWriter(await localWriter(opts.dataDir));
     } catch (err) {
       if (err instanceof RepoError && err.code === 'no_repo') out.hasBackups = false;
       else if (err instanceof RepoError && err.code === 'key_mismatch') { out.hasBackups = true; out.keyMatches = false; }
@@ -171,7 +193,7 @@ export async function testDestination(
     }
     return out;
   } catch (err) {
-    return { ok: false, destination, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, destination, error: friendlyStoreError(err, dest) };
   }
 }
 
@@ -189,7 +211,7 @@ export async function checkRecoveryKey(
   }
   try {
     const store = opts.store ?? await makeStore(dest, opts.dataDir);
-    const repo = await Repository.open(store, raw, { hostname: os.hostname() });
+    const repo = await Repository.open(store, raw);
     return { ok: true, snapshotCount: (await repo.listSnapshotKeys()).length };
   } catch (err) {
     if (err instanceof RepoError && err.code === 'no_repo') return { ok: true, snapshotCount: 0 };

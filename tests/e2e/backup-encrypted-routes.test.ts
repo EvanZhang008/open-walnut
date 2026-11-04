@@ -35,10 +35,10 @@ let google: Awaited<ReturnType<typeof startFakeGoogleDrive>>;
 let scheduler: BackupSchedulerHandle;
 const events: Array<{ name: string; data: unknown }> = [];
 
-async function call<T = Record<string, unknown>>(method: string, route: string, body?: unknown): Promise<{ status: number; body: T }> {
+async function call<T = Record<string, unknown>>(method: string, route: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: T }> {
   const res = await fetch(`${base}/api/backup${route}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json().catch(() => ({}))) as T };
@@ -145,6 +145,55 @@ describe('encrypted backups through the routes', () => {
     expect(String(r.body.error)).toMatch(/Type the keys/);
   });
 
+  it('a session (not the person) cannot sign in, point backups elsewhere, or restore from another key', async () => {
+    const agent = { 'x-walnut-caller-sid': 'session-under-test' };
+    for (const [method, route, body] of [
+      ['POST', '/gdrive/connect', {}],
+      ['POST', '/gdrive/complete', { url: 'http://127.0.0.1:1/?code=x&state=y' }],
+      ['POST', '/gdrive/disconnect', {}],
+      ['POST', '/destination/test', { destination: { ...r2(), bucket: 'elsewhere' } }],
+      ['POST', '/snapshots', { recoveryKey: generateRecoveryKey() }],
+      ['POST', '/restore', { recoveryKey: generateRecoveryKey(), targetDir: `${WALNUT_HOME}-agent-restore` }],
+      ['GET', '/recovery-key', undefined],
+    ] as const) {
+      const r = await call(method, route, body, agent);
+      expect(r.status, `${method} ${route}`).toBe(403);
+      expect(r.body).toMatchObject({ code: 'person_at_this_machine' });
+    }
+    // The saved destination it may still read.
+    expect((await call('POST', '/destination/test', {}, agent)).body).toMatchObject({ ok: true });
+  });
+
+  it('a restore target reached through a symlink into the data home is refused', async () => {
+    const link = `${WALNUT_HOME}-link`;
+    await fsp.symlink(WALNUT_HOME, link);
+    try {
+      const r = await call('POST', '/restore', { snapshotId: 'latest', targetDir: path.join(link, 'inside') });
+      expect(r.status).toBe(400);
+      expect(String(r.body.error)).toMatch(/never writes into the data folder/);
+    } finally {
+      await fsp.rm(link);
+    }
+  });
+
+  it('masked keys nested under auth are restored for the saved S3 target only', async () => {
+    const saved = (await getConfig()).backup!;
+    const s3dest = {
+      type: 's3' as const, bucket: 'walnut-r2', endpoint: s3.url, region: 'us-east-1',
+      auth: { method: 'access_keys' as const, aws_access_key_id: 'AKTEST', aws_secret_access_key: 'nested-secret' },
+    };
+    await updateConfig({ backup: { ...saved, destination: s3dest } } as never);
+    try {
+      const masked = { ...s3dest, auth: { ...s3dest.auth, aws_secret_access_key: '••••••cret' } };
+      const t = await call('POST', '/destination/test', { destination: masked });
+      expect(t.body, JSON.stringify(t.body)).toMatchObject({ ok: true, canWrite: true });
+      const other = await call('POST', '/destination/test', { destination: { ...masked, bucket: 'another' } });
+      expect(other.status).toBe(400);
+    } finally {
+      await updateConfig({ backup: saved } as never);
+    }
+  });
+
   it('a new machine with another key is asked for the saved key, and the backups are never replaced', async () => {
     const realKey = (await fsp.readFile(recoveryKeyPath(WALNUT_HOME), 'utf8')).trim();
     await fsp.rm(recoveryKeyPath(WALNUT_HOME));
@@ -212,5 +261,9 @@ describe('encrypted backups through the routes', () => {
     const cfg = (await getConfig()).backup!;
     expect(cfg.bucket).toBeUndefined();
     expect(Boolean(cfg.enabled && cfg.bucket)).toBe(false);
+    // Both at once (a hand edit, an API call): the legacy bucket is dropped, so an
+    // older Walnut never mirrors the home to it in the clear.
+    await updateConfig({ backup: { enabled: true, bucket: 'legacy-bucket', destination: r2() } } as never);
+    expect((await getConfig()).backup!.bucket).toBeUndefined();
   });
 });

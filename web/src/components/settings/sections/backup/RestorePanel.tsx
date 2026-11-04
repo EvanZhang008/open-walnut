@@ -1,16 +1,16 @@
 /**
  * Restore: pick one of the backups, bring it back into a NEW folder.
  *
- * The data Walnut runs on is never touched; the last row says how to switch
- * to the restored folder. Progress and the result come from `backup:status`
- * (`restore`), so they survive closing and reopening Settings.
+ * The data Walnut runs on is never touched; the result row says how to switch
+ * to the restored folder, naming the real folders. Progress and the result
+ * come from `backup:status` (`restore`), so they survive closing and reopening
+ * Settings, until the user dismisses the result or starts another restore.
  */
 import { useState } from 'react'
 import { SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
 import { saveErrorMessage } from '../../settings-pane-context'
-import { formatAbsoluteTime } from '../addons-format'
 import { apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
 
@@ -38,10 +38,16 @@ interface BackupItem {
 interface Props {
   dest: BackupDestinationConfig | null
   restore: RestoreStatus | undefined
-  disabled: boolean
+  /** The data folder Walnut runs on (to name it in the switch steps). */
+  dataDir?: string
+  /** A restore cannot start yet (the Backups group's first row says why). */
+  blocked: boolean
 }
 
-export function RestorePanel({ dest, restore, disabled }: Props) {
+const whenOf = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
@@ -49,9 +55,12 @@ export function RestorePanel({ dest, restore, disabled }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
+  const dismiss = () => { void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}) }
+
   const open = async () => {
     setLoading(true)
     setError(null)
+    if (restore?.finishedAt) dismiss()
     try {
       const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', dest ? { destination: dest } : {}, { timeoutMs: 60000 })
       setItems(r.snapshots)
@@ -99,18 +108,35 @@ export function RestorePanel({ dest, restore, disabled }: Props) {
     )
   }
 
+  const home = dataDir ?? '~/.open-walnut'
   return (
     <>
       {restore?.finishedAt && !items && (
         restore.error ? (
-          <SettingsRow label="Restore failed" state="error" help={restore.error} data-testid="backup-restore-failed" />
+          <SettingsRow
+            label="Restore failed"
+            error={restore.error}
+            data-testid="backup-restore-failed"
+            control={<SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Dismiss</SettingsButton>}
+          />
         ) : (
           <SettingsRow
             label="Restored"
             wide
             data-testid="backup-restore-done"
-            help={<>{restore.doneFiles} files ({fmtBytes(restore.doneBytes)}) are in <code>{restore.targetDir}</code>. To use them: quit Walnut, rename <code>~/.open-walnut</code> to keep it aside, move this folder to <code>~/.open-walnut</code>, start Walnut.</>}
-            control={restore.targetDir ? <CopyButton text={restore.targetDir} data-testid="backup-restore-copy-path" /> : undefined}
+            help={
+              <>
+                {restore.doneFiles} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>.
+                {' '}To make them your Walnut data: quit Walnut, rename <code>{home}</code> to keep it aside,
+                rename the restored folder to <code>{home}</code>, then start Walnut.
+              </>
+            }
+            control={
+              <span className="settings-inline-pair">
+                {restore.targetDir && <CopyButton text={restore.targetDir} label="Copy path" bordered data-testid="backup-restore-copy-path" />}
+                <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>
+              </span>
+            }
           />
         )
       )}
@@ -120,9 +146,9 @@ export function RestorePanel({ dest, restore, disabled }: Props) {
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
-          <SettingsButton onClick={items ? () => setItems(null) : open} busy={loading} busyLabel="Loading..." disabled={disabled}
-            reserve={['Choose a backup', 'Cancel']} data-testid="backup-restore-open">
-            {items ? 'Cancel' : 'Choose a backup'}
+          <SettingsButton onClick={items ? () => setItems(null) : open} busy={loading} busyLabel="Loading..." disabled={blocked && !items}
+            data-testid="backup-restore-open">
+            {items ? 'Close' : 'Choose a backup'}
           </SettingsButton>
         }
       />
@@ -133,7 +159,7 @@ export function RestorePanel({ dest, restore, disabled }: Props) {
             {items.map((it) => (
               <label key={it.id} className="backup-restore-item" data-picked={picked === it.id ? 'true' : undefined}>
                 <input type="radio" name="backup-restore-pick" value={it.id} checked={picked === it.id} onChange={() => setPicked(it.id)} />
-                <span className="backup-restore-when">{formatAbsoluteTime(it.createdAt)}</span>
+                <span className="backup-restore-when">{whenOf(it.createdAt)}</span>
                 <span className="backup-restore-meta">
                   {[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,
                     it.totalBytes !== undefined ? fmtBytes(it.totalBytes) : null,
@@ -148,11 +174,11 @@ export function RestorePanel({ dest, restore, disabled }: Props) {
             wide
             label="Into folder"
             htmlFor="backup-restore-target"
-            help="Leave empty for a new folder next to your data (.open-walnut-restored-<date>)."
+            help="A new, empty folder. Leave it empty for one next to your data (.open-walnut-restored-<date>)."
             control={
               <span className="settings-inline-pair">
-                <input id="backup-restore-target" type="text" data-no-draft="autosave" className="settings-input settings-input--mono"
-                  value={target} onChange={(e) => setTarget(e.target.value)} placeholder="New folder next to your data" />
+                <input id="backup-restore-target" type="text" data-no-draft="autosave" className="settings-input"
+                  value={target} onChange={(e) => setTarget(e.target.value)} placeholder="Optional" />
                 <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
                   Restore
                 </SettingsButton>

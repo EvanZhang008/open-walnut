@@ -6,8 +6,10 @@
  * Drive addresses files by id, not name, so the store keeps a name -> id cache
  * filled by listing the folder. A name that is not cached is looked up before
  * a create, so a second machine writing the same key updates the file instead
- * of adding a duplicate; if a duplicate exists anyway (a past race), the
- * newest file wins.
+ * of adding a duplicate. A create that may have landed without an answer
+ * (timeout, 5xx) is looked up again before it is retried. If duplicates exist
+ * anyway (a past race), reads use the newest, a put keeps only the newest and
+ * a delete removes them all.
  */
 import { randomBytes } from 'node:crypto';
 import { StoreNotFoundError, type BackupStore, type StoredObject } from './types.js';
@@ -18,6 +20,7 @@ const MULTIPART_MAX_BYTES = 5 * 1024 * 1024;
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const FILE_FIELDS = 'id,name,size,modifiedTime';
 const RETRY_REASONS = new Set(['rateLimitExceeded', 'userRateLimitExceeded']);
+const MAX_RETRY_AFTER_MS = 5 * 60_000;
 
 export interface DriveEndpoints {
   api: string;
@@ -35,9 +38,16 @@ export function driveEndpoints(): DriveEndpoints {
 export type AccessTokenGetter = (forceRefresh?: boolean) => Promise<string>;
 
 export interface DriveRetryOptions {
-  /** Total tries per request, including the first. */
+  /** Tries per request when Drive fails (5xx) or cannot be reached, including the first. */
   attempts?: number;
   baseDelayMs?: number;
+  /** Tries per request when Drive throttles (429, 403 rate limit), including the first. */
+  rateLimitAttempts?: number;
+  rateLimitBaseDelayMs?: number;
+  /** Ceiling of one throttling backoff (Retry-After may ask for more, up to 5 minutes). */
+  rateLimitMaxDelayMs?: number;
+  /** Replaces every request's timeout (tests use a short one). */
+  timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -78,45 +88,84 @@ async function readDriveError(resp: Response): Promise<{ reason?: string; messag
   }
 }
 
-/** Authorized fetch with timeouts, backoff on throttling and server errors, and one token refresh on 401. */
+/** Retry-After as milliseconds (seconds or an HTTP date), clamped to [0, 5 min]. */
+function retryAfterMs(resp: Response): number | undefined {
+  const v = resp.headers.get('retry-after')?.trim();
+  if (!v) return undefined;
+  const ms = /^\d+(\.\d+)?$/.test(v) ? Number(v) * 1000 : Date.parse(v) - Date.now();
+  return Number.isFinite(ms) ? Math.min(Math.max(ms, 0), MAX_RETRY_AFTER_MS) : undefined;
+}
+
+/**
+ * Authorized fetch with timeouts, backoff and one token refresh on 401.
+ * Failures (no answer, 5xx) and throttling (429, 403 rate limit) have separate
+ * budgets: throttling backs off longer and gets more tries.
+ */
 class DriveHttp {
   private readonly fetchImpl: typeof fetch;
   private readonly attempts: number;
   private readonly baseDelayMs: number;
+  private readonly rateLimitAttempts: number;
+  private readonly rateLimitBaseDelayMs: number;
+  private readonly rateLimitMaxDelayMs: number;
+  private readonly timeoutMs?: number;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly getAccessToken: AccessTokenGetter, fetchImpl?: typeof fetch, retry: DriveRetryOptions = {}) {
     this.fetchImpl = fetchImpl ?? fetch;
     this.attempts = Math.max(1, retry.attempts ?? 5);
     this.baseDelayMs = retry.baseDelayMs ?? 500;
+    this.rateLimitAttempts = Math.max(1, retry.rateLimitAttempts ?? 8);
+    this.rateLimitBaseDelayMs = retry.rateLimitBaseDelayMs ?? 1000;
+    this.rateLimitMaxDelayMs = retry.rateLimitMaxDelayMs ?? 64_000;
+    this.timeoutMs = retry.timeoutMs;
     this.sleep = retry.sleep ?? defaultSleep;
   }
 
   /** Resolves with any 2xx response, and with a 404 when `allow404`; throws DriveApiError otherwise. */
   async request(what: string, spec: RequestSpec, allow404 = false): Promise<Response> {
+    return (await this.send(what, spec, allow404))!;
+  }
+
+  /**
+   * Like request, for a call that is not safe to repeat blindly (a create).
+   * Before retrying after a try that got no answer or a 5xx (it may have
+   * taken effect), `alreadyDone` is asked; true ends the call with undefined.
+   * Throttled tries were refused, so they are retried without asking.
+   */
+  async send(what: string, spec: RequestSpec, allow404 = false, alreadyDone?: () => Promise<boolean>): Promise<Response | undefined> {
     let refreshed = false;
     let forceToken = false;
     let lastError = '';
-    for (let attempt = 0; attempt < this.attempts; attempt++) {
-      if (attempt > 0) {
-        const delay = this.baseDelayMs * 2 ** (attempt - 1);
-        await this.sleep(delay + Math.random() * delay);
-      }
+    let tries = 0;
+    let failures = 0;
+    let throttled = 0;
+    let wait = 0;
+    let ambiguous = false;
+    for (;;) {
+      if (wait > 0) await this.sleep(wait);
+      if (ambiguous && alreadyDone && await alreadyDone()) return undefined;
+      wait = 0;
+      ambiguous = false;
       const token = await this.getAccessToken(forceToken);
       forceToken = false;
+      tries++;
       let resp: Response;
       try {
         resp = await this.fetchImpl(spec.url, {
           method: spec.method,
           headers: { Authorization: `Bearer ${token}`, ...spec.headers },
           ...(spec.body !== undefined ? { body: spec.body as unknown as BodyInit } : {}),
-          signal: AbortSignal.timeout(spec.timeoutMs ?? NETWORK_TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.timeoutMs ?? spec.timeoutMs ?? NETWORK_TIMEOUT_MS),
         });
       } catch (err) {
         const name = err instanceof Error ? err.name : '';
         lastError = name === 'TimeoutError' || name === 'AbortError'
           ? 'no answer from Google Drive in time'
           : `could not reach Google Drive (${err instanceof Error ? err.message : String(err)})`;
+        if (++failures >= this.attempts) break;
+        wait = this.failureDelay(failures);
+        ambiguous = true;
         continue;
       }
       if (resp.ok || (allow404 && resp.status === 404)) return resp;
@@ -125,15 +174,34 @@ class DriveHttp {
       if (resp.status === 401 && !refreshed) {
         refreshed = true;
         forceToken = true;
-        attempt--; // a token refresh is not a retry
+        tries--; // a token refresh is not a retry
         continue;
       }
-      const retryable = resp.status === 429 || resp.status >= 500
-        || (resp.status === 403 && reason !== undefined && RETRY_REASONS.has(reason));
-      if (!retryable) throw new DriveApiError(`Google Drive ${what} failed: ${detail}`, resp.status, reason);
+      const throttle = resp.status === 429 || (resp.status === 403 && reason !== undefined && RETRY_REASONS.has(reason));
+      if (!throttle && resp.status < 500) throw new DriveApiError(`Google Drive ${what} failed: ${detail}`, resp.status, reason);
       lastError = detail;
+      if (throttle) {
+        if (++throttled >= this.rateLimitAttempts) break;
+        wait = retryAfterMs(resp) ?? this.throttleDelay(throttled);
+      } else {
+        if (++failures >= this.attempts) break;
+        wait = retryAfterMs(resp) ?? this.failureDelay(failures);
+        ambiguous = true;
+      }
     }
-    throw new DriveApiError(`Google Drive ${what} failed after ${this.attempts} tries: ${lastError}`, 0);
+    throw new DriveApiError(`Google Drive ${what} failed after ${tries} tries: ${lastError}`, 0);
+  }
+
+  /** Before the nth retry after a failure: base * 2^(n-1), plus up to as much again. */
+  private failureDelay(n: number): number {
+    const delay = this.baseDelayMs * 2 ** (n - 1);
+    return delay + Math.random() * delay;
+  }
+
+  /** Before the nth retry after throttling: base * 2^(n-1) plus up to one base of jitter, capped. */
+  private throttleDelay(n: number): number {
+    const delay = this.rateLimitBaseDelayMs * 2 ** (n - 1) + Math.random() * this.rateLimitBaseDelayMs;
+    return Math.min(this.rateLimitMaxDelayMs, delay);
   }
 
   async json<T>(what: string, spec: RequestSpec): Promise<T> {
@@ -173,6 +241,18 @@ async function listAll(http: DriveHttp, api: string, what: string, q: string, fi
   return out;
 }
 
+/** Files grouped by name, newest first in each group. */
+function byNewest(files: DriveFile[]): Map<string, DriveFile[]> {
+  const out = new Map<string, DriveFile[]>();
+  for (const f of files) {
+    const group = out.get(f.name);
+    if (group) group.push(f);
+    else out.set(f.name, [f]);
+  }
+  for (const group of out.values()) group.sort((a, b) => mtime(b) - mtime(a));
+  return out;
+}
+
 export interface DriveStoreOptions {
   folderId: string;
   folderName: string;
@@ -185,8 +265,8 @@ export interface DriveStoreOptions {
 export class DriveStore implements BackupStore {
   readonly kind = 'gdrive' as const;
   private readonly http: DriveHttp;
-  /** name -> the newest file of that name in the folder. */
-  private readonly byName = new Map<string, DriveFile>();
+  /** name -> every known file of that name in the folder, newest first. */
+  private readonly byName = new Map<string, DriveFile[]>();
 
   constructor(private readonly o: DriveStoreOptions) {
     this.http = new DriveHttp(o.getAccessToken, o.fetchImpl, o.retry);
@@ -200,50 +280,70 @@ export class DriveStore implements BackupStore {
     return this.o.endpoints ?? driveEndpoints();
   }
 
-  private remember(files: DriveFile[]): void {
-    for (const f of files) {
-      const seen = this.byName.get(f.name);
-      if (!seen || mtime(f) >= mtime(seen)) this.byName.set(f.name, f);
-    }
-  }
-
-  /** The newest file named `key`, from the cache or a fresh lookup. */
-  private async find(key: string, fresh = false): Promise<DriveFile | undefined> {
-    if (!fresh) {
-      const hit = this.byName.get(key);
-      if (hit) return hit;
-    }
-    this.byName.delete(key);
+  /** Every file named `key` in the folder, newest first, asked of Drive (the cache is refreshed). */
+  private async lookup(key: string): Promise<DriveFile[]> {
     const files = await listAll(this.http, this.ep.api, `lookup of ${key}`,
       `name=${qLiteral(key)} and ${qLiteral(this.o.folderId)} in parents and trashed=false`, FILE_FIELDS);
-    this.remember(files.filter((f) => f.name === key));
-    return this.byName.get(key);
+    const copies = byNewest(files.filter((f) => f.name === key)).get(key) ?? [];
+    if (copies.length) this.byName.set(key, copies);
+    else this.byName.delete(key);
+    return copies;
+  }
+
+  /** The files named `key`, newest first, from the cache or a fresh lookup. */
+  private async copies(key: string, fresh = false): Promise<DriveFile[]> {
+    const hit = fresh ? undefined : this.byName.get(key);
+    return hit?.length ? hit : this.lookup(key);
   }
 
   async put(key: string, body: Buffer): Promise<void> {
-    let existing = await this.find(key);
-    if (existing) {
-      const updated = await this.upload(key, body, existing.id);
+    let copies = await this.copies(key);
+    for (let pass = 0; pass < 2 && copies.length; pass++) {
+      const [newest, ...extra] = copies;
+      const updated = await this.upload(key, body, newest.id);
       if (updated) {
-        this.byName.set(key, updated);
+        this.byName.set(key, [updated]);
+        await this.removeCopies(key, extra);
         return;
       }
-      // The cached file is gone (deleted elsewhere): look again, then create.
-      existing = await this.find(key, true);
-      if (existing) {
-        const again = await this.upload(key, body, existing.id);
-        if (again) {
-          this.byName.set(key, again);
-          return;
-        }
-      }
+      // The newest file is gone (deleted elsewhere): look again, then create.
+      copies = pass === 0 ? await this.lookup(key) : [];
     }
-    const created = await this.upload(key, body);
-    if (created) this.byName.set(key, created);
+    this.byName.set(key, [await this.create(key, body)]);
   }
 
-  /** Creates (no id) or replaces the content of a file; undefined when the file to update is gone. */
-  private async upload(key: string, body: Buffer, id?: string): Promise<DriveFile | undefined> {
+  /** A new file named `key`; a retried create is checked so it never leaves two. */
+  private async create(key: string, body: Buffer): Promise<DriveFile> {
+    let checked = false;
+    let landed: DriveFile | undefined;
+    const made = await this.upload(key, body, undefined, async () => {
+      checked = true;
+      landed = (await this.lookup(key)).find((f) => Number(f.size ?? -1) === body.length);
+      return landed !== undefined;
+    });
+    if (!checked) return made!;
+    // Some try may have landed unseen besides the one that answered: keep the newest only.
+    const [newest, ...extra] = await this.lookup(key);
+    await this.removeCopies(key, extra);
+    return newest ?? made ?? landed!;
+  }
+
+  /** Deletes these files; one that is already gone is fine. */
+  private async removeCopies(key: string, files: DriveFile[]): Promise<void> {
+    for (const f of files) {
+      const resp = await this.http.request(`delete of ${key}`, {
+        method: 'DELETE',
+        url: `${this.ep.api}/files/${encodeURIComponent(f.id)}`,
+      }, true);
+      await resp.body?.cancel().catch(() => {});
+    }
+  }
+
+  /**
+   * Creates (no id) or replaces the content of a file; undefined when the file
+   * to update is gone, or when a create's `alreadyDone` found it had landed.
+   */
+  private async upload(key: string, body: Buffer, id?: string, alreadyDone?: () => Promise<boolean>): Promise<DriveFile | undefined> {
     const what = `upload of ${key}`;
     const method = id ? 'PATCH' : 'POST';
     const base = id ? `${this.ep.upload}/files/${encodeURIComponent(id)}` : `${this.ep.upload}/files`;
@@ -257,18 +357,18 @@ export class DriveStore implements BackupStore {
         body,
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ]);
-      const resp = await this.http.request(what, {
+      const resp = await this.http.send(what, {
         method,
         url: `${base}?uploadType=multipart&fields=${FILE_FIELDS}`,
         headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
         body: multipart,
         timeoutMs: UPLOAD_TIMEOUT_MS,
-      }, Boolean(id));
-      if (resp.status === 404) return undefined;
+      }, Boolean(id), alreadyDone);
+      if (!resp || resp.status === 404) return undefined;
       return (await resp.json()) as DriveFile;
     }
 
-    // Large bodies: open a resumable session, then send the bytes to it.
+    // Large bodies: open a resumable session (safe to repeat), then send the bytes to it.
     const session = await this.http.request(what, {
       method,
       url: `${base}?uploadType=resumable&fields=${FILE_FIELDS}`,
@@ -283,19 +383,19 @@ export class DriveStore implements BackupStore {
     const location = session.headers.get('location');
     await session.body?.cancel().catch(() => {});
     if (!location) throw new DriveApiError(`Google Drive ${what} failed: no upload session address in the answer`, session.status);
-    const resp = await this.http.request(what, {
+    const resp = await this.http.send(what, {
       method: 'PUT',
       url: location,
       headers: { 'Content-Type': 'application/octet-stream' },
       body,
       timeoutMs: UPLOAD_TIMEOUT_MS,
-    });
-    return (await resp.json()) as DriveFile;
+    }, false, alreadyDone);
+    return resp ? ((await resp.json()) as DriveFile) : undefined;
   }
 
   async get(key: string): Promise<Buffer> {
     for (const fresh of [false, true]) {
-      const file = await this.find(key, fresh);
+      const file = (await this.copies(key, fresh))[0];
       if (!file) throw new StoreNotFoundError(key);
       const resp = await this.http.request(`download of ${key}`, {
         method: 'GET',
@@ -313,24 +413,22 @@ export class DriveStore implements BackupStore {
     const files = await listAll(this.http, this.ep.api, `listing of ${this.o.folderName}`,
       `${qLiteral(this.o.folderId)} in parents and trashed=false`, FILE_FIELDS);
     this.byName.clear();
-    this.remember(files);
+    for (const [name, group] of byNewest(files)) this.byName.set(name, group);
     const out: StoredObject[] = [];
-    for (const f of this.byName.values()) {
-      if (!f.name.startsWith(prefix)) continue;
+    for (const [name, [f]] of this.byName) {
+      if (!name.startsWith(prefix)) continue;
       const modifiedAt = mtime(f);
-      out.push({ key: f.name, size: Number(f.size ?? 0), ...(modifiedAt ? { modifiedAt } : {}) });
+      out.push({ key: name, size: Number(f.size ?? 0), ...(modifiedAt ? { modifiedAt } : {}) });
     }
     return out.sort((a, b) => a.key.localeCompare(b.key));
   }
 
+  /** Deletes every file named `key`: the fresh lookup plus any cached copy it missed. */
   async delete(key: string): Promise<void> {
-    const file = await this.find(key);
-    if (!file) return;
-    const resp = await this.http.request(`delete of ${key}`, {
-      method: 'DELETE',
-      url: `${this.ep.api}/files/${encodeURIComponent(file.id)}`,
-    }, true);
-    await resp.body?.cancel().catch(() => {});
+    const cached = this.byName.get(key) ?? [];
+    const found = await this.lookup(key);
+    const ids = new Set(found.map((f) => f.id));
+    await this.removeCopies(key, [...found, ...cached.filter((f) => !ids.has(f.id))]);
     this.byName.delete(key);
   }
 }

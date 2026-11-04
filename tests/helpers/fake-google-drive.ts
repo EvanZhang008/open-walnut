@@ -28,8 +28,16 @@ export interface FakeGoogleDrive {
   /** WALNUT_GDRIVE_* variables pointing Walnut at this fake. */
   env: Record<string, string>;
   files(): FakeDriveFile[];
-  /** The next `n` Drive requests (those matching `match` on `METHOD /path?query`, if given) answer `status` with this error reason. */
-  failNext(n: number, status: number, reason?: string, match?: RegExp): void;
+  /**
+   * The next `n` Drive requests (those matching `match` on `METHOD /path?query`, if given) answer `status`
+   * with this error reason, and a Retry-After header when `retryAfter` is given.
+   */
+  failNext(n: number, status: number, reason?: string, match?: RegExp, retryAfter?: string): void;
+  /**
+   * The next `n` file creates store the file, then fail: 'hang' never answers (the client times out),
+   * 'reset' drops the connection, a number answers that status.
+   */
+  failAfterCreate(n: number, how: 'hang' | 'reset' | number): void;
   /** `METHOD /path?query` of every request, in order. */
   requests: string[];
   /** A valid access token without the OAuth dance (for store tests). */
@@ -124,8 +132,10 @@ export async function startFakeGoogleDrive(
   const refreshTokens = new Map<string, { clientId: string; scope: string }>();
   const accessTokens = new Map<string, number>();
   const files = new Map<string, StoredFile>();
-  const sessions = new Map<string, { fileId?: string; metadata: Record<string, unknown> }>();
-  const failures: Array<{ status: number; reason: string; match?: RegExp }> = [];
+  // `done` is the file a finished session wrote: Drive answers a repeated PUT with it.
+  const sessions = new Map<string, { fileId?: string; metadata: Record<string, unknown>; done?: string }>();
+  const failures: Array<{ status: number; reason: string; match?: RegExp; retryAfter?: string }> = [];
+  const afterCreate: Array<'hang' | 'reset' | number> = [];
   const requests: string[] = [];
   let clock = Date.now();
   // Strictly increasing timestamps, so "newest" is well defined within one test.
@@ -142,8 +152,9 @@ export async function startFakeGoogleDrive(
     res.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8', ...headers });
     res.end(JSON.stringify(body));
   };
-  const driveError = (res: http.ServerResponse, status: number, reason: string, message = REASON_MESSAGES[reason] ?? reason) =>
-    json(res, status, { error: { code: status, message, errors: [{ domain: 'global', reason, message }] } });
+  const driveError = (res: http.ServerResponse, status: number, reason: string, message = REASON_MESSAGES[reason] ?? reason,
+    headers: Record<string, string> = {}) =>
+    json(res, status, { error: { code: status, message, errors: [{ domain: 'global', reason, message }] } }, headers);
   const html = (res: http.ServerResponse, status: number, body: string) => {
     res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(body);
@@ -154,10 +165,10 @@ export async function startFakeGoogleDrive(
     ...(f.mimeType === FOLDER_MIME ? {} : { size: String(f.data.length) }),
   });
 
-  const createFile = (res: http.ServerResponse, metadata: Record<string, unknown>, data: Buffer) => {
+  const createFile = (res: http.ServerResponse, metadata: Record<string, unknown>, data: Buffer): string | undefined => {
     const parents = Array.isArray(metadata.parents) ? (metadata.parents as string[]) : ['root'];
     for (const p of parents) {
-      if (p !== 'root' && files.get(p)?.mimeType !== FOLDER_MIME) return driveError(res, 404, 'notFound', `File not found: ${p}.`);
+      if (p !== 'root' && files.get(p)?.mimeType !== FOLDER_MIME) return void driveError(res, 404, 'notFound', `File not found: ${p}.`);
     }
     const t = now();
     const f: StoredFile = {
@@ -166,7 +177,11 @@ export async function startFakeGoogleDrive(
       data, createdTime: t, modifiedTime: t,
     };
     files.set(f.id, f);
-    json(res, 200, resource(f));
+    const how = afterCreate.shift();
+    if (how === 'reset') res.socket?.destroy();
+    else if (typeof how === 'number') driveError(res, how, how >= 500 ? 'backendError' : 'forbidden');
+    else if (how !== 'hang') json(res, 200, resource(f));
+    return f.id;
   };
   const updateFile = (res: http.ServerResponse, fileId: string, metadata: Record<string, unknown>, data: Buffer) => {
     const f = files.get(fileId);
@@ -251,7 +266,7 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
     const at = failures.findIndex((f) => !f.match || f.match.test(line));
     if (at >= 0) {
       const [fail] = failures.splice(at, 1);
-      return driveError(res, fail.status, fail.reason);
+      return driveError(res, fail.status, fail.reason, undefined, fail.retryAfter ? { 'Retry-After': fail.retryAfter } : {});
     }
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
     const exp = token ? accessTokens.get(token) : undefined;
@@ -285,7 +300,7 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
       });
     }
     if (m === 'POST' && p === '/drive/v3/files') {
-      return createFile(res, JSON.parse((await readBody(req)).toString('utf-8') || '{}'), Buffer.alloc(0));
+      return void createFile(res, JSON.parse((await readBody(req)).toString('utf-8') || '{}'), Buffer.alloc(0));
     }
     if (fileId && p.startsWith('/drive/') && (m === 'GET' || m === 'DELETE')) {
       const f = files.get(fileId);
@@ -306,9 +321,18 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
       if (m === 'PUT' && uploadId) {
         const s = sessions.get(uploadId);
         if (!s) return driveError(res, 404, 'notFound', 'Upload session not found.');
-        sessions.delete(uploadId);
         const data = await readBody(req);
-        return s.fileId ? updateFile(res, s.fileId, s.metadata, data) : createFile(res, s.metadata, data);
+        if (s.done) {
+          const f = files.get(s.done);
+          return f ? json(res, 200, resource(f)) : driveError(res, 404, 'notFound', `File not found: ${s.done}.`);
+        }
+        if (s.fileId) {
+          updateFile(res, s.fileId, s.metadata, data);
+          s.done = s.fileId;
+          return;
+        }
+        s.done = createFile(res, s.metadata, data);
+        return;
       }
       if ((m === 'POST' && p === '/upload/drive/v3/files') || (m === 'PATCH' && fileId)) {
         const body = await readBody(req);
@@ -330,7 +354,8 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
         } else if (uploadType !== 'media') {
           return driveError(res, 400, 'invalid', `Invalid uploadType: ${uploadType}`);
         }
-        return fileId ? updateFile(res, fileId, metadata, media) : createFile(res, metadata, media);
+        if (fileId) return updateFile(res, fileId, metadata, media);
+        return void createFile(res, metadata, media);
       }
     }
     driveError(res, 404, 'notFound', `No route for ${m} ${p}`);
@@ -363,9 +388,12 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
       WALNUT_GDRIVE_CLIENT_SECRET: 'fake-client-secret',
     },
     files: () => [...files.values()].map((f) => ({ id: f.id, name: f.name, parents: [...f.parents], size: f.data.length, mimeType: f.mimeType })),
-    failNext(n, status, reason, match) {
+    failNext(n, status, reason, match, retryAfter) {
       const r = reason ?? (status === 429 ? 'rateLimitExceeded' : status >= 500 ? 'backendError' : status === 404 ? 'notFound' : 'forbidden');
-      for (let i = 0; i < n; i++) failures.push({ status, reason: r, match });
+      for (let i = 0; i < n; i++) failures.push({ status, reason: r, match, retryAfter });
+    },
+    failAfterCreate(n, how) {
+      for (let i = 0; i < n; i++) afterCreate.push(how);
     },
     requests,
     mintAccessToken,

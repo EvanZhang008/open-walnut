@@ -25,7 +25,14 @@ async function writeClipboard(text: string): Promise<void> {
   }
 }
 
-export function CopyButton({ text, variant = 'text', 'data-testid': testId }: { text: string; variant?: 'text' | 'default' | 'primary'; 'data-testid'?: string }) {
+export function CopyButton({ text, variant = 'text', label = 'Copy', bordered = false, 'data-testid': testId }: {
+  text: string
+  variant?: 'text' | 'default' | 'primary'
+  label?: string
+  /** A bordered button, to sit among other bordered buttons (the same as variant "default"). */
+  bordered?: boolean
+  'data-testid'?: string
+}) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -40,8 +47,8 @@ export function CopyButton({ text, variant = 'text', 'data-testid': testId }: { 
     )
   }
   return (
-    <SettingsButton variant={variant} reserve={['Copy', 'Copied']} onClick={onClick} data-testid={testId}>
-      {copied ? 'Copied' : 'Copy'}
+    <SettingsButton variant={bordered ? 'default' : variant} reserve={[label, 'Copied']} onClick={onClick} data-testid={testId}>
+      {copied ? 'Copied' : label}
     </SettingsButton>
   )
 }

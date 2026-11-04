@@ -80,14 +80,21 @@ test.describe('Backup settings', () => {
     const testBtn = section.getByTestId('backup-test-connection')
     await expect(testBtn).toBeDisabled()
     await expect(section.getByTestId('backup-run-now')).toBeDisabled()
-    await section.locator('#backup-enabled').click()
+    // Nothing to back up to yet: the switch waits, and says why.
+    await expect(section.locator('#backup-enabled')).toBeDisabled()
+    await expect(section.getByTestId('backup-enabled-row')).toContainText('Where backups go')
     await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
     await section.locator('#backup-r2-bucket').fill('walnut-backup')
     await section.locator('#backup-r2-access-key').fill('AKEXAMPLE')
+    await expect(section.getByTestId('backup-connection-row')).toContainText('Fill in: secret access key')
     await section.locator('#backup-r2-secret').fill('secret-example')
     await expect(testBtn).toBeEnabled()
+    await expect(testBtn).toHaveText('Test and save')
+    // Typing alone saves no destination.
+    await page.waitForTimeout(1500)
+    expect((config.last()?.backup as Record<string, unknown> | undefined)?.destination).toBeUndefined()
     await testBtn.click()
-    await expect(section.getByTestId('backup-connection-row')).toContainText('Walnut can write here')
+    await expect(section.getByTestId('backup-connection-row')).toContainText('Saved: backups go here now')
 
     // The saved config is encrypted backups: no legacy bucket an older Walnut would upload to.
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
@@ -104,6 +111,10 @@ test.describe('Backup settings', () => {
     await expect(section.getByTestId('backup-key-unsaved')).toBeVisible()
     await section.getByTestId('backup-key-saved').click()
     await expect(section.getByTestId('backup-key-unsaved')).toHaveCount(0)
+    // With a destination and a key, the switch can go on.
+    await expect(section.locator('#backup-enabled')).toBeEnabled()
+    await section.locator('#backup-enabled').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled).toBe(true)
 
     // Restore lists the backups, newest first and picked, and restores the one chosen.
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()
@@ -125,10 +136,14 @@ test.describe('Backup settings', () => {
     await expect(section).toContainText('files go to the bucket unencrypted')
     await expect(section.locator('#backup-bucket')).toHaveValue('old-bucket')
     await expect(section.getByTestId('backup-service-r2')).toHaveCount(0)
+    await answer(page, '**/api/backup/destination/test', { ok: true, destination: 's3://old-bucket/walnut-backup', canWrite: true, hasBackups: false, hasKey: false })
     await section.getByTestId('backup-legacy-switch').click()
     await expect(section.getByTestId('backup-service-s3')).toHaveAttribute('aria-checked', 'true')
     await expect(section.locator('#backup-s3-bucket')).toHaveValue('old-bucket')
     await expect(section.locator('#backup-s3-region')).toHaveValue('eu-west-1')
+    // The old copy keeps running until the new one is tested and saved.
+    expect((config.last()?.backup as Record<string, unknown> | undefined)?.destination).toBeUndefined()
+    await section.getByTestId('backup-test-connection').click()
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
       type: 's3', bucket: 'old-bucket', region: 'eu-west-1', prefix: 'walnut-backup',
     })
@@ -137,7 +152,7 @@ test.describe('Backup settings', () => {
   })
 
   test('Google Drive with the user\'s own Google client, and the paste fallback', async ({ page }) => {
-    await holdConfigWrites(page, { enabled: true, destination: { type: 'gdrive' } })
+    const config = await holdConfigWrites(page, { enabled: true, destination: { type: 'gdrive' } })
     await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
     await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
     let connected = false
@@ -170,6 +185,34 @@ test.describe('Backup settings', () => {
     await section.locator('#backup-gdrive-paste').fill('http://127.0.0.1:5555/?state=s&code=c')
     await section.getByTestId('backup-gdrive-finish').click()
     await expect(section.getByTestId('backup-gdrive-connected')).toContainText('someone@example.com')
+    // Connected: Drive with this client is where backups go now.
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
+      type: 'gdrive', client_id: '1234-abc.apps.googleusercontent.com',
+    })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('looking at another service changes nothing; its fields are kept apart', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '••••••mple' }
+    const config = await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2 })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted' })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: false, email: null, folderName: null, pending: false })
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-service-row')).toContainText('Backups go to Cloudflare R2')
+    await section.getByTestId('backup-service-gdrive').click()
+    // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
+    await expect(section.getByTestId('backup-gdrive-connect')).toBeEnabled()
+    await expect(section.getByTestId('backup-gdrive-own-client')).toBeVisible()
+    await expect(section.locator('#backup-gdrive-client-id')).toBeHidden()
+    await section.getByTestId('backup-service-s3').click()
+    await section.locator('#backup-s3-bucket').fill('something-else')
+    await page.waitForTimeout(1500)
+    expect(config.last()).toBeNull()
+    await section.getByTestId('backup-service-r2').click()
+    await expect(section.locator('#backup-r2-bucket')).toHaveValue('my-bucket')
+    await expect(section.getByTestId('backup-test-connection')).toHaveText('Test connection')
+    await expect(section.getByTestId('backup-service-row')).toContainText('Backups go to Cloudflare R2')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })

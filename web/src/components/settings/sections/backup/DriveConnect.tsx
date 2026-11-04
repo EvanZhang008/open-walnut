@@ -1,9 +1,10 @@
 /**
  * Google Drive as the destination: one "Connect Google Drive" sign-in.
  *
- * Walnut asks Google only for `drive.file` (the files it makes itself). When
- * this build carries no Google client of Walnut's own, the user makes one
- * (steps in place, about five minutes, once) and pastes its ID and secret.
+ * Walnut asks Google only for `drive.file` (the files it makes itself). With
+ * Walnut's own Google client in the build, Connect is all there is; the user's
+ * own client is an optional choice tucked away. Without one, the user makes a
+ * client (steps in place, about five minutes, once) and pastes its ID and secret.
  * The sign-in opens in the browser; Google sends it back to this computer,
  * and when the browser is on another device the user pastes the address it
  * ended on instead.
@@ -30,13 +31,19 @@ interface DriveStatus {
 interface Props {
   dest: BackupDestinationConfig
   onChange: (next: BackupDestinationConfig) => void
-  /** Told when the sign-in finished, so the pane can ask for the recovery key. */
+  /** Backups go to Google Drive now. */
+  inUse: boolean
+  /** The service backups go to instead, while Drive is only being looked at. */
+  otherInUse: string | null
+  /** Told when the sign-in finished: the pane makes Drive the destination. */
   onConnected: () => void
+  /** "Use Google Drive": connected earlier, chosen now. */
+  onUse: () => void
   /** Told whenever the connection state is read. */
   onConnectedChange?: (connected: boolean) => void
 }
 
-export function DriveConnect({ dest, onChange, onConnected, onConnectedChange }: Props) {
+export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, onUse, onConnectedChange }: Props) {
   const [status, setStatus] = useState<DriveStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [waiting, setWaiting] = useState(false)
@@ -107,53 +114,64 @@ export function DriveConnect({ dest, onChange, onConnected, onConnectedChange }:
   if (!status) return <SettingsRow label="Google account" help="Checking..." />
 
   if (status.connected) {
+    const who = `${status.email ? ` as ${status.email}` : ''}`
     return (
       <SettingsRow
         label="Google account"
-        help={`Connected${status.email ? ` as ${status.email}` : ''}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`}
+        help={inUse
+          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
+          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
         data-testid="backup-gdrive-connected"
-        control={<SettingsButton onClick={disconnect} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>}
+        control={
+          <span className="settings-inline-pair">
+            {!inUse && <SettingsButton variant="primary" onClick={onUse} data-testid="backup-gdrive-use">Use Google Drive</SettingsButton>}
+            <SettingsButton onClick={disconnect} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
+          </span>
+        }
       />
     )
   }
 
   const needsOwnClient = !status.builtinClient
   const hasOwnClient = Boolean(dest.client_id?.trim())
+  const clientRows = (
+    <>
+      <SettingsRow label="Client ID" htmlFor="backup-gdrive-client-id" control={
+        <input id="backup-gdrive-client-id" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
+          className="settings-input settings-input--short" placeholder="e.g. 123-abc.apps.googleusercontent.com"
+          value={dest.client_id ?? ''} onChange={(e) => onChange({ ...dest, client_id: e.target.value })} />
+      } />
+      <SettingsRow label="Client secret" htmlFor="backup-gdrive-client-secret" control={
+        <SecretInput id="backup-gdrive-client-secret" value={dest.client_secret ?? ''} onChange={(v) => onChange({ ...dest, client_secret: v })} />
+      } />
+    </>
+  )
+  const steps = (
+    <>
+      <ol className="settings-steps" data-testid="backup-gdrive-steps">
+        <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud: new project</a>, name it <code>Walnut Backup</code>, choose <b>Create</b>.</li>
+        <li>Open <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer">Google Drive API</a> and choose <b>Enable</b>.</li>
+        <li>Open <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noreferrer">Google Auth Platform</a>, choose <b>Get started</b>: any app name, your email, Audience <b>External</b>.</li>
+        <li>Under <b>Audience</b> choose <b>Publish app</b> (otherwise Google signs Walnut out every 7 days).</li>
+        <li>Under <b>Clients</b> choose <b>Create client</b>, type <b>Desktop app</b>, then copy its Client ID and Client secret into the rows below.</li>
+      </ol>
+      <p className="settings-steps-note">Walnut asks only to see the files it makes. Keep the ID and secret with your recovery key: a new computer needs the same ones to find these backups.</p>
+    </>
+  )
   return (
     <>
-      {needsOwnClient && (
-        <>
-          <SettingsDisclosure id="backup-gdrive-client-help" label="Set up a Google sign-in for Walnut (once, about 5 minutes)"
-            defaultOpen={!hasOwnClient} data-testid="backup-gdrive-client-help">
-            <ol className="settings-steps" data-testid="backup-gdrive-steps">
-              <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud: new project</a>, name it <code>Walnut Backup</code>, choose <b>Create</b>.</li>
-              <li>Open <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer">Google Drive API</a> and choose <b>Enable</b>.</li>
-              <li>Open <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noreferrer">Google Auth Platform</a>, choose <b>Get started</b>: any app name, your email, Audience <b>External</b>.</li>
-              <li>Under <b>Audience</b> choose <b>Publish app</b> (otherwise Google signs Walnut out every 7 days).</li>
-              <li>Under <b>Clients</b> choose <b>Create client</b>, type <b>Desktop app</b>, then copy its Client ID and Client secret into the rows below.</li>
-            </ol>
-            <p className="settings-steps-note">Walnut asks only to see the files it makes. Keep the ID and secret with your recovery key: a new computer needs the same ones to find these backups.</p>
-          </SettingsDisclosure>
-          <SettingsRow label="Client ID" htmlFor="backup-gdrive-client-id" control={
-            <input id="backup-gdrive-client-id" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
-              className="settings-input settings-input--short settings-input--mono" placeholder="...apps.googleusercontent.com"
-              value={dest.client_id ?? ''} onChange={(e) => onChange({ ...dest, client_id: e.target.value })} />
-          } />
-          <SettingsRow label="Client secret" htmlFor="backup-gdrive-client-secret" control={
-            <SecretInput id="backup-gdrive-client-secret" value={dest.client_secret ?? ''} onChange={(v) => onChange({ ...dest, client_secret: v })} />
-          } />
-        </>
-      )}
       <SettingsRow
         label="Google account"
         help={waiting
           ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl && <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>}</>
-          : 'Sign in with Google and allow Walnut to make its own backup folder.'}
+          : needsOwnClient && !hasOwnClient
+            ? 'First add a Google client below (once, about 5 minutes).'
+            : 'Sign in with Google and allow Walnut to make its own backup folder.'}
         error={error ?? undefined}
         data-testid="backup-gdrive-row"
         control={
           <SettingsButton variant="primary" onClick={connect} busy={busy || waiting} busyLabel={waiting ? 'Waiting for Google...' : 'Opening...'}
-            disabled={needsOwnClient && !hasOwnClient} title={needsOwnClient && !hasOwnClient ? 'Add the Client ID first.' : undefined}
+            disabled={needsOwnClient && !hasOwnClient}
             data-testid="backup-gdrive-connect">
             Connect Google Drive
           </SettingsButton>
@@ -168,7 +186,7 @@ export function DriveConnect({ dest, onChange, onConnected, onConnectedChange }:
           help="Paste the whole address the browser showed at the end (it starts with http://127.0.0.1)."
           control={
             <span className="settings-inline-pair">
-              <input id="backup-gdrive-paste" type="text" data-no-draft="autosave" className="settings-input settings-input--mono"
+              <input id="backup-gdrive-paste" type="text" data-no-draft="autosave" className="settings-input"
                 value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1:...?code=..." />
               <SettingsButton onClick={finish} busy={finishing} busyLabel="Finishing..." disabled={!pasted.trim()} data-testid="backup-gdrive-finish">
                 Finish
@@ -176,6 +194,21 @@ export function DriveConnect({ dest, onChange, onConnected, onConnectedChange }:
             </span>
           }
         />
+      )}
+      {needsOwnClient ? (
+        <>
+          <SettingsDisclosure id="backup-gdrive-client-help" label="Set up a Google client for Walnut (once, about 5 minutes)"
+            defaultOpen={!hasOwnClient} data-testid="backup-gdrive-client-help">
+            {steps}
+          </SettingsDisclosure>
+          {clientRows}
+        </>
+      ) : (
+        <SettingsDisclosure id="backup-gdrive-own-client" label="Use your own Google client (optional)" defaultOpen={hasOwnClient}
+          data-testid="backup-gdrive-own-client">
+          {steps}
+          {clientRows}
+        </SettingsDisclosure>
       )}
     </>
   )

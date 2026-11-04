@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 import { isNotFound, type BackupStore } from '../stores/types.js';
+import type { WriterIdentity } from '../local-state.js';
 import { AVG_CHUNK, MAX_CHUNK, MIN_CHUNK, chunkBuffer } from './chunker.js';
 import { blobId, deriveKeys, keyCheck, open, seal, type RepoKeys } from './crypto.js';
 import {
@@ -55,6 +56,14 @@ export interface LoadedIndex {
 
 const randomId = (): string => randomBytes(16).toString('hex');
 
+function sealWriter(keys: RepoKeys, me: WriterIdentity): RepoConfig['writer'] {
+  return {
+    id: me.id,
+    name: seal(keys, Buffer.from(me.name, 'utf8'), 'writer-name').toString('base64'),
+    since: new Date().toISOString(),
+  };
+}
+
 export class Repository {
   private constructor(
     readonly store: BackupStore,
@@ -64,13 +73,13 @@ export class Repository {
 
   /**
    * Open the repository at `store`. With `create`, a store with no repository
-   * gets a new one owned by `hostname`. A repository made with another key is
+   * gets a new one written by `writer`. A repository made with another key is
    * refused, never replaced: it is somebody's backups.
    */
   static async open(
     store: BackupStore,
     rawKey: Buffer,
-    opts: { create?: boolean; hostname: string },
+    opts: { create?: boolean; writer?: WriterIdentity } = {},
   ): Promise<Repository> {
     const keys = deriveKeys(rawKey);
     let config: RepoConfig | null = null;
@@ -80,7 +89,7 @@ export class Repository {
       if (!isNotFound(err)) throw err;
     }
     if (!config) {
-      if (!opts.create) throw new RepoError('no_repo', `No Walnut backups at ${store.describe()} yet.`);
+      if (!opts.create || !opts.writer) throw new RepoError('no_repo', `No Walnut backups at ${store.describe()} yet.`);
       const repoId = randomId();
       config = {
         format: REPO_FORMAT,
@@ -89,7 +98,7 @@ export class Repository {
         createdAt: new Date().toISOString(),
         keyCheck: keyCheck(keys, repoId),
         chunker: { min: MIN_CHUNK, avg: AVG_CHUNK, max: MAX_CHUNK },
-        writer: { hostname: opts.hostname, since: new Date().toISOString() },
+        writer: sealWriter(keys, opts.writer),
       };
       await store.put(REPO_CONFIG_KEY, Buffer.from(JSON.stringify(config, null, 2)));
       return new Repository(store, keys, config);
@@ -112,8 +121,21 @@ export class Repository {
     return this.config;
   }
 
-  async setWriter(hostname: string): Promise<void> {
-    const next: RepoConfig = { ...this.config, writer: { hostname, since: new Date().toISOString() } };
+  isWriter(me: WriterIdentity): boolean {
+    return this.config.writer?.id === me.id;
+  }
+
+  /** The writer machine's name, for the user ("another computer" when it cannot be read). */
+  writerName(): string {
+    try {
+      return open(this.keys, Buffer.from(this.config.writer.name, 'base64'), 'writer-name').toString('utf8');
+    } catch {
+      return 'another computer';
+    }
+  }
+
+  async setWriter(me: WriterIdentity): Promise<void> {
+    const next: RepoConfig = { ...this.config, writer: sealWriter(this.keys, me) };
     await this.store.put(REPO_CONFIG_KEY, Buffer.from(JSON.stringify(next, null, 2)));
     this.config = next;
   }
@@ -141,13 +163,19 @@ export class Repository {
 
   // ── Index ────────────────────────────────────────────────────────────────
 
-  async loadIndex(): Promise<LoadedIndex> {
-    const objs = await this.store.list('index/');
+  /**
+   * Every index file, merged. With `stored`, packs not in it are left out
+   * BEFORE blobs are mapped, so a blob that a stale index places in a deleted
+   * pack is found in the live pack that also holds it.
+   */
+  async loadIndex(stored?: { has(packId: string): boolean }): Promise<LoadedIndex> {
+    const objs = (await this.store.list('index/')).sort((a, b) => a.key.localeCompare(b.key));
     const blobs = new Map<string, BlobRef>();
     const packs = new Map<string, PackInfo>();
     for (const obj of objs) {
       const file = await this.readSealedJson<IndexFile>(obj.key);
       for (const pack of file.packs) {
+        if (stored && !stored.has(pack.id)) continue;
         packs.set(pack.id, pack);
         for (const [id, offset, length, rawLength] of pack.blobs) {
           if (!blobs.has(id)) blobs.set(id, { pack: pack.id, type: pack.type, offset, length, rawLength });

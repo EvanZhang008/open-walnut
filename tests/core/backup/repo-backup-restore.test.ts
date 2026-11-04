@@ -28,6 +28,12 @@ import { startFakeS3, type FakeS3 } from '../../helpers/fake-s3-server.js';
 let root: string;
 let home: string;
 
+const A = { id: 'a'.repeat(32), name: 'mac-a' };
+const B = { id: 'b'.repeat(32), name: 'mac-b' };
+const H = { id: 'c'.repeat(32), name: 'h' };
+/** Past the prune's grace for fresh packs (6 h). */
+const LATER = 7 * 3_600_000;
+
 async function write(rel: string, body: string | Buffer, mtime?: Date): Promise<void> {
   const p = path.join(home, rel);
   await fsp.mkdir(path.dirname(p), { recursive: true });
@@ -97,7 +103,7 @@ describe.each(stores)('encrypted backup on %s', (_name, make) => {
     const { store, close, fake } = await make();
     try {
       const raw = parseRecoveryKey(generateRecoveryKey());
-      const first = await runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-a' });
+      const first = await runRepoBackup(store, raw, { dataDir: home, writer: A });
       expect(first.fileCount).toBeGreaterThan(5);
       expect(first.skipped).toEqual([]);
 
@@ -112,13 +118,13 @@ describe.each(stores)('encrypted backup on %s', (_name, make) => {
       if (fake) expect(fake.requests.some((r) => r.startsWith('GET /b/walnut-backup/'))).toBe(true);
 
       // A second run with nothing changed reads only the sqlite snapshot again, and its pages dedupe.
-      const second = await runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-a' });
+      const second = await runRepoBackup(store, raw, { dataDir: home, writer: A });
       expect(second.changedFiles).toBeLessThanOrEqual(1);
       expect(second.uploadedBytes).toBeLessThan(first.uploadedBytes / 10);
 
       // Change one note: only that note's chunk is new.
       await write('notes/日记/2026-11-04 晨跑.md', '# 晨跑\n\nRan 7 km today.\n');
-      const third = await runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-a' });
+      const third = await runRepoBackup(store, raw, { dataDir: home, writer: A });
       expect(third.changedFiles).toBeLessThanOrEqual(2);
 
       const target = path.join(root, 'restored');
@@ -141,7 +147,7 @@ describe.each(stores)('encrypted backup on %s', (_name, make) => {
       db.close();
 
       // An older backup still restores to what it held then.
-      const { snapshots } = await (await Repository.open(store, raw, { hostname: 'mac-a' })).listSnapshots();
+      const { snapshots } = await (await Repository.open(store, raw, { })).listSnapshots();
       expect(snapshots).toHaveLength(3);
       const old = path.join(root, 'restored-old');
       await restoreRepoSnapshot(store, raw, old, { snapshotId: snapshots[2].id });
@@ -155,20 +161,23 @@ describe.each(stores)('encrypted backup on %s', (_name, make) => {
     const { store, close } = await make();
     try {
       const raw = parseRecoveryKey(generateRecoveryKey());
-      await runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-a' });
+      await runRepoBackup(store, raw, { dataDir: home, writer: A });
       const wrong = parseRecoveryKey(generateRecoveryKey());
-      await expect(runRepoBackup(store, wrong, { dataDir: home, hostname: 'mac-a' })).rejects.toMatchObject({ code: 'key_mismatch' });
+      await expect(runRepoBackup(store, wrong, { dataDir: home, writer: A })).rejects.toMatchObject({ code: 'key_mismatch' });
       await expect(restoreRepoSnapshot(store, wrong, path.join(root, 'x'), { snapshotId: 'latest' })).rejects.toMatchObject({ code: 'key_mismatch' });
       // The repository config is untouched by the refusals.
-      const repo = await Repository.open(store, raw, { hostname: 'mac-a' });
-      expect(repo.config.writer.hostname).toBe('mac-a');
+      const repo = await Repository.open(store, raw);
+      expect(repo.config.writer.id).toBe(A.id);
+      expect(repo.writerName()).toBe('mac-a');
+      // The plaintext config names no machine: only the id, the name sealed.
+      expect((await store.get(REPO_CONFIG_KEY)).toString('utf8')).not.toContain('mac-a');
 
       await expect(restoreRepoSnapshot(store, raw, home, { snapshotId: 'latest' })).rejects.toThrow(/not empty/);
-      await expect(runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-b' })).rejects.toMatchObject({ code: 'other_writer' });
-      await repo.setWriter('mac-b');
-      const r = await runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-b' });
+      await expect(runRepoBackup(store, raw, { dataDir: home, writer: B })).rejects.toMatchObject({ code: 'other_writer' });
+      await repo.setWriter(B);
+      const r = await runRepoBackup(store, raw, { dataDir: home, writer: B });
       expect(r.fileCount).toBeGreaterThan(0);
-      await expect(runRepoBackup(store, raw, { dataDir: home, hostname: 'mac-a' })).rejects.toMatchObject({ code: 'other_writer' });
+      await expect(runRepoBackup(store, raw, { dataDir: home, writer: A })).rejects.toMatchObject({ code: 'other_writer' });
     } finally {
       await close();
     }
@@ -179,7 +188,7 @@ describe('restore integrity', () => {
   it('refuses a damaged pack instead of writing bad data', async () => {
     const store = new LocalStore(path.join(root, 'dest'));
     const raw = parseRecoveryKey(generateRecoveryKey());
-    await runRepoBackup(store, raw, { dataDir: home, hostname: 'h' });
+    await runRepoBackup(store, raw, { dataDir: home, writer: H });
     const packs = await store.list('packs/');
     const victim = packs.sort((a, b) => b.size - a.size)[0];
     const body = await store.get(victim.key);
@@ -191,12 +200,12 @@ describe('restore integrity', () => {
   it('keeps the previous copy of a file it cannot read this time', async () => {
     const store = new LocalStore(path.join(root, 'dest'));
     const raw = parseRecoveryKey(generateRecoveryKey());
-    await runRepoBackup(store, raw, { dataDir: home, hostname: 'h' });
+    await runRepoBackup(store, raw, { dataDir: home, writer: H });
     const file = path.join(home, 'notes/big-log.txt');
     await fsp.appendFile(file, 'more\n');
     await fsp.chmod(file, 0o000);
     try {
-      const r = await runRepoBackup(store, raw, { dataDir: home, hostname: 'h' });
+      const r = await runRepoBackup(store, raw, { dataDir: home, writer: H });
       if (process.getuid?.() !== 0) expect(r.skipped).toContain('notes/big-log.txt');
       const target = path.join(root, 'r');
       await restoreRepoSnapshot(store, raw, target, { snapshotId: 'latest' });
@@ -242,12 +251,12 @@ describe('retention', () => {
     // Three backups, each with a different big file, so each owns packs.
     for (let i = 0; i < 3; i++) {
       await write('notes/rotating.bin', randomBytes(2 * 1024 * 1024));
-      await runRepoBackup(store, raw, { dataDir: home, hostname: 'h' });
+      await runRepoBackup(store, raw, { dataDir: home, writer: H });
     }
-    const repo = await Repository.open(store, raw, { hostname: 'h' });
+    const repo = await Repository.open(store, raw);
     const before = (await store.list('packs/')).reduce((n, o) => n + o.size, 0);
     // daily: 1 keeps only the newest (all three are today).
-    const result = await pruneRepo(repo, { daily: 1, weekly: 0 });
+    const result = await pruneRepo(repo, { daily: 1, weekly: 0 }, { now: Date.now() + LATER, writer: H });
     expect(result.forgotten).toHaveLength(2);
     const after = (await store.list('packs/')).reduce((n, o) => n + o.size, 0);
     // The middle backup's file sat alone in its pack: that pack is gone. (The first
@@ -259,7 +268,7 @@ describe('retention', () => {
     await restoreRepoSnapshot(store, raw, target, { snapshotId: 'latest' });
     expect((await fsp.readFile(path.join(target, 'notes/rotating.bin'))).equals(await fsp.readFile(path.join(home, 'notes/rotating.bin')))).toBe(true);
     // And a backup after the prune still dedupes against what survived.
-    const next = await runRepoBackup(store, raw, { dataDir: home, hostname: 'h' });
+    const next = await runRepoBackup(store, raw, { dataDir: home, writer: H });
     expect(next.changedFiles).toBeLessThanOrEqual(1);
   }, 60_000);
 });

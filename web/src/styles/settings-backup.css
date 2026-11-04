@@ -53,3 +53,6 @@
 .backup-restore-meta { color: var(--fg-muted); font-size: 12.5px; }
 .backup-key-shown { padding-top: 10px; padding-bottom: 10px; }
 .backup-key-shown .backup-key { white-space: normal; word-break: break-all; font-size: 13px; }
+/* The restore list spans the row: each backup lines up under the Restore label. */
+.backup-restore-list.settings-row { justify-content: flex-start; align-items: stretch; }
+.backup-restore-list .backup-restore-item { width: 100%; box-sizing: border-box; }
