@@ -326,23 +326,57 @@ describe('host_exec', () => {
     resetHostExecForTest() // (that job never reached the fake host; free its slot for the next test)
   }, 60_000)
 
-  it('reads and stops a background job, and caps a task at two at once', async () => {
+  it('reads and stops a background job; at the cap of four a call waits for a slot, then is refused', async () => {
     const a = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
     const b = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo one; sleep 0.3; echo two', background: true }, SID)
-    expect([a.body.running, b.body.running]).toEqual([true, true])
-    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).toMatchObject({ status: 429, body: { code: 'busy' } })
-    // The second ends with nobody reading it: at the cap the server asks the host, and there is room.
-    await new Promise((r) => setTimeout(r, 1_000))
+    const c = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
+    const d = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
+    expect([a, b, c, d].map((r) => r.body.running)).toEqual([true, true, true, true])
+    // b ends with nobody reading it: the waiting call asks the host, finds the room and runs.
+    const lists = sent.filter((m) => m.cmd === 'exec.list').length
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).status).toBe(200)
-    expect(sent.some((m) => m.cmd === 'exec.list')).toBe(true)
+    expect(sent.filter((m) => m.cmd === 'exec.list').length).toBeGreaterThan(lists)
     const done = await api('GET', `/api/v1/hosts/macbox/exec/${b.body.jobId}?offset=0&wait_ms=10000`, undefined, SID)
     expect(done.body).toMatchObject({ running: false, exitCode: 0, output: 'one\ntwo\n' })
-    expect((await api('POST', `/api/v1/hosts/macbox/exec/${a.body.jobId}/stop`, undefined, SID)).status).toBe(200)
-    const stopped = await api('GET', `/api/v1/hosts/macbox/exec/${a.body.jobId}?wait_ms=10000`, undefined, SID)
-    expect(stopped.body.running).toBe(false)
-    // Both ended: the cap has room again.
+    // Four still run: a fifth waits for a slot (a relayed caller: half of what its answer time
+    // leaves), then is refused with how long it waited.
+    const e = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
+    expect(e.body.running).toBe(true)
+    const t0 = Date.now()
+    const full = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)
+    expect(full).toMatchObject({ status: 429, body: { code: 'busy' } })
+    expect(full.body.error).toMatch(/already runs 4 commands on other hosts \(waited \d+ s for one to end\)/)
+    expect(Date.now() - t0).toBeGreaterThan(2_000)
+    // A stop while a call waits: it takes the freed slot and runs.
+    const waiting = api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo got-a-slot' }, SID)
+    await new Promise((r) => setTimeout(r, 500))
+    for (const job of [a, c, d, e]) expect((await api('POST', `/api/v1/hosts/macbox/exec/${job.body.jobId}/stop`, undefined, SID)).status).toBe(200)
+    expect(await waiting).toMatchObject({ status: 200, body: { exitCode: 0, output: 'got-a-slot\n' } })
+    for (const job of [a, c, d, e]) {
+      expect((await api('GET', `/api/v1/hosts/macbox/exec/${job.body.jobId}?wait_ms=10000`, undefined, SID)).body.running).toBe(false)
+    }
+    // All ended: the cap has room again.
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).status).toBe(200)
-  }, 60_000)
+  }, 90_000)
+
+  it('twelve calls at once all run, queued: the host never runs more than four of the task at a time', async () => {
+    // 2026-11-04: the count and the slot were apart by a dial, so a burst passed the cap together,
+    // and the calls that lost the race were refused instead of waiting.
+    const marks = path.join(hostRoot, 'burst.log')
+    await fs.rm(marks, { force: true })
+    const line = `echo "s $(date +%s%N)" >> ${marks}; sleep 0.4; echo "e $(date +%s%N)" >> ${marks}`
+    const all = await Promise.all(Array.from({ length: 12 }, () => api('POST', '/api/v1/hosts/macbox/exec', { command: line }, SID)))
+    expect(all.map((r) => r.status)).toEqual(Array(12).fill(200))
+    expect(all.every((r) => r.body.exitCode === 0)).toBe(true)
+    const events = (await fs.readFile(marks, 'utf8')).trim().split('\n').map((l) => l.split(' ')).map(([k, t]) => ({ k, t: BigInt(t) }))
+    expect(events.filter((x) => x.k === 's')).toHaveLength(12)
+    events.sort((x, y) => (x.t < y.t ? -1 : x.t > y.t ? 1 : x.k === 'e' ? -1 : 1))
+    let now = 0
+    let most = 0
+    for (const x of events) { now += x.k === 's' ? 1 : -1; most = Math.max(most, now) }
+    expect(most).toBeLessThanOrEqual(4)
+    expect(most).toBeGreaterThan(1)
+  }, 90_000)
 
   it('a revoked grant stops the task and the next call asks the user again; Deny is kept', async () => {
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants

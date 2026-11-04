@@ -9,7 +9,8 @@
  *   - never on the caller's own host (that is its own Bash tool);
  *   - only under the user's grant for this task on this host (exec-grants.ts),
  *     asked for once by letter, kept until revoked;
- *   - at most 2 runs at once per task and 4 per host;
+ *   - at most 4 runs at once per task and 8 per host; a call at a cap waits a little for a
+ *     slot (takeSlot) before it is refused, so a burst from parallel agents runs, queued;
  *   - a foreground run ends by 10 minutes (the host kills its process group), a
  *     background one by 2 hours; only the tail of the output comes back (256 KB),
  *     the whole log stays in the task's directory on that host;
@@ -41,8 +42,13 @@ import { grantFor, isOwnHost } from './host-exec-grant.js'
 // The user's grant for a task on a host (host-exec-grant.ts), for host_mcp and host_http too.
 export { grantFor, isOwnHost }
 
-export const MAX_RUNNING_PER_TASK = 2
-export const MAX_RUNNING_PER_HOST = 4
+export const MAX_RUNNING_PER_TASK = 4
+export const MAX_RUNNING_PER_HOST = 8
+/** The longest a call waits at a cap for a slot (less for a relayed call, budgetLeft). */
+const SLOT_WAIT_MAX_MS = 20_000
+/** While it waits: a look at the count this often, and at the hosts' own lists this often. */
+const SLOT_POLL_MS = 1_000
+const SLOT_REFRESH_MS = 2_000
 const DIAL_MS = 15_000
 export const REPLY_MARGIN_MS = 30_000
 export const LIST_MS = 5_000
@@ -91,8 +97,26 @@ export interface ExecParams {
 
 export interface Caller { sid: string; taskId: string; taskTitle: string; host: string }
 
-/** In flight, by job: who runs it and until when it may run (a background job that is never read again ends by itself). */
-const running = new Map<string, { taskId: string; host: string; until: number; at: number }>()
+/**
+ * In flight, by job: who runs it and until when it may run (a background job that is never read
+ * again ends by itself). `pending`: a slot taken for a run not sent to the host yet.
+ */
+const running = new Map<string, { taskId: string; host: string; until: number; at: number; pending?: boolean }>()
+/** Calls waiting at a cap, woken when a slot frees. */
+const slotWaiters = new Set<() => void>()
+
+/** A run's slot is free again: the calls waiting at a cap look once more. */
+function release(jobId: string): void {
+  if (running.delete(jobId)) for (const wake of [...slotWaiters]) wake()
+}
+
+function slotFreed(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); slotWaiters.delete(done); resolve() }
+    const timer = setTimeout(done, Math.max(1, ms))
+    slotWaiters.add(done)
+  })
+}
 /** A job the host has not confirmed (`at` set, not 0) may not have reached it yet: a refresh drops it only after this long. */
 const REFRESH_GRACE_MS = 10_000
 
@@ -100,7 +124,7 @@ function countRunning(pred: (r: { taskId: string; host: string }) => boolean): n
   const t = Date.now()
   let n = 0
   for (const [id, r] of running) {
-    if (r.until < t) { running.delete(id); continue }
+    if (r.until < t) { release(id); continue }
     if (pred(r)) n++
   }
   return n
@@ -248,23 +272,42 @@ async function refreshRunning(pred: (r: { taskId: string; host: string }) => boo
       const reply = await conn.send('exec.list', {}, Math.max(1, Math.min(LIST_MS, within - (Date.now() - asked)))) as { ok?: boolean; jobs?: Array<{ jobId: string; running: boolean }> }
       if (!reply.ok || !Array.isArray(reply.jobs)) return
       const live = new Set(reply.jobs.filter((j) => j.running).map((j) => j.jobId))
-      for (const [id, r] of running) if (r.host === h && !live.has(id) && r.at < asked - REFRESH_GRACE_MS) running.delete(id)
+      for (const [id, r] of running) if (r.host === h && !r.pending && !live.has(id) && r.at < asked - REFRESH_GRACE_MS) release(id)
     } catch { /* the host away: its count stands until the jobs' own deadlines */ }
   }))
 }
 
-async function checkCaps(caller: Caller, host: string, since: number): Promise<void> {
+/**
+ * A slot for `jobId` under both caps, taken in the same step as the count (2026-11-04: the count
+ * and the slot were apart by a dial, so 16 calls at once all passed a cap of 2). At a cap the call
+ * waits for a slot, at most SLOT_WAIT_MAX_MS and half of what its answer time leaves, asking the
+ * hosts now and then which runs still go (a background job nobody read again may have ended).
+ */
+async function takeSlot(caller: Caller, host: string, jobId: string, since: number): Promise<void> {
   const mine = (r: { taskId: string }) => r.taskId === caller.taskId
   const theirs = (r: { host: string }) => r.host === host
   // A refresh may use at most half of what is left, so the run itself still fits.
   const share = () => Math.min(DIAL_MS + LIST_MS, (budgetLeft(caller, since) - START_MIN_LEFT_MS) / 2)
-  if (countRunning(mine) >= MAX_RUNNING_PER_TASK) await refreshRunning(mine, share())
-  if (countRunning(mine) >= MAX_RUNNING_PER_TASK) {
-    throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} commands on other hosts; wait for one (host_exec_read) or stop one (host_exec_stop).`, 429, 'busy')
-  }
-  if (countRunning(theirs) >= MAX_RUNNING_PER_HOST) await refreshRunning(theirs, share())
-  if (countRunning(theirs) >= MAX_RUNNING_PER_HOST) {
-    throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} commands for other hosts; try again in a moment.`, 429, 'busy')
+  const waitUntil = Date.now() + Math.max(0, Math.min(SLOT_WAIT_MAX_MS, (budgetLeft(caller, since) - START_MIN_LEFT_MS) / 2))
+  let refreshAt = 0
+  for (;;) {
+    const taskFull = countRunning(mine) >= MAX_RUNNING_PER_TASK
+    if (!taskFull && countRunning(theirs) < MAX_RUNNING_PER_HOST) {
+      running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + DIAL_MS + 2 * REPLY_MARGIN_MS, at: Date.now(), pending: true })
+      return
+    }
+    if (Date.now() >= refreshAt) {
+      refreshAt = Date.now() + SLOT_REFRESH_MS
+      await refreshRunning(taskFull ? mine : theirs, share())
+      continue
+    }
+    const left = waitUntil - Date.now()
+    if (left <= 0) {
+      const waited = `waited ${Math.round((Date.now() - since) / 1000)} s for one to end`
+      if (taskFull) throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} commands on other hosts (${waited}); wait for one (host_exec_read) or stop one (host_exec_stop).`, 429, 'busy')
+      throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} commands for other hosts (${waited}); try again in a moment.`, 429, 'busy')
+    }
+    await slotFreed(Math.min(left, SLOT_POLL_MS, Math.max(1, refreshAt - Date.now())))
   }
 }
 
@@ -277,7 +320,7 @@ async function checkCaps(caller: Caller, host: string, since: number): Promise<v
  */
 export async function jobAnswer(host: string, jobId: string, reply: Record<string, unknown>, opts: { known?: RunShape; fromOffset?: boolean } = {}): Promise<Record<string, unknown> & { redactedLines?: number }> {
   const { shapeOf } = await import('./host-exec-legacy.js')
-  if (reply.running !== true) running.delete(jobId)
+  if (reply.running !== true) release(jobId)
   const { text, redacted } = await redact(typeof reply.output === 'string' ? reply.output : '')
   const offset = typeof reply.offset === 'number' ? reply.offset : undefined
   const more = opts.fromOffset === true && typeof reply.nextOffset === 'number' && typeof reply.outputBytes === 'number' && reply.nextOffset < reply.outputBytes
@@ -332,17 +375,25 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const ran = asked ? jobs.startedRun(jobId) : undefined
   if (ran && (ran.taskId !== caller.taskId || ran.host !== host)) throw jobTaken(jobId)
   if (ran) return sameJob(caller, host, jobId, params.background === true, t0, ran.startedAt)
-  await checkCaps(caller, host, t0)
+  await takeSlot(caller, host, jobId, t0)
 
   const background = params.background === true
   const cap = background ? BACKGROUND_MAX_MS : FOREGROUND_MAX_MS
   const timeoutMs = Math.min(typeof params.timeout_ms === 'number' && params.timeout_ms > 0 ? params.timeout_ms : (background ? cap : 2 * 60_000), cap)
   // Too little time left to start it and get the answer back before the caller gives up: start nothing.
   const tooLate = async () => new HostExecError(`There was not time to start the command on ${await hostName(host)} and answer before your call gives up; nothing ran. Try again.`, 503, 'host_offline')
-  if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
-  const conn = await dial(host, budgetLeft(caller, t0) - START_MIN_LEFT_MS)
-  if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
-  const { send, known: shape } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, params, line)
+  let conn: Awaited<ReturnType<typeof dial>>
+  let send: Record<string, unknown>
+  let shape: RunShape | undefined
+  try {
+    if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
+    conn = await dial(host, budgetLeft(caller, t0) - START_MIN_LEFT_MS)
+    if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
+    ;({ send, known: shape } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, params, line))
+  } catch (err) {
+    release(jobId) // nothing was sent: the slot is free
+    throw err
+  }
   running.set(jobId, { taskId: caller.taskId, host, until: Date.now() + timeoutMs + REPLY_MARGIN_MS, at: Date.now() })
   // This task's runs there, for host_exec_list (an older host does not say whose a job is).
   const noteRun = () => jobs.noteStarted({ jobId, taskId: caller.taskId, host, command: preview, startedAt: Date.now() })
@@ -372,7 +423,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     if (reply.code === 'job_exists' || (typeof reply.error === 'string' && / already exists$/.test(reply.error))) {
       return sameJob(caller, host, jobId, background, t0)
     }
-    running.delete(jobId)
+    release(jobId)
     throw daemonError(reply, 'the host refused the command')
   }
   // The host has it now: a refresh may judge it by the host's list from here on.
@@ -430,4 +481,5 @@ async function sameJob(caller: Caller, host: string, jobId: string, background: 
 /** Tests: forget the in-flight runs. */
 export function resetHostExecForTest(): void {
   running.clear()
+  for (const wake of [...slotWaiters]) wake()
 }
