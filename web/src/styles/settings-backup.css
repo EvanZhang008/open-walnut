@@ -57,8 +57,8 @@
 .backup-restore-list.settings-row { justify-content: flex-start; align-items: stretch; }
 .backup-restore-list .backup-restore-item { width: 100%; box-sizing: border-box; }
 /* Typing the recovery key: the whole key stays visible while it is checked. */
-.backup-key-entry { display: flex; gap: 8px; align-items: center; padding-top: 8px; padding-bottom: 10px; }
-.backup-key-entry .backup-key-input { flex: 1 1 auto; min-width: 0; }
+.backup-key-entry, .backup-wide-entry { display: flex; gap: 8px; align-items: center; padding-top: 8px; padding-bottom: 10px; }
+.backup-key-entry .backup-key-input, .backup-wide-entry .settings-input { flex: 1 1 auto; min-width: 0; }
 /* After a restore: the exact commands that make it the live data. */
 .backup-restore-swap { display: flex; gap: 8px; align-items: flex-start; padding-top: 4px; padding-bottom: 10px; }
 .backup-restore-commands { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere;

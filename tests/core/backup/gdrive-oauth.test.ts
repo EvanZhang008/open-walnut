@@ -74,7 +74,9 @@ describe('startDriveConnect', () => {
     expect(landing.startsWith(`${c.redirectUri}/?`)).toBe(true);
     const page = await fetch(landing);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('Walnut is connected to Google Drive. You can close this tab and go back to Walnut.');
+    const html = await page.text();
+    expect(html).toContain('Walnut is connected to Google Drive. This tab closes by itself');
+    expect(html).toContain('window.close()');
 
     const r = await c.done;
     expect(r.ok).toBe(true);

@@ -164,16 +164,16 @@ export function registerCommands(program: Command): void {
     });
   backupCredFlags(backup.command('list').description('List restore points'))
     .action(async (options: Record<string, unknown>) => {
-      const { runBackupList } = await import('./backup.js');
-      await runBackupList(options);
+      const { runBackupList, plainFailure } = await import('./backup.js');
+      await runBackupList(options).catch(plainFailure('List'));
     });
   backupCredFlags(backup.command('restore').description('Restore a backup into a fresh directory'))
     .option('--at <id>', 'Backup to restore, from `backup list` (default: the newest)')
     .option('--to <dir>', 'Target directory (default: ~/open-walnut-restored-<ts>)')
     .option('--force', 'Allow restoring into a non-empty directory')
     .action(async (options: Record<string, unknown>) => {
-      const { runBackupRestore } = await import('./backup.js');
-      await runBackupRestore(options);
+      const { runBackupRestore, plainFailure } = await import('./backup.js');
+      await runBackupRestore(options).catch(plainFailure('Restore'));
     });
 
   program

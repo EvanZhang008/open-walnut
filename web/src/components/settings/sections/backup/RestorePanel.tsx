@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
+import { SegmentedControl } from '../../inputs/SegmentedControl'
 import { saveErrorMessage } from '../../settings-pane-context'
 import { apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
@@ -42,27 +43,39 @@ interface Props {
   dataDir?: string
   /** A restore cannot start yet (the Backups group's first row says why). */
   blocked: boolean
+  /** The service in use, named when there is a choice of where to restore from. */
+  destLabel?: string
+  /** Other services set up before: their backups can be restored too, without switching to them. */
+  others?: Array<{ label: string; dest: BackupDestinationConfig }>
 }
 
-const whenOf = (iso: string): string =>
-  new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+/** When a backup was made; to the second when another one shares its minute. */
+const whenOf = (iso: string, seconds = false): string =>
+  new Date(iso).toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
+  })
 
-export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
+export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, others = [] }: Props) {
+  const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
+  const [from, setFrom] = useState(0)
+  const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
   const [target, setTarget] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // A refused start (a folder that is not empty) belongs to the folder row, and goes once it is edited.
+  const [startError, setStartError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
   const dismiss = () => { void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}) }
 
-  const open = async () => {
+  const open = async (at: BackupDestinationConfig | null = source) => {
     setLoading(true)
     setError(null)
     if (restore?.finishedAt) dismiss()
     try {
-      const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', dest ? { destination: dest } : {}, { timeoutMs: 60000 })
+      const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', at ? { destination: at } : {}, { timeoutMs: 60000 })
       setItems(r.snapshots)
       setPicked(r.snapshots[0]?.id ?? null)
     } catch (err) {
@@ -75,12 +88,12 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
   const start = async () => {
     if (!picked) return
     setStarting(true)
-    setError(null)
+    setStartError(null)
     try {
-      await apiPost('/api/backup/restore', { snapshotId: picked, targetDir: target.trim() || undefined, ...(dest ? { destination: dest } : {}) })
+      await apiPost('/api/backup/restore', { snapshotId: picked, targetDir: target.trim() || undefined, ...(source ? { destination: source } : {}) })
       setItems(null)
     } catch (err) {
-      setError(saveErrorMessage(err))
+      setStartError(saveErrorMessage(err))
     } finally {
       setStarting(false)
     }
@@ -128,8 +141,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
             help={
               <>
                 {restore.doneFiles} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>.
-                {' '}To make them your Walnut data: quit Walnut, run the two commands below in a terminal
-                (they keep your current data aside, nothing is deleted), then start Walnut.
+                {' '}To make them your Walnut data: quit Walnut, run the command below in a terminal
+                (it keeps your current data aside and deletes nothing), then start Walnut.
               </>
             }
             control={
@@ -143,7 +156,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
       {restore?.finishedAt && !restore.error && !items && swap && (
         <div className="settings-row settings-row-indent backup-restore-swap" data-testid="backup-restore-swap">
           <pre className="backup-restore-commands">{swap}</pre>
-          <CopyButton text={swap} label="Copy commands" bordered data-testid="backup-restore-copy-commands" />
+          <CopyButton text={swap} label="Copy command" bordered data-testid="backup-restore-copy-commands" />
         </div>
       )}
       <SettingsRow
@@ -152,12 +165,28 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
-          <SettingsButton onClick={items ? () => setItems(null) : open} busy={loading} busyLabel="Loading..." disabled={blocked && !items}
+          <SettingsButton onClick={items ? () => setItems(null) : () => void open()} busy={loading} busyLabel="Loading..." disabled={blocked && !items}
             data-testid="backup-restore-open">
             {items ? 'Close' : 'Choose a backup'}
           </SettingsButton>
         }
       />
+      {items && sources.length > 1 && (
+        <SettingsRow
+          indent
+          label="From"
+          data-testid="backup-restore-from"
+          control={
+            <SegmentedControl
+              id="backup-restore-from"
+              aria-label="Restore from"
+              value={String(from)}
+              onChange={(v) => { setFrom(Number(v)); void open(sources[Number(v)].dest) }}
+              options={sources.map((s, i) => ({ value: String(i), label: s.label, testId: `backup-restore-from-${s.dest.type}` }))}
+            />
+          }
+        />
+      )}
       {items && items.length === 0 && <SettingsRow indent label="No backups here yet." />}
       {items && items.length > 0 && (
         <>
@@ -165,7 +194,9 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
             {items.map((it) => (
               <label key={it.id} className="backup-restore-item" data-picked={picked === it.id ? 'true' : undefined}>
                 <input type="radio" name="backup-restore-pick" value={it.id} checked={picked === it.id} onChange={() => setPicked(it.id)} />
-                <span className="backup-restore-when">{whenOf(it.createdAt)}</span>
+                <span className="backup-restore-when">
+                  {whenOf(it.createdAt, items.some((o) => o.id !== it.id && whenOf(o.createdAt) === whenOf(it.createdAt)))}
+                </span>
                 <span className="backup-restore-meta">
                   {[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,
                     it.totalBytes !== undefined ? fmtBytes(it.totalBytes) : null,
@@ -177,20 +208,21 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
           </div>
           <SettingsRow
             indent
-            wide
             label="Into folder"
             htmlFor="backup-restore-target"
-            help="A new, empty folder. Leave it empty for one next to your data (open-walnut-restored-<date>)."
-            control={
-              <span className="settings-inline-pair">
-                <input id="backup-restore-target" type="text" data-no-draft="autosave" className="settings-input"
-                  value={target} onChange={(e) => setTarget(e.target.value)} placeholder="Optional" />
-                <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
-                  Restore
-                </SettingsButton>
-              </span>
-            }
+            help="A new, empty folder. Leave it empty to use the one shown, next to your data."
+            error={startError ?? undefined}
+            data-testid="backup-restore-target-row"
           />
+          <div className="settings-row settings-row-indent backup-wide-entry">
+            <input id="backup-restore-target" type="text" data-no-draft="autosave" spellCheck={false}
+              className="settings-input settings-input--mono" aria-label="Restore into folder"
+              value={target} onChange={(e) => { setTarget(e.target.value); setStartError(null) }}
+              placeholder={dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-<date>` : 'Optional'} />
+            <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
+              Restore
+            </SettingsButton>
+          </div>
         </>
       )}
     </>
@@ -202,9 +234,14 @@ const shellQuote = (p: string): string => {
   return /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`
 }
 
-/** The two moves that make the restored folder the live data, current data kept aside. */
+/**
+ * The one command that makes the restored folder the live data, current data kept
+ * aside. Chained with &&: when a step fails nothing after it runs, so the restored
+ * folder never lands inside the live one.
+ */
 export function swapCommands(home: string, restored: string, at?: string): string {
-  const stamp = (at ?? new Date().toISOString()).slice(0, 10)
-  const aside = `${home.replace(/\/+$/, '')}-before-restore-${stamp}`
-  return `mv ${shellQuote(home)} ${shellQuote(aside)}\nmv ${shellQuote(restored)} ${shellQuote(home)}`
+  const stamp = (at ?? new Date().toISOString()).slice(0, 19).replace(/:/g, '-')
+  const h = home.replace(/\/+$/, '')
+  const aside = `${h}-before-restore-${stamp}`
+  return `[ ! -e ${shellQuote(aside)} ] && mv ${shellQuote(h)} ${shellQuote(aside)} && mv ${shellQuote(restored)} ${shellQuote(h)}`
 }

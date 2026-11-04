@@ -177,6 +177,8 @@ describe('PUT /api/config', () => {
       { enabled: true, destination: { type: 'gdrive', client_id: 'other.apps.googleusercontent.com' } },
       // A service kept for later is one click from being the destination.
       { enabled: true, destination: dest, other_destinations: [{ type: 's3', bucket: 'theirs', region: 'us-east-1' }] },
+      // Less history kept deletes backups at the next prune.
+      { enabled: true, destination: dest, retention: { daily: 1, weekly: 0 } },
     ]) {
       const r = await request(app).put('/api/config').set(agent).send({ backup });
       expect(r.status, JSON.stringify(backup)).toBe(403);

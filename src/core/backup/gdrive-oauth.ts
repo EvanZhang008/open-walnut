@@ -282,11 +282,14 @@ function deniedMessage(error: string, description?: string | null): string {
   return `Google sign-in failed: ${error}${description ? ` (${description})` : ''}.`;
 }
 
-function page(title: string, text: string): string {
+function page(title: string, text: string, closeTab = false): string {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>`
     + '<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#222}</style>'
-    + `</head><body><h1 style="font-size:1.25rem">${esc(title)}</h1><p>${esc(text)}</p></body></html>`;
+    + `</head><body><h1 style="font-size:1.25rem">${esc(title)}</h1><p>${esc(text)}</p>`
+    // Walnut opened this tab, so the browser lets it close it; when it cannot, the text stays.
+    + (closeTab ? '<script>setTimeout(function(){window.close()},1200)</script>' : '')
+    + '</body></html>';
 }
 
 function exchangeOnce(p: PendingConnect, code: string): Promise<DriveTokens> {
@@ -295,9 +298,9 @@ function exchangeOnce(p: PendingConnect, code: string): Promise<DriveTokens> {
 }
 
 function handleRequest(p: PendingConnect, req: http.IncomingMessage, res: http.ServerResponse): void {
-  const reply = (status: number, title: string, text: string) => {
+  const reply = (status: number, title: string, text: string, closeTab = false) => {
     res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close', 'Cache-Control': 'no-store' });
-    res.end(page(title, text));
+    res.end(page(title, text, closeTab));
   };
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (req.method !== 'GET' || url.searchParams.get('state') !== p.state || p.done) {
@@ -318,7 +321,7 @@ function handleRequest(p: PendingConnect, req: http.IncomingMessage, res: http.S
   }
   exchangeOnce(p, code).then(
     (tokens) => {
-      reply(200, 'Connected', 'Walnut is connected to Google Drive. You can close this tab and go back to Walnut.');
+      reply(200, 'Connected', 'Walnut is connected to Google Drive. This tab closes by itself; if it stays open, close it and go back to Walnut.', true);
       finish(p, { ok: true, tokens });
     },
     (err: unknown) => {

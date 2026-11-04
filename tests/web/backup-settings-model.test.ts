@@ -65,7 +65,10 @@ describe('buildBackupConfig', () => {
 
 describe('testHelp', () => {
   it('says what was found and whether it was saved', () => {
-    expect(testHelp({ ok: true, hasBackups: false, savedNow: true }, false)).toBe('Connected. Walnut can write here; no backups yet. Saved: backups go here now.');
+    expect(testHelp({ ok: true, hasBackups: false, savedNow: true }, false)).toBe('Connected and saved: backups go here now.');
+    expect(testHelp({ ok: true, hasBackups: false }, false)).toBe('Connected. Walnut can write here; no backups yet.');
+    expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: true, savedNow: true }, false))
+      .toBe("Connected and saved: backups go here now. It holds this computer's Walnut backups.");
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: false }, false)).toMatch(/another recovery key/);
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: false, writer: 'Old-Mac' }, false)).toMatch(/computer "Old-Mac"/);
     expect(testHelp({ ok: false, error: 'No bucket named "x".' }, false)).toBe('Couldn\'t connect. No bucket named "x".');
@@ -88,12 +91,15 @@ describe('other destinations', () => {
 });
 
 describe('swapCommands', () => {
-  it('keeps the current data aside and moves the restored folder in', () => {
-    expect(swapCommands('/Users/me/.open-walnut', '/Users/me/open-walnut-restored-2026-11-04', '2026-11-04T08:00:00Z'))
-      .toBe('mv /Users/me/.open-walnut /Users/me/.open-walnut-before-restore-2026-11-04\nmv /Users/me/open-walnut-restored-2026-11-04 /Users/me/.open-walnut');
+  it('keeps the current data aside and moves the restored folder in, each step only after the last one worked', () => {
+    expect(swapCommands('/Users/me/.open-walnut', '/Users/me/open-walnut-restored-2026-11-04T08-00-00', '2026-11-04T08:00:00.000Z'))
+      .toBe('[ ! -e /Users/me/.open-walnut-before-restore-2026-11-04T08-00-00 ] && mv /Users/me/.open-walnut /Users/me/.open-walnut-before-restore-2026-11-04T08-00-00 && mv /Users/me/open-walnut-restored-2026-11-04T08-00-00 /Users/me/.open-walnut');
+  });
+  it('two restores on one day keep apart', () => {
+    expect(swapCommands('/h/.w', '/h/r', '2026-11-04T08:00:00Z')).not.toBe(swapCommands('/h/.w', '/h/r', '2026-11-04T15:30:00Z'));
   });
   it('quotes paths a shell would split, and keeps ~ expandable', () => {
-    expect(swapCommands('~/.open-walnut', "/tmp/my restore's", '2026-11-04'))
-      .toBe("mv ~/.open-walnut ~/.open-walnut-before-restore-2026-11-04\nmv '/tmp/my restore'\\''s' ~/.open-walnut");
+    expect(swapCommands('~/.open-walnut/', "/tmp/my restore's", '2026-11-04T08:00:00Z'))
+      .toBe("[ ! -e ~/.open-walnut-before-restore-2026-11-04T08-00-00 ] && mv ~/.open-walnut ~/.open-walnut-before-restore-2026-11-04T08-00-00 && mv '/tmp/my restore'\\''s' ~/.open-walnut");
   });
 });

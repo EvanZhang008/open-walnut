@@ -1,9 +1,11 @@
 /**
  * Keep a sensible history and give back the space of the rest.
  *
- * Retention (selectKept, pure): the newest `recent` snapshots, the newest of
- * each of the last `daily` days that have one, and the newest of each of the
- * last `weekly` ISO weeks. Then garbage collection: a pack none
+ * Retention (selectKept, pure): every snapshot of the last `withinHours` (at
+ * most MAX_WITHIN), the newest `recent` snapshots, the newest of each of the
+ * last `daily` days that have one, and the newest of each of the last `weekly`
+ * ISO weeks. So "Back up now" pressed a few times never pushes out the
+ * morning's backup: today's are all kept until tomorrow. Then garbage collection: a pack none
  * of the kept snapshots needs is deleted, and a pack mostly dead (under half
  * its bytes still needed) is repacked: its live sealed blobs are copied into
  * a new pack as they are (no decryption needed) and the old one is deleted.
@@ -30,9 +32,13 @@ export interface RetentionPolicy {
   weekly: number;
   /** The newest few, whatever their day: a backup made right after a bad change keeps the good one of that morning. */
   recent?: number;
+  /** Every backup this recent is kept, whatever else the policy says. */
+  withinHours?: number;
 }
 
-export const DEFAULT_RETENTION: RetentionPolicy = { daily: 7, weekly: 4, recent: 3 };
+export const DEFAULT_RETENTION: RetentionPolicy = { daily: 7, weekly: 4, recent: 3, withinHours: 24 };
+/** A bound on the backups kept for being recent (an hourly schedule plus many manual runs). */
+const MAX_WITHIN = 48;
 const ORPHAN_GRACE_MS = 6 * 3_600_000;
 const REPACK_BELOW_LIVE_RATIO = 0.5;
 const MAX_INDEX_FILES = 8;
@@ -50,9 +56,13 @@ export function isoWeekKey(d: Date): string {
 }
 
 /** Ids of the snapshots the policy keeps. */
-export function selectKept(snapshots: Array<Pick<Snapshot, 'id' | 'createdAt'>>, policy: RetentionPolicy): Set<string> {
+export function selectKept(snapshots: Array<Pick<Snapshot, 'id' | 'createdAt'>>, policy: RetentionPolicy, now = Date.now()): Set<string> {
   const newestFirst = [...snapshots].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const kept = new Set<string>();
+  if (policy.withinHours) {
+    const since = now - policy.withinHours * 3_600_000;
+    for (const s of newestFirst.filter((x) => Date.parse(x.createdAt) >= since).slice(0, MAX_WITHIN)) kept.add(s.id);
+  }
   for (const s of newestFirst.slice(0, Math.max(1, policy.recent ?? 1))) kept.add(s.id);
   const days = new Set<string>();
   const weeks = new Set<string>();
@@ -113,7 +123,7 @@ export async function pruneRepo(
   if (unreadable.length > 0) return skip(`${unreadable.length} backup(s) could not be read`);
   if (snapshots.length === 0) return result;
   if (opts.mustKeep && !snapshots.some((s) => s.id === opts.mustKeep)) return skip('the new backup is not listed yet');
-  const kept = selectKept(snapshots, policy);
+  const kept = selectKept(snapshots, policy, now);
   const forgotten = snapshots.filter((s) => !kept.has(s.id));
 
   const { index, storedPacks } = await loadLiveIndex(repo);

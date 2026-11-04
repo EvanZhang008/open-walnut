@@ -38,9 +38,17 @@ export async function writeRecoveryKey(dataDir: string, key: string): Promise<st
   const canonical = formatRecoveryKey(parseRecoveryKey(key));
   const file = recoveryKeyPath(dataDir);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const before = await readRecoveryKey(dataDir);
-  if (before && formatRecoveryKey(parseRecoveryKey(before)) !== canonical) {
-    await fs.copyFile(file, `${file}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  // Whatever is there and is not this key is kept aside first, a file that no longer
+  // parses (damaged, edited by hand) included: it may be the only copy of a key.
+  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  if (raw !== null && raw.trim() !== canonical) {
+    let same = false;
+    try {
+      same = formatRecoveryKey(parseRecoveryKey(raw.trim())) === canonical;
+    } catch {
+      /* unreadable: keep it aside */
+    }
+    if (!same) await fs.copyFile(file, `${file}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`);
   }
   const tmp = `${file}.tmp-${randomBytes(4).toString('hex')}`;
   await fs.writeFile(tmp, `${canonical}\n`, { mode: 0o600 });

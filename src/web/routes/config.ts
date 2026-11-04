@@ -58,6 +58,7 @@ export function getWebAssetsReport(): WebAssetsReport | null {
 // settings, say) are masked; the typed fields Settings edits are not.
 import { configForClients, emitConfigChanged } from '../../core/config-broadcast.js'
 import { MaskedValueError, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
+import { storedBackupLike } from '../../core/backup/destination.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { permissionsApplicable } from '../../core/permissions/applicable.js'
@@ -598,7 +599,9 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     // `push_tokens` is left out first: the push registry is its only writer (below), and
     // a phone may change its row between this client's read and its write.
     const { push_tokens: ignoredPushTokens, ...sent } = req.body ?? {}
-    const body = restoreMaskedSecrets(sent, await getConfig())
+    const storedConfig = await getConfig()
+    const body = restoreMaskedSecrets(sent, sent.backup === undefined ? storedConfig
+      : { ...storedConfig, backup: storedBackupLike(sent.backup, storedConfig.backup) })
 
     if (body.experimental !== undefined && !validExperimentalFlags(body.experimental)) {
       res.status(400).json({ error: 'experimental must be an object of boolean flags' })
@@ -666,7 +669,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       return
     }
     // Where backups go is the person's choice too: a write from anyone else that moves them
-    // (another bucket, service, account or endpoint) would send the data home elsewhere.
+    // (another bucket, service, account or endpoint) would send the data home elsewhere, and
+    // one that keeps less history would delete backups.
     // Switching them on or off and the interval stay open to all.
     if (body.backup !== undefined && !isPersonAtThisMachine(req)
       && backupTarget(body.backup) !== backupTarget((await getConfig()).backup)) {
@@ -765,6 +769,8 @@ function backupTarget(b: unknown): string {
   const pick = (o: Record<string, unknown> | null, keys: string[]) => (o ? keys.map((k) => o[k] ?? '') : null)
   return JSON.stringify([
     c.bucket ?? '', c.region ?? '', c.prefix ?? '', pick(a, ['method', 'profile']),
+    // How much history is kept: a smaller one deletes backups at the next prune.
+    c.retention ?? null,
     pick(d, ['type', 'bucket', 'prefix', 'region', 'account_id', 'endpoint', 'client_id', 'folder_name']),
     pick((d?.auth ?? null) as Record<string, unknown> | null, ['method', 'profile']),
     // The services not in use yet: one of them becomes the destination with one click.

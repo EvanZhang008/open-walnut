@@ -346,7 +346,8 @@ encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response
     }
     const folderName = ((await getConfig()).backup?.destination?.folder_name || DEFAULT_DRIVE_FOLDER).trim();
     let settle: (r: { ok: boolean; error?: string; email?: string }) => void = () => {};
-    connectDone = new Promise((r) => { settle = r; });
+    const mine: NonNullable<typeof connectDone> = new Promise((r) => { settle = r; });
+    connectDone = mine;
     let started: Awaited<ReturnType<typeof startDriveConnect>>;
     try {
       started = await startDriveConnect(client, {
@@ -376,11 +377,12 @@ encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response
     } catch (err) {
       // No sign-in under way: nothing must read as pending.
       settle({ ok: false, error: err instanceof Error ? err.message : String(err) });
-      connectDone = null;
+      // Only this attempt's own wait goes: a newer sign-in under way stays pending.
+      if (connectDone === mine) connectDone = null;
       throw err;
     }
-    void connectDone.then((r) => {
-      connectDone = null;
+    void mine.then((r) => {
+      if (connectDone === mine) connectDone = null;
       broadcastDrive(r);
     });
     res.json({ authUrl: started.authUrl, redirectUri: started.redirectUri });

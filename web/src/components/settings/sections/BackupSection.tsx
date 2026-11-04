@@ -86,6 +86,9 @@ export function BackupSection({ config, onSave }: Props) {
   const [enabled, setEnabled] = useState(saved.enabled ?? false)
   // Empty while the user retypes it; a save falls back to 24.
   const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24)
+  // A value out of range is shown as an error and never saved (no silent change to it).
+  const intervalOk = Number.isInteger(Number(intervalHours)) && Number(intervalHours) >= 1 && Number(intervalHours) <= MAX_INTERVAL_HOURS
+  const intervalToSave = intervalOk ? Number(intervalHours) : (saved.interval_hours ?? 24)
   const [legacyMode, setLegacyMode] = useState(savedEngine === 'mirror')
   const [legacy, setLegacy] = useState<LegacyFields>(legacyOf(saved))
   const [type, setType] = useState<BackupDestinationType>(savedDest?.type ?? 'r2')
@@ -108,11 +111,13 @@ export function BackupSection({ config, onSave }: Props) {
   // wrote while its refresh is still on the way. Two writes in a row (I saved
   // it, then the switch) must not undo each other.
   const baseRef = useRef(saved)
+  // Writes still on the way: the refresh after the first of two must not set the base back.
+  const writesInFlight = useRef(0)
   useEffect(() => {
     const p = prevSaved.current
     prevSaved.current = saved
     if (p === saved) return
-    baseRef.current = saved
+    if (writesInFlight.current === 0) baseRef.current = saved
     if ((p.enabled ?? false) !== (saved.enabled ?? false)) setEnabled(saved.enabled ?? false)
     if ((p.interval_hours ?? 24) !== (saved.interval_hours ?? 24)) setIntervalHours(saved.interval_hours ?? 24)
     if (stableJson(p.destination) !== stableJson(saved.destination) && saved.destination) {
@@ -150,14 +155,24 @@ export function BackupSection({ config, onSave }: Props) {
     const destination = over.destination ?? base.destination ?? null
     return buildBackupConfig(base, {
       enabled: over.enabled ?? enabled,
-      intervalHours,
+      intervalHours: intervalToSave,
       destination,
       legacy: destination ? undefined : legacyMode ? legacy : engineOf(base) === 'mirror' ? legacyOf(base) : undefined,
     })
   }
   const writeBackup = async (next: BackupConfig) => {
+    const before = baseRef.current
     baseRef.current = next
-    await onSave({ backup: next } as Partial<Config>)
+    writesInFlight.current++
+    try {
+      await onSave({ backup: next } as Partial<Config>)
+    } catch (err) {
+      // Not saved: the next write must not carry it (a destination the user never got).
+      if (baseRef.current === next) baseRef.current = before
+      throw err
+    } finally {
+      writesInFlight.current--
+    }
   }
 
   // Autosave covers the interval (and the legacy form, as before); the switch saves at once.
@@ -175,7 +190,7 @@ export function BackupSection({ config, onSave }: Props) {
 
   const setAutomatic = (on: boolean) => {
     setEnabled(on)
-    void writeBackup(compose(baseRef.current, { enabled: on }))
+    writeBackup(compose(baseRef.current, { enabled: on })).catch(() => setEnabled(!on))
   }
 
   /** Where backups go from now on: saved on purpose, never by looking at a tab. */
@@ -264,7 +279,8 @@ export function BackupSection({ config, onSave }: Props) {
   /** "I saved it": on a first setup it also turns backups on (the key was seen before the first upload). */
   const markKeySaved = (turnOn = false) => {
     if (turnOn) setEnabled(true)
-    void writeBackup({ ...compose(baseRef.current, turnOn ? { enabled: true } : {}), recovery_key_saved_at: new Date().toISOString() })
+    writeBackup({ ...compose(baseRef.current, turnOn ? { enabled: true } : {}), recovery_key_saved_at: new Date().toISOString() })
+      .catch(() => { if (turnOn) setEnabled(false) })
   }
 
   // Drive is saved as the destination once its sign-in finishes (on this tab, so on purpose).
@@ -278,7 +294,7 @@ export function BackupSection({ config, onSave }: Props) {
     setDriveConnected(true)
     const d = draftsRef.current.gdrive
     const current = baseRef.current.destination
-    if (!current || (current.type === 'gdrive' && !sameDestination(d, current))) void saveRef.current(cleanDestination(d))
+    if (!current || (current.type === 'gdrive' && !sameDestination(d, current))) void saveRef.current(cleanDestination(d)).catch(() => {})
     else setKeyRefresh((n) => n + 1)
   }, [])
 
@@ -305,7 +321,7 @@ export function BackupSection({ config, onSave }: Props) {
           formatAbsoluteTime(status.lastBackupAt),
           `${(status.lastFileCount ?? 0).toLocaleString()} files`,
           fmtBytes(status.lastTotalBytes),
-          ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} kept`] : []),
+          ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} backup${status.snapshotCount === 1 ? '' : 's'} kept`] : []),
         ].join(', ')
       : otherWriter ? 'Another computer writes these backups. Move them here above first.'
         : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
@@ -324,8 +340,8 @@ export function BackupSection({ config, onSave }: Props) {
     if (missing.length > 0) return `Fill in: ${missing.join(', ')}.`
     if (testResult) return testHelp(testResult, false)
     if (draftIsSaved) return 'Backups go here. Test again any time.'
-    return savedDest
-      ? `Not used yet. "Test and save" checks it, then backups go here instead of ${labelOf(savedDest.type)}.`
+    return savedDest && savedDest.type !== type
+      ? `Not used yet. "Use ${labelOf(type)}" checks it first, then backups go here instead of ${labelOf(savedDest.type)}.`
       : '"Test and save" writes, reads back and deletes a small test file, then backups go here.'
   }
 
@@ -372,7 +388,7 @@ export function BackupSection({ config, onSave }: Props) {
                 inUse={savedDest?.type === 'gdrive'}
                 otherInUse={savedDest && savedDest.type !== 'gdrive' ? labelOf(savedDest.type) : null}
                 onConnected={onDriveConnected}
-                onUse={() => void saveDestination(cleanDestination(draft))}
+                onUse={() => void saveDestination(cleanDestination(draft)).catch(() => {})}
                 onConnectedChange={setDriveConnected}
               />
             )}
@@ -388,7 +404,7 @@ export function BackupSection({ config, onSave }: Props) {
               <SettingsButton onClick={handleTest} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
                 variant={!legacyMode && !draftIsSaved && missing.length === 0 ? 'primary' : undefined}
                 disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0}>
-                {legacyMode || draftIsSaved ? 'Test connection' : 'Test and save'}
+                {legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
               </SettingsButton>
             }
           />
@@ -440,6 +456,7 @@ export function BackupSection({ config, onSave }: Props) {
           help={blocked
             ? (enabled ? `Paused: ${blocked}` : blocked)
             : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
+          state={blocked && enabled ? 'warning' : undefined}
           data-testid="backup-enabled-row"
           control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} />}
         />
@@ -447,12 +464,10 @@ export function BackupSection({ config, onSave }: Props) {
           label="Every"
           htmlFor="backup-interval"
           help={legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
+          error={intervalOk ? undefined : `Use a whole number of hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
+          data-testid="backup-interval-row"
           control={
-            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours}
-              onBlur={() => {
-                const n = Number(intervalHours)
-                setIntervalHours(Number.isFinite(n) && n >= 1 ? Math.min(MAX_INTERVAL_HOURS, Math.round(n)) : (saved.interval_hours ?? 24))
-              }} />
+            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} />
           }
         />
         {otherWriter && (
@@ -478,6 +493,10 @@ export function BackupSection({ config, onSave }: Props) {
         />
         <RestorePanel
           dest={legacyMode ? null : savedDest ?? null}
+          destLabel={inUse ?? undefined}
+          others={legacyMode ? [] : (saved.other_destinations ?? [])
+            .filter((o) => missingFields(o).length === 0 && (o.type !== 'gdrive' || driveConnected))
+            .map((o) => ({ label: labelOf(o.type), dest: o }))}
           restore={status?.restore}
           dataDir={status?.dataDir}
           blocked={!!blocked}

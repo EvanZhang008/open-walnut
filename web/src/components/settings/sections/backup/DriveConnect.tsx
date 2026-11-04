@@ -140,8 +140,26 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
 
   if (status.connected) {
     const who = `${status.email ? ` as ${status.email}` : ''}`
+    if (confirmingDisconnect) {
+      return (
+        <SettingsRow
+          label="Disconnect Google Drive?"
+          state="warning"
+          help={inUse
+            ? 'Backups pause until you connect again. The backups already in your Drive stay there.'
+            : 'The backups already in your Drive stay there.'}
+          error={error ?? undefined}
+          data-testid="backup-gdrive-disconnect-warning"
+          control={
+            <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
+              <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
+              <SettingsButton variant="danger" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
+            </span>
+          }
+        />
+      )
+    }
     return (
-      <>
       <SettingsRow
         label="Google account"
         help={inUse
@@ -149,26 +167,13 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
         error={error ?? undefined}
         data-testid="backup-gdrive-connected"
-        control={confirmingDisconnect ? (
-          <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
-            <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
-            <SettingsButton variant="danger" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
-          </span>
-        ) : (
+        control={
           <span className="settings-inline-pair">
             {!inUse && <SettingsButton variant="primary" onClick={onUse} data-testid="backup-gdrive-use">Use Google Drive</SettingsButton>}
             <SettingsButton onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
           </span>
-        )}
+        }
       />
-      {confirmingDisconnect && (
-        <SettingsRow indent state="warning" label="Disconnect Google Drive?"
-          data-testid="backup-gdrive-disconnect-warning"
-          help={inUse
-            ? 'Backups pause until you connect again. The backups already in your Drive stay there.'
-            : 'The backups already in your Drive stay there.'} />
-      )}
-      </>
     )
   }
 

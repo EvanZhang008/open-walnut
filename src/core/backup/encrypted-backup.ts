@@ -30,6 +30,7 @@ function retentionOf(cfg: BackupConfig) {
     daily: Math.max(1, cfg.retention?.daily ?? DEFAULT_RETENTION.daily),
     weekly: Math.max(0, cfg.retention?.weekly ?? DEFAULT_RETENTION.weekly),
     recent: Math.max(1, DEFAULT_RETENTION.recent ?? 1),
+    withinHours: DEFAULT_RETENTION.withinHours,
   };
 }
 

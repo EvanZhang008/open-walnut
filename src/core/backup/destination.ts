@@ -83,3 +83,32 @@ export async function makeStore(dest: BackupDestinationConfig, dataDir: string):
     auth: dest.auth,
   });
 }
+
+/**
+ * The stored backup section laid out like a write's: each sent destination slot
+ * (`destination`, `other_destinations[i]`) faces the stored destination of the
+ * same service. Switching services moves a destination between those slots, and
+ * the masks a client read back (config-secret-shape.ts pairs a mask with the
+ * value stored at its own place) must follow it. Only the user's own backup
+ * destinations are paired with each other; nothing else moves.
+ */
+export function storedBackupLike(sent: unknown, stored: BackupConfig | undefined): BackupConfig | undefined {
+  if (!stored || !sent || typeof sent !== 'object') return stored;
+  const s = sent as { destination?: unknown; other_destinations?: unknown };
+  const pool = [stored.destination, ...(stored.other_destinations ?? [])].filter(
+    (d): d is BackupDestinationConfig => !!d && typeof d === 'object' && typeof d.type === 'string',
+  );
+  const byType = (d: unknown): BackupDestinationConfig | undefined => {
+    const type = d && typeof d === 'object' ? (d as { type?: unknown }).type : undefined;
+    const same = pool.filter((p) => p.type === type);
+    return same.length === 1 ? same[0] : undefined;
+  };
+  // A slot whose service has nothing stored faces nothing: its masks are refused,
+  // never filled from another service's keys.
+  const out: BackupConfig = { ...stored };
+  if (s.destination !== undefined) out.destination = byType(s.destination);
+  if (Array.isArray(s.other_destinations)) {
+    out.other_destinations = s.other_destinations.map((o) => byType(o)) as BackupDestinationConfig[];
+  }
+  return out;
+}

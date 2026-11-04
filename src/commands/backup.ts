@@ -130,6 +130,14 @@ export async function runBackupRun(options: Record<string, unknown>): Promise<vo
   }
 }
 
+/** A failed list or restore: its message alone (a wrong key, a missing bucket), no stack trace. */
+export function plainFailure(what: string): (err: unknown) => void {
+  return (err) => {
+    console.error(`${what} FAILED: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  };
+}
+
 export async function runBackupList(options: Record<string, unknown>): Promise<void> {
   const enc = await encryptedConfig(options);
   if (enc) {
@@ -183,7 +191,11 @@ export async function runBackupRestore(options: Record<string, unknown>): Promis
       },
     });
     console.log(`Restore complete: ${r.restoredFiles} files (${mb(r.restoredBytes)}) from the backup of ${r.snapshot.createdAt} (${r.snapshot.hostname}), every file checked.`);
-    console.log(`To use it: quit Walnut, rename ~/.open-walnut to keep it aside, move ${target} to ~/.open-walnut, start Walnut.`);
+    const home = path.resolve(WALNUT_HOME);
+    console.log(`To use it: quit Walnut, run this (your current data is kept aside, nothing is deleted), then start Walnut:`);
+    const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+    const aside = `${home}-before-restore-${ts}`;
+    console.log(`  [ ! -e ${q(aside)} ] && mv ${q(home)} ${q(aside)} && mv ${q(target)} ${q(home)}`);
     return;
   }
   const cfg = await resolveCliConfig(options);

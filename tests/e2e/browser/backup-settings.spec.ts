@@ -94,7 +94,7 @@ test.describe('Backup settings', () => {
     await page.waitForTimeout(1500)
     expect((config.last()?.backup as Record<string, unknown> | undefined)?.destination).toBeUndefined()
     await testBtn.click()
-    await expect(section.getByTestId('backup-connection-row')).toContainText('Saved: backups go here now')
+    await expect(section.getByTestId('backup-connection-row')).toContainText('saved: backups go here now')
 
     // The saved config is encrypted backups: no legacy bucket an older Walnut would upload to.
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
@@ -110,7 +110,7 @@ test.describe('Backup settings', () => {
     await expect(section.getByTestId('backup-key-value')).toHaveText(KEY)
     await expect(section.getByTestId('backup-key-unsaved')).toBeVisible()
     // First setup: saying the key is saved is what starts backups.
-    await expect(section.getByTestId('backup-key-saved')).toHaveText('I saved it, start backups')
+    await expect(section.getByTestId('backup-key-saved')).toHaveText('I saved it, turn on backups')
     await section.getByTestId('backup-key-saved').click()
     await expect(section.getByTestId('backup-key-unsaved')).toHaveCount(0)
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled).toBe(true)

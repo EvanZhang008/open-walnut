@@ -39,7 +39,9 @@ export function friendlyStoreError(err: unknown, dest: BackupDestinationConfig):
   if (code === 'NoSuchBucket' || (status === 404 && /bucket/i.test(raw))) {
     return cloudflare
       ? `No bucket named ${bucket} in this Cloudflare account. Check the spelling, or create it on the R2 page (Create bucket)${tag}.`
-      : `No bucket named ${bucket} here. Check the spelling and the region${tag}.`;
+      : dest.type === 's3' && !dest.endpoint?.trim()
+        ? `No bucket named ${bucket} here. Check the spelling and the region${tag}.`
+        : `No bucket named ${bucket} here. Check the spelling, or create it first${tag}.`;
   }
   if ((code && KEY_REFUSED.has(code)) || status === 401) {
     return cloudflare

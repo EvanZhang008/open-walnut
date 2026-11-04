@@ -15,6 +15,7 @@ import { log } from '../../logging/index.js';
 import { getConfig } from '../config-manager.js';
 import { describeDestination, engineOf, isDestinationReady } from './destination.js';
 import { listEncryptedBackups, runEncryptedBackup } from './encrypted-backup.js';
+import { backupLockHeld } from './local-state.js';
 import { currentBackupJob, runBackupJob } from './jobs.js';
 import { RepoError } from './repo/repository.js';
 import { fetchRemoteManifest, runBackup } from './s3-backup.js';
@@ -231,6 +232,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     health.lastSnapshotId = undefined;
     health.snapshotCount = undefined;
     health.versioningEnabled = undefined;
+    health.notice = undefined;
     health.error = undefined;
     health.errorCode = undefined;
     health.consecutiveFailures = 0;
@@ -291,6 +293,12 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       const config = await getConfig();
       const cfg = config.backup;
       syncDestination(cfg);
+      // The terminal's run ended: its notice goes even when no run of ours follows
+      // (the backup it made counts, so the next one may be a day away).
+      if (health.notice && !(await backupLockHeld(dataDir))) {
+        health.notice = undefined;
+        emitStatus();
+      }
       health.configured = await isBackupConfigured(cfg, dataDir);
       if (health.configured && currentBackupJob() === null) {
         await readAnchor(cfg!);

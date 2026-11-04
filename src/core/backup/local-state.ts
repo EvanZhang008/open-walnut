@@ -82,6 +82,13 @@ async function holderGone(text: string, deps: Required<LockDeps>): Promise<boole
   return Boolean(now) && now !== recorded;
 }
 
+/** Another live process holds this data home's backup lock now. */
+export async function backupLockHeld(dataDir: string, deps: LockDeps = {}): Promise<boolean> {
+  const d: Required<LockDeps> = { alive: deps.alive ?? pidAlive, started: deps.started ?? processStart };
+  const held = await fs.readFile(runLockPath(dataDir), 'utf8').catch(() => null);
+  return held !== null && !(await holderGone(held, d));
+}
+
 /**
  * Run `fn` holding this data home's backup lock. A lock whose holder is alive
  * is never taken, however long it runs (a first upload takes hours); one whose

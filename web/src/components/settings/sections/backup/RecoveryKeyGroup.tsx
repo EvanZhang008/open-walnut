@@ -163,13 +163,11 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             <SettingsRow
               state="warning"
               label="Save it somewhere safe"
-              help={firstSetup
-                ? 'Put it in your password manager or print it. You need it to restore on a new computer. Then backups start.'
-                : 'Put it in your password manager or print it. You need it to restore on a new computer.'}
+              help="Put it in your password manager or print it. You need it to restore on a new computer."
               data-testid="backup-key-unsaved"
               control={
                 <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => onMarkSaved(firstSetup)} data-testid="backup-key-saved">
-                  {firstSetup ? 'I saved it, start backups' : 'I saved it'}
+                  {firstSetup ? 'I saved it, turn on backups' : 'I saved it'}
                 </SettingsButton>
               }
             />

@@ -43,7 +43,7 @@ export function R2Fields({ dest, onChange }: Props) {
   return (
     <>
       <TextRow id="backup-r2-account" label="Account ID" value={dest.account_id} onChange={(v) => set({ account_id: v })}
-        placeholder="e.g. 32 letters and digits" />
+        placeholder={dest.endpoint?.trim() ? 'Not needed with a custom endpoint' : 'e.g. 32 letters and digits'} />
       <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. walnut-backup" />
       <TextRow id="backup-r2-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
       <SettingsRow
@@ -57,12 +57,12 @@ export function R2Fields({ dest, onChange }: Props) {
             Open the <a href="https://dash.cloudflare.com/?to=/:account/r2/overview" target="_blank" rel="noreferrer">R2 page of your Cloudflare dashboard</a>.
             The first time, Cloudflare asks you to add a card to turn R2 on; the free tier is 10 GB.
           </li>
+          <li>Copy the <b>Account ID</b> (on the R2 page, under Account details) into the first row.</li>
           <li>Choose <b>Create bucket</b>, name it (for example <code>walnut-backup</code>), keep the defaults.</li>
           <li>Back on the R2 page choose <b>Manage API tokens</b>, then <b>Create Account API token</b>.</li>
           <li>Pick <b>Object Read &amp; Write</b>, limit it to that bucket, and create it.</li>
           <li>Copy the <b>Access Key ID</b> and <b>Secret Access Key</b> into the rows above (Cloudflare shows the secret once).</li>
           <li>Choose <b>Test and save</b> below.</li>
-          <li>The <b>Account ID</b> is on the same page, under Account details.</li>
         </ol>
       </SettingsDisclosure>
       <SettingsDisclosure id="backup-r2-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-r2-advanced">

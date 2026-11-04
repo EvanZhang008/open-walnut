@@ -19,8 +19,8 @@ import { loadLiveIndex, runRepoBackup } from '../../../src/core/backup/repo/back
 import { restoreRepoSnapshot } from '../../../src/core/backup/repo/restore.js';
 import { pruneRepo } from '../../../src/core/backup/repo/prune.js';
 import { Repository } from '../../../src/core/backup/repo/repository.js';
-import { ensureRecoveryKey, readRecoveryKey, recoveryKeyPath } from '../../../src/core/backup/recovery-key.js';
-import { BackupLockedError, localWriter, machineIdPath, runLockPath, withBackupLock } from '../../../src/core/backup/local-state.js';
+import { ensureRecoveryKey, readRecoveryKey, recoveryKeyPath, writeRecoveryKey } from '../../../src/core/backup/recovery-key.js';
+import { BackupLockedError, backupLockHeld, localWriter, machineIdPath, runLockPath, withBackupLock } from '../../../src/core/backup/local-state.js';
 import { scanDataDir } from '../../../src/core/backup/scan.js';
 
 const H = { id: 'c'.repeat(32), name: 'h' };
@@ -143,6 +143,27 @@ describe('one data home, one job at a time across processes', () => {
     await fsp.writeFile(runLockPath(home), `${process.pid} deadbeef Mon Jan 1 00:00:00 2024\n`);
     expect(await withBackupLock(home, async () => 'ran', { alive: () => true, started: async () => 'Tue Nov 4 06:00:00 2026' })).toBe('ran');
   });
+
+  it('an EEXIST thrown by the work itself is its own error, not a held lock', async () => {
+    const err = Object.assign(new Error('exists'), { code: 'EEXIST' });
+    await expect(withBackupLock(home, async () => { throw err; })).rejects.toBe(err);
+    await expect(fsp.stat(runLockPath(home))).rejects.toThrow();
+  });
+
+  it('tells whether a live process holds the lock (the busy notice goes when it ends)', async () => {
+    expect(await backupLockHeld(home)).toBe(false);
+    let release!: () => void;
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => { entered = r; });
+    const job = withBackupLock(home, () => new Promise<void>((r) => { release = r; entered(); }));
+    await inside;
+    expect(await backupLockHeld(home)).toBe(true);
+    release();
+    await job;
+    expect(await backupLockHeld(home)).toBe(false);
+    await fsp.writeFile(runLockPath(home), '999999 deadbeef Mon Jan 1 00:00:00 2024\n');
+    expect(await backupLockHeld(home, { alive: () => false })).toBe(false);
+  });
 });
 
 describe('the recovery key', () => {
@@ -159,6 +180,32 @@ describe('the recovery key', () => {
     await fsp.writeFile(recoveryKeyPath(home), `${theirs}\n`);
     const r = await ensureRecoveryKey(home);
     expect(r).toEqual({ key: theirs, created: false });
+  });
+
+  it('a typed key never replaces what was on disk without keeping a copy, an unreadable file included', async () => {
+    const dir = path.dirname(recoveryKeyPath(home));
+    const asides = async () => (await fsp.readdir(dir)).filter((f) => f.startsWith('recovery-key.replaced-'));
+    const first = generateRecoveryKey();
+    await writeRecoveryKey(home, first);
+    expect(await asides()).toEqual([]);
+    // The same key again (typed in another form): nothing to keep.
+    await writeRecoveryKey(home, first.toLowerCase());
+    expect(await asides()).toEqual([]);
+    // Another key: the old one is kept beside it.
+    const second = generateRecoveryKey();
+    await writeRecoveryKey(home, second);
+    const kept = await asides();
+    expect(kept).toHaveLength(1);
+    expect((await fsp.readFile(path.join(dir, kept[0]), 'utf8')).trim()).toBe(first);
+    // A damaged file is kept too.
+    await fsp.writeFile(recoveryKeyPath(home), 'WB1-damaged by hand\n');
+    await new Promise((r) => setTimeout(r, 5));
+    await writeRecoveryKey(home, first);
+    const all = await asides();
+    expect(all).toHaveLength(2);
+    const texts = await Promise.all(all.map((f) => fsp.readFile(path.join(dir, f), 'utf8')));
+    expect(texts.map((t) => t.trim())).toContain('WB1-damaged by hand');
+    expect(await readRecoveryKey(home)).toBe(first);
   });
 });
 

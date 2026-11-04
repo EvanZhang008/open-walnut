@@ -79,3 +79,17 @@ describe('GET /api/config (cloud mode) redacts secrets', () => {
     expect(c.api_keys[0].name).toBe('legacy');
   });
 });
+
+describe('PUT /api/config (cloud mode): where backups go', () => {
+  it('a switch of service is refused as the person-only choice, not as an unpaired mask', async () => {
+    const r2 = { type: 'r2', bucket: 'mine', account_id: 'acct', access_key_id: 'AKR2', secret_access_key: 'r2-secret-access-key-value-7777QQQQ' };
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, backup: { enabled: true, interval_hours: 24, destination: r2 } }), 'utf-8');
+    const app = createApp();
+    const masked = (await request(app).get('/api/config')).body.config.backup.destination;
+    const r = await request(app).put('/api/config').send({
+      backup: { enabled: true, interval_hours: 24, destination: { type: 'gdrive' }, other_destinations: [masked] },
+    });
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ code: 'person_at_this_machine' });
+  });
+});

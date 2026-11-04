@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { friendlyStoreError } from '../../../src/core/backup/errors.js';
-import { selectKept } from '../../../src/core/backup/repo/prune.js';
+import { DEFAULT_RETENTION, selectKept } from '../../../src/core/backup/repo/prune.js';
 
 const r2 = { type: 'r2' as const, bucket: 'walnut-backup', account_id: 'abc' };
 const named = (name: string, status?: number): Error => Object.assign(new Error(`raw ${name}`), { name, $metadata: { httpStatusCode: status } });
@@ -35,3 +35,28 @@ describe('retention keeps the newest few of today', () => {
     expect([...selectKept(snaps, { daily: 7, weekly: 4 })]).toEqual(['s15']);
   });
 });
+
+describe('retention keeps every backup of the last day', () => {
+  it('"Back up now" pressed five times never pushes out the morning backup', () => {
+    const now = Date.parse('2026-11-04T09:30:00Z');
+    const at = (iso: string, id: string) => ({ id, createdAt: iso });
+    const snaps = [
+      at('2026-11-04T09:17:00Z', 'morning'), at('2026-11-04T09:21:00Z', 'later'),
+      ...[1, 2, 3, 4, 5].map((n) => at(`2026-11-04T09:23:0${n}Z`, `click${n}`)),
+      at('2026-11-03T05:00:00Z', 'day-before'), at('2026-11-02T05:00:00Z', 'two-days'),
+    ];
+    const kept = selectKept(snaps, DEFAULT_RETENTION, now);
+    for (const id of ['morning', 'later', 'click1', 'click5', 'day-before', 'two-days']) expect(kept.has(id), id).toBe(true);
+    // A day later the clicks of that day fold into one, the day's newest.
+    const nextDay = selectKept(snaps, DEFAULT_RETENTION, now + 36 * 3_600_000);
+    expect(nextDay.has('click5')).toBe(true);
+    expect(nextDay.has('morning')).toBe(false);
+  });
+
+  it('keeps at most 48 for being recent', () => {
+    const now = Date.parse('2026-11-04T12:00:00Z');
+    const snaps = Array.from({ length: 60 }, (_, i) => ({ id: `s${i}`, createdAt: new Date(now - i * 60_000).toISOString() }));
+    expect(selectKept(snaps, DEFAULT_RETENTION, now).size).toBe(48);
+  });
+});
+

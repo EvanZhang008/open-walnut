@@ -61,8 +61,9 @@ id, a key check, and the writer machine's random id; no names, no paths), `packs
 
 ## History kept
 
-The newest 3 backups, the newest of each of the last 7 days, and the newest of each of the
-last 4 weeks. Older backups are forgotten and their space given back (a pack still mostly
+Every backup of the last 24 hours (at most 48), the newest 3, the newest of each of the last
+7 days, and the newest of each of the last 4 weeks. So pressing "Back up now" a few times
+never pushes out the morning's backup. Older backups are forgotten and their space given back (a pack still mostly
 needed is kept; one mostly unneeded is repacked). A prune never runs when it could be
 wrong: a backup it cannot read, the new backup not listed yet, or another machine now the
 writer; and it never deletes a pack written in the last 6 hours.
@@ -95,9 +96,11 @@ Settings, Backup, "Choose a backup": pick one, optionally a folder, Restore. It 
 new, empty folder (by default `open-walnut-restored-<date>` next to the data folder), never
 over the data Walnut runs on. Every chunk is checked on the way back (the AES-GCM tag, then
 its id) and every file's size; mtimes and executable bits come back. When it finishes, the
-pane shows the two `mv` commands, with the real paths, that make it the live data: quit
-Walnut, run them (the current data is kept aside as `.open-walnut-before-restore-<date>`,
-nothing is deleted), start Walnut.
+pane shows one command, with the real paths, that makes it the live data: quit Walnut, run
+it (the current data is kept aside as `.open-walnut-before-restore-<time>`, nothing is
+deleted; its steps are chained with `&&`, so a failed step stops the rest), start Walnut.
+A service set up before and kept (`other_destinations`) can be restored from too: "From"
+appears above the list.
 
 From a terminal, also on a new computer with no Walnut data yet:
 
@@ -107,7 +110,7 @@ open-walnut backup restore --type r2 --account-id <id> --bucket <bucket> --acces
 ```
 
 The restore lands in `~/open-walnut-restored-<date>` (or `--to <folder>`, `--at <backup id>`
-from the list); rename it to `~/.open-walnut` with Walnut stopped.
+from the list), and the command prints the one line that makes it the live data.
 
 `WALNUT_BACKUP_SECRET_ACCESS_KEY` and `WALNUT_BACKUP_RECOVERY_KEY` keep the secrets out of
 the shell history. The `restore-backup` skill walks a Claude Code session through it.

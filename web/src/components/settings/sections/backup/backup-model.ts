@@ -23,7 +23,7 @@ export const DESTINATION_NOTE: Record<BackupDestinationType, string> = {
 }
 
 /** Under the interval: what history is kept (the server's retention). */
-export const RETENTION_NOTE = 'Keeps the last 3, one a day for a week, and one a week for a month.'
+export const RETENTION_NOTE = 'Keeps every backup of the last day, then one a day for a week and one a week for a month.'
 
 /** A week between backups at most. */
 export const MAX_INTERVAL_HOURS = 168
@@ -118,11 +118,11 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
   if (!r) return legacy ? 'Checks the bucket with these credentials.' : 'Writes, reads back and deletes a small test file.'
   if (!r.ok) return `Couldn't connect. ${r.error ?? ''}`.trim()
   if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
-  const saved = r.savedNow ? ' Saved: backups go here now.' : ''
-  if (!r.hasBackups) return `Connected. Walnut can write here; no backups yet.${saved}`
-  if (r.keyMatches === false) return `Connected. It holds Walnut backups made with another recovery key.${saved}`
-  if (r.thisWriter === false && r.writer) return `Connected. It holds Walnut backups from the computer "${r.writer}".${saved}`
-  return `Connected. It holds this computer's Walnut backups.${saved}`
+  const head = r.savedNow ? 'Connected and saved: backups go here now.' : 'Connected.'
+  if (!r.hasBackups) return r.savedNow ? head : `${head} Walnut can write here; no backups yet.`
+  if (r.keyMatches === false) return `${head} It holds Walnut backups made with another recovery key.`
+  if (r.thisWriter === false && r.writer) return `${head} It holds Walnut backups from the computer "${r.writer}".`
+  return `${head} It holds this computer's Walnut backups.`
 }
 
 /**
