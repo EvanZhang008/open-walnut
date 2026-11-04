@@ -20,6 +20,7 @@ import { TaskMenuRows } from './TaskMenuRows';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 import { KebabIcon } from './KebabIcon';
+import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -559,6 +560,8 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
+  /** The right-clicked row and where it sat when the menu opened (cursor-menu-scroll.ts). */
+  const rowAnchor = useRef<RowAnchor | null>(null);
   // Measured placement + height cap — the menu height is never guessed, so a
   // tall menu in a short window scrolls internally instead of being clipped.
   const menuPos = useMenuPlacement(open, btnRef, menuRef, {
@@ -584,10 +587,10 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     //  1. Inside the menu — the menu scrolls its own overflow now, so this must
     //     NOT dismiss it (that would make the fix unusable).
     //  2. Right-click path (cursorAnchor set) — a cursor anchor is a frozen
-    //     viewport point, not an element. Once the page scrolls, it no longer
-    //     points at the row it was opened on, so close outright. Safe here
-    //     because a right-click never scrolls the row into view, so this can't
-    //     fire in the same tick as the open (see case 3).
+    //     viewport point, not an element. Close once a scroll moved the row it
+    //     was opened on away from under it; a pane that does not hold the row,
+    //     or the late event of the scroll that brought the row into view, moves
+    //     nothing and keeps the menu (cursor-menu-scroll.ts).
     //  3. Button path — follow the trigger (useMenuPlacement repositions) and
     //     only close once it truly leaves the viewport. A blanket close-on-scroll
     //     would fire in the SAME tick as the opening click whenever that click
@@ -597,7 +600,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       if (menuRef.current?.contains(e.target as Node)) return;
       // Scrolling the Project (or Adopt) flyout's own list is reading, not page scroll.
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
-      if (cursorAnchor) { closeMenu(); return; }
+      if (cursorAnchor) { if (scrollMovedRow(rowAnchor.current, e.target)) closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
@@ -627,6 +630,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       e.preventDefault();
       // Placement (flip, clamp, height cap) is all measured by useMenuPlacement —
       // record only the cursor point it should anchor to.
+      rowAnchor.current = rowAnchorOf(row);
       setCursorAnchor({ x: e.clientX, y: e.clientY });
       setOpen(true);
     };

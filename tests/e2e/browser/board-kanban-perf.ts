@@ -4,6 +4,7 @@
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import type { Page } from '@playwright/test'
+import { getTask, type KanbanApi } from './board-kanban-fixture'
 
 /** Long tasks from now on (Chromium; WebKit has no longtask entries: null). */
 export const watchLongTasks = (page: Page) => page.evaluate(() => {
@@ -46,3 +47,48 @@ export const DRAG_CPU_MS = 500
 export const DRAG_TASK_MS = 30
 export const PUSH_TASK_MS = 32
 export const TRACE_FROM_MS = 16
+
+/**
+ * The page's live frames about tasks and sessions outside the team are dropped (C50). Every worker of a
+ * run shares the fixture server, and each frame about another spec's task re-renders what reads the
+ * task store (the task list, the Board's view model), so the drag was judged on other specs' writes:
+ * 2026-11-04, CI shard 1 ran three other kanban specs beside C50 and its drag read 1,967 and 2,165 ms
+ * of CPU (budgets 688 and 976, 4 to 5 times the runs before it) with no change to the drag's code,
+ * and on Linux one unrelated task patched 57 times inside the drag added about 3,000 ms. The team's
+ * own frames pass (a task under it and its session are learned from them), so its live pushes still
+ * land inside the window, as a user's own team's do.
+ */
+export async function onlyTeamFrames(page: Page, api: KanbanApi, taskIds: readonly string[], sessionIds: readonly string[]): Promise<void> {
+  const tasks = new Set(taskIds)
+  const sessions = new Set(sessionIds)
+  for (const t of await Promise.all(taskIds.map((id) => getTask(api, id)))) {
+    const sid = (t as { session_id?: string } | null)?.session_id
+    if (sid) sessions.add(sid)
+  }
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((message) => server.send(message))
+    server.onMessage((message) => { if (!outsideTeam(message, tasks, sessions)) ws.send(message) })
+  })
+}
+
+type FrameData = { task?: { id?: unknown; session_id?: unknown; parent_task_id?: unknown }; taskId?: unknown; sessionId?: unknown }
+const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+
+function outsideTeam(message: string | Buffer, tasks: Set<string>, sessions: Set<string>): boolean {
+  if (typeof message !== 'string') return false
+  let frame: { type?: string; data?: FrameData }
+  try { frame = JSON.parse(message) } catch { return false }
+  const d = frame.type === 'event' && frame.data && typeof frame.data === 'object' ? frame.data : null
+  if (!d) return false
+  const task = d.task && typeof d.task === 'object' ? d.task : undefined
+  const taskOf = [task?.id, d.taskId].filter(str)
+  const sessionOf = [d.sessionId, task?.session_id].filter(str)
+  if (!taskOf.length && !sessionOf.length) return false
+  const inTeam = taskOf.some((id) => tasks.has(id)) || sessionOf.some((id) => sessions.has(id))
+    || (str(task?.parent_task_id) && tasks.has(task.parent_task_id))
+  if (!inTeam) return true
+  for (const id of taskOf) tasks.add(id)
+  for (const id of sessionOf) sessions.add(id)
+  return false
+}

@@ -28,6 +28,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useProjectActions } from '@/hooks/useProjectActions';
+import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import * as ICONS from '../common/Icons';
 
 /** Shared open/close + placement shell for one trigger button and its menu.
@@ -41,7 +42,10 @@ function useHeaderMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
   const menuPos = useMenuPlacement(open, btnRef, menuRef, { anchorPoint: cursorAnchor, onAnchorLost: closeMenu });
-  const openAtCursor = useCallback((x: number, y: number) => {
+  /** The right-clicked row and where it sat: a scroll that leaves it in place keeps the menu. */
+  const rowAnchor = useRef<RowAnchor | null>(null);
+  const openAtCursor = useCallback((x: number, y: number, row: HTMLElement) => {
+    rowAnchor.current = rowAnchorOf(row);
     setCursorAnchor({ x, y });
     setOpen(true);
   }, []);
@@ -56,7 +60,7 @@ function useHeaderMenu() {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
-      if (cursorAnchor) { closeMenu(); return; }
+      if (cursorAnchor) { if (scrollMovedRow(rowAnchor.current, e.target)) closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
@@ -143,7 +147,7 @@ function PlusControl({ actions, restLabel, wrapClassName }: {
           if (single) return;
           e.preventDefault();
           e.stopPropagation();
-          openAtCursor(e.clientX, e.clientY);
+          openAtCursor(e.clientX, e.clientY, e.currentTarget);
         }}
         // Header rows are click-to-collapse AND dnd-kit drag handles, so both
         // events must stop here: the click would fold the section, the pointerdown
@@ -271,7 +275,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
       // Nested/overlapping rows: only the innermost row owns the right-click.
       if (target.closest(rowSelector) !== row) return;
       e.preventDefault();
-      openAtCursor(e.clientX, e.clientY);
+      openAtCursor(e.clientX, e.clientY, row);
     };
     row.addEventListener('contextmenu', handleContextMenu);
     return () => row.removeEventListener('contextmenu', handleContextMenu);

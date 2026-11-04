@@ -19,7 +19,7 @@ import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTe
 import { cpuBudget, longTaskBudget, machineQuiet, referenceDrawMs, traceTaskTimes } from './cpu-reference'
 import { serveProductionBundle } from './production-bundle'
 import {
-  DRAG_CPU_MS, DRAG_CPU_REFS, DRAG_TASK_MS, OPEN_CPU_MS, OPEN_CPU_REFS, PUSH_TASK_MS, TRACE_FROM_MS, longTasks, watchLongTasks,
+  DRAG_CPU_MS, DRAG_CPU_REFS, DRAG_TASK_MS, OPEN_CPU_MS, OPEN_CPU_REFS, PUSH_TASK_MS, TRACE_FROM_MS, longTasks, onlyTeamFrames, watchLongTasks,
 } from './board-kanban-perf'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -328,6 +328,8 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; no task
   test.setTimeout(240_000)
   // Judged on the bundle users run (production-bundle.ts): React's development build doubles the work.
   await serveProductionBundle(page)
+  // Judged on the drag's own work: another worker's writes on the shared server stay out (board-kanban-perf.ts).
+  await onlyTeamFrames(page, api, [team.leader, ...team.all, team.nested], [team.leaderSid, ...team.runningSids])
   const clock: { read: (() => Promise<number>) | null; at: number } = { read: null, at: 0 }
   const pane = await openBoard(page, async () => {
     clock.read = await cpuClock(page, info.project.name)

@@ -23,6 +23,7 @@ import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 import { KebabIcon } from '@/components/tasks/KebabIcon';
+import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -117,6 +118,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
   const kebabMenuRef = useRef<HTMLDivElement>(null);
   const closeKebab = useCallback(() => { setKebabOpen(false); setCursorAnchor(null); }, []);
+  /** The right-clicked header and where it sat when the menu opened (cursor-menu-scroll.ts). */
+  const scopeAnchor = useRef<RowAnchor | null>(null);
   // Measured placement — this menu is the tallest in the app (task actions +
   // an inline date picker + the Session section), so its height must never be
   // guessed. See useMenuPlacement for why.
@@ -148,6 +151,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       })) return;
       if (target.closest(contextMenuScope) !== scope) return;
       e.preventDefault();
+      scopeAnchor.current = rowAnchorOf(scope);
       setCursorAnchor({ x: e.clientX, y: e.clientY });
       setKebabOpen(true);
     };
@@ -199,10 +203,10 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
-      // A cursor anchor is a frozen viewport point: once the page scrolls it no
-      // longer points at what was right-clicked, so close outright (the button
-      // path instead follows its trigger — see the comment above).
-      if (cursorAnchor) { closeKebab(); return; }
+      // A cursor anchor is a frozen viewport point: close once a scroll moved what
+      // was right-clicked away from under it (the button path instead follows its
+      // trigger — see the comment above).
+      if (cursorAnchor) { if (scrollMovedRow(scopeAnchor.current, e.target)) closeKebab(); return; }
       const r = kebabBtnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
     };
