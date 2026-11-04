@@ -172,8 +172,9 @@ describe('no web file that counts or renders Needs Action reaches for letters', 
 
   it('the panel badges Needs Action with counts.action and lists only feed asks there; letters render only in the Inbox', () => {
     const src = code(read('web/src/components/common/NotificationPanel.tsx'));
-    // The rail badge is the pure count, nothing added to it.
-    expect(src).toMatch(/label="Needs you" count=\{counts\.action\}\s/);
+    // The rail badge is the action count, plus the approvals waiting (24c880ff9: the corner's
+    // approval card is listed there too), never a letter.
+    expect(src).toMatch(/label="Needs you" count=\{counts\.action(?: \+ approvals\.length)?\}\s/);
     // Every letter list (InboxPane, the reader's rows) sits behind the Inbox branch.
     const panes = [...src.matchAll(/<InboxPane\b/g)];
     expect(panes.length).toBeGreaterThan(0);

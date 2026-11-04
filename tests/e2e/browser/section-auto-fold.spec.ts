@@ -15,6 +15,7 @@
 import { test, expect } from './shortcut-test-fixture'
 import type { Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
+import { pausePageClock } from './page-clock'
 import { LS_STATUS_SECTIONS_KEY, endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionToggle } from './status-section-helpers'
 
 const MIN = 60_000
@@ -100,7 +101,7 @@ test.describe('status folds: one rule', () => {
     await page.clock.fastForward(16 * MIN)
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'true')
     // On a paused clock no timer runs, so this folds only if leaving itself folds it.
-    const pauseHere = async () => page.clock.pauseAt(await page.evaluate(() => Date.now() + 500))
+    const pauseHere = async () => pausePageClock(page, { leadMs: 500 })
     await pauseHere()
     await pointerAway(page)
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'false')
@@ -194,7 +195,7 @@ test.describe('status folds: one rule', () => {
     await pointerAway(page)
     // Half a second past Waiting's 15 minutes, Completed's are half a second off: on a paused
     // clock only Waiting's own timer can run, and it takes Completed with it.
-    await page.clock.pauseAt(openedAt + 15 * MIN + 500)
+    await pausePageClock(page, { notBefore: openedAt + 15 * MIN, leadMs: 500 })
     await expect(statusSectionToggle(panel, 'waiting')).toHaveAttribute('aria-expanded', 'false')
     await expect(statusSectionToggle(panel, 'done')).toHaveAttribute('aria-expanded', 'false')
     await page.clock.resume()

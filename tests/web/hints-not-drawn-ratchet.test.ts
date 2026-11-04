@@ -19,6 +19,9 @@ const DIRS = ['components', 'pages']
 const ALLOWED: Record<string, string> = {
   // The /api/v1/hints registry rows of Settings, not a message's.
   'components/settings/sections/MessageHintsGroup.tsx': 'the registry list in Settings',
+  // Hands the row to its host's attachments line (user-row-attachments.ts): only the browser side
+  // panel answers, with the page selection the person attached, never a hint's own words.
+  'components/sessions/SessionMessage.tsx': 'the side panel draws the selection the person attached',
 }
 
 /** The code of a file, its comments taken out (a comment may name `.hints`). */

@@ -435,7 +435,11 @@ describe('a window a spec opens', () => {
       if (assigned < 0) continue
       const page = new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${m[1]}\\b`).exec(lines[start + assigned])![1]
       const from = start + assigned + 1
-      const at = lines.slice(from).findIndex((l) => new RegExp(`expect\\(\\s*${page}\\.(?:locator|getBy)`).test(l))
+      // Only inside the function that opened it: a top-level closing line ends it (a helper that
+      // returns the page, whose caller's `page` is another one).
+      const end = lines.slice(from).findIndex((l) => /^\}/.test(l))
+      const scope = end < 0 ? lines.slice(from) : lines.slice(from, from + end)
+      const at = scope.findIndex((l) => new RegExp(`expect\\(\\s*${page}\\.(?:locator|getBy)`).test(l))
       if (at >= 0) out.push({ line: from + at + 1, timed: /timeout:/.test(lines[from + at]) })
     }
     return out
@@ -454,6 +458,18 @@ describe('a window a spec opens', () => {
       "await expect(reopened.locator('.session-panel-input textarea')).toHaveValue('draft')",
     ].join('\n')
     expect(firstWaits(spec)).toEqual([{ line: 4, timed: false }])
+    // A helper that opens a window and returns it: the scan ends with the helper.
+    const helper = [
+      'async function openSite(url: string) {',
+      "  const opened = ctx.waitForEvent('page')",
+      '  const page = await opened',
+      '  return page',
+      '}',
+      "test('x', async () => {",
+      "  await expect(page.locator('#cur')).toHaveValue('1')",
+      '})',
+    ].join('\n')
+    expect(firstWaits(helper)).toEqual([])
     expect(firstWaits(spec.replace("'draft')", "'draft', { timeout: 30_000 })"))).toEqual([{ line: 4, timed: true }])
   })
 })
