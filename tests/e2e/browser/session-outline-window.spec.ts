@@ -17,6 +17,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
+import { openOutline } from './outline-helpers'
 
 const SESSION_ID = 'pw-outline-window-session'
 const TASK_ID = 'pw-task-outline-window'
@@ -85,7 +86,7 @@ test.describe('Outline over a lazy tail', () => {
     // 1. The rail reads in TRANSCRIPT order: the early (unloaded) pin first.
     const toc = panel.locator('.session-toc')
     await expect(toc.locator('.session-toc-tick')).toHaveCount(2)
-    await toc.locator('.session-toc-rail').hover()
+    await openOutline(toc)
     const rows = toc.locator('.session-toc-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toContainText(`reply ${EARLY}`)

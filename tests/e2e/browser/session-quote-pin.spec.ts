@@ -23,6 +23,7 @@
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
+import { openOutline } from './outline-helpers'
 
 /** Own fixture record (test-server.ts): the outline transcript under a second
  *  session id, so this spec's pins never land on the record the outline spec counts
@@ -262,7 +263,7 @@ test.describe('Quote pins', () => {
     // 3. The outline gains a ❝ row (and the collapsed rail a tick).
     const toc = panel.locator('.session-toc')
     await expect(toc.locator('.session-toc-tick')).toHaveCount(1)
-    await toc.locator('.session-toc-rail').hover()
+    await openOutline(toc)
     const item = toc.locator('.session-toc-item').first()
     await expect(item).toContainText('❝')
     await expect(item).toContainText('index in place')
@@ -295,7 +296,7 @@ test.describe('Quote pins', () => {
     //    pointing the eye at the wrong thing, so both halves are asserted: the
     //    passage highlight lights up, and the row highlight never does.
     await wheel(page, panel, -1400) // scroll the passage away so the jump has work
-    await toc.locator('.session-toc-rail').hover()
+    await openOutline(toc)
     await toc.locator('.session-toc-item').first().click()
     await expect.poll(() => flashCount(page), { timeout: 3000 }).toBe(1)
     expect(await panel.locator('.user-messages-highlight').count()).toBe(0)
@@ -380,7 +381,7 @@ test.describe('Quote pins', () => {
 
     const toc = panel.locator('.session-toc')
     await expect(toc.locator('.session-toc-tick')).toHaveCount(1)
-    await toc.locator('.session-toc-rail').hover()
+    await openOutline(toc)
     // A whole-message row carries NO quote glyph — the two kinds stay tellable apart.
     await expect(toc.locator('.session-toc-item').first()).not.toContainText('❝')
     await expect(toc.locator('.session-toc-item').first()).toContainText(USER_ASK)

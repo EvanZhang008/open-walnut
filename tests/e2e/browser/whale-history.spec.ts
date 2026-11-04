@@ -17,6 +17,7 @@
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { WHALE_SESSION, WHALE_TASK, WHALE_TURNS } from './whale-history-fixture';
+import { openOutline } from './outline-helpers';
 
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
 // Serial on one fixture record; the budget is wide because a 2,800-row transcript is real DOM work on a loaded machine.
@@ -362,7 +363,7 @@ async function outlinePinLands(page: Page, baseURL: string, request: APIRequestC
     });
 
     const toc = panel.locator('.session-toc');
-    await toc.locator('.session-toc-rail').hover();
+    await openOutline(toc);
     await toc.locator('.session-toc-row').first().click();
 
     // One click, several bounded pages: the jump keeps paging until the row lands.

@@ -21,6 +21,7 @@
  * button is gated on one.
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
+import { openOutline } from './outline-helpers'
 
 const SESSION_ID = 'pw-pins-session'
 const TASK_ID = 'pw-task-pins'
@@ -188,7 +189,7 @@ test.describe('Session outline, message time, and rewind', () => {
     await expect(toc.locator('.session-toc-panel')).toHaveCount(0)
 
     // 2. Hover expands it into the labelled list, in transcript order.
-    await rail.hover()
+    await openOutline(toc)
     const items = toc.locator('.session-toc-item')
     await expect(items).toHaveCount(2)
     await expect(items.nth(0)).toContainText(EARLY_ASK)
@@ -202,7 +203,10 @@ test.describe('Session outline, message time, and rewind', () => {
     const beforeJump = await history.evaluate((el) => el.scrollTop)
     expect(beforeJump).toBeGreaterThan(0)
 
-    await rail.hover()
+    // Opened and SETTLED before the click: a click inside the panel's slide-in is
+    // retried by Playwright with a forced centring scroll, which moved the timeline
+    // 211 px before the jump recorded where the reader was (outline-helpers.ts).
+    await openOutline(toc)
     await items.nth(0).click()
     // Smooth scroll + the render-window expansion: polled, since a loaded machine
     // (CI) can take longer than any fixed wait (2026-11-03: a 900 ms wait read
@@ -216,7 +220,7 @@ test.describe('Session outline, message time, and rewind', () => {
     }, { timeout: 5_000 }).toBe(true)
 
     // 4. "Back" restores the pre-jump position.
-    await rail.hover()
+    await openOutline(toc)
     const back = toc.locator('.session-toc-back')
     await expect(back).toBeVisible()
     await back.click()
@@ -249,7 +253,7 @@ test.describe('Session outline, message time, and rewind', () => {
 
     // Unpin from the outline itself; the last pin taking the whole outline with it
     // is intended (nothing pinned ⇒ nothing to show).
-    await toc.locator('.session-toc-rail').hover()
+    await openOutline(toc)
     await toc.locator('.session-toc-unpin').first().click()
     await expect(panel.locator('.session-toc')).toHaveCount(0)
     await expect(row(panel, LATE_ASK).locator('.msg-pin-btn')).not.toHaveClass(/is-pinned/)
