@@ -88,10 +88,21 @@ test('the Changed chip counts what its tab lists, and the tab shows the git stri
   await expect(panel.locator('[data-header-id="changed"][data-hidden="true"]')).toHaveCount(1, { timeout: 10_000 })
   await expect(panel.getByTestId('session-header-more-count')).toHaveText('2')
   expect(await panel.getByTestId('session-header-more-btn').getAttribute('title')).toContain('Changed (2)')
+  const more = panel.getByTestId('session-header-more-btn')
+  const menuRow = page.getByTestId('session-header-more-item-changed')
+  await more.click()
+  await expect(menuRow.getByTestId('session-header-more-item-changed-count')).toHaveText('2')
+  // Opened from the menu, Changed keeps its number there and on "...", beside "Open".
+  await menuRow.click()
+  await expect(panel.locator('[data-header-id="changed"].session-action-chip-active')).toHaveCount(1)
+  await expect(more.getByTestId('session-header-more-count')).toHaveText('2')
+  await more.click()
+  await expect(menuRow.getByTestId('session-header-more-item-changed-count')).toHaveText('2')
+  await expect(menuRow).toHaveAttribute('data-state', 'Open')
 })
 
 test('an open Changed tab follows the session as it edits, with no Re-scan', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(240_000)
   const repo = await repoPath(page)
   const panel = await openPanel(page)
   const chip = panel.getByTestId('session-changed-chip')
@@ -141,4 +152,20 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
   }) + '\n')
   await expect(diff.getByTestId('session-diff-comment-changed')).toBeVisible({ timeout: 60_000 })
   await expect(box).toHaveValue('half-typed note')
+  // An automatic re-read is quiet: no "re-scanning" spinner is left turning after it.
+  await expect(diff.locator('.session-diff-refreshing:not(.is-idle)')).toHaveCount(0, { timeout: 15_000 })
+
+  // With the tab closed, the session writes one more file: the chip's number follows by itself.
+  const shown = Number(await chip.getByTestId('session-changed-count').innerText())
+  await pane.locator('.session-diff-comment-cancel').click()
+  await chip.click()
+  await expect(diff).toBeHidden()
+  const name2 = `closed-${Date.now()}.ts`
+  const file2 = path.join(repo, 'src', name2)
+  await fs.writeFile(file2, 'export const closed = 1\n')
+  await fs.appendFile(jsonl, JSON.stringify({
+    type: 'assistant', sessionId: GIT_GLANCE_SESSION, timestamp: new Date().toISOString(),
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${name2}`, name: 'Write', input: { file_path: file2, content: 'export const closed = 1\n' } }] },
+  }) + '\n')
+  await expect(chip.getByTestId('session-changed-count')).toHaveText(String(shown + 1), { timeout: 90_000 })
 })

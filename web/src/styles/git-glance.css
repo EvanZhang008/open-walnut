@@ -86,14 +86,17 @@
 .git-glance-pill .git-glance-branch { flex: 0 1 auto; min-width: 4ch; max-width: 24ch; color: var(--fg); }
 .git-glance-pill .git-glance-icon { opacity: 0.85; }
 .git-glance-pill > :not(.git-glance-branch) { flex-shrink: 0; }
+/* A short name (a detached HEAD's sha, "main") is never cut: it shows whole or goes (usePillFit). */
+.git-glance .git-glance-branch:not(.git-glance-branch-split) { flex-shrink: 0; min-width: auto; text-overflow: clip; }
+/* A line keeps its whole branch while it has words to give up: the words become icons
+   first (fit 1), and only then does the branch cut in the middle. */
+.git-glance-line:not(.git-glance-fit-1):not(.git-glance-fit-2) .git-glance-branch-split { flex-shrink: 0; }
 .git-glance-files { display: inline-flex; align-items: center; gap: 2px; }
 .git-glance-file-icon { opacity: 0.7; }
 /* The phone task list pins its pills' size (phone-pages.css); this one still gives way. */
 .app-shell-navigation .todo-panel .git-glance-pill.todo-item-due-pill { flex-shrink: 1; min-width: 0; max-width: 100%; }
 /* A search row: the pill shrinks (its branch first) rather than leaving the project's line. */
 html .home-navigation-scroll .todo-search-results .todo-item-title-row > .git-glance-pill { flex-shrink: 1; min-width: 0; overflow: hidden; }
-/* A list or search row: short enough to stay on the project's line. */
-.todo-item-title-row .git-glance-pill .git-glance-branch { max-width: 14ch; }
 
 /* The phone search's result row: its own line under the title (12px: a phone's smallest text). */
 .phone-search-row .git-glance-pill { align-self: flex-start; height: 20px; margin-top: 2px; font-size: 12px; }
@@ -199,4 +202,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 @media (prefers-reduced-motion: reduce) { .session-chip-count { animation: none; } }
 
 /* A menu row's count (the phone's session menu, Changed): beside its name. */
-.phone-session-row .session-chip-count { margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 12px; line-height: 18px; }
+.phone-session-row .session-chip-count { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 12px; line-height: 18px; }
+.task-kebab-item .session-chip-count + .session-header-more-value { margin-left: 6px; }
+/* The Changed toolbar's ↻ keeps its room while idle (SessionDiffView). */
+.session-diff-refreshing.is-idle { visibility: hidden; animation: none; }

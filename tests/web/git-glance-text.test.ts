@@ -56,6 +56,9 @@ describe('titles', () => {
     expect(changedChipTitle(g([repo()], { changedFiles: 1 }))).toMatch(/^This session changed 1 file, all committed\. Click to see them/);
     expect(changedChipTitle(g([repo({ files: 2 })], { changedFiles: 4 }))).toMatch(/^This session changed 4 files \(2 still uncommitted in its repo\)\./);
     expect(changedChipTitle(g([repo({ files: 1 }), repo({ repoRoot: '/w/b' })], { changedFiles: 3 }))).toContain('(1 still uncommitted in its repos)');
+    // More uncommitted than the session changed: never "13 files (14 still uncommitted)".
+    expect(changedChipTitle(g([repo({ files: 14 })], { changedFiles: 13 }))).toMatch(/^This session changed 13 files\. Its repo has 14 uncommitted files \(some changed outside this session\)\./);
+    expect(changedChipTitle(g([repo({ files: 0 })], { changedFiles: 0 }))).toMatch(/^This session has not changed any files yet\./);
   });
 
   it('a pill names a detached HEAD by its short sha', () => {

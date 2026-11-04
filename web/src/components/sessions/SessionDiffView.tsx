@@ -1651,9 +1651,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     // 60s timeout, leaving the tab stuck on a stale list.
     const POLL_MS = 3000;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    // The ↻ is for a read the user asked for (opening the tab, Re-scan); an automatic re-read is quiet.
+    const showsSpinner = !soft || all;
+    let spinning = all;
     const pollUntilFresh = (attempt: number): void => {
       if (ctrl.signal.aborted) { settle(); return; }
-      setRefreshingBg(true);
+      if (showsSpinner) { spinning = true; setRefreshingBg(true); }
       pollTimer = setTimeout(() => {
         fetchSessionChanges(sessionId, { base, scope, light: true, swr: true, signal: ctrl.signal })
           .then((res) => {
@@ -1662,15 +1665,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               // Still recomputing — keep the currently-shown list, poll again
               // (cap ~5min so an abandoned tab doesn't poll forever).
               if (attempt < 100) pollUntilFresh(attempt + 1);
-              else { setRefreshingBg(false); settle(); }
+              else { if (spinning) setRefreshingBg(false); settle(); }
               return;
             }
             rememberChanges(cacheKey, res);
             applyList(res, soft, all);
-            setRefreshingBg(false);
+            if (spinning) setRefreshingBg(false);
             settle();
           })
-          .catch(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); settle(); });
+          .catch(() => { if (!ctrl.signal.aborted && spinning) setRefreshingBg(false); settle(); });
       }, POLL_MS);
     };
     fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
@@ -1706,8 +1709,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       ctrl.abort();
       if (pollTimer) clearTimeout(pollTimer);
       settle();
-      // A Re-scan cut short takes its ↻ with it (its own then/poll never runs to clear it).
-      if (all && running) setRefreshingBg(false);
+      // A read cut short takes its ↻ with it (its own then/poll never runs to clear it).
+      if (running && spinning) setRefreshingBg(false);
     };
   }, [sessionId, base, scope, isSessionBase, cacheKey, applyList]);
 
@@ -2430,7 +2433,11 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
         <span className="session-diff-toolbar-title">
           {data ? (empty ? 'No file changes' : `${data.fileCount} file${data.fileCount === 1 ? '' : 's'} changed`) : (loading ? 'Loading…' : 'Changes')}
-          {(refreshingBg || (loading && !!data)) && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
+          {/* Its room is kept while idle, so the controls after it never shift when it shows. */}
+          {(() => {
+            const on = refreshingBg || (loading && !!data);
+            return <span className={`session-diff-refreshing${on ? '' : ' is-idle'}`} aria-hidden={on ? undefined : true} title={on ? 'List served from cache — re-scanning in the background' : undefined}>↻</span>;
+          })()}
         </span>
         <div className="session-diff-base-wrap">
           <label className="session-diff-base-select" title="Choose what the diff compares against">

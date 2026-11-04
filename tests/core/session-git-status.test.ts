@@ -24,6 +24,8 @@ let peeks: Record<string, { fileCount: number; groups: Array<{ repoRoot: string;
 let countChanges: ReturnType<typeof vi.fn>;
 let shedding: boolean;
 let busy: boolean;
+/** Each session transcript's size+mtime signature, as a stat would read it. */
+let sigs: Record<string, string>;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -41,6 +43,7 @@ beforeEach(() => {
   readRemote = vi.fn(async (_host: string, dirs: string[]) => dirs.map((d) => repo(d)));
   shedding = false;
   busy = false;
+  sigs = { s1: 'v1' };
   // The real compute reports its count back through noteSessionChangesComputed.
   countChanges = vi.fn(async (id: string) => { noteSessionChangesComputed(id, 7); });
   _setSessionGitStatusDepsForTesting({
@@ -52,6 +55,7 @@ beforeEach(() => {
     countChanges,
     shedding: () => shedding,
     changesBusy: () => busy,
+    transcriptSig: async (id) => sigs[id] ?? null,
     now: () => now,
   });
 });
@@ -338,3 +342,78 @@ describe('a Changed count before the tab is ever opened', () => {
   });
 });
 
+
+describe('a counted session is counted again when its repos move', () => {
+  async function counted(): Promise<void> {
+    peeks.s1 = null;
+    await getSessionGitGlances(['s1'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    expect(emitted.at(-1)!.changedFiles).toBe(7);
+  }
+
+  it('its list grew with no Changed tab open: the count follows, keeping its parse state', async () => {
+    await counted();
+    countChanges.mockImplementationOnce(async (id: string) => { noteSessionChangesComputed(id, 8); });
+    // The session writes a new file: its transcript grows, one more uncommitted file in its repo.
+    sigs.s1 = 'v2';
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 2 })));
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges).toHaveBeenCalledTimes(2);
+    expect(countChanges.mock.calls[1]![2]).toEqual({ recount: true });
+    expect(emitted.at(-1)!.changedFiles).toBe(8);
+  });
+
+  it('repos that did not move are never counted again; a move inside the window waits for its end', async () => {
+    await counted();
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    // A recount runs, then the repos move again 10s later: not now, but when its 30s are up.
+    sigs.s1 = 'v2';
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 2 })));
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(2);
+    sigs.s1 = 'v3';
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 3 })));
+    now += 10_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(2);
+    now += 20_000;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(countChanges).toHaveBeenCalledTimes(3);
+  });
+
+  it('a repo another session (or the user) moved: an idle session is not counted again', async () => {
+    await counted();
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 5 })));
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    // Its own transcript moves next: now it is.
+    sigs.s1 = 'v2';
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 6 })));
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges).toHaveBeenCalledTimes(2);
+  });
+
+  it('a session nobody watches any more is not counted again', async () => {
+    await counted();
+    _resetSessionGitStatusForTesting();
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.map((d) => repo(d, { files: 2 })));
+    await computeSessionGitGlance('s1');
+    now += 60_000;
+    await computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+  });
+});

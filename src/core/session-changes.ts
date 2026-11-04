@@ -579,6 +579,26 @@ async function readDiskSnapshot(key: string): Promise<SessionChangesResult | nul
 }
 
 /**
+ * The session transcript's "<mtimeMs>:<size>" (one stat on its host), by the
+ * path its last compute read, or the one derived from its cwd; null when
+ * neither is known or the stat fails. Says whether the session wrote anything
+ * since a count, without parsing it.
+ */
+export async function sessionTranscriptSig(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
+  try {
+    const entry = cacheGet(cacheKey(sessionId, host));
+    const jsonlPath = entry?.resolvedPath
+      ?? (cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, host) : null);
+    if (!jsonlPath) return null;
+    const { DaemonFileReader } = await import('./daemon-file-reader.js');
+    const st = await new DaemonFileReader(host ?? '__local__').stat(jsonlPath);
+    return st ? `${st.mtimeMs}:${st.size ?? ''}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Stale-while-revalidate wrapper: return SOMETHING paintable immediately.
  *  1. In-memory cache, file mtime UNCHANGED → the result is CURRENT: serve it
  *     with no flags (this is what lets the frontend's convergence POLL stop).

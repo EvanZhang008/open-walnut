@@ -68,6 +68,8 @@ const CACHE_MAX = 500;
 const COUNT_PACE_MS = 2_000;
 const COUNT_RETRY_MS = 10 * 60_000;
 const COUNT_RETRY_FRONT_MS = 30_000;
+/** A counted session whose repos moved is counted again, at most this often. */
+const RECOUNT_MS = 30_000;
 const COUNT_QUEUE_MAX = 100;
 const COUNT_WAIT_MAX_MS = 2 * 60_000;
 
@@ -85,6 +87,35 @@ const lanes = new Map<string, { running: number; waiters: Array<() => void> }>()
 const reads = new Map<string, { at: number; p: Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'> }>();
 const countQueue: string[] = [];
 const countQueued = new Map<string, number>();
+/** Counted sessions due a recount (their repos moved since). */
+const recountDue = new Set<string>();
+const recountTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** When each session's Changed list last reported its count (any compute: a tab, a count). */
+const countedAt = new Map<string, number>();
+/** Each session's transcript signature when its count last ran here. */
+const countedSig = new Map<string, string>();
+/** When Walnut last heard the session use a tool. */
+const activeAt = new Map<string, number>();
+
+/** Keeps a per-session map to CACHE_MAX, oldest first out. */
+function stamp<V>(m: Map<string, V>, id: string, v: V): void {
+  m.delete(id);
+  m.set(id, v);
+  if (m.size > CACHE_MAX) {
+    const oldest = m.keys().next().value;
+    if (oldest !== undefined) m.delete(oldest);
+  }
+}
+
+/** Did the session itself write since its count? (Its repo moving is not enough: other
+ *  sessions in the same repo, or the user, move it too.) Never counted here: once. */
+async function sessionWroteSinceCount(sessionId: string, record: { cwd?: string; host?: string }): Promise<boolean> {
+  if ((activeAt.get(sessionId) ?? -Infinity) > (countedAt.get(sessionId) ?? -Infinity)) return true;
+  const sig = await deps.transcriptSig(sessionId, record).catch(() => null);
+  if (sig === null) return false;
+  const known = countedSig.get(sessionId);
+  return known === undefined || known !== sig;
+}
 let counting = false;
 /** Bumped by the test reset: a drain from before it stops. */
 let countGen = 0;
@@ -98,11 +129,13 @@ interface Deps {
   readRemote: (host: string, dirs: string[]) => Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'>;
   emit: (glance: SessionGitGlance) => void;
   /** Compute the session's Changed list (it reports its count through noteSessionChangesComputed). */
-  countChanges: (id: string, record: { cwd?: string; host?: string; outputFile?: string }) => Promise<unknown>;
+  countChanges: (id: string, record: { cwd?: string; host?: string; outputFile?: string }, opts?: { recount?: boolean }) => Promise<unknown>;
   /** True while the server sheds background work for memory. */
   shedding: () => boolean;
   /** True while any Changed compute runs (a count waits for it). */
   changesBusy: () => boolean;
+  /** The session transcript's size+mtime signature (one stat), null when unknown. */
+  transcriptSig: (id: string, record: { cwd?: string; host?: string }) => Promise<string | null>;
   now: () => number;
 }
 
@@ -156,12 +189,18 @@ const defaultDeps: Deps = {
     return res.repos as GitRepoStatus[];
   },
   emit: (glance) => { bus.emit(GIT_STATUS_EVENT, glance, ['web-ui'], { source: 'session-git-status' }); },
-  countChanges: async (id, record) => {
+  countChanges: async (id, record, opts) => {
     const { computeSessionChanges } = await import('./session-changes.js');
-    // noRetain: the disk snapshot (what later peeks read), not the in-memory cache of sessions in use.
-    return computeSessionChanges(id, record.cwd, record.host, record.outputFile, { noRetain: true });
+    // A first count, noRetain: the disk snapshot (what later peeks read), not the in-memory
+    // cache of sessions in use. A recount is a session at work: it keeps its parse state, so
+    // the next recount reads only what the transcript gained.
+    return computeSessionChanges(id, record.cwd, record.host, record.outputFile, opts?.recount ? undefined : { noRetain: true });
   },
   changesBusy: () => changesInflightProbe?.() ?? false,
+  transcriptSig: async (id, record) => {
+    const { sessionTranscriptSig } = await import('./session-changes.js');
+    return sessionTranscriptSig(id, record.cwd, record.host);
+  },
   shedding: () => {
     try { return memoryPressureShedding(); } catch { return false; }
   },
@@ -244,6 +283,7 @@ function remember(id: string, entry: Entry): void {
 
 async function computeInner(sessionId: string): Promise<SessionGitGlance> {
   {
+    const readStart = deps.now();
     const prev = cache.get(sessionId);
     const record = await deps.getSession(sessionId);
     const host = record?.host;
@@ -287,6 +327,14 @@ async function computeInner(sessionId: string): Promise<SessionGitGlance> {
     // No Changed list yet for a session on screen: count one behind (its repos
     // were just read, so its host is there to read the transcript from).
     if (changedFiles === null && readOk && record?.cwd && isWatched(sessionId)) queueCount(sessionId);
+    // Counted, and its repos moved: the session (or someone) edited files, so its own list may
+    // have grown while no Changed tab was open to recompute it.
+    // (A list computed since this read began already saw those edits.)
+    else if (changedFiles !== null && prev && readOk && record?.cwd && isWatched(sessionId)
+      && !sameRepos(prev.glance.repos, repos) && (countedAt.get(sessionId) ?? -Infinity) < readStart) {
+      const rec = record;
+      void sessionWroteSinceCount(sessionId, rec).then((wrote) => { if (wrote && isWatched(sessionId)) queueCount(sessionId, false, true); });
+    }
     return glance;
   }
 }
@@ -371,12 +419,32 @@ export function noteSessionActivity(sessionId: string, delayMs = ACTIVITY_DEBOUN
 // ── Background Changed counts ──
 
 /** Count a watched session's Changed list behind, one session at a time (front = an open panel). */
-function queueCount(sessionId: string, front = false): void {
+function queueCount(sessionId: string, front = false, recount = false): void {
   const last = countQueued.get(sessionId);
   const queued = countQueue.includes(sessionId);
-  if (queued && front) countQueue.splice(countQueue.indexOf(sessionId), 1);
-  else if (queued || (last !== undefined && deps.now() - last < (front ? COUNT_RETRY_FRONT_MS : COUNT_RETRY_MS))) return;
-  if (!queued && countQueue.length >= COUNT_QUEUE_MAX) return;
+  const retryMs = recount ? RECOUNT_MS : front ? COUNT_RETRY_FRONT_MS : COUNT_RETRY_MS;
+  if (queued) {
+    if (recount) recountDue.add(sessionId);
+    if (!front) return;
+    countQueue.splice(countQueue.indexOf(sessionId), 1);
+  } else if (last !== undefined && deps.now() - last < retryMs) {
+    // Too soon: a recount comes back when its window ends (a session that edits once and
+    // stops is still counted again).
+    if (recount && !recountTimers.has(sessionId)) {
+      recountDue.add(sessionId);
+      const t = setTimeout(() => {
+        recountTimers.delete(sessionId);
+        if (isWatched(sessionId)) queueCount(sessionId, false, true);
+        else recountDue.delete(sessionId);
+      }, retryMs - (deps.now() - last));
+      t.unref?.();
+      recountTimers.set(sessionId, t);
+    }
+    return;
+  } else if (countQueue.length >= COUNT_QUEUE_MAX) {
+    return;
+  }
+  if (recount) recountDue.add(sessionId);
   countQueued.set(sessionId, deps.now());
   if (countQueued.size > CACHE_MAX) {
     for (const [k, at] of countQueued) if (deps.now() - at >= COUNT_RETRY_MS) countQueued.delete(k);
@@ -401,11 +469,17 @@ async function drainCounts(): Promise<void> {
       if (gen !== countGen) return;
       const id = countQueue.shift();
       if (id === undefined) break;
-      if (!isWatched(id) || cache.get(id)?.glance.changedFiles != null) continue;
+      const recount = recountDue.delete(id);
+      if (!isWatched(id) || (!recount && cache.get(id)?.glance.changedFiles != null)) continue;
       if (deps.shedding()) { countQueued.delete(id); continue; }
       try {
         const record = await deps.getSession(id);
-        if (record?.cwd) await deps.countChanges(id, record);
+        if (record?.cwd) {
+          // The transcript as this count reads it: a later recount needs it to have moved.
+          const sig = await deps.transcriptSig(id, record).catch(() => null);
+          await deps.countChanges(id, record, recount ? { recount: true } : undefined);
+          if (sig !== null) stamp(countedSig, id, sig);
+        }
       } catch (err) {
         log.session.debug('session-git-status: Changed count failed', { sessionId: id, error: String(err) });
       }
@@ -418,6 +492,7 @@ async function drainCounts(): Promise<void> {
 
 /** The Changed tab's list for a session was recomputed: push the new count. */
 export function noteSessionChangesComputed(sessionId: string, fileCount: number): void {
+  stamp(countedAt, sessionId, deps.now());
   const entry = cache.get(sessionId);
   if (!entry || entry.glance.changedFiles === fileCount) {
     // Unknown session: a watched one gets its first read (repos may be new too).
@@ -440,12 +515,16 @@ export function startSessionGitStatus(): () => void {
   bus.subscribe('session-git-status', (event) => {
     const data = event.data as { sessionId?: unknown; replayed?: unknown } | undefined;
     if (!data || typeof data.sessionId !== 'string' || data.replayed === true) return;
+    if (isWatched(data.sessionId)) stamp(activeAt, data.sessionId, deps.now());
     noteSessionActivity(data.sessionId);
   }, { global: true, interest: [EventNames.SESSION_TOOL_RESULT, EventNames.SESSION_RESULT] });
   return () => {
     bus.unsubscribe('session-git-status');
     for (const t of activityTimers.values()) clearTimeout(t);
     activityTimers.clear();
+    for (const t of recountTimers.values()) clearTimeout(t);
+    recountTimers.clear();
+    recountDue.clear();
     started = false;
   };
 }
@@ -466,6 +545,12 @@ export function _resetSessionGitStatusForTesting(): void {
   reads.clear();
   countQueue.length = 0;
   countQueued.clear();
+  recountDue.clear();
+  for (const t of recountTimers.values()) clearTimeout(t);
+  recountTimers.clear();
+  countedAt.clear();
+  countedSig.clear();
+  activeAt.clear();
   countGen++;
   counting = false;
 }
