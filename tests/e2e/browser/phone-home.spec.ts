@@ -359,6 +359,13 @@ test('C37: with no hover the row kebab shows and opens on a tap', async ({ page 
 /**
  * Rows use `content-visibility: auto`, so a row a script just scrolled to is
  * laid out but not yet painted or hit-testable. Wait for it, as a finger would.
+ *
+ * The probe aims at the row's own text (its first visible leaf with words), never
+ * at a fixed point of the row box: a two-line card (title, then a "Needs your
+ * answer" pill) has a gap at its middle, where a painted card answers the hit test
+ * with itself. On the shared fixture another spec's task may be the only row in
+ * view (2026-11-04: an org spec's pinned "Side question" card at 390x844), so the
+ * probe must hold for every row shape. A failure names what each row hit.
  */
 async function settlePaint(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400)))))
@@ -366,14 +373,23 @@ async function settlePaint(page: Page): Promise<void> {
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.todo-panel .todo-panel-item, .todo-panel .todo-pinned-card'))
       .filter((el) => { const r = el.getBoundingClientRect(); return r.top > 120 && r.bottom < innerHeight - 60 })
     // No row on screen (only folded project headers): nothing to wait for.
+    if (rows.length === 0) return 'ok'
     // Else any visible row whose own content answers a hit test (a sticky
     // header may cover the first one).
-    return rows.length === 0 || rows.some((el) => {
-      const r = el.getBoundingClientRect()
-      const hit = document.elementFromPoint(Math.min(innerWidth - 60, r.left + 120), r.top + r.height / 2)
-      return !!hit && hit !== el && el.contains(hit)
-    })
-  }), { timeout: 5_000 }).toBe(true)
+    const misses: string[] = []
+    for (const el of rows) {
+      const leaf = Array.from(el.querySelectorAll<HTMLElement>('*')).find((d) => {
+        if (d.childElementCount > 0 || !(d.textContent ?? '').trim()) return false
+        const b = d.getBoundingClientRect()
+        return b.width > 0 && b.height > 0 && b.left >= 0 && b.right <= innerWidth
+      })
+      const b = (leaf ?? el).getBoundingClientRect()
+      const hit = document.elementFromPoint(b.left + Math.min(b.width / 2, 40), b.top + b.height / 2)
+      if (hit && hit !== el && el.contains(hit)) return 'ok'
+      misses.push(`${(el.textContent ?? '').trim().slice(0, 40)} -> ${hit === el ? 'the row itself' : hit ? `${hit.tagName.toLowerCase()}.${String(hit.className)}` : 'nothing'}`)
+    }
+    return misses.join('; ')
+  }), { timeout: 5_000, message: 'no row on screen answers a hit test on its own text' }).toBe('ok')
 }
 
 for (const size of [{ width: 390, height: 844 }, { width: 375, height: 667 }, { width: 320, height: 568 }]) {
