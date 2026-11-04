@@ -166,7 +166,7 @@ export async function runBackupRestore(options: Record<string, unknown>): Promis
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const target = typeof options.to === 'string'
     ? path.resolve(options.to)
-    : path.join(os.homedir(), `.open-walnut-restored-${ts}`);
+    : path.join(os.homedir(), `open-walnut-restored-${ts}`);
   const enc = await encryptedConfig(options);
   if (enc) {
     const { restoreEncryptedBackup } = await import('../core/backup/encrypted-backup.js');

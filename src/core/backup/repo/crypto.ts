@@ -67,7 +67,8 @@ function checksum(chars: string): number {
  */
 export function parseRecoveryKey(input: string): Buffer {
   let s = input.trim().toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
-  if (s.startsWith(KEY_PREFIX)) s = s.slice(KEY_PREFIX.length);
+  // Only a key with the prefix is longer than 53: a bare body that happens to start with WB1 keeps it.
+  if (s.length === 53 + KEY_PREFIX.length && s.startsWith(KEY_PREFIX)) s = s.slice(KEY_PREFIX.length);
   if (s.length !== 53 || /[^0-9A-Z]/.test(s) || /U/.test(s)) {
     throw new Error('That is not a Walnut recovery key (it starts with WB1- and has 53 letters and digits after it).');
   }

@@ -35,7 +35,7 @@ const ID_RE = /^[0-9a-f]{32}$/;
 
 export async function localWriter(dataDir: string): Promise<WriterIdentity> {
   const file = machineIdPath(dataDir);
-  const name = os.hostname();
+  const name = os.hostname().replace(/\.(local|lan|home)$/i, '');
   try {
     const id = (await fs.readFile(file, 'utf8')).trim();
     if (ID_RE.test(id)) return { id, name };
@@ -97,16 +97,21 @@ export async function withBackupLock<T>(dataDir: string, fn: () => Promise<T>, d
   const line = `${process.pid} ${token} ${await d.started(process.pid)}`.trim();
 
   for (let attempt = 0; attempt < 3; attempt++) {
+    let taken = false;
     try {
       await fs.writeFile(file, `${line}\n`, { mode: 0o600, flag: 'wx' });
+      taken = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+    // Outside the take's try: an EEXIST thrown by `fn` itself is its own error, not a held lock.
+    if (taken) {
       try {
         return await fn();
       } finally {
         const still = await fs.readFile(file, 'utf8').catch(() => '');
         if (still.trim() === line) await fs.rm(file, { force: true });
       }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
     const held = await fs.readFile(file, 'utf8').catch(() => null);
     if (held === null) continue; // released in between

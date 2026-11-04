@@ -132,11 +132,17 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
   const runEncrypted = async (cfg: BackupConfig): Promise<{ result: BackupRunResult; errorCode?: string }> => {
     const start = Date.now();
     try {
+      let lastEmit = 0;
       const r = await runEncryptedBackup(cfg, {
         dataDir,
         onProgress: (done, total) => {
           health.progress = { uploadedBytes: done, totalBytes: total };
-          emitStatus();
+          // Every window gets a frame per emit: a few a second, not one per file.
+          const now = Date.now();
+          if (now - lastEmit >= 250 || done === total) {
+            lastEmit = now;
+            emitStatus();
+          }
         },
       });
       health.lastSnapshotId = r.snapshotId;
@@ -196,12 +202,16 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
         };
       }
       if (outcome.errorCode === 'busy') {
-        // A terminal's `open-walnut backup` holds the lock: not a failure, try at the next tick.
+        // A terminal's `open-walnut backup` holds the lock: not a failure. Read the
+        // anchor again next tick, so the backup it makes counts as this one.
         health.running = false;
         health.progress = undefined;
+        health.notice = 'A backup or restore started from a terminal is running; this one waits for it.';
+        anchorFor = '';
         emitStatus();
         return outcome.result;
       }
+      health.notice = undefined;
       lastRunAtMs = Date.now();
       applyResult(outcome.result, outcome.errorCode);
       return outcome.result;

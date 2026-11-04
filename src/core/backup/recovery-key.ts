@@ -30,10 +30,18 @@ export async function readRecoveryKey(dataDir: string): Promise<string | null> {
   }
 }
 
+/**
+ * Keep `key` as this machine's key. A different key already here is moved
+ * aside (`recovery-key.replaced-<time>`), never lost: other backups may need it.
+ */
 export async function writeRecoveryKey(dataDir: string, key: string): Promise<string> {
   const canonical = formatRecoveryKey(parseRecoveryKey(key));
   const file = recoveryKeyPath(dataDir);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const before = await readRecoveryKey(dataDir);
+  if (before && formatRecoveryKey(parseRecoveryKey(before)) !== canonical) {
+    await fs.copyFile(file, `${file}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  }
   const tmp = `${file}.tmp-${randomBytes(4).toString('hex')}`;
   await fs.writeFile(tmp, `${canonical}\n`, { mode: 0o600 });
   await fs.rename(tmp, file);

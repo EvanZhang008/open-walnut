@@ -130,10 +130,10 @@ describe('encrypted backups through the routes', () => {
     expect(await sameFile(target, 'auth.json')).toBe(true);
     // The recovery key rides inside the (encrypted) backup, so the restored home can keep backing up.
     expect((await fsp.readFile(recoveryKeyPath(target), 'utf8')).trim()).toBe(k.body.key);
-    // A second restore into the same folder is refused: it is not empty any more.
-    await call('POST', '/restore', { snapshotId: 'latest', targetDir: target });
-    await until(() => scheduler.health.restore?.running === false);
-    expect(scheduler.health.restore?.error).toMatch(/not empty/);
+    // A second restore into the same folder is refused at once: it is not empty any more.
+    const again = await call('POST', '/restore', { snapshotId: 'latest', targetDir: target });
+    expect(again.status).toBe(400);
+    expect(String(again.body.error)).toMatch(/not empty/);
   }, 60_000);
 
   it('masked secrets stand only for the saved target', async () => {

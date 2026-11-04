@@ -29,14 +29,19 @@ interface Props {
   /** The last backup found the destination's backups made with another key. */
   mismatch: boolean
   savedAt: string | undefined
-  onMarkSaved: () => void
+  /** Backups were never switched on: "I saved it" turns them on too. */
+  firstSetup: boolean
+  /** This computer's name, for the downloaded kit. */
+  machineName?: string
+  onMarkSaved: (turnOn?: boolean) => void
   /** Told what the pane may do: back up only with a key, and never while one is asked for. */
   onState: (s: KeyState) => void
   /** Bumped by the pane when something changed that may make a key appear (Drive connected, a save). */
   refreshToken: number
 }
 
-export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, savedAt, onMarkSaved, onState, refreshToken }: Props) {
+export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, savedAt, firstSetup, machineName, onMarkSaved, onState, refreshToken }: Props) {
+  const [accepted, setAccepted] = useState<string | null>(null)
   const [key, setKey] = useState<string | null>(null)
   const [askedForKey, setNeedsKey] = useState(false)
   const needsKey = askedForKey || mismatch
@@ -74,10 +79,11 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
     setChecking(true)
     setError(null)
     try {
-      const r = await apiPut<{ key: string }>('/api/backup/recovery-key', { key: typed, destination: dest }, { timeoutMs: 45000 })
+      const r = await apiPut<{ key: string; snapshotCount?: number }>('/api/backup/recovery-key', { key: typed, destination: dest }, { timeoutMs: 45000 })
       setKey(r.key)
       setNeedsKey(false)
       setTyped('')
+      setAccepted(r.snapshotCount ? `Key accepted. It opens the ${r.snapshotCount} backup${r.snapshotCount === 1 ? '' : 's'} in ${destinationLabel}.` : 'Key accepted.')
       onMarkSaved()
     } catch (err) {
       setError(saveErrorMessage(err))
@@ -88,7 +94,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
 
   const download = () => {
     if (!key) return
-    const blob = new Blob([recoveryKitText(key, destinationLabel, window.location.hostname, new Date())], { type: 'text/plain' })
+    const blob = new Blob([recoveryKitText(key, destinationLabel, machineName ?? 'this computer', new Date())], { type: 'text/plain' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = 'walnut-recovery-key.txt'
@@ -105,33 +111,39 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
       footer={needsKey ? undefined : 'Your backups are encrypted with this key before they leave this computer. Without it nobody can open them, Walnut included.'}
     >
       {needsKey ? (
-        <SettingsRow
-          label="Enter your recovery key"
-          htmlFor="backup-key-input"
-          wide
-          state="warning"
-          help={mismatch && key
-            ? `The backups in ${destinationLabel} were made with another recovery key. Type that key (it starts with WB1-). It replaces this computer's key, so keep the old one if other backups use it.`
-            : `${destinationLabel} already has Walnut backups. Type the key you saved when you set them up (it starts with WB1-).`}
-          error={error ?? undefined}
-          data-testid="backup-key-needed"
-          control={
-            <span className="settings-inline-pair">
-              <input id="backup-key-input" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
-                className="settings-input settings-input--mono" value={typed} onChange={(e) => setTyped(e.target.value)}
-                placeholder="WB1-XXXXX-XXXXX-..." />
-              <SettingsButton variant="primary" onClick={useTypedKey} busy={checking} busyLabel="Checking..." disabled={!typed.trim()}
-                data-testid="backup-key-use">
-                Use this key
-              </SettingsButton>
-            </span>
-          }
-        />
+        <>
+          <SettingsRow
+            label="Enter your recovery key"
+            htmlFor="backup-key-input"
+            state="warning"
+            help={mismatch && key
+              ? `The backups in ${destinationLabel} were made with another recovery key. Type that key. This computer's current key is kept aside, and you can copy it here first.`
+              : `${destinationLabel} already has Walnut backups. Type the key you saved when you set them up (it starts with WB1-).`}
+            error={error ?? undefined}
+            data-testid="backup-key-needed"
+            control={mismatch && key ? (
+              <span className="settings-inline-pair">
+                <CopyButton text={key} label="Copy current key" bordered data-testid="backup-key-copy-old" />
+                <SettingsButton onClick={download} data-testid="backup-key-download-old">Download</SettingsButton>
+              </span>
+            ) : undefined}
+          />
+          <div className="settings-row settings-row-indent backup-key-entry">
+            <input id="backup-key-input" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
+              aria-label="Recovery key"
+              className="settings-input settings-input--mono backup-key-input" value={typed} onChange={(e) => setTyped(e.target.value)}
+              placeholder="WB1-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXX" />
+            <SettingsButton variant="primary" onClick={useTypedKey} busy={checking} busyLabel="Checking..." disabled={!typed.trim()}
+              data-testid="backup-key-use">
+              Use this key
+            </SettingsButton>
+          </div>
+        </>
       ) : key ? (
         <>
           <SettingsRow
             label="Recovery key"
-            help="Opens your backups. Keep a copy somewhere other than this computer."
+            help={accepted ?? 'Opens your backups. Keep a copy somewhere other than this computer.'}
             error={error ?? undefined}
             data-testid="backup-key-row"
             control={
@@ -151,9 +163,15 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             <SettingsRow
               state="warning"
               label="Save it somewhere safe"
-              help="Put it in your password manager or print it. You need it to restore on a new computer."
+              help={firstSetup
+                ? 'Put it in your password manager or print it. You need it to restore on a new computer. Then backups start.'
+                : 'Put it in your password manager or print it. You need it to restore on a new computer.'}
               data-testid="backup-key-unsaved"
-              control={<SettingsButton onClick={onMarkSaved} data-testid="backup-key-saved">I saved it</SettingsButton>}
+              control={
+                <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => onMarkSaved(firstSetup)} data-testid="backup-key-saved">
+                  {firstSetup ? 'I saved it, start backups' : 'I saved it'}
+                </SettingsButton>
+              }
             />
           )}
         </>

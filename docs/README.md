@@ -49,6 +49,9 @@ must live under one of these top-level categories instead of directly under
 
 ## References
 
+- [Backups](reference/backups.md): encrypted, deduplicated backups to Cloudflare R2, Google
+  Drive or S3; the format and why, what each service costs, the recovery key (where it is
+  kept, how a new computer uses it), history kept, restore, and the older S3 copy.
 - [Releasing](reference/releasing.md): the stable and nightly channels, `bun run release`,
   the GitHub Actions publish through npm trusted publishing, and how installs learn about and
   apply updates.

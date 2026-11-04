@@ -35,7 +35,8 @@ const RETIRED_ELSEWHERE: Record<string, { uses: number; why: string }> = {
 const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/web/routes/browser-pair.ts': { markers: 2, rule: 'credentials: signing a browser in to this Walnut' },
   'src/web/routes/expose.ts': { markers: 2, rule: 'permissions: turning a tunnel on, how Walnut is reached from outside' },
-  'src/web/routes/config.ts': { markers: 4, rule: 'permissions: config.expose (reach from outside) and config.hosts (hosts that run a Walnut server)' },
+  'src/web/routes/config.ts': { markers: 6, rule: 'permissions: config.expose (reach from outside), config.hosts (hosts that run a Walnut server), and outward sends: config.backup where the data home is uploaded' },
+  'src/web/routes/backup-encrypted.ts': { markers: 1, rule: 'credentials and outward sends: the Google sign-in, the recovery key, and where backups are read from or restored to' },
   'src/web/routes/host-servers.ts': { markers: 2, rule: 'permissions: setting up a Walnut server on a host' },
   'src/web/routes/companion-build.ts': { markers: 2, rule: 'permissions: how the cloud companion installs new builds' },
   'src/web/routes/replicas-status.ts': { markers: 2, rule: 'deleting data: confirming a replica\'s removal of most of its rows' },

@@ -166,6 +166,29 @@ describe('PUT /api/config', () => {
     expect((await request(app).put('/api/config').send({ hosts: { dev: { hostname: 'dev.example' }, 'companion-2': { hostname: 'box.example' } } })).status).toBe(200);
   });
 
+  it('only the person moves where backups go; a session may still pause them or change the interval', async () => {
+    const app = createApp();
+    const dest = { type: 'r2', bucket: 'mine', account_id: 'acct', access_key_id: 'k', secret_access_key: 's' };
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, backup: { enabled: true, interval_hours: 24, destination: dest } }), 'utf-8');
+    const agent = { 'x-walnut-caller-sid': 'session-under-test' };
+    for (const backup of [
+      { enabled: true, destination: { ...dest, bucket: 'theirs' } },
+      { enabled: true, destination: { ...dest, endpoint: 'https://elsewhere.example' } },
+      { enabled: true, destination: { type: 'gdrive', client_id: 'other.apps.googleusercontent.com' } },
+      // A service kept for later is one click from being the destination.
+      { enabled: true, destination: dest, other_destinations: [{ type: 's3', bucket: 'theirs', region: 'us-east-1' }] },
+    ]) {
+      const r = await request(app).put('/api/config').set(agent).send({ backup });
+      expect(r.status, JSON.stringify(backup)).toBe(403);
+      expect(r.body).toMatchObject({ code: 'person_at_this_machine' });
+    }
+    expect((await request(app).put('/api/config').set(agent).send({ backup: { enabled: false, interval_hours: 12, destination: dest } })).status).toBe(200);
+    const saved = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { backup: { enabled: boolean; interval_hours: number; destination: { bucket: string } } };
+    expect(saved.backup).toMatchObject({ enabled: false, interval_hours: 12, destination: { bucket: 'mine' } });
+    // The person moves it.
+    expect((await request(app).put('/api/config').send({ backup: { enabled: true, destination: { ...dest, bucket: 'new' } } })).status).toBe(200);
+  });
+
   it('a real host already saved as companion keeps saving', async () => {
     const app = createApp();
     await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { companion: { hostname: 'box.example' } } }), 'utf-8');

@@ -665,6 +665,14 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(403).json({ error: 'Only you, at this computer, can change how Walnut is reached from outside (Settings, Phones & Cloud).', code: 'person_at_this_machine' })
       return
     }
+    // Where backups go is the person's choice too: a write from anyone else that moves them
+    // (another bucket, service, account or endpoint) would send the data home elsewhere.
+    // Switching them on or off and the interval stay open to all.
+    if (body.backup !== undefined && !isPersonAtThisMachine(req)
+      && backupTarget(body.backup) !== backupTarget((await getConfig()).backup)) {
+      res.status(403).json({ error: 'Only you, at this computer, can change where backups go (Settings, Backup).', code: 'person_at_this_machine' })
+      return
+    }
     // `companion` names the cloud companion (replication/companion-keep.ts): a host saved
     // under it would take the companion's keep choice. One already there stays.
     if (body.hosts && typeof body.hosts === 'object' && !Array.isArray(body.hosts)) {
@@ -748,3 +756,19 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     next(err)
   }
 })
+
+/** Where a backup section sends the data (secrets left out: they arrive masked). */
+function backupTarget(b: unknown): string {
+  const c = (b ?? {}) as Record<string, unknown>
+  const d = (c.destination ?? null) as Record<string, unknown> | null
+  const a = (c.auth ?? null) as Record<string, unknown> | null
+  const pick = (o: Record<string, unknown> | null, keys: string[]) => (o ? keys.map((k) => o[k] ?? '') : null)
+  return JSON.stringify([
+    c.bucket ?? '', c.region ?? '', c.prefix ?? '', pick(a, ['method', 'profile']),
+    pick(d, ['type', 'bucket', 'prefix', 'region', 'account_id', 'endpoint', 'client_id', 'folder_name']),
+    pick((d?.auth ?? null) as Record<string, unknown> | null, ['method', 'profile']),
+    // The services not in use yet: one of them becomes the destination with one click.
+    (Array.isArray(c.other_destinations) ? c.other_destinations : []).map((o) =>
+      pick(o as Record<string, unknown>, ['type', 'bucket', 'prefix', 'region', 'account_id', 'endpoint', 'client_id', 'folder_name'])),
+  ])
+}

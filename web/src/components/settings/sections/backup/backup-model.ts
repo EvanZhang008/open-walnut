@@ -74,9 +74,10 @@ export function cleanDestination(d: BackupDestinationConfig): BackupDestinationC
 /** What config still lacks (the server's missingFields, mirrored). Drive's sign-in is checked apart. */
 export function missingFields(d: BackupDestinationConfig): string[] {
   const m: string[] = []
+  // In the order the form shows them.
+  if (d.type === 'r2' && !trimmed(d.account_id) && !trimmed(d.endpoint)) m.push('account ID')
   if (d.type === 'r2' || d.type === 's3') if (!trimmed(d.bucket)) m.push('bucket')
   if (d.type === 'r2') {
-    if (!trimmed(d.account_id) && !trimmed(d.endpoint)) m.push('account ID')
     if (!trimmed(d.access_key_id)) m.push('access key ID')
     if (!trimmed(d.secret_access_key)) m.push('secret access key')
   }
@@ -179,12 +180,24 @@ export function buildBackupConfig(
   const base: BackupConfig = {
     ...(saved.retention ? { retention: saved.retention } : {}),
     ...(saved.recovery_key_saved_at ? { recovery_key_saved_at: saved.recovery_key_saved_at } : {}),
+    ...(saved.other_destinations?.length ? { other_destinations: saved.other_destinations } : {}),
     enabled: form.enabled,
     interval_hours: Math.min(MAX_INTERVAL_HOURS, Math.max(1, Math.round(Number(form.intervalHours) || 24))),
   }
   if (form.destination) return { ...base, destination: cleanDestination(form.destination) }
   if (form.legacy) return { ...base, ...form.legacy }
   return base
+}
+
+/**
+ * The services kept after `next` becomes the destination: the one in use so
+ * far joins the others (one per type), so switching back needs no retyping.
+ */
+export function othersAfterSwitch(saved: BackupConfig, next: BackupDestinationConfig): BackupDestinationConfig[] {
+  const others = (saved.other_destinations ?? []).filter((o) => o.type !== next.type)
+  const prev = saved.destination
+  if (prev && prev.type !== next.type) return [...others.filter((o) => o.type !== prev.type), prev]
+  return others
 }
 
 /** A legacy S3 copy becomes encrypted backups in the same bucket (another folder in it). */

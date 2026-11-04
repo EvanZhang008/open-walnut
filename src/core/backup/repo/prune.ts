@@ -18,6 +18,7 @@
  * packs would look dead), the run's new snapshot not listed yet, or this
  * machine no longer the writer (checked again right before deleting).
  */
+import { createHash } from 'node:crypto';
 import { log } from '../../../logging/index.js';
 import { loadLiveIndex } from './backup-run.js';
 import { packKey, PACK_TARGET_BYTES, type BlobLocation, type PackInfo, type Snapshot } from './format.js';
@@ -135,6 +136,10 @@ export async function pruneRepo(
     for (const e of await repo.readTree(s, index, cache)) for (const id of e.b) live.add(id);
   }
 
+  // A kept backup names a part no index lists (a pack the store did not list
+  // this time, say): deleting the old indexes now could lose it for good.
+  for (const id of live) if (!index.blobs.has(id)) return skip('a kept backup names parts no index lists');
+
   const survivors: PackInfo[] = [];
   const doomed: PackInfo[] = [];
   const repackers = { data: new PackWriter(repo, 'data'), tree: new PackWriter(repo, 'tree') };
@@ -159,6 +164,10 @@ export async function pruneRepo(
       continue;
     }
     const body = await repo.store.get(packKey(pack.id));
+    // A damaged download must not be copied into a new pack with a valid hash.
+    if (createHash('sha256').update(body).digest('hex') !== pack.id) {
+      throw new Error(`pack ${pack.id.slice(0, 12)} did not match its hash; nothing was deleted`);
+    }
     for (const [id, offset, length, rawLength] of liveBlobs as BlobLocation[]) {
       await repackers[pack.type].add(id, body.subarray(offset, offset + length), rawLength);
     }

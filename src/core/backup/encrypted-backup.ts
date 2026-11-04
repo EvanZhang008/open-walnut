@@ -13,7 +13,7 @@ import { friendlyStoreError } from './errors.js';
 import { parseRecoveryKey } from './repo/crypto.js';
 import { runRepoBackup, type RepoBackupResult } from './repo/backup-run.js';
 import { DEFAULT_RETENTION, pruneRepo, type PruneResult } from './repo/prune.js';
-import { RepoError, Repository } from './repo/repository.js';
+import { RepoError, Repository, holdsBackupData } from './repo/repository.js';
 import { restoreRepoSnapshot, type RepoRestoreResult } from './repo/restore.js';
 import { isNotFound, type BackupStore } from './stores/types.js';
 import { REPO_CONFIG_KEY, type SnapshotSummary } from './repo/format.js';
@@ -66,6 +66,7 @@ export async function runEncryptedBackup(
     try {
       const repo = await Repository.open(store, raw);
       result.prune = await pruneRepo(repo, retentionOf(cfg), { writer, mustKeep: result.snapshotId });
+      if (result.prune.skipped) result.pruneError = result.prune.skipped;
       result.snapshotCount = (await repo.listSnapshotKeys()).length;
     } catch (err) {
       // The backup itself landed; a failed prune only means more history kept until next time.
@@ -80,8 +81,9 @@ async function hasRepository(store: BackupStore): Promise<boolean> {
     await store.get(REPO_CONFIG_KEY);
     return true;
   } catch (err) {
-    if (isNotFound(err)) return false;
-    throw err;
+    if (!isNotFound(err)) throw err;
+    // No config read back, but backup data there: treat it as backups (never a new key for them).
+    return holdsBackupData(store);
   }
 }
 

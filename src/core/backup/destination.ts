@@ -26,11 +26,12 @@ export function engineOf(cfg: BackupConfig | undefined): BackupEngine | null {
  */
 export function missingFields(dest: BackupDestinationConfig): string[] {
   const missing: string[] = [];
+  // In the order the form shows them.
+  if (dest.type === 'r2' && !dest.account_id?.trim() && !dest.endpoint?.trim()) missing.push('account ID');
   if (dest.type === 'r2' || dest.type === 's3') {
     if (!dest.bucket?.trim()) missing.push('bucket');
   }
   if (dest.type === 'r2') {
-    if (!dest.account_id?.trim() && !dest.endpoint?.trim()) missing.push('account ID');
     if (!dest.access_key_id?.trim()) missing.push('access key ID');
     if (!dest.secret_access_key?.trim()) missing.push('secret access key');
   }

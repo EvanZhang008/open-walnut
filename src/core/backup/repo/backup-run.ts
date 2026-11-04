@@ -105,12 +105,18 @@ export async function runRepoBackup(
     const entries: TreeEntry[] = [];
     const data = new PackWriter(repo, 'data');
 
+    let sinceYield = 0;
     for (const file of all) {
       const prev = prevByPath.get(file.path);
       if (isReusable(prev) && prev.s === file.size && prev.m === file.mtimeMs) {
         entries.push(prev);
         doneBytes += file.size;
         opts.onProgress?.(doneBytes, totalBytes);
+        // Tens of thousands of unchanged files with no await between them would hold the event loop.
+        if (++sinceYield >= 500) {
+          sinceYield = 0;
+          await new Promise((r) => setImmediate(r));
+        }
         continue;
       }
       const isSnapshot = file.path.startsWith(`${SQLITE_SNAPSHOT_PREFIX}/`);

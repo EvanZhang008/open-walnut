@@ -31,22 +31,25 @@ export function friendlyStoreError(err: unknown, dest: BackupDestinationConfig):
   const bucket = dest.bucket ? `"${dest.bucket}"` : 'this bucket';
   const tag = code ? ` (${code})` : '';
   if (dest.type === 'gdrive') return raw;
+  const cloudflare = dest.type === 'r2' && !dest.endpoint?.trim();
   if ((code && NETWORK_CODES.has(code)) || /fetch failed|getaddrinfo|socket hang up/i.test(raw)) {
     const where = dest.endpoint?.trim() ? `the custom endpoint ${dest.endpoint.trim()}` : dest.type === 'r2' ? 'Cloudflare with this Account ID' : 'AWS';
     return `Can't reach ${where}. Check the address and your internet connection${tag}.`;
   }
   if (code === 'NoSuchBucket' || (status === 404 && /bucket/i.test(raw))) {
-    return dest.type === 'r2'
+    return cloudflare
       ? `No bucket named ${bucket} in this Cloudflare account. Check the spelling, or create it on the R2 page (Create bucket)${tag}.`
       : `No bucket named ${bucket} here. Check the spelling and the region${tag}.`;
   }
   if ((code && KEY_REFUSED.has(code)) || status === 401) {
-    return dest.type === 'r2'
+    return cloudflare
       ? `Cloudflare refused these keys. Check the access key ID and the secret; Cloudflare shows the secret only once, so make a new token if it is lost${tag}.`
-      : `AWS refused these credentials. Check the keys or the profile${tag}.`;
+      : dest.endpoint?.trim()
+        ? `The service refused these keys. Check the access key ID and the secret${tag}.`
+        : `AWS refused these credentials. Check the keys or the profile${tag}.`;
   }
   if (code === 'AccessDenied' || status === 403) {
-    return dest.type === 'r2'
+    return cloudflare
       ? `These keys may not write to ${bucket}. Give the API token Object Read & Write on that bucket${tag}.`
       : `These credentials may not write to ${bucket}. They need s3:PutObject, GetObject, ListBucket and DeleteObject on it${tag}.`;
   }

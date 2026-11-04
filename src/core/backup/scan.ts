@@ -38,6 +38,7 @@ const EXCLUDED_FILE_RE = [
   /\.sqlite-wal$/,
   /\.sqlite$/, // canonical DBs upload as safe snapshots, never raw (see below)
   /\.lock$/,
+  /(^|\/)server\.lock\.json$/, // the running server's own lock: a restored copy must not claim it
   /\.DS_Store$/,
 ];
 

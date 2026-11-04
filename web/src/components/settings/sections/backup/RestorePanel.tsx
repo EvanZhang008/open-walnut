@@ -109,6 +109,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
   }
 
   const home = dataDir ?? '~/.open-walnut'
+  const swap = restore?.targetDir ? swapCommands(home, restore.targetDir, restore.finishedAt) : null
   return (
     <>
       {restore?.finishedAt && !items && (
@@ -127,18 +128,23 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
             help={
               <>
                 {restore.doneFiles} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>.
-                {' '}To make them your Walnut data: quit Walnut, rename <code>{home}</code> to keep it aside,
-                rename the restored folder to <code>{home}</code>, then start Walnut.
+                {' '}To make them your Walnut data: quit Walnut, run the two commands below in a terminal
+                (they keep your current data aside, nothing is deleted), then start Walnut.
               </>
             }
             control={
               <span className="settings-inline-pair">
-                {restore.targetDir && <CopyButton text={restore.targetDir} label="Copy path" bordered data-testid="backup-restore-copy-path" />}
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>
               </span>
             }
           />
         )
+      )}
+      {restore?.finishedAt && !restore.error && !items && swap && (
+        <div className="settings-row settings-row-indent backup-restore-swap" data-testid="backup-restore-swap">
+          <pre className="backup-restore-commands">{swap}</pre>
+          <CopyButton text={swap} label="Copy commands" bordered data-testid="backup-restore-copy-commands" />
+        </div>
       )}
       <SettingsRow
         label="Restore"
@@ -174,7 +180,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
             wide
             label="Into folder"
             htmlFor="backup-restore-target"
-            help="A new, empty folder. Leave it empty for one next to your data (.open-walnut-restored-<date>)."
+            help="A new, empty folder. Leave it empty for one next to your data (open-walnut-restored-<date>)."
             control={
               <span className="settings-inline-pair">
                 <input id="backup-restore-target" type="text" data-no-draft="autosave" className="settings-input"
@@ -189,4 +195,16 @@ export function RestorePanel({ dest, restore, dataDir, blocked }: Props) {
       )}
     </>
   )
+}
+
+const shellQuote = (p: string): string => {
+  if (p.startsWith('~/')) return `~/${shellQuote(p.slice(2))}`
+  return /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`
+}
+
+/** The two moves that make the restored folder the live data, current data kept aside. */
+export function swapCommands(home: string, restored: string, at?: string): string {
+  const stamp = (at ?? new Date().toISOString()).slice(0, 10)
+  const aside = `${home.replace(/\/+$/, '')}-before-restore-${stamp}`
+  return `mv ${shellQuote(home)} ${shellQuote(aside)}\nmv ${shellQuote(restored)} ${shellQuote(home)}`
 }

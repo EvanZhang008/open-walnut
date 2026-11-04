@@ -109,12 +109,18 @@ test.describe('Backup settings', () => {
     await section.getByTestId('backup-key-show').click()
     await expect(section.getByTestId('backup-key-value')).toHaveText(KEY)
     await expect(section.getByTestId('backup-key-unsaved')).toBeVisible()
+    // First setup: saying the key is saved is what starts backups.
+    await expect(section.getByTestId('backup-key-saved')).toHaveText('I saved it, start backups')
     await section.getByTestId('backup-key-saved').click()
     await expect(section.getByTestId('backup-key-unsaved')).toHaveCount(0)
-    // With a destination and a key, the switch can go on.
-    await expect(section.locator('#backup-enabled')).toBeEnabled()
-    await section.locator('#backup-enabled').click()
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled).toBe(true)
+    await expect(section.locator('#backup-enabled')).toBeChecked()
+    // The switch saves at once (no wait for an autosave), and the destination rides along.
+    await section.locator('#backup-enabled').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 500 }).toBe(false)
+    expect((config.last()?.backup as Record<string, unknown>).destination).toMatchObject({ type: 'r2', bucket: 'walnut-backup' })
+    await section.locator('#backup-enabled').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 500 }).toBe(true)
 
     // Restore lists the backups, newest first and picked, and restores the one chosen.
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()
@@ -199,7 +205,7 @@ test.describe('Backup settings', () => {
     await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
     await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: false, email: null, folderName: null, pending: false })
     const section = await openBackup(page)
-    await expect(section.getByTestId('backup-service-row')).toContainText('Backups go to Cloudflare R2')
+    await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
     await section.getByTestId('backup-service-gdrive').click()
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
     await expect(section.getByTestId('backup-gdrive-connect')).toBeEnabled()
@@ -212,7 +218,38 @@ test.describe('Backup settings', () => {
     await section.getByTestId('backup-service-r2').click()
     await expect(section.locator('#backup-r2-bucket')).toHaveValue('my-bucket')
     await expect(section.getByTestId('backup-test-connection')).toHaveText('Test connection')
-    await expect(section.getByTestId('backup-service-row')).toContainText('Backups go to Cloudflare R2')
+    await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('Drive connected while R2 is in use: chosen on purpose, R2 kept; disconnect asks first', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '••••••mple' }
+    const config = await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2 })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted' })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'someone@example.com', folderName: 'Walnut Backup', pending: false })
+    let disconnects = 0
+    await page.route('**/api/backup/gdrive/disconnect', (route) => { disconnects++; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
+    const section = await openBackup(page)
+    await section.getByTestId('backup-service-gdrive').click()
+    const row = section.getByTestId('backup-gdrive-connected')
+    await expect(row).toContainText('Backups still go to Cloudflare R2')
+    await page.waitForTimeout(800)
+    expect(config.last()).toBeNull()
+
+    // Disconnect asks first; Keep leaves it connected.
+    await section.getByTestId('backup-gdrive-disconnect').click()
+    await expect(section.getByTestId('backup-gdrive-disconnect-warning')).toBeVisible()
+    await section.getByTestId('backup-gdrive-disconnect-cancel').click()
+    await expect(section.getByTestId('backup-gdrive-disconnect-warning')).toHaveCount(0)
+    expect(disconnects).toBe(0)
+
+    // "Use Google Drive" makes it the destination and keeps the R2 settings for later.
+    await section.getByTestId('backup-gdrive-use').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({ type: 'gdrive' })
+    const written = config.last()?.backup as Record<string, unknown>
+    expect(written.other_destinations).toEqual([expect.objectContaining({ type: 'r2', bucket: 'my-bucket' })])
+    expect(written.enabled).toBe(true)
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })

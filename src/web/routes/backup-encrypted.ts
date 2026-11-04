@@ -136,7 +136,7 @@ encryptedBackupRouter.post('/snapshots', async (req: Request, res: Response) => 
 /** Where a restore lands by default: beside the data home, never inside it. */
 function defaultRestoreDir(): string {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return path.join(path.dirname(path.resolve(WALNUT_HOME)), `.open-walnut-restored-${ts}`);
+  return path.join(path.dirname(path.resolve(WALNUT_HOME)), `open-walnut-restored-${ts}`);
 }
 
 /** The real path of `p`: its nearest existing ancestor resolved through symlinks, the rest appended. */
@@ -170,13 +170,18 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   if (error) return void res.status(400).json({ error });
   const snapshotId = typeof req.body?.snapshotId === 'string' ? req.body.snapshotId : 'latest';
   const typedKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim();
-  // Backups from a destination or key the request brings could be anyone's files: the person's step.
-  if ((custom || typedKey) && !personOnly(req, res, 'A restore from another destination or key is started')) return;
+  const customTarget = typeof req.body?.targetDir === 'string' && req.body.targetDir.trim() !== '';
+  // Backups from a destination or key the request brings could be anyone's files, and a
+  // folder of the request's choosing gets the whole data home in the clear: the person's step.
+  if ((custom || typedKey || customTarget) && !personOnly(req, res, 'A restore from another destination or key, or into a folder of your choice, is started')) return;
   const targetDir = typeof req.body?.targetDir === 'string' && req.body.targetDir.trim()
     ? req.body.targetDir.trim().replace(/^~(?=\/|$)/, os.homedir())
     : defaultRestoreDir();
   const bad = await badTarget(targetDir);
   if (bad) return void res.status(400).json({ error: bad });
+  // Said at once, beside the folder field, not later as a failed restore.
+  const inTarget = await fs.readdir(targetDir).catch(() => null);
+  if (inTarget && inTarget.length > 0) return void res.status(400).json({ error: `${targetDir} is not empty. Pick a new, empty folder (or leave the field empty).` });
   const recoveryKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim() ? req.body.recoveryKey : undefined;
   const mirror = engineOf(cfg) === 'mirror' && !dest;
   if (!mirror && !dest) return void res.status(400).json({ error: 'Choose where backups go first.' });
@@ -282,7 +287,9 @@ encryptedBackupRouter.put('/recovery-key', async (req: Request, res: Response, n
 });
 
 // POST /api/backup/adopt — this machine becomes the one that writes these backups.
-encryptedBackupRouter.post('/adopt', async (_req: Request, res: Response) => {
+encryptedBackupRouter.post('/adopt', async (req: Request, res: Response) => {
+  // It stops another computer's backups: the person's step.
+  if (!personOnly(req, res, 'Backups are moved to this computer')) return;
   try {
     const cfg = (await getConfig()).backup ?? {};
     if (!cfg.destination) return void res.status(400).json({ error: 'Choose where backups go first.' });
@@ -340,30 +347,38 @@ encryptedBackupRouter.post('/gdrive/connect', async (req: Request, res: Response
     const folderName = ((await getConfig()).backup?.destination?.folder_name || DEFAULT_DRIVE_FOLDER).trim();
     let settle: (r: { ok: boolean; error?: string; email?: string }) => void = () => {};
     connectDone = new Promise((r) => { settle = r; });
-    const started = await startDriveConnect(client, {
-      onDone: (outcome) => {
-        void (async () => {
-          try {
-            if (!outcome.ok) throw new Error(outcome.error);
-            let tokens = outcome.tokens;
-            await writeDriveTokens(WALNUT_HOME, tokens);
-            const getToken = makeAccessTokenGetter(WALNUT_HOME, client);
-            const about = await driveAbout(getToken).catch(() => ({} as { email?: string }));
-            const folder = await findOrCreateFolder(folderName, getToken);
-            tokens = { ...(await readDriveTokens(WALNUT_HOME))!, email: about.email, folder_id: folder.id, folder_name: folderName };
-            await writeDriveTokens(WALNUT_HOME, tokens);
-            getBackupScheduler()?.resetAnchor();
-            log.web.info('backup: google drive connected', { folderCreated: folder.created });
-            settle({ ok: true, email: about.email });
-            getBackupScheduler()?.emitStatus();
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.web.warn('backup: google drive connect failed', { error: msg });
-            settle({ ok: false, error: msg });
-          }
-        })();
-      },
-    });
+    let started: Awaited<ReturnType<typeof startDriveConnect>>;
+    try {
+      started = await startDriveConnect(client, {
+        onDone: (outcome) => {
+          void (async () => {
+            try {
+              if (!outcome.ok) throw new Error(outcome.error);
+              let tokens = outcome.tokens;
+              await writeDriveTokens(WALNUT_HOME, tokens);
+              const getToken = makeAccessTokenGetter(WALNUT_HOME, client);
+              const about = await driveAbout(getToken).catch(() => ({} as { email?: string }));
+              const folder = await findOrCreateFolder(folderName, getToken);
+              tokens = { ...(await readDriveTokens(WALNUT_HOME))!, email: about.email, folder_id: folder.id, folder_name: folderName };
+              await writeDriveTokens(WALNUT_HOME, tokens);
+              getBackupScheduler()?.resetAnchor();
+              log.web.info('backup: google drive connected', { folderCreated: folder.created });
+              settle({ ok: true, email: about.email });
+              getBackupScheduler()?.emitStatus();
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.web.warn('backup: google drive connect failed', { error: msg });
+              settle({ ok: false, error: msg });
+            }
+          })();
+        },
+      });
+    } catch (err) {
+      // No sign-in under way: nothing must read as pending.
+      settle({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      connectDone = null;
+      throw err;
+    }
     void connectDone.then((r) => {
       connectDone = null;
       broadcastDrive(r);

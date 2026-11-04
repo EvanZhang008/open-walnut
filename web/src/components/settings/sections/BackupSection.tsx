@@ -28,7 +28,7 @@ import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
 import {
   DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
-  engineOf, fmtBytes, legacyToEncrypted, missingFields, sameDestination, stableJson, testHelp,
+  engineOf, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, stableJson, testHelp,
   type BackupConfig, type BackupDestinationConfig, type BackupDestinationType, type DestinationTest,
 } from './backup/backup-model'
 import { R2Fields, S3Fields } from './backup/BucketFields'
@@ -51,6 +51,8 @@ interface BackupStatus {
   engine?: 'mirror' | 'encrypted'
   destination?: string
   dataDir?: string
+  machineName?: string
+  notice?: string
   lastBackupAt?: string
   lastFileCount?: number
   lastTotalBytes?: number
@@ -66,10 +68,11 @@ interface BackupStatus {
 
 type Drafts = Record<BackupDestinationType, BackupDestinationConfig>
 
-const emptyDrafts = (saved?: BackupDestinationConfig): Drafts => ({
+const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationConfig[] = []): Drafts => ({
   r2: { type: 'r2' },
   gdrive: { type: 'gdrive' },
   s3: { type: 's3', auth: { method: 'aws_chain' } },
+  ...Object.fromEntries(others.map((o) => [o.type, o])),
   ...(saved ? { [saved.type]: saved } : {}),
 })
 
@@ -86,7 +89,7 @@ export function BackupSection({ config, onSave }: Props) {
   const [legacyMode, setLegacyMode] = useState(savedEngine === 'mirror')
   const [legacy, setLegacy] = useState<LegacyFields>(legacyOf(saved))
   const [type, setType] = useState<BackupDestinationType>(savedDest?.type ?? 'r2')
-  const [drafts, setDrafts] = useState<Drafts>(() => emptyDrafts(savedDest))
+  const [drafts, setDrafts] = useState<Drafts>(() => emptyDrafts(savedDest, saved.other_destinations))
   const [profiles, setProfiles] = useState<string[]>([])
   const [status, setStatus] = useState<BackupStatus | null>(null)
   const [testing, setTesting] = useState(false)
@@ -101,10 +104,15 @@ export function BackupSection({ config, onSave }: Props) {
   // A config refresh re-seeds only what its SAVED value moved, so the refresh
   // after one field's save never wipes text typed meanwhile in another.
   const prevSaved = useRef(saved)
+  // What the next write builds on: the saved section, or the last one this pane
+  // wrote while its refresh is still on the way. Two writes in a row (I saved
+  // it, then the switch) must not undo each other.
+  const baseRef = useRef(saved)
   useEffect(() => {
     const p = prevSaved.current
     prevSaved.current = saved
     if (p === saved) return
+    baseRef.current = saved
     if ((p.enabled ?? false) !== (saved.enabled ?? false)) setEnabled(saved.enabled ?? false)
     if ((p.interval_hours ?? 24) !== (saved.interval_hours ?? 24)) setIntervalHours(saved.interval_hours ?? 24)
     if (stableJson(p.destination) !== stableJson(saved.destination) && saved.destination) {
@@ -123,35 +131,57 @@ export function BackupSection({ config, onSave }: Props) {
     fetchAwsProfiles().then(setProfiles).catch(() => {})
   }, [loadStatus])
 
+  // An event carries the whole health: a field the server cleared is absent, so
+  // replace, keeping only what the status route alone adds.
   useEvent('backup:status', useCallback((data: unknown) => {
-    setStatus((prev) => ({ ...(prev ?? { configured: false, running: false, consecutiveFailures: 0 }), ...(data as BackupStatus) }))
+    setStatus((prev) => ({ primary: prev?.primary, dataDir: prev?.dataDir, machineName: prev?.machineName, ...(data as BackupStatus) }))
   }, []))
 
   const draft = drafts[type]
   const draftIsSaved = !!savedDest && sameDestination(draft, savedDest)
   const missing = missingFields(draft)
 
-  // Autosave covers the switch and the interval (and the legacy form, as before).
-  const form = (): BackupConfig => buildBackupConfig(saved, {
-    enabled,
-    intervalHours,
-    destination: legacyMode ? null : savedDest ?? null,
-    legacy: legacyMode ? legacy : undefined,
-  })
+  /**
+   * The backup section to write, built on `base`. Until an encrypted destination
+   * is saved, the older S3 copy keeps its fields (also after "Switch to
+   * encrypted", which saves nothing by itself).
+   */
+  const compose = (base: BackupConfig, over: { enabled?: boolean; destination?: BackupDestinationConfig } = {}): BackupConfig => {
+    const destination = over.destination ?? base.destination ?? null
+    return buildBackupConfig(base, {
+      enabled: over.enabled ?? enabled,
+      intervalHours,
+      destination,
+      legacy: destination ? undefined : legacyMode ? legacy : engineOf(base) === 'mirror' ? legacyOf(base) : undefined,
+    })
+  }
+  const writeBackup = async (next: BackupConfig) => {
+    baseRef.current = next
+    await onSave({ backup: next } as Partial<Config>)
+  }
+
+  // Autosave covers the interval (and the legacy form, as before); the switch saves at once.
+  const form = (): BackupConfig => compose(saved)
   const baseline = (): BackupConfig => buildBackupConfig(saved, {
     enabled: saved.enabled ?? false,
     intervalHours: saved.interval_hours ?? 24,
-    destination: legacyMode ? null : savedDest ?? null,
-    legacy: savedEngine === 'mirror' ? legacyOf(saved) : undefined,
+    destination: savedDest ?? null,
+    legacy: savedEngine === 'mirror' && !savedDest ? legacyOf(saved) : undefined,
   })
   const handleSave = async () => {
-    await onSave({ backup: form() } as Partial<Config>)
+    await writeBackup(compose(baseRef.current))
   }
   useSettingsAutoSave({ current: stableJson(form()), baseline: stableJson(baseline()), save: handleSave })
 
+  const setAutomatic = (on: boolean) => {
+    setEnabled(on)
+    void writeBackup(compose(baseRef.current, { enabled: on }))
+  }
+
   /** Where backups go from now on: saved on purpose, never by looking at a tab. */
   const saveDestination = async (d: BackupDestinationConfig) => {
-    await onSave({ backup: buildBackupConfig(saved, { enabled, intervalHours, destination: d }) } as Partial<Config>)
+    const base = baseRef.current
+    await writeBackup({ ...compose(base, { destination: d }), other_destinations: othersAfterSwitch(base, d) })
     setLegacyMode(false)
     setKeyRefresh((n) => n + 1)
     loadStatus()
@@ -231,8 +261,10 @@ export function BackupSection({ config, onSave }: Props) {
     setTestResult(null)
   }
 
-  const markKeySaved = () => {
-    void onSave({ backup: { ...form(), recovery_key_saved_at: new Date().toISOString() } } as Partial<Config>)
+  /** "I saved it": on a first setup it also turns backups on (the key was seen before the first upload). */
+  const markKeySaved = (turnOn = false) => {
+    if (turnOn) setEnabled(true)
+    void writeBackup({ ...compose(baseRef.current, turnOn ? { enabled: true } : {}), recovery_key_saved_at: new Date().toISOString() })
   }
 
   // Drive is saved as the destination once its sign-in finishes (on this tab, so on purpose).
@@ -240,11 +272,13 @@ export function BackupSection({ config, onSave }: Props) {
   draftsRef.current = drafts
   const saveRef = useRef(saveDestination)
   saveRef.current = saveDestination
+  // Drive's sign-in makes it the destination only when nothing else is in use;
+  // otherwise "Use Google Drive" is the step that moves the backups.
   const onDriveConnected = useCallback(() => {
     setDriveConnected(true)
     const d = draftsRef.current.gdrive
-    const current = prevSaved.current.destination
-    if (!current || !sameDestination(d, current)) void saveRef.current(cleanDestination(d))
+    const current = baseRef.current.destination
+    if (!current || (current.type === 'gdrive' && !sameDestination(d, current))) void saveRef.current(cleanDestination(d))
     else setKeyRefresh((n) => n + 1)
   }, [])
 
@@ -277,6 +311,13 @@ export function BackupSection({ config, onSave }: Props) {
         : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
+  const inUse = savedDest ? labelOf(savedDest.type) : null
+  const lastHelp = status?.notice ?? (inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
+  const serviceHelp = !inUse
+    ? 'Pick one, then connect it.'
+    : savedDest!.type === type
+      ? `In use: backups go to ${inUse}.`
+      : `In use: ${inUse}.`
 
   const connectionHelp = (): string => {
     if (legacyMode) return testHelp(testResult, true)
@@ -301,7 +342,7 @@ export function BackupSection({ config, onSave }: Props) {
           <>
             <SettingsRow
               label="Service"
-              help={savedDest ? `Backups go to ${labelOf(savedDest.type)}.` : 'Pick one, then connect it.'}
+              help={serviceHelp}
               data-testid="backup-service-row"
               control={
                 <SegmentedControl
@@ -313,6 +354,15 @@ export function BackupSection({ config, onSave }: Props) {
                 />
               }
             />
+            {savedEngine === 'mirror' && !savedDest && (
+              <SettingsRow
+                state="warning"
+                label="The older S3 copy keeps running"
+                help={'Until this one is tested and saved, files still go to the old bucket unencrypted.'}
+                data-testid="backup-legacy-pending"
+                control={<SettingsButton onClick={() => { setLegacyMode(true); setTestResult(null) }} data-testid="backup-legacy-back">Back to it</SettingsButton>}
+              />
+            )}
             {type === 'r2' && <R2Fields dest={draft} onChange={setDest} profiles={profiles} />}
             {type === 's3' && <S3Fields dest={draft} onChange={setDest} profiles={profiles} />}
             {type === 'gdrive' && (
@@ -361,6 +411,8 @@ export function BackupSection({ config, onSave }: Props) {
           ready={destReady}
           mismatch={keyMismatch}
           savedAt={saved.recovery_key_saved_at}
+          firstSetup={!saved.enabled}
+          machineName={status?.machineName}
           onMarkSaved={markKeySaved}
           onState={setKeyState}
           refreshToken={keyRefresh}
@@ -385,16 +437,16 @@ export function BackupSection({ config, onSave }: Props) {
         <SettingsRow
           label="Back up automatically"
           htmlFor="backup-enabled"
-          help={blocked && !enabled
-            ? blocked
+          help={blocked
+            ? (enabled ? `Paused: ${blocked}` : blocked)
             : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
           data-testid="backup-enabled-row"
-          control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setEnabled} disabled={!!blocked && !enabled} />}
+          control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} />}
         />
         <SettingsRow
           label="Every"
           htmlFor="backup-interval"
-          help={legacyMode ? undefined : RETENTION_NOTE}
+          help={legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
           control={
             <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours}
               onBlur={() => {
@@ -414,7 +466,7 @@ export function BackupSection({ config, onSave }: Props) {
         )}
         <SettingsRow
           label="Last backup"
-          help={lastBackupHelp}
+          help={lastHelp}
           error={lastError ?? undefined}
           data-testid="backup-last-row"
           control={

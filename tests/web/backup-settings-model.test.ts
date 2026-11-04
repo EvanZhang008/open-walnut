@@ -5,14 +5,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, missingFields, sameDestination, testHelp,
+  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, missingFields, othersAfterSwitch, sameDestination, testHelp,
 } from '../../web/src/components/settings/sections/backup/backup-model';
+import { swapCommands } from '../../web/src/components/settings/sections/backup/RestorePanel';
 
 const r2 = { type: 'r2' as const, bucket: 'b', account_id: 'a', access_key_id: 'k', secret_access_key: 's' };
 
 describe('missingFields', () => {
   it('names each empty field of a bucket destination', () => {
-    expect(missingFields({ type: 'r2' })).toEqual(['bucket', 'account ID', 'access key ID', 'secret access key']);
+    expect(missingFields({ type: 'r2' })).toEqual(['account ID', 'bucket', 'access key ID', 'secret access key']);
     expect(missingFields(r2)).toEqual([]);
     expect(missingFields({ type: 'r2', bucket: 'b', endpoint: 'http://x', access_key_id: 'k', secret_access_key: 's' })).toEqual([]);
     expect(missingFields({ type: 's3', bucket: 'b', auth: { method: 'access_keys', aws_access_key_id: 'k' } })).toEqual(['access keys']);
@@ -68,5 +69,31 @@ describe('testHelp', () => {
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: false }, false)).toMatch(/another recovery key/);
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: false, writer: 'Old-Mac' }, false)).toMatch(/computer "Old-Mac"/);
     expect(testHelp({ ok: false, error: 'No bucket named "x".' }, false)).toBe('Couldn\'t connect. No bucket named "x".');
+  });
+});
+
+describe('other destinations', () => {
+  const drive = { type: 'gdrive' as const, folder_name: 'Walnut Backup' };
+  it('switching keeps the service left behind, one per type, never the one now in use', () => {
+    expect(othersAfterSwitch({ destination: r2 }, drive)).toEqual([r2]);
+    expect(othersAfterSwitch({ destination: drive, other_destinations: [r2] }, r2)).toEqual([drive]);
+    expect(othersAfterSwitch({ destination: r2, other_destinations: [{ ...r2, bucket: 'old' }] }, drive)).toEqual([r2]);
+    expect(othersAfterSwitch({ destination: r2, other_destinations: [drive] }, { ...r2, bucket: 'b2' })).toEqual([drive]);
+    expect(othersAfterSwitch({}, r2)).toEqual([]);
+  });
+  it('a save keeps them', () => {
+    const cfg = buildBackupConfig({ other_destinations: [drive] }, { enabled: true, intervalHours: 24, destination: r2 });
+    expect(cfg.other_destinations).toEqual([drive]);
+  });
+});
+
+describe('swapCommands', () => {
+  it('keeps the current data aside and moves the restored folder in', () => {
+    expect(swapCommands('/Users/me/.open-walnut', '/Users/me/open-walnut-restored-2026-11-04', '2026-11-04T08:00:00Z'))
+      .toBe('mv /Users/me/.open-walnut /Users/me/.open-walnut-before-restore-2026-11-04\nmv /Users/me/open-walnut-restored-2026-11-04 /Users/me/.open-walnut');
+  });
+  it('quotes paths a shell would split, and keeps ~ expandable', () => {
+    expect(swapCommands('~/.open-walnut', "/tmp/my restore's", '2026-11-04'))
+      .toBe("mv ~/.open-walnut ~/.open-walnut-before-restore-2026-11-04\nmv '/tmp/my restore'\\''s' ~/.open-walnut");
   });
 });

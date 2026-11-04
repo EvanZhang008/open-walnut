@@ -9,7 +9,7 @@
  * and when the browser is on another device the user pastes the address it
  * ended on instead.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { SecretInput } from '../../inputs/SecretInput'
@@ -51,6 +51,9 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   const [pasted, setPasted] = useState('')
   const [finishing, setFinishing] = useState(false)
   const [authUrl, setAuthUrl] = useState<string | null>(null)
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
+  // The sign-in can finish by the event, the poll or a paste: tell the pane once.
+  const toldConnected = useRef(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -63,17 +66,39 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   }, [onConnectedChange])
   useEffect(() => { void refresh() }, [refresh])
 
+  const signedIn = useCallback(() => {
+    setWaiting(false)
+    if (toldConnected.current) return
+    toldConnected.current = true
+    onConnected()
+  }, [onConnected])
+
   useEvent('backup:gdrive', useCallback((data: unknown) => {
     const d = data as { connected: boolean; error: string | null }
     setWaiting(false)
     setError(d.connected ? null : d.error)
     void refresh()
-    if (d.connected) onConnected()
-  }, [refresh, onConnected]))
+    if (d.connected) signedIn()
+  }, [refresh, signedIn]))
+
+  // A missed event (a reconnecting socket) must not leave the row waiting forever.
+  useEffect(() => {
+    if (!waiting) return
+    const t = setInterval(() => {
+      void apiGet<DriveStatus>('/api/backup/gdrive/status').then((s) => {
+        if (!s.connected) return
+        setStatus(s)
+        onConnectedChange?.(true)
+        signedIn()
+      }).catch(() => {})
+    }, 3000)
+    return () => clearInterval(t)
+  }, [waiting, signedIn, onConnectedChange])
 
   const connect = async () => {
     setBusy(true)
     setError(null)
+    toldConnected.current = false
     try {
       const r = await apiPost<{ authUrl: string }>('/api/backup/gdrive/connect', {
         client_id: dest.client_id, client_secret: dest.client_secret, destination: dest,
@@ -96,9 +121,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
     try {
       await apiPost('/api/backup/gdrive/complete', { url: pasted }, { timeoutMs: 45000 })
       setPasted('')
-      setWaiting(false)
       await refresh()
-      onConnected()
+      signedIn()
     } catch (err) {
       setError(saveErrorMessage(err))
     } finally {
@@ -107,7 +131,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   }
 
   const disconnect = async () => {
-    await apiPost('/api/backup/gdrive/disconnect', {}).catch(() => {})
+    setConfirmingDisconnect(false)
+    await apiPost('/api/backup/gdrive/disconnect', {}).catch((err) => setError(saveErrorMessage(err)))
     await refresh()
   }
 
@@ -116,19 +141,34 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   if (status.connected) {
     const who = `${status.email ? ` as ${status.email}` : ''}`
     return (
+      <>
       <SettingsRow
         label="Google account"
         help={inUse
           ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
           : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
+        error={error ?? undefined}
         data-testid="backup-gdrive-connected"
-        control={
+        control={confirmingDisconnect ? (
+          <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
+            <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
+            <SettingsButton variant="danger" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
+          </span>
+        ) : (
           <span className="settings-inline-pair">
             {!inUse && <SettingsButton variant="primary" onClick={onUse} data-testid="backup-gdrive-use">Use Google Drive</SettingsButton>}
-            <SettingsButton onClick={disconnect} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
+            <SettingsButton onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
           </span>
-        }
+        )}
       />
+      {confirmingDisconnect && (
+        <SettingsRow indent state="warning" label="Disconnect Google Drive?"
+          data-testid="backup-gdrive-disconnect-warning"
+          help={inUse
+            ? 'Backups pause until you connect again. The backups already in your Drive stay there.'
+            : 'The backups already in your Drive stay there.'} />
+      )}
+      </>
     )
   }
 

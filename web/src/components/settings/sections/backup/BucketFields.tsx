@@ -65,7 +65,7 @@ export function R2Fields({ dest, onChange }: Props) {
           <li>The <b>Account ID</b> is on the same page, under Account details.</li>
         </ol>
       </SettingsDisclosure>
-      <SettingsDisclosure id="backup-r2-advanced" label="Advanced" data-testid="backup-r2-advanced">
+      <SettingsDisclosure id="backup-r2-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-r2-advanced">
         <TextRow id="backup-r2-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })}
           placeholder="Default: walnut-backup" />
         <TextRow id="backup-r2-endpoint" label="Custom endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
@@ -126,7 +126,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
           } />
         </>
       )}
-      <SettingsDisclosure id="backup-s3-advanced" label="Advanced" data-testid="backup-s3-advanced">
+      <SettingsDisclosure id="backup-s3-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-s3-advanced">
         <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Default: walnut-backup" />
         <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
           placeholder="https://s3.example.com" help="For MinIO, Backblaze B2 and other S3-compatible services." />
@@ -141,4 +141,14 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
       </SettingsDisclosure>
     </>
   )
+}
+
+/** What is set under Advanced, so a custom endpoint is never hidden behind a closed row. */
+function advancedSummary(dest: BackupDestinationConfig): string | undefined {
+  const parts: string[] = []
+  const endpoint = dest.endpoint?.trim()
+  if (endpoint) parts.push(`Endpoint ${endpoint.replace(/^https?:\/\//, '')}`)
+  const prefix = dest.prefix?.trim()
+  if (prefix && prefix !== 'walnut-backup') parts.push(`Folder ${prefix}`)
+  return parts.length ? parts.join(', ') : undefined
 }

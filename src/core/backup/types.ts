@@ -28,6 +28,11 @@ export interface BackupConfig {
   auth?: BackupAuthConfig;
   /** Encrypted backups: where they go. */
   destination?: BackupDestinationConfig;
+  /**
+   * Services set up before (one per type), kept so switching back needs no
+   * retyping. Only `destination` is backed up to; these are never used.
+   */
+  other_destinations?: BackupDestinationConfig[];
   /** Encrypted backups: how many to keep. Default 7 daily + 4 weekly. */
   retention?: { daily?: number; weekly?: number };
   /** When the user confirmed they saved the recovery key (Settings stops asking). */
@@ -107,6 +112,8 @@ export interface BackupDiff {
 
 /** Live health of the backup subsystem, broadcast as `backup:status`. */
 export interface BackupHealth {
+  /** A passing note, not a failure (a terminal's backup holds the lock). */
+  notice?: string;
   configured: boolean;
   running: boolean;
   lastBackupAt?: string;

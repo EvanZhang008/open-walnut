@@ -17,6 +17,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { getConfig } from '../../core/config-manager.js';
+import os from 'node:os';
 import { WALNUT_HOME } from '../../constants.js';
 import {
   enableBucketVersioning,
@@ -124,7 +125,7 @@ backupRouter.get('/status', async (_req: Request, res: Response) => {
   // Another destination was saved since the health was last read: show its backups, not the old one's.
   scheduler.syncDestination((await getConfig()).backup);
   // dataDir: the restore result names the real data folder to swap it with.
-  res.json({ ...scheduler.health, primary: true, dataDir: WALNUT_HOME });
+  res.json({ ...scheduler.health, primary: true, dataDir: WALNUT_HOME, machineName: os.hostname().replace(/\.(local|lan|home)$/i, '') });
 });
 
 // POST /api/backup/enable-versioning — one-click deletion protection.

@@ -56,6 +56,11 @@ export interface LoadedIndex {
 
 const randomId = (): string => randomBytes(16).toString('hex');
 
+/** The store already holds snapshots or packs. */
+export async function holdsBackupData(store: BackupStore): Promise<boolean> {
+  return (await store.list('snapshots/')).length > 0 || (await store.list('packs/')).length > 0;
+}
+
 function sealWriter(keys: RepoKeys, me: WriterIdentity): RepoConfig['writer'] {
   return {
     id: me.id,
@@ -90,6 +95,11 @@ export class Repository {
     }
     if (!config) {
       if (!opts.create || !opts.writer) throw new RepoError('no_repo', `No Walnut backups at ${store.describe()} yet.`);
+      // Backups there without a readable config (a listing that lagged): never start a new
+      // repository over them, or their key check and writer would be replaced.
+      if (await holdsBackupData(store)) {
+        throw new RepoError('bad_format', `${store.describe()} holds Walnut backup data but its walnut-backup.json could not be read. Try again in a minute.`);
+      }
       const repoId = randomId();
       config = {
         format: REPO_FORMAT,
