@@ -1,9 +1,9 @@
 ---
 name: restore-backup
-description: Hands-on disaster-recovery agent for Open Walnut S3 backups. Paste into your OWN Claude Code session — it finds your backup in S3, restores it to a fresh folder, verifies every file and database, and helps you adopt it as the live data folder. Works on a brand-new machine with nothing installed. Use when a user lost their Walnut data, got a new machine, or wants to verify their backups actually restore.
+description: Hands-on disaster-recovery agent for Open Walnut backups (encrypted backups in Cloudflare R2, Google Drive or S3, and the older unencrypted S3 copy). Paste into your OWN Claude Code session — it finds your backup, restores it to a fresh folder, verifies every file and database, and helps you adopt it as the live data folder. Works on a brand-new machine with nothing installed. Use when a user lost their Walnut data, got a new machine, or wants to verify their backups actually restore.
 ---
 
-# Restore Open Walnut from an S3 backup
+# Restore Open Walnut from a backup
 
 **Goal:** get the user's Walnut data back, verified, with zero chance of making things worse.
 You are doing the restore *for* the user. Be **proactive**: run the commands yourself, verify
@@ -16,10 +16,52 @@ restore point, whether to adopt).
    it, and only then (with the user's explicit go-ahead) swap it into place. If
    `~/.open-walnut` still exists, treat it as precious even if the user says it's broken:
    rename it aside, never delete it.
-2. **Never delete anything in the bucket.** The bucket is the last copy. Read-only access is
-   all a restore needs.
+2. **Never delete anything in the bucket or Drive folder.** It is the last copy. Read-only
+   access is all a restore needs.
 
-## What's in the bucket (so you can reason about it)
+## Which kind of backup is it?
+
+- **Encrypted backups** (Walnut 2026-11 and later; Settings → Backup shows Cloudflare R2,
+  Google Drive or Amazon S3). Everything is encrypted on the user's computer; the
+  **recovery key** (it starts with `WB1-`) is the only thing that opens it. Ask the user for
+  it first: their password manager, or the `walnut-recovery-key.txt` they downloaded. Without
+  it nobody can restore, Walnut included. Go to "Encrypted backups" below.
+- **The older S3 copy** (`backup.bucket` in config.yaml, files stored as they are). Skip to
+  "What's in the bucket".
+
+## Encrypted backups
+
+At the destination (an R2 or S3 bucket folder, default `walnut-backup`, or the
+"Walnut Backup" folder in Google Drive): `walnut-backup.json` (plaintext: format, key check,
+which machine writes), `snapshots/` (one encrypted object per backup), `index/` and
+`packs/` (encrypted, deduplicated pieces of files). Nothing is readable without the key.
+
+**Google Drive, or any destination when Walnut can run with a screen:** the easiest way is
+the app itself. Install Walnut (Step 1), open Settings → Backup, pick the same service and
+fill it in (for Drive: Connect Google Drive, with the same Google client ID and secret as
+before if the user made their own), type the recovery key when Walnut asks for it, then
+Backups → Restore → Choose a backup → Restore. It restores into a new folder beside the data
+folder and says where. Then verify (Step 4) and adopt (Step 5).
+
+**R2 or S3 from a terminal** (no config needed; keep the secrets out of shell history):
+
+```bash
+export WALNUT_BACKUP_SECRET_ACCESS_KEY='<secret access key>'
+export WALNUT_BACKUP_RECOVERY_KEY='WB1-...'
+# Cloudflare R2
+open-walnut backup list --type r2 --account-id <account id> --bucket <bucket> --access-key-id <key id>
+open-walnut backup restore --type r2 --account-id <account id> --bucket <bucket> --access-key-id <key id> \
+  [--at <backup id>] --to ~/walnut-restored
+# Amazon S3 (default AWS credentials, or --profile <name>)
+open-walnut backup restore --type s3 --bucket <bucket> --region <region> [--profile <name>] --to ~/walnut-restored
+```
+
+`--prefix` is the folder in the bucket (default `walnut-backup`). Restore checks every piece
+twice (its encryption tag and its content id) and every file's size, and gives files their
+original modification times. "made with a different recovery key" means the key is wrong:
+ask again, never guess. Then go to Step 4.
+
+## What's in the bucket (the older S3 copy)
 
 Under the configured prefix (default `walnut`):
 

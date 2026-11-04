@@ -1,355 +1,359 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Config } from '@open-walnut/core';
-import { SectionCard } from '../inputs/SectionCard';
-import { ToggleSwitch } from '../inputs/ToggleSwitch';
-import { SettingsGroup, SettingsRow } from '../SettingsSection';
-import { SettingsButton } from '../inputs/SettingsButton';
-import { NumberInput } from '../inputs/NumberInput';
-import { SecretInput } from '../inputs/SecretInput';
-import { SegmentedControl } from '../inputs/SegmentedControl';
-import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
-import { saveErrorMessage } from '../settings-pane-context';
-import { formatAbsoluteTime } from './addons-format';
-import { apiGet, apiPost } from '@/api/client';
-import { fetchAwsProfiles } from '@/api/config';
-import { useEvent } from '@/hooks/useWebSocket';
-import '@/styles/settings-sections-addons.css';
+/**
+ * Settings → Backup.
+ *
+ * Four groups, top to bottom: the switch and how often; where backups go
+ * (Cloudflare R2, Google Drive or Amazon S3, with that service's fields);
+ * the recovery key; and the backups themselves (last backup, Back up now,
+ * Restore). People who set up the older unencrypted S3 copy keep that form
+ * until they choose to switch.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Config } from '@open-walnut/core'
+import { SectionCard } from '../inputs/SectionCard'
+import { ToggleSwitch } from '../inputs/ToggleSwitch'
+import { SettingsGroup, SettingsRow } from '../SettingsSection'
+import { SettingsButton } from '../inputs/SettingsButton'
+import { NumberInput } from '../inputs/NumberInput'
+import { SegmentedControl } from '../inputs/SegmentedControl'
+import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
+import { saveErrorMessage } from '../settings-pane-context'
+import { formatAbsoluteTime } from './addons-format'
+import { apiGet, apiPost } from '@/api/client'
+import { fetchAwsProfiles } from '@/api/config'
+import { useEvent } from '@/hooks/useWebSocket'
+import {
+  DESTINATIONS, DESTINATION_NOTE, buildBackupConfig, engineOf, fmtBytes, legacyToEncrypted, missingFields, stableJson,
+  type BackupConfig, type BackupDestinationConfig, type BackupDestinationType,
+} from './backup/backup-model'
+import { R2Fields, S3Fields } from './backup/BucketFields'
+import { DriveConnect } from './backup/DriveConnect'
+import { LegacyS3Fields, type LegacyFields } from './backup/LegacyS3Fields'
+import { RecoveryKeyGroup } from './backup/RecoveryKeyGroup'
+import { RestorePanel, type RestoreStatus } from './backup/RestorePanel'
+import '@/styles/settings-sections-addons.css'
+import '@/styles/settings-backup.css'
 
 interface Props {
-  config: Config;
-  onSave: (partial: Partial<Config>) => Promise<void>;
+  config: Config
+  onSave: (partial: Partial<Config>) => Promise<void>
 }
 
 interface BackupStatus {
-  configured: boolean;
-  running: boolean;
-  primary?: boolean;
-  lastBackupAt?: string;
-  lastDurationMs?: number;
-  lastFileCount?: number;
-  lastTotalBytes?: number;
-  progress?: { uploadedBytes: number; totalBytes: number };
-  consecutiveFailures: number;
-  error?: string;
-  versioningEnabled?: boolean;
+  configured: boolean
+  running: boolean
+  primary?: boolean
+  engine?: 'mirror' | 'encrypted'
+  destination?: string
+  lastBackupAt?: string
+  lastFileCount?: number
+  lastTotalBytes?: number
+  lastUploadedBytes?: number
+  progress?: { uploadedBytes: number; totalBytes: number }
+  consecutiveFailures: number
+  error?: string
+  errorCode?: string
+  versioningEnabled?: boolean
+  snapshotCount?: number
+  restore?: RestoreStatus
 }
 
 interface TestResult {
-  ok: boolean;
-  arn?: string;
-  versioningEnabled?: boolean;
-  error?: string;
+  ok: boolean
+  arn?: string
+  versioningEnabled?: boolean
+  hasBackups?: boolean
+  keyMatches?: boolean
+  hasKey?: boolean
+  writer?: string
+  error?: string
 }
 
-const fmtBytes = (n?: number): string =>
-  n === undefined ? 'unknown size' : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+type Drafts = Record<BackupDestinationType, BackupDestinationConfig>
+
+const emptyDrafts = (saved?: BackupDestinationConfig): Drafts => ({
+  r2: { type: 'r2' },
+  gdrive: { type: 'gdrive' },
+  s3: { type: 's3', auth: { method: 'aws_chain' } },
+  ...(saved ? { [saved.type]: saved } : {}),
+})
+
+const legacyOf = (b: BackupConfig): LegacyFields => ({ bucket: b.bucket, region: b.region, prefix: b.prefix, auth: b.auth })
+
+function testHelp(r: TestResult | null, legacy: boolean): string {
+  if (!r) return legacy ? 'Checks the bucket with these credentials.' : 'Writes, reads back and deletes a small test file.'
+  if (!r.ok) return `Couldn't connect: ${r.error}`
+  if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
+  if (!r.hasBackups) return 'Connected. Walnut can write here; no backups yet.'
+  if (r.keyMatches === false) return 'Connected. It holds Walnut backups made with another recovery key.'
+  return `Connected. It holds your Walnut backups${r.writer ? ` from ${r.writer}` : ''}.`
+}
 
 export function BackupSection({ config, onSave }: Props) {
-  const saved = config.backup ?? {};
-  const [enabled, setEnabled] = useState(saved.enabled ?? false);
-  const [bucket, setBucket] = useState(saved.bucket ?? '');
-  const [region, setRegion] = useState(saved.region ?? 'us-west-2');
-  const [prefix, setPrefix] = useState(saved.prefix ?? 'walnut');
+  const saved: BackupConfig = config.backup ?? {}
+  const savedEngine = engineOf(saved)
+  const [enabled, setEnabled] = useState(saved.enabled ?? false)
   // Empty while the user retypes it; a save falls back to 24.
-  const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24);
-  const [method, setMethod] = useState(saved.auth?.method ?? 'aws_chain');
-  const [profile, setProfile] = useState(saved.auth?.profile ?? '');
-  const [accessKey, setAccessKey] = useState(saved.auth?.aws_access_key_id ?? '');
-  const [secretKey, setSecretKey] = useState(saved.auth?.aws_secret_access_key ?? '');
-  const [profiles, setProfiles] = useState<string[]>([]);
+  const [intervalHours, setIntervalHours] = useState<number | undefined>(saved.interval_hours ?? 24)
+  const [legacyMode, setLegacyMode] = useState(savedEngine === 'mirror')
+  const [legacy, setLegacy] = useState<LegacyFields>(legacyOf(saved))
+  const [type, setType] = useState<BackupDestinationType>(saved.destination?.type ?? 'r2')
+  const [drafts, setDrafts] = useState<Drafts>(() => emptyDrafts(saved.destination))
+  const [profiles, setProfiles] = useState<string[]>([])
+  const [status, setStatus] = useState<BackupStatus | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
+  const [adopting, setAdopting] = useState(false)
+  const [enablingVersioning, setEnablingVersioning] = useState(false)
+  const [keyRefresh, setKeyRefresh] = useState(0)
+  const [driveConnected, setDriveConnected] = useState(false)
 
-  const [status, setStatus] = useState<BackupStatus | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [enablingVersioning, setEnablingVersioning] = useState(false);
-
-  // A config refresh re-seeds only the fields whose SAVED value moved: the
-  // refresh after one field's auto-save must not wipe text typed meanwhile in
-  // another (the bucket typed while the master switch's save was in flight).
-  const prevSaved = useRef(saved);
+  // A config refresh re-seeds only what its SAVED value moved, so the refresh
+  // after one field's save never wipes text typed meanwhile in another.
+  const prevSaved = useRef(saved)
   useEffect(() => {
-    const p = prevSaved.current;
-    prevSaved.current = saved;
-    if (p === saved) return;
-    const moved = <T,>(a: T, b: T, set: (v: T) => void) => { if (a !== b) set(b); };
-    moved(p.enabled ?? false, saved.enabled ?? false, setEnabled);
-    moved(p.bucket ?? '', saved.bucket ?? '', setBucket);
-    moved(p.region ?? 'us-west-2', saved.region ?? 'us-west-2', setRegion);
-    moved(p.prefix ?? 'walnut', saved.prefix ?? 'walnut', setPrefix);
-    moved(p.interval_hours ?? 24, saved.interval_hours ?? 24, setIntervalHours);
-    moved(p.auth?.method ?? 'aws_chain', saved.auth?.method ?? 'aws_chain', setMethod);
-    moved(p.auth?.profile ?? '', saved.auth?.profile ?? '', setProfile);
-    moved(p.auth?.aws_access_key_id ?? '', saved.auth?.aws_access_key_id ?? '', setAccessKey);
-    moved(p.auth?.aws_secret_access_key ?? '', saved.auth?.aws_secret_access_key ?? '', setSecretKey);
+    const p = prevSaved.current
+    prevSaved.current = saved
+    if (p === saved) return
+    if ((p.enabled ?? false) !== (saved.enabled ?? false)) setEnabled(saved.enabled ?? false)
+    if ((p.interval_hours ?? 24) !== (saved.interval_hours ?? 24)) setIntervalHours(saved.interval_hours ?? 24)
+    if (stableJson(p.destination) !== stableJson(saved.destination) && saved.destination) {
+      const d = saved.destination
+      setDrafts((cur) => ({ ...cur, [d.type]: d }))
+    }
+    if (stableJson(legacyOf(p)) !== stableJson(legacyOf(saved))) setLegacy(legacyOf(saved))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
+  }, [config])
 
   useEffect(() => {
-    apiGet<BackupStatus>('/api/backup/status').then(setStatus).catch(() => {});
-    // A failed read keeps the profiles it listed before.
-    fetchAwsProfiles().then(setProfiles).catch(() => {});
-  }, []);
+    apiGet<BackupStatus>('/api/backup/status').then(setStatus).catch(() => {})
+    fetchAwsProfiles().then(setProfiles).catch(() => {})
+  }, [])
 
   useEvent('backup:status', useCallback((data: unknown) => {
-    setStatus((prev) => ({ ...(prev ?? { configured: false, running: false, consecutiveFailures: 0 }), ...(data as BackupStatus) }));
-  }, []));
+    setStatus((prev) => ({ ...(prev ?? { configured: false, running: false, consecutiveFailures: 0 }), ...(data as BackupStatus) }))
+  }, []))
 
-  const formConfig = () => ({
+  const dest = drafts[type]
+  const form = (): BackupConfig => buildBackupConfig(saved, {
     enabled,
-    bucket: bucket.trim(),
-    region: region.trim() || 'us-west-2',
-    prefix: prefix.trim() || 'walnut',
-    interval_hours: Math.max(1, Number(intervalHours) || 24),
-    auth: {
-      method,
-      ...(method === 'profile' && profile ? { profile } : {}),
-      ...(method === 'access_keys' ? { aws_access_key_id: accessKey, aws_secret_access_key: secretKey } : {}),
-    },
-  });
-
+    intervalHours,
+    destination: legacyMode ? null : dest,
+    legacy: legacyMode ? legacy : undefined,
+  })
+  const baseline = (): BackupConfig => buildBackupConfig(saved, {
+    enabled: saved.enabled ?? false,
+    intervalHours: saved.interval_hours ?? 24,
+    destination: saved.destination ?? null,
+    legacy: savedEngine === 'mirror' ? legacyOf(saved) : undefined,
+  })
   const handleSave = async () => {
-    await onSave({ backup: formConfig() } as Partial<Config>);
-  };
+    await onSave({ backup: form() } as Partial<Config>)
+  }
+  useSettingsAutoSave({ current: stableJson(form()), baseline: stableJson(baseline()), save: handleSave })
 
-  useSettingsAutoSave({
-    current: JSON.stringify(formConfig()),
-    baseline: JSON.stringify({
-      enabled: saved.enabled ?? false,
-      bucket: saved.bucket ?? '',
-      region: saved.region ?? 'us-west-2',
-      prefix: saved.prefix ?? 'walnut',
-      interval_hours: saved.interval_hours ?? 24,
-      auth: {
-        method: saved.auth?.method ?? 'aws_chain',
-        ...(saved.auth?.method === 'profile' && saved.auth?.profile ? { profile: saved.auth.profile } : {}),
-        ...(saved.auth?.method === 'access_keys'
-          ? { aws_access_key_id: saved.auth?.aws_access_key_id ?? '', aws_secret_access_key: saved.auth?.aws_secret_access_key ?? '' }
-          : {}),
-      },
-    }),
-    save: handleSave,
-  });
+  const setDest = (next: BackupDestinationConfig) => setDrafts((cur) => ({ ...cur, [next.type]: next }))
+  const pickType = (t: BackupDestinationType) => {
+    setType(t)
+    setTestResult(null)
+  }
+
+  const savedDest = saved.destination
+  const destReady = !legacyMode && !!savedDest && savedDest.type === type && missingFields(savedDest).length === 0
+  const destLabel = DESTINATIONS.find((d) => d.value === type)?.label ?? ''
 
   const handleTest = async () => {
-    setTesting(true);
-    setTestResult(null);
+    setTesting(true)
+    setTestResult(null)
     try {
-      setTestResult(await apiPost<TestResult>('/api/backup/test', formConfig(), { timeoutMs: 45000 }));
+      setTestResult(legacyMode
+        ? await apiPost<TestResult>('/api/backup/test', form(), { timeoutMs: 45000 })
+        : await apiPost<TestResult>('/api/backup/destination/test', { destination: dest }, { timeoutMs: 45000 }))
     } catch (err) {
-      setTestResult({ ok: false, error: saveErrorMessage(err) });
+      setTestResult({ ok: false, error: saveErrorMessage(err) })
     } finally {
-      setTesting(false);
+      setTesting(false)
     }
-  };
+  }
 
   const handleRunNow = async () => {
-    setRunError(null);
+    setRunError(null)
     try {
-      // Fire-and-forget: the server answers 202 and the run continues in the
-      // background; progress/completion arrive via backup:status events.
-      await apiPost('/api/backup/run', {});
-      setStatus((prev) => (prev ? { ...prev, running: true } : prev));
+      // The server answers 202; progress and the result arrive as backup:status events.
+      await apiPost('/api/backup/run', {})
+      setStatus((prev) => (prev ? { ...prev, running: true } : prev))
     } catch (err) {
-      setRunError(saveErrorMessage(err));
+      setRunError(saveErrorMessage(err))
     }
-  };
+  }
+
+  const handleAdopt = async () => {
+    setAdopting(true)
+    try {
+      await apiPost('/api/backup/adopt', {}, { timeoutMs: 45000 })
+      setRunError(null)
+    } catch (err) {
+      setRunError(saveErrorMessage(err))
+    } finally {
+      setAdopting(false)
+    }
+  }
 
   const handleEnableVersioning = async () => {
-    setEnablingVersioning(true);
+    setEnablingVersioning(true)
     try {
-      await apiPost('/api/backup/enable-versioning', formConfig(), { timeoutMs: 45000 });
-      setStatus((prev) => (prev ? { ...prev, versioningEnabled: true } : prev));
-      setTestResult((prev) => (prev ? { ...prev, versioningEnabled: true } : prev));
+      await apiPost('/api/backup/enable-versioning', form(), { timeoutMs: 45000 })
+      setStatus((prev) => (prev ? { ...prev, versioningEnabled: true } : prev))
+      setTestResult((prev) => (prev ? { ...prev, versioningEnabled: true } : prev))
     } catch (err) {
-      setRunError(saveErrorMessage(err));
+      setRunError(saveErrorMessage(err))
     } finally {
-      setEnablingVersioning(false);
+      setEnablingVersioning(false)
     }
-  };
+  }
 
-  const versioningOff =
-    (testResult && testResult.ok && testResult.versioningEnabled === false) ||
-    (status?.configured && status.versioningEnabled === false);
+  const switchToEncrypted = () => {
+    setDrafts((cur) => ({ ...cur, s3: legacyToEncrypted(saved) }))
+    setType('s3')
+    setLegacyMode(false)
+    setTestResult(null)
+  }
+
+  const markKeySaved = () => {
+    void onSave({ backup: { ...form(), recovery_key_saved_at: new Date().toISOString() } } as Partial<Config>)
+  }
+  const onDriveConnected = useCallback(() => setKeyRefresh((n) => n + 1), [])
+
+  const canRun = legacyMode ? Boolean(legacy.bucket?.trim()) : destReady && (type !== 'gdrive' || driveConnected)
   const progressPct = status?.progress && status.progress.totalBytes > 0
     ? Math.floor((status.progress.uploadedBytes / status.progress.totalBytes) * 100)
-    : null;
-
-
-  const lastBackupHelp = status?.running && progressPct !== null
-    ? `In progress: ${progressPct}% (${fmtBytes(status.progress?.uploadedBytes)} of ${fmtBytes(status.progress?.totalBytes)})`
+    : null
+  const lastBackupHelp = status?.running
+    ? progressPct !== null ? `Backing up: ${progressPct}% of ${fmtBytes(status.progress?.totalBytes)}` : 'Backing up...'
     : status?.lastBackupAt
       ? [
           formatAbsoluteTime(status.lastBackupAt),
-          `${status.lastFileCount ?? 0} files`,
+          `${(status.lastFileCount ?? 0).toLocaleString()} files`,
           fmtBytes(status.lastTotalBytes),
-          ...(status.versioningEnabled ? ['versioning on'] : []),
+          ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} kept`] : []),
         ].join(', ')
-      : 'No backup has run yet.';
-  const lastError = status?.error ? `Last error: ${status.error}` : runError;
+      : canRun ? 'No backup yet. The first one starts within a minute once this is on.' : 'Finish "Where backups go" above first.'
+  const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
+  const otherWriter = !legacyMode && status?.errorCode === 'other_writer'
+  const lastError = otherWriter || status?.errorCode === 'key_mismatch' ? null : (status?.error ? `Last error: ${status.error}` : runError)
 
   return (
-    <SectionCard id="backup" title="S3 Backup" onSave={handleSave} showSave={false}>
-      <SettingsGroup footer={<>What gets backed up: everything in your data folder, credentials (<code>auth.json</code>) included, so use a bucket only you can access.</>}>
+    <SectionCard id="backup" title="Backup" onSave={handleSave} showSave={false}>
+      <SettingsGroup footer="Everything in your data folder is backed up (notes, tasks, passwords, sign-ins); caches and search indexes are skipped.">
         <SettingsRow
-          label="Scheduled backups"
+          label="Back up automatically"
           htmlFor="backup-enabled"
-          help="Only changed files upload after the first run; caches and search indexes are skipped."
+          help={legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
           control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setEnabled} />}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup heading="Destination">
-        <SettingsRow
-          label="Bucket"
-          htmlFor="backup-bucket"
-          control={
-            <input id="backup-bucket" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
-              value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-walnut-backup" />
-          }
-        />
-        <SettingsRow
-          label="Region"
-          htmlFor="backup-region"
-          control={
-            <input id="backup-region" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
-              value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-west-2" />
-          }
-        />
-        <SettingsRow
-          label="Prefix"
-          htmlFor="backup-prefix"
-          help="Folder inside the bucket; use a distinct prefix per machine."
-          control={
-            <input id="backup-prefix" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
-              value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="walnut" />
-          }
         />
         <SettingsRow
           label="Every"
           htmlFor="backup-interval"
-          control={
-            <NumberInput id="backup-interval" min={1} unit="hours" value={intervalHours}
-              onChange={setIntervalHours} />
-          }
+          help={legacyMode ? undefined : 'Keeps one backup a day for a week and one a week for a month.'}
+          control={<NumberInput id="backup-interval" min={1} unit="hours" value={intervalHours} onChange={setIntervalHours} />}
         />
       </SettingsGroup>
 
-      <SettingsGroup heading="Credentials">
-        <SettingsRow
-          label="Method"
-          control={
-            <SegmentedControl
-              id="backup-auth-method"
-              aria-label="Credentials method"
-              value={method}
-              onChange={(v) => setMethod(v)}
-              options={[
-                { value: 'aws_chain', label: 'Default chain', title: 'The default AWS credential chain', testId: 'backup-auth-aws_chain' },
-                { value: 'profile', label: 'AWS profile', title: 'A profile from ~/.aws', testId: 'backup-auth-profile' },
-                { value: 'access_keys', label: 'Access keys', testId: 'backup-auth-access_keys' },
-              ]}
-            />
-          }
-        />
-        {method === 'profile' && (
-          <SettingsRow
-            label="Profile"
-            htmlFor="backup-profile"
-            indent
-            control={profiles.length > 0 ? (
-              <select id="backup-profile" className="settings-select" value={profile} onChange={(e) => setProfile(e.target.value)}>
-                <option value="">Choose a profile</option>
-                {profiles.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-            ) : (
-              <input id="backup-profile" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
-                value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
-            )}
-          />
-        )}
-        {method === 'access_keys' && (
+      <SettingsGroup heading="Where backups go" footer={legacyMode ? undefined : DESTINATION_NOTE[type]} data-testid="backup-destination-group">
+        {legacyMode ? (
+          <LegacyS3Fields value={legacy} onChange={setLegacy} profiles={profiles} onSwitch={switchToEncrypted} />
+        ) : (
           <>
             <SettingsRow
-              label="Access key ID"
-              htmlFor="backup-access-key"
-              indent
+              label="Service"
               control={
-                <input id="backup-access-key" type="text" data-no-draft="autosave" className="settings-input settings-input--short settings-input--mono"
-                  value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
+                <SegmentedControl
+                  id="backup-service"
+                  aria-label="Backup service"
+                  value={type}
+                  onChange={pickType}
+                  options={DESTINATIONS.map((d) => ({ value: d.value, label: d.label, testId: `backup-service-${d.value}` }))}
+                />
               }
             />
-            <SettingsRow
-              label="Secret access key"
-              htmlFor="backup-secret-key"
-              indent
-              control={<SecretInput id="backup-secret-key" value={secretKey} onChange={setSecretKey} />}
-            />
+            {type === 'r2' && <R2Fields dest={dest} onChange={setDest} profiles={profiles} />}
+            {type === 's3' && <S3Fields dest={dest} onChange={setDest} profiles={profiles} />}
+            {type === 'gdrive' && <DriveConnect dest={dest} onChange={setDest} onConnected={onDriveConnected} onConnectedChange={setDriveConnected} />}
           </>
         )}
-        <SettingsRow
-          label="Connection"
-          help={testResult
-            ? testResult.ok ? `Connected as ${testResult.arn ?? 'unknown identity'}` : `Couldn't connect: ${testResult.error}`
-            : 'Checks the bucket with these credentials.'}
-          state={testResult && !testResult.ok ? 'error' : undefined}
-          data-testid="backup-connection-row"
-          control={
-            <SettingsButton onClick={handleTest} disabled={!bucket.trim()} title={bucket.trim() ? undefined : 'Enter a bucket first.'} busy={testing} busyLabel="Testing..."
-              data-testid="backup-test-connection">
-              Test connection
-            </SettingsButton>
-          }
-        />
-      </SettingsGroup>
-
-      {versioningOff && (
-        // A warning row in a group, on the 14px inset and the control column (F35).
-        <SettingsGroup data-testid="backup-versioning-off">
+        {(legacyMode || type !== 'gdrive') && (
+          <SettingsRow
+            label="Connection"
+            help={testHelp(testResult, legacyMode)}
+            state={testResult && !testResult.ok ? 'error' : undefined}
+            data-testid="backup-connection-row"
+            control={
+              <SettingsButton onClick={handleTest} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
+                disabled={legacyMode ? !legacy.bucket?.trim() : missingFields(dest).length > 0}
+                title={legacyMode || missingFields(dest).length === 0 ? undefined : `Add the ${missingFields(dest).join(', ')} first.`}>
+                Test connection
+              </SettingsButton>
+            }
+          />
+        )}
+        {versioningOff && (
           <SettingsRow
             state="warning"
             label="Bucket versioning is off"
             help="A deleted or overwritten backup can't be recovered."
-            control={
-              <SettingsButton onClick={handleEnableVersioning} busy={enablingVersioning} busyLabel="Enabling...">
-                Enable versioning
-              </SettingsButton>
-            }
+            data-testid="backup-versioning-off"
+            control={<SettingsButton onClick={handleEnableVersioning} busy={enablingVersioning} busyLabel="Enabling...">Enable versioning</SettingsButton>}
           />
-        </SettingsGroup>
+        )}
+      </SettingsGroup>
+
+      {!legacyMode && savedDest && (
+        <RecoveryKeyGroup
+          dest={savedDest}
+          destinationLabel={destLabel}
+          ready={destReady && (type !== 'gdrive' || driveConnected)}
+          savedAt={saved.recovery_key_saved_at}
+          onMarkSaved={markKeySaved}
+          refreshToken={keyRefresh}
+        />
       )}
 
       <SettingsGroup
+        heading="Backups"
+        data-testid="backup-backups-group"
         footer={
           <>
-            Restore from a terminal with <code>open-walnut backup restore</code>, or paste the{' '}
-            <a
-              href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md"
-              target="_blank"
-              rel="noreferrer"
-            >
+            Also from a terminal: <code>open-walnut backup restore</code>, or paste the{' '}
+            <a href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md" target="_blank" rel="noreferrer">
               restore-backup skill
             </a>{' '}
-            into a Claude Code session.
+            into a Claude Code session on the new computer.
           </>
         }
       >
+        {otherWriter && (
+          <SettingsRow
+            state="warning"
+            label="Another computer writes these backups"
+            help={`${status?.error ?? ''} Moving them here makes that computer stop backing up to this place.`}
+            data-testid="backup-other-writer"
+            control={<SettingsButton onClick={handleAdopt} busy={adopting} busyLabel="Moving..." data-testid="backup-adopt">Back up from this computer</SettingsButton>}
+          />
+        )}
         <SettingsRow
           label="Last backup"
-          // A greyed Back up now says why, in the row, not only on hover (N3-31).
-          help={!bucket.trim() && !status?.lastBackupAt ? 'Enter a bucket above to back up.' : lastBackupHelp}
+          help={lastBackupHelp}
           error={lastError ?? undefined}
           data-testid="backup-last-row"
           control={
-            <SettingsButton onClick={handleRunNow} disabled={!bucket.trim()} title={bucket.trim() ? undefined : 'Enter a bucket first.'} busy={status?.running === true}
-              busyLabel="Backing up..." data-testid="backup-run-now">
+            <SettingsButton onClick={handleRunNow} disabled={!canRun} busy={status?.running === true} busyLabel="Backing up..."
+              title={canRun ? undefined : 'Finish "Where backups go" first.'} data-testid="backup-run-now">
               Back up now
             </SettingsButton>
           }
         />
+        <RestorePanel dest={legacyMode ? null : savedDest ?? null} restore={status?.restore} disabled={!canRun && !status?.lastBackupAt} />
       </SettingsGroup>
     </SectionCard>
-  );
+  )
 }

@@ -1,0 +1,55 @@
+/* Settings → Backup: the step lists, the recovery key, the restore list. */
+.settings-steps {
+  margin: 0;
+  padding: 10px var(--settings-row-pad-x) 10px calc(var(--settings-row-pad-x) + 22px);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--fg-secondary);
+}
+.settings-steps li + li { margin-top: 4px; }
+.settings-steps a { color: var(--accent); }
+.settings-steps code,
+.settings-row-help code { font-family: var(--font-mono); font-size: 12px; }
+.settings-steps-note {
+  margin: 0;
+  padding: 0 var(--settings-row-pad-x) 12px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.settings-inline-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-inline-pair .settings-input { min-width: 0; flex: 1 1 260px; }
+.backup-key {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  user-select: all;
+  white-space: nowrap;
+}
+.backup-restore-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.backup-restore-item {
+  display: grid;
+  grid-template-columns: 18px minmax(150px, auto) 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.backup-restore-item[data-picked='true'] { background: var(--bg-tertiary); }
+.backup-restore-meta { color: var(--fg-muted); font-size: 12.5px; }
+.backup-key-shown { padding-top: 10px; padding-bottom: 10px; }
+.backup-key-shown .backup-key { white-space: normal; word-break: break-all; font-size: 13px; }

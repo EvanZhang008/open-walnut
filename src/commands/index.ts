@@ -145,12 +145,18 @@ export function registerCommands(program: Command): void {
 
   const backup = program
     .command('backup')
-    .description('S3 backup of the data directory');
+    .description('Backups of the data directory (encrypted to S3, Cloudflare R2 or Google Drive; or the older S3 copy)');
   const backupCredFlags = (c: Command): Command => c
     .option('--bucket <bucket>', 'S3 bucket (overrides config backup.bucket)')
     .option('--region <region>', 'AWS region')
     .option('--prefix <prefix>', 'Key prefix (default: walnut)')
-    .option('--profile <profile>', 'AWS profile (bare-machine restores)');
+    .option('--profile <profile>', 'AWS profile (bare-machine restores)')
+    .option('--key <recoveryKey>', 'Recovery key of encrypted backups (default: this machine\'s saved key)')
+    .option('--type <r2|s3|gdrive>', 'Encrypted backups at this kind of place, from these flags instead of config.yaml')
+    .option('--account-id <id>', 'Cloudflare account id (with --type r2)')
+    .option('--endpoint <url>', 'S3-compatible endpoint (with --type r2 or s3)')
+    .option('--access-key-id <id>', 'Access key id (with --type r2, or s3 with --endpoint)')
+    .option('--secret-access-key <secret>', 'Secret access key (with --access-key-id)');
   backupCredFlags(backup.command('run').description('Run a backup now'))
     .action(async (options: Record<string, unknown>) => {
       const { runBackupRun } = await import('./backup.js');
@@ -162,7 +168,7 @@ export function registerCommands(program: Command): void {
       await runBackupList(options);
     });
   backupCredFlags(backup.command('restore').description('Restore a backup into a fresh directory'))
-    .option('--at <versionId>', 'Manifest version to restore (from `backup list`)')
+    .option('--at <id>', 'Backup to restore, from `backup list` (default: the newest)')
     .option('--to <dir>', 'Target directory (default: ~/.open-walnut-restored-<ts>)')
     .option('--force', 'Allow restoring into a non-empty directory')
     .action(async (options: Record<string, unknown>) => {

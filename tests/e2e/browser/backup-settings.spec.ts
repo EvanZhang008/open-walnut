@@ -1,100 +1,175 @@
 /**
- * Playwright test: S3 Backup settings pane.
- *
- * Real-UI flow: navigate to Settings via the sidebar, click the "S3 Backup"
- * nav item, turn scheduled backups on, fill the form, exercise Test connection
- * (fails fast against a nonexistent bucket; we assert the error path renders,
- * no real AWS needed), and check the status row and restore hint render.
+ * Playwright: Settings → Backup, the real pane in the browser.
  *
  * Config writes are answered in the page (PUT /api/config never reaches the
- * shared fixture server), so turning backups on here cannot start a scheduler
- * for the other specs that share that server.
+ * shared fixture server), and the backup routes that would reach outside the
+ * machine (a bucket, Google) are answered in the page too, so the specs that
+ * share the fixture server never start a backup. The routes themselves are
+ * covered against real stores in tests/e2e/backup-encrypted-routes.test.ts.
  */
 import { test, expect, type Page } from '@playwright/test'
 
-async function holdConfigWrites(page: Page): Promise<void> {
+// Fake, invented for this test: shaped like a recovery key, opens nothing.
+const KEY = 'WB1-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-00'
+
+async function holdConfigWrites(page: Page, initialBackup: Record<string, unknown>): Promise<{ last: () => Record<string, unknown> | null }> {
   let written: Record<string, unknown> | null = null
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'PUT') {
       const body = route.request().postDataJSON() as Record<string, unknown>
-      written = (body.config as Record<string, unknown> | undefined) ?? body
+      written = { ...(written ?? {}), ...((body.config as Record<string, unknown> | undefined) ?? body) }
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
     }
     const res = await route.fetch()
     const data = await res.json() as { config: Record<string, unknown> }
-    data.config = written
-      ? { ...data.config, ...written }
-      : { ...data.config, backup: { enabled: false, bucket: '', region: 'us-west-2', prefix: 'walnut', interval_hours: 24 } }
+    data.config = { ...data.config, backup: initialBackup, ...(written ?? {}) }
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
   })
+  return { last: () => written }
 }
 
-test.describe('S3 Backup settings', () => {
-  test('section renders, saves, and test-connection reports failure honestly', async ({ page }) => {
-    await holdConfigWrites(page)
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    // Real UI navigation (SPA click, not goto): sidebar, then Settings, then the pane.
-    if ((await page.locator('.sidebar.collapsed').count()) > 0) {
-      await page.locator('.sidebar-collapse-btn').click()
-    }
-    await page.locator('.sidebar-nav a[href^="/settings"]').click()
-    await page.getByTestId('settings-nav-backup').click()
+async function answer(page: Page, glob: string, body: unknown, status = 200): Promise<void> {
+  await page.route(glob, (route) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) }))
+}
 
-    const section = page.locator('#backup')
-    await expect(section).toBeVisible({ timeout: 5000 })
+async function openBackup(page: Page) {
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
+  await page.getByTestId('settings-nav-backup').click()
+  const section = page.locator('#backup')
+  await expect(section).toBeVisible({ timeout: 5000 })
+  return section
+}
 
-    // The what-gets-backed-up explanation renders (users must know scope + that
-    // credentials ride along before pointing this at a bucket).
-    await expect(section).toContainText('What gets backed up')
-    await expect(section).toContainText('auth.json')
+test.describe('Backup settings', () => {
+  test('a new setup: R2 fields, test, recovery key, restore', async ({ page }) => {
+    const config = await holdConfigWrites(page, {})
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
+    await answer(page, '**/api/backup/destination/test', { ok: true, destination: 'r2://walnut-backup/walnut-backup', canWrite: true, hasBackups: false, hasKey: false })
+    let keyMade = false
+    await page.route('**/api/backup/recovery-key', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ key: keyMade ? KEY : null }) }))
+    await page.route('**/api/backup/recovery-key/ensure', (route) => {
+      keyMade = true
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ key: KEY, created: true }) })
+    })
+    await answer(page, '**/api/backup/snapshots', {
+      engine: 'encrypted',
+      snapshots: [
+        { id: 'snap-2', createdAt: '2026-11-04T06:00:00Z', hostname: 'mac', fileCount: 22597, totalBytes: 7.3e9 },
+        { id: 'snap-1', createdAt: '2026-11-03T06:00:00Z', hostname: 'mac', fileCount: 22501, totalBytes: 7.2e9 },
+      ],
+    })
+    let restoreBody: Record<string, unknown> | null = null
+    await page.route('**/api/backup/restore', (route) => {
+      restoreBody = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ started: true }) })
+    })
 
-    // The master switch leads; the form under it is dimmed until it is on.
-    const enabled = section.locator('#backup-enabled')
-    await expect(enabled).toHaveAttribute('aria-checked', 'false')
-    await enabled.click()
-    await expect(enabled).toHaveAttribute('aria-checked', 'true')
+    const section = await openBackup(page)
+    await expect(section).toContainText('Everything in your data folder is backed up')
+    // The service picker leads, R2 first; its free tier is stated in place.
+    await expect(section.getByTestId('backup-service-r2')).toHaveAttribute('aria-checked', 'true')
+    await expect(section).toContainText('Free up to 10 GB a month')
+    // The steps to get the keys are one click away.
+    await section.getByTestId('backup-r2-help').click()
+    await expect(section.getByTestId('backup-r2-steps')).toContainText('Object Read & Write')
 
-    // Form fields present with defaults.
-    await expect(section.locator('#backup-bucket')).toBeVisible()
-    await expect(section.locator('#backup-region')).toHaveValue('us-west-2')
-    await expect(section.locator('#backup-prefix')).toHaveValue('walnut')
-    await expect(section.locator('#backup-interval')).toHaveValue('24')
-
-    // Credential method is a segmented control offering the three methods.
-    await expect(section.locator('#backup-auth-method')).toBeVisible()
-    await section.getByTestId('backup-auth-access_keys').click()
-    await expect(section.locator('#backup-access-key')).toBeVisible()
-    await expect(section.locator('#backup-secret-key')).toHaveAttribute('type', 'password')
-    await section.getByTestId('backup-auth-aws_chain').click()
-    await expect(section.locator('#backup-access-key')).toHaveCount(0)
-
-    // Buttons disabled until a bucket is set.
     const testBtn = section.getByTestId('backup-test-connection')
-    const runBtn = section.getByTestId('backup-run-now')
-    await expect(testBtn).toHaveText('Test connection')
-    await expect(runBtn).toHaveText('Back up now')
     await expect(testBtn).toBeDisabled()
-    await expect(runBtn).toBeDisabled()
-
-    await section.locator('#backup-bucket').fill('walnut-e2e-nonexistent-bucket-1234')
+    await expect(section.getByTestId('backup-run-now')).toBeDisabled()
+    await section.locator('#backup-enabled').click()
+    await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
+    await section.locator('#backup-r2-bucket').fill('walnut-backup')
+    await section.locator('#backup-r2-access-key').fill('AKEXAMPLE')
+    await section.locator('#backup-r2-secret').fill('secret-example')
     await expect(testBtn).toBeEnabled()
-    await expect(runBtn).toBeEnabled()
-
-    // Status row: no backup yet.
-    await expect(section.getByTestId('backup-last-row')).toContainText('No backup has run yet')
-
-    // Restore hint names the CLI and links the agent skill.
-    await expect(section).toContainText('open-walnut backup restore')
-    await expect(
-      section.locator('a[href*="skills/restore-backup"]', { hasText: 'restore-backup skill' }),
-    ).toBeVisible()
-
-    // Test connection against a nonexistent bucket must fail loudly, not hang:
-    // STS/HeadBucket errors land in the Connection row's error help.
     await testBtn.click()
-    await expect(section.getByTestId('backup-connection-row')).toContainText(/Couldn't connect/, { timeout: 60_000 })
-    // A config re-read can still be inside the route callback when the page closes.
+    await expect(section.getByTestId('backup-connection-row')).toContainText('Walnut can write here')
+
+    // The saved config is encrypted backups: no legacy bucket an older Walnut would upload to.
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
+      type: 'r2', bucket: 'walnut-backup', account_id: '0123456789abcdef0123456789abcdef',
+    })
+    expect((config.last()?.backup as Record<string, unknown>).bucket).toBeUndefined()
+
+    // The recovery key: hidden until asked, then saved-it.
+    const keyRow = section.getByTestId('backup-key-row')
+    await expect(keyRow).toBeVisible({ timeout: 10000 })
+    await expect(section.getByTestId('backup-key-value')).toHaveCount(0)
+    await section.getByTestId('backup-key-show').click()
+    await expect(section.getByTestId('backup-key-value')).toHaveText(KEY)
+    await expect(section.getByTestId('backup-key-unsaved')).toBeVisible()
+    await section.getByTestId('backup-key-saved').click()
+    await expect(section.getByTestId('backup-key-unsaved')).toHaveCount(0)
+
+    // Restore lists the backups, newest first and picked, and restores the one chosen.
+    await expect(section.getByTestId('backup-run-now')).toBeEnabled()
+    await section.getByTestId('backup-restore-open').click()
+    const list = section.getByTestId('backup-restore-list')
+    await expect(list.locator('label')).toHaveCount(2)
+    await expect(list).toContainText('22,597 files')
+    await list.locator('label').nth(1).click()
+    await section.getByTestId('backup-restore-start').click()
+    await expect.poll(() => restoreBody).toMatchObject({ snapshotId: 'snap-1' })
+    await expect(section.locator('a[href*="skills/restore-backup"]')).toBeVisible()
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('the older S3 copy keeps its form until the user switches', async ({ page }) => {
+    const config = await holdConfigWrites(page, { enabled: true, bucket: 'old-bucket', region: 'eu-west-1', prefix: 'walnut', interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'mirror' })
+    const section = await openBackup(page)
+    await expect(section).toContainText('files go to the bucket unencrypted')
+    await expect(section.locator('#backup-bucket')).toHaveValue('old-bucket')
+    await expect(section.getByTestId('backup-service-r2')).toHaveCount(0)
+    await section.getByTestId('backup-legacy-switch').click()
+    await expect(section.getByTestId('backup-service-s3')).toHaveAttribute('aria-checked', 'true')
+    await expect(section.locator('#backup-s3-bucket')).toHaveValue('old-bucket')
+    await expect(section.locator('#backup-s3-region')).toHaveValue('eu-west-1')
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.destination).toMatchObject({
+      type: 's3', bucket: 'old-bucket', region: 'eu-west-1', prefix: 'walnut-backup',
+    })
+    expect((config.last()?.backup as Record<string, unknown>).bucket).toBeUndefined()
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('Google Drive with the user\'s own Google client, and the paste fallback', async ({ page }) => {
+    await holdConfigWrites(page, { enabled: true, destination: { type: 'gdrive' } })
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    let connected = false
+    await page.route('**/api/backup/gdrive/status', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ builtinClient: false, client: connected ? 'custom' : null, connected, email: connected ? 'someone@example.com' : null, folderName: 'Walnut Backup', pending: false }),
+    }))
+    let connectBody: Record<string, unknown> | null = null
+    await page.route('**/api/backup/gdrive/connect', (route) => {
+      connectBody = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ authUrl: 'about:blank#google', redirectUri: 'http://127.0.0.1:5555' }) })
+    })
+    await page.route('**/api/backup/gdrive/complete', (route) => {
+      connected = true
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, email: 'someone@example.com' }) })
+    })
+
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-service-gdrive')).toHaveAttribute('aria-checked', 'true')
+    await expect(section.getByTestId('backup-gdrive-steps')).toContainText('Desktop app')
+    await expect(section.getByTestId('backup-gdrive-steps')).toContainText('Publish app')
+    const connect = section.getByTestId('backup-gdrive-connect')
+    await expect(connect).toBeDisabled()
+    await section.locator('#backup-gdrive-client-id').fill('1234-abc.apps.googleusercontent.com')
+    await section.locator('#backup-gdrive-client-secret').fill('client-secret-example')
+    await expect(connect).toBeEnabled()
+    await connect.click()
+    await expect.poll(() => connectBody).toMatchObject({ client_id: '1234-abc.apps.googleusercontent.com' })
+    await expect(section.getByTestId('backup-gdrive-open-link')).toBeVisible()
+    await section.locator('#backup-gdrive-paste').fill('http://127.0.0.1:5555/?state=s&code=c')
+    await section.getByTestId('backup-gdrive-finish').click()
+    await expect(section.getByTestId('backup-gdrive-connected')).toContainText('someone@example.com')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })

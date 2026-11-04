@@ -1,9 +1,12 @@
 /**
- * `open-walnut backup` — S3 backup from the CLI.
+ * `open-walnut backup` — backups from the CLI, same engines as Settings.
  *
- *   backup run                         one backup now (same engine as the UI)
- *   backup list                        restore points (manifest versions)
- *   backup restore [--at <versionId>] [--to <dir>] [--force] [--profile <p>]
+ *   backup run                         one backup now
+ *   backup list [--key <k>]            the backups there are
+ *   backup restore [--at <id>] [--to <dir>] [--force] [--key <k>] [--profile <p>]
+ *
+ * With `backup.destination` in config.yaml (and no --bucket flag) these work on
+ * encrypted backups; otherwise on the older S3 copy (`backup.bucket`).
  *
  * Restore downloads into a FRESH directory by default and never overwrites a
  * live data dir — disaster recovery must not be able to make things worse.
@@ -11,7 +14,48 @@
 import os from 'node:os';
 import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
+import { WALNUT_HOME } from '../constants.js';
 import type { BackupConfig } from '../core/backup/types.js';
+
+/**
+ * The encrypted-backup config a command works on: `--type` builds the
+ * destination from flags (a new machine with no config.yaml); otherwise
+ * config.yaml's `backup.destination`, unless `--bucket` asks for the older S3
+ * copy.
+ */
+async function encryptedConfig(options: Record<string, unknown>): Promise<BackupConfig | null> {
+  const flag = (k: string): string | undefined => (typeof options[k] === 'string' ? (options[k] as string) : undefined);
+  const type = flag('type');
+  if (type) {
+    if (type !== 'r2' && type !== 's3' && type !== 'gdrive') throw new Error('--type is r2, s3 or gdrive');
+    const saved = (await getConfig()).backup ?? {};
+    return {
+      ...saved,
+      destination: {
+        ...(saved.destination?.type === type ? saved.destination : {}),
+        type,
+        ...(flag('bucket') ? { bucket: flag('bucket') } : {}),
+        ...(flag('prefix') ? { prefix: flag('prefix') } : {}),
+        ...(flag('region') ? { region: flag('region') } : {}),
+        ...(flag('accountId') ? { account_id: flag('accountId') } : {}),
+        ...(flag('endpoint') ? { endpoint: flag('endpoint') } : {}),
+        ...(flag('accessKeyId') ? { access_key_id: flag('accessKeyId') } : {}),
+        // The env form keeps the secret out of shell history.
+        ...(flag('secretAccessKey') ?? process.env.WALNUT_BACKUP_SECRET_ACCESS_KEY
+          ? { secret_access_key: flag('secretAccessKey') ?? process.env.WALNUT_BACKUP_SECRET_ACCESS_KEY }
+          : {}),
+        ...(flag('profile') ? { auth: { method: 'profile' as const, profile: flag('profile') } } : {}),
+      },
+    };
+  }
+  if (flag('bucket')) return null;
+  const cfg = (await getConfig()).backup;
+  return cfg?.destination?.type ? cfg : null;
+}
+
+const mb = (n: number): string => `${(n / 1048576).toFixed(1)} MB`;
+const keyOf = (options: Record<string, unknown>): string | undefined =>
+  typeof options.key === 'string' && options.key.trim() ? options.key : process.env.WALNUT_BACKUP_RECOVERY_KEY || undefined;
 
 /** Config for CLI runs: disk config, with bare-machine fallbacks. On a fresh
  *  machine there is no config.yaml yet — allow bucket/region/profile flags. */
@@ -33,6 +77,29 @@ async function resolveCliConfig(options: Record<string, unknown>): Promise<Backu
 }
 
 export async function runBackupRun(options: Record<string, unknown>): Promise<void> {
+  const enc = await encryptedConfig(options);
+  if (enc) {
+    const { runEncryptedBackup } = await import('../core/backup/encrypted-backup.js');
+    const { describeDestination } = await import('../core/backup/destination.js');
+    console.log(`Backing up (encrypted) to ${describeDestination(enc.destination!)} ...`);
+    let lastPct = -1;
+    try {
+      const r = await runEncryptedBackup(enc, {
+        dataDir: WALNUT_HOME,
+        onProgress: (done, total) => {
+          const pct = total > 0 ? Math.floor((done / total) * 100) : 100;
+          if (pct !== lastPct && pct % 10 === 0) { lastPct = pct; console.log(`  ${pct}%`); }
+        },
+      });
+      console.log(`Backup complete: ${r.fileCount} files (${mb(r.totalBytes)}), ${r.changedFiles} read, ${mb(r.uploadedBytes)} uploaded in ${Math.round(r.durationMs / 1000)}s`);
+      if (r.skipped.length) console.log(`  ${r.skipped.length} file(s) could not be read and kept their previous copy.`);
+      if (r.pruneError) console.log(`  Old backups were not cleaned up: ${r.pruneError}`);
+    } catch (err) {
+      console.error(`Backup FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   const cfg = await resolveCliConfig(options);
   const { runBackup } = await import('../core/backup/s3-backup.js');
   console.log(`Backing up to s3://${cfg.bucket}/${cfg.prefix ?? 'walnut'} ...`);
@@ -64,6 +131,21 @@ export async function runBackupRun(options: Record<string, unknown>): Promise<vo
 }
 
 export async function runBackupList(options: Record<string, unknown>): Promise<void> {
+  const enc = await encryptedConfig(options);
+  if (enc) {
+    const { listEncryptedBackups } = await import('../core/backup/encrypted-backup.js');
+    const listing = await listEncryptedBackups(enc, { dataDir: WALNUT_HOME, recoveryKey: keyOf(options) });
+    if (listing.snapshots.length === 0) {
+      console.log(`No backups at ${listing.destination} yet.`);
+      return;
+    }
+    console.log(`Backups at ${listing.destination} (written by ${listing.writer}):`);
+    for (const s of listing.snapshots) {
+      console.log(`  ${s.id}  ${s.createdAt}  ${s.fileCount} files  ${mb(s.totalBytes)}  from ${s.hostname}`);
+    }
+    if (listing.unreadable) console.log(`  (${listing.unreadable} could not be read)`);
+    return;
+  }
   const cfg = await resolveCliConfig(options);
   const { listRestorePoints } = await import('../core/backup/restore.js');
   const points = await listRestorePoints(cfg);
@@ -81,12 +163,31 @@ export async function runBackupList(options: Record<string, unknown>): Promise<v
 }
 
 export async function runBackupRestore(options: Record<string, unknown>): Promise<void> {
-  const cfg = await resolveCliConfig(options);
-  const { restoreFromBackup } = await import('../core/backup/restore.js');
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const target = typeof options.to === 'string'
     ? path.resolve(options.to)
     : path.join(os.homedir(), `.open-walnut-restored-${ts}`);
+  const enc = await encryptedConfig(options);
+  if (enc) {
+    const { restoreEncryptedBackup } = await import('../core/backup/encrypted-backup.js');
+    console.log(`Restoring to ${target} ...`);
+    let lastPct = -1;
+    const r = await restoreEncryptedBackup(enc, {
+      dataDir: WALNUT_HOME,
+      snapshotId: typeof options.at === 'string' ? options.at : 'latest',
+      targetDir: target,
+      recoveryKey: keyOf(options),
+      onProgress: (done, total) => {
+        const pct = total > 0 ? Math.floor((done / total) * 100) : 100;
+        if (pct !== lastPct && pct % 10 === 0) { lastPct = pct; console.log(`  ${pct}%`); }
+      },
+    });
+    console.log(`Restore complete: ${r.restoredFiles} files (${mb(r.restoredBytes)}) from the backup of ${r.snapshot.createdAt} (${r.snapshot.hostname}), every file checked.`);
+    console.log(`To use it: quit Walnut, rename ~/.open-walnut to keep it aside, move ${target} to ~/.open-walnut, start Walnut.`);
+    return;
+  }
+  const cfg = await resolveCliConfig(options);
+  const { restoreFromBackup } = await import('../core/backup/restore.js');
 
   console.log(`Restoring to ${target} ...`);
   const result = await restoreFromBackup(cfg, target, {

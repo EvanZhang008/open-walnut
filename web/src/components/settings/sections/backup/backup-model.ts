@@ -1,0 +1,155 @@
+/**
+ * Pure helpers of the Backup settings pane: what the form saves, what is
+ * still missing, and the words its rows show. No React here, so the rules are
+ * tested on their own (tests/web/backup-settings-model.test.ts).
+ */
+import type { Config } from '@open-walnut/core'
+
+export type BackupConfig = NonNullable<Config['backup']>
+export type BackupDestinationConfig = NonNullable<BackupConfig['destination']>
+export type BackupDestinationType = BackupDestinationConfig['type']
+
+export const DESTINATIONS: Array<{ value: BackupDestinationType; label: string }> = [
+  { value: 'r2', label: 'Cloudflare R2' },
+  { value: 'gdrive', label: 'Google Drive' },
+  { value: 's3', label: 'Amazon S3' },
+]
+
+/** One line under the service picker: what it costs and what it sees. */
+export const DESTINATION_NOTE: Record<BackupDestinationType, string> = {
+  r2: 'Free up to 10 GB a month, no download fees. Cloudflare asks for a card when you turn R2 on.',
+  gdrive: 'Uses your Google Drive space (15 GB free, shared with Gmail). Walnut can see only the files it makes.',
+  s3: 'Your own AWS bucket, billed by AWS.',
+}
+
+export type Engine = 'mirror' | 'encrypted' | null
+
+export function engineOf(cfg: BackupConfig | undefined): Engine {
+  if (cfg?.destination?.type) return 'encrypted'
+  if (cfg?.bucket) return 'mirror'
+  return null
+}
+
+const trimmed = (v: string | undefined): string | undefined => {
+  const t = v?.trim()
+  return t ? t : undefined
+}
+
+/** The destination as it is saved: trimmed, empty fields left out, only the fields of its type. */
+export function cleanDestination(d: BackupDestinationConfig): BackupDestinationConfig {
+  const out: BackupDestinationConfig = { type: d.type }
+  const put = <K extends keyof BackupDestinationConfig>(k: K) => {
+    const v = d[k]
+    if (typeof v === 'string') {
+      const t = trimmed(v)
+      if (t) out[k] = t as BackupDestinationConfig[K]
+    } else if (v !== undefined) {
+      out[k] = v
+    }
+  }
+  if (d.type === 'r2') (['bucket', 'prefix', 'account_id', 'endpoint', 'access_key_id', 'secret_access_key'] as const).forEach(put)
+  if (d.type === 's3') {
+    ;(['bucket', 'prefix', 'region', 'endpoint'] as const).forEach(put)
+    if (trimmed(d.endpoint)) (['access_key_id', 'secret_access_key'] as const).forEach(put)
+    else if (d.auth?.method) {
+      out.auth = {
+        method: d.auth.method,
+        ...(d.auth.method === 'profile' && trimmed(d.auth.profile) ? { profile: trimmed(d.auth.profile) } : {}),
+        ...(d.auth.method === 'access_keys'
+          ? { aws_access_key_id: d.auth.aws_access_key_id ?? '', aws_secret_access_key: d.auth.aws_secret_access_key ?? '' }
+          : {}),
+      }
+    }
+  }
+  if (d.type === 'gdrive') (['folder_name', 'client_id', 'client_secret'] as const).forEach(put)
+  return out
+}
+
+/** What config still lacks (the server's missingFields, mirrored). Drive's sign-in is checked apart. */
+export function missingFields(d: BackupDestinationConfig): string[] {
+  const m: string[] = []
+  if (d.type === 'r2' || d.type === 's3') if (!trimmed(d.bucket)) m.push('bucket')
+  if (d.type === 'r2') {
+    if (!trimmed(d.account_id) && !trimmed(d.endpoint)) m.push('account ID')
+    if (!trimmed(d.access_key_id)) m.push('access key ID')
+    if (!trimmed(d.secret_access_key)) m.push('secret access key')
+  }
+  if (d.type === 's3' && trimmed(d.endpoint) && (!trimmed(d.access_key_id) || !trimmed(d.secret_access_key))) m.push('access keys')
+  return m
+}
+
+/** Stable JSON for the autosave's current/baseline compare (key order and blanks never count as an edit). */
+export function stableJson(v: unknown): string {
+  const norm = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(norm)
+    if (x && typeof x === 'object') {
+      const o: Record<string, unknown> = {}
+      for (const k of Object.keys(x as object).sort()) {
+        const val = (x as Record<string, unknown>)[k]
+        if (val === undefined || val === '') continue
+        o[k] = norm(val)
+      }
+      return o
+    }
+    return x
+  }
+  return JSON.stringify(norm(v))
+}
+
+/**
+ * The `backup` section a save writes. Fields this pane does not edit
+ * (retention, the saved-key mark) are kept from what is saved. Encrypted
+ * backups never carry the legacy `bucket`, so an older Walnut reads them as
+ * not configured and uploads nothing in the clear.
+ */
+export function buildBackupConfig(
+  saved: BackupConfig,
+  form: { enabled: boolean; intervalHours: number | undefined; destination: BackupDestinationConfig | null; legacy?: Pick<BackupConfig, 'bucket' | 'region' | 'prefix' | 'auth'> },
+): BackupConfig {
+  const base: BackupConfig = {
+    ...(saved.retention ? { retention: saved.retention } : {}),
+    ...(saved.recovery_key_saved_at ? { recovery_key_saved_at: saved.recovery_key_saved_at } : {}),
+    enabled: form.enabled,
+    interval_hours: Math.max(1, Number(form.intervalHours) || 24),
+  }
+  if (form.destination) return { ...base, destination: cleanDestination(form.destination) }
+  if (form.legacy) return { ...base, ...form.legacy }
+  return base
+}
+
+/** A legacy S3 copy becomes encrypted backups in the same bucket (another folder in it). */
+export function legacyToEncrypted(saved: BackupConfig): BackupDestinationConfig {
+  return {
+    type: 's3',
+    bucket: saved.bucket,
+    region: saved.region,
+    prefix: 'walnut-backup',
+    auth: saved.auth ?? { method: 'aws_chain' },
+  }
+}
+
+export const fmtBytes = (n?: number): string => {
+  if (n === undefined) return 'unknown size'
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`
+  return `${Math.max(1, Math.ceil(n / 1024))} KB`
+}
+
+/** The text of the downloaded recovery kit. */
+export function recoveryKitText(key: string, destination: string, machine: string, at: Date): string {
+  return [
+    'Walnut backup recovery key',
+    '',
+    key,
+    '',
+    `Backups: ${destination}`,
+    `Machine: ${machine}`,
+    `Saved: ${at.toISOString().slice(0, 10)}`,
+    '',
+    'Your backups are encrypted with this key before they leave your computer.',
+    'Nobody can open them without it, Walnut included. Keep it in a password manager',
+    'or print it. To restore on a new computer: install Walnut, open Settings > Backup,',
+    'choose the same place, then enter this key when Walnut asks for it.',
+    '',
+  ].join('\n')
+}

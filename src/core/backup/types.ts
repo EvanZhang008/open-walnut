@@ -6,9 +6,19 @@
  * scanner/diff logic stays pure and unit-testable without an S3 client.
  */
 
-/** `backup:` section of config.yaml. */
+/**
+ * `backup:` section of config.yaml.
+ *
+ * Two engines, chosen by what is set:
+ *   - `destination` set: the encrypted repository (repo/), to S3, Cloudflare R2
+ *     or Google Drive. The legacy `bucket` stays unset, so an older Walnut that
+ *     only knows `bucket` reads backups as not configured and uploads nothing.
+ *   - only `bucket` set: the original S3 mirror (s3-backup.ts), unchanged for
+ *     the people already using it.
+ */
 export interface BackupConfig {
   enabled?: boolean;
+  /** Legacy S3 mirror only. */
   bucket?: string;
   region?: string;
   /** Key prefix inside the bucket. Default 'walnut'. */
@@ -16,6 +26,39 @@ export interface BackupConfig {
   /** Hours between automatic backups. Default 24, minimum 1. */
   interval_hours?: number;
   auth?: BackupAuthConfig;
+  /** Encrypted backups: where they go. */
+  destination?: BackupDestinationConfig;
+  /** Encrypted backups: how many to keep. Default 7 daily + 4 weekly. */
+  retention?: { daily?: number; weekly?: number };
+  /** When the user confirmed they saved the recovery key (Settings stops asking). */
+  recovery_key_saved_at?: string;
+}
+
+export type BackupDestinationType = 's3' | 'r2' | 'gdrive';
+
+export interface BackupDestinationConfig {
+  type: BackupDestinationType;
+  /** s3, r2: the bucket. */
+  bucket?: string;
+  /** s3, r2: folder inside the bucket. Default 'walnut-backup'. */
+  prefix?: string;
+  /** s3: AWS region. */
+  region?: string;
+  /** r2: the Cloudflare account id (the endpoint is derived from it). */
+  account_id?: string;
+  /** s3, r2: any S3-compatible endpoint instead (R2 EU jurisdiction, MinIO, ...). */
+  endpoint?: string;
+  /** r2 and S3-compatible: an access key pair. Masked by config-redact. */
+  access_key_id?: string;
+  secret_access_key?: string;
+  /** s3 on AWS: the credential source, as the legacy mirror. */
+  auth?: BackupAuthConfig;
+  /** gdrive: the folder's name (default "Walnut Backup"). Its id and the
+   *  sign-in are this machine's own (local/backup/gdrive-token.json). */
+  folder_name?: string;
+  /** gdrive: the user's own Google OAuth client, when Walnut's is not used. */
+  client_id?: string;
+  client_secret?: string;
 }
 
 /** Credential source for the S3 client — mirrors the Bedrock methods. */
@@ -77,6 +120,29 @@ export interface BackupHealth {
   error?: string;
   /** False = bucket has no versioning — deletion protection is off. */
   versioningEnabled?: boolean;
+  /** Which engine runs: the legacy S3 mirror or encrypted backups. */
+  engine?: 'mirror' | 'encrypted';
+  /** Encrypted backups: where they go (`r2://bucket/prefix`, `Google Drive: Walnut Backup`). */
+  destination?: string;
+  /** Encrypted backups: a problem the user must act on (wrong key, another writer). */
+  errorCode?: string;
+  lastSnapshotId?: string;
+  /** Encrypted backups: how many backups are kept now. */
+  snapshotCount?: number;
+  /** A restore in progress or just finished. */
+  restore?: RestoreStatus;
+}
+
+export interface RestoreStatus {
+  running: boolean;
+  snapshotId?: string;
+  targetDir?: string;
+  doneBytes?: number;
+  totalBytes?: number;
+  doneFiles?: number;
+  totalFiles?: number;
+  finishedAt?: string;
+  error?: string;
 }
 
 /** Outcome of one backup run. */

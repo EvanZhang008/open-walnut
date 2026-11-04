@@ -38,6 +38,7 @@ import { searchAgentRouter } from './routes/search-agent.js'
 import { memoryRouter } from './routes/memory.js'
 import { configRouter, setStaticRootReporter } from './routes/config.js'
 import { backupRouter, setBackupScheduler } from './routes/backup.js'
+import { encryptedBackupRouter, setDriveEventEmitter } from './routes/backup-encrypted.js'
 import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
@@ -2266,6 +2267,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // cloud-mode config redaction above.
   if (bootPolicy('backup-routes')) {
     app.use('/api/backup', backupRouter)
+    app.use('/api/backup', encryptedBackupRouter)
   }
   app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
@@ -3566,6 +3568,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Git auto-commit polling (30s interval) --
   // Skip for ephemeral servers — they use a temp copy of data, no need to backup
+  const startBackups = async (): Promise<void> => {
+    const { startBackupScheduler } = await import('../core/backup/backup-scheduler.js')
+    backupSchedulerHandle = startBackupScheduler({
+      emit: broadcastEvent,
+      notify: (n) => publishErrorNotification(n),
+      // The scheduler owns the transition gate (it holds consecutiveFailures),
+      // so this only ever fires on a failing→success edge.
+      onRecovered: () => { void publishRecovery(['backup']) },
+    })
+    setBackupScheduler(backupSchedulerHandle)
+    setDriveEventEmitter(broadcastEvent)
+  }
+  // An ephemeral server backs nothing up, unless a test of backups asks for it
+  // (it then backs up its own temp data home to the destination its config names).
+  if (isEphemeral && process.env.WALNUT_EPHEMERAL_BACKUP === '1') await startBackups()
+
   if (!isEphemeral) {
     if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
 
@@ -3629,15 +3647,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // S3 backup scheduler (primary box only): a cloud replica backing up its
       // git-synced copy would race the primary and double-pay for uploads.
       // Self-gates on config backup.enabled; the routes 400 when unset here.
-      const { startBackupScheduler } = await import('../core/backup/backup-scheduler.js')
-      backupSchedulerHandle = startBackupScheduler({
-        emit: broadcastEvent,
-        notify: (n) => publishErrorNotification(n),
-        // The scheduler owns the transition gate (it holds consecutiveFailures),
-        // so this only ever fires on a failing→success edge.
-        onRecovered: () => { void publishRecovery(['backup']) },
-      })
-      setBackupScheduler(backupSchedulerHandle)
+      await startBackups()
 
       // Keep-Awake (macOS console only): holds the Mac awake while local CLI
       // sessions run — opt-in via config keep_awake.enabled, released on low

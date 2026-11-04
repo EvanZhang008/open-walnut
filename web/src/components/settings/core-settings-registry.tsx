@@ -273,10 +273,10 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <BrowserSection />,
   },
   {
-    owner: 'walnut', id: 'backup', label: 'S3 Backup', title: 'S3 Backup', group: 'configure',
+    owner: 'walnut', id: 'backup', label: 'Backup', title: 'Backup', group: 'configure',
     icon: 'archive-box', tint: '#34C759',
-    description: 'Scheduled copies of your Walnut data to an S3 bucket.',
-    keywords: ['s3', 'bucket', 'region', 'prefix', 'aws', 'profile', 'access key'],
+    description: 'Encrypted backups of your Walnut data to Cloudflare R2, Google Drive or Amazon S3, and restore.',
+    keywords: ['backup', 'restore', 'r2', 'cloudflare', 'google drive', 'drive', 's3', 'bucket', 'recovery key', 'encryption', 'aws'],
     render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} />,
   },
   // Machines: Phones & Cloud is one entry with four tabs (settings-way-panes.ts): the

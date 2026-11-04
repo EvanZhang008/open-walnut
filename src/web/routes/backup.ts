@@ -1,5 +1,7 @@
 /**
  * Backup routes — S3 backup configuration testing, manual runs, status.
+ * Encrypted backups (S3, R2, Google Drive), restore and the recovery key are
+ * in backup-encrypted.ts, mounted on this router.
  *
  * The scheduler itself lives in src/core/backup/backup-scheduler.ts and is
  * started by server.ts (primary box only). server.ts also only MOUNTS this
@@ -17,9 +19,10 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig } from '../../core/config-manager.js';
 import {
   enableBucketVersioning,
-  isBackupRunning,
   testBackupConnection,
 } from '../../core/backup/s3-backup.js';
+import { engineOf } from '../../core/backup/destination.js';
+import { currentBackupJob } from '../../core/backup/jobs.js';
 import type { BackupAuthConfig, BackupConfig } from '../../core/backup/types.js';
 import type { BackupSchedulerHandle } from '../../core/backup/backup-scheduler.js';
 import { log } from '../../logging/index.js';
@@ -30,6 +33,9 @@ export const backupRouter = Router();
 let scheduler: BackupSchedulerHandle | null = null;
 export function setBackupScheduler(handle: BackupSchedulerHandle | null): void {
   scheduler = handle;
+}
+export function getBackupScheduler(): BackupSchedulerHandle | null {
+  return scheduler;
 }
 
 /** True when the body carries its own usable credential source. */
@@ -87,12 +93,13 @@ backupRouter.post('/run', async (_req: Request, res: Response, next: NextFunctio
       res.status(400).json({ error: 'Backups run on the primary machine only' });
       return;
     }
-    if (isBackupRunning()) {
-      res.status(409).json({ error: 'A backup is already running' });
+    const job = currentBackupJob();
+    if (job) {
+      res.status(409).json({ error: job === 'restore' ? 'A restore is running' : 'A backup is already running' });
       return;
     }
     const config = await getConfig();
-    if (!config.backup?.bucket) {
+    if (!engineOf(config.backup)) {
       res.status(400).json({ error: 'Backup is not configured' });
       return;
     }
