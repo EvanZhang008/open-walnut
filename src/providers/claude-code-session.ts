@@ -32,7 +32,7 @@ import { registerSessionServerProbe } from '../core/sessions/session-server-stat
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
-import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_DETAIL, COMPACTION_STOPPED_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
 import { isProcessAliveAsync } from '../utils/process.js'
@@ -7428,6 +7428,11 @@ export class ClaudeCodeSession {
         // early-exit guard: replayed/followup results carry a correct modelUsage
         // too, and this is pure bookkeeping with no turn-lifecycle effect.
         if (result.modelUsage) this.harvestRawContextWindow(result.modelUsage)
+        // The compaction notice's gate closes at every result, whichever way it is handled below:
+        // one left open (a replayed status line, a result held for background work) would read a
+        // later turn as a compaction stopped halfway.
+        const compactionOpen = this._compactionNoticeOpen
+        this._compactionNoticeOpen = false
 
         // ── Positional replay guard (the watermark, P3) ──
         // A result at or below the consumed watermark was already processed TO
@@ -7755,6 +7760,19 @@ export class ClaudeCodeSession {
           ...(resultErrors?.length ? { errors: resultErrors } : {}),
         })
 
+        // A compaction whose turn ended with no boundary was stopped halfway (a Stop cancels
+        // `/compact`, probed on CLI 2.1.312): its "Compacting context..." row becomes the outcome,
+        // the gate reopens for the next one. A Stop of a turn that was only the compaction (no tool
+        // ran: an auto-compaction mid-work is not one) ends as no work stopped (server.ts).
+        const compactionStopped = compactionOpen && this._isReplayedByOffset() !== true
+        const onlyCompactionStopped = compactionStopped && userInterrupted && this._firstToolTs === undefined
+        if (compactionStopped) {
+          bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+            variant: 'compact' as const, message: COMPACTION_STOPPED_MESSAGE, detail: COMPACTION_STOPPED_DETAIL, progress: false,
+          }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+        }
+
         if (this.claudeSessionId) {
           this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
             log.session.warn('persistSessionRecord failed (result handler)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
@@ -8041,6 +8059,7 @@ export class ClaudeCodeSession {
             isError: effectiveIsError ?? false,
             retryExhausted,
             ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
+            ...(onlyCompactionStopped ? { compactionStopped: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),
             ...(wakeupPending ? { wakeupPending: true } : {}),
             ...resultUsageFields,

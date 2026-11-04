@@ -2,8 +2,10 @@
  * Compacting a Claude Code session from its panel, without typing /compact:
  *  · the composer's "+" menu row "Compact context" (any time no turn runs), and
  *  · the cold-cache line above the composer: a big session whose prompt cache
- *    expired offers "Compact first", because the next message would re-read the
- *    whole context at full price (compact-offer.ts decides when).
+ *    expired offers "Compact first": the next message writes the whole context to
+ *    the cache again, and so does a compaction (it never reads the cache, measured
+ *    2026-11-04), but after it every message reads the summary (compact-offer.ts
+ *    decides when).
  * Both send `/compact` as the user's own message. Walnut compacts idle sessions
  * before their cache expires by itself too (src/core/sessions/idle-compaction.ts);
  * this is for the sessions it did not (a 5-minute cache, an older turn, the
@@ -39,7 +41,7 @@ const minListeners = new Set<(v: number | undefined) => void>();
 function loadMinTokens(): void {
   minInflight ??= fetchConfig()
     .then((c) => {
-      minTokens = c.session?.idle_compaction?.min_tokens;
+      minTokens = c.session?.idle_compaction?.min_tokens ?? undefined;
       minLoaded = true;
       for (const l of minListeners) l(minTokens);
     })
@@ -100,9 +102,12 @@ export function useIdleCompacting(sessionId: string | null | undefined): boolean
     const d = data as { sessionId?: string; active?: boolean };
     if (sessionId && d.sessionId === sessionId) setOn(d.active === true);
   }, [sessionId]));
-  useEvent('session:result', useCallback((data: unknown) => {
+  // Its result ends it; so does the CLI failing or ending before one.
+  const ended = useCallback((data: unknown) => {
     if (sessionId && (data as { sessionId?: string })?.sessionId === sessionId) setOn(false);
-  }, [sessionId]));
+  }, [sessionId]);
+  useEvent('session:result', ended);
+  useEvent('session:error', ended);
   return on;
 }
 
@@ -138,6 +143,13 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
   const [sent, setSent] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { setDismissedFor(readDismissed(sessionId)); setSent(null); }, [sessionId]);
+  // The turn it started ended: a compaction that landed has no offer anyway, and one stopped
+  // halfway offers again (2026-11-04 review: the line was gone until a reload).
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) setSent(null);
+    wasRunning.current = running;
+  }, [running]);
 
   // Wake when the cache goes cold while the panel stays open.
   const dueAt = compactOfferDueAt(facts, minTokens);
@@ -180,16 +192,20 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
   }, [showing]);
 
   const tokensLine = facts && facts.tokens > 0 ? `${formatContextTokens(facts.tokens)} tokens in context` : undefined;
+  // Just compacted, nothing said since: another pass would only summarize the summary.
+  const compacted = !!facts?.compactedAt;
   const plusAction = useMemo<PlusMenuAction | undefined>(() => (acp || lane ? undefined : {
     id: 'compact-context',
     label: 'Compact context',
     title: running
       ? 'Available when the current turn ends'
-      : `Summarize the conversation so far into a short context (sends ${COMPACT_COMMAND})${tokensLine ? `. ${tokensLine}` : ''}`,
-    disabled: running,
+      : compacted
+        ? 'Already compacted; available again after the next message'
+        : `Summarize the conversation so far into a short context (sends ${COMPACT_COMMAND})${tokensLine ? `. ${tokensLine}` : ''}`,
+    disabled: running || compacted,
     icon: COMPACT_ICON,
     onSelect: compact,
-  }), [acp, lane, running, tokensLine, compact]);
+  }), [acp, lane, running, compacted, tokensLine, compact]);
 
   const node = offer ? (
     <div className="compact-offer-line" role="status" data-testid="compact-offer">
@@ -197,8 +213,8 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
       <span className="compact-offer-body">
         <span className="compact-offer-text">
           <strong>{offer.expiredForMs < 60_000 ? 'Prompt cache just expired.' : `Prompt cache expired ${formatAgo(offer.expiredForMs)} ago.`}</strong>{' '}
-          Your next message re-reads all {formatContextTokens(offer.tokens)} tokens of this conversation at full price.
-          Compacting first replaces them with a short summary.
+          Your next message stores all {formatContextTokens(offer.tokens)} tokens of this conversation in the cache again.
+          Compacting first costs about the same once, then every message reads a short summary instead.
         </span>
         <span className="compact-offer-actions">
           <button type="button" className="compact-offer-btn compact-offer-btn-primary" onClick={compact} data-testid="compact-offer-compact">

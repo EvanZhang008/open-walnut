@@ -112,11 +112,15 @@ describe('foldStepsPhrase', () => {
   it('a run of runtime rows names a compaction only once it made its boundary', () => {
     const idle = { variant: 'info', message: 'Compacting this idle session (400K tokens) before its prompt cache expires in about 3 min' };
     const progress = { variant: 'compact', message: 'Compacting context...' };
-    const done = { variant: 'compact', message: 'Context compacted' };
+    const done = { variant: 'compact', message: 'Context compacted', detail: '400K \u2192 18K tokens' };
     const error = { variant: 'error', message: 'API Error: 529 overloaded' };
-    expect(systemRunLabel([idle, progress])).toBe('2 system messages');
-    expect(systemRunLabel([idle, done])).toBe('Compacted by Walnut while idle');
-    expect(systemRunLabel([error, done])).toBe('Context compacted \u00b7 1 more');
+    // 2026-11-04 review: the folded line read "2 system messages" while it ran, and hid the size.
+    expect(systemRunLabel([idle, progress])).toBe('Compacting while idle');
+    expect(systemRunLabel([error, progress])).toBe('Compacting context \u00b7 1 more');
+    expect(systemRunLabel([idle, { variant: 'compact', message: 'Compaction stopped' }])).toBe('Compaction stopped');
+    expect(systemRunLabel([idle, done])).toBe('Compacted by Walnut while idle \u00b7 400K \u2192 18K tokens');
+    expect(systemRunLabel([error, done])).toBe('Context compacted \u00b7 400K \u2192 18K tokens \u00b7 1 more');
+    expect(systemRunLabel([error, { variant: 'compact', message: 'Context compacted' }])).toBe('Context compacted \u00b7 1 more');
     expect(systemRunLabel([error, { variant: 'info', message: 'Retrying' }])).toBe('2 system messages');
   });
 });

@@ -109,6 +109,8 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SHOTS}/${info.project.name}-plus-menu.png` })
   await row.click()
   await expect(panel.locator('.session-panel-input .chat-plus-menu')).toHaveCount(0)
+  // While it runs the working line says what it does, not "is working".
+  await expect(panel.locator('.session-working-label')).toHaveText(/is compacting the context/, { timeout: 10_000 })
   await openNotices(panel)
   await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
   // One row for one compaction: the live row and the transcript's are the same line.
@@ -134,7 +136,7 @@ test('a cold cache offers Compact first; Keep full context holds across a reload
   const offer = panel.getByTestId('compact-offer')
   await expect(offer).toBeVisible({ timeout: 20_000 })
   await expect(offer).toContainText('Prompt cache expired 1 hour ago.')
-  await expect(offer).toContainText('re-reads all 400K tokens')
+  await expect(offer).toContainText('stores all 400K tokens of this conversation in the cache again')
   await offer.screenshot({ path: `${SHOTS}/${info.project.name}-offer.png` })
   await panel.getByTestId('compact-offer-dismiss').click()
   await expect(offer).toHaveCount(0)
@@ -172,10 +174,19 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   await min.fill('300')
   await min.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
-  await page.locator('#idle-compaction').click()
-  await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(false)
-  // The size still decides the cold-cache offer, so it stays editable with the switch off.
+  // 0 is not a size: the field clears back to the 200K default instead of keeping a 0 that is ignored.
+  await min.fill('0')
+  await min.press('Enter')
+  await expect(min).toHaveValue('')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(null)
+  await min.fill('300')
+  await min.press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
+  // Off by default; the size still decides the cold-cache offer, so it stays editable with the switch off.
+  await expect(page.locator('#idle-compaction')).not.toBeChecked()
   await expect(page.locator('#idle-compaction-min')).toBeEnabled()
+  await page.locator('#idle-compaction').click()
+  await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(true)
   await row.locator('xpath=ancestor::*[contains(@class,"settings-group")][1]').screenshot({ path: `${SHOTS}/${info.project.name}-settings.png` }).catch(() => {})
   // Back to the defaults for the specs after this one.
   await page.locator('#idle-compaction').click()

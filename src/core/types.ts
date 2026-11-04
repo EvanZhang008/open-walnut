@@ -1693,10 +1693,10 @@ export interface Config {
      *  (src/core/sessions/idle-compaction.ts), so the next message reads a small summary
      *  instead of paying a full uncached read of the whole context. */
     idle_compaction?: {
-      /** Default true. */
+      /** Default false: a compaction writes the whole conversation to the cache once, come back or not. */
       enabled?: boolean;
-      /** Only sessions holding at least this many context tokens. Default 200000. */
-      min_tokens?: number;
+      /** Only sessions holding at least this many context tokens. Default 200000; null (a cleared field) is the default. */
+      min_tokens?: number | null;
     };
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */

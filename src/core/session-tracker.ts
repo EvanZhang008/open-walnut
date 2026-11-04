@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { SESSIONS_DIR, WALNUT_HOME } from '../constants.js';
 import { isSessionProcessAlive } from '../utils/session-liveness.js';
 import { log } from '../logging/index.js';
+import { isQuietTurn } from './sessions/quiet-turn.js';
 import type {
   AcpSessionCapabilities,
   SessionSummary,
@@ -2166,7 +2167,9 @@ function applyUpdateToSession(
   ) {
     expireErrorNotificationsOnDeath(session.claudeSessionId);
   }
-  session.lastActiveAt = now;
+  // Walnut's own quiet turn (its idle compaction, sessions/quiet-turn.ts) is no activity of the
+  // session's: it would read "just now" and top the recent lists after an hour nobody touched it.
+  if (!isQuietTurn(session.claudeSessionId)) session.lastActiveAt = now;
   commitStatusVersion(session, beforeStatus, now);
   return true;
 }

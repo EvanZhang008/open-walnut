@@ -22,8 +22,11 @@
  * a wakeup, a CLI cron), a lane or ACP session, a completed task, an org node
  * while the org is off, and a session whose CLI process is gone (stopped: a
  * resume would build its prompt again and likely miss the cache, so it would pay
- * the full read the compaction exists to save). `session.idle_compaction.enabled:
- * false` turns it off. Primary only (server.ts). The timers are rebuilt from the
+ * the full read the compaction exists to save). Off unless
+ * `session.idle_compaction.enabled: true` (or WALNUT_IDLE_COMPACTION=1): measured on Claude Code
+ * 2.1.312 (2026-11-04), `/compact` does not read the warm cache (13K of a 299K prefix), so it writes
+ * the whole conversation once at the cache-write price whether or not anyone comes back.
+ * `WALNUT_IDLE_COMPACTION=0` turns it off over the setting. Primary only (server.ts). The timers are rebuilt from the
  * records at boot.
  *
  * The `/compact` row has its own id and a user uuid, so it always goes out alone
@@ -56,14 +59,14 @@ export interface IdleCompactionConfig {
 }
 
 export function resolveIdleCompactionConfig(
-  session: { idle_compaction?: { enabled?: boolean; min_tokens?: number } } | undefined,
+  session: { idle_compaction?: { enabled?: boolean; min_tokens?: number | null } } | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): IdleCompactionConfig {
   const min = session?.idle_compaction?.min_tokens;
   // Tests and demos move the send earlier (a lead near the whole lifetime fires right after the turn).
   const lead = Number(env.WALNUT_IDLE_COMPACT_LEAD_MS);
   return {
-    enabled: session?.idle_compaction?.enabled !== false && env.WALNUT_IDLE_COMPACTION !== '0',
+    enabled: env.WALNUT_IDLE_COMPACTION === '1' || (session?.idle_compaction?.enabled === true && env.WALNUT_IDLE_COMPACTION !== '0'),
     minTokens: typeof min === 'number' && Number.isFinite(min) && min > 0 ? min : DEFAULT_IDLE_COMPACT_MIN_TOKENS,
     leadMs: Number.isFinite(lead) && lead > 0 ? lead : IDLE_COMPACT_LEAD_MS,
   };
@@ -105,7 +108,8 @@ function defaultDeps(): IdleCompactionDeps {
     },
     getSession: async (id) => (await import('../session-tracker.js')).getSessionByClaudeId(id),
     listSessions: async () => (await import('../session-tracker.js')).listNonTerminalSessions(),
-    saveSession: async (id, updates) => (await import('../session-tracker.js')).updateSessionRecord(id, updates),
+    // Its own bookkeeping is no activity of the session's: the session keeps its last-active time.
+    saveSession: async (id, updates) => (await import('../session-tracker.js')).updateSessionRecordConditionally(id, updates, () => true, { preserveLastActiveAt: true }),
     getTask: async (id) => (await import('../task-manager.js')).getTask(id).catch(() => null),
     live: (id) => {
       const runner = liveRunner;
@@ -196,6 +200,11 @@ export class IdleCompaction {
   /** sessionId → the timer and the request it was set for. */
   private readonly timers = new Map<string, { timer: ReturnType<typeof setTimeout>; requestAt: string }>();
   private stopped = false;
+  private rearmTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Sessions disarmed by what happened to them (a failed or stopped turn, a send) until their next clean turn end: a settings change does not arm them again. */
+  private readonly held = new Set<string>();
+  /** The settings the timers were last set under (a config change of another key re-arms nothing). */
+  private lastCfg: string | undefined;
 
   constructor(deps: Partial<IdleCompactionDeps> = {}) {
     this.deps = { ...defaultDeps(), ...deps };
@@ -235,6 +244,14 @@ export class IdleCompaction {
       case EventNames.SESSION_DELETED:
         for (const id of d.sessionIds ?? (d.sessionId ? [d.sessionId] : [])) this.cancel(id, 'deleted');
         return;
+      case EventNames.CONFIG_CHANGED:
+        // Switched on, or a lower threshold: sessions already idle are armed now, not at their next turn.
+        if (this.rearmTimer) this.deps.clearTimer(this.rearmTimer);
+        this.rearmTimer = this.deps.setTimer(() => {
+          this.rearmTimer = null;
+          void this.rearm().catch((err) => log.session.warn('idle compaction: rearm failed', { error: err instanceof Error ? err.message : String(err) }));
+        }, 1_000);
+        return;
       case EventNames.SESSION_WILL_REAP: {
         // The idle reap ends the CLI before its armed time (15 min under memory pressure): compact now,
         // while the CLI and its cache are alive. A reaped session is not compacted later.
@@ -253,7 +270,10 @@ export class IdleCompaction {
   /** A quiet turn ended, whichever way: a row that never went out is taken back, and the end is stored. */
   readonly onQuietEnd = (end: QuietTurnEnd): void => {
     if (end.kind !== 'idle-compact') return;
-    this.deps.announce(end.sessionId, false);
+    // A person's message after the line went out ends the quiet turn, but the CLI still compacts
+    // first: the panels keep saying so until the compaction's own result (they clear on it).
+    const stillCompacting = end.delivered && (end.why === 'other-send' || end.why === 'other-line');
+    if (!stillCompacting) this.deps.announce(end.sessionId, false);
     if (end.rowId && !end.delivered) void this.takeBack(end.sessionId, end.rowId, end.why);
     void this.noteQuietEnd(end.sessionId);
   };
@@ -287,6 +307,7 @@ export class IdleCompaction {
 
   /** A turn ended: store the facts the runner holds, and set the timer from them. */
   async onTurnEnd(sessionId: string): Promise<void> {
+    this.held.delete(sessionId);
     const facts = this.deps.live(sessionId).promptCache;
     if (!facts) return;
     const rec = await this.deps.getSession(sessionId);
@@ -303,6 +324,8 @@ export class IdleCompaction {
     if (!window || !facts) { this.cancel(sessionId, 'no-window'); return; }
     const prev = this.timers.get(sessionId);
     if (prev?.requestAt === facts.requestAt) return;
+    // Facts read before a newer turn end armed its own timer: the newer one stands.
+    if (prev && Date.parse(prev.requestAt) > Date.parse(facts.requestAt)) return;
     if (prev) this.deps.clearTimer(prev.timer);
     const delay = Math.max(0, window.fireAtMs - this.deps.now());
     const requestAt = facts.requestAt;
@@ -312,6 +335,8 @@ export class IdleCompaction {
   }
 
   cancel(sessionId: string, why: string): void {
+    if (why === 'turn-not-clean' || why === 'session-error' || why === 'send') this.held.add(sessionId);
+    if (why === 'deleted') this.held.delete(sessionId);
     const t = this.timers.get(sessionId);
     if (!t) return;
     this.deps.clearTimer(t.timer);
@@ -390,6 +415,7 @@ export class IdleCompaction {
    * (a restart forgets which turn was quiet, so a late result reads as an ordinary turn end).
    */
   async rebuild(): Promise<number> {
+    this.lastCfg ??= JSON.stringify(await this.deps.config());
     let n = 0;
     for (const rec of await this.deps.listSessions()) {
       const ic = rec.idleCompaction;
@@ -404,8 +430,27 @@ export class IdleCompaction {
     return n;
   }
 
+  /** Every session's timer again from its facts, under the settings now (a config change). */
+  async rearm(): Promise<number> {
+    const cfg = JSON.stringify(await this.deps.config());
+    if (cfg === this.lastCfg) return 0;
+    this.lastCfg = cfg;
+    let n = 0;
+    for (const rec of await this.deps.listSessions()) {
+      if (this.held.has(rec.claudeSessionId)) continue;
+      const facts = this.deps.live(rec.claudeSessionId).promptCache ?? rec.promptCache;
+      if (!facts) continue;
+      const sent = rec.idleCompaction && Date.parse(rec.idleCompaction.sentAt) >= Date.parse(facts.requestAt);
+      if (sent) continue;
+      await this.schedule(rec.claudeSessionId, facts);
+      if (this.timers.has(rec.claudeSessionId)) n++;
+    }
+    return n;
+  }
+
   stop(): void {
     this.stopped = true;
+    if (this.rearmTimer) this.deps.clearTimer(this.rearmTimer);
     for (const t of this.timers.values()) this.deps.clearTimer(t.timer);
     this.timers.clear();
   }
@@ -424,7 +469,7 @@ export function startIdleCompaction(
   onQuietTurnEnd(ic.onQuietEnd);
   bus.subscribe('idle-compaction', ic.handleEvent, {
     global: true,
-    interest: ['session:result', 'session:error', 'session:send', 'session:deleted', 'session:will-reap'],
+    interest: ['session:result', 'session:error', 'session:send', 'session:deleted', 'session:will-reap', 'config:changed'],
   });
   void ic.rebuild().then((n) => { if (n) log.session.info('idle compaction timers rebuilt', { armed: n }); })
     .catch((err) => log.session.warn('idle compaction rebuild failed', { error: err instanceof Error ? err.message : String(err) }));

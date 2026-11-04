@@ -79,15 +79,17 @@ export function SessionsSection({ config, onSave }: Props) {
     { rowKey: 'sessions.max-idle', kind: 'number' },
   );
   const idleCompact = useOptimisticSetting<boolean>(
-    config.session?.idle_compaction?.enabled !== false,
+    config.session?.idle_compaction?.enabled === true,
     (v) => saveIdleCompaction({ enabled: v }, 'sessions.idle-compaction'),
     { rowKey: 'sessions.idle-compaction' },
   );
-  // Shown and typed in thousands of tokens; stored in tokens. Empty = the server's 200K.
+  // Shown and typed in thousands of tokens; stored in tokens. Empty = the server's 200K. The server
+  // reads 0 or less as unset, so the field clears to that on commit instead of showing a 0 it ignores.
   const compactMin = useCommitField<number | undefined>(
     config.session?.idle_compaction?.min_tokens != null ? Math.round(config.session.idle_compaction.min_tokens / 1000) : undefined,
-    (v) => saveIdleCompaction({ min_tokens: v != null && v > 0 ? v * 1000 : undefined }, 'sessions.idle-compaction-min'),
-    { rowKey: 'sessions.idle-compaction-min', kind: 'number' },
+    // null, not undefined: a save keeps a key it does not mention, so a cleared field sends null.
+    (v) => saveIdleCompaction({ min_tokens: v != null ? v * 1000 : null }, 'sessions.idle-compaction-min'),
+    { rowKey: 'sessions.idle-compaction-min', kind: 'number', clamp: (v) => (v != null && v > 0 ? v : undefined) },
   );
   const permission = useOptimisticSetting<boolean>(
     config.session?.permission_prompt ?? true,
@@ -152,7 +154,7 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="idle-compaction-row"
           label="Compact idle sessions before the cache expires"
-          help="A big Claude Code session left idle is summarized a few minutes before its one-hour prompt cache runs out, so your next message there reads a short summary instead of paying for the whole conversation again."
+          help="A big Claude Code session left idle is summarized a few minutes before its one-hour prompt cache runs out. The summary costs about one message to the whole conversation, even if you never come back; every message after it reads the short summary instead. Off, a session with a cold cache offers the same compaction when you return."
           htmlFor="idle-compaction"
           error={idleCompact.error}
           control={

@@ -32,6 +32,10 @@ export const COMPACTING_MESSAGE = 'Compacting context...'
 /** Outcome line: the compaction landed. Numbers ride in the detail. */
 export const COMPACTED_MESSAGE = 'Context compacted'
 
+/** Outcome line: the turn ended with no boundary (a Stop cancels `/compact`: "Compaction canceled."). */
+export const COMPACTION_STOPPED_MESSAGE = 'Compaction stopped'
+export const COMPACTION_STOPPED_DETAIL = 'context unchanged'
+
 /** `compact_metadata`, either dialect. Canonical JSONL uses camelCase
  *  (`compactMetadata.preTokens`); the CLI's stream-json stdout — what the daemon
  *  stream files hold — uses snake_case (`compact_metadata.pre_tokens`). */

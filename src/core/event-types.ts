@@ -272,6 +272,8 @@ export interface SessionResultEvent {
   /** True only for a terminal upstream retry-exhaustion signature. */
   retryExhausted?: boolean;
   interrupted?: boolean;
+  /** The turn was a compaction stopped before its boundary (claude-code-session.ts): it ends as no work stopped. */
+  compactionStopped?: boolean;
   /** CLI's cumulative cost for the current process (running total, restarts at 0
    *  on each --resume). For DISPLAY only — do NOT bill this; it would re-charge the
    *  whole running total every turn (the 13× session-cost inflation bug). */

@@ -14,7 +14,7 @@
  */
 import type { EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
-import { COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import type { ToolRunMember } from './tool-run-phrase';
 
@@ -107,14 +107,24 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
 }
 
 /**
- * A run of runtime rows' line. A compaction says so by name (its explanation and numbers are
- * inside), with the count of the other rows; only one that made its boundary does: its progress row
- * ("Compacting context...") is no result, and one stopped halfway made none.
+ * A run of runtime rows' line. A compaction says so by name, with its size change and the count of
+ * the other rows. Only one that made its boundary says compacted ("Context compacted"); one still
+ * running says compacting, and one stopped halfway ("Compaction stopped") says stopped.
  */
-export function systemRunLabel(members: readonly { variant: string; message: string }[]): string {
+export function systemRunLabel(members: readonly { variant: string; message: string; detail?: string }[]): string {
   const idle = members.filter((m) => isIdleCompactLine(m.message)).length;
-  const done = members.filter((m) => m.variant === 'compact' && m.message !== COMPACTING_MESSAGE).length;
-  if (!done) return `${members.length} system messages`;
-  const others = members.length - done - idle;
-  return `${idle ? 'Compacted by Walnut while idle' : 'Context compacted'}${others > 0 ? ` \u00b7 ${others} more` : ''}`;
+  const compacts = members.filter((m) => m.variant === 'compact');
+  const done = compacts.filter((m) => m.message === COMPACTED_MESSAGE);
+  const more = (named: number) => {
+    const n = members.length - named - idle;
+    return n > 0 ? ` \u00b7 ${n} more` : '';
+  };
+  if (done.length > 0) {
+    const size = done[done.length - 1]!.detail;
+    return `${idle ? 'Compacted by Walnut while idle' : 'Context compacted'}${size ? ` \u00b7 ${size}` : ''}${more(done.length)}`;
+  }
+  const last = compacts[compacts.length - 1]?.message;
+  if (last === COMPACTING_MESSAGE) return `${idle ? 'Compacting while idle' : 'Compacting context'}${more(compacts.length)}`;
+  if (last === COMPACTION_STOPPED_MESSAGE) return `Compaction stopped${more(compacts.length)}`;
+  return `${members.length} system messages`;
 }

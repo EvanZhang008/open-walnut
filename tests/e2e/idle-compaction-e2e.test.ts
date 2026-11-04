@@ -22,6 +22,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { bus } from '../../src/core/event-bus.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 // The cache lives an hour; this lead sends the compaction 5 s after the request.
@@ -71,6 +72,7 @@ async function startBig(message: string): Promise<{ sid: string; taskId: string 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   process.env.WALNUT_IDLE_COMPACT_LEAD_MS = String(LEAD_MS)
+  process.env.WALNUT_IDLE_COMPACTION = '1'
   process.env.MOCK_COMPACT_MS = '2500'
   daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
@@ -82,6 +84,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.WALNUT_IDLE_COMPACT_LEAD_MS
+  delete process.env.WALNUT_IDLE_COMPACTION
   delete process.env.MOCK_COMPACT_MS
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
@@ -172,6 +175,33 @@ describe('a big idle session with a 1-hour cache', () => {
     const after = await task(w.taskId)
     expect(after.phase).toBe(before.phase)
     expect(sentTexts(w.sid).filter((s) => s.trim() === '/compact')).toHaveLength(1)
+  }, 90_000)
+
+  // 2026-11-04 review: "Compact first", then Stop. The CLI cancels it; the task stayed IN_PROGRESS
+  // ("It stopped, and nothing will wake it") and the compacting row stayed open.
+  it('a person\'s own /compact stopped halfway hands the task back and closes its row', async () => {
+    const w = await startBig('big-context-turn:400000:5m')
+    const rows: Array<{ message?: string; progress?: boolean }> = []
+    const sub = `idle-compaction-e2e-rows-${w.sid}`
+    bus.subscribe(sub, (e) => {
+      const d = e.data as { sessionId?: string; variant?: string; message?: string; progress?: boolean }
+      if (d.sessionId === w.sid && d.variant === 'compact') rows.push({ message: d.message, progress: d.progress })
+    }, { global: true, interest: ['session:system-event'] })
+    try {
+      await sendMessageToSession(w.sid, '/compact', { source: 'ui', taskId: w.taskId })
+      await until('compacting', async () => rows, (r) => r.some((x) => x.progress === true), 15_000)
+      const stop = await req('POST', `/api/sessions/${w.sid}/interrupt`)
+      expect(stop.status, JSON.stringify(stop.json)).toBeLessThan(300)
+      await until('its row closed', async () => rows, (r) => r.some((x) => x.message === 'Compaction stopped' && x.progress === false), 15_000)
+      const t = await until('handed back', () => task(w.taskId), (t) => t.phase === 'NEED_ACTION', 15_000)
+      expect(t.phase).toBe('NEED_ACTION')
+      const rec = await getSessionByClaudeId(w.sid)
+      expect(rec!.promptCache!.compactedAt).toBeUndefined()
+      // The next compaction shows its progress row again.
+      rows.length = 0
+      await sendMessageToSession(w.sid, '/compact', { source: 'ui', taskId: w.taskId })
+      await until('compacting again', async () => rows, (r) => r.some((x) => x.progress === true), 15_000)
+    } finally { bus.unsubscribe(sub) }
   }, 90_000)
 
   it('a 5-minute cache and a small session are left alone', async () => {

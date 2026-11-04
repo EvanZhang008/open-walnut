@@ -5261,7 +5261,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } catch {}
       }
 
-      if (eventData<'session:result'>(event).interrupted) return
+      if (eventData<'session:result'>(event).interrupted) {
+        // A Stop of a turn that was only a compaction was no work to stop: the task reads as it did
+        // before it (a person's own; Walnut's idle one is quiet and moves nothing).
+        const turnGen = (event.data as { turnGen?: number }).turnGen
+        if (eventData<'session:result'>(event).compactionStopped && taskId && sessionId) {
+          const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
+          if (!isQuietTurn(sessionId, turnGen)) {
+            const { applySessionPhase } = await import('../core/phase.js')
+            await applySessionPhase(taskId, 'session:result', 'server.ts:compaction-stopped', { sessionId, turnGen })
+          }
+        }
+        return
+      }
       // A quiet turn (Walnut's idle compaction, core/sessions/quiet-turn.ts): its cost is recorded
       // above, and nothing else of a turn end happens (no notification, no phase, no ended event).
       {

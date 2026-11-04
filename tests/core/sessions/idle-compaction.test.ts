@@ -53,7 +53,7 @@ function harness(over: Partial<IdleCompactionDeps> = {}): Harness {
     now: () => now.ms,
     setTimer: (fn, ms) => { const t = { fn, at: now.ms + ms, cleared: false }; timers.push(t); return t as unknown as ReturnType<typeof setTimeout>; },
     clearTimer: (t) => { (t as unknown as { cleared: boolean }).cleared = true; },
-    config: async () => resolveIdleCompactionConfig({}, {}),
+    config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: true } }, {}),
     getSession: async () => state.rec,
     listSessions: async () => (state.rec ? [state.rec] : []),
     saveSession: async (_id, updates) => { saved.push(updates); if (state.rec) state.rec = { ...state.rec, ...updates }; },
@@ -252,6 +252,17 @@ describe('when it fires', () => {
     expect(told).toEqual([true, false]);
   });
 
+  it('a person writing once the line went out leaves the panels saying it compacts (its result clears them)', async () => {
+    const told: boolean[] = [];
+    const h = harness({ announce: (_sid, active) => { told.push(active); } });
+    h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
+    expect(await h.ic.fire(SID, facts().requestAt)).toBe('sent');
+    noteQuietTurnDelivery(SID, [h.lastRow()!]);
+    noteSessionSend(SID, 'ui');
+    expect(isQuietTurn(SID)).toBe(false);
+    expect(told).toEqual([true]);
+  });
+
   // 2026-11-04 on the Mac: under memory pressure the idle reap ends a CLI after 15 minutes, long before
   // its compaction time, and a reaped session is never compacted. The reap's warning sends it then.
   it('an idle reap about to end the CLI sends the armed compaction now; an unarmed session is left alone', async () => {
@@ -270,6 +281,67 @@ describe('when it fires', () => {
     expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
     expect(h.timers[0]!.cleared).toBe(true);
     expect(h.ic.armedFor(SID)).toBeUndefined();
+  });
+
+  // 2026-11-04 review: switched back on, or the threshold lowered, and a big session already idle
+  // was not compacted until its next turn. A config change arms (and disarms) every session now.
+  it('a settings change re-arms the idle sessions under the new switch and threshold', async () => {
+    const cfg = { enabled: true, min: 500_000 };
+    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: cfg.enabled, min_tokens: cfg.min } }, {}) });
+    await h.ic.onTurnEnd(SID);
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    const changed = async () => {
+      h.ic.handleEvent(ev(EventNames.CONFIG_CHANGED, {}, 'config'));
+      h.now.ms += 1_000;
+      await h.runDue();
+      for (let i = 0; i < 20; i++) await settle();
+    };
+    cfg.min = 300_000;
+    await changed();
+    expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
+    cfg.enabled = false;
+    await changed();
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    cfg.enabled = true;
+    await changed();
+    expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
+    cfg.min = 450_000;
+    await changed();
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    // Already sent for this request: a change does not arm it again.
+    cfg.min = 300_000;
+    h.state.rec = record({ idleCompaction: { sentAt: new Date(T0 + 50 * 60_000).toISOString(), rowId: 'qm-quiet-idle-compact-b' } });
+    await changed();
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+  });
+
+  it('a session disarmed by a stopped turn stays disarmed through a settings change, until its next clean turn', async () => {
+    const cfg = { min: 500_000 };
+    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: true, min_tokens: cfg.min } }, {}) });
+    const changed = async () => {
+      h.ic.handleEvent(ev(EventNames.CONFIG_CHANGED, {}, 'config'));
+      h.now.ms += 1_000;
+      await h.runDue();
+      for (let i = 0; i < 20; i++) await settle();
+    };
+    h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID, interrupted: true }));
+    cfg.min = 300_000;
+    await changed();
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    await h.ic.onTurnEnd(SID);
+    expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
+    // A change of another key (same idle compaction settings) re-arms nothing.
+    h.ic.cancel(SID, 'no-window');
+    await changed();
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+  });
+
+  it('a timer for a newer request is not replaced by older facts', async () => {
+    const h = harness();
+    const newer = facts({ requestAt: new Date(T0 + 120_000).toISOString(), expiresAt: new Date(T0 + 120_000 + ONE_HOUR_MS).toISOString() });
+    await h.ic.schedule(SID, newer);
+    await h.ic.schedule(SID, facts());
+    expect(h.ic.armedFor(SID)).toBe(newer.requestAt);
   });
 
   it('off in config, off everywhere', async () => {
@@ -305,14 +377,16 @@ describe('at boot', () => {
 
 describe('the settings', () => {
   it('reads enabled, the threshold and the test lead', () => {
-    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: true, minTokens: 200_000, leadMs: IDLE_COMPACT_LEAD_MS });
-    expect(resolveIdleCompactionConfig({ idle_compaction: { min_tokens: 120_000 } }, { WALNUT_IDLE_COMPACT_LEAD_MS: '3590000' }))
+    // Off by default (2026-11-04: a compaction writes the whole conversation once, come back or not).
+    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: false, minTokens: 200_000, leadMs: IDLE_COMPACT_LEAD_MS });
+    expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: true, min_tokens: 120_000 } }, { WALNUT_IDLE_COMPACT_LEAD_MS: '3590000' }))
       .toEqual({ enabled: true, minTokens: 120_000, leadMs: 3_590_000 });
-    expect(resolveIdleCompactionConfig({}, { WALNUT_IDLE_COMPACTION: '0' }).enabled).toBe(false);
+    expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: true } }, { WALNUT_IDLE_COMPACTION: '0' }).enabled).toBe(false);
+    expect(resolveIdleCompactionConfig({}, { WALNUT_IDLE_COMPACTION: '1' }).enabled).toBe(true);
   });
 
   it('skipReason is the one decision, pure', () => {
-    const cfg = resolveIdleCompactionConfig({}, {});
+    const cfg = resolveIdleCompactionConfig({ idle_compaction: { enabled: true } }, {});
     const base = {
       rec: record(), task: task(), facts: facts(), scheduledFor: facts().requestAt,
       live: { inTurn: false, outliving: false, cron: false }, queued: 0, orgOff: false, nowMs: T0 + ONE_HOUR_MS - 60_000, cfg,

@@ -29,7 +29,7 @@ import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamCh
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { IDLE_COMPACTING_TEXT, useIdleCompacting } from './CompactContext';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
-import { COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
+import { COMPACTED_MESSAGE, COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
@@ -4545,7 +4545,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const m of part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m)) {
       if (m.role === 'system') {
         const compact = isIdleCompactLine(m.text) ? 'idle' as const
-          : m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE ? 'cli' as const : undefined;
+          : m.systemVariant === 'compact' && m.text === COMPACTED_MESSAGE ? 'cli' as const : undefined;
         out.push({ kind: 'notice', error: m.systemVariant === 'error', ...(compact ? { compact } : {}) });
         continue;
       }
@@ -5428,7 +5428,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             label={assistantLabel}
             {...(workingText ? { text: workingText } : {})}
             tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
-            {...(idleCompacting ? { text: IDLE_COMPACTING_TEXT } : {})}
+            {...(idleCompacting
+              ? { text: IDLE_COMPACTING_TEXT }
+              // A compaction's progress row is open: the line says the same, not "is working".
+              : blocks.some((b) => b.type === 'system' && b.variant === 'compact' && b.progress === true)
+                ? { text: `${assistantLabel} is compacting the context\u2026` }
+                : {})}
           />
         </SessionWorkingIndicator>
       );

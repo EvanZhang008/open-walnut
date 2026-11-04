@@ -3459,6 +3459,8 @@ select {
 .session-system-icon { font-size: 11px; line-height: 1; }
 .session-system-text { font-weight: 500; }
 .session-system-detail { font-size: 11px; opacity: 0.7; }
+/* A narrow panel wraps the words, never the clock ("02:42 / PM"). */
+.session-system-time { white-space: nowrap; flex-shrink: 0; }
 .session-system-line--error { color: var(--warning); }
 
 /* ── Permission Request Card (inline Allow/Deny for sensitive operations) ── */

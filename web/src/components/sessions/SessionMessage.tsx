@@ -463,7 +463,7 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
       {icon && <span className="session-system-icon">{icon}</span>}
       <span className="session-system-text">{message}</span>
       {detail && <span className="session-system-detail">{detail}</span>}
-      {time && <span className="session-system-detail">{time}</span>}
+      {time && <span className="session-system-detail session-system-time">{time}</span>}
     </div>
   );
 }
