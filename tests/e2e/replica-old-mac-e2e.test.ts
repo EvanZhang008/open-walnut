@@ -39,9 +39,9 @@ import Database from '../../src/lib/sqlite.js'
 import {
   BUN, HOST_KEY, ROOT, WINDOWS, _signalSafetyForTesting as guard, sleep, startHostDaemon, waitFor, writeStubBin, type Twin,
 } from '../helpers/replica-cluster.js'
+import { OLD_BUILD_SHA, OLD_BUILD_FETCH_MS, ensureOldBuild } from '../helpers/v1-daemon-sources.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
-const OLD_BUILD = '1fe1fd194'
 type Pinned = NonNullable<ReturnType<typeof guard.pin>>
 
 /** The 1fe1fd194 sources, unpacked once for the file (its node_modules: oldNodeModules). */
@@ -49,7 +49,10 @@ let oldRoot = ''
 function oldTree(): string {
   if (oldRoot) return oldRoot
   const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-old-mac-'))
-  execFileSync('/bin/sh', ['-c', `git -C "${ROOT}" archive ${OLD_BUILD} src package.json tsconfig.json | tar -x -C "${tree}"`])
+  // Two steps, not `git archive | tar`: a pipe's status is tar's, so an archive that failed (a
+  // shallow CI clone without the commit) extracted nothing and the file died with no message.
+  const archive = execFileSync('git', ['-C', ROOT, 'archive', OLD_BUILD_SHA, 'src', 'package.json', 'tsconfig.json'], { maxBuffer: 512 * 1024 * 1024 })
+  execFileSync('tar', ['-x', '-C', tree], { input: archive })
   oldNodeModules(tree)
   oldRoot = tree
   return tree
@@ -310,6 +313,9 @@ function hostStream(c: Cluster, sid: string): Array<Record<string, any>> {
       .map((l) => { try { return JSON.parse(l) as Record<string, any> } catch { return {} } })
   } catch { return [] }
 }
+
+// CI's clone is shallow: fetch the old build before any suite unpacks it.
+beforeAll(() => ensureOldBuild(), OLD_BUILD_FETCH_MS)
 
 afterAll(() => {
   if (oldRoot && !process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(oldRoot, { recursive: true, force: true })

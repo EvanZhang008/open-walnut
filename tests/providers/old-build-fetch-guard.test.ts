@@ -17,13 +17,27 @@ function testFiles(dir: string, out: string[] = []): string[] {
   return out
 }
 
+/**
+ * A file reads an old commit when it uses the old-build helpers or runs `git archive` itself (an
+ * argv `'git', [..., 'archive'` or a shell line `` `git ... archive ${...}` ``): an archive of a
+ * commit a shallow clone may lack. Prose that only mentions either does not count. 2026-11-04:
+ * replica-old-mac-e2e ran its own `git archive 1fe1fd194 | tar` without the helper, so on CI's
+ * shallow clone a failed beforeAll skipped every test of it, unseen until the e2e baseline
+ * counted such files.
+ */
+function readsAnOldCommit(text: string): boolean {
+  return text.includes('helpers/v1-daemon-sources')
+    || /['"]git['"],\s*\[[^\]]*['"]archive['"]/.test(text)
+    || /`git [^`\n]*\barchive \$\{/.test(text)
+}
+
 describe('the old build is fetched before the tests that read it', () => {
   const readers = testFiles(path.join(ROOT, 'tests'))
-    .filter((f) => fs.readFileSync(f, 'utf8').includes('helpers/v1-daemon-sources'))
+    .filter((f) => f !== __filename && readsAnOldCommit(fs.readFileSync(f, 'utf8')))
     .map((f) => path.relative(ROOT, f))
 
   it('finds the readers at all', () => {
-    expect(readers).toEqual(expect.arrayContaining(['tests/providers/offline-host-journal-v2.test.ts', 'tests/providers/offline-journal-migration-claim.test.ts']))
+    expect(readers).toEqual(expect.arrayContaining(['tests/providers/offline-host-journal-v2.test.ts', 'tests/providers/offline-journal-migration-claim.test.ts', 'tests/e2e/replica-old-mac-e2e.test.ts', 'tests/integration/journal-v2-twins.test.ts']))
   })
 
   it('every reader fetches it in a beforeAll with the fetch budget', () => {
