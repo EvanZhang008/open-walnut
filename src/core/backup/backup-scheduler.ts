@@ -67,7 +67,10 @@ export async function isBackupConfigured(cfg: BackupConfig | undefined, dataDir:
   if (!cfg?.enabled) return false;
   const engine = engineOf(cfg);
   if (engine === 'mirror') return Boolean(cfg.bucket);
-  if (engine === 'encrypted') return isDestinationReady(cfg.destination!, dataDir);
+  // Nothing leaves this computer before the user said the recovery key is kept
+  // somewhere (Settings, Backup, "I saved it"; a typed key counts): without it the
+  // backups could never be opened again.
+  if (engine === 'encrypted') return Boolean(cfg.recovery_key_saved_at) && isDestinationReady(cfg.destination!, dataDir);
   return false;
 }
 

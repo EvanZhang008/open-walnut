@@ -109,6 +109,10 @@ backupRouter.post('/run', async (_req: Request, res: Response, next: NextFunctio
       res.status(400).json({ error: 'Backup is not configured' });
       return;
     }
+    if (engineOf(config.backup) === 'encrypted' && !config.backup?.recovery_key_saved_at) {
+      res.status(400).json({ error: 'Save the recovery key first (Settings, Backup, "I saved it").', code: 'key_not_saved' });
+      return;
+    }
     scheduler.runNow().catch((err) => {
       log.web.warn('backup: manual run failed', {
         error: err instanceof Error ? err.message : String(err),

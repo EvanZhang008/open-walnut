@@ -347,12 +347,11 @@ export function BackupSection({ config, onSave }: Props) {
     driveConnected,
     needsKey: keyState.needsKey || keyMismatch,
     hasKey: keyState.hasKey,
+    keySaved: Boolean(saved.recovery_key_saved_at),
   })
-  // Nothing leaves this computer before the user has the key that opens it.
+  // Nothing leaves this computer before the user has the key that opens it (the server holds to it too).
   const keyUnsaved = !legacyMode && keyState.hasKey && !saved.recovery_key_saved_at
-  const runBlocked = blocked
-    ?? (otherWriter ? 'Another computer writes these backups. Move them here above first.' : null)
-    ?? (keyUnsaved ? 'Save the recovery key above first.' : null)
+  const runBlocked = blocked ?? (otherWriter ? 'Another computer writes these backups. Move them here above first.' : null)
 
   const progressPct = status?.progress && status.progress.totalBytes > 0
     ? Math.floor((status.progress.uploadedBytes / status.progress.totalBytes) * 100)
@@ -367,7 +366,7 @@ export function BackupSection({ config, onSave }: Props) {
           ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} backup${status.snapshotCount === 1 ? '' : 's'} kept`] : []),
         ].join(', ') + (enabled && !runBlocked
           // When the next one runs, so a switch of service never leaves the user guessing.
-          ? `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + (saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`
+          ? (status.error ? '' : `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`)
           : '')
       : otherWriter ? 'Another computer writes these backups. Move them here above first.'
         : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.'

@@ -41,6 +41,8 @@ describe('blockedReason', () => {
     expect(blockedReason({ ...base, saved: r2, needsKey: true })).toMatch(/recovery key/);
     expect(blockedReason({ ...base, saved: r2, hasKey: false })).toMatch(/Waiting for the recovery key/);
     expect(blockedReason({ ...base, saved: r2 })).toBeNull();
+    expect(blockedReason({ ...base, saved: r2, keySaved: false })).toBe('Save the recovery key above first.');
+    expect(blockedReason({ ...base, saved: r2, keySaved: true })).toBeNull();
     expect(blockedReason({ ...base, saved: { type: 'gdrive' }, driveConnected: true })).toBeNull();
     expect(blockedReason({ ...base, legacyMode: true })).toMatch(/bucket/);
     expect(blockedReason({ ...base, legacyMode: true, legacyBucket: 'old' })).toBeNull();

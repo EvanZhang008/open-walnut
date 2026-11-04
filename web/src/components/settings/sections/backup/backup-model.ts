@@ -137,6 +137,8 @@ export function blockedReason(s: {
   driveConnected: boolean
   needsKey: boolean
   hasKey: boolean
+  /** The user said the key is kept ("I saved it", or a typed key). Absent: not asked. */
+  keySaved?: boolean
 }): string | null {
   if (s.legacyMode) return trimmed(s.legacyBucket) ? null : 'Fill in the bucket above first.'
   if (!s.saved) return 'Set up "Where backups go" above first.'
@@ -145,6 +147,7 @@ export function blockedReason(s: {
   if (s.saved.type === 'gdrive' && !s.driveConnected) return 'Connect Google Drive above first.'
   if (s.needsKey) return 'Enter your recovery key above first.'
   if (!s.hasKey) return 'Waiting for the recovery key above.'
+  if (s.keySaved === false) return 'Save the recovery key above first.'
   return null
 }
 

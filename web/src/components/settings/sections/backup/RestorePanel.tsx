@@ -279,7 +279,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, other
         </SettingsDisclosure>
       )}
       {switchError && !pendingSwitch && (
-        <SettingsRow label="The restored data was not switched in" error={switchError} data-testid="backup-restore-switch-error" />
+        <SettingsRow label="The restored data was not switched in" error={switchError} data-testid="backup-restore-switch-error"
+          control={<SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-error-dismiss">Dismiss</SettingsButton>} />
       )}
     </>
   )

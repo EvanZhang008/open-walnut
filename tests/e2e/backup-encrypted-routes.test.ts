@@ -110,6 +110,12 @@ describe('encrypted backups through the routes', () => {
     const mode = (await fsp.stat(recoveryKeyPath(WALNUT_HOME))).mode & 0o777;
     expect(mode).toBe(0o600);
 
+    // Nothing goes up before the user said the key is kept.
+    const early = await call('POST', '/run');
+    expect(early.status).toBe(400);
+    expect(early.body).toMatchObject({ code: 'key_not_saved' });
+    await updateConfig({ backup: { ...(await getConfig()).backup, recovery_key_saved_at: new Date().toISOString() } } as never);
+
     expect((await call('POST', '/run')).status).toBe(202);
     await until(() => !scheduler.health.running && !!scheduler.health.lastSnapshotId);
     expect(scheduler.health.error).toBeUndefined();

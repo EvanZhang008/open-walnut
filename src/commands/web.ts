@@ -87,6 +87,9 @@ export async function runWeb(options: {
     const sw = await applyPendingSwitch(WALNUT_HOME)
     if (sw.kind === 'switched') console.log(`Switched to the restored data; the previous data folder is kept at ${sw.aside}`)
     if (sw.kind === 'failed') console.error(`Restored data not switched in: ${sw.error}`)
+    if (sw.kind === 'waiting') console.error('A switch to restored data waits: the Walnut that asked for it still runs. Quit it first.')
+    // Never start on a data folder that is not in place: Walnut would make a new, empty one.
+    if (sw.kind === 'failed' && sw.fatal) { process.exitCode = 1; return }
   }
 
   // Note: ephemeral WALNUT_HOME guard is in constants.ts (must run at import time,

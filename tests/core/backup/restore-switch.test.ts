@@ -78,7 +78,7 @@ describe('restore switch', () => {
         if (n === 2) throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
         return fsp.rename(a, b);
       },
-    } as Pick<typeof fsp, 'rename'>;
+    };
     const out = await applyPendingSwitch(home, flaky);
     expect(out.kind).toBe('failed');
     expect(await read(path.join(home, 'notes', 'a.md'))).toBe('live');
@@ -115,4 +115,50 @@ describe('restore switch', () => {
     const p = await requestSwitch(home, restored, at);
     expect(p.aside).toBe(`${home}-before-restore-2026-11-04T10-05-00-2`);
   });
+
+  it('waits while the Walnut that asked still runs; goes once it is gone', async () => {
+    const p = await requestSwitch(home, restored);
+    // Seen from another process (a second start beside the asking server).
+    const marker = JSON.parse(await read(switchMarkerPath(home)));
+    await fsp.writeFile(switchMarkerPath(home), JSON.stringify({ ...marker, pid: 4242, started: 'Tue Nov 4 10:00:00 2026' }));
+    const alive = { alive: () => true, started: async () => 'Tue Nov 4 10:00:00 2026' };
+    expect(await applyPendingSwitch(home, alive)).toEqual({ kind: 'waiting' });
+    expect(await read(path.join(home, 'notes', 'a.md'))).toBe('live');
+    expect(await readPendingSwitch(home)).not.toBeNull();
+    // Its pid now belongs to another process (started at another time): it is gone.
+    const reused = { alive: () => true, started: async () => 'Wed Nov 5 08:00:00 2026' };
+    expect(await applyPendingSwitch(home, reused)).toEqual({ kind: 'switched', aside: p.aside });
+  });
+
+  it('a request older than a day is dropped, never done', async () => {
+    await requestSwitch(home, restored, new Date('2026-11-01T10:00:00Z'));
+    const out = await applyPendingSwitch(home, { now: () => Date.parse('2026-11-04T10:00:00Z') });
+    expect(out.kind).toBe('failed');
+    expect(await read(path.join(home, 'notes', 'a.md'))).toBe('live');
+    expect(await lastSwitchError(home)).toMatch(/more than a day ago/);
+    // The user read it: cancel drops the note too.
+    await cancelSwitch(home);
+    expect(await lastSwitchError(home)).toBeNull();
+  });
+
+  it('refuses a data folder that is a link', async () => {
+    const real = path.join(root, 'real-home');
+    await fsp.rename(home, real);
+    await fsp.symlink(real, home);
+    await expect(requestSwitch(home, restored)).rejects.toThrow(/link/);
+  });
+
+  it('putting the old folder back fails too: the request stays, the outcome is fatal, and the next start finishes', async () => {
+    const p = await requestSwitch(home, restored);
+    let n = 0;
+    const broken = { rename: async (a: string, b: string) => { n++; if (n >= 2) throw new Error('EIO'); return fsp.rename(a, b); } };
+    const out = await applyPendingSwitch(home, broken);
+    expect(out).toMatchObject({ kind: 'failed', fatal: true });
+    expect(await exists(home)).toBe(false);
+    expect(await read(path.join(p.aside, 'notes', 'a.md'))).toBe('live');
+    expect(await readPendingSwitch(home)).not.toBeNull();
+    expect(await applyPendingSwitch(home)).toMatchObject({ kind: 'switched' });
+    expect(await read(path.join(home, 'notes', 'a.md'))).toBe('restored');
+  });
 });
+
