@@ -97,6 +97,38 @@ protected file in use together: while another one reads fine (the Focus state, f
 example), a Screen Time refusal does not send you to add a program that is already
 added.
 
+## Local Network, and the server a deploy runs
+
+macOS asks "Allow ... to find devices on local networks?" the first time a program
+reaches a local address (an SSH host on your LAN, a machine joined to Walnut). For an
+app the answer is kept under its bundle, so Walnut.app is asked once. For a program
+with no bundle, macOS keeps the answer under the program's **path** and its Mach-O
+**UUID** (measured on macOS 26: a different binary with the same UUID at an allowed
+path connected; another UUID at that path was refused; the code hash is not
+compared).
+
+- **A server Walnut.app started, or one `scripts/dev-prod.sh` deployed, runs under
+  Walnut.app**, so its one Local Network choice holds for every build. The deploy puts
+  `Walnut --session-host --` in front of the compiled file in its launchd job, after
+  the file approves its own command line (`walnut __session-host-approve`). Before
+  this, launchd ran the file from each deploy's new stage directory, and every
+  deploy asked about `walnut-darwin-arm64` again. A rollback, or
+  `WALNUT_SESSION_HOST=0`, runs the file directly.
+- **Every darwin file Walnut builds carries a fixed UUID and signing identifier**
+  (`dev.openwalnut.walnut`, `dev.openwalnut.session-daemon`;
+  `scripts/lib/macho-identity.mjs`). bun gives each file it compiles the UUID of
+  bun's own runtime and the identifier `a.out`, shared with every bun program on the
+  Mac and changed by every bun upgrade. With the fixed identity, a file that runs on
+  its own from one place (a Mac host's daemon service, a server you run from your own
+  launchd job) keeps its answer across updates. The deploy refuses a file without it
+  before stopping the running server.
+- A server started from Terminal never asks: macOS allows command-line tools run
+  from Terminal or over SSH, and their children.
+- If the answer was "Don't Allow", Walnut sees connections to the local network fail
+  with "No route to host" and sends one letter naming the entry to turn on in
+  **System Settings > Privacy & Security > Local Network**: Walnut, or the file's own
+  name when the server runs on its own (`src/core/hosts/local-network-alert.ts`).
+
 ## Scope, precisely
 
 - **Full Disk Access granted to Walnut covers the daemon and everything it
@@ -147,9 +179,11 @@ added.
 - Turn it off with `WALNUT_SESSION_HOST=0`.
 - Test and sandbox daemons deliberately do not use it, so a test run can never
   borrow a granted identity or put a permission dialog on screen.
-- Walnut runs only the command recorded in
+- Walnut runs only a command recorded in
   `~/Library/Application Support/Open Walnut/session-host-launch.json`, and
-  re-checks the payload's hash before starting it. That file is owned by you and
+  re-checks the payload's hash before starting it. The file holds the commands
+  still in use (the deployed server and its daemon, at most 8); an approval whose
+  payload file is gone is dropped at the next write. That file is owned by you and
   mode 0600, which stops other software from reusing the app as a launcher. Code
   running as your own user could rewrite it, so it is not a defence against
   same-user malware.

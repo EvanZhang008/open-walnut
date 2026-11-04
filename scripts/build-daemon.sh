@@ -257,6 +257,9 @@ echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-darwin-arm64" \
   src/providers/daemon-standalone.ts
+# Walnut's own fixed Mach-O UUID and identifier, so a Mac's Local Network choice
+# for the daemon survives its updates (scripts/lib/macho-identity.mjs).
+"$BUN" scripts/lib/macho-identity.mjs stamp "$OUTDIR/daemon-darwin-arm64" daemon-darwin-arm64 --where-signable
 echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
 fi
 

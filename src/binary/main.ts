@@ -8,6 +8,8 @@
  *                                    `--start`, `--stop`, `--status` and `--service` alone mean the same
  *   walnut __selftest                checks the file's own parts without a server (src/binary/selftest.ts)
  *   walnut __plugin-check ...        loads installed plugins without activating them (src/core/plugins/plugin-load-check.ts)
+ *   walnut __session-host-approve -- <argv...>
+ *                                    approves argv under Walnut.app and prints the host executable (the deploy's server launch)
  *   walnut walnut <args> | wn <args> the on-host `walnut` the daemon's PATH shim runs
  *   walnut <runtime root>/<script>   a program a Node build starts as a file (src/binary/bundled-modules.ts)
  *
@@ -50,6 +52,9 @@ if (first === '__selftest') {
 } else if (first === '__plugin-check') {
   const { runPluginLoadCheck } = await import('../core/plugins/plugin-load-check.js')
   process.exit(await runPluginLoadCheck(userArgs.slice(1)))
+} else if (first === '__session-host-approve') {
+  const { runSessionHostApprove } = await import('../providers/session-host-approve.js')
+  process.exit(await runSessionHostApprove(userArgs.slice(1)))
 } else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--status' || first === '--service') {
   // The daemon reads its own argv (`--start`, `--stop`, `--status`, `--service`, `--version`).
   // Its lifecycle flags also work bare (no CLI meaning as a first word), so the file stands in

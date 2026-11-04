@@ -14,7 +14,8 @@ import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  claimedLaunchdLabel, parseLaunchdJobPid, removeOwnLaunchdJob, type LaunchctlExec,
+  claimedLaunchdLabel, jobIsOwnSessionHost, parseLaunchdJobPid, removeOwnLaunchdJob,
+  type LaunchctlExec, type ProcessParentLookup,
 } from '../../src/core/launchd-self-remove.js'
 
 const LABEL = 'com.example.walnut-prod'
@@ -122,6 +123,47 @@ describe('removeOwnLaunchdJob', () => {
     const { exec } = stubExec(4242, true)
     await expect(removeOwnLaunchdJob('duplicate', { env: JOB_ENV, platform: 'darwin', pid: 4242, exec }))
       .resolves.toBe('remove-failed')
+  })
+})
+
+// The deploy runs the server under Walnut.app's session host (scripts/dev-prod.sh,
+// session_host_prefix), so launchd reports the host's first generation as the job:
+// launchd -> host (job pid 700) -> host, disclaimed (701) -> server (4242).
+const HOST = '/Applications/Walnut.app/Contents/MacOS/Walnut --session-host -- /tmp/stage/dist-bin/walnut-darwin-arm64 web --port 3456'
+function processes(table: Record<number, { ppid: number; command: string }>): ProcessParentLookup {
+  return async (pid) => table[pid] ?? null
+}
+const VIA_HOST = processes({ 701: { ppid: 700, command: HOST }, 700: { ppid: 1, command: HOST } })
+
+describe('removeOwnLaunchdJob under the session host', () => {
+  it('removes the job when its process is the host two steps above this server', async () => {
+    const { exec, calls } = stubExec(700)
+    await expect(removeOwnLaunchdJob('duplicate', {
+      env: JOB_ENV, platform: 'darwin', pid: 4242, ppid: 701, exec, parentOf: VIA_HOST, flushLog: async () => {},
+    })).resolves.toBe('removed')
+    expect(calls).toEqual([['list', LABEL], ['remove', LABEL]])
+  })
+
+  it('never removes it for a server started by hand anywhere below the production server', async () => {
+    // A session shell (900) under the daemon under the production server: its parent is no host.
+    const below = processes({
+      900: { ppid: 880, command: '/bin/zsh -c walnut web --port 3999' },
+      880: { ppid: 4242, command: '/tmp/stage/dist-bin/walnut-darwin-arm64 __daemon --start' },
+      701: { ppid: 700, command: HOST }, 700: { ppid: 1, command: HOST },
+    })
+    const { exec, calls } = stubExec(700)
+    await expect(removeOwnLaunchdJob('duplicate', {
+      env: JOB_ENV, platform: 'darwin', pid: 5555, ppid: 900, exec, parentOf: below,
+    })).resolves.toBe('not-the-job-process')
+    expect(calls).toEqual([['list', LABEL]])
+  })
+
+  it('the chain must be exactly host, host, job: a host one step off or a non-host job never matches', async () => {
+    expect(await jobIsOwnSessionHost(700, 701, VIA_HOST)).toBe(true)
+    expect(await jobIsOwnSessionHost(699, 701, VIA_HOST)).toBe(false)
+    expect(await jobIsOwnSessionHost(700, 701, processes({ 701: { ppid: 700, command: HOST }, 700: { ppid: 1, command: '/bin/sh -c x' } }))).toBe(false)
+    expect(await jobIsOwnSessionHost(700, 701, processes({ 701: { ppid: 700, command: '/usr/bin/env walnut' }, 700: { ppid: 1, command: HOST } }))).toBe(false)
+    expect(await jobIsOwnSessionHost(700, 701, processes({}))).toBe(false)
   })
 })
 

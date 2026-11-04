@@ -13,7 +13,10 @@ import {
   classifySessionHostStart,
   desktopAppCandidates,
   desktopAppExecutable,
+  mergeSessionHostApprovals,
   parseSessionHostIdentity,
+  parseSessionHostManifest,
+  SESSION_HOST_MAX_COMMANDS,
   sessionHostArgv,
   sessionHostManifestPath,
   sessionHostUnavailableReason,
@@ -114,6 +117,48 @@ describe('buildSessionHostManifest', () => {
   it('keeps flags and unicode verbatim, since the host matches argv exactly', () => {
     const argv = ['/opt/walnut/daemon', '--start', 'two words', '"quoted"', '$HOME', '测试'];
     expect(JSON.parse(buildSessionHostManifest([{ argv }])).commands[0].argv).toEqual(argv);
+  });
+});
+
+describe('mergeSessionHostApprovals', () => {
+  // The deploy approves the server it launches through the host, and that server
+  // approves its daemon moments later. launchd relaunches the server (KeepAlive)
+  // with the deploy's argv, so the daemon's approval must never revoke it.
+  const server = { argv: ['/stage/a/walnut', 'web', '--port', '3456'], files: [{ path: '/stage/a/walnut', sha256: SHA }] };
+  const daemon = { argv: ['/stage/a/walnut', '__daemon', '--start'], files: [{ path: '/stage/a/walnut', sha256: SHA }] };
+  const all = () => true;
+
+  it('keeps the server approval when the daemon is approved after it, newest first', () => {
+    expect(mergeSessionHostApprovals(daemon, [server], all)).toEqual([daemon, server]);
+  });
+
+  it('replaces an approval of the same argv instead of listing it twice', () => {
+    const rehashed = { ...server, files: [{ path: '/stage/a/walnut', sha256: 'b'.repeat(64) }] };
+    expect(mergeSessionHostApprovals(rehashed, [daemon, server], all)).toEqual([rehashed, daemon]);
+  });
+
+  it('drops approvals whose payload is gone (a swept stage), so stale ones do not pile up', () => {
+    const old = { argv: ['/stage/old/walnut', 'web', '--port', '3456'], files: [{ path: '/stage/old/walnut', sha256: SHA }] };
+    expect(mergeSessionHostApprovals(daemon, [old, server], (c) => !c.argv[0]!.includes('/old/'))).toEqual([daemon, server]);
+  });
+
+  it('keeps at most SESSION_HOST_MAX_COMMANDS', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ argv: [`/stage/${i}/walnut`, 'web'], files: [] }));
+    const merged = mergeSessionHostApprovals(server, many, all);
+    expect(merged).toHaveLength(SESSION_HOST_MAX_COMMANDS);
+    expect(merged[0]).toBe(server);
+  });
+
+  it('round-trips through the manifest the host reads', () => {
+    const text = buildSessionHostManifest(mergeSessionHostApprovals(daemon, [server], all));
+    expect(parseSessionHostManifest(text)).toEqual([daemon, server]);
+  });
+
+  it('reads anything unexpected as no approvals, never a throw', () => {
+    for (const bad of ['', 'not json', '{}', '{"version":2,"commands":[]}', '{"version":1,"commands":[{"argv":["relative"]}]}',
+      '{"version":1,"commands":[{"argv":["/x"],"files":[{"path":"/x","sha256":"short"}]}]}']) {
+      expect(parseSessionHostManifest(bad)).toEqual([]);
+    }
   });
 });
 

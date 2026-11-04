@@ -119,6 +119,62 @@ export function buildSessionHostManifest(commands: readonly SessionHostCommand[]
   return `${JSON.stringify({ version: 1, commands: body }, null, 2)}\n`;
 }
 
+/**
+ * The commands an existing manifest approves. Empty on anything that is not a
+ * version 1 manifest with well-formed commands: an unreadable approval is no
+ * approval, and the next write replaces it.
+ */
+export function parseSessionHostManifest(text: string): SessionHostCommand[] {
+  let root: unknown;
+  try { root = JSON.parse(text); } catch { return []; }
+  if (typeof root !== 'object' || root === null) return [];
+  const { version, commands } = root as { version?: unknown; commands?: unknown };
+  if (version !== 1 || !Array.isArray(commands)) return [];
+  const out: SessionHostCommand[] = [];
+  for (const command of commands) {
+    const argv = (command as { argv?: unknown })?.argv;
+    const files = (command as { files?: unknown })?.files ?? [];
+    if (!Array.isArray(argv) || argv.length === 0 || !argv.every((w) => typeof w === 'string' && w.length > 0)) continue;
+    if (!(argv[0] as string).startsWith('/') || !Array.isArray(files)) continue;
+    const okFiles = files.every((f) => typeof f?.path === 'string' && f.path.startsWith('/')
+      && typeof f?.sha256 === 'string' && HEX64.test(f.sha256));
+    if (!okFiles) continue;
+    out.push({ argv: argv as string[], files: files as SessionHostFile[] });
+  }
+  return out;
+}
+
+/**
+ * How many approved commands a manifest keeps. Each Walnut build approves two
+ * (the server a deploy launches through the host, and the daemon that server
+ * starts), and the previous build's pair is still needed until its processes
+ * are gone; the cap keeps a run of deploys from piling up approvals.
+ */
+export const SESSION_HOST_MAX_COMMANDS = 8;
+
+function sameArgv(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((word, i) => word === b[i]);
+}
+
+/**
+ * The manifest after approving `next`: it first, then every other approval
+ * whose payload files are all still on disk (`stillThere`), newest first, at
+ * most SESSION_HOST_MAX_COMMANDS. Approving one command must never revoke
+ * another that is still in use: the deploy's server and the daemon it starts
+ * both run under the host, and launchd relaunches the server (KeepAlive) with
+ * the argv the deploy approved, long after the server approved its daemon.
+ * The host re-hashes every file before it runs a command, so an entry kept
+ * here can never run a payload that changed since it was approved.
+ */
+export function mergeSessionHostApprovals(
+  next: SessionHostCommand,
+  existing: readonly SessionHostCommand[],
+  stillThere: (command: SessionHostCommand) => boolean,
+): SessionHostCommand[] {
+  const kept = existing.filter((c) => !sameArgv(c.argv, next.argv) && stillThere(c));
+  return [next, ...kept].slice(0, SESSION_HOST_MAX_COMMANDS);
+}
+
 /** The argv that runs `program args…` under Walnut's identity. */
 export function sessionHostArgv(
   executable: string,

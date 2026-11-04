@@ -64,8 +64,8 @@ export interface LocalNetworkEpisode {
 interface StateFile { version: 1; episode: LocalNetworkEpisode }
 
 /** The letter for an episode first seen at `firstSeenAt`. Pure; the words live in the letter registry. */
-export function localNetworkLetter(firstSeenAt: number, lang: LetterLang = 'en'): { subject: string; markdown: string } {
-  const { subject, markdown } = LOCAL_NETWORK_BLOCKED.render(lang, { firstSeenAt })
+export function localNetworkLetter(firstSeenAt: number, lang: LetterLang = 'en', program?: string): { subject: string; markdown: string } {
+  const { subject, markdown } = LOCAL_NETWORK_BLOCKED.render(lang, { firstSeenAt, ...(program ? { program } : {}) })
   return { subject, markdown }
 }
 
@@ -78,6 +78,8 @@ export interface LocalNetworkAlertDeps {
   archive: (ref: { letterId?: string; opKey: string }) => Promise<void>
   /** The user's letter language; English when absent. */
   language?: () => Promise<LetterLang>
+  /** The entry macOS lists for this server in Local Network (serverLocalNetworkName); "Walnut" when absent. */
+  program?: () => Promise<string>
   statePath?: string
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => { unref?: () => void }
@@ -159,8 +161,9 @@ export function createLocalNetworkAlert(deps: LocalNetworkAlertDeps): LocalNetwo
 
   async function deliver(ep: LocalNetworkEpisode): Promise<void> {
     const lang = (await deps.language?.().catch(() => 'en' as const)) ?? 'en'
+    const program = await deps.program?.().catch(() => undefined)
     try {
-      ep.letterId = await deps.send({ ...localNetworkLetter(ep.openedAt, lang), opKey: ep.opKey })
+      ep.letterId = await deps.send({ ...localNetworkLetter(ep.openedAt, lang, program), opKey: ep.opKey })
     } catch (err) {
       // The episode stays confirmed: the next 'blocked' check sends again under the same op key.
       log.session.warn('local network letter could not be sent; trying at the next check', { error: err instanceof Error ? err.message : String(err) })
@@ -258,6 +261,17 @@ export function localNetworkAlertOff(i: { platform: NodeJS.Platform; enabled: bo
 let running: LocalNetworkAlert | null = null
 
 /**
+ * The entry macOS lists for this server in Local Network: "Walnut" when Walnut.app is above it (the
+ * app started it, or the deploy ran it through the session host, scripts/dev-prod.sh), else the
+ * program itself, which macOS lists under its file name (`walnut-darwin-arm64`).
+ */
+export async function serverLocalNetworkName(): Promise<string> {
+  const { detectLauncher } = await import('../permissions/darwin.js')
+  const launcher = await detectLauncher().catch(() => null)
+  return launcher?.kind === 'mac-app' ? 'Walnut' : path.basename(process.execPath)
+}
+
+/**
  * Check the local network on a clock (primary only; server.ts host wiring, beside the sign-in
  * letter). macOS only; off on the host fixture and on every isolated server (the test runner, an
  * ephemeral child, a data home in a temp or task dir, a fake HOME). `WALNUT_LOCAL_NETWORK_LETTER`
@@ -299,6 +313,7 @@ export async function startLocalNetworkAlert(opts: {
       if (letter && !letter.archived) await setArchived(letter.id, true)
     },
     language: walnutLetterLanguage,
+    program: serverLocalNetworkName,
     ...opts.deps,
   })
   alert.start()

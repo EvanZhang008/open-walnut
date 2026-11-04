@@ -882,6 +882,16 @@ fi
 SERVER_FILE="$STAGE_DIR/dist-bin/walnut-$SELF_TARGET"
 echo "Staged the compiled files for boot: $(cd "$STAGE_DIR/dist-bin" && ls | tr '\n' ' ')in $STAGE_DIR/dist-bin"
 
+# Pre-kill: a darwin file must carry Walnut's fixed Mach-O UUID and signing
+# identifier (scripts/lib/macho-identity.mjs). macOS keys the user's Local
+# Network choice for an unbundled program on its path and UUID, so a build that
+# lost them would be asked about again wherever it runs on its own.
+if [[ "$SELF_TARGET" == darwin-* ]] && ! why="$("$BUN_BIN" "$REPO_ROOT/scripts/lib/macho-identity.mjs" check "$SERVER_FILE" "walnut-$SELF_TARGET" 2>&1)"; then
+  echo "walnut-$SELF_TARGET does not carry Walnut's macOS identity: $why" >&2
+  echo "Deploy aborted before the kill, prod untouched." >&2
+  exit 1
+fi
+
 # The server program for a build: the compiled file, whose runtime tree lives
 # in the runtime/ dir beside its dist-bin/ (WALNUT_RUNTIME_DIR names that
 # parent, src/binary/runtime-tree.ts). Sets the global array server_argv;
@@ -1537,7 +1547,14 @@ xml_escape() {
 # WALNUT_RUNTIME_DIR is dropped first: a deploy started from inside a session of
 # the old server inherits that server's, which names the OLD stage. BUN_BE_BUN=1
 # would make the compiled file run as the bun CLI instead of Walnut.
+#
+# The file runs under Walnut.app's session host when session_host_prefix found
+# one (host_prefix), so macOS holds Walnut.app responsible for the server: its
+# Local Network choice (and every other privacy grant) is then Walnut's one
+# choice instead of one per deploy. The env assignments stay in front of the
+# host, which passes the environment through.
 launchd_job_argv() {
+  local last=$(( ${#server_argv[@]} - 1 ))
   launchd_argv=(/bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut
     "$SERVE_ROOT" /usr/bin/env
     -u OPEN_WALNUT_EPHEMERAL
@@ -1548,7 +1565,58 @@ launchd_job_argv() {
     -u BUN_BE_BUN
     PATH="$PATH"
     WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL"
-    "${server_argv[@]}" web --port "$PORT")
+    "${server_argv[@]:0:$last}"
+    ${host_prefix[@]+"${host_prefix[@]}"}
+    "${server_argv[$last]}" web --port "$PORT")
+}
+
+# Put Walnut.app's session host in front of the launchd job's server, `session_host_prefix
+# <walnut file>`. Sets the global array host_prefix: (<Walnut.app executable> --session-host --),
+# or empty when there is no Walnut.app that knows the flag, the file is too old to approve
+# itself (a rollback to a build from before this), or WALNUT_SESSION_HOST=0.
+#
+# Why (2026-11-04, the user: "why it keep asking me"): launchd starts the file straight from the
+# deploy's stage directory, so to macOS Local Network privacy the server is its own program, and
+# macOS keys an unbundled program's choice on its path and Mach-O UUID (measured: an allowed path
+# with the same UUID and a different binary connects, a different UUID at that path is refused).
+# Every deploy's new stage path asked "Allow walnut-darwin-arm64 to find devices on local
+# networks?" again. Under the host the responsible program is Walnut.app, whose one choice holds
+# for every build. The file approves its own command line (`__session-host-approve`, the same
+# manifest the daemon's launch uses, other approvals kept) within 20 s, or the job runs it
+# directly as before. A host that refuses the command anyway (exit 125: an older Walnut
+# rewrote the manifest, the app moved) is caught by the readiness loop
+# (session_host_refused), which relaunches the same build directly.
+session_host_prefix() {
+  host_prefix=()
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  if [[ "${WALNUT_SESSION_HOST:-1}" == "0" || "${host_plain:-0}" == "1" ]]; then
+    echo "Server runs as its own program ($([[ "${host_plain:-0}" == "1" ]] && echo rollback || echo WALNUT_SESSION_HOST=0))."
+    return 0
+  fi
+  local file="$1" out="" rc=0 waited=0 apid outf errf last=$(( ${#server_argv[@]} - 1 ))
+  outf="$(mktemp "${TMPDIR:-/tmp}/walnut-host-approve.XXXXXX")" || return 0
+  # Its words go to the deploy's stderr, never into the server log: the readiness
+  # loop reads any new byte there as the new server's first output.
+  errf="$outf.err"
+  env -u BUN_BE_BUN -u WALNUT_RUNTIME_DIR "${server_argv[@]:0:$last}" \
+    "$file" __session-host-approve -- "$file" web --port "$PORT" \
+    </dev/null >"$outf" 2>"$errf" &
+  apid=$!
+  while kill -0 "$apid" 2>/dev/null && (( waited < 40 )); do sleep 0.5; waited=$(( waited + 1 )); done
+  if kill -0 "$apid" 2>/dev/null; then
+    kill -9 "$apid" 2>/dev/null || true
+    rc=124
+  fi
+  wait "$apid" 2>/dev/null || rc=$?
+  out="$(head -n 1 "$outf" 2>/dev/null || true)"
+  if [[ -s "$errf" ]]; then sed 's/^/  /' "$errf" | head -n 5 >&2 || true; fi
+  rm -f "$outf" "$errf"
+  if (( rc == 0 )) && [[ "$out" == /*/Walnut.app/Contents/MacOS/Walnut && -x "$out" ]]; then
+    host_prefix=("$out" --session-host --)
+    echo "Server runs under ${out%/Contents/MacOS/Walnut}: macOS asks for Walnut.app's permissions, once."
+  else
+    echo "Server runs as its own program (session host not used, status $rc); macOS may ask again for its local network access."
+  fi
 }
 
 write_launchd_plist() {
@@ -1627,7 +1695,9 @@ submit_launchd_job() {
 launch_server() {
   set_server_argv "$1" || return 1
   pid=""
+  host_prefix=()
   if (( use_launchd )); then
+    session_host_prefix "$1"
     if ! submit_launchd_job; then
       # Still on the use_launchd path: degrade to nohup rather than abort.
       echo "launchd submit failed outright; falling back to nohup." >&2
@@ -1690,6 +1760,14 @@ launch_server() {
       </dev/null >>"$SERVER_LOG" 2>&1 &
     pid=$!
   fi
+}
+
+# Whether the job's last run ended with the session host's own refusal
+# (SESSION_HOST_REFUSAL_STATUS, 125: the command is not approved, a payload hash
+# changed, the manifest is unreadable). launchd would relaunch it into the same
+# refusal every ten seconds.
+session_host_refused() {
+  launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null | grep -q 'last exit code = 125'
 }
 
 # Bounded /api/config poll used by the rollback path (the primary readiness
@@ -1811,7 +1889,11 @@ rollback_to_lkg() {
     echo "Could not stage the last-known-good build; starting it from $lkg itself." >&2
   fi
   echo "Rolling back to the last-known-good file: $lkg_path" >&2
+  # Straight from the file, never through the session host: whatever failed
+  # this deploy may have been the host, and a rollback must serve.
+  host_plain=1
   launch_server "$lkg_path"
+  host_plain=0
   if wait_for_config_ready 90; then
     echo "Rollback server is serving on :$PORT (this deploy itself still failed)." >&2
   else
@@ -1833,8 +1915,20 @@ READY_SECS="${WALNUT_DEVPROD_READY_SECS:-180}"
 FIRSTLOG_SECS="${WALNUT_DEVPROD_FIRSTLOG_SECS:-15}"
 ready=0
 elapsed_halves=0
+host_retry_done=0
 for _ in $(seq 1 $(( READY_SECS * 2 ))); do
   elapsed_halves=$(( elapsed_halves + 1 ))
+  if (( use_launchd && ${#host_prefix[@]} > 0 && ! host_retry_done && elapsed_halves % 4 == 0 )) && session_host_refused; then
+    host_retry_done=1
+    echo "Walnut.app's session host refused to run the server (exit 125, see $SERVER_LOG); relaunching it directly." >&2
+    remove_launchd_job || true
+    host_plain=1
+    server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+    launch_server "$SERVER_FILE"
+    host_plain=0
+    elapsed_halves=0
+    continue
+  fi
   if (( ! use_launchd )) && ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid" || true
     echo "Server process exited before becoming ready." >&2
@@ -1893,11 +1987,26 @@ fi
 # old dist in the job. Removes only a job PROVABLY not serving: it is loaded
 # (`launchctl print` answered for the job's domain) and its PID is absent or
 # differs from the listener's. A probe that answers nothing removes nothing.
+# Under Walnut.app's session host (session_host_prefix) the job's PID is the
+# host's first generation and the listener is its grandchild: job -> host
+# (disclaimed) -> server. That chain, and only that one, is the job serving.
 if (( use_launchd )); then
   listener_now="$(listener_pids | head -n 1)"
   if [[ -n "$listener_now" ]] && job_info="$(launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null)"; then
     job_pid_now="$(printf '%s\n' "$job_info" | launchd_print_pid || true)"
-    if [[ "$job_pid_now" != "$listener_now" ]]; then
+    job_serves=0
+    if [[ "$job_pid_now" == "$listener_now" ]]; then
+      job_serves=1
+    elif [[ -n "$job_pid_now" ]]; then
+      host_gen2="$(ps -o ppid= -p "$listener_now" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ "$host_gen2" =~ ^[0-9]+$ ]] \
+        && [[ "$(ps -o ppid= -p "$host_gen2" 2>/dev/null | tr -d '[:space:]' || true)" == "$job_pid_now" ]] \
+        && [[ "$(ps -o command= -p "$host_gen2" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]] \
+        && [[ "$(ps -o command= -p "$job_pid_now" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]]; then
+        job_serves=1
+      fi
+    fi
+    if (( ! job_serves )); then
       listener_cmd="$(ps -o command= -p "$listener_now" 2>/dev/null || true)"
       echo "Port :$PORT is served by PID $listener_now, not by launchd job '$LAUNCH_LABEL' (PID ${job_pid_now:-none})." >&2
       echo "Another supervisor (for example the Mac app) restarted the server first: ${listener_cmd:-unknown command}" >&2

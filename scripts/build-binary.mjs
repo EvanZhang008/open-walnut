@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { assertNoBuildPaths, copyInfraApp, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
+import { checkDarwinIdentity, stampDarwinIdentity } from './lib/macho-identity.mjs'
 
 if (typeof Bun === 'undefined') {
   console.error('build-binary: run this with bun (bun scripts/build-binary.mjs)')
@@ -312,27 +313,19 @@ function runtimeDirnamePlugin() {
 }
 
 /**
- * bun signs a darwin-arm64 file it compiles (ad-hoc, on any host), but a
- * darwin-x64 one keeps the signature of bun's own x64 runtime, which the
- * appended code invalidates (`codesign --verify`: "code or signature have been
- * modified"). Re-sign it ad-hoc, keeping that signature's flags and
- * entitlements (bun's JIT needs allow-jit): codesign on macOS, rcodesign
- * elsewhere (scripts/install-rcodesign.sh; `WALNUT_RCODESIGN` names another).
+ * Every darwin file gets Walnut's fixed Mach-O UUID and signing identifier, then
+ * an ad-hoc signature (scripts/lib/macho-identity.mjs): macOS privacy keys an
+ * unbundled program on its path and UUID, and bun gives every file the UUID of
+ * its own runtime and the identifier `a.out`. The re-sign also repairs
+ * darwin-x64, which keeps the signature of bun's x64 runtime that the appended
+ * code invalidates. codesign on macOS, rcodesign elsewhere
+ * (scripts/install-rcodesign.sh; `WALNUT_RCODESIGN` names another).
  */
 function signDarwin(target, outfile) {
-  if (target !== 'darwin-x64') return
-  if (process.platform === 'darwin') {
-    run('codesign', ['--force', '--sign', '-', '--preserve-metadata=entitlements,flags', outfile], { stdio: 'ignore' })
-    run('codesign', ['--verify', outfile])
-    return
-  }
-  const rcodesign = process.env.WALNUT_RCODESIGN || 'rcodesign'
-  try {
-    execFileSync(rcodesign, ['--version'], { stdio: 'ignore' })
-  } catch {
-    throw new Error(`walnut-darwin-x64 needs an ad-hoc signature: build it on macOS, or put rcodesign on PATH (sh scripts/install-rcodesign.sh <dir>)`)
-  }
-  run(rcodesign, ['sign', outfile], { stdio: 'ignore' })
+  if (!target.startsWith('darwin-')) return
+  stampDarwinIdentity(outfile, `walnut-${target}`)
+  const problems = checkDarwinIdentity(outfile, `walnut-${target}`)
+  if (problems.length) throw new Error(`walnut-${target}: ${problems.join('; ')}`)
 }
 
 function notInFilePlugin(names) {

@@ -27,10 +27,13 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLOUD_MODE, IS_EPHEMERAL } from '../constants.js';
 import { log } from '../logging/index.js';
+import { withFileLock } from '../utils/file-lock.js';
 import { findDesktopApp, findDesktopAppWith, realHome } from './desktop-app.js';
 import {
   buildSessionHostManifest,
+  mergeSessionHostApprovals,
   parseSessionHostIdentity,
+  parseSessionHostManifest,
   sessionHostArgv,
   sessionHostManifestPath,
   sessionHostUnavailableReason,
@@ -57,10 +60,15 @@ async function hashFile(target: string): Promise<string> {
 }
 
 /**
- * Record the one command the host may run, with the hash of every payload file.
+ * Approve one more command the host may run, with the hash of every payload file.
  *
- * Rewritten (not appended to) on every launch, so a stale approval can never
- * accumulate. 0600 because the file names what this identity will execute.
+ * The other approvals stay while their payload files are still on disk
+ * (mergeSessionHostApprovals): the deploy approves the server it launches
+ * through the host, and that server approves its daemon a moment later, so a
+ * rewrite that kept only the newest command would leave launchd unable to
+ * relaunch the server. Read, merged and written under a lock, because the
+ * deploy and a running server can approve at the same time. 0600 because the
+ * file names what this identity will execute.
  */
 export async function approveSessionHostCommand(
   manifest: string,
@@ -77,12 +85,57 @@ export async function approveSessionHostCommand(
     if (!stat.isFile()) continue;
     files.push({ path: word, sha256: await hashFile(word) });
   }
-  const body = buildSessionHostManifest([{ argv, files }]);
   await fsp.mkdir(path.dirname(manifest), { recursive: true, mode: 0o700 });
-  const temp = `${manifest}.tmp-${process.pid}`;
-  await fsp.writeFile(temp, body, { mode: 0o600 });
-  await fsp.chmod(temp, 0o600);
-  await fsp.rename(temp, manifest);
+  await withFileLock(manifest, async () => {
+    const existing = parseSessionHostManifest(await fsp.readFile(manifest, 'utf8').catch(() => ''));
+    const present = new Set<string>();
+    for (const file of existing.flatMap((c) => c.files ?? [])) {
+      if (await fsp.stat(file.path).then((s) => s.isFile(), () => false)) present.add(file.path);
+    }
+    const commands = mergeSessionHostApprovals({ argv, files }, existing,
+      (c) => (c.files ?? []).every((f) => present.has(f.path)));
+    const temp = `${manifest}.tmp-${process.pid}`;
+    await fsp.writeFile(temp, buildSessionHostManifest(commands), { mode: 0o600 });
+    await fsp.chmod(temp, 0o600);
+    await fsp.rename(temp, manifest);
+  }, { timeoutMs: 15_000 });
+}
+
+/**
+ * For the deploy (scripts/dev-prod.sh, through `walnut __session-host-approve`):
+ * approve `argv` under Walnut.app and return the host executable to put in
+ * front of it, or the reason it cannot run there. Unlike the daemon's launch
+ * this takes no ephemeral or isolated-dir rule: the deploy decides which server
+ * it launches, and a rehearsal's server borrows the grant the user already gave
+ * Walnut without asking for a new one.
+ *
+ * Why the server goes through the host (2026-11-04): a server launchd starts
+ * straight from the compiled file is its own program to macOS Local Network
+ * privacy, and macOS keys an unbundled program's choice on its path and Mach-O
+ * UUID, so every deploy's new stage directory asked "Allow walnut-darwin-arm64
+ * to find devices on local networks?" again. Under the host the responsible
+ * program is Walnut.app, whose one choice holds for every build.
+ */
+export async function approveUnderSessionHost(argv: readonly string[]): Promise<
+  { ok: true; executable: string; app: string } | { ok: false; reason: SessionHostUnavailable | 'bad_argv'; detail?: string }
+> {
+  if (argv.length === 0 || !path.isAbsolute(argv[0]!)) return { ok: false, reason: 'bad_argv', detail: 'argv[0] must be an absolute path' };
+  if (process.platform !== 'darwin') return { ok: false, reason: 'not_macos' };
+  if (CLOUD_MODE) return { ok: false, reason: 'cloud' };
+  if (process.env.WALNUT_SESSION_HOST === '0') return { ok: false, reason: 'disabled' };
+  const home = realHome();
+  if (!home) return { ok: false, reason: 'not_installed', detail: 'no passwd home for this user' };
+  const installed = findDesktopApp();
+  if (!installed) return { ok: false, reason: 'not_installed', detail: 'no Walnut.app on this machine' };
+  if (!(await findDesktopAppWith(SESSION_HOST_FLAG))) {
+    return { ok: false, reason: 'unsupported_app', detail: `${installed.app} predates ${SESSION_HOST_FLAG}` };
+  }
+  try {
+    await approveSessionHostCommand(sessionHostManifestPath(home), argv);
+  } catch (err) {
+    return { ok: false, reason: 'unsupported_app', detail: `could not approve the launch: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  return { ok: true, executable: installed.executable, app: installed.app };
 }
 
 /** What the host says it is. Null when it could not be asked or did not answer. */

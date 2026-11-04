@@ -17,7 +17,9 @@
  * inherited by every daemon, CLI session and shell under it. A server started by
  * hand from one of those shells that hit the lock would otherwise remove the
  * PRODUCTION job. Environment is therefore only a cheap prefilter; the decision
- * rests on launchd's own answer: `launchctl list <label>` must report THIS pid.
+ * rests on launchd's own answer: `launchctl list <label>` must report THIS pid,
+ * or the Walnut.app session host the deploy runs this server under
+ * (jobIsOwnSessionHost).
  */
 
 import { execFile } from 'node:child_process'
@@ -49,6 +51,38 @@ export function claimedLaunchdLabel(
   return label
 }
 
+/** One process's parent and command line, or null when it is gone (`ps -o ppid=,command=`). */
+export type ProcessParentLookup = (pid: number) => Promise<{ ppid: number; command: string } | null>
+
+const defaultParentOf: ProcessParentLookup = (pid) => new Promise((resolve) => {
+  execFile('ps', ['-o', 'ppid=,command=', '-p', String(pid)], { timeout: 5_000 }, (err, stdout) => {
+    const m = err ? null : /^\s*(\d+)\s+(.*)$/.exec(String(stdout).split('\n')[0] ?? '')
+    resolve(m ? { ppid: Number(m[1]), command: m[2]! } : null)
+  })
+})
+
+/** A Walnut.app session host supervising its payload (desktop/SessionHost.swift). */
+const SESSION_HOST_COMMAND = /\/Walnut\.app\/Contents\/MacOS\/Walnut --session-host -- /
+
+/**
+ * Whether `jobPid` is the session host the deploy put in front of this server
+ * (scripts/dev-prod.sh, session_host_prefix). launchd then reports the host's
+ * first generation as the job's process: it re-spawns itself once (disclaimed)
+ * and that second generation is this server's parent. Both must be the host,
+ * and the chain must end at `jobPid` in exactly those two steps, so a server
+ * started by hand anywhere below the production server never matches.
+ */
+export async function jobIsOwnSessionHost(
+  jobPid: number,
+  ppid: number,
+  parentOf: ProcessParentLookup = defaultParentOf,
+): Promise<boolean> {
+  const second = await parentOf(ppid)
+  if (!second || second.ppid !== jobPid || !SESSION_HOST_COMMAND.test(second.command)) return false
+  const first = await parentOf(jobPid)
+  return !!first && SESSION_HOST_COMMAND.test(first.command)
+}
+
 /** The PID launchd reports for a job, from `launchctl list <label>` output. */
 export function parseLaunchdJobPid(listOutput: string): number | null {
   const m = /"PID"\s*=\s*(\d+);/.exec(listOutput)
@@ -59,7 +93,9 @@ export interface SelfRemoveOptions {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   pid?: number
+  ppid?: number
   exec?: LaunchctlExec
+  parentOf?: ProcessParentLookup
   /** Puts the buffered log on disk (tests stub it). */
   flushLog?: () => Promise<void>
 }
@@ -87,7 +123,9 @@ export async function removeOwnLaunchdJob(reason: string, opts: SelfRemoveOption
   } catch {
     return 'job-not-listed'
   }
-  if (jobPid !== pid) {
+  const viaHost = jobPid !== null && jobPid !== pid
+    && await jobIsOwnSessionHost(jobPid, opts.ppid ?? process.ppid, opts.parentOf).catch(() => false)
+  if (jobPid !== pid && !viaHost) {
     log.web.info('duplicate server: its launchd label belongs to another process, leaving the job alone', {
       label, jobPid, pid,
     })
@@ -98,7 +136,7 @@ export async function removeOwnLaunchdJob(reason: string, opts: SelfRemoveOption
   // in its buffer never reached the log (seen on a real job: the line was only in
   // the job's stdout).
   log.web.warn('duplicate server: removing its own launchd job so KeepAlive cannot relaunch it', {
-    label, pid, reason: reason.slice(0, 300),
+    label, pid, ...(viaHost ? { hostPid: jobPid } : {}), reason: reason.slice(0, 300),
   })
   await (opts.flushLog ?? flushLogBufferNow)().catch(() => { /* best-effort */ })
   try {

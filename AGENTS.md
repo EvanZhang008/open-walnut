@@ -111,7 +111,9 @@ WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/
 # dir it makes, <dir>/rehearsal-state (lock, stamps, stages, LKG, log, the CLI publish
 # stand-in), with the build clone beside it in <dir>. It writes only into those dirs
 # (and the daemon's <daemon dir>-streams), except that its servers, like every Walnut
-# server, append their exit line to /tmp/open-walnut-exit.log. Refuses :3456, :3457,
+# server, append their exit line to /tmp/open-walnut-exit.log, and on a Mac with
+# Walnut.app it adds its server's command to the session host's approvals (the others
+# kept) and runs it under the app, as the real deploy does (WALNUT_SESSION_HOST=0: not). Refuses :3456, :3457,
 # a port served by anything it did not start, ~/.open-walnut, /tmp/open-walnut,
 # ~/.cache/open-walnut, the production log and any WALNUT_DEVPROD_LKG_DIR.
 # Clean up after: bootout com.open-walnut.dev-prod-rehearsal.<port>, then remove the dirs.
@@ -236,7 +238,12 @@ files are staged as `<stage>/dist-bin/walnut-<target>`, where host servers pick 
 (`path.dirname(process.execPath)`). `walnut __selftest` runs first (it also unpacks the runtime
 tree into `<stage>/runtime/<build>`, on the temp volume, never the data home), then the smoke
 boot runs `<file> web` with its own data, daemon and runtime dirs. The launchd job runs the file
-directly; the LKG holds `dist-bin/` and `runtime/`, and a rollback starts the last good build's
+directly, under Walnut.app's session host on a Mac that has the app (`session_host_prefix`; the
+file approves its own argv with `__session-host-approve`), because macOS keys an unbundled
+program's Local Network choice on its path and Mach-O UUID, and each stage path asked again
+(2026-11-04); a rollback runs it without the host, and every darwin file carries a fixed UUID and
+identifier, checked before the kill (`scripts/lib/macho-identity.mjs`,
+`docs/reference/macos-session-identity.md`); the LKG holds `dist-bin/` and `runtime/`, and a rollback starts the last good build's
 file, from a fresh stage cloned from the LKG (`open-walnut-stage.rollback.*`), never from
 the LKG itself, and a snapshot never replaces an LKG a process still runs from: the next good
 deploy replaces the LKG whole, and would delete a rollback server's file and tree (or those of

@@ -92,7 +92,8 @@ describe('dev-prod.sh launchd domain', () => {
   it('never lets a removal that failed abort the deploy (set -e): every call site decides', () => {
     // The definition aside, each call is in an `if !` or has an `||`.
     const calls = code.filter((l) => /\bremove_launchd_job\b/.test(l) && !/^remove_launchd_job\(\) \{/.test(l))
-    expect(calls.length).toBe(5)
+    // The sixth: a session host refusal during readiness, before the same build is relaunched directly.
+    expect(calls.length).toBe(6)
     for (const l of calls) expect(l).toMatch(/if ! remove_launchd_job; then|remove_launchd_job \|\| /)
     // The first, after the old job got its SIGTERM, starts the new server with nohup.
     const first = script.slice(script.indexOf('  if ! remove_launchd_job; then'))

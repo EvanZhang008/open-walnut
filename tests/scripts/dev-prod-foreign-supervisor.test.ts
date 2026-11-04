@@ -40,7 +40,11 @@ function block(): string {
   return script.slice(a, b)
 }
 
-interface Stub { listener?: string; job?: 'absent' | 'nopid' | string; useLaunchd?: 0 | 1 }
+interface Stub {
+  listener?: string; job?: 'absent' | 'nopid' | string; useLaunchd?: 0 | 1
+  /** `ps` answers per pid: parent and command line. Anything not listed reads as a plain server. */
+  procs?: Record<string, { ppid: string; command: string }>
+}
 
 function run(stub: Stub): { status: number | null; stdout: string; stderr: string } {
   const prelude = [
@@ -66,7 +70,12 @@ function run(stub: Stub): { status: number | null; stdout: string; stderr: strin
     '  fi',
     '  echo "UNEXPECTED launchctl $*"; return 1',
     '}',
-    'ps() { echo "bun /repo/dist/cli.js web --port 3456"; }',
+    ...Object.entries(stub.procs ?? {}).flatMap(([pid, p]) => [`STUB_PPID_${pid}='${p.ppid}'`, `STUB_CMD_${pid}='${p.command}'`]),
+    'ps() {',
+    '  local field="$2" pid="$4" v',
+    '  if [[ "$field" == ppid= ]]; then v="STUB_PPID_$pid"; echo "${!v:-1}"; return 0; fi',
+    '  v="STUB_CMD_$pid"; echo "${!v:-bun /repo/dist/cli.js web --port 3456}"',
+    '}',
     'remove_launchd_job() { echo REMOVED_JOB; }',
   ].join('\n')
   const r = spawnSync('bash', ['-c', `${prelude}\n${block()}\necho DONE`], { encoding: 'utf-8' })
@@ -78,7 +87,8 @@ describe('dev-prod.sh names its launchd job to the server', () => {
     // One argv array (launchd_job_argv) feeds both the Interactive plist and the
     // `launchctl submit` fallback, so the label rides along on either path.
     const argv = script.slice(script.indexOf('launchd_job_argv() {'), script.indexOf('write_launchd_plist() {'))
-    expect(argv).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL"\n\s+"\$\{server_argv\[@\]\}" web --port "\$PORT"\)/)
+    // The session host (when there is one) sits between the env assignments and the file.
+    expect(argv).toMatch(/WALNUT_LAUNCHD_LABEL="\$LAUNCH_LABEL"\n\s+"\$\{server_argv\[@\]:0:\$last\}"\n\s+\$\{host_prefix\[@\]\+"\$\{host_prefix\[@\]\}"\}\n\s+"\$\{server_argv\[\$last\]\}" web --port "\$PORT"\)/)
     const submit = fn('submit_launchd_job')
     expect(submit).toMatch(/^\s+launchd_job_argv$/m)
     expect(submit).toMatch(/-- "\$\{launchd_argv\[@\]\}"/)
@@ -107,6 +117,29 @@ describe('dev-prod.sh foreign-supervisor check', () => {
     expect(r.stdout).toContain('DONE')
     expect(r.stdout).not.toContain('REMOVED_JOB')
     expect(r.stderr).toBe('')
+  })
+
+  // The deploy runs the server under Walnut.app's session host: launchd's job is the
+  // host (700), which re-spawned itself (701), whose child serves the port (4242).
+  const HOST_CMD = '/Applications/Walnut.app/Contents/MacOS/Walnut --session-host -- /stage/walnut web --port 3456'
+  const viaHost = { 4242: { ppid: '701', command: '/stage/walnut web --port 3456' }, 701: { ppid: '700', command: HOST_CMD }, 700: { ppid: '1', command: HOST_CMD } }
+
+  it('leaves the job alone when it serves through the session host', () => {
+    const r = run({ listener: '4242', job: '700', procs: viaHost })
+    expect(r.stdout).toContain('DONE')
+    expect(r.stdout).not.toContain('REMOVED_JOB')
+    expect(r.stderr).toBe('')
+  })
+
+  it('still removes the job when the listener only looks like a host chain (a Mac app server, a wrong parent)', () => {
+    for (const procs of [
+      { ...viaHost, 701: { ppid: '700', command: '/Applications/Walnut.app/Contents/MacOS/Walnut' } },
+      { ...viaHost, 701: { ppid: '699', command: HOST_CMD } },
+      { ...viaHost, 700: { ppid: '1', command: '/bin/sh -c x' } },
+    ]) {
+      const r = run({ listener: '4242', job: '700', procs })
+      expect(r.stdout).toContain('REMOVED_JOB')
+    }
   })
 
   it('removes the job when another process serves the port (the 2026-09-25 shape)', () => {
