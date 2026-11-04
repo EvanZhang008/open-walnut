@@ -12,7 +12,7 @@ import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
 import { SegmentedControl } from '../../inputs/SegmentedControl'
 import { saveErrorMessage } from '../../settings-pane-context'
-import { apiPost } from '@/api/client'
+import { apiGet, apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
 
 export interface RestoreStatus {
@@ -106,6 +106,27 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const [using, setUsing] = useState(false)
   const [useError, setUseError] = useState<string | null>(null)
   const [restarting, setRestarting] = useState(false)
+  const [slowRestart, setSlowRestart] = useState(false)
+  // While Walnut restarts into the restored data, ask it every 2 s; once it answers with the
+  // switch done, load the page again (everything on it was the old data). Slow: offer Reload.
+  useEffect(() => {
+    if (!restarting) return
+    let stop = false
+    const started = Date.now()
+    const poll = async () => {
+      while (!stop) {
+        await new Promise((r) => setTimeout(r, 2000))
+        if (stop) return
+        if (Date.now() - started > 20_000) setSlowRestart(true)
+        try {
+          const st = await apiGet<{ pendingSwitch?: unknown }>('/api/backup/status', undefined, { timeoutMs: 3000, quietStatuses: [502, 503, 504] })
+          if (!st.pendingSwitch) { window.location.reload(); return }
+        } catch { /* still restarting */ }
+      }
+    }
+    void poll()
+    return () => { stop = true }
+  }, [restarting])
   const useRestored = async () => {
     if (!restore?.targetDir) return
     setUsing(true)
@@ -119,6 +140,23 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       setUseError(saveErrorMessage(err))
     } finally {
       setUsing(false)
+    }
+  }
+  // The data set aside by the last switch: kept by default, deleted only after a confirm.
+  const [confirmDeletePrevious, setConfirmDeletePrevious] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deletePrevious = async () => {
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await apiPost('/api/backup/restore/use/delete-previous', {})
+      setConfirmDeletePrevious(false)
+      onSwitchChanged?.()
+    } catch (err) {
+      setDeleteError(saveErrorMessage(err))
+    } finally {
+      setDeleting(false)
     }
   }
   const cancelUse = () => { void apiPost('/api/backup/restore/use/cancel', {}).catch(() => {}).finally(() => onSwitchChanged?.()) }
@@ -266,9 +304,11 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           wide
           data-testid="backup-restore-switch-pending"
           help={restarting
-            ? <>This page comes back by itself. Your current data is kept at <code>{pendingSwitch.aside}</code>.</>
+            ? <>{slowRestart ? 'Taking longer than usual. Reload the page once Walnut is back.' : 'This page loads again by itself in a few seconds.'} Your current data is kept at <code>{pendingSwitch.aside}</code>.</>
             : <>Quit Walnut and open it again: it then uses <code>{pendingSwitch.restored}</code>, and keeps your current data at <code>{pendingSwitch.aside}</code>. Nothing is deleted.</>}
-          control={restarting ? undefined : <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-cancel">Keep current data</SettingsButton>}
+          control={restarting
+            ? (slowRestart ? <SettingsButton onClick={() => window.location.reload()} data-testid="backup-restore-reload">Reload</SettingsButton> : undefined)
+            : <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-cancel">Keep current data</SettingsButton>}
         />
       ) : shownResult && restore && !items && (
         restore.error ? (
@@ -285,8 +325,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             wide
             data-testid="backup-restore-use-confirm"
             help={canRestart
-              ? <>Walnut restarts and runs on <code>{restore.targetDir}</code>. Your current data is kept beside it, renamed, and nothing is deleted.</>
-              : <>From its next start Walnut runs on <code>{restore.targetDir}</code> (quit Walnut and open it again). Your current data is kept beside it, renamed, and nothing is deleted.</>}
+              ? <>Walnut restarts and runs on <code>{restore.targetDir}</code>: tasks, notes and settings as they were in that backup. Your current data is kept beside it, renamed; nothing is deleted.</>
+              : <>From its next start Walnut runs on <code>{restore.targetDir}</code> (quit Walnut and open it again): tasks, notes and settings as they were in that backup. Your current data is kept beside it, renamed; nothing is deleted.</>}
             error={useError ?? undefined}
             control={
               <span className="settings-inline-pair">
@@ -299,10 +339,10 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           />
         ) : (
           <SettingsRow
-            label="Restored"
+            label={restore.source ? `Restored from ${restore.source}` : 'Restored'}
             wide
             data-testid="backup-restore-done"
-            help={<>{restore.source ? `From ${restore.source}${restore.snapshotAt ? `, the backup of ${whenOf(restore.snapshotAt)}` : ''}: ` : ''}{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}), every one checked, are in <code>{restore.targetDir}</code>. Your Walnut data is unchanged until you choose to use them.</>}
+            help={<>{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}){restore.snapshotAt ? ` from the backup of ${whenOf(restore.snapshotAt)}` : ''}, all checked, in <code>{restore.targetDir}</code>. Nothing changes until you use them.</>}
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>
@@ -321,11 +361,32 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           <p className="settings-steps-note">Quit Walnut, run it in a terminal (it keeps your current data aside and deletes nothing), then start Walnut.</p>
         </SettingsDisclosure>
       )}
-      {switchDone && !pendingSwitch && !switchError && (
-        <SettingsRow label="Now running on the restored data" wide data-testid="backup-restore-switch-done"
-          help={<>Walnut uses the data restored from the backup. Your previous data is kept at <code>{switchDone.aside}</code>; delete that folder yourself once you no longer need it.</>}
-          control={<SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-done-dismiss">Done</SettingsButton>} />
-      )}
+      {switchDone && !pendingSwitch && !switchError && (confirmDeletePrevious ? (
+        <SettingsRow label="Delete your data from before the restore?" state="warning" wide data-testid="backup-restore-delete-previous-confirm"
+          help="It is deleted from this computer for good. Your backups still hold what they held."
+          error={deleteError ?? undefined}
+          control={
+            <span className="settings-inline-pair">
+              <SettingsButton onClick={() => { setConfirmDeletePrevious(false); setDeleteError(null) }} data-testid="backup-restore-delete-previous-cancel">Cancel</SettingsButton>
+              <SettingsButton variant="danger" className="backup-danger-button" onClick={() => void deletePrevious()} busy={deleting} busyLabel="Deleting..."
+                data-testid="backup-restore-delete-previous-yes">Delete</SettingsButton>
+            </span>
+          } />
+      ) : (
+        <>
+          <SettingsRow label="Now running on the restored data" wide data-testid="backup-restore-switch-done"
+            help="Walnut uses the data restored from the backup. Your data from before is kept, untouched, until you delete it."
+            control={
+              <span className="settings-inline-pair">
+                <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-done-dismiss">Keep it</SettingsButton>
+                <SettingsButton onClick={() => setConfirmDeletePrevious(true)} data-testid="backup-restore-delete-previous">Delete it</SettingsButton>
+              </span>
+            } />
+          <SettingsDisclosure id="backup-restore-previous-where" label="Where it is" data-testid="backup-restore-previous-where">
+            <p className="settings-steps-note"><code>{switchDone.aside}</code></p>
+          </SettingsDisclosure>
+        </>
+      ))}
       {switchError && !pendingSwitch && (
         <SettingsRow label="The restored data was not switched in" error={switchError} data-testid="backup-restore-switch-error"
           control={<SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-error-dismiss">Dismiss</SettingsButton>} />

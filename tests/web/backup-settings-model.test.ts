@@ -109,7 +109,7 @@ describe('swapCommands', () => {
 
 describe('fieldProblem', () => {
   it('asks for the scheme of an endpoint and a 32-character account ID, before any test', () => {
-    expect(fieldProblem({ type: 'r2', endpoint: 'storage.example.com' })).toBe('Start the endpoint with https://');
+    expect(fieldProblem({ type: 'r2', endpoint: 'storage.example.com' })).toBe('Start the endpoint with https:// (or http:// for a server on your own network)');
     expect(fieldProblem({ type: 's3', endpoint: 'https://' })).toMatch(/not a web address/);
     expect(fieldProblem({ type: 's3', endpoint: 'http://127.0.0.1:9000' })).toBeNull();
     expect(fieldProblem({ type: 'r2', account_id: 'abc' })).toMatch(/32 letters and digits/);
@@ -139,7 +139,7 @@ describe('secretNeedsRetyping', () => {
 
 describe('destinationSummary', () => {
   it('says whether the saved bucket is the one in use', () => {
-    expect(destinationSummary({ ...r2, account_id: '0123456789abcdef0123456789abcdef' })).toMatch(/account \.\.\.cdef, key ID k\. Tested and in use\.$/);
+    expect(destinationSummary({ ...r2, account_id: '0123456789abcdef0123456789abcdef' })).toMatch(/account \.\.\.cdef, key ID starting k\. Tested and in use\.$/);
     expect(destinationSummary(r2, false)).toMatch(/Tested before\.$/);
   });
 });

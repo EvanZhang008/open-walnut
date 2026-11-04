@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  applyPendingSwitch, cancelSwitch, lastSwitchDone, lastSwitchError, readPendingSwitch, requestSwitch, switchMarkerPath,
+  applyPendingSwitch, cancelSwitch, deletePreviousData, lastSwitchDone, lastSwitchError, readPendingSwitch, requestSwitch, switchMarkerPath,
 } from '../../../src/core/backup/restore-switch.js';
 import { machineIdPath } from '../../../src/core/backup/local-state.js';
 
@@ -62,6 +62,23 @@ describe('restore switch', () => {
     // A second start does nothing more.
     expect(await applyPendingSwitch(home)).toEqual({ kind: 'none' });
     await cancelSwitch(home);
+    expect(await lastSwitchDone(home)).toBeNull();
+  });
+
+  it('deletes only the folder the last switch set aside, when asked', async () => {
+    await expect(deletePreviousData(home)).rejects.toThrow(/No data set aside/);
+    const p = await requestSwitch(home, restored);
+    await applyPendingSwitch(home);
+    // A tampered note naming another folder is refused, and nothing is deleted.
+    const done = JSON.parse(await read(`${home}.restore-switch-done.json`));
+    await fsp.writeFile(`${home}.restore-switch-done.json`, JSON.stringify({ ...done, aside: path.join(root, 'elsewhere') }));
+    await fsp.mkdir(path.join(root, 'elsewhere'));
+    await expect(deletePreviousData(home)).rejects.toThrow(/leaves it alone/);
+    expect(await exists(path.join(root, 'elsewhere'))).toBe(true);
+    await fsp.writeFile(`${home}.restore-switch-done.json`, JSON.stringify(done));
+    expect(await deletePreviousData(home)).toBe(p.aside);
+    expect(await exists(p.aside)).toBe(false);
+    expect(await read(path.join(home, 'notes', 'a.md'))).toBe('restored');
     expect(await lastSwitchDone(home)).toBeNull();
   });
 

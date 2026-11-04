@@ -291,6 +291,17 @@ encryptedBackupRouter.post('/restore/use/cancel', async (req: Request, res: Resp
   res.json({ ok: true });
 });
 
+// POST /api/backup/restore/use/delete-previous — delete the data the last switch set aside (after a confirm in the pane).
+encryptedBackupRouter.post('/restore/use/delete-previous', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'The data from before a restore is deleted')) return;
+  try {
+    const { deletePreviousData } = await import('../../core/backup/restore-switch.js');
+    res.json({ ok: true, deleted: await deletePreviousData(WALNUT_HOME) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // POST /api/backup/restore/dismiss — the user read the last restore's result: stop showing it.
 encryptedBackupRouter.post('/restore/dismiss', (_req: Request, res: Response) => {
   const s = getBackupScheduler();
@@ -356,7 +367,7 @@ encryptedBackupRouter.post('/adopt', async (req: Request, res: Response) => {
     if (!cfg.destination) return void res.status(400).json({ error: 'Choose where backups go first.' });
     await adoptEncryptedBackups(cfg, { dataDir: WALNUT_HOME });
     const s = getBackupScheduler();
-    if (s) { s.resetAnchor(); s.health.errorCode = undefined; s.health.error = undefined; s.emitStatus(); }
+    if (s) { s.health.errorCode = undefined; s.health.error = undefined; s.resetAnchor(); s.runSoon(); }
     res.json({ ok: true });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });

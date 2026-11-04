@@ -87,8 +87,12 @@ writer; and it never deletes a pack written in the last 6 hours.
 
 Only one computer writes to a destination (its random machine id is in
 `walnut-backup.json`), so two computers never prune each other's backups. Another computer
-can list and restore. "Back up from this computer" moves the role, and the other computer
-then stops backing up there. A restored home is a new writer until its user moves the role.
+can list and restore. When a backup finds another writer (a restore on a new computer, say),
+the pane says so at the next check, not when the schedule comes round: the scheduler runs at
+once when the destination holds backups this machine does not write. "Back up this computer"
+asks first, then moves the role and runs a backup within a minute; the other computer then
+stops backing up there. A service chosen while Walnut runs backs up within a minute too
+(the newest backup there may be older than the data).
 
 ## Restore
 
@@ -100,14 +104,22 @@ its id) and every file's size; mtimes and executable bits come back.
 "Use this data" makes the restored folder the data folder, after a confirm. A running
 Walnut cannot swap its own folder, so it writes a small request beside the data folder
 (`~/.open-walnut.restore-switch.json`) and restarts when it can (the Mac app and installed
-builds can; a source checkout says to quit and open it again). At the next start, before
+builds can; a source checkout says to quit and open it again). The page asks Walnut every 2
+seconds while it restarts and loads again once the switch is done (after 20 seconds it also
+offers Reload). The confirm says that settings go back to that backup's time too, like the
+rest of the data. At the next start, before
 anything reads the data folder (`src/commands/web.ts`, `core/backup/restore-switch.ts`),
 the current folder is renamed to `.open-walnut-before-restore-<time>` (kept, never
 deleted) and the restored folder into its place. A start that died between the two
 renames finishes the switch; a rename that fails puts the old folder back and says why in
 `~/.open-walnut.restore-switch-error.txt`. This machine's writer id moves with the switch,
-so it stays the writer of its backups. "Do it by hand" shows the same as one shell command,
-chained with `&&` so a failed step stops the rest.
+so it stays the writer of its backups. "Advanced: switch it yourself in a terminal" shows the
+same as one shell command, chained with `&&` so a failed step stops the rest.
+After the switch the pane says it runs on the restored data, with "Keep it" and "Delete it"
+for the folder set aside. "Delete it" asks first and removes only that folder: it must sit
+beside the data folder, be named `<data folder>-before-restore-<time>` and not be a link
+(`deletePreviousData` in `core/backup/restore-switch.ts`, route
+`POST /api/backup/restore/use/delete-previous`, the person's step).
 A service set up before and kept (`other_destinations`) can be restored from too: "From"
 appears above the list.
 

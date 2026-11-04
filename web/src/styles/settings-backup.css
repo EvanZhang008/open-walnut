@@ -43,7 +43,8 @@
 }
 .backup-restore-item {
   display: grid;
-  grid-template-columns: 18px minmax(150px, auto) 1fr;
+  /* One width for every row, room for the date and the Latest tag: the details line up. */
+  grid-template-columns: 18px 232px 1fr;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -89,6 +90,10 @@
   padding: 0 12px;
   border-color: var(--settings-error-text, var(--error));
 }
+/* A bordered button ends on the edge every other button ends on (no text-button overhang),
+   and its label sits centred in the room kept for the busy label. */
+.settings-row-actions .settings-button.settings-button-danger.backup-danger-button { margin-right: 0; }
+.settings-button.settings-button-danger.backup-danger-button .settings-button-stack > * { text-align: center; }
 .settings-button.settings-button-danger.backup-danger-button:hover:not(:disabled) {
   text-decoration: none;
   background: rgba(255, 59, 48, 0.08);

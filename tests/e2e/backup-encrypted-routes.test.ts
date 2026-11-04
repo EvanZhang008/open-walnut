@@ -166,6 +166,29 @@ describe('encrypted backups through the routes', () => {
     expect((await call<{ pendingSwitch: unknown }>('GET', '/status')).body.pendingSwitch).toBeNull();
   }, 60_000);
 
+  it('a service chosen while Walnut runs, or backups moved here, back up at the next check', async () => {
+    // Reading the status as it is changes nothing.
+    await call('GET', '/status');
+    expect(scheduler.health.dueNow).toBeUndefined();
+    const before = (await getConfig()).backup!;
+    await updateConfig({ backup: { ...before, destination: { ...r2(), prefix: 'walnut-moved' } } } as never);
+    const st = await call<{ dueNow?: boolean }>('GET', '/status');
+    expect(st.body.dueNow).toBe(true);
+    // A run clears it.
+    expect((await call('POST', '/run')).status).toBe(202);
+    await until(() => !scheduler.health.running && scheduler.health.dueNow === undefined);
+    // Moving the backups here (after the confirm in the pane) runs one soon too.
+    expect((await call('POST', '/adopt', {})).status).toBe(200);
+    expect((await call<{ dueNow?: boolean }>('GET', '/status')).body.dueNow).toBe(true);
+    expect((await call('POST', '/run')).status).toBe(202);
+    await until(() => !scheduler.health.running && scheduler.health.dueNow === undefined);
+    // Back to the first folder: a switch too, so it runs once more (and leaves nothing pending for the tests after).
+    await updateConfig({ backup: before } as never);
+    expect((await call<{ dueNow?: boolean }>('GET', '/status')).body.dueNow).toBe(true);
+    expect((await call('POST', '/run')).status).toBe(202);
+    await until(() => !scheduler.health.running && scheduler.health.dueNow === undefined);
+  }, 60_000);
+
   it('masked secrets stand only for the saved service account', async () => {
     const masked = { ...r2(), secret_access_key: '••••••alue' };
     expect((await call('POST', '/destination/test', { destination: masked })).body).toMatchObject({ ok: true });
@@ -189,6 +212,7 @@ describe('encrypted backups through the routes', () => {
       ['POST', '/snapshots', { recoveryKey: generateRecoveryKey() }],
       ['POST', '/restore', { recoveryKey: generateRecoveryKey(), targetDir: `${WALNUT_HOME}-agent-restore` }],
       ['GET', '/recovery-key', undefined],
+      ['POST', '/restore/use/delete-previous', {}],
     ] as const) {
       const r = await call(method, route, body, agent);
       expect(r.status, `${method} ${route}`).toBe(403);
@@ -196,6 +220,13 @@ describe('encrypted backups through the routes', () => {
     }
     // The saved destination it may still read.
     expect((await call('POST', '/destination/test', {}, agent)).body).toMatchObject({ ok: true });
+  });
+
+  it('delete-previous with no finished switch deletes nothing and says why', async () => {
+    const r = await call('POST', '/restore/use/delete-previous', {});
+    expect(r.status).toBe(400);
+    expect(String(r.body.error)).toMatch(/No data set aside/);
+    expect((await fsp.stat(WALNUT_HOME)).isDirectory()).toBe(true);
   });
 
   it('a restore target reached through a symlink into the data home is refused', async () => {

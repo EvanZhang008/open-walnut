@@ -94,6 +94,8 @@ export interface BackupListing {
   snapshots: SnapshotSummary[];
   unreadable: number;
   writer: string;
+  /** This machine is the one that writes them. */
+  thisWriter: boolean;
 }
 
 export async function listEncryptedBackups(
@@ -109,6 +111,7 @@ export async function listEncryptedBackups(
     snapshots: snapshots.map(({ tree: _tree, ...rest }) => rest),
     unreadable: unreadable.length,
     writer: repo.writerName(),
+    thisWriter: repo.isWriter(await localWriter(opts.dataDir)),
   };
 }
 

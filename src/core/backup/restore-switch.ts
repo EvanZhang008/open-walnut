@@ -122,6 +122,25 @@ export async function lastSwitchError(home: string): Promise<string | null> {
   return fs.readFile(switchErrorPath(home), 'utf8').then((t) => t.trim() || null, () => null);
 }
 
+/**
+ * Delete the data set aside by the last switch, when the person asks. Only that
+ * one folder: beside the data folder, with the aside name a switch gives, never a
+ * link, never the data folder. The note goes with it.
+ */
+export async function deletePreviousData(home: string): Promise<string> {
+  const h = path.resolve(home);
+  const done = await lastSwitchDone(h);
+  if (!done) throw new Error('No data set aside by a switch to delete.');
+  const aside = path.resolve(done.aside);
+  const named = path.dirname(aside) === path.dirname(h) && path.basename(aside).startsWith(`${path.basename(h)}-before-restore-`);
+  if (!named || aside === h) throw new Error(`${aside} is not the folder a switch set aside; Walnut leaves it alone.`);
+  const st = await fs.lstat(aside).catch(() => null);
+  if (st?.isSymbolicLink()) throw new Error(`${aside} is a link; Walnut leaves it alone.`);
+  if (st) await fs.rm(aside, { recursive: true, force: true });
+  await fs.rm(switchDonePath(h), { force: true });
+  return aside;
+}
+
 async function carryMachineId(from: string, to: string): Promise<void> {
   const src = machineIdPath(from);
   const dst = machineIdPath(to);

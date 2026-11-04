@@ -52,8 +52,10 @@ export interface BackupSchedulerHandle {
   runNow: () => Promise<BackupRunResult>;
   /** Push the current health to every window (after a restore or a setting change). */
   emitStatus: () => void;
-  /** Forget the schedule anchor (the destination changed): the next tick reads it again. */
+  /** Forget the schedule anchor (the destination or the key changed): read it again now, backups on or off. */
   resetAnchor: () => void;
+  /** Run the next backup at the next check, whatever the schedule says (the backups were just moved here). */
+  runSoon: () => void;
   /**
    * The health shows ONE destination's backups. When the configured one is not
    * the one shown, forget the old one's last backup, error and restore at once,
@@ -83,6 +85,8 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
   let lastRunAtMs = 0;
   /** The destination the anchor was read for: a new one is read again. */
   let anchorFor = '';
+  /** Run at the next check, whatever the anchor says (a service chosen while running, backups moved here). */
+  let forceDue = false;
 
   const emitStatus = (): void => deps.emit('backup:status', health);
 
@@ -217,6 +221,8 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       }
       health.notice = undefined;
       lastRunAtMs = Date.now();
+      forceDue = false;
+      health.dueNow = undefined;
       applyResult(outcome.result, outcome.errorCode);
       return outcome.result;
     });
@@ -248,7 +254,11 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
   const syncDestination = (cfg: BackupConfig | undefined): boolean => {
     const at = cfg && engineOf(cfg) ? describe(cfg) : undefined;
     if (health.destination === at || health.running) return false;
+    // A service chosen while Walnut runs (not the first read at start) backs up within a
+    // minute: the newest backup there may be older than the data, and the user just chose it.
+    const switched = health.destination !== undefined && at !== undefined;
     forgetDestination(at);
+    if (switched) { forceDue = true; health.dueNow = true; }
     emitStatus();
     if (cfg && at) {
       void (async () => {
@@ -270,6 +280,9 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       if (health.engine === 'encrypted') {
         const listing = await listEncryptedBackups(cfg, { dataDir });
         health.snapshotCount = listing.snapshots.length;
+        // Another computer writes these: run at the next check, so the pane asks about it
+        // now (a restore on a new computer), not when the schedule comes round a day later.
+        const otherWriter = listing.snapshots.length > 0 && !listing.thisWriter;
         const newest = listing.snapshots[0];
         if (newest) {
           lastRunAtMs = Date.parse(newest.createdAt) || 0;
@@ -278,6 +291,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
           health.lastTotalBytes = newest.totalBytes;
           health.lastSnapshotId = newest.id;
         }
+        if (otherWriter) lastRunAtMs = 0;
       } else {
         const previous = await fetchRemoteManifest(cfg);
         if (previous) {
@@ -289,6 +303,16 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       /* unreachable destination or no key yet — the run itself will surface the error */
     }
     emitStatus();
+  };
+
+  /** Read the anchor now when the destination can be read, backups on or off (the pane shows what is there). */
+  const readAnchorNow = (): void => {
+    void (async () => {
+      const cfg = (await getConfig()).backup;
+      if (!cfg || !engineOf(cfg) || currentBackupJob() !== null) return;
+      if (engineOf(cfg) === 'encrypted' && !(await isDestinationReady(cfg.destination!, dataDir))) return;
+      await readAnchor(cfg);
+    })().catch(() => {});
   };
 
   const tick = async (): Promise<void> => {
@@ -308,7 +332,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
         const hours = Math.max(cfg!.interval_hours ?? DEFAULT_INTERVAL_HOURS, MIN_INTERVAL_HOURS);
         const dueAtMs = lastRunAtMs + hours * 3_600_000;
         // Never backed up anywhere → first tick runs immediately.
-        if (Date.now() >= dueAtMs) {
+        if (forceDue || Date.now() >= dueAtMs) {
           await execute(cfg!);
         }
       }
@@ -344,6 +368,12 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     emitStatus,
     resetAnchor(): void {
       anchorFor = '';
+      readAnchorNow();
+    },
+    runSoon(): void {
+      forceDue = true;
+      health.dueNow = true;
+      emitStatus();
     },
     syncDestination,
   };

@@ -95,7 +95,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
   }, [ready, JSON.stringify(dest)])
 
   useEffect(() => { void load() }, [load, refreshToken])
-  useEffect(() => { onState({ hasKey: !!key && !mismatch, needsKey }) }, [key, needsKey, mismatch, onState])
+  // Told only once the key is read: until then the pane shows "Checking...", not "no key".
+  useEffect(() => { if (loaded) onState({ hasKey: !!key && !mismatch, needsKey }) }, [loaded, key, needsKey, mismatch, onState])
 
   const useTypedKey = async () => {
     setChecking(true)
@@ -156,7 +157,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
           <div className="settings-row settings-row-indent backup-key-entry">
             <input id="backup-key-input" type="text" data-no-draft="autosave" autoComplete="off" spellCheck={false}
               aria-label="Recovery key"
-              className="settings-input settings-input--mono backup-key-input" value={typed} onChange={(e) => setTyped(e.target.value)}
+              className="settings-input settings-input--mono backup-key-input" value={typed} onChange={(e) => { setTyped(e.target.value); setError(null) }}
               placeholder="WB1-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXX" />
             <SettingsButton variant="primary" onClick={useTypedKey} busy={checking} busyLabel="Checking..." disabled={!typed.trim()}
               data-testid="backup-key-use">

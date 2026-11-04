@@ -224,10 +224,10 @@ test.describe('Backup settings', () => {
     await expect(section.getByTestId('backup-service-gdrive')).not.toHaveClass(/backup-service-in-use/)
     // A value out of range is said, never saved, and leaving the field shows the one in use.
     await section.locator('#backup-interval').fill('0')
-    await expect(section.getByRole('alert')).toContainText('whole number of hours')
+    await expect(section.getByRole('alert')).toContainText('Enter whole hours from 1 to 168')
     await section.locator('#backup-interval').blur()
     await expect(section.locator('#backup-interval')).toHaveValue('24')
-    await expect(section.getByRole('alert')).toContainText('0 hours is not a whole number from 1 to 168: kept 24 hours.')
+    await expect(section.getByRole('alert')).toContainText('Enter 1 to 168 hours: kept 24 hours.')
     await section.getByTestId('backup-service-gdrive').click()
     await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
@@ -383,6 +383,60 @@ test.describe('Backup settings', () => {
     await section.getByTestId('backup-restore-dismiss').click()
     await expect(section.getByTestId('backup-restore-done')).toHaveCount(0)
     expect(dismissed).toBe(true)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+  test('after a switch: the previous data is kept until the user deletes it, after a confirm', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '\u2022\u2022\u2022\u2022\u2022\u2022mple' }
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2, recovery_key_saved_at: '2026-11-01T00:00:00Z' })
+    const aside = '/Users/me/.open-walnut-before-restore-2026-11-04T10-05-00'
+    let done: { restored: string; aside: string; at: string } | null = { restored: '/Users/me/.open-walnut', aside, at: '2026-11-04T10:05:00Z' }
+    await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut',
+      pendingSwitch: null, canRestart: true, switchDone: done,
+    }) }))
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    let deleted = 0
+    await page.route('**/api/backup/restore/use/delete-previous', (route) => { deleted++; done = null; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
+    const section = await openBackup(page)
+    const row = section.getByTestId('backup-restore-switch-done')
+    await expect(row).toContainText('Now running on the restored data')
+    // The folder is one level down, not in the row.
+    await expect(row).not.toContainText(aside)
+    await section.getByTestId('backup-restore-previous-where').click()
+    await expect(section.locator('#backup-restore-previous-where-disclosure')).toContainText(aside)
+    await section.getByTestId('backup-restore-delete-previous').click()
+    await expect(section.getByTestId('backup-restore-delete-previous-confirm')).toContainText('deleted from this computer for good')
+    await section.getByTestId('backup-restore-delete-previous-cancel').click()
+    await expect(row).toBeVisible()
+    expect(deleted).toBe(0)
+    await section.getByTestId('backup-restore-delete-previous').click()
+    await section.getByTestId('backup-restore-delete-previous-yes').click()
+    await expect(row).toHaveCount(0)
+    await expect(section.getByTestId('backup-restore-delete-previous-confirm')).toHaveCount(0)
+    expect(deleted).toBe(1)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('while the key is still being read, backups say Checking, never Paused', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '\u2022\u2022\u2022\u2022\u2022\u2022mple' }
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2, recovery_key_saved_at: '2026-11-01T00:00:00Z' })
+    await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut', pendingSwitch: null,
+      lastBackupAt: '2026-11-04T09:00:00Z',
+    }) }))
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => { release = r })
+    await page.route('**/api/backup/recovery-key', async (route) => {
+      await held
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ key: KEY, savedAt: '2026-11-01T00:00:00Z' }) })
+    })
+    const section = await openBackup(page)
+    const enabledRow = section.getByTestId('backup-enabled-row')
+    await expect(enabledRow).toContainText('Checking...')
+    await expect(enabledRow).not.toContainText('Paused')
+    release()
+    await expect(enabledRow).not.toContainText('Checking...')
+    await expect(enabledRow).not.toContainText('Paused')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })

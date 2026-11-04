@@ -136,6 +136,8 @@ export interface BackupHealth {
   lastSnapshotId?: string;
   /** Encrypted backups: how many backups are kept now. */
   snapshotCount?: number;
+  /** The next backup runs at the next check (within a minute): a service was just chosen, or the backups were moved here. */
+  dueNow?: boolean;
   /** A restore in progress or just finished. */
   restore?: RestoreStatus;
 }

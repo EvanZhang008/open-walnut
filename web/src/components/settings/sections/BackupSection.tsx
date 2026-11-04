@@ -67,6 +67,8 @@ interface BackupStatus {
   errorCode?: string
   versioningEnabled?: boolean
   snapshotCount?: number
+  /** The next backup runs at the next check (within a minute). */
+  dueNow?: boolean
   restore?: RestoreStatus
 }
 
@@ -154,6 +156,8 @@ export function BackupSection({ config, onSave }: Props) {
   const [driveConnected, setDriveConnected] = useState<boolean | null>(null)
   const driveOk = driveConnected !== false
   const [keyState, setKeyState] = useState<KeyState>({ hasKey: false, needsKey: false })
+  // Read once the key group answered: before that nothing is said as missing or paused.
+  const [keyKnown, setKeyKnown] = useState(false)
 
   // A config refresh re-seeds only what its SAVED value moved, so the refresh
   // after one field's save never wipes text typed meanwhile in another.
@@ -372,11 +376,13 @@ export function BackupSection({ config, onSave }: Props) {
     if (status?.running || status?.lastBackupAt) setRunError(null)
   }, [status?.running, status?.lastBackupAt])
 
+  const [confirmAdopt, setConfirmAdopt] = useState(false)
   const handleAdopt = async () => {
     setAdopting(true)
     try {
       await apiPost('/api/backup/adopt', {}, { timeoutMs: 45000 })
       setRunError(null)
+      setConfirmAdopt(false)
     } catch (err) {
       setRunError(saveErrorMessage(err))
     } finally {
@@ -440,7 +446,7 @@ export function BackupSection({ config, onSave }: Props) {
   })
   // Nothing leaves this computer before the user has the key that opens it (the server holds to it too).
   const keyUnsaved = !legacyMode && keyState.hasKey && !saved.recovery_key_saved_at
-  const runBlocked = blocked ?? (otherWriter ? 'Another computer writes these backups. Move them here above first.' : null)
+  const runBlocked = blocked ?? (otherWriter ? 'Another computer writes these backups. Move them to this computer first.' : null)
 
   const progressPct = status?.progress && status.progress.totalBytes > 0
     ? Math.floor((status.progress.uploadedBytes / status.progress.totalBytes) * 100)
@@ -455,15 +461,18 @@ export function BackupSection({ config, onSave }: Props) {
           ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} backup${status.snapshotCount === 1 ? '' : 's'} kept`] : []),
         ].join(', ') + (enabled && !runBlocked
           // When the next one runs, so a switch of service never leaves the user guessing.
-          ? (status.error ? '' : `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`)
+          ? (status.error ? '' : status.dueNow ? '. Next: within a minute.' : `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`)
           : '')
-      : otherWriter ? 'Another computer writes these backups. Move them here above first.'
+      : otherWriter ? 'Another computer writes these backups. Move them to this computer first.'
         : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.'
           : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null
-  const lastHelp = status?.notice
+  // Until the status and the key are read, the rows say so, never a failure that is not there.
+  const onKeyState = useCallback((k: KeyState) => { setKeyState(k); setKeyKnown(true) }, [])
+  const loading = !status || (!legacyMode && !!savedDest && !keyKnown)
+  const lastHelp = loading ? 'Checking...' : status?.notice
     // The first row of the group says why nothing can run yet; this one does not repeat it.
     ?? (runBlocked && !status?.running && !status?.lastBackupAt ? (blocked ? 'No backup yet.' : `No backup yet. ${runBlocked}`)
       : inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
@@ -597,7 +606,7 @@ export function BackupSection({ config, onSave }: Props) {
           firstSetup={!saved.enabled}
           machineName={status?.machineName}
           onMarkSaved={markKeySaved}
-          onState={setKeyState}
+          onState={onKeyState}
           refreshToken={keyRefresh}
           onStartOver={savedDest.type === 'gdrive' ? undefined : () => saveDestination({ ...savedDest, prefix: startOverPrefix(savedDest) })}
           startOverWhere={savedDest.type === 'gdrive' ? undefined : `the folder "${startOverPrefix(savedDest)}" in ${savedDest.bucket}`}
@@ -609,7 +618,7 @@ export function BackupSection({ config, onSave }: Props) {
         data-testid="backup-backups-group"
         footer={
           <>
-            Everything in your data folder is backed up (notes, tasks, passwords, sign-ins); caches and search indexes are skipped.
+            Everything in your data folder is backed up (notes, tasks, passwords, sign-ins). Skipped: caches and search indexes (Walnut rebuilds them), Git sync's history (its own repository keeps it), and health and place data (they never leave this computer).
             {' '}On a new computer: install Walnut, choose the same service here, and type your recovery key when Walnut asks.
           </>
         }
@@ -618,11 +627,11 @@ export function BackupSection({ config, onSave }: Props) {
         <SettingsRow
           label="Back up automatically"
           htmlFor="backup-enabled"
-          help={blocked
+          help={loading ? 'Checking...' : blocked
             ? (enabled ? `Paused: ${blocked}` : blocked)
             : !enabled ? 'Off: backups run only when you choose Back up now.'
               : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
-          state={blocked && enabled ? 'warning' : undefined}
+          state={blocked && enabled && !loading ? 'warning' : undefined}
           data-testid="backup-enabled-row"
           control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} />}
         />
@@ -631,7 +640,7 @@ export function BackupSection({ config, onSave }: Props) {
           htmlFor="backup-interval"
           help={!enabled ? 'Turn on Back up automatically to choose how often.'
             : legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
-          error={intervalOk ? (intervalNote ?? undefined) : `Use a whole number of hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
+          error={intervalOk ? (intervalNote ?? undefined) : `Enter whole hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
           data-testid="backup-interval-row"
           disabled={!enabled}
           control={
@@ -641,20 +650,34 @@ export function BackupSection({ config, onSave }: Props) {
               onBlur={() => {
                 if (intervalOk) return
                 const kept = saved.interval_hours ?? 24
-                setIntervalNote(`${intervalHours === undefined ? 'An empty value' : `${intervalHours} hours`} is not a whole number from 1 to ${MAX_INTERVAL_HOURS}: kept ${kept} hours.`)
+                setIntervalNote(`Enter 1 to ${MAX_INTERVAL_HOURS} hours: kept ${kept} hours.`)
                 setIntervalHours(kept)
               }} />
           }
         />
-        {otherWriter && (
+        {otherWriter && (confirmAdopt ? (
+          <SettingsRow
+            state="warning"
+            label="Back up this computer from now on?"
+            help={`${inUse ?? 'This service'} then takes this computer's backups, the first within a minute. The other computer stops backing up there; the backups already there stay.`}
+            error={runError ?? undefined}
+            data-testid="backup-adopt-confirm"
+            control={
+              <span className="settings-inline-pair">
+                <SettingsButton onClick={() => { setConfirmAdopt(false); setRunError(null) }} data-testid="backup-adopt-cancel">Cancel</SettingsButton>
+                <SettingsButton variant="primary" onClick={() => void handleAdopt()} busy={adopting} busyLabel="Moving..." data-testid="backup-adopt-yes">Back up this computer</SettingsButton>
+              </span>
+            }
+          />
+        ) : (
           <SettingsRow
             state="warning"
             label="Another computer writes these backups"
-            help={`${status?.error ?? ''} Moving them here makes that computer stop backing up to this place.`}
+            help={status?.error ?? undefined}
             data-testid="backup-other-writer"
-            control={<SettingsButton onClick={handleAdopt} busy={adopting} busyLabel="Moving..." data-testid="backup-adopt">Back up from this computer</SettingsButton>}
+            control={<SettingsButton onClick={() => setConfirmAdopt(true)} data-testid="backup-adopt">Back up this computer</SettingsButton>}
           />
-        )}
+        ))}
         <SettingsRow
           label="Last backup"
           help={justDone && !lastError ? `Backed up just now. ${lastHelp}` : lastHelp}
@@ -682,7 +705,7 @@ export function BackupSection({ config, onSave }: Props) {
           restore={status?.restore}
           dataDir={status?.dataDir}
           blocked={!!blocked}
-          blockedWhy={blocked ?? undefined}
+          blockedWhy={loading ? undefined : (blocked ?? undefined)}
           pendingSwitch={status?.pendingSwitch}
           switchError={status?.switchError}
           switchDone={status?.switchDone}

@@ -62,8 +62,8 @@ export async function runRepoBackup(
   if (!repo.isWriter(opts.writer)) {
     throw new RepoError(
       'other_writer',
-      `Backups at ${store.describe()} are written by "${repo.writerName()}". ` +
-        'Choose "Back up from this machine instead" to move them here, or use another folder.',
+      `These backups are written by "${repo.writerName()}". ` +
+        'Move them to this computer to back it up there, or use another folder.',
     );
   }
 
