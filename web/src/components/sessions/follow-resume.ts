@@ -31,8 +31,35 @@ export interface FollowLeave {
  */
 export const RETURN_FROM_ABOVE_PX = 8;
 
-export function followResumes(leave: FollowLeave | null, scrollTop: number, gap: number): boolean {
+/**
+ * How long after the reader's own downward input (a wheel down, a finger moving
+ * up the screen, End or Page Down) the scroll it causes still counts as theirs.
+ * The same half second the echo guard gives input before a scroll.
+ */
+export const READER_DOWN_MS = 500;
+
+/**
+ * `readerDown`: the reader's own input moved the view DOWN just now. The 8px
+ * rule above exists for scrolls no input explains (upward momentum, the echo
+ * of a write); a downward input that lands at the end is the reader's return
+ * however short the trip up was. Without it, a wheel 1px up and back to the
+ * end left following off for good, so the transcript stopped keeping its tail
+ * above a growing composer (2026-11-04, composer-in-flow.webkit.spec.ts, every
+ * run after 5d9ea90b1), and on a trackpad a small nudge up did the same.
+ */
+export function followResumes(leave: FollowLeave | null, scrollTop: number, gap: number, readerDown = false): boolean {
   if (!leave) return true;
   if (scrollTop > leave.leftAt + 0.5) return true;
-  return gap <= 2 && leave.highestSinceLeft < leave.leftAt - RETURN_FROM_ABOVE_PX;
+  if (gap > 2) return false;
+  return readerDown || leave.highestSinceLeft < leave.leftAt - RETURN_FROM_ABOVE_PX;
+}
+
+/**
+ * The reader's downward input arriving while the view already sits at the end:
+ * the push moves nothing, so no scroll event will carry it. Only at the end:
+ * mid-history, a second wheel tick below where they left is reading on, never
+ * a return (review of the 2026-11-04 fix: it pulled the view down to the end).
+ */
+export function downInputResumesAtEnd(leave: FollowLeave | null, scrollTop: number, gap: number): boolean {
+  return !!leave && gap <= 2 && followResumes(leave, scrollTop, gap, true);
 }

@@ -19,7 +19,7 @@ import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
-import { followResumes, type FollowLeave } from './follow-resume';
+import { downInputResumesAtEnd, followResumes, READER_DOWN_MS, type FollowLeave } from './follow-resume';
 import { liveOutputSize, phoneTurnStartStep, PHONE_TURN_START_WINDOW_MS, type TimelineContent } from './phone-turn-start';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
@@ -2195,6 +2195,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (isAtBottom.current || !leave) leave = { leftAt: el.scrollTop, highestSinceLeft: el.scrollTop };
       isAtBottom.current = false;
     };
+    // The reader's own input moving the view DOWN (a wheel down, a finger moving
+    // up the screen, End or Page Down). A scroll it causes that lands at the end
+    // is their return, however short the trip up was (follow-resume.ts).
+    let readerDownAt = 0;
+    const readerDownNow = () => Date.now() - readerDownAt < READER_DOWN_MS;
+    const readerMovesDown = () => {
+      readerDownAt = Date.now();
+      if (isAtBottom.current || !leave) return;
+      // Not following: the scroll this input causes is the reader's, never a
+      // resize echo, so the quiet window must not swallow it.
+      ignoreScrollUntil.current = 0;
+      // Already at the end: the push moves nothing, so no scroll event will
+      // carry it. Read it here.
+      if (downInputResumesAtEnd(leave, el.scrollTop, el.scrollHeight - el.scrollTop - el.clientHeight)) {
+        isAtBottom.current = true;
+        leave = null;
+      }
+    };
     // Wheel-UP is unambiguous "stop following, I'm reading" intent — honor it
     // SYNCHRONOUSLY (inc-1786690697303: while streaming, debouncedScroll
     // re-arms ignoreScrollUntil every content tick, so the wheel's scroll
@@ -2209,6 +2227,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         readerLeaves();
         ignoreScrollUntil.current = 0; // user input overrides any quiet window
         setShowScrollArrow(el.scrollHeight > el.clientHeight);
+      } else if (e.deltaY > 0) {
+        readerMovesDown();
       }
     };
     // A finger moving DOWN the screen pans the transcript UP, the touch twin of
@@ -2230,6 +2250,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (y - touchY > 4 && el.scrollTop > 0) {
         readerLeaves();
         setShowScrollArrow(el.scrollHeight > el.clientHeight);
+      } else if (touchY - y > 4) {
+        readerMovesDown();
       }
       touchY = y;
     };
@@ -2245,7 +2267,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
     el.addEventListener('pointerdown', markUserInput, { passive: true });
-    el.addEventListener('keydown', markUserInput, { passive: true });
+    const onKeyDown = (e: KeyboardEvent) => {
+      markUserInput();
+      // Only a key the scroller itself takes: on a button, a link, a field or a
+      // widget the same key acts on that control and scrolls nothing.
+      const t = e.target as HTMLElement | null;
+      if (t && t !== el && (t.isContentEditable || t.closest('button, a, summary, input, textarea, select, [contenteditable], [role]'))) return;
+      if (e.key === 'End' || e.key === 'PageDown' || e.key === 'ArrowDown' || (e.key === ' ' && !e.shiftKey)) readerMovesDown();
+    };
+    el.addEventListener('keydown', onKeyDown, { passive: true });
     // A CLICK counts as input in its own right, not just the pointerdown that
     // usually precedes it: the follower below asks "did the reader grow this?",
     // and expanding a tool run is a click. Keyboard activation arrives as keydown.
@@ -2296,7 +2326,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
       const prev = isAtBottom.current;
       if (!nearBottom) readerLeaves();
-      else if (prev || followResumes(leave, el.scrollTop, el.scrollHeight - el.scrollTop - el.clientHeight)) { isAtBottom.current = true; leave = null; }
+      else if (prev || followResumes(leave, el.scrollTop, el.scrollHeight - el.scrollTop - el.clientHeight, readerDownNow())) { isAtBottom.current = true; leave = null; }
       // Log only on transitions (not every scroll tick)
       if (isAtBottom.current !== lastLoggedAtBot) {
         lastLoggedAtBot = isAtBottom.current;
@@ -2339,7 +2369,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('pointerdown', markUserInput);
-      el.removeEventListener('keydown', markUserInput);
+      el.removeEventListener('keydown', onKeyDown);
       el.removeEventListener('click', markUserInput);
       clearInterval(pollTimer);
     };
