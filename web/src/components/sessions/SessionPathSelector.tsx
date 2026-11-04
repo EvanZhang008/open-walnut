@@ -814,9 +814,8 @@ export function SessionPathSelector({
       // portalled below. Classic mode keeps the stylesheet's anchored geometry.
       style={popoutAnchor ? menuPlacementStyle(popoutPlacement) : undefined}
     >
-      {/* One-line concept explainer — new users repeatedly ask "task vs session?".
-          A session is the live Claude Code run; the task is the tracking record
-          Walnut auto-creates for it. Say it at the exact moment both get created. */}
+      {/* One line on what the folder is for: the session runs there once the
+          draft's own Start launches it (the picker itself launches nothing). */}
       <div className="sps-header">
         <span className="sps-header-title">Choose folder and host</span>
         <span className="sps-header-hint">

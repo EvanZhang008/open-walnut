@@ -197,7 +197,9 @@ test.describe('copy next to the card (N17)', () => {
       const inputs = Array.from(el.querySelectorAll<HTMLInputElement>('input')).map((i) => i.placeholder)
       return [(el as HTMLElement).innerText, ...inputs].join('\n')
     })
-    expect(text).toContain('A task is created automatically to track it.')
+    // The draft's picker says what the folder is for (647b662c6: "the session runs in this
+    // folder once you start it"; the draft's own Start launches, so it no longer says a task is made).
+    expect(text).toContain('The session runs in this folder once you start it.')
     expect(text).not.toMatch(/[\u2013\u2014]/)
   })
 })
