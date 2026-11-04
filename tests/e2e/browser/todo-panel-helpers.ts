@@ -223,8 +223,12 @@ export async function drawAllListRows(page: Page): Promise<void> {
     .reduce((sum, t) => sum + (Number(t.match(/\d+/)?.[0]) || 0), 0)
   for (let i = 0; i < 60 && (await more.count()) > 0; i++) {
     const before = await hiddenRows()
-    await more.first().click()
-    await expect.poll(hiddenRows).toBeLessThan(before)
+    // A project opened just before starts its batch again when the open lands, which can be
+    // after this press: press again until the count goes down.
+    await expect(async () => {
+      if ((await more.count()) > 0 && (await hiddenRows()) >= before) await more.first().click()
+      await expect.poll(hiddenRows, { timeout: 3_000 }).toBeLessThan(before)
+    }).toPass({ timeout: 20_000 })
   }
 }
 

@@ -1083,14 +1083,95 @@ tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextF
   }
 })
 
+/** Deletes a page handed over as it went (`delay_ms`): an Undo still on screen there, which the
+ *  page coming back (a reload) takes back or sends at the end of its window. A tab that never
+ *  comes back is deleted for it when the delay ends. In memory: a restart drops them, and the
+ *  tasks stay (the safe side). Each id maps to the request that scheduled it; one timer per
+ *  request deletes what is still its own in one store write. */
+const scheduledDeletes = new Map<string, { token: symbol; heldAt?: number }>()
+const scheduleTimers = new Map<symbol, ReturnType<typeof setTimeout>>()
+/** The longest delay a page may ask for (its window plus the time a reload may take). */
+const MAX_DELETE_DELAY_MS = 60_000
+/** Most ids one scheduled delete may carry. */
+const MAX_SCHEDULED_DELETE_BATCH = 500
+/** Holds taken back (id -> the `held_at` of the hold): the going page's POST and the returning
+ *  page's cancel travel on different connections, so a schedule for that hold arriving after
+ *  its cancel is ignored. A later delete of the task (a newer `held_at`) still schedules. */
+const cancelledHolds = new Map<string, { heldAt: number; until: number }>()
+/** `upTo`: only a schedule of a hold asked no later than that (a cancel for one hold leaves a
+ *  newer delete of the same task scheduled). */
+function unscheduleDeletes(ids: readonly string[], upTo?: number): string[] {
+  const cancelled: string[] = []
+  for (const id of ids) {
+    const entry = scheduledDeletes.get(id)
+    if (!entry) continue
+    if (upTo !== undefined && entry.heldAt !== undefined && entry.heldAt > upTo) continue
+    const { token } = entry
+    scheduledDeletes.delete(id)
+    cancelled.push(id)
+    if (![...scheduledDeletes.values()].some((e) => e.token === token)) {
+      clearTimeout(scheduleTimers.get(token))
+      scheduleTimers.delete(token)
+    }
+  }
+  return cancelled
+}
+function heldAtOf(req: Request): number | undefined {
+  const v = req.body?.held_at
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+function holdCancelled(id: string, heldAt: number | undefined, now: number): boolean {
+  const hold = cancelledHolds.get(id)
+  if (!hold) return false
+  if (hold.until <= now) { cancelledHolds.delete(id); return false }
+  return heldAt !== undefined && heldAt <= hold.heldAt
+}
+
 // POST /api/tasks/batch/delete — delete many tasks in one store write.
 // POST (not DELETE) because the id list travels in the body; DELETE-with-body is
-// poorly supported across proxies/clients.
+// poorly supported across proxies/clients. `delay_ms`: delete them after that long instead,
+// unless /batch/delete/cancel or another delete of them comes first.
 tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const taskIds = batchIds(req, res)
     if (!taskIds) return
     const force = req.body?.force === true || req.query.force === 'true'
+    const delay = req.body?.delay_ms
+    if (delay !== undefined) {
+      if (typeof delay !== 'number' || !Number.isFinite(delay) || delay <= 0 || delay > MAX_DELETE_DELAY_MS) {
+        res.status(400).json({ error: `delay_ms must be a number of ms from 1 to ${MAX_DELETE_DELAY_MS}` })
+        return
+      }
+      if (taskIds.length > MAX_SCHEDULED_DELETE_BATCH) {
+        res.status(400).json({ error: `at most ${MAX_SCHEDULED_DELETE_BATCH} task_ids with delay_ms` })
+        return
+      }
+      const now = Date.now()
+      const heldAt = heldAtOf(req)
+      // A hold the returning page already took back stays taken back.
+      const ids = [...new Set(taskIds)].filter((id) => !holdCancelled(id, heldAt, now))
+      unscheduleDeletes(ids)
+      if (ids.length) {
+        const token = Symbol('scheduled-delete')
+        for (const id of ids) scheduledDeletes.set(id, { token, ...(heldAt !== undefined ? { heldAt } : {}) })
+        const timer = setTimeout(() => {
+          scheduleTimers.delete(token)
+          const due = ids.filter((id) => scheduledDeletes.get(id)?.token === token)
+          for (const id of due) scheduledDeletes.delete(id)
+          if (!due.length) return
+          void deleteTasksByIds(due, { force }).then(({ deleted, failed }) => {
+            for (const task of deleted) bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'api' })
+            log.web.info('scheduled task delete ran', { count: due.length, deleted: deleted.length, failed: failed.length })
+          }, (err) => log.web.warn('scheduled task delete failed', { count: due.length, error: err instanceof Error ? err.message : String(err) }))
+        }, delay)
+        timer.unref?.()
+        scheduleTimers.set(token, timer)
+      }
+      log.web.info('tasks delete scheduled via REST', { count: ids.length, skipped: taskIds.length - ids.length, delayMs: delay, force })
+      res.status(202).json({ scheduled: ids })
+      return
+    }
+    unscheduleDeletes(taskIds)
 
     const { deleted, failed } = await deleteTasksByIds(taskIds, { force })
     log.web.info('tasks batch delete via REST', { count: taskIds.length, deleted: deleted.length, failed: failed.length, force })
@@ -1102,6 +1183,30 @@ tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: Next
   } catch (err) {
     next(err)
   }
+})
+
+// POST /api/tasks/batch/delete/cancel — take back deletes scheduled with delay_ms (an Undo
+// pressed on the page that came back). Answers which ids still had one. With `held_at`, a
+// schedule for that hold that arrives later is ignored too.
+tasksRouter.post('/batch/delete/cancel', (req: Request, res: Response) => {
+  const taskIds = batchIds(req, res)
+  if (!taskIds) return
+  if (taskIds.length > MAX_SCHEDULED_DELETE_BATCH) {
+    res.status(400).json({ error: `at most ${MAX_SCHEDULED_DELETE_BATCH} task_ids` })
+    return
+  }
+  const now = Date.now()
+  for (const [id, hold] of cancelledHolds) if (hold.until <= now) cancelledHolds.delete(id)
+  const heldAt = heldAtOf(req)
+  if (heldAt !== undefined) {
+    for (const id of taskIds) {
+      const prev = cancelledHolds.get(id)
+      cancelledHolds.set(id, { heldAt: Math.max(heldAt, prev?.heldAt ?? heldAt), until: now + MAX_DELETE_DELAY_MS })
+    }
+  }
+  const cancelled = unscheduleDeletes(taskIds, heldAt)
+  log.web.info('scheduled task deletes cancelled via REST', { count: taskIds.length, cancelled: cancelled.length })
+  res.json({ cancelled })
 })
 
 /** Most ids one POST /api/tasks/batch/plugin-field may carry. */
@@ -1531,7 +1636,10 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       if (!owed.ok) { res.status(409).json({ error: owed.message, code: owed.code, items: owed.items }); return }
       owedSettle = owed.settle
     }
-    const { pinned: _pinned, focus_tier: _focusTier, user_words: userWords, ...fields } = (req.body ?? {}) as Record<string, unknown>
+    // `undo_phase_changed_at`: this write takes back the task's last phase move (an Undo,
+    // web/src/undo/TaskUndoContext.tsx restorePhase), and that move left a phase set at this
+    // time: a NEED_ACTION it puts back is the person's own ask only if it was one then.
+    const { pinned: _pinned, focus_tier: _focusTier, user_words: userWords, undo_phase_changed_at: undoChangedAt, ...fields } = (req.body ?? {}) as Record<string, unknown>
     const pinPatch = pinParse.patch
     // A session moving a worker out of its lead's project needs the user's words naming
     // the new one (caller-placement.ts workerMoveRefusal); the web console sends no caller.
@@ -1567,9 +1675,12 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       const { closeWithSettle } = await import('../../core/sessions/owed-to-user.js')
       result = await closeWithSettle(owedSettle, null, () => updateTask(id, fields, { source: 'api', asyncPush: true }))
       if (fields.phase === 'NEED_ACTION') {
-        // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
-        const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
-        await markPersonNeeds([result.task.id], fields.phase, callerSid || undefined)
+        // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts); an Undo's is
+        // what it was before the move it takes back (the mark is not touched by that move).
+        const { markPersonNeeds, personMarkedNeeds } = await import('../../core/sessions/person-needs.js')
+        const wasAsk = typeof undoChangedAt !== 'string'
+          || personMarkedNeeds({ phase: 'NEED_ACTION', needs_marked_at: result.task.needs_marked_at, phase_changed_at: undoChangedAt })
+        if (wasAsk) await markPersonNeeds([result.task.id], fields.phase, callerSid || undefined)
       }
     }
     if (pinPatch && pinTarget) {
@@ -1780,6 +1891,7 @@ tasksRouter.delete('/:id', async (req: Request, res: Response, next: NextFunctio
   try {
     const id = param(req.params.id)
     const force = req.query.force === 'true'
+    unscheduleDeletes([id])
     try {
       const result = await deleteTask(id)
       log.web.info('task deleted via REST', { taskId: id })

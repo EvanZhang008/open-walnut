@@ -92,7 +92,10 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   // of main thread for an address bar nobody looks at (C38).
   const live = useRef({ focusedTaskId, sessionColumns, activeProject, visible, pending });
   live.current = { focusedTaskId, sessionColumns, activeProject, visible, pending };
-  const schedule = useCallback(() => {
+  // `now`: write at once, not after the debounce. A column that opens or closes goes into the
+  // address at once, so a reload right after (inside an Undo's window) does not bring back a
+  // column that was closed, or drop one that was opened.
+  const schedule = useCallback((opts?: { now?: boolean }) => {
     const now = live.current;
     if (!now.visible) return;
     if (window.location.pathname !== '/') return;
@@ -101,7 +104,7 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
     if (now.pending) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
+    const write = () => {
       timerRef.current = null;
       // The console may have left Home inside the debounce (a link opened in a
       // plugin's App right after closing the details): writing `/` then would put
@@ -119,14 +122,20 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
       // Keep the entry's state: a phone layer's marker (usePhoneOverlayHistory)
       // and react-router's own keys live there, and null would wipe both.
       window.history.replaceState(window.history.state, '', `/${search}`);
-    }, 300);
+    };
+    if (opts?.now) write();
+    else timerRef.current = setTimeout(write, 300);
   }, []);
 
+  const writtenColumns = useRef<string | null>(null);
   useEffect(() => {
-    schedule();
+    const ids = sessionColumns.join('\n');
+    const changed = writtenColumns.current !== null && writtenColumns.current !== ids;
+    writtenColumns.current = ids;
+    schedule(changed ? { now: true } : undefined);
   }, [focusedTaskId, sessionColumns, activeProject, visible, pending, schedule]);
 
-  useEffect(() => subscribeThreadLeaves(schedule), [schedule]);
+  useEffect(() => subscribeThreadLeaves(() => schedule()), [schedule]);
 
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);

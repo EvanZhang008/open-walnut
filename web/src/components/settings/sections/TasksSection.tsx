@@ -7,6 +7,9 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { useShowPriority } from '@/hooks/useShowPriority';
+import { setNextAfterComplete, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
+import { openShortcutsHelp } from '@/keyboard/shortcuts-help-event';
+import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { SmartTaskCreation } from './SmartTaskCreation';
 import { useSerialSave, type OnSave } from './GeneralSection';
@@ -43,6 +46,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
   const projects = useProjectRegistry();
   // The app-wide store answers until config has the key (default hidden).
   const storeShowPriority = useShowPriority();
+  const nextAfterComplete = useNextAfterComplete();
   const save = useSerialSave(config, onSave);
   const showPriority = useOptimisticSetting<boolean>(
     config.ui?.show_priority ?? storeShowPriority,
@@ -123,6 +127,28 @@ export function TasksSection({ config, onSave, onReload }: Props) {
             }
           />
         )}
+        <SettingsRow
+          label="Go to the next task after completing one"
+          help={`Completing a task from its session column, or with ${isMacPlatform() ? '⌘⇧D' : 'Ctrl+Shift+D'}, opens the next task that needs you.`}
+          htmlFor="settings-next-after-complete"
+          control={
+            <ToggleSwitch
+              id="settings-next-after-complete"
+              aria-label="Go to the next task after completing one"
+              checked={nextAfterComplete}
+              onChange={setNextAfterComplete}
+            />
+          }
+        />
+        <SettingsRow
+          label="Keyboard shortcuts"
+          help={`Press ? anywhere outside a text box, or ${isMacPlatform() ? '⌘' : 'Ctrl+'}/ anywhere, to see them.`}
+          control={
+            <button type="button" className="settings-button settings-button-default" onClick={openShortcutsHelp}>
+              Show shortcuts
+            </button>
+          }
+        />
         <SettingsRow
           label="Default project"
           help={projectWarning ?? 'Where new tasks land when none is given.'}

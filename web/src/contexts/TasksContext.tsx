@@ -22,11 +22,11 @@ export interface TasksContextValue {
   showOperationError: (msg: string) => void;
   refetch: () => void;
   create: (input: CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
-  /** Resolves true once the server took the write, false when it refused (already reported). */
+  /** Each resolves whether the server took the write (it is optimistic either way). */
   update: (id: string, updates: UpdateTaskInput) => Promise<boolean>;
-  toggleComplete: (id: string) => void;
+  toggleComplete: (id: string) => Promise<boolean>;
   /** Resolves true once the server took the write, false when it refused (already reported). */
-  setPhase: (id: string, phase: string) => Promise<boolean>;
+  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -35,6 +35,9 @@ export interface TasksContextValue {
   /** Optimistic remove + DELETE (`force` gets past the active-session guard).
    *  Resolves TRUE when the server accepted it; never rejects. */
   deleteTask: (id: string, opts?: { force?: boolean }) => Promise<boolean>;
+  /** Hide rows while their delete can still be undone (no server write). */
+  hideTasks: (ids: string[]) => void;
+  unhideTasks: (ids: string[]) => void;
   /** Write a plugin-declared task field optimistically. `donor` = the caller's
    *  richest copy of the row (the list payload carries no `ext`). */
   setPluginField: (

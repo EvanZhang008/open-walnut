@@ -93,7 +93,8 @@ describe('a transition value is never mirrored into a ref during render', () => 
       'components/tasks/TodoPanel.tsx': ['useCommittedRef<Task[]>(tasks)', 'useCommittedRef(tasks)'],
       'components/chat/AskWalnutSlot.tsx': ['useCommittedRef(tasks)', 'useCommittedRef(askTasks)', 'useCommittedRef(rows)'],
       'hooks/useFocusBar.ts': ['useCommittedRef<Task[]>(tasks)'],
-      'hooks/useTasks.ts': ['useCommittedRef(tasks)'],
+      // The full list, held deletes included: the writes work on it (useTasks' hideTasks).
+      'hooks/useTasks.ts': ['useCommittedRef(allTasks)'],
     };
     for (const [file, calls] of Object.entries(uses)) {
       const src = readFileSync(join(WEB_SRC, file), 'utf8');

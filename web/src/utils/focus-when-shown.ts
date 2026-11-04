@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 /**
  * Focus a box once it can take focus. A box in a hidden page (Home stays mounted, hidden, while
  * another route shows: App.tsx `visible`) or a collapsed column silently swallows focus(), so the
@@ -33,4 +35,31 @@ export function focusWhenShown(
   };
   attempt(true);
   return () => cancelAnimationFrame(raf);
+}
+
+/**
+ * A component's request for the caret (a nonce bumped by "focus here", or `true` for "focus on
+ * open"): focusWhenShown once per request. React runs an effect again without its deps changing
+ * when it reconnects a subtree (StrictMode in development, a Suspense boundary showing its
+ * content again, <Activity>), and a bare effect then took the caret back to a box the person had
+ * left long ago (2026-11-04: a click on a task row put the caret back in another column).
+ * A falsy request clears it, so the same value later is a new request. The callbacks are read
+ * when the request runs, not tracked.
+ */
+export function useFocusRequest(
+  request: unknown,
+  get: () => HTMLTextAreaElement | HTMLInputElement | null,
+  onFocused?: (el: HTMLTextAreaElement | HTMLInputElement) => void,
+): void {
+  const done = useRef<unknown>(undefined);
+  const live = useRef({ get, onFocused });
+  live.current = { get, onFocused };
+  useEffect(() => {
+    if (!request) { done.current = undefined; return; }
+    if (Object.is(done.current, request)) return;
+    return focusWhenShown(() => live.current.get(), (el) => {
+      done.current = request;
+      live.current.onFocused?.(el);
+    });
+  }, [request]);
 }

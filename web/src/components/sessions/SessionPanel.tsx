@@ -165,7 +165,8 @@ import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
 import { setActiveSession } from '@/stores/active-session';
 import { markDeniedByMessage } from '@/stores/permission-request-store';
-import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerInsertDetail } from '@/utils/composer-insert';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
+import { COMPOSER_FOCUS_EVENT, COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerFocusDetail, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
 import { WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
@@ -727,17 +728,20 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const pinned = session?.taskId ? focusBar.isPinned(session.taskId) : false;
   const pinnedTier: FocusTier | undefined = pinned && session?.taskId ? focusBar.tierOf(session.taskId) : undefined;
 
+  // Through the undoable actions (an Undo toast and mod+z), as the task list's are.
+  const taskUndo = useTaskUndo();
+  const pinActions = taskUndo ?? focusBar;
   const handlePinTask = useCallback((id: string) => {
-    focusBar.pin(id).catch((err) => console.error('Pin failed:', err));
-  }, [focusBar]);
+    pinActions.pin(id).catch((err) => console.error('Pin failed:', err));
+  }, [pinActions]);
 
   const handleUnpinTask = useCallback((id: string) => {
-    focusBar.unpin(id).catch((err) => console.error('Unpin failed:', err));
-  }, [focusBar]);
+    pinActions.unpin(id).catch((err) => console.error('Unpin failed:', err));
+  }, [pinActions]);
 
   const handleSetTier = useCallback((id: string, tier: FocusTier) => {
-    focusBar.setTier(id, tier).catch((err) => console.error('Set tier failed:', err));
-  }, [focusBar]);
+    pinActions.setTier(id, tier).catch((err) => console.error('Set tier failed:', err));
+  }, [pinActions]);
 
   // Fetch session metadata
   useEffect(() => {
@@ -1311,6 +1315,20 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, [sessionId]);
+  // A keyboard jump to this column (pages/useHomeKeyboard.ts): the caret goes into its
+  // composer, revealed first when the chat is collapsed, and the timeline stays put.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const detail = (e as CustomEvent<ComposerFocusDetail>).detail;
+      if (!detail || detail.sessionId !== sessionId || detail.handled) return;
+      if (detail.within && !(panelRef.current && detail.within.contains(panelRef.current))) return;
+      detail.handled = true;
+      requestComposerFocus({ keepTimelinePosition: true });
+      setActiveSession(sessionId);
+    };
+    window.addEventListener(COMPOSER_FOCUS_EVENT, onFocus);
+    return () => window.removeEventListener(COMPOSER_FOCUS_EVENT, onFocus);
+  }, [sessionId, requestComposerFocus]);
   // The transcript pill's "Quote" and "Comment" (beside "Ask here"): the passage,
   // with the user's comment under it, goes into the MAIN conversation's composer as
   // a quote. Nothing is sent: the user collects as many as they like and sends them

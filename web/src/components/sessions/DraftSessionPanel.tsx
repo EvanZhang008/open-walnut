@@ -80,7 +80,7 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
-import { focusWhenShown } from '@/utils/focus-when-shown';
+import { useFocusRequest } from '@/utils/focus-when-shown';
 import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
 
 /** Files attached before the session exists (api/file-upload.ts). */
@@ -591,12 +591,9 @@ export function DraftSessionPanel({
   // columns can be open at once, so a document-level query would grab whichever
   // one happens to be first in the DOM.
   // Retried until shown: a draft opened from another page mounts while Home is still hidden.
-  useEffect(() => {
-    if (!autoFocus) return;
-    // A restored or seeded draft ("Snooze this task until: ") goes on where its text ends;
-    // a bare focus() leaves the caret at 0, so typing landed in front of it.
-    return focusWhenShown(getComposer, (el) => el.setSelectionRange(el.value.length, el.value.length));
-  }, [autoFocus, getComposer]);
+  // A restored or seeded draft ("Snooze this task until: ") goes on where its text ends;
+  // a bare focus() leaves the caret at 0, so typing landed in front of it.
+  useFocusRequest(autoFocus, getComposer, (el) => el.setSelectionRange(el.value.length, el.value.length));
 
   // Owner asked for the folder picker (a Start with no cwd that reached MainPage —
   // see DraftColumn.openPickerNonce). Skips the initial undefined/0 so a freshly

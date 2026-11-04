@@ -49,6 +49,7 @@ const NAMED_ALLOWED: Record<string, string> = {
   '.unpaired-notice': 'the full-screen sign-in page (inset: 0), not a corner notice',
   '.sfe-reveal-error': 'a line inside the file explorer about the reveal the person just asked for',
   '.notification-toast-swipe': 'the swipe wrapper inside a toast',
+  '.notification-toast-timer': 'the time-left bar along the bottom edge inside an Undo toast',
 };
 
 const NOTICE_NAME = /(toast|toaster|snackbar|notice|undo-bar|approval-stack|reminder|alert-card)/i;

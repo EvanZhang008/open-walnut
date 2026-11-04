@@ -45,6 +45,7 @@ vi.mock('../../web/node_modules/react', () => ({
     return [stateSlots[slot], set] as const
   },
   useCallback: <T,>(fn: T) => fn,
+  useMemo: <T,>(fn: () => T) => fn(),
   useEffect: () => {},
   // useCommittedRef (useTasks) writes its ref in a layout effect; the commit is not modelled here.
   useLayoutEffect: () => {},

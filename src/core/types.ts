@@ -1966,6 +1966,9 @@ export interface Config {
      *  Walnut adds should be visible); false hides them behind each message's footer
      *  "Walnut added" control, which shows them for that message. */
     show_walnut_additions?: boolean;
+    /** Completing a task from its session column (or with the keyboard) goes on to the next
+     *  task that needs the person: its column opens and takes the caret. Default: true. */
+    next_after_complete?: boolean;
   };
   /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key
    *  (`ticket-id:*`) to `shown` (whole), `value` (the text after the key) or `hidden`. Display

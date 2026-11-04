@@ -9,7 +9,8 @@
  *   scrollLog.dump()    — returns all logs as string
  *   scrollLog.clear()   — clears the buffer
  *
- * Keyboard shortcut: Ctrl+Shift+D — copies scroll logs to clipboard + downloads as file.
+ * Keyboard shortcut: Ctrl+Alt+Shift+D — copies scroll logs to clipboard + downloads as file
+ * (Ctrl+Shift+D is the app's "complete and go to the next task" off a Mac).
  */
 
 const STORAGE_KEY = 'open_walnut_scroll_debug';
@@ -118,10 +119,10 @@ scrollLog.mark = function mark(sessionId: string) {
   scrollLog('═══ SESSION-SWITCH ═══', { sessionId: sessionId.substring(0, 8) });
 };
 
-// ── Keyboard shortcut: Ctrl+Shift+D to dump logs ──
+// ── Keyboard shortcut: Ctrl+Alt+Shift+D to dump logs ──
 if (typeof window !== 'undefined') {
   window.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+    if (e.ctrlKey && e.altKey && e.shiftKey && e.code === 'KeyD') {
       e.preventDefault();
       const text = scrollLog.dump();
 

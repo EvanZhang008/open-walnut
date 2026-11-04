@@ -157,6 +157,89 @@ describe('POST /api/tasks/batch/phase', () => {
   });
 });
 
+describe('POST /api/tasks/batch/delete with delay_ms (a held delete a page hands over as it goes)', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // A cancel that must reach the server inside the delay gets 2 s of it: on a loaded host one
+  // request can take longer than 150 ms, and the schedule would end before the cancel lands.
+
+  it('deletes them once the delay ends, not before', async () => {
+    const [a, b] = await makeTasks(['A', 'B']);
+    const res = await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 150 });
+    expect(res.status).toBe(202);
+    expect(res.body.scheduled).toEqual([a]);
+    expect((await listTasks()).map((t) => t.id).sort()).toEqual([a, b].sort());
+    await expect.poll(async () => (await listTasks()).map((t) => t.id), { timeout: 10_000 }).toEqual([b]);
+  });
+
+  it('a cancel inside the delay keeps them, and says which it took back', async () => {
+    const [a] = await makeTasks(['A']);
+    await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 2_000 });
+    const res = await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: [a, 'no-such-task'] });
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled).toEqual([a]);
+    await wait(2_500);
+    expect((await listTasks()).map((t) => t.id)).toEqual([a]);
+  });
+
+  it('a delete sent now takes the place of the scheduled one (it never runs twice)', async () => {
+    const [a] = await makeTasks(['A']);
+    await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 2_000 });
+    const now = await request(createApp()).delete(`/api/tasks/${a}`);
+    expect(now.status).toBe(204);
+    const cancel = await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: [a] });
+    expect(cancel.body.cancelled).toEqual([]);
+  });
+
+  it('a schedule that reaches the server after its hold was cancelled is ignored; a later hold still schedules', async () => {
+    const [a] = await makeTasks(['A']);
+    const heldAt = Date.now();
+    // The returning page's cancel overtakes the going page's POST.
+    const cancel = await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: [a], held_at: heldAt });
+    expect(cancel.body.cancelled).toEqual([]);
+    const late = await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 150, held_at: heldAt });
+    expect(late.status).toBe(202);
+    expect(late.body.scheduled).toEqual([]);
+    await wait(400);
+    expect((await listTasks()).map((t) => t.id)).toEqual([a]);
+    // Deleted again later: a newer hold is not the one taken back.
+    const again = await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 150, held_at: heldAt + 5_000 });
+    expect(again.body.scheduled).toEqual([a]);
+    await expect.poll(listTasks, { timeout: 10_000 }).toEqual([]);
+  });
+
+  it('a late cancel of an older hold leaves a newer delete of the same task scheduled', async () => {
+    const [a] = await makeTasks(['A']);
+    const first = Date.now();
+    // Deleted, undone (its cancel delayed), deleted again: the newer hold is on the server.
+    await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms: 150, held_at: first + 500 });
+    const late = await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: [a], held_at: first });
+    expect(late.body.cancelled).toEqual([]);
+    await expect.poll(listTasks, { timeout: 10_000 }).toEqual([]);
+  });
+
+  it('a cancel of one keeps the rest of the same schedule, deleted together when it ends', async () => {
+    const [a, b, c] = await makeTasks(['A', 'B', 'C']);
+    await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a, b], delay_ms: 2_000 });
+    await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: [a] });
+    await expect.poll(async () => (await listTasks()).map((t) => t.id).sort(), { timeout: 10_000 }).toEqual([a, c].sort());
+  });
+
+  it('refuses more ids than a schedule may carry', async () => {
+    const ids = Array.from({ length: 501 }, (_, i) => `t-${i}`);
+    expect((await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: ids, delay_ms: 150 })).status).toBe(400);
+    expect((await request(createApp()).post('/api/tasks/batch/delete/cancel').send({ task_ids: ids })).status).toBe(400);
+  });
+
+  it('refuses a delay that is not a sensible number of ms', async () => {
+    const [a] = await makeTasks(['A']);
+    for (const delay_ms of [0, -5, 'soon', 600_000]) {
+      const res = await request(createApp()).post('/api/tasks/batch/delete').send({ task_ids: [a], delay_ms });
+      expect(res.status, String(delay_ms)).toBe(400);
+    }
+    expect((await listTasks()).map((t) => t.id)).toEqual([a]);
+  });
+});
+
 describe('POST /api/tasks/batch/delete', () => {
   it('deletes every task in the selection', async () => {
     const ids = await makeTasks(['A', 'B', 'C']);

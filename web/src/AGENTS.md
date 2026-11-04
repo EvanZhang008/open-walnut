@@ -94,8 +94,13 @@ show inline after the open ones, other completed hits that show the query fold i
   from the board, or an agent finishing its task, closes nothing, because the person may be reading
   that column. 400ms after the click (the tick is read, and a server that refused has rolled the
   phase back by then) the ordinary `handleCloseSession` runs, so the close is the same fade the ×
-  gives (the sessions area's own removal, the neighbours take the width) and a toast (`hint`, 8s)
-  says "Task completed" + the task title + Undo. There is deliberately NO custom close animation:
+  gives (the sessions area's own removal, the neighbours take the width) and an Undo toast (the
+  app's undo stack, 5s, also on mod+z: next item) says "Task completed" + the task title + Undo, then
+  the next task that needs the person opens (`advance`, MainPage; Settings > Tasks turns it off).
+  When that task's session was not open, it takes the closed column's place in the SAME render
+  with the strip's auto-animate held for that commit (`openSessionInPlaceOf`): no fade over the
+  neighbours and no second reflow. With nothing to go on to, the caret goes to the column that
+  takes the closed one's place, never back to the row that opened it. There is deliberately NO custom close animation:
   a clip-path roll-up into the header strip shipped first (2026-10-04) and the person asked for the
   ordinary fade back. A locked column closes too (2026-10-05 user call: completing it from its own
   header means done with it), and its Undo brings it back locked, in its place among the pins (the
@@ -112,6 +117,22 @@ show inline after the open ones, other completed hits that show the query fold i
   node carries `data-column-id` (the session id). Ratchets:
   `tests/e2e/browser/column-complete-close.spec.ts` (holds the tick to act inside it),
   `tests/web/session-columns.test.ts`.
+- **Complete, reopen, snooze, pin and delete of a task take an Undo for 5 seconds, on the toast and
+  on mod+z** (`undo/undo-stack.ts`, `undo/TaskUndoContext.tsx`, `useTaskUndo()`). Every surface that
+  does one of them goes through `useTaskUndo()` (or `useUndoableTaskActions()` for complete, phase and
+  delete), never straight to the store, or it has no Undo (`tests/web/undo-surfaces-ratchet.test.ts`). A
+  DELETE is a hard delete on the server, so it is HELD: the row is hidden (`hideTasks`) and the
+  request goes out when the window ends, or when the page goes as one keepalive `POST /api/tasks/batch/delete` (WebKit cancels a page-exit DELETE, keepalive or not); an Undo shows the row
+  again with nothing sent. A write the store reports refused (`setPhase` / `toggleComplete` /
+  `update` resolve false) drops its Undo and toast. Undo toasts carry `placement: 'bottom'`: they
+  stack bottom left, off the columns' headers, and only the newest shows the key. mod+z belongs to
+  the task undo outside text boxes and in an EMPTY composer only (`undo/undo-key.ts`). Keys:
+  `keyboard/shortcuts.ts` is the one table the handlers match and the `?` sheet lists
+  (`tests/web/keyboard-shortcuts.test.ts` fails on a row with no handler). No other page-wide
+  keydown may claim a chord of that table (TodoSearchBar's `/` takes no modifier, the scroll-debug
+  dump is Ctrl+Alt+Shift+D): the spec presses each one in the Mac app's and a Linux browser's keys. See
+  [Keyboard and undo](../../docs/reference/keyboard-and-undo.md). Ratchet:
+  `tests/e2e/browser/keyboard-triage.spec.ts`.
 - **The session header's tool row never moves when the session record lands, and a session with no
   task shows no task controls.** The record arrives 60 to 130 ms after the row is painted (seconds on
   a slow box), and a chip that appears then in front of others pushes them under a click already on

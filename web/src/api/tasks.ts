@@ -246,6 +246,10 @@ export interface UpdateTaskInput {
   add_depends_on?: string[];
   remove_depends_on?: string[];
   set_depends_on?: string[];
+  /** An Undo of the task's last phase move: its phase_changed_at before that move. The server
+   *  then marks a NEED_ACTION put back as the person's own ask only if it was one
+   *  (src/core/sessions/person-needs.ts); '' when the row did not carry it. */
+  undo_phase_changed_at?: string;
 }
 
 /**
@@ -464,9 +468,23 @@ export function batchSetPhase(taskIds: string[], phase: string, opts?: WriteOpts
   return apiPost('/api/tasks/batch/phase', { task_ids: taskIds, phase }, opts);
 }
 
-/** Delete many tasks in one round-trip. `force` stops active sessions first. */
-export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean } & WriteOpts): Promise<{ deleted: Task[]; failed: BatchTaskOutcome[] }> {
-  return apiPost('/api/tasks/batch/delete', { task_ids: taskIds, ...(opts?.force ? { force: true } : {}) }, opts?.opId ? { opId: opts.opId } : undefined);
+/** Delete many tasks in one round-trip. `force` stops active sessions first. `delayMs`: the
+ *  server deletes them after that long instead, unless cancelled (cancelScheduledDeletes) or
+ *  deleted sooner: a held delete handed over by a page that is going. */
+export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean; delayMs?: number; heldAt?: number } & WriteOpts): Promise<{ deleted: Task[]; failed: BatchTaskOutcome[] }> {
+  return apiPost('/api/tasks/batch/delete', {
+    task_ids: taskIds,
+    ...(opts?.force ? { force: true } : {}),
+    ...(opts?.delayMs ? { delay_ms: Math.round(opts.delayMs) } : {}),
+    ...(opts?.heldAt ? { held_at: opts.heldAt } : {}),
+  }, opts?.opId ? { opId: opts.opId } : undefined);
+}
+
+/** Take back deletes scheduled with `delayMs` (an Undo on the page that came back). `heldAt`:
+ *  when that delete was asked (epoch ms); a schedule for it reaching the server later is
+ *  ignored too. Sent with keepalive: an Undo followed at once by a reload still reaches it. */
+export function cancelScheduledDeletes(taskIds: string[], heldAt?: number): Promise<{ cancelled: string[] }> {
+  return apiPost('/api/tasks/batch/delete/cancel', { task_ids: taskIds, ...(heldAt ? { held_at: heldAt } : {}) }, { keepalive: true });
 }
 
 /** Reorder tasks within ONE project group. `project: ''` = Inbox (valid, not "unset"). */

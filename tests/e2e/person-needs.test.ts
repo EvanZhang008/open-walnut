@@ -92,6 +92,34 @@ describe('a person sets NEED_ACTION', () => {
     await updateTask(id, { phase: 'NEED_ACTION' })
     expect(personMarkedNeeds(await getTask(id))).toBe(false)
   })
+
+  it('an Undo of a completion puts back what was there: a session\'s NEED_ACTION stays the session\'s', async () => {
+    const id = await idleTask()
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'NEED_ACTION' }, '99999999-2222-4333-8444-555555555555')
+    const before = await getTask(id)
+    expect(personMarkedNeeds(before)).toBe(false)
+    await new Promise((r) => setTimeout(r, 20))
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'COMPLETE' })
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'NEED_ACTION', undo_phase_changed_at: before.phase_changed_at })
+    const task = await getTask(id)
+    expect(task.phase).toBe('NEED_ACTION')
+    expect(personMarkedNeeds(task)).toBe(false)
+    expect(task as unknown as Record<string, unknown>).not.toHaveProperty('undo_phase_changed_at')
+    expect(await statusAfter(id)).toMatchObject({ state: 'read', toRead: 'turn' })
+  })
+
+  it('an Undo of a completion puts back what was there: the person\'s own NEED_ACTION stays theirs', async () => {
+    const id = await idleTask()
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'NEED_ACTION' })
+    const before = await getTask(id)
+    expect(personMarkedNeeds(before)).toBe(true)
+    await new Promise((r) => setTimeout(r, 20))
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'COMPLETE' })
+    await new Promise((r) => setTimeout(r, 20))
+    await call('PATCH', `/api/tasks/${id}`, { phase: 'NEED_ACTION', undo_phase_changed_at: before.phase_changed_at })
+    expect(personMarkedNeeds(await getTask(id))).toBe(true)
+    expect(await statusAfter(id)).toMatchObject({ state: 'needs', ask: MARKED_ASK })
+  })
 })
 
 describe('guard: every phase route marks a person\'s NEED_ACTION', () => {

@@ -1,0 +1,54 @@
+/* An Undo toast: the key that also runs it, and the time it has left. */
+.notification-toast:has(.notification-toast-timer) {
+  position: relative;
+  overflow: hidden;
+}
+
+.notification-toast-action .notification-toast-kbd {
+  margin-left: 8px;
+  font: 500 11px/1 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.notification-toast-timer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: transparent;
+}
+
+.notification-toast-timer-bar {
+  height: 100%;
+  background: var(--success, #3aa757);
+  opacity: 0.55;
+  transform-origin: left center;
+  animation-name: notification-toast-timer;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes notification-toast-timer {
+  from { transform: scaleX(var(--timer-from, 1)); }
+  to { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-toast-timer { display: none; }
+}
+
+/* Over a chat the corner keeps each notice to its title (corner-stack.css), but an Undo keeps
+   its body naming its task (and where the keys went on to, and what they passed over): it is
+   what the Undo takes back. Two lines, so the end of it is read, not cut. */
+.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast):has(.notification-toast-timer) .notification-toast-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  margin-top: 2px;
+  white-space: normal;
+  overflow: hidden;
+}

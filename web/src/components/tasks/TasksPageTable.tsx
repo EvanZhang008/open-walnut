@@ -3,7 +3,6 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey, readDraft, writeDraft } from '@/utils/drafts';
 import { useNavigate } from 'react-router-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
-import { useConfirm } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { createPortal } from 'react-dom';
@@ -381,7 +380,6 @@ export function TasksPageTable({
   onOpenTask,
 }: TasksPageTableProps) {
   const navigate = useNavigate();
-  const confirm = useConfirm();
   // ONE registry read for the whole table (see ProjectCell).
   const { projectNames } = useProjectRegistry();
   const openTask = useCallback((taskId: string) => {
@@ -448,11 +446,11 @@ export function TasksPageTable({
     }
   };
 
+  // Its pages delete through the Undo stack (useUndoableTaskActions): held, with an Undo toast,
+  // so no confirm, as from a row's menu on Home.
   const confirmDelete = useCallback(async (task: Task) => {
-    if (await confirm({ title: `Delete task “${orgDisplayTitle(task)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
-      onDelete(task.id);
-    }
-  }, [confirm, onDelete]);
+    onDelete(task.id);
+  }, [onDelete]);
 
   const handleDelete = useCallback((e: MouseEvent, task: Task) => {
     e.stopPropagation();

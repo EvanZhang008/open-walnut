@@ -1,0 +1,192 @@
+/* The keyboard shortcuts sheet (keyboard/ShortcutsHelp.tsx). */
+.shortcuts-help {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 18px 22px 18px;
+}
+
+.shortcuts-help-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.shortcuts-help-head .app-modal-title { flex: 1; }
+
+.shortcuts-help-close {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.shortcuts-help-close:hover { color: var(--fg); background: var(--bg-hover); }
+
+.shortcuts-help-group + .shortcuts-help-group { margin-top: 14px; }
+
+.shortcuts-help-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin: 8px 0 4px;
+}
+
+.shortcuts-help-list { margin: 0; }
+
+.shortcuts-help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.shortcuts-help-row:first-child { border-top: none; }
+
+.shortcuts-help-label {
+  font-size: 13px;
+  color: var(--fg);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.shortcuts-help-keys {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.shortcuts-help-chord {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.shortcuts-help-sep {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-right: 3px;
+}
+
+.shortcuts-help kbd,
+.session-jump-badge kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font: 500 12px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.shortcuts-help-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+/* The column number badges shown while the jump modifier is held (pages/useHomeKeyboard.ts):
+   one key cap per column, just under its header (whose rows are all buttons: JumpBadge sets the
+   top), at the top left of the transcript while the key is held. The last column also shows
+   the mod+9 that reaches it. */
+.main-page-session-column:has(> .session-jump-badge) { position: relative; }
+
+/* The current column (useHomeKeyboard's `current`, the one the keys act on, `is-current`, one
+   column or many): its header is tinted with an accent line along its top, drawn
+   by the header itself above its glass (the glass, the header's ::before, paints over anything
+   under it), and its composer carries an accent ring, so it reads at a glance with the caret
+   anywhere. It wins over an unread column's red ring: the person is in it. */
+.main-page-session-column.is-current .session-panel > .session-panel-header::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(var(--accent), var(--accent)) top / 100% 3px no-repeat,
+    color-mix(in srgb, var(--accent) 9%, transparent);
+  pointer-events: none;
+}
+.main-page-session-column.is-current .session-panel .session-panel-input .chat-input-box {
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  box-shadow: var(--glass-g4-shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.session-jump-badge {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 60;
+  pointer-events: none;
+  animation: session-jump-badge-in 0.12s ease-out;
+}
+
+.session-jump-badge kbd {
+  min-width: 40px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--card-bg);
+  border-radius: 9px;
+  border-bottom-width: 3px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.session-jump-badge kbd.session-jump-badge-last {
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 7px;
+  border-bottom-width: 2px;
+  color: var(--fg-muted);
+  background: var(--card-bg);
+  border-color: var(--border);
+}
+
+/* The current column's number, in the accent: where the keys act now. */
+.main-page-session-column.is-current .session-jump-badge kbd:not(.session-jump-badge-last) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+@keyframes session-jump-badge-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-jump-badge { animation: none; }
+}
+
+/* The sheet takes focus as a whole (so Esc and the keys work at once): no ring around it all. */
+.app-modal.shortcuts-help:focus,
+.app-modal.shortcuts-help:focus-visible {
+  outline: none;
+}
+
+/* A completion's column goes blank where it stands at once, then leaves (MainPage handleCloseSession
+   `fade`, COLUMN_FADE_MS): the neighbours widen once it is gone, never under it. No transition: a
+   Home column never animates (home-panels-no-transition.test.ts). */
+.main-page-session-column.is-closing {
+  opacity: 0;
+  pointer-events: none;
+}

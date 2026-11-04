@@ -21,6 +21,7 @@ import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 import { KebabIcon } from '@/components/tasks/KebabIcon';
@@ -110,6 +111,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   // echo guard and the error banner. The direct REST path below stays for a
   // task the list does not have (or no store at all: pop-out windows).
   const store = useTasksContextSafe();
+  const taskUndo = useTaskUndo();
   const storeFor = useCallback((id: string) => (
     store && store.tasks.some((t) => t.id === id) ? store : null
   ), [store]);
@@ -124,7 +126,18 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
   const kebabMenuRef = useRef<HTMLDivElement>(null);
-  const closeKebab = useCallback(() => { setKebabOpen(false); setCursorAnchor(null); }, []);
+  /** The menu goes away by itself (a press elsewhere, a scroll): the caret is wherever that left it. */
+  const dismissKebab = useCallback(() => { setKebabOpen(false); setCursorAnchor(null); }, []);
+  const closeKebab = useCallback(() => {
+    dismissKebab();
+    // An action whose row went with the menu leaves the caret nowhere: it goes back to the
+    // button the menu came from, so the keys still act on this column (a snooze, a pin).
+    requestAnimationFrame(() => {
+      const btn = kebabBtnRef.current;
+      const nowhere = !document.activeElement || document.activeElement === document.body;
+      if (nowhere && btn?.isConnected) btn.focus({ preventScroll: true });
+    });
+  }, [dismissKebab]);
   /** The right-clicked header and where it sat when the menu opened (cursor-menu-scroll.ts). */
   const scopeAnchor = useRef<RowAnchor | null>(null);
   // Measured placement — this menu is the tallest in the app (task actions +
@@ -134,7 +147,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     anchorPoint: cursorAnchor,
     // The row can be filtered out or re-rendered away while the menu is open;
     // without this the menu is stranded off-screen with no way back.
-    onAnchorLost: closeKebab,
+    onAnchorLost: dismissKebab,
   });
 
   // Right-click anywhere on the opted-in ancestor opens this kebab at the cursor.
@@ -212,7 +225,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       // The Project picker's list and the Adopt a worker picker are their own portals.
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
-      closeKebab();
+      dismissKebab();
     };
     // Capture, and taken (preventDefault): the open menu is the layer this Escape closes, so a
     // full-screen panel under it stays (useFullscreen leaves only on an Escape nobody took).
@@ -223,9 +236,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       // A cursor anchor is a frozen viewport point: close once a scroll moved what
       // was right-clicked away from under it (the button path instead follows its
       // trigger — see the comment above).
-      if (cursorAnchor) { if (scrollMovedRow(scopeAnchor.current, e.target)) closeKebab(); return; }
+      if (cursorAnchor) { if (scrollMovedRow(scopeAnchor.current, e.target)) dismissKebab(); return; }
       const r = kebabBtnRef.current?.getBoundingClientRect();
-      if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
+      if (r && (r.bottom < 0 || r.top > window.innerHeight)) dismissKebab();
     };
     document.addEventListener('mousedown', handleClick);
     document.addEventListener('keydown', handleKey, true);
@@ -235,9 +248,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       document.removeEventListener('keydown', handleKey, true);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [kebabOpen, closeKebab, cursorAnchor]);
+  }, [kebabOpen, closeKebab, dismissKebab, cursorAnchor]);
 
-  const handlePhaseChange = useCallback((phase: string) => {
+  const handlePhaseChange = useCallback((phase: string, ring = false) => {
     if (!task || task.phase === phase) return;
     const now = new Date().toISOString();
     const completing = phase === 'COMPLETE';
@@ -256,8 +269,13 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const id = task.id;
     const shared = storeFor(id);
     if (shared) {
-      shared.setPhase(id, phase);
-      if (completing) onCompleted?.({ taskId: id, from: task.phase });
+      // A column's own completion takes its Undo from the column (useColumnCompleteClose);
+      // anywhere else a complete or reopen takes the plain one.
+      if (completing && onCompleted) {
+        shared.setPhase(id, phase);
+        onCompleted({ taskId: id, from: task.phase });
+      } else if (taskUndo) taskUndo.setPhase(id, phase, ring ? { ring } : undefined);
+      else shared.setPhase(id, phase);
       return;
     }
     // Nothing rolls back the store here, so the host hears about the completion only once the
@@ -271,7 +289,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       resync: () => { fetchTask(id).then(setTask).catch(() => {}); },
       showError: (message) => store?.showOperationError(message),
     });
-  }, [task, storeFor, store, writePhase, onCompleted]);
+  }, [task, storeFor, store, writePhase, onCompleted, taskUndo]);
 
   // The status control's "Until" row. Same split as the other writes: this
   // menu's own copy at once, then the shared store when it carries the row.
@@ -315,12 +333,13 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const id = task.id;
     setTask(prev => prev ? { ...prev, start_date: date ?? undefined } : prev);
     const shared = storeFor(id);
-    if (shared) shared.update(id, { start_date: date ?? '' });
-    else updateTask(id, { start_date: date ?? '' }).catch(() => {
+    if (shared) {
+      if (taskUndo) taskUndo.setStartDate(id, date); else shared.update(id, { start_date: date ?? '' });
+    } else updateTask(id, { start_date: date ?? '' }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
-  }, [task, closeKebab, storeFor]);
+  }, [task, closeKebab, storeFor, taskUndo]);
 
   // Kebab "Project" select. Through the store this is the same move the board
   // kebab makes (project flip + reorder into the destination group).
@@ -339,10 +358,15 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   // Delete: the store's path when it carries the row (it shows a refusal, a live session's
   // 409 included), else a plain DELETE, so a menu off the board deletes as the board's does.
   const handleDelete = useCallback((id: string) => {
+    // Its delete is already held (the list hid it): one DELETE goes out, at the end of its Undo.
+    if (taskUndo?.isDeleteHeld(id)) return;
     const shared = storeFor(id);
-    if (shared) { void shared.deleteTask(id); return; }
+    if (shared) {
+      if (taskUndo) taskUndo.deleteTask(id); else void shared.deleteTask(id);
+      return;
+    }
     deleteTask(id).catch((err) => store?.showOperationError(`Could not delete the task: ${String(err)}`));
-  }, [storeFor, store]);
+  }, [storeFor, store, taskUndo]);
 
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -371,9 +395,11 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           className={`task-quick-phase-btn ${taskCircleClass(task, circleStatus)}`}
           onClick={(e) => {
             e.stopPropagation();
-            handlePhaseChange(isDone ? 'TODO' : 'COMPLETE');
+            handlePhaseChange(isDone ? 'TODO' : 'COMPLETE', true);
           }}
           title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+          // An icon alone (a narrow column) still says what it does.
+          aria-label={compact ? (isDone ? 'Reopen the task' : 'Complete the task') : undefined}
         >
           <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}</span>
           {!compact && <span className="task-quick-phase-label">{quickPhaseLabel(task)}</span>}

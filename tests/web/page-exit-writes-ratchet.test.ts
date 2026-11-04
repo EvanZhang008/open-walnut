@@ -20,6 +20,8 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'components/settings/inputs/useSettingsAutoSave.ts': 'client',
   'components/settings/sections/AdvancedSection.tsx': 'client',
   'components/settings/sections/SttSection.tsx': 'client',
+  // The held deletes leave as batch POSTs through the client (a page-exit DELETE is cancelled by WebKit).
+  'undo/TaskUndoContext.tsx': 'client',
   'utils/drafts.ts': 'raw',
   'utils/ui-prefs-sync.ts': 'raw',
   'utils/time-tracking.ts': 'raw',

@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import { useNavigate } from 'react-router-dom';
+import '@/styles/undo-toast.css';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
@@ -168,7 +169,8 @@ export function NotificationToaster() {
   // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
   const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
   // Asks take at most MAX_ASK_TOASTS places (the rest fold into one line).
-  const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - Math.min(MAX_ASK_TOASTS, allToasts.filter(asking).length))));
+  const room = shownCount - Math.min(MAX_ASK_TOASTS, allToasts.filter(asking).length);
+  const kept = new Set(room > 0 ? allToasts.filter((t) => !asking(t)).slice(-room) : []);
   // "N more ›" opens the notification center, which lists only what it keeps. A toast it does not
   // keep (an Undo after a column closed) is shown in place instead: the count unfolds the stack.
   const [unfolded, setUnfolded] = useState(false);
@@ -209,6 +211,22 @@ export function NotificationToaster() {
   // did (its session's card and Needs you still hold it).
   const phoneGone = phone ? pendingAsks.filter((t) => !engaged.has(t.id) && now.age(t.id) >= PHONE_ASK_TOAST_MS) : [];
   const toasts = foldedAsks.length || phoneGone.length ? shown.filter((t) => !foldedAsks.includes(t) && !phoneGone.includes(t)) : shown;
+  // A toast with its own clock hears when it goes out of sight and comes back (an Undo's clock
+  // stands still meanwhile, so it never comes back with a moment left).
+  const shownBefore = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    const inSight = new Set(toasts.map((t) => t.id));
+    const present = new Set<string>();
+    for (const t of allToasts) {
+      present.add(t.id);
+      if (!t.onShownChange) continue;
+      const inView = inSight.has(t.id);
+      const was = shownBefore.current.get(t.id);
+      if (was === undefined ? !inView : was !== inView) t.onShownChange(inView);
+      shownBefore.current.set(t.id, inView);
+    }
+    for (const id of [...shownBefore.current.keys()]) if (!present.has(id)) shownBefore.current.delete(id);
+  });
 
   // Every ask waiting, as the badge and the panel count them (some came before this page did).
   // An ask whose card is on screen is in view already: the line does not count it.
@@ -237,6 +255,8 @@ export function NotificationToaster() {
     ? () => setUnfolded(true)
     : () => window.dispatchEvent(new CustomEvent('notification:open-center'));
   const moreWords = older === 1 ? '1 more ›' : `${older} more ›`;
+  // The key runs only the newest Undo: an older toast keeps its button, not the key.
+  const keyed = [...toasts].reverse().find((t) => t.actionKeyHint)?.id;
 
   return (
     <CornerSlot order={CORNER_ORDER.toasts} className="corner-slot-toasts">
@@ -282,6 +302,7 @@ export function NotificationToaster() {
               onPin={() => pinToast(toast.id)}
               onRead={() => { if (toast.persistent) markReadByKey([toast.dedupKey]); }}
               navigate={navigate}
+              keyed={toast.id === keyed}
             />
           </SwipeToast>
         );
@@ -313,7 +334,7 @@ export function NotificationToaster() {
  * is cut or the record keeps more (the raw line behind it). Details opens the whole text in
  * place and keeps the toast up until it is closed: reading must not race its timer.
  */
-function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate }: {
+function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, keyed }: {
   toast: Notification;
   phone: boolean;
   more: { words: string; older: number; open: () => void; inPlace: boolean } | null;
@@ -321,6 +342,8 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate }
   onPin: () => void;
   onRead: () => void;
   navigate: (to: string) => void;
+  /** This toast's action is the one the key runs: it shows the key. */
+  keyed: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
@@ -434,8 +457,11 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate }
           }}
         >
           {toast.action.label}
+          {toast.actionKeyHint && keyed && <kbd className="notification-toast-kbd">{toast.actionKeyHint}</kbd>}
         </button>
       )}
+      {/* A toast with its own clock (an Undo) shows how long it has left. */}
+      {toast.durationMs && <ToastTimer total={toast.durationMs} timeLeft={toast.timeLeftMs} />}
     </div>
   );
 }
@@ -748,6 +774,19 @@ function PermCommand({ command, onOpen }: { command: string; onOpen: () => void 
         {(cut || open) && <NoticeDetailsToggle open={open} onToggle={() => { onOpen(); setOpen(!open); }} />}
         <CopyCommandButton command={command} label />
       </div>
+    </div>
+  );
+}
+
+/** A toast's time left as a bar, drawn from where its clock stands when it comes into sight. */
+function ToastTimer({ total, timeLeft }: { total: number; timeLeft?: () => number }) {
+  const [start] = useState(() => Math.max(0, Math.min(total, timeLeft?.() ?? total)));
+  return (
+    <div className="notification-toast-timer" aria-hidden="true">
+      <div
+        className="notification-toast-timer-bar"
+        style={{ animationDuration: `${start}ms`, ['--timer-from' as string]: String(total > 0 ? start / total : 0) }}
+      />
     </div>
   );
 }

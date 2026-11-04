@@ -16,6 +16,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
+import { watchColumnFades } from './column-fade-watch'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -72,13 +73,42 @@ const releaseTick = (page: Page) => page.evaluate(() => {
   w.__tickHeld.splice(0).forEach((run) => run())
 })
 
-/** Keep the 8s toasts (and the hook's 8s refusal watch) up for two minutes, for a test that
- *  must do a slow UI step (open another session) while the Undo is still on screen. */
+/** Keep the 5s Undo (its toast and its undo-stack entry) and the hook's 8s refusal watch up for
+ *  two minutes, for a test that must do a slow UI step (open another session) while the Undo is
+ *  still on screen. */
 async function stretchToasts(page: Page) {
   await page.addInitScript(() => {
     const original = window.setTimeout.bind(window)
     window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) =>
-      original(fn, delay === 8000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
+      // The Undo window and what is armed from it (an Undo out of sight stands still, then goes on).
+      original(fn, typeof delay === 'number' && delay >= 2_500 && delay <= 20_000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
+  })
+}
+
+/** These tests are about the close and its Undo: going on to the next task that needs the
+ *  person (Settings > Tasks, on by default; keyboard-triage.spec.ts covers it) is turned off
+ *  in what this page reads of the config, so no other column opens. The off never reaches the
+ *  server: a config write from this page (the panel count, through Settings) leaves it out, or
+ *  the other specs on this fixture would find it off too. */
+async function noAdvance(page: Page) {
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() !== 'GET') {
+      const sent = route.request().postDataJSON() as { ui?: Record<string, unknown> } | null
+      if (sent?.ui && 'next_after_complete' in sent.ui) {
+        const { next_after_complete: _off, ...ui } = sent.ui
+        return route.fallback({ postData: JSON.stringify({ ...sent, ui }) })
+      }
+      return route.fallback()
+    }
+    // A read still on its way when the test ends meets a closed page: nothing to answer then.
+    try {
+      const res = await route.fetch()
+      const body = await res.json() as { config?: { ui?: Record<string, unknown> } }
+      const config = { ...(body.config ?? {}), ui: { ...(body.config?.ui ?? {}), next_after_complete: false } }
+      await route.fulfill({ response: res, json: { ...body, config } })
+    } catch (err) {
+      if (!page.isClosed()) throw err
+    }
   })
 }
 
@@ -128,6 +158,7 @@ test.setTimeout(180_000)
 holdPanelCountLock('test')
 
 test.beforeEach(async ({ page }) => {
+  await noAdvance(page)
   await page.setViewportSize({ width: 1600, height: 900 })
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-home-chat-visible', '0') } catch { /* off */ }
@@ -138,26 +169,32 @@ test.afterEach(async ({ page }) => {
   await resetTasks(page)
 })
 
-test('completing from the header closes the column at once, and names an Undo', async ({ page }, info) => {
+test('completing from the header fades the column where it stands, then the neighbours take its width, and names an Undo', async ({ page }, info) => {
   await watchAnimations(page)
   await openThree(page)
   expect(await order(page)).toEqual(KEYS.map(SID))
   const before = await widths(page)
   const engine = info.project.name
 
+  const fades = await watchColumnFades(page)
   await ring(page, 'b').click()
+  // The column fades in its own place (no strip animation lifting it over its neighbours),
+  // and nothing beside it moves until it is gone.
+  await expect.poll(async () => (await fades()).map((f) => f.id), { timeout: 15_000 }).toEqual([SID('b')])
   // The completion is applied at once (the ring answers the click, not the server).
   await expect.poll(() => phase(page, 'b'), { timeout: 15_000 }).toBe('COMPLETE')
   await expect(undoToast(page)).toBeVisible({ timeout: 15_000 })
   await expect(undoToast(page)).toContainText('Close fixture B')      // named by its task, never by a session id
 
-  // The close has no fade: once the column leaves, the very next frame holds no trace of it.
+  // Once the column leaves, the very next frame holds no trace of it.
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
   const left = await page.evaluate(() => new Promise<number>((resolve) => requestAnimationFrame(() =>
     resolve(document.querySelectorAll('.main-page-session-column[data-column-id="pw-close-b-session"]').length))))
   expect(left, 'nothing of the closed column is left on screen').toBe(0)
-  await page.screenshot({ path: `${SHOTS}/${engine}-1-closed-at-once.png` })
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
+  const [fade] = await fades()
+  expect(fade.drift[SID('a')]).toBeLessThan(2)
+  expect(fade.drift[SID('c')]).toBeLessThan(2)
   await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c')].join())
   await expect.poll(async () => (await widths(page))[SID('a')], { timeout: 10_000 }).toBeGreaterThan(before[SID('a')] + 100)
   const after = await widths(page)
@@ -283,6 +320,7 @@ test('two columns completed back to back each keep their own Undo and their own 
   await expect(homeColumns(page)).toHaveCount(1, { timeout: 30_000 })
   expect(await order(page)).toEqual([SID('b')])
   const toasts = page.locator('.notification-toast--success', { hasText: 'Task completed' })
+  // Over the columns the corner keeps both in reach.
   await expect(toasts).toHaveCount(2)
   await expect(toasts.filter({ hasText: 'Close fixture A' })).toHaveCount(1)
   await expect(toasts.filter({ hasText: 'Close fixture C' })).toHaveCount(1)

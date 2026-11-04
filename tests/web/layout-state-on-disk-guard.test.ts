@@ -54,6 +54,7 @@ const SESSION_FILES: Record<string, string> = {
   'utils/stale-assets.ts': 'reload bookkeeping of one tab',
   'utils/thread-stack-persist.ts': 'the question stack inside one panel, per tab by spec C69; the panel is in the layout record',
   'utils/ui-prefs-sync.ts': 'the one-boot skip flag crash recovery sets',
+  'undo/TaskUndoContext.tsx': 'the Undos on screen when this tab reloads, for the seconds they had left (undo/undo-persist.ts); a relaunch rightly ends them',
 };
 
 /** sessionStorage keys read or written directly by name. */

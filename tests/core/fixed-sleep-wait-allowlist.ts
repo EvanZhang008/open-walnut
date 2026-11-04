@@ -479,6 +479,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/web/routes/session-stream-v1-cloud-hop.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100))", reason: "concurrency setup: lets both attempts be in flight before the status gate opens; the single delivery holds either way and the second attempt arrival is not observable" },
   { file: "tests/web/routes/status-changed-reconnect-gate.test.ts", sleep: "await new Promise(r => setTimeout(r, 600))", reason: "time under test: past the 500 ms MARK_DONE_DEDUP_MS window" },
   { file: "tests/web/routes/stt-setup-sse.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200));", reason: "negative: gives the route time to see the close and wrongly stop the install; the finish is awaited by vi.waitFor" },
+  { file: "tests/web/routes/tasks-batch.test.ts", sleep: "await wait(2_500);", reason: "negative: a delete cancelled inside its delay must not run once the delay has passed" },
+  { file: "tests/web/routes/tasks-batch.test.ts", sleep: "await wait(400);", reason: "negative: a schedule that arrives after its hold was cancelled must not delete once its delay has passed" },
   { file: "tests/web/routes/user-file-lock-routes.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300));", reason: "negative: neither route writes while the lock is held" },
   { file: "tests/web/routes/voice-archive-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: after the drop, no further live hop goes out" },
   { file: "tests/web/routes/voice-archive-cloud.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: after the drop only the live hop already on its way went out, no second one" },

@@ -35,7 +35,8 @@ import type { SessionEndpointWait, SessionUsageLimit } from './types.js';
 import { limitAskWords, limitTimeWords, limitWaitingWords } from './sessions/usage-limit-model.js';
 export { limitName, limitTimeWords } from './sessions/usage-limit-model.js';
 export { claudeFamilyOf, fallbackBannerWords, fallbackEngineName, fallbackLimitReset, fallbackModelName } from './agents/fallback-engine-words.js';
-import { startDateMs } from './snooze.js';
+import { snoozedUntil, startDateMs } from './snooze.js';
+export { snoozedUntil, startDateMs };
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
@@ -924,6 +925,13 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
  *  or not) and Main (its Needs you is the user's turn to talk). The Org rail offers Snooze only here. */
 export function snoozeTakesOff(s: Pick<UserStatus, 'state' | 'source' | 'kind'>, isMain = false): boolean {
   return !isMain && ((s.state === 'needs' && s.source !== 'prompt') || s.state === 'read' || (s.state === 'waiting' && s.kind === 'you'));
+}
+
+/** A stored status the task's own start date, still to come, already takes off the user: the next
+ *  pass marks it snoozed (snoozeOf), and a page reads it so from the moment the date is written.
+ *  A time only: a bare day starts at local midnight, and a page and the server may not share one. */
+export function snoozedAhead(s: Pick<UserStatus, 'state' | 'source' | 'kind' | 'snoozed'>, startDate: string | null | undefined, isMain = false, nowMs = Date.now()): boolean {
+  return !s.snoozed && !!startDate?.includes('T') && snoozeTakesOff(s, isMain) && startDateMs(startDate) > nowMs;
 }
 
 /**

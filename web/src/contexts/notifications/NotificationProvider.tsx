@@ -309,8 +309,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     // Auto-dismiss the toast after the per-kind lifetime. dismissToast drops the
     // dedupKey too, so the same key (e.g. a new sort change) can toast again later.
-    if (shouldToast && Number.isFinite(TOAST_DURATION_MS[input.kind])) {
-      const duration = TOAST_DURATION_MS[input.kind];
+    if (shouldToast && !input.ownClock && Number.isFinite(TOAST_DURATION_MS[input.kind])) {
+      const duration = input.durationMs ?? TOAST_DURATION_MS[input.kind];
       const timer = setTimeout(() => dismissToast(id), duration);
       timers.current.set(id, timer);
     }

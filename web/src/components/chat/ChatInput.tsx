@@ -36,7 +36,7 @@ import { keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentFilePa
 import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
 import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
-import { focusWhenShown } from '@/utils/focus-when-shown';
+import { useFocusRequest } from '@/utils/focus-when-shown';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -659,8 +659,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // input value + focus + cursor-to-end, but DON'T send — the user reviews/edits
   // (fills in purpose/name) and presses Send themselves. Keyed on the nonce so the
   // parent can re-apply the same text; nonce 0/undefined = no-op (initial mount).
+  // Each prefill is applied once: an effect React runs again (a reconnected subtree) must not
+  // put the same block in twice.
+  const prefillApplied = useRef(0);
+  const prefillCaret = useRef<((el: HTMLTextAreaElement | HTMLInputElement) => void) | null>(null);
   useEffect(() => {
-    if (!prefillNonce || !prefillText) return;
+    if (!prefillNonce || !prefillText || prefillApplied.current === prefillNonce) return;
+    prefillApplied.current = prefillNonce;
     // Where the block lands is placePrefill's rule (prefill-place.ts). Read through
     // the ref, not `value` — this effect is keyed on the nonce.
     const placed = placePrefill(prefillMode, valueRef.current, prefillText);
@@ -692,19 +697,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       el.setSelectionRange(caret, caret);
       fitTextarea(el as HTMLTextAreaElement);
     };
-    // A competing focus handler that wins a frame is retried too (focusWhenShown checks activeElement).
-    return focusWhenShown(() => textareaRef.current, placeCaret);
+    prefillCaret.current = placeCaret;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
+  // Its caret, after the text above (declared after it, so it runs after it in the same commit).
+  // A competing focus handler that wins a frame is retried too (focusWhenShown checks activeElement).
+  useFocusRequest(prefillNonce && prefillText ? prefillNonce : 0, () => textareaRef.current, (el) => prefillCaret.current?.(el));
 
-  // Focus-only request (thread anchor): same retry loop as the prefill above —
-  // a hidden textarea swallows focus() silently, and the caller reveals the
-  // column in the same state batch — but the draft is never touched. The caret
-  // goes to the END of whatever is already typed.
-  useEffect(() => {
-    if (!focusNonce) return;
-    return focusWhenShown(() => textareaRef.current, (el) => el.setSelectionRange(el.value.length, el.value.length));
-  }, [focusNonce]);
+  // Focus-only request (thread anchor, a keyboard jump to the column): same retry loop as the
+  // prefill above — a hidden textarea swallows focus() silently, and the caller reveals the
+  // column in the same state batch — but the draft is never touched. Coming back to a box the
+  // person already typed in keeps its caret where they left it (a textarea keeps its selection
+  // while blurred); a first visit puts it at the END of whatever is already there.
+  const caretLeft = useRef(false);
+  useFocusRequest(focusNonce, () => textareaRef.current, (el) => {
+    if (!caretLeft.current) el.setSelectionRange(el.value.length, el.value.length);
+  });
 
   // Close the "+" and send dropdowns on outside click / Escape.
   useEffect(() => {
@@ -1915,6 +1923,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
+            onBlur={(e) => { caretLeft.current = e.currentTarget.value.length > 0; }}
             placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
             disabled={disabled}
             rows={1}

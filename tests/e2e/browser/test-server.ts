@@ -381,6 +381,27 @@ await fs.writeFile(
       // Column complete-close fixtures (column-complete-close.spec.ts): three real columns, each with a
       // long transcript, whose tasks the spec completes and undoes. Their own tasks, because the
       // spec changes their phase and every other spec shares this dataset.
+      // Keyboard triage fixtures (keyboard-triage.spec.ts): four tasks with real columns, which the
+      // spec sets to Needs you, jumps between, completes from the keyboard and undoes.
+      ...(['a', 'b', 'c', 'd', 'e'] as const).map((key) => ({
+        id: `pw-task-kbd-${key}`,
+        title: `Keyboard fixture ${key.toUpperCase()}`,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [`pw-kbd-${key}-session`],
+        active_session_ids: [],
+        session_id: `pw-kbd-${key}-session`,
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
       ...(['a', 'b', 'c'] as const).map((key) => ({
         id: `pw-task-close-${key}`,
         title: `Close fixture ${key.toUpperCase()}`,
@@ -3562,8 +3583,9 @@ await fs.mkdir(searchAskFixtureRoot, { recursive: true })
   const encodedCwd = vscodeFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
   const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
   await fs.mkdir(jsonlDir, { recursive: true })
-  for (const key of ['a', 'b', 'c'] as const) {
-    const sessionId = `pw-close-${key}-session`
+  for (const sessionId of [...(['a', 'b', 'c'] as const).map((k) => `pw-close-${k}-session`), ...(['a', 'b', 'c', 'd', 'e'] as const).map((k) => `pw-kbd-${k}-session`)]) {
+    const key = sessionId.replace(/^pw-(close|kbd)-|-session$/g, '')
+    const label = sessionId.startsWith('pw-kbd-') ? 'kbd' : 'close'
     await fs.writeFile(
       path.join(jsonlDir, `${sessionId}.jsonl`),
       Array.from({ length: 45 }, (_, i) => [
@@ -3571,13 +3593,13 @@ await fs.mkdir(searchAskFixtureRoot, { recursive: true })
           type: 'user',
           sessionId,
           timestamp: new Date(sessionFixtureNow - 90_000 + i * 1_000).toISOString(),
-          message: { role: 'user', content: `close ${key} question ${i + 1}` },
+          message: { role: 'user', content: `${label} ${key} question ${i + 1}` },
         }),
         JSON.stringify({
           type: 'assistant',
           sessionId,
           timestamp: new Date(sessionFixtureNow - 89_500 + i * 1_000).toISOString(),
-          message: { role: 'assistant', content: [{ type: 'text', text: `close ${key} answer ${i + 1}: the chat keeps enough rows to scroll under the header.` }] },
+          message: { role: 'assistant', content: [{ type: 'text', text: `${label} ${key} answer ${i + 1}: the chat keeps enough rows to scroll under the header.` }] },
         }),
       ]).flat().concat('').join('\n'),
     )
@@ -3617,6 +3639,19 @@ await fs.writeFile(
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
       },
+      ...(['a', 'b', 'c', 'd', 'e'] as const).map((key) => ({
+        claudeSessionId: `pw-kbd-${key}-session`,
+        taskId: `pw-task-kbd-${key}`,
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 10_000).toISOString(),
+        messageCount: 90,
+        cwd: vscodeFixtureRoot,
+        title: `Keyboard fixture session ${key.toUpperCase()}`,
+      })),
       ...(['a', 'b', 'c'] as const).map((key) => ({
         claudeSessionId: `pw-close-${key}-session`,
         taskId: `pw-task-close-${key}`,

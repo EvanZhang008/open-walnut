@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DndContext } from '@dnd-kit/core';
 import { Link } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useDragBusTarget } from '@/hooks/useDragBusTarget';
 import { parseDateLocal } from '@/components/common/DatePicker';
@@ -34,7 +35,8 @@ interface Props {
 }
 
 export function CalendarSidePanel({ onClose, active = true, width, panelRef: externalPanelRef }: Props) {
-  const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
+  const { tasks, update, create } = useTasksContext();
+  const { setPhase, deleteTask } = useUndoableTaskActions();
   const confirmCalendarWrite = useCalendarWriteConfirmation();
   const [day, setDay] = useState(() => formatDateOnly(new Date()));
   const anchor = useMemo(() => parseDateLocal(day), [day]);

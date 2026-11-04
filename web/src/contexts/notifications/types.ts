@@ -97,6 +97,19 @@ export interface Notification {
    *  `action` when present (displayActionsOf in notification-actions.ts). */
   actions?: NotificationAction[];
   onAction?: () => void;
+  /** Toast lifetime override (ms) for a toast whose action has its own clock: an
+   *  Undo lives exactly as long as its undo can still run (undo/undo-stack.ts). */
+  durationMs?: number;
+  /** The toast's lifetime is its owner's (an Undo's stack): no timer of the provider's ends
+   *  it, the owner dismisses it. */
+  ownClock?: boolean;
+  /** The time it has left now (an Undo whose clock stood still while it was out of sight):
+   *  its timer bar starts from there. */
+  timeLeftMs?: () => number;
+  /** Called when the toast goes out of sight (behind newer ones) and comes back. */
+  onShownChange?: (shown: boolean) => void;
+  /** The key that runs `action` too (⌘Z for an Undo), drawn beside its label. */
+  actionKeyHint?: string;
   /** emit a browser Notification when the tab is hidden (permission + reminder). */
   browserNotify?: boolean;
 

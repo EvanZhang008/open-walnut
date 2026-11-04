@@ -38,6 +38,7 @@ describe('Home (pages/MainPage.tsx)', () => {
     const RESTORES: Array<[RegExp, string]> = [
       [/^\s*setFocusedTask\(task\);\s*$/, 'restoreFocus: a load brings the focus back (paired with setSuppressDetail(true))'],
       [/else setFocusedTask\(task\);/, "the URL's Back/Forward: the person stepping back to a place, not opening a task"],
+      [/setFocusedTask\(task\); \/\/ the list follows a column already open/, 'a key moving between session columns: the list follows a column whose open was recorded already'],
     ]
     const unlisted: string[] = []
     let restores = 0

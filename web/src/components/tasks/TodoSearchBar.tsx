@@ -121,8 +121,8 @@ export function TodoSearchBar({
         ensureVisible();
         return;
       }
-      // / key when no editable element is focused
-      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && !(document.activeElement as HTMLElement)?.isContentEditable) {
+      // / key alone when no editable element is focused (mod+/ is the shortcuts sheet's)
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && !(document.activeElement as HTMLElement)?.isContentEditable) {
         e.preventDefault();
         ensureVisible();
       }

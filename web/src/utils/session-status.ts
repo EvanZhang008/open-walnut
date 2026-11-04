@@ -7,7 +7,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, TaskPhase } from '@/types/session';
-import { USER_STATE_LABELS, shownState, stateWord, storedUserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, shownState, snoozedAhead, stateWord, storedUserState } from '@open-walnut/user-status';
 import { idleCompactingStore } from '@/stores/idle-compacting-store';
 
 // ── Session ID resolution ──
@@ -47,7 +47,7 @@ export function taskNeedsAction(task: Task): boolean {
   // The one user status (src/core/user-status.ts) when the server has derived it: a turn
   // that ended with nothing for the user is not "needs you" (2026-10-25). The phase is
   // the fallback for a task not derived yet.
-  if (task.user_status) return task.user_status.state === 'needs';
+  if (task.user_status) return task.user_status.state === 'needs' && !snoozedAhead(task.user_status, task.start_date, task.org_role === 'main');
   return task.phase === 'NEED_ACTION';
 }
 
@@ -60,8 +60,11 @@ export type TaskUserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
  * task the server has not derived yet. Every web surface that says Needs you, Working or Waiting
  * reads this (tests/core/task-state-ratchet.test.ts).
  */
-export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status'>, snoozed = false): TaskUserState {
+export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'start_date' | 'org_role'>>, snoozed = false): TaskUserState {
   if (task.status === 'done' || task.phase === 'COMPLETE') return 'done';
+  // A snooze just written reads as one at once, not after the server's next pass (about 1.5 s,
+  // the row sat under Needs you that long, at its top).
+  if (task.user_status && snoozedAhead(task.user_status, task.start_date, task.org_role === 'main')) return 'waiting';
   if (task.user_status) return storedUserState(task.user_status);
   if (task.phase === 'NEED_ACTION') return snoozed ? 'waiting' : 'needs';
   // Working stays Working while snoozed, as on the server (user-status.ts snoozeOf).

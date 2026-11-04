@@ -163,6 +163,9 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/tasks/WaitingChip.tsx': 1,
   'web/src/components/tasks/TodoPanel.tsx': 9,
   'web/src/hooks/useTasks.ts': 2,
+  // restorePhase writes the remembered phase back: WAITING with its clock, NEED_ACTION as the
+  // Undo of a completion (phase writes, not readers).
+  'web/src/undo/TaskUndoContext.tsx': 2,
   'web/src/utils/session-status.ts': 2,
 }
 

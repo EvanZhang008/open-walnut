@@ -15,6 +15,7 @@ import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { lookupTaskLabel, resolveTaskToken } from '@/stores/entity-label-store';
 import { projectDisplayName } from '@/utils/project-display';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
@@ -34,15 +35,21 @@ export function TaskDetailActions({ task, onDeleted, onError }: {
   onError: (message: string) => void;
 }) {
   const store = useTasksContextSafe();
+  const undo = useTaskUndo();
   const confirm = useConfirm();
   const inStore = !!store?.tasks.some((t) => t.id === task.id);
   const done = task.status === 'done' || task.phase === 'COMPLETE';
 
+  // In the app both go through the Undo stack, as from every other place: a toast with Undo and
+  // mod+z. The REST fallback (a row the store does not carry, a pop-out) has no Undo.
   const complete = async () => {
+    if (inStore && undo) { undo.toggleComplete(task.id); return; }
     if (inStore) { store!.toggleComplete(task.id); return; }
     try { await toggleCompleteTask(task.id); } catch (e) { onError(errText(e)); }
   };
   const remove = async () => {
+    // Held for its Undo window, so no confirm: the popup closes and the toast offers Undo.
+    if (inStore && undo) { undo.deleteTask(task.id); onDeleted?.(); return; }
     const ok = await confirm({ title: `Delete task “${orgDisplayTitle(task)}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true });
     if (!ok) return;
     // The store removes the row optimistically and reports the outcome (its banner says why a

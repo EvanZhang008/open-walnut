@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import {
   SLOT_MINUTES,
@@ -56,7 +57,8 @@ function parseDroppableId(id: string): { zone: 'day' | 'allday' | 'col'; day: st
 
 export function CalendarPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
+  const { tasks, update, create } = useTasksContext();
+  const { setPhase, deleteTask } = useUndoableTaskActions();
   const confirmCalendarWrite = useCalendarWriteConfirmation();
 
   // A phone opens on one day: seven columns at phone width are 45px each.

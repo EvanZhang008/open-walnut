@@ -43,6 +43,8 @@ const SITES: Site[] = [
   // ── web/src/hooks/useProjectActions.ts ──
   { file: 'hooks/useProjectActions.ts', in: 'moveLoadedTasks', pending: true, why: 'the rename or delete is out until it answers; the caller settles it' },
   { file: 'hooks/useProjectActions.ts', in: 'moveLoadedTasks', pending: false, why: 'the undo, made after its settle' },
+  // ── web/src/undo/TaskUndoContext.tsx ──
+  { file: 'undo/TaskUndoContext.tsx', in: 'setStartDate', pending: true, why: "a snooze's Undo: the start date write is out until update answers; settled on both paths" },
 ]
 
 function sourceFiles(dir: string): string[] {

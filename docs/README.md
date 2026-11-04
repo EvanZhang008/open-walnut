@@ -58,6 +58,9 @@ must live under one of these top-level categories instead of directly under
 - [One daemon, several Walnuts](reference/shared-daemon.md): what each Walnut keeps to
   itself on a shared host daemon, when a Walnut replaces the daemon with its own build,
   and what the OS account shares (files by path, the engines' stores).
+- [Keyboard and undo](reference/keyboard-and-undo.md): moving between session columns
+  from the keyboard, completing a task and going on to the next one that needs you, and the
+  5 second Undo (with mod+z) on complete, snooze, pin and delete.
 - [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
   to run when, the known-failure baseline, and the free CI setup.
 - [ACP seam map](reference/acp-seam-map.md)

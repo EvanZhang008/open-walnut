@@ -92,7 +92,8 @@ test('an edit in the task details popup reaches the board row before the server 
   expect(picked).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   const patchesBefore = patchesAnswered
   await dayPill.click()
-  await expect(boardRow.locator('.todo-item-due-pill')).toHaveAttribute('title', `Due: ${picked}`, { timeout: INSTANT_MS })
+  // The row's git glance wears the pill class too (a branch with commits of its own shows one).
+  await expect(boardRow.locator('.todo-item-due-pill:not(.git-glance)')).toHaveAttribute('title', `Due: ${picked}`, { timeout: INSTANT_MS })
   await expect(due.locator('.dp-trigger')).not.toHaveText('Set date', { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(patchesBefore)
 
@@ -124,14 +125,14 @@ test('an edit in the task details popup reaches the board row before the server 
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   await expect(boardRow).toBeVisible()
   await expect(rowPhase).toHaveAttribute('title', 'Click to complete')
-  await expect(boardRow.locator('.todo-item-due-pill')).toHaveAttribute('title', `Due: ${picked}`)
+  await expect(boardRow.locator('.todo-item-due-pill:not(.git-glance)')).toHaveAttribute('title', `Due: ${picked}`)
   expect(togglesAnswered).toBe(reopenBefore)
 
   // 5. Let the held writes land. The echoes must not undo what the user did.
   await expect.poll(() => patchesAnswered + togglesAnswered, { timeout: HOLD_MS * 4 })
     .toBeGreaterThanOrEqual(3)
   await page.waitForTimeout(1000)
-  await expect(boardRow.locator('.todo-item-due-pill')).toHaveAttribute('title', `Due: ${picked}`)
+  await expect(boardRow.locator('.todo-item-due-pill:not(.git-glance)')).toHaveAttribute('title', `Due: ${picked}`)
   await expect(rowPhase).toHaveAttribute('title', 'Click to complete')
 
   const server = await request.get(`/api/tasks/${TASK_ID}`)

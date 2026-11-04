@@ -1,5 +1,5 @@
 import { matchParentRef } from '../../../src/lib/id-ref';
-import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, startTransition } from 'react';
 import { useCommittedRef } from './useCommittedRef';
 import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
@@ -16,6 +16,7 @@ import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
 import { isPluginOnlyTask } from '@open-walnut/org-tree';
+import { snoozedUntil } from '@open-walnut/user-status';
 import { forThisWindow } from '@/api/test-run';
 import { randomId } from '@/utils/random-id';
 
@@ -339,8 +340,8 @@ interface UseTasksReturn {
   refetch: () => void;
   create: (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => Promise<Task>;
   update: (id: string, updates: tasksApi.UpdateTaskInput) => Promise<boolean>;
-  toggleComplete: (id: string) => void;
-  setPhase: (id: string, phase: string) => Promise<boolean>;
+  toggleComplete: (id: string) => Promise<boolean>;
+  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -356,6 +357,10 @@ interface UseTasksReturn {
    *  active-children guard. Resolves TRUE when the server accepted it (never
    *  rejects — a failure shows the banner and refetches server truth). */
   deleteTask: (id: string, opts?: { force?: boolean }) => Promise<boolean>;
+  /** Hide rows from every reader without touching the server (a delete that can still be
+   *  undone: undo/TaskUndoContext.tsx). Refetches and echoes keep them hidden. */
+  hideTasks: (ids: string[]) => void;
+  unhideTasks: (ids: string[]) => void;
   /**
    * Write a plugin-declared task field (manifest `taskFields`) optimistically.
    * `donor` is the caller's richest copy of the row — the list payload omits
@@ -439,7 +444,14 @@ export function folderSubtreeIds(rootId: string, meta: Record<string, FolderMeta
 }
 
 export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [allTasks, setTasks] = useState<Task[]>([]);
+  // Rows held back while their delete can still be undone. Every reader sees `tasks`;
+  // the writes below keep working on the full list.
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(() => new Set());
+  const tasks = useMemo(
+    () => (hiddenIds.size === 0 ? allTasks : allTasks.filter((t) => !hiddenIds.has(t.id))),
+    [allTasks, hiddenIds],
+  );
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
   const [folderMeta, setFolderMeta] = useState<Record<string, FolderMeta>>({});
@@ -481,7 +493,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // write goes out, and that echo drew the card outside the folder for a moment.
   const localEdits = useRef(new Map<string, LocalEdit>());
   // The list as last committed, for a write that has to know a row's fields up front.
-  const tasksNow = useCommittedRef(tasks);
+  const tasksNow = useCommittedRef(allTasks);
   const noteLocalEdits = (patches: Record<string, Partial<Task>>, pending = false) => {
     noteEdits(localEdits.current, patches, pending, performance.now());
   };
@@ -828,7 +840,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         const mark = (task as { replica_sync?: unknown }).replica_sync ?? null;
         if ((cur.replica_sync ?? null) !== mark) patch.replica_sync = mark;
       }
-      if (task.user_status && JSON.stringify(task.user_status) !== JSON.stringify(cur.user_status ?? null)) patch.user_status = task.user_status;
+      // A status still marked snoozed for a task no longer snoozed (the snooze's Undo put the
+      // status before it back here) is the server's pass not yet run: its next one clears it.
+      const staleSnooze = !!task.user_status?.snoozed && !!cur.user_status && !cur.user_status.snoozed
+        && !snoozedUntil(task, new Map(prev.map((t) => [t.id, t] as const)));
+      if (task.user_status && !staleSnooze && JSON.stringify(task.user_status) !== JSON.stringify(cur.user_status ?? null)) patch.user_status = task.user_status;
       if (Object.keys(patch).length === 0) return prev;
       const next = prev.slice();
       next[idx] = { ...cur, ...patch } as Task;
@@ -1091,6 +1107,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (!onlyReadMarker) settle = holdOptimistic(id, apply);
       setTasks(apply);
     }
+    // Resolves whether the server took it (an Undo's toast goes when it did not).
     return withWriteRetry((opId) => tasksApi.updateTask(id, updates, { opId }))
       .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
   }, [guardEcho, onOpError]);
@@ -1100,16 +1117,28 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const apply = (rows: Task[]) => applyToggleComplete(rows, id);
     const settle = holdOptimistic(id, apply);
     setTasks(apply);
-    withWriteRetry((opId) => tasksApi.toggleCompleteTask(id, { opId }))
-      .then(() => settle(), (err: Error) => { settle(); onOpError(err, [id]); });
+    return withWriteRetry((opId) => tasksApi.toggleCompleteTask(id, { opId }))
+      .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
   }, [guardEcho, onOpError]);
 
-  const setPhase = useCallback((id: string, phase: string) => {
+  // `undoOf`: an Undo of the task's last phase move, with its phase_changed_at before that move
+  // (TaskUndoContext restorePhase; the server tells whether a NEED_ACTION was the person's ask).
+  // `unread`: the read marker to keep rather than the one the phase implies (an Undo puts a
+  // task the person had read back as read).
+  const setPhase = useCallback((id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => {
     guardEcho(`phase:${id}`);
-    const apply = (rows: Task[]) => applyPhaseChange(rows, id, phase);
+    const unread = opts?.unread;
+    const apply = (rows: Task[]) => {
+      const next = applyPhaseChange(rows, id, phase);
+      return unread === undefined ? next : next.map((t) => (t.id === id && t.unread !== unread ? { ...t, unread } : t));
+    };
     const settle = holdOptimistic(id, apply);
     setTasks(apply);
-    return withWriteRetry((opId) => tasksApi.updateTask(id, { phase }, { opId }))
+    return withWriteRetry((opId) => tasksApi.updateTask(id, {
+      phase,
+      ...(opts?.undoOf !== undefined ? { undo_phase_changed_at: opts.undoOf } : {}),
+      ...(unread !== undefined ? { unread } : {}),
+    }, { opId }))
       .then(() => { settle(); return true; }, (err: Error) => { settle(); onOpError(err, [id]); return false; });
   }, [guardEcho, onOpError]);
 
@@ -1286,6 +1315,18 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       return false;
     }
   }, [onOpError]);
+
+  const hideTasks = useCallback((ids: string[]) => {
+    setHiddenIds((prev) => (ids.every((id) => prev.has(id)) ? prev : new Set([...prev, ...ids])));
+  }, []);
+  const unhideTasks = useCallback((ids: string[]) => {
+    setHiddenIds((prev) => {
+      if (!ids.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  }, []);
 
   // Plugin-declared field write (manifest taskFields). NO echo guard,
   // deliberately: the server's task:updated carries the authoritative `ext` plus
@@ -1619,5 +1660,5 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     refetch();
   }, [refetch]);
 
-  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, completedHidden, ensureAllTasks, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, completedHidden, ensureAllTasks, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, hideTasks, unhideTasks, setPluginField, batchSetPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
 }

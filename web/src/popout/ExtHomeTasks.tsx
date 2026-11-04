@@ -12,6 +12,7 @@ import { useCallback, useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -22,7 +23,9 @@ import { resolveTaskSessionId, taskOfSession } from '@/utils/session-status';
 export type OpenTask = (task: Task, how: { sessionId: string } | 'detail') => void;
 
 export default function ExtHomeTasks({ onOpen }: { onOpen: OpenTask }) {
-  const { tasks, loading, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta } = useTasksContext();
+  const { tasks, loading, create, update, reorder, moveTask, reparentTask, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta } = useTasksContext();
+  // Completes and phase changes take one Undo, as on Home (TaskUndoContext; the store's own when none).
+  const { toggleComplete, setPhase } = useUndoableTaskActions();
   const focusBar = useFocusBarContext();
   const favorites = useFavorites();
   const ordering = useOrdering();

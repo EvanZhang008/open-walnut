@@ -46,6 +46,7 @@ import {
 import type { Task } from '@open-walnut/core';
 import { visibleInterval } from '@/utils/page-visibility';
 import { projectDisplayName } from '@/utils/project-display';
+import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
 
 const LS_GROUPED = 'walnut-tasks-page-grouped';
@@ -73,7 +74,8 @@ export function DashboardPage() {
   // A project's ⋮ menu asks Main about it; the answer is read in Main's chat.
   const openMainChat = useCallback(() => navigate('/org?node=main&tab=chat'), [navigate]);
   const askMainAbout = useAskMainAbout(openMainChat);
-  const { tasks: storeTasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
+  const { tasks: storeTasks, loading, error, create, update, completedHidden, ensureAllTasks } = useTasksContext();
+  const { toggleComplete, deleteTask } = useUndoableTaskActions();
   // Main and project leads are the org's own nodes: hidden here as on the home board (the org chart shows them).
   const tasks = useMemo(() => storeTasks.filter((t) => !isHiddenFromTaskLists(t)), [storeTasks]);
   const { projectOrder, reorderProjects } = useOrdering();

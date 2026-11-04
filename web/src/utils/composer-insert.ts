@@ -27,6 +27,16 @@ export interface ComposerInsertDetail {
   handled: boolean;
 }
 
+/** Put the caret in a session panel's composer, nothing inserted (a keyboard jump). */
+export const COMPOSER_FOCUS_EVENT = 'session:composer-focus';
+
+export interface ComposerFocusDetail {
+  sessionId: string;
+  /** Only a panel inside this element takes it (the Home column, not an Org chat of the same session). */
+  within?: Element;
+  handled: boolean;
+}
+
 /** Draft key a session composer persists under (ChatInput `draftKey`). */
 export function sessionDraftKey(sessionId: string): string {
   const base = `draft:session:${sessionId}`;

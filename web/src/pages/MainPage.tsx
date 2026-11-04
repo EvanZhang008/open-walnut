@@ -97,8 +97,17 @@ import {
   replaceSessionColumn,
   columnKey,
   toggleLockSlot,
+  restoreSessionColumn,
 } from './sessionColumns';
-import { useColumnCompleteClose } from './useColumnCompleteClose';
+import { nextLine, useColumnCompleteClose, type AdvanceResult } from './useColumnCompleteClose';
+import { focusColumnComposer, focusTaskRow, noteKeyboardMove, personMovedSince, useHomeKeyboard } from './useHomeKeyboard';
+import { afterStrip } from './after-strip';
+import { COLUMN_FADE_MS, columnElement, holdStripAnimation, keepScrollWhileFading, prefersReducedMotion } from './hold-strip-animation';
+import { jumpBadgeLabel } from '@/keyboard/shortcuts';
+import { phaseSnapshot, useTaskUndo } from '@/undo/TaskUndoContext';
+import { nextAfterCompleteNow, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
+import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
+import '@/styles/keyboard-shortcuts.css';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
 import { recordTaskOpened } from '@/utils/recent-opened';
@@ -641,7 +650,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // View Transitions snapshotting live chat content at the wrong scale. A column that
   // opens or closes does not move at all (columnMotion: the New task draft is whole in
   // its first frame).
-  const [sessionsAreaAutoAnimateRef] = useAutoAnimate<HTMLDivElement>(columnMotion);
+  const [sessionsAreaAutoAnimateRef, setSessionsAreaAnimate] = useAutoAnimate<HTMLDivElement>(columnMotion);
 
   // Active project tab — mirrors TodoPanel's tab for URL sync (may be a tab
   // sentinel: INBOX_TAB). Initialized from the SAME localStorage key
@@ -835,6 +844,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     (sessionPanel.panelRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     sessionsAreaAutoAnimateRef(el);
   }, [sessionPanel.panelRef, sessionsAreaAutoAnimateRef]);
+  const holdSessionsAreaAnimation = useCallback(() => {
+    holdStripAnimation(setSessionsAreaAnimate, sessionPanel.panelRef.current as HTMLElement | null);
+  }, [setSessionsAreaAnimate, sessionPanel.panelRef]);
 
   // Column widths: one WEIGHT per column, summing to 100. This replaced a single
   // `colSplitPct` scalar (col 0 = pct%, "the rest" = 100-pct% each) that only made
@@ -1665,6 +1677,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [notify, navigateRef, setPanelMode]);
 
   // ── Session column handlers ──
+  const [fadingColumns, setFadingColumns] = useState<ReadonlySet<string>>(() => new Set());
+  const fadeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /** A column still fading (handleCloseSession `fade`) stops fading and its pending removal
+   *  is dropped: it was swapped out in place, or an Undo brought it back. */
+  const endFade = useCallback((sessionId: string) => {
+    const timer = fadeTimersRef.current.get(sessionId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    fadeTimersRef.current.delete(sessionId);
+    setFadingColumns((prev) => { if (!prev.has(sessionId)) return prev; const next = new Set(prev); next.delete(sessionId); return next; });
+  }, []);
+  useEffect(() => () => { for (const timer of fadeTimersRef.current.values()) clearTimeout(timer); }, []);
   // Clicking a session pill always opens/moves to rightmost — use close button to dismiss.
   // Single path for "open a session, with toast if fully locked" — shared by pill
   // clicks, dock events, chat session-link clicks.
@@ -1697,6 +1721,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // column of its own to morph is a plain open, with the same grant and toast.
   const openSessionOrToastRef = useRef(openSessionOrToast);
   openSessionOrToastRef.current = openSessionOrToast;
+  /** The next task's session takes the place of the column that is closing (the eye stays
+   *  put), in the same render as the close and with the strip's animation held for it: one
+   *  frame swaps the two, with no fade over the neighbours and no second reflow. */
+  const openSessionInPlaceOf = useCallback((sessionId: string, closing: string, at: number) => {
+    const current = sessionColumnsRef.current;
+    if (current.some(c => c.id === sessionId)) return;
+    const without = current.filter(c => c.id !== closing);
+    const place = (cols: SessionSlot[]) => restoreSessionColumn(cols, { id: sessionId, locked: false }, at, triageOpenRef.current, maxPanelsRef.current);
+    // A refused open (every slot pinned) is openSessionOrToast's, with its toast.
+    if (at < 0 || !place(without).some(c => c.id === sessionId)) { openSessionOrToast(sessionId); return; }
+    yieldFullscreen('open-session');
+    holdSessionsAreaAnimation();
+    // The closing column may still be fading in its place (handleCloseSession `fade`): it goes now.
+    endFade(closing);
+    setSessionColumns(prev => (prev.some(c => c.id === sessionId) ? prev : place(prev.filter(c => c.id !== closing))));
+    // An open past a full strip (an overflow column kept) grows it like any open does.
+    followGrownStrip(realColumnCount(without), realColumnCount(place(without)));
+  }, [openSessionOrToast, holdSessionsAreaAnimation, followGrownStrip, endFade]);
 
   // ── The org (pages/OrgPage.tsx): a page of its own; the drawer's link goes there ──
   const openOrg = useCallback(() => {
@@ -1811,19 +1853,46 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [visible]);
 
-  const handleCloseSession = useCallback((sessionId: string) => {
+  // `keepFocus`: the caller puts the caret somewhere itself (an Undo going back to its column).
+  // `fade`: the column fades where it stands, then leaves with the strip's animation held, so
+  // its neighbours widen after it rather than under it (a completion's close; the strip's own
+  // exit drew the column at its old width over neighbours already at their new one).
+  const handleCloseSession = useCallback((sessionId: string, opts?: { keepFocus?: boolean; fade?: boolean }) => {
     const opener = sessionOpenersRef.current.get(sessionId);
     sessionOpenersRef.current.delete(sessionId);
     const task = taskOfSession(taskMapRef.current.values(), sessionId);
-    pendingSessionFocusRef.current = {
+    pendingSessionFocusRef.current = opts?.keepFocus ? null : {
       opener,
       taskId: task?.id,
     };
+    const fade = !!opts?.fade && !!columnElement(sessionId);
+    if (fade && !prefersReducedMotion()) {
+      endFade(sessionId);
+      setFadingColumns((prev) => new Set(prev).add(sessionId));
+      fadeTimersRef.current.set(sessionId, setTimeout(() => {
+        fadeTimersRef.current.delete(sessionId);
+        holdSessionsAreaAnimation();
+        setSessionColumns(prev => removeSessionColumn(prev, sessionId));
+        setFadingColumns((prev) => { const next = new Set(prev); next.delete(sessionId); return next; });
+      }, COLUMN_FADE_MS));
+      return;
+    }
+    if (fade) holdSessionsAreaAnimation(); else keepScrollWhileFading(sessionId);
     // A close is no Minimize: the session goes to the taskbar's Recent end, never its chips.
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
-  }, []);
+  }, [holdSessionsAreaAnimation, endFade]);
 
-  // Completing a task from its column's header closes the column, with an Undo.
+  // Completing a task from its column's header closes the column, with an Undo, and goes
+  // on to the next task that needs the person (advanceRef, set below with the locate it uses).
+  const taskUndo = useTaskUndo();
+  useNextAfterComplete(); // loads the Settings switch the advance reads (nextAfterCompleteNow)
+  const advanceRef = useRef<((info: { taskId: string; sessionId: string; queueBefore: string[]; quiet?: boolean }) => AdvanceResult | null) | null>(null);
+  const locateTaskRef = useRef<(taskId: string) => void>(() => {});
+  /** The list's selection follows a column the caret was moved to (a jump, a completion's
+   *  neighbour), without opening a detail or a fold. Set below, where the selection lives. */
+  const followColumnInListRef = useRef<(columnId: string) => void>(() => {});
+  /** The column the keys act on (useHomeKeyboard's `current`), for handlers set up before it. */
+  const currentColumnRef = useRef<string | null>(null);
   const columnComplete = useColumnCompleteClose({
     sessionColumns,
     setSessionColumns,
@@ -1831,8 +1900,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPhase,
     closeColumn: handleCloseSession,
     openSession: openSessionOrToast,
-    notify,
-    dismissToast,
+    undo: taskUndo,
+    advance: (info) => advanceRef.current?.(info) ?? null,
+    focusColumn: (sid) => { focusColumnComposer(sid); followColumnInListRef.current(sid); },
+    movedSince: personMovedSince,
+    locateTask: (taskId) => locateTaskRef.current(taskId),
     triageOpenRef,
     maxPanelsRef,
   });
@@ -2540,16 +2612,200 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // The list's complete / reopen, snooze, pin and delete take an Undo (undo/TaskUndoContext.tsx).
   const handleComplete = useCallback((id: string) => {
     const task = taskMapRef.current.get(id);
     if (task && task.status !== 'done' && focusedTaskRef.current?.id === id) setFocusedTask(null);
-    toggleComplete(id);
-  }, [toggleComplete]);
+    if (taskUndo) taskUndo.toggleComplete(id); else toggleComplete(id);
+  }, [toggleComplete, taskUndo]);
 
   const handleSetPhase = useCallback((id: string, phase: string) => {
     if (phase === 'COMPLETE' && focusedTaskRef.current?.id === id) setFocusedTask(null);
-    setPhase(id, phase);
-  }, [setPhase]);
+    if (taskUndo) taskUndo.setPhase(id, phase); else setPhase(id, phase);
+  }, [setPhase, taskUndo]);
+
+  const handleDeleteTask = useCallback((id: string) => {
+    if (focusedTaskRef.current?.id === id) setFocusedTask(null);
+    if (taskUndo) taskUndo.deleteTask(id); else void deleteTask(id);
+  }, [deleteTask, taskUndo]);
+
+  // A deleted task's open column goes with it (from any menu that deletes), and its Undo puts
+  // the column back where it stood.
+  useEffect(() => taskUndo?.onDelete((id) => {
+    const task = taskMapRef.current.get(id);
+    if (!task) return;
+    const cols = sessionColumnsRef.current;
+    const index = cols.findIndex((c) => c.id === task.session_id || c.id === task.exec_session_id
+      || c.id === task.plan_session_id || task.session_ids?.includes(c.id));
+    if (index < 0) return;
+    const slot = cols[index];
+    // Deleted from the column the person was in: the caret goes on to its neighbour, as after a
+    // completion, and the Undo brings it back into the restored box. From anywhere else (the
+    // list's menu), the caret stays where the person is.
+    const caretCol = document.activeElement?.closest?.('.main-page-session-column[data-column-id]')?.getAttribute('data-column-id');
+    const wasCurrent = currentColumnRef.current === slot.id || caretCol === slot.id;
+    const at = performance.now();
+    handleCloseSession(slot.id, { keepFocus: true });
+    const neighbour = cols[index + 1]?.id ?? cols[index - 1]?.id;
+    let cancelMove = () => {};
+    if (wasCurrent && neighbour) {
+      cancelMove = afterStrip(() => !sessionColumnsRef.current.some((c) => c.id === slot.id), () => {
+        if (personMovedSince(at)) return;
+        focusColumnComposer(neighbour);
+        followColumnInListRef.current(neighbour);
+      });
+    }
+    return (why) => {
+      cancelMove();
+      if (sessionColumnsRef.current.some((c) => c.id === slot.id)) return;
+      setSessionColumns((prev) => restoreSessionColumn(prev, slot, index, triageOpenRef.current, maxPanelsRef.current));
+      // A refusal seconds later puts the column back but leaves the caret where the person is.
+      if (wasCurrent && why === 'undo') { focusColumnComposer(slot.id); followColumnInListRef.current(slot.id); }
+    };
+  }), [taskUndo, handleCloseSession]);
+
+  const handlePinTask = useCallback((id: string) => { void (taskUndo ?? focusBar).pin(id); }, [taskUndo, focusBar]);
+  const handleUnpinTask = useCallback((id: string) => { void (taskUndo ?? focusBar).unpin(id); }, [taskUndo, focusBar]);
+  const handleSetTier = useCallback(
+    (id: string, tier: Parameters<typeof focusBar.setTier>[1], order?: string[]) => (taskUndo ?? focusBar).setTier(id, tier, order),
+    [taskUndo, focusBar],
+  );
+
+  // Next task that needs the person, after `taskId` was completed: its column opens (or, open
+  // already, takes the caret) and its row is selected. Opened once the strip has rendered
+  // without the column that is closing, which `openSessionOrToast` reads (after-strip.ts).
+  locateTaskRef.current = handleLocateTaskById;
+  advanceRef.current = ({ taskId, sessionId: closing, queueBefore, quiet }) => {
+    if (!nextAfterCompleteNow()) return null;
+    // The keys go on through sessions: a task under Needs you with no session is passed over
+    // while one with a session is left, and is landed on (its row) only when none is.
+    const all = [...taskMapRef.current.values()];
+    const sessionless = new Set(needsYouQueue(all).filter((t) => !resolveTaskSessionId(t)).map((t) => t.id));
+    const next = nextNeedsYou(queueBefore, taskId, all, sessionless) ?? nextNeedsYou(queueBefore, taskId, all);
+    if (!next) return null;
+    // Said on the toast: the ones passed over were next in line.
+    let passedOver = 0;
+    const doneAt = queueBefore.indexOf(taskId);
+    if (doneAt >= 0) {
+      for (const id of [...queueBefore.slice(doneAt + 1), ...queueBefore.slice(0, doneAt)]) {
+        if (id === next.id) break;
+        if (sessionless.has(id)) passedOver++;
+      }
+    }
+    const sid = resolveTaskSessionId(next);
+    const wasOpen = !!sid && sessionColumnsRef.current.some((c) => c.id === sid);
+    // Where the closing column stands: the next session opens in its place.
+    const at = closing ? sessionColumnsRef.current.findIndex((c) => c.id === closing) : -1;
+    // The caret goes to the next task, not back to where the closed column was opened from;
+    // `quiet`: the person went somewhere else meanwhile, and the caret stays with them.
+    if (closing && pendingSessionFocusRef.current) pendingSessionFocusRef.current = null;
+    if (!quiet) noteKeyboardMove();
+    const asked = performance.now();
+    let cancel = () => {};
+    let cancelRow = () => {};
+    if (sid && !wasOpen && closing) {
+      openSessionInPlaceOf(sid, closing, at);
+      if (!quiet) cancel = focusColumnComposer(sid);
+      handleLocateTaskById(next.id);
+    } else {
+      cancel = afterStrip(() => !closing || !sessionColumnsRef.current.some((c) => c.id === closing), () => {
+        // The person may have gone somewhere while the closing column faded (a jump): theirs.
+        const still = !quiet && !personMovedSince(asked);
+        if (sid) {
+          if (!sessionColumnsRef.current.some((c) => c.id === sid)) openSessionOrToast(sid);
+          if (still) focusColumnComposer(sid);
+        }
+        handleLocateTaskById(next.id);
+        // A task with no session: the caret goes to its row in the list, so the keys go on
+        // from there (mod+shift+D completes it, mod+1 goes back to the columns).
+        if (!sid && still) cancelRow = focusTaskRow(next.id);
+      });
+    }
+    const cancelAll = () => { cancel(); cancelRow(); };
+    return { task: next, cancel: cancelAll, ...(sid && !wasOpen ? { openedSessionId: sid } : {}), ...(sid ? { ...(passedOver ? { passedOver } : {}) } : { noSession: true }) };
+  };
+
+  // mod+shift+D in a column: what its header's Complete does (close it, Undo, go on).
+  // `given`: the task, when the caller knows it (the list's selection), not read off the column.
+  const completeColumnTask = useCallback((columnId: string, given?: Task): boolean => {
+    const task = given ?? [...taskMapRef.current.values()].find((candidate) =>
+      candidate.session_id === columnId
+      || candidate.exec_session_id === columnId
+      || candidate.plan_session_id === columnId
+      || candidate.session_ids?.includes(columnId));
+    if (!task || task.status === 'done' || task.phase === 'COMPLETE') return false;
+    if (focusedTaskRef.current?.id === task.id) setFocusedTask(null);
+    columnComplete.onTaskCompleted(columnId, { taskId: task.id, from: task.phase });
+    setPhase(task.id, 'COMPLETE');
+    return true;
+  }, [columnComplete.onTaskCompleted, setPhase]);
+
+  /** How long after a list completion a refusal still takes its advance back. */
+  const REFUSAL_TAKES_BACK_MS = 8000;
+  // mod+shift+D with no column in hand: the task selected in the list. A task whose session is
+  // open in a column takes that column's road (it closes, and the next opens in its place); else
+  // its Undo also takes back the advance (the column it opened closes again).
+  const completeSelectedTask = useCallback((): boolean => {
+    const task = focusedTaskRef.current ? taskMapRef.current.get(focusedTaskRef.current.id) : undefined;
+    if (!task || task.status === 'done' || task.phase === 'COMPLETE') return false;
+    const ownColumn = sessionColumnsRef.current.find((c) => c.id === task.session_id
+      || c.id === task.exec_session_id || c.id === task.plan_session_id || task.session_ids?.includes(c.id));
+    if (ownColumn) return completeColumnTask(ownColumn.id, task);
+    const queueBefore = needsYouQueue([...taskMapRef.current.values()]).map((t) => t.id);
+    const before = phaseSnapshot(task);
+    setFocusedTask(null);
+    const write = setPhase(task.id, 'COMPLETE');
+    const at = performance.now();
+    const advanced = advanceRef.current?.({ taskId: task.id, sessionId: '', queueBefore }) ?? null;
+    const takeBack = (withSelection: boolean) => {
+      advanced?.cancel();
+      const opened = advanced?.openedSessionId;
+      if (opened && sessionColumnsRef.current.some((c) => c.id === opened && !c.locked)) handleCloseSession(opened, { keepFocus: true });
+      if (withSelection) handleLocateTaskById(task.id);
+    };
+    const undo = () => {
+      const cur = taskMapRef.current.get(task.id);
+      if (!cur || cur.phase === 'COMPLETE') void taskUndo?.restorePhase(task.id, before);
+      takeBack(true);
+    };
+    const body = [task.title, advanced ? nextLine(advanced) : ''].filter(Boolean).join('  \u00b7  ');
+    if (taskUndo) {
+      const withdraw = taskUndo.push({
+        key: `phase:${task.id}`, title: 'Task completed', body, undo,
+        revive: { kind: 'phase', data: { id: task.id, nowDone: true, before } },
+      });
+      // Refused: no Undo is left, and the advance made for it goes too, unless the person moved
+      // on since (a click, a jump, typing) or it is long past: then it is theirs.
+      void write.then((ok) => {
+        if (ok) return;
+        withdraw();
+        if (!personMovedSince(at) && performance.now() - at < REFUSAL_TAKES_BACK_MS) takeBack(true);
+      });
+    }
+    return true;
+  }, [setPhase, taskUndo, handleCloseSession, handleLocateTaskById, completeColumnTask]);
+
+  followColumnInListRef.current = (columnId) => {
+    const task = [...taskMapRef.current.values()].find((t) => t.session_id === columnId || t.exec_session_id === columnId
+      || t.plan_session_id === columnId || t.session_ids?.includes(columnId));
+    if (!task || focusedTaskRef.current?.id === task.id) return;
+    setSuppressDetail(true);
+    setFocusedTask(task); // the list follows a column already open: no new open for Recent
+  };
+  const { jumpHints, env: keyEnv, current: currentColumn } = useHomeKeyboard({
+    visible: visible && !phoneLayout,
+    columnsRef: sessionColumnsRef,
+    completeColumn: completeColumnTask,
+    completeSelected: completeSelectedTask,
+    columnTaskDone: (columnId) => [...taskMapRef.current.values()].some((t) => (t.session_id === columnId || t.exec_session_id === columnId
+      || t.plan_session_id === columnId || t.session_ids?.includes(columnId)) && (t.status === 'done' || t.phase === 'COMPLETE')),
+    hint: (message, ms = 3000) => notify({ kind: 'hint', severity: 'info', title: message, dedupKey: `keyboard-hint:${message}`, persistent: false, durationMs: ms }),
+    // One current task: the list follows the column the keys went to. Quietly: no detail, no
+    // column moved, and no locate (focusNonce unchanged), so a fold the person closed stays
+    // closed and the list scrolls only to a row it already draws.
+    onJump: (columnId) => followColumnInListRef.current(columnId),
+  });
+  currentColumnRef.current = currentColumn;
 
   // Batch complete/reopen from the multi-select bar. Mirrors handleSetPhase's detail-pane
   // cleanup: completing the focused task must drop the detail pane, and in a batch the
@@ -2577,8 +2833,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [update]);
 
   const handleSetStartDate = useCallback((id: string, date: string | null) => {
-    update(id, { start_date: date ?? '' });
-  }, [update]);
+    if (taskUndo) taskUndo.setStartDate(id, date); else update(id, { start_date: date ?? '' });
+  }, [update, taskUndo]);
 
   const handleUpdate = useCallback((id: string, updates: { title?: string }) => {
     update(id, updates);
@@ -3287,7 +3543,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetPhase={handleSetPhase}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
-          onDelete={deleteTask}
+          onDelete={handleDeleteTask}
           onBatchSetPhase={handleBatchSetPhase}
           onBatchDelete={handleBatchDelete}
           onSetPriority={handleSetPriority}
@@ -3323,10 +3579,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           openSessionTaskIds={openSessionTaskIds}
           openInWindowTaskIds={openInWindowTaskIds}
           onOpenTriageForTask={handleOpenTriageForTask}
-          onPinTask={focusBar.pin}
-          onUnpinTask={focusBar.unpin}
+          onPinTask={handlePinTask}
+          onUnpinTask={handleUnpinTask}
           onReorderPinned={focusBar.reorder}
-          onSetTier={focusBar.setTier}
+          onSetTier={handleSetTier}
           pinnedTaskIds={pinnedTaskIdSet}
           focusTaskIds={focusTaskIdSet}
           waitTaskIds={waitTaskIdSet}
@@ -3525,10 +3781,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             {/* This divider trades width between colIdx-1 and colIdx only. */}
             {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
             <div
-              className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === mobileActiveIdx ? ' is-mobile-active' : ''}`}
+              className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === mobileActiveIdx ? ' is-mobile-active' : ''}${currentColumn === sid ? ' is-current' : ''}${fadingColumns.has(sid) ? ' is-closing' : ''}`}
               data-column-id={sid}
               style={colStyle}
             >
+              {jumpHints && idx < 9 && (
+                <JumpBadge
+                  label={jumpBadgeLabel(idx + 1, keyEnv)}
+                  // The last column is also mod+9's, as in a browser's tabs.
+                  alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
+                />
+              )}
               {isDraft ? (
                 // A `draft:` id resolves to NOTHING server-side, so it must never
                 // reach SessionPanel (which would fetch it and render "session not
@@ -3655,5 +3918,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
     </div>
     </>
+  );
+}
+
+/** A column's number while the jump modifier is held: just under its header (whose rows are
+ *  all buttons), at the top of the transcript, for the moment the key is held. */
+function JumpBadge({ label, alsoLast }: { label: string; alsoLast?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const column = ref.current?.parentElement;
+    const header = column?.querySelector<HTMLElement>('.session-panel-header');
+    setTop(column && header ? header.getBoundingClientRect().bottom - column.getBoundingClientRect().top + 6 : 6);
+  }, []);
+  return (
+    <div ref={ref} className="session-jump-badge" aria-hidden="true" style={top === null ? { visibility: 'hidden' } : { top }}>
+      <kbd>{label}</kbd>
+      {alsoLast && <kbd className="session-jump-badge-last">{alsoLast}</kbd>}
+    </div>
   );
 }

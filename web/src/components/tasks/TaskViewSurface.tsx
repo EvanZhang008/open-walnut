@@ -7,6 +7,7 @@ import {
   type TaskQueryContext,
 } from '@open-walnut/task-query'
 import { useTasksContext } from '@/contexts/TasksContext'
+import { useUndoableTaskActions } from '@/undo/TaskUndoContext'
 import { useFavorites } from '@/hooks/useFavorites'
 import { useOrdering } from '@/hooks/useOrdering'
 import { useProjectRegistry } from '@/hooks/useProjectRegistry'
@@ -62,7 +63,8 @@ export function TaskViewSurface({
   persistenceKey,
   onOpenTask,
 }: TaskViewSurfaceProps) {
-  const { tasks, loading, error, toggleComplete, create, deleteTask, update } = useTasksContext()
+  const { tasks, loading, error, create, update } = useTasksContext()
+  const { toggleComplete, deleteTask } = useUndoableTaskActions()
   const { projectOrder } = useOrdering()
   const { sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry()
   const { toggleFavoriteProject } = useFavorites()
