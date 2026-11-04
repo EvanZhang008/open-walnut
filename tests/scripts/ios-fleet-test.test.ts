@@ -187,6 +187,28 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.map((c) => c.op)).not.toContain('task_send')
   })
 
+  // 2026-11-04, the user: iOS tests go to the other Macs; this Walnut's own Mac only when none can.
+  it('this Walnut\'s own Mac comes after every other Mac, however idle, and the run says when it falls back to it', () => {
+    const bin = fakeWalnut([
+      { host: '__local__', loadPerCpu: 0.01 },
+      { host: 'mac-two', loadPerCpu: 0.6 },
+      { host: 'mac-mini', loadPerCpu: 0.3, result: { exit: 75, state: 'busy' } },
+    ], outTgz())
+    const r = run(['unit'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    // mac-mini turns out busy: the next Mac takes it, never this one while another can.
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
+    const alone = fakeWalnut([
+      { host: '__local__', loadPerCpu: 0.2 },
+      { host: 'mac-mini', loadPerCpu: 3.1 },
+      { host: 'laptop', loadPerCpu: 0.1, connected: false },
+    ], outTgz())
+    const r2 = run(['unit'], alone)
+    expect(r2.status, r2.stderr).toBe(0)
+    expect(r2.stderr).toContain('not using mac-mini (mac-mini): load 3.1 per CPU, over 0.75')
+    expect(r2.stderr).toMatch(/using __local__ \(__local__\): load 0\.2 per CPU; no other iOS Mac can take the run/)
+  })
+
   it('a Mac that turns out busy hands the run to the next one; a failed run keeps its exit code', () => {
     const bin = fakeWalnut([
       { host: 'mac-mini', loadPerCpu: 0.1, result: { exit: 75, state: 'busy' } },

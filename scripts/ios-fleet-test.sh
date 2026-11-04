@@ -3,7 +3,10 @@
 # devbox included), the way a Linux test runs anywhere. Walnut does the moving:
 #
 #   1. pick a Mac: host_list's hosts tagged `ios` that are connected, least loaded first
-#      (host_load), skipping any over --max-load per CPU; or the one --host names;
+#      (host_load), skipping any over --max-load per CPU; or the one --host names. The
+#      Mac Walnut runs on (`__local__`) comes last, after every other Mac, and the run
+#      says when it falls back to it (2026-11-04, the user: iOS tests go to the other
+#      Macs, this one only when none of them can take it);
 #   2. send this checkout's iOS sources (tracked and untracked, not ignored) with
 #      host_copy into this task's directory on that Mac;
 #   3. run ios-native/tests/fleet/remote-run.sh there through host_exec, in the
@@ -155,7 +158,11 @@ for h in hosts:
     if per is None or per > cap:
         print("SKIP\t" + note + (f", over {cap}" if per is not None else ""), file=sys.stderr); continue
     rows.append((per, h["host"], note))
-for per, host, note in sorted(rows):
+# Every other Mac first, least loaded first; this Walnut's own Mac only after them.
+others = [r for r in rows if r[1] != "__local__"]
+for per, host, note in sorted(rows, key=lambda r: (r[1] == "__local__", r[0])):
+    if host == "__local__":
+        note += "; no other iOS Mac can take the run" if not others else "; after the other Macs"
     print(host + "\t" + note)
 PY
 }
