@@ -188,8 +188,6 @@ export interface OrgThread {
   snoozed?: ThreadSnoozed;
   /** Pinned to the top of his view (thread-view.ts pinnedFirst). */
   pinned?: ThreadPinned;
-  /** When a node last wrote a new summary (reply): the thread's latest result (human-inbox/thread-instead.ts). */
-  replied?: { at: string; by: ThreadWriter };
   /** When its last move into needs buzzed his phone (push/thread-push.ts): one buzz per absence. */
   needsBuzzedAt?: string;
 }
@@ -551,7 +549,6 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
   if (patch.reply !== undefined) { if (patch.reply.trim()) next.reply = clip(patch.reply, THREAD_REPLY_MAX); else delete next.reply; }
-  if (next.reply && next.reply !== cur.reply && by !== 'human') next.replied = { at, by };
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
   else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';

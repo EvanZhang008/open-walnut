@@ -613,9 +613,7 @@ keep the user's Threads: a result, answer or update about one of them goes to
 that thread only (`thread_update`: its summary and state; Walnut files the chat
 reply under his message), whether he is in the chat or away, never also a
 letter. A decision about it is that thread's `needs` state, not a letter. The
-inbox is for what needs him and has no thread. Walnut refuses such a letter
-(409 `thread_instead`, the thread named): one naming a task of an open thread,
-or a report naming no task right after the node put a result in a thread.
+inbox is for what needs him and has no thread.
 
 When you answer another task's request (Main, a lead, any task that asked you),
 your result goes only to that task, in your reply: it tells the user. A report

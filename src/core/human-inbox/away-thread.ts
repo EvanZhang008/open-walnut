@@ -17,8 +17,7 @@
  * The absence is "since he was last in the chat": a letter of it was made after that moment (so a
  * restart that forgets a heartbeat keeps the thread). A thread is used for AWAY_THREAD_MAX_MS, and only
  * by the session that wrote it (his answers in it go to that session). Pinned, mail items and a letter
- * the user asked for stand alone, as before. A letter about one of the node's open Threads never gets
- * here: it is refused before (thread-instead.ts; 2026-11-04, the user: one place per update).
+ * the user asked for stand alone, as before.
  */
 import type { AwayThreadMark, LetterRecord, LetterSender, NewLetter } from './types.js';
 

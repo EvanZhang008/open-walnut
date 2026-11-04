@@ -277,7 +277,7 @@ export const MAIN_NEWS_ONCE_LINE =
  * Walnut says when he is away (the `user-away` hint, org/user-away.ts), threads the letters of one
  * absence (human-inbox/away-thread.ts) and sends the report he asks for (org/morning-report.ts).
  * 2026-11-04, the user: one place per update, so what is on one of his Threads stays there, away or
- * not (THREAD_ONE_PLACE_RULE, human-inbox/thread-instead.ts).
+ * not (THREAD_ONE_PLACE_RULE).
  */
 export const AWAY_INBOX_LINE =
   'When the user is away from your chat, Walnut says so on the message (a user-away note). What needs him then and is '

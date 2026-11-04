@@ -37,8 +37,8 @@ const DIRECT_SENDS: Record<string, string> = {
 
 /** Files that append an agent turn (agentReply), and whether a session's repeat is refused there. */
 const REPLIES: Record<string, 'guarded' | string> = {
-  // A session's reply, from the route and the cloud relay (both call agentReplyAsCaller; thread-instead.ts).
-  'src/core/human-inbox/letter-ops.ts': 'guarded',
+  'src/web/routes/human-inbox-v1.ts': 'guarded',
+  'src/core/human-inbox/relay.ts': 'guarded',
   'src/core/human-inbox/away-thread.ts': 'a fold of a session\'s send: guarded when the send is (refuseDuplicate from the caller)',
   'src/core/plugins/server-api.ts': 'a plugin\'s reply in its own letter',
 };
@@ -76,9 +76,7 @@ describe('duplicate letters: every writer is decided', () => {
   it('every agent reply is listed, and the session paths refuse a repeat', () => {
     const found = calling(/\bagentReply\s*\(/).filter((f) => f !== 'src/core/human-inbox/store.ts');
     expect(unlisted(found, REPLIES), 'A new agent reply path: pass refuseDuplicate for a session\'s reply, or add it to REPLIES with why').toEqual([]);
-    expect(found).toEqual(expect.arrayContaining(['src/core/human-inbox/letter-ops.ts']));
-    // The route and the relay reach it through letter-ops only.
-    for (const f of ['src/web/routes/human-inbox-v1.ts', 'src/core/human-inbox/relay.ts']) expect(read(f), f).toMatch(/\bagentReplyAsCaller\s*\(/);
+    expect(found).toEqual(expect.arrayContaining(['src/web/routes/human-inbox-v1.ts', 'src/core/human-inbox/relay.ts']));
     for (const [f, how] of Object.entries(REPLIES)) {
       if (how !== 'guarded') continue;
       const calls = read(f).split('\n').filter((l) => /\bagentReply\s*\(/.test(l) && !/import|\/\//.test(l.trim().slice(0, 8)));

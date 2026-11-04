@@ -1,8 +1,8 @@
 /**
  * A thread that waits on the user buzzes his phone.
  *
- * 2026-11-04: a thread's news goes to the thread only, never also a letter (human-inbox/
- * thread-instead.ts), and only letters buzzed the phone; so a decision on a thread while he was away
+ * 2026-11-04: a thread's news goes to the thread only, never also a letter (org/thread-rules.ts
+ * THREAD_ONE_PLACE_RULE), and only letters buzzed the phone; so a decision on a thread while he was away
  * buzzed nothing. Walnut VP, for the user: "Evan wants no duplicates, not no reminders: a thread that
  * waits on his decision and does not buzz while he is away hides the decision." So when Main or a
  * lead moves one of its threads into needs (threads-store.ts mutateThreads, the one write of a

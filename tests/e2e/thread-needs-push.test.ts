@@ -6,7 +6,8 @@
  * needs logs one `thread push` line, which the cases wait on instead of a sleep. Covered: the push
  * goes out with the node and the thread and no letter is made; staying in needs, answered and
  * pending do not buzz; back into needs buzzes again; a second thread of the absence stays quiet;
- * nothing while he is in the chat; a thread opened answered never buzzes.
+ * nothing while he is in the chat; a thread opened answered never buzzes. And the one-place rule is
+ * prompt text only: a lead's letter about one of its threads is sent.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -20,7 +21,7 @@ vi.mock('../../src/core/push/apns.js', () => ({
 }));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { listLetters } from '../../src/core/human-inbox/store.js';
+import { getLetter, listLetters } from '../../src/core/human-inbox/store.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { updateConfig } from '../../src/core/config-manager.js';
@@ -132,5 +133,18 @@ describe('a thread that waits on him', () => {
     expect(await pushLine(waitingId)).toMatchObject({ sent: 1 });
     expect(lines.some((l) => l.threadId === (answered.thread?.id ?? answered.id))).toBe(false);
     expect(sendApns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('one place per update is prompt text only', () => {
+  it('a lead\'s letter about one of its open threads is sent like any other (no thread_instead refusal)', async () => {
+    const lead = await newLead();
+    const id = await asked(lead, 'Is the packaging done?');
+    const worker = (await addTask({ title: 'Package the app', project: `Proj${n}`, source: 'local', parent_task_id: lead.id } as never)).task.id;
+    await run(lead, 'thread_update', { id, state: 'answered', add_tasks: [worker], reply: 'Shipped, video at /x/pkg.mp4' });
+    const sent = await run(lead, 'human_inbox_send', { subject: 'Packaging shipped', type: 'info', markdown: 'Video: /x/pkg.mp4', task_refs: [worker] });
+    expect(sent.letterId).toMatch(/^lt-/);
+    await run(lead, 'human_inbox_reply', { letter: sent.letterId, text: 'One more note on the packaging' });
+    expect((await getLetter(sent.letterId))!.thread.map((e) => e.text)).toContain('One more note on the packaging');
   });
 });

@@ -7,9 +7,10 @@
  * Fails when a place an Org node reads (its prompt, the user-away and threads hints, the thread ops,
  * human_inbox_send) loses THREAD_ONE_PLACE_RULE; when ANY text a node reads (every prompt line,
  * hint, op and param description, built-in skill) tells it again to send a thread's result to the
- * inbox, or that a result he asked for goes there while he is away; and when the pure gate
- * (human-inbox/thread-instead.ts) stops refusing a node's letter about an open thread, or starts
- * refusing one that is not about one. The server flow is tests/e2e/thread-instead.test.ts.
+ * inbox, or that a result he asked for goes there while he is away; and when any of them says
+ * again that Walnut refuses such a letter. The rule is prompt text only (2026-11-04, the user: "I
+ * think there's no need for programmatic ... thread itself is a text ... just a prompt"): a letter
+ * about a thread is sent like any other.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -18,8 +19,6 @@ import { THREAD_ONE_PLACE_RULE, THREADS_OPEN_RULE } from '../../../src/core/org/
 import { AWAY_INBOX_LINE, THREADS_LINE, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { USER_BACK_TEXT, effectiveHints, userAwayText } from '../../../src/core/hints/hint-registry.js'
-import { THREAD_GATE_SITES, THREAD_JUST_UPDATED_MS, answersHimThere, threadInsteadMessage, threadInsteadOf } from '../../../src/core/human-inbox/thread-instead.js'
-import { emptyThreads, fileMessage, setAnswers, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
 import { getOp, listOps } from '../../../src/ops/index.js'
 
 const hint: ThreadHintState = {
@@ -30,13 +29,13 @@ const MAIN = { org_role: 'main', project: 'Walnut' } as const
 const LEAD = { org_role: 'lead', project: 'Walnut' } as const
 
 describe('the rule says what the user said', () => {
-  it('a thread\'s news goes to the thread only, away or not; a decision on it is its needs state; Walnut refuses the letter', () => {
+  it('a thread\'s news goes to the thread only, away or not; a decision on it is its needs state; prompt only, no refusal', () => {
     expect(THREAD_ONE_PLACE_RULE).toMatch(/goes to that thread only/)
     expect(THREAD_ONE_PLACE_RULE).toMatch(/whether he is in your chat or away/)
     expect(THREAD_ONE_PLACE_RULE).toMatch(/never also a letter/)
     expect(THREAD_ONE_PLACE_RULE).toMatch(/decision about it is that thread's needs state/)
     expect(THREAD_ONE_PLACE_RULE).toMatch(/inbox is only for what needs him and has no thread/)
-    expect(THREAD_ONE_PLACE_RULE).toContain('thread_instead')
+    expect(THREAD_ONE_PLACE_RULE).not.toMatch(/thread_instead|refuses/)
     // The old exception (a decision still a letter while he is away, named from the thread) is gone.
     expect(THREADS_OPEN_RULE).not.toMatch(/still goes to his inbox/)
     expect(THREADS_OPEN_RULE).toMatch(/never beside a letter about the same thing/)
@@ -63,7 +62,7 @@ describe('every place a node reads it carries it', () => {
     for (const name of ['thread_list', 'thread_update', 'thread_create', 'thread_split', 'thread_file']) {
       expect(getOp(name)?.description, name).toContain(THREAD_ONE_PLACE_RULE)
     }
-    expect(getOp('human_inbox_send')?.description).toMatch(/One place per update[\s\S]*409 thread_instead/)
+    expect(getOp('human_inbox_send')?.description).toMatch(/One place per update[\s\S]*never also a letter/)
   })
 })
 
@@ -129,6 +128,10 @@ describe('no text tells a node to send a thread\'s result to the inbox', () => {
     expect(offenders(nodeTexts())).toEqual([])
   })
 
+  it('none says Walnut refuses a letter about a thread: the rule is prompt text only', () => {
+    expect(nodeTexts().filter((t) => /thread_instead/.test(t.text)).map((t) => t.where)).toEqual([])
+  })
+
   it('the check catches the old wording and new ones like it', () => {
     const planted = [
       'An update that needs him then (a decision only he can make, something to review, a result he asked for) goes to his inbox with human_inbox_send.',
@@ -150,151 +153,6 @@ describe('no text tells a node to send a thread\'s result to the inbox', () => {
       'reply in its thread instead, or pass resend_reason',
     ]
     expect(offenders(fine.map((text, i) => ({ where: `fine:${i}`, text })))).toEqual([])
-  })
-})
-
-describe('the gate (threadInsteadOf)', () => {
-  const NOW = Date.parse('2026-11-04T01:00:00Z')
-  const iso = (agoMin: number) => new Date(NOW - agoMin * 60_000).toISOString()
-  const node = 'mvm0n3bu-6910'
-  const vp = 'mvp0aaaa-1111'
-  const info = (taskRefs: string[] = []) => ({ nodeTaskId: node, type: 'info' as const, taskRefs })
-  /** His message, then the node's write `agoMin` ago: a summary (a result) unless `reply` is off. */
-  function threads(by: string, agoMin: number, extra: Partial<OrgThread> = {}, opts: { reply?: boolean; tasks?: string[] } = {}): OrgThread[] {
-    let f = fileMessage(emptyThreads(node), { text: 'star a slack channel', via: 'chat', at: iso(agoMin + 5) }).file
-    f = updateThread(f, f.threads[0].id, {
-      title: 'Slack stars', state: 'pending', add_tasks: opts.tasks ?? ['mthfqunw-d46a'], ...(opts.reply === false ? {} : { reply: 'Stars ship today' }),
-    }, by as never, iso(agoMin)).file
-    return [{ ...f.threads[0], ...extra }]
-  }
-
-  it('a letter naming a task of an open thread is refused, by full id or a prefix, however long ago the thread moved', () => {
-    const t = threads(`task:${node}`, 600)
-    expect(threadInsteadOf(info(['mthfqunw-d46a']), t, NOW)).toMatchObject({ threadId: t[0].id, why: 'task', taskId: 'mthfqunw-d46a' })
-    expect(threadInsteadOf(info(['mthfqu']), t, NOW)).toMatchObject({ why: 'task' })
-    // The node's own task in the pills says nothing; another task's letter goes.
-    expect(threadInsteadOf(info([node]), t, NOW)).toBeNull()
-    expect(threadInsteadOf(info(['a0619f18-b0dc']), t, NOW)).toBeNull()
-    // A very short prefix is too loose to count.
-    expect(threadInsteadOf(info(['mthf']), t, NOW)).toBeNull()
-    // A decision naming it is the thread's too: its needs state.
-    expect(threadInsteadOf({ ...info(['mthfqunw-d46a']), type: 'action_required' }, t, NOW)).toMatchObject({ why: 'task' })
-  })
-
-  it('a decision is the thread\'s only through a task that one open thread went to: a team\'s task on several threads, or named only in answers, may be asked about something new', () => {
-    const team = '2be78a01-1dd2'
-    const two = [...threads(`task:${node}`, 600, {}, { tasks: [team] }), ...threads(`task:${node}`, 600, { id: 'th-cccccccccccc' }, { tasks: [team] })]
-    const decision = { ...info([team]), type: 'action_required' as const }
-    expect(threadInsteadOf(decision, two, NOW)).toBeNull()
-    expect(threadInsteadOf(decision, two.slice(0, 1), NOW)).toMatchObject({ why: 'task' })
-    // A report naming it is a result of one of them either way.
-    expect(threadInsteadOf(info([team]), two, NOW)).toMatchObject({ why: 'task' })
-    let f = fileMessage(emptyThreads(node), { text: 'is the Mac ok', via: 'chat', at: iso(300) }).file
-    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Yes.', at: iso(299), about: [team] }]])).file
-    expect(threadInsteadOf(decision, f.threads, NOW)).toBeNull()
-  })
-
-  it('a task the node\'s chat answer named in the thread ties a letter to it, as one it went to does', () => {
-    let f = fileMessage(emptyThreads(node), { text: 'why does the mic fail', via: 'chat', at: iso(300) }).file
-    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Fixed in the voice task.', at: iso(299), about: ['2be78a01-1dd2'] }]])).file
-    expect(threadInsteadOf(info(['2be78a01-1dd2']), f.threads, NOW)).toMatchObject({ why: 'task', threadId: f.threads[0].id })
-  })
-
-  it('a thread handed to a VP or lead does not tie that node\'s other work to it', () => {
-    const t = threads('task:main-1', 600, {}, { tasks: [vp] })
-    const isNode = (id: string) => id === vp
-    expect(threadInsteadOf({ nodeTaskId: 'main-1', type: 'action_required', taskRefs: [vp] }, t, NOW, isNode)).toBeNull()
-    expect(threadInsteadOf({ nodeTaskId: 'main-1', type: 'info', taskRefs: [vp, 'other-task-1'] }, t, NOW, isNode)).toBeNull()
-    // Without the role it would have matched: the roles are what keeps it out.
-    expect(threadInsteadOf({ nodeTaskId: 'main-1', type: 'action_required', taskRefs: [vp] }, t, NOW)).toMatchObject({ why: 'task' })
-  })
-
-  it('a report naming no task right after the node put a result in a thread is refused; later, his own write, a tidy-up or a decision goes', () => {
-    expect(threadInsteadOf(info(), threads(`task:${node}`, 2), NOW)).toMatchObject({ why: 'just_updated' })
-    expect(threadInsteadOf(info([node]), threads(`task:${node}`, 2), NOW)).toMatchObject({ why: 'just_updated' })
-    for (const type of ['completion', 'review'] as const) {
-      expect(threadInsteadOf({ ...info(), type }, threads(`task:${node}`, 1), NOW), type).toMatchObject({ why: 'just_updated' })
-    }
-    expect(threadInsteadOf(info(), threads(`task:${node}`, THREAD_JUST_UPDATED_MS / 60_000 + 1), NOW)).toBeNull()
-    expect(threadInsteadOf(info(), threads('human', 1), NOW)).toBeNull()
-    expect(threadInsteadOf(info(), threads('task:another-node', 1), NOW)).toBeNull()
-    // A title, known or state change without a new summary is no result.
-    expect(threadInsteadOf(info(), threads(`task:${node}`, 1, {}, { reply: false }), NOW)).toBeNull()
-    // A decision naming no task may be about anything: only its tasks tie it to a thread.
-    expect(threadInsteadOf({ ...info(), type: 'action_required' }, threads(`task:${node}`, 1), NOW)).toBeNull()
-  })
-
-  it('the node\'s chat answer filed in a thread is a result too', () => {
-    let f = fileMessage(emptyThreads(node), { text: 'is it live?', via: 'chat', at: iso(30) }).file
-    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Live, video at /x/v.mp4', at: iso(3) }]])).file
-    expect(threadInsteadOf(info(), f.threads, NOW)).toMatchObject({ why: 'just_updated', threadId: f.threads[0].id })
-  })
-
-  it('a closed thread holds nothing', () => {
-    const closed = threads(`task:${node}`, 1, { closed: { how: 'acked', at: iso(0), by: 'human' } })
-    expect(threadInsteadOf(info(['mthfqunw-d46a']), closed, NOW)).toBeNull()
-    expect(threadInsteadOf(info(), closed, NOW)).toBeNull()
-  })
-
-  it('the refusal names the thread and the way: thread_update, needs for a decision, user_asked only for a letter he asked for', () => {
-    const msg = threadInsteadMessage({ threadId: 'th-31b6fb91ab98', title: 'Slack stars', state: 'pending', why: 'task', taskId: 'mthfqunw-d46a' })
-    expect(msg).toMatch(/^Not sent: it names mthfqunw-d46a, a task of the user's open thread th-31b6fb91ab98 "Slack stars"/)
-    expect(msg).toContain('thread_update {"id":"th-31b6fb91ab98"')
-    expect(msg).toMatch(/state "needs" with user_kind/)
-    expect(msg).toMatch(/user_asked:true only when he asked in his own words for this as a letter/)
-    expect(threadInsteadMessage({ threadId: 'th-1', title: 'x', state: 'working', why: 'just_updated' })).toMatch(/a report naming no task, and you just put a result in/)
-  })
-})
-
-describe('every way into the inbox meets the rule (a new send path is decided, not missed)', () => {
-  // Every way a letter or a letter's turn is written: the store's writers, the session entry points, the plugin API.
-  const SEND = /(?<![\w.])sendLetter(Once)?\s*\(|\bstore\.sendLetter(Once)?\s*\(|\bsendLetterAsCaller(Once)?\s*\(|\bletters\.send\s*\(|(?<![\w])(?:store\.)?agentReply(AsCaller)?\s*\(/
-  const files: Array<{ f: string; text: string }> = []
-  const walk = (dir: string): void => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name)
-      if (e.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts')) files.push({ f: path.relative(process.cwd(), p).split(path.sep).join('/'), text: fs.readFileSync(p, 'utf8') })
-    }
-  }
-  walk(path.resolve('src'))
-  const sites = files.filter(({ text }) => SEND.test(text)).map(({ f }) => f).sort()
-
-  it('finds the send sites at all', () => {
-    expect(sites).toEqual(expect.arrayContaining(['src/core/human-inbox/store.ts', 'src/core/human-inbox/letter-ops.ts', 'src/web/routes/human-inbox-v1.ts', 'src/core/plugins/server-api.ts']))
-  })
-
-  it('each one is listed in THREAD_GATE_SITES with how the rule meets it, and each listed one still sends', () => {
-    expect(sites.filter((f) => !(f in THREAD_GATE_SITES)), 'A new letter send or reply path: route a session\'s send through letter-ops '
-      + '(sendLetterAsCallerOnce / agentReplyAsCaller) or list it in THREAD_GATE_SITES with why no node\'s words reach the inbox there').toEqual([])
-    for (const f of Object.keys(THREAD_GATE_SITES)) expect(sites, `${f} is listed but writes no letter`).toContain(f)
-    for (const [f, why] of Object.entries(THREAD_GATE_SITES)) expect(why.length, f).toBeGreaterThan(15)
-  })
-
-  it('a gated site writes only through the gate, and the gate checks before it writes', () => {
-    for (const [f, why] of Object.entries(THREAD_GATE_SITES)) {
-      if (!why.startsWith('gated')) continue
-      const text = files.find((x) => x.f === f)!.text
-      expect(text, f).toMatch(/sendLetterAsCallerOnce|agentReplyAsCaller/)
-      expect(text, `${f} writes around the gate`).not.toMatch(/(?<![\w.])(?:store\.)?(?:sendLetter(Once)?|agentReply)\s*\(/)
-    }
-    const ops = files.find((x) => x.f === 'src/core/human-inbox/letter-ops.ts')!.text
-    const send = ops.slice(ops.indexOf('export async function sendLetterAsCallerOnce'), ops.indexOf('export async function agentReplyAsCaller'))
-    expect(send.indexOf('findThreadInstead(')).toBeGreaterThan(0)
-    expect(send.indexOf('findThreadInstead(')).toBeLessThan(send.indexOf('sendAway('))
-    expect(send.indexOf('findThreadInstead(')).toBeLessThan(send.indexOf('sendLetterOnce('))
-    const reply = ops.slice(ops.indexOf('export async function agentReplyAsCaller'))
-    expect(reply.indexOf('findThreadInsteadForReply(')).toBeGreaterThan(0)
-    expect(reply.indexOf('findThreadInsteadForReply(')).toBeLessThan(reply.indexOf('agentReply(id'))
-  })
-
-  it('a reply answering him where he wrote is that conversation\'s place; one after the node\'s own turn is not', () => {
-    expect(answersHimThere({ thread: [{ from: 'agent', at: 1 } as never, { from: 'human', at: 2 } as never] })).toBe(true)
-    expect(answersHimThere({ thread: [{ from: 'human', at: 1 } as never, { from: 'agent', at: 2 } as never] })).toBe(false)
-    expect(answersHimThere({ thread: [], answered: { actionId: 'a', label: 'A', at: 5 } })).toBe(true)
-    // A task's answer in his place is not him writing there.
-    expect(answersHimThere({ thread: [], answered: { actionId: 'a', label: 'A', at: 5, by: { sessionId: 's' } } })).toBe(false)
-    expect(answersHimThere({ thread: [] })).toBe(false)
   })
 })
 

@@ -62,9 +62,7 @@ defineOp({
     + 'which tells the user; a report letter (info, completion, review) about that work is refused (409, '
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
     + 'One place per update: Main and the leads (a VP is a lead) put a result, answer or update about one of the user\'s '
-    + 'Threads in that thread only (thread_update), whether he is in the chat or away; their letter about an open thread '
-    + '(it names a task of the thread, or is a report naming none right after they put a result in a thread) is refused (409 thread_instead, '
-    + 'the thread named). '
+    + 'Threads in that thread only (thread_update), whether he is in the chat or away, never also a letter; the inbox is for what has no thread. '
     + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
     + 'snooze_reason says why it cannot wait for that date. '
     + 'One letter per question: the same subject again within 10 minutes is refused (409 duplicate_letter, '
@@ -144,9 +142,7 @@ defineOp({
     + 'option. Same standard as the letter itself: answer the question first, keep it to a few '
     + 'sentences, link anything long. This flips the letter back to unread and notifies them, so '
     + 'reply here rather than only in the session, otherwise your answer never leaves this host. '
-    + 'Post each reply once: the same text as your latest reply there, within 10 minutes, is refused (409 duplicate_reply). '
-    + 'Main and the leads: a turn about one of the user\'s open Threads goes to that thread (thread_update), not into an old '
-    + 'letter, so it is refused (409 thread_instead) unless he wrote in this letter since your last turn there.',
+    + 'Post each reply once: the same text as your latest reply there, within 10 minutes, is refused (409 duplicate_reply).',
   input: {
     letter: z.string().min(1).describe('Letter id from human_inbox_send (lt-...)'),
     text: z.string().min(1).describe('Your reply as plain text (always required: it is the thread line)'),

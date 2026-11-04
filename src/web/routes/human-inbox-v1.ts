@@ -97,8 +97,6 @@ const ERROR_CODES: Record<string, string> = {
   human_approval: 'human-approval-required',
   // A report letter from a task that answers another task's request: the asker tells the user.
   reply_instead: 'conflict',
-  // A letter from Main or a lead about one of its open threads: the thread holds it (thread-instead.ts).
-  thread_instead: 'thread_instead',
   // A task answering for the user without quoting the user's words.
   user_words: 'bad_request',
   // A letter from or about a snoozed task without a stated `snooze_reason` (snooze-letter.ts).
@@ -366,14 +364,12 @@ humanInboxV1Router.post('/human-inbox/:id/reply', async (req: Request, res: Resp
     if (CLOUD_MODE) {
       // `id` LAST: the URL owns the letter id, so a body field named `id` can
       // never make the primary answer a different letter than the one logged.
-      await relayControlAction(res, 'server.human-inbox.reply', SERVER_RELAY_SID, { ...b, callerSid: callerSid(req) ?? null, id }, 200)
+      await relayControlAction(res, 'server.human-inbox.reply', SERVER_RELAY_SID, { ...b, id }, 200)
       return
     }
-    const { agentReplyAsCaller } = await import('../../core/human-inbox/letter-ops.js')
-    // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts),
-    // and a node's turn about one of its open threads too (thread-instead.ts).
-    const { callerSid: _c, ...input } = b as Record<string, unknown>
-    const letter = await agentReplyAsCaller(id, input as unknown as AgentReplyInput, callerSid(req))
+    const { agentReply } = await import('../../core/human-inbox/store.js')
+    // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts).
+    const letter = await agentReply(id, b as unknown as AgentReplyInput, { refuseDuplicate: true })
     log.notif.info('human-inbox: agent reply accepted', { letterId: id, callerSid: callerSid(req) })
     res.json({ letter })
   })

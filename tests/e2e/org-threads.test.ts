@@ -334,8 +334,7 @@ describe('a question for the user names which of their kinds it is', () => {
     expect((await letter(WORKER_SID)).status).toBe(409)
     expect((await letter(LEAD_SID, { user_asked: true })).status).toBe(409)
     expect((await letter(WORKER_SID, { user_kind: 'credentials', user_kind_why: 'It needs a key only he holds' })).status).toBe(201)
-    // A report naming no task right after the lead wrote a thread would be that thread's (thread-instead.ts): this one he asked for.
-    expect((await letter(LEAD_SID, { type: 'info', actions: undefined, subject: 'FYI', markdown: 'Done.', user_asked: true })).status).toBe(201)
+    expect((await letter(LEAD_SID, { type: 'info', actions: undefined, subject: 'FYI', markdown: 'Done.' })).status).toBe(201)
     expect((await letter(undefined)).status).toBe(201)
   })
 
