@@ -33,6 +33,8 @@ let sites: http.Server
 let port = 0
 let base = ''
 let profile = ''
+/** The device this browser's extension was paired as (the shared fixture may hold other extensions). */
+let ownDevice = ''
 const site = (host: string, p: string) => `http://${host}:${port}${p}`
 
 // ── the test sites ──
@@ -186,8 +188,12 @@ test('connect the extension from its popup and the connect page', async () => {
   await connect.waitForLoadState('domcontentloaded')
   expect(connect.url()).toBe(`${base}/connect-extension`)
   await expect(connect.getByRole('heading', { name: 'Connect this browser to Walnut?' })).toBeVisible({ timeout: 20_000 })
+  const extensionDevices = async () => ((await (await connect.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).map((d) => d.name).filter((n) => n.startsWith('extension-'))
+  const earlier = new Set(await extensionDevices())
   await connect.getByTestId('connect-extension-go').click()
   await expect(connect.getByTestId('connect-extension-done')).toBeVisible({ timeout: 20_000 })
+  ownDevice = (await extensionDevices()).find((n) => !earlier.has(n)) ?? ''
+  expect(ownDevice).not.toBe('')
   await expect(connect.locator('.pw-ext-card p').first()).toHaveText(/^Walnut extension \(Chrome on (Linux|Mac|Windows)\) is connected\./)
   // Its device: an extension, named for what it is.
   const devices = (await (await connect.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string; info?: { deviceName?: string } }>
@@ -289,8 +295,8 @@ test('a sign-up page gets a strong password, and the new login is saved', async 
   await page.locator('#new1').click()
   const menu = await frameOf(page, 'menu.html')
   await menu.getByTestId('menu-generate').click()
+  await expect(page.locator('#new1')).toHaveValue(/^.{20,}$/)
   const made = await page.locator('#new1').inputValue()
-  expect(made.length).toBeGreaterThanOrEqual(20)
   await expect(page.locator('#new2')).toHaveValue(made)
   // The fill moved the focus to the confirmation: that never opens the menu again over the form.
   await noFrame(page, 'menu.html')
@@ -367,6 +373,7 @@ test('a same-origin frame fills; another site\'s frame gets no icon and no fill'
 })
 
 test('a page cannot open the menu itself, restyle it unseen, use menu.html, or have a login it typed offered', async () => {
+  test.setTimeout(120_000) // many steps, each waiting on the menu frame: a busy runner needs more than the default
   const page = await ctx.newPage()
   await page.goto(site('login.example.test', '/login'))
   await page.waitForTimeout(400)
@@ -505,11 +512,13 @@ test('locked: the menu says so and opens the unlock; Remove in Settings disconne
   // Settings → Passwords lists it; Remove ends its token, and the popup asks to connect again.
   const settings = await ctx.newPage()
   await settings.goto(`${base}/settings#browser`)
-  const row = settings.getByText(/^Walnut extension \(Chrome on /).first()
+  // Other extensions paired on this Walnut (earlier specs on the shared fixture) carry the same
+  // name: the row is this browser's own device.
+  const row = settings.locator(`.settings-row[data-device="${ownDevice}"]`)
   await expect(row).toBeVisible({ timeout: 20_000 })
-  const before = ((await (await settings.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).filter((d) => d.name.startsWith('extension-')).length
-  await settings.locator('.settings-row', { hasText: /Walnut extension \(Chrome on / }).first().getByRole('button', { name: 'Remove' }).click()
-  await expect.poll(async () => ((await (await settings.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).filter((d) => d.name.startsWith('extension-')).length).toBe(before - 1)
+  await expect(row).toContainText(/Walnut extension \(Chrome on /)
+  await row.getByRole('button', { name: 'Remove' }).click()
+  await expect.poll(async () => ((await (await settings.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).some((d) => d.name === ownDevice)).toBe(false)
   await settings.close()
 
   // Its first call is refused: it forgets the connection and asks to connect again.

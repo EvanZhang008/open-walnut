@@ -62,6 +62,7 @@ export function BrowserExtensionGroup({ agentsOn }: { agentsOn?: ReadonlySet<str
       {devices?.map((d) => (
         <SettingsRow
           key={d.name}
+          data-device={d.name}
           label={d.info?.deviceName ?? 'Walnut extension'}
           help={`Connected ${new Date(d.createdAt).toLocaleDateString()}, ${when(d.lastUsedAt)}${agentsOn ? (agentsOn.has(d.name) ? '. Agents: on' : '. Agents: off') : ''}`}
           control={<SettingsButton busy={busy === d.name} onClick={() => void remove(d.name)}>Remove</SettingsButton>}
