@@ -264,11 +264,16 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     const live = await connect()
     await rpc(live.ws, { cmd: 'attach', sid: 'br-burst', fromOffset: 0 })
     const events = () => live.frames.filter((f) => f.ev === 'jsonl' && f.sid === 'br-burst') as Array<{ line: string; v: number }>
-    expect(await waitFor(() => events().at(-1)?.v === size, 60_000)).toBe(true)
+    // The stream opens with the daemon's note of the process (line-answer-v1), then the CLI's stdout.
+    const isNote = (line: string) => line.includes('"subtype":"walnut_process"')
+    const noteBytes = () => { const n = events().find((e) => isNote(e.line)); return n ? Buffer.byteLength(n.line) + 1 : -1 }
+    expect(await waitFor(() => noteBytes() > 0 && events().at(-1)?.v === size + noteBytes(), 60_000)).toBe(true)
     const expected = fs.readFileSync(source, 'utf8').split('\n').filter(Boolean)
-    const got = events()
+    expect(events().filter((e) => isNote(e.line))).toHaveLength(1)
+    expect(isNote(events()[0].line)).toBe(true)
+    const got = events().filter((e) => !isNote(e.line))
     expect(got.length).toBe(expected.length)
-    let v = 0
+    let v = noteBytes()
     for (let i = 0; i < expected.length; i++) {
       v += Buffer.byteLength(expected[i]) + 1
       if (got[i].line !== expected[i] || got[i].v !== v) throw new Error(`line ${i}: got v ${got[i].v}, want ${v}`)

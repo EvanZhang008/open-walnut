@@ -217,15 +217,22 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
 
   it('the CLI\'s own word settles it in any process: started, cancelled, discarded', async () => {
     const core = createDaemonCore(ctx.deps)
-    for (const [state, fate] of [['started', 'ran'], ['completed', 'ran'], ['cancelled', 'cancelled'], ['discarded', 'dropped'], ['refused', 'dropped']]) {
+    // started alone, from a process that is gone, was never answered (line-answer-v1).
+    for (const [state, fate] of [['started', 'unanswered'], ['completed', 'ran'], ['cancelled', 'cancelled'], ['discarded', 'dropped'], ['refused', 'dropped']]) {
       // Printed by an earlier process (another pid); this one is new.
       const s = session(`word-${state}`, 907, `${marker('qm-1', 1)}\n${lifecycle('u-1', 'queued')}\n${lifecycle('u-1', state)}\n`)
       try {
-        expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true }))
+        expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true }))
           .toEqual({ ok: true, duplicate: true, fate, state })
         expect(drain(s.readerFd)).toHaveLength(0)
       } finally { fs.closeSync(s.readerFd) }
     }
+    // A server that does not tell taken from answered (no answers flag) hears ran, as before.
+    const s = session('word-old-server', 907, `${marker('qm-1', 1)}\n${lifecycle('u-1', 'started')}\n`)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true }))
+        .toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'started' })
+    } finally { fs.closeSync(s.readerFd) }
   })
 
   it('a resend into a new process writes the line: the one that had it died before running it', async () => {
@@ -286,6 +293,40 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     } finally { await fresh.cleanup() }
   }, 15_000)
 
+  it('the stream lost the line\'s frames (a rotated file): the CLI\'s transcript says taken and answered or not (line-answer-v1)', async () => {
+    const transcript = path.join(ctx.tmpDir, 'transcript.jsonl')
+    const asked: string[] = []
+    const core = createDaemonCore({ ...ctx.deps, transcriptPathFn: async (sid) => { asked.push(sid); return transcript } })
+    const prompt = JSON.stringify({ type: 'user', uuid: 'u-1', isSidechain: false, message: { role: 'user', content: 'hello' } })
+    const reply = JSON.stringify({ type: 'assistant', uuid: 'a-1', isSidechain: false, message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } })
+    for (const [body, fate] of [[`${prompt}\n`, { fate: 'unanswered', state: 'started' }], [`${prompt}\n${reply}\n`, { fate: 'ran', state: 'started', answer: 'yes' }]] as const) {
+      fs.writeFileSync(transcript, body)
+      // A fresh stream after rotation: nothing of the line in it.
+      const s = session(`rotated-${fate.fate}`, 920, '')
+      try {
+        expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true }))
+          .toEqual({ ok: true, duplicate: true, ...fate })
+        expect(drain(s.readerFd)).toHaveLength(0)
+      } finally { fs.closeSync(s.readerFd) }
+    }
+    expect(asked).toEqual(['sid', 'sid'])
+    // Not in the transcript: the CLI never took it, so it is written.
+    fs.writeFileSync(transcript, `${JSON.stringify({ type: 'user', uuid: 'u-0', message: { role: 'user', content: 'x' } })}\n`)
+    const fresh = session('rotated-none', 920, '')
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true })).toMatchObject({ ok: true })
+      expect(drain(fresh.readerFd).filter((l) => l.includes('"hello"'))).toHaveLength(1)
+    } finally { fs.closeSync(fresh.readerFd) }
+    // An older server (no answers flag): the transcript is not asked, the line is written as before.
+    fs.writeFileSync(transcript, `${prompt}\n`)
+    const old = session('rotated-old-server', 920, '')
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })).toMatchObject({ ok: true })
+      expect(drain(old.readerFd).filter((l) => l.includes('"hello"'))).toHaveLength(1)
+    } finally { fs.closeSync(old.readerFd) }
+    expect(asked).toHaveLength(3)
+  })
+
   it('P3: the check reads the stream window piece by piece, never holding the loop', async () => {
     const core = createDaemonCore(ctx.deps)
     // 6 MiB of other output after the line's lifecycle word: inside the 8 MiB window.
@@ -296,9 +337,10 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       let on = true
       const tick = () => { ticks++; if (on) setImmediate(tick) }
       setImmediate(tick)
-      const res = await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })
+      const res = await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true })
       on = false
-      expect(res).toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'started' })
+      // Started by a process that is gone, with no answer in 6 MiB of deltas (line-answer-v1).
+      expect(res).toEqual({ ok: true, duplicate: true, fate: 'unanswered', state: 'started' })
       // A synchronous 8 MiB read and scan would let no tick run before the answer.
       expect(ticks).toBeGreaterThan(5)
       expect(drain(s.readerFd)).toHaveLength(0)
@@ -375,7 +417,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     const core = createDaemonCore(ctx.deps)
     const cases: Array<[string, Record<string, unknown>]> = [
       [`${marker('qm-1', 916)}\n${lifecycle('u-1', 'queued')}\n`, { ok: true, duplicate: true, fate: 'waiting', state: 'queued' }],
-      [`${lifecycle('u-1', 'started')}\n`, { ok: true, duplicate: true, fate: 'ran', state: 'started' }],
+      [`${lifecycle('u-1', 'started')}\n`, { ok: true, duplicate: true, fate: 'ran', state: 'started', answer: 'pending' }],
       [`${lifecycle('u-1', 'cancelled')}\n`, { ok: true, duplicate: true, fate: 'cancelled', state: 'cancelled' }],
     ]
     for (const [i, [stream, expected]] of cases.entries()) {
@@ -423,15 +465,15 @@ describe('send-dedupe-v1 twins', () => {
   const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
-  it('both daemons pass the dedupe flag, lostPid and bootWait from the wire into the send', () => {
-    const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true \}\)/
+  it('both daemons pass the dedupe flag, lostPid, bootWait and answers from the wire into the send', () => {
+    const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true, answers: cmd\.answers === true \}\)/
     expect(standalone).toMatch(wire)
     expect(template).toMatch(wire)
   })
 
   it('the JS twin runs the very same scan and verdict text (behavior: daemon-send-dedupe-twins-e2e.test.ts)', async () => {
     const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } = await import('../../src/providers/line-fate-core.js')
+    const { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, transcriptLineScan, transcriptLineVerdict } = await import('../../src/providers/line-fate-core.js')
     const src = getDaemonSource()
     expect(src).not.toContain('__LINE_FATE_')
     expect(src).not.toContain('__LINE_TORN_END__')
@@ -441,6 +483,9 @@ describe('send-dedupe-v1 twins', () => {
     expect(src).toContain(`const lineTornEnd = (${lineTornEnd.toString()});`)
     expect(src).toContain(`const lineWriteBegun = (${lineWriteBegun.toString()});`)
     expect(src).toContain(`const lineWriteCut = (${lineWriteCut.toString()});`)
+    expect(src).not.toContain('__TRANSCRIPT_LINE_')
+    expect(src).toContain(`const transcriptLineScan = (${transcriptLineScan.toString()});`)
+    expect(src).toContain(`const transcriptLineVerdict = (${transcriptLineVerdict.toString()});`)
   })
 
   it('both twins ask piece by piece and await the answer inside the write chain', () => {

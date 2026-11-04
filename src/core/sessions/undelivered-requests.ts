@@ -60,6 +60,8 @@ export function requestIdOf(row: Pick<QueuedMessage, 'message'>): string | undef
 export function parkMeansNeverRan(reason: string | undefined): boolean {
   if (!reason) return false;
   return /^Not delivered( yet)?:/.test(reason)
+    // Read and never answered, twice (claude-code-session.ts LINE_NOT_ANSWERED_REASON): no answer will come.
+    || /^Not answered:/.test(reason)
     || /^Not sent: the session budget is paused/.test(reason)
     || /dropped this message without running it/.test(reason)
     || /working directory (no longer exists|not set|not available)|cwd does not exist on this host/i.test(reason)
@@ -79,7 +81,8 @@ export function isHeldElsewhereReason(reason: unknown): boolean {
 /** A park a Stop made: the message never ran either, but by the user's choice, so nobody is told to resend it. */
 export function parkByStop(reason: string | undefined): boolean {
   return reason === 'Session stopped by user; retry explicitly to send'
-    || reason === 'The session ended before Claude Code ran this message';
+    || reason === 'The session ended before Claude Code ran this message'
+    || reason === 'The session ended before Claude Code answered this message';
 }
 
 /**

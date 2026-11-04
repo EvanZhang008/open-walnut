@@ -6,8 +6,10 @@
  * which lives only in that process: a crash drops it unseen, and on --resume
  * the CLI does not replay it. So for a CLI that reports its command queue
  * (stream-json `command_lifecycle`, named by the line's uuid) a row leaves
- * Walnut's queue only on the CLI's own word: `started` or `completed` (the
- * model has it), `cancelled` (a Stop dropped it). `discarded` and `refused`
+ * Walnut's queue only on the CLI's own word: `completed` (the turn ran),
+ * `started` (the model has it; with a daemon that judges answers, the rows
+ * then wait for the answer, see "Lines the CLI took" below), `cancelled` (a
+ * Stop dropped it). `discarded` and `refused`
  * mean it never ran, and the user is told. Nothing else counts: no turn count,
  * no timer. A CLI that has not reported lifecycle keeps the old rule (the write
  * is the last word), see ClaudeCodeSession.writeMessage.
@@ -44,8 +46,11 @@ const bySession = new Map<string, Map<string, Line>>()
 /** Bound per session: a CLI that never reports on its lines must not pin memory. */
 const MAX_LINES = 64
 
-/** The last state each recent uuid reported, so a report that beats its registration is not lost. */
-const seen = new Map<string, Map<string, LineState>>()
+/**
+ * The last state each recent uuid reported, so a report that beats its
+ * registration is not lost, with the process that reported it (null: unknown).
+ */
+const seen = new Map<string, Map<string, { state: LineState; pid: number | null }>>()
 const MAX_SEEN = 256
 
 /**
@@ -64,7 +69,12 @@ export function awaitLine(
   onEvicted?: (rows: QueuedMessage[]) => void,
 ): LineState | undefined {
   if (!sessionId || !uuid || rows.length === 0) return undefined
-  const already = seen.get(sessionId)?.get(uuid)
+  const word = seen.get(sessionId)?.get(uuid)
+  // A `started` another process said is no word on this write into `pid`: that
+  // process took the line and is gone, and whether it answered is the daemon's
+  // to read (line-answer-v1), never taken as this process's start.
+  const stale = !!word && word.state === 'started' && word.pid != null && pid != null && word.pid !== pid
+  const already = word && !stale ? word.state : undefined
   if (already && already !== 'queued') return already
   let lines = bySession.get(sessionId)
   if (!lines) { lines = new Map(); bySession.set(sessionId, lines) }
@@ -102,13 +112,25 @@ export function dropLine(sessionId: string | null | undefined, uuid: string): vo
 }
 
 /** Remember what the CLI said about a uuid (registered or not). */
-export function noteLineState(sessionId: string | null | undefined, uuid: string, state: LineState): void {
+export function noteLineState(sessionId: string | null | undefined, uuid: string, state: LineState, pid: number | null = null): void {
   if (!sessionId || !uuid) return
   let states = seen.get(sessionId)
   if (!states) { states = new Map(); seen.set(sessionId, states) }
   states.delete(uuid)
-  states.set(uuid, state)
+  states.set(uuid, { state, pid })
   if (states.size > MAX_SEEN) states.delete(states.keys().next().value!)
+}
+
+/**
+ * Forget what the CLI said about a uuid: a line its process took and never
+ * answered goes back to pending, and its resend must ask the daemon (which reads
+ * whether that process answered) instead of finding `started` here (line-answer-v1).
+ */
+export function forgetLineState(sessionId: string | null | undefined, uuid: string): void {
+  const states = sessionId ? seen.get(sessionId) : undefined
+  if (!states) return
+  states.delete(uuid)
+  if (states.size === 0) seen.delete(sessionId!)
 }
 
 /** Is any line of this session waiting for the CLI to take it? */
@@ -143,6 +165,114 @@ export function untakenLines(sessionId: string | null | undefined, pid?: number 
     lines.delete(uuid)
   }
   if (lines.size === 0) bySession.delete(sessionId)
+  return out
+}
+
+// ── Lines the CLI took, waiting for its answer (line-answer-v1) ──
+//
+// `started` says the CLI took the line for a turn, not that it answered: a CLI
+// killed before its first word leaves a message nobody answers. With a daemon
+// that judges answers (line-answer-v1), a taken line's rows stay queued here
+// until the process that took it prints its answer (an assistant message or a
+// result, line-fate-core.ts lineAnswerFrame). When that process ends first,
+// they go back to pending under their uuid, and the next delivery asks the
+// daemon, which reads the CLI's stdout and says whether it answered (ran) or
+// not (unanswered: sent once more under a new uuid). Kept apart from the lines
+// waiting to be taken: nothing here is challenged, cancelled by a Stop, or
+// handed back to the composer.
+
+/**
+ * `after`: how many answers the reader had counted when it read the line's
+ * `started` frame (or its process's first init, for a resume's first line), so
+ * only a later answer is the line's. Null: the line's start was not read here
+ * (a daemon's word that the process took it), so no answer counts until the
+ * reader reaches that frame (orderAnswer): the daemon's word and the stream are
+ * not ordered, and an answer read before the frame belongs to an earlier turn.
+ */
+interface AnsweringLine extends Line { after: number | null }
+
+const answering = new Map<string, Map<string, AnsweringLine>>()
+
+/**
+ * The CLI took this line in process `pid`: its rows wait for that process's
+ * answer. Past the bound the oldest line leaves and goes to `onEvicted`, which
+ * settles it by the old rule (taken is delivered), so no row is stranded.
+ */
+export function awaitAnswer(
+  sessionId: string | null | undefined, uuid: string, rows: QueuedMessage[], pid: number | null,
+  after: number | null, onEvicted?: (rows: QueuedMessage[]) => void,
+): void {
+  if (!sessionId || !uuid || rows.length === 0) return
+  let lines = answering.get(sessionId)
+  if (!lines) { lines = new Map(); answering.set(sessionId, lines) }
+  lines.delete(uuid)
+  lines.set(uuid, { rows: [...rows], pid, after })
+  if (lines.size > MAX_LINES) {
+    const oldest = lines.keys().next().value!
+    const evicted = lines.get(oldest)!.rows
+    lines.delete(oldest)
+    onEvicted?.(evicted)
+  }
+}
+
+/** The reader reached the `started` frame of a line waiting for its answer: answers from here on are its. */
+export function orderAnswer(sessionId: string | null | undefined, uuid: string, after: number): void {
+  const line = sessionId ? answering.get(sessionId)?.get(uuid) : undefined
+  if (line && line.after === null) line.after = after
+}
+
+/**
+ * Process `pid` printed an answer, the reader's `count`-th: every line it took
+ * whose start came before that answer is answered, removed and returned.
+ */
+export function answeredLines(sessionId: string | null | undefined, pid: number | null, count: number): UntakenLine[] {
+  const lines = sessionId ? answering.get(sessionId) : undefined
+  if (!lines) return []
+  const out: UntakenLine[] = []
+  for (const [uuid, line] of lines) {
+    if (pid != null && line.pid != null && line.pid !== pid) continue
+    if (line.after === null || count <= line.after) continue
+    out.push({ uuid, rows: line.rows })
+    lines.delete(uuid)
+  }
+  if (lines.size === 0) answering.delete(sessionId!)
+  return out
+}
+
+/** Lines still waiting for an answer from `pid` (or any process), removed: that process ended. */
+export function unansweredLines(sessionId: string | null | undefined, pid?: number | null): UntakenLine[] {
+  return drainAnswering(sessionId, pid ?? null)
+}
+
+/** One line's wait for its answer ends (the CLI said `completed`): its rows, or none. */
+export function takeAnswering(sessionId: string | null | undefined, uuid: string): QueuedMessage[] {
+  const lines = sessionId ? answering.get(sessionId) : undefined
+  const line = lines?.get(uuid)
+  if (!lines || !line) return []
+  lines.delete(uuid)
+  if (lines.size === 0) answering.delete(sessionId!)
+  return line.rows
+}
+
+/** Is any line of this session waiting for an answer (optionally from process `pid`)? */
+export function hasAnsweringLines(sessionId: string | null | undefined, pid?: number | null): boolean {
+  const lines = sessionId ? answering.get(sessionId) : undefined
+  if (!lines) return false
+  if (pid == null) return lines.size > 0
+  for (const line of lines.values()) if (line.pid == null || line.pid === pid) return true
+  return false
+}
+
+function drainAnswering(sessionId: string | null | undefined, pid: number | null): UntakenLine[] {
+  const lines = sessionId ? answering.get(sessionId) : undefined
+  if (!lines) return []
+  const out: UntakenLine[] = []
+  for (const [uuid, line] of lines) {
+    if (pid != null && line.pid != null && line.pid !== pid) continue
+    out.push({ uuid, rows: line.rows })
+    lines.delete(uuid)
+  }
+  if (lines.size === 0) answering.delete(sessionId!)
   return out
 }
 
@@ -235,6 +365,7 @@ export function announceReclaimed(sessionId: string, why: ReclaimReason = 'death
 /** Test-only reset. */
 export function resetLineConsumption(): void {
   bySession.clear()
+  answering.clear()
   seen.clear()
   told.clear()
   held.clear()

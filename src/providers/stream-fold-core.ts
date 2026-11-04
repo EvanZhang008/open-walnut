@@ -184,20 +184,27 @@ export function createStreamFold<F extends SpanningFold, T>(deps: StreamFoldDeps
     return { fold, task, boundary: v, from, checkpointV, aborted: stopped, ms }
   }
 
-  /** True when `<projects>/<any project>/<transcriptId>.jsonl` exists. */
-  async function transcriptExists(projectsDirs: readonly string[], transcriptId: string): Promise<boolean> {
+  /** `<projects>/<any project>/<transcriptId>.jsonl` when it exists and holds anything, else null. */
+  async function transcriptPathOf(projectsDirs: readonly string[], transcriptId: string): Promise<string | null> {
+    if (!transcriptId) return null
     const name = transcriptId + '.jsonl'
     for (const dir of projectsDirs) {
       let slugs: string[]
       try { slugs = await fsp.readdir(dir) } catch { continue }
       for (const slug of slugs) {
+        const file = deps.path.join(dir, slug, name)
         try {
-          const st = await fsp.stat(deps.path.join(dir, slug, name))
-          if (st.isFile() && st.size > 0) return true
+          const st = await fsp.stat(file)
+          if (st.isFile() && st.size > 0) return file
         } catch { /* not in this project */ }
       }
     }
-    return false
+    return null
+  }
+
+  /** True when `<projects>/<any project>/<transcriptId>.jsonl` exists. */
+  async function transcriptExists(projectsDirs: readonly string[], transcriptId: string): Promise<boolean> {
+    return (await transcriptPathOf(projectsDirs, transcriptId)) !== null
   }
 
   /**
@@ -252,5 +259,5 @@ export function createStreamFold<F extends SpanningFold, T>(deps: StreamFoldDeps
     return true
   }
 
-  return { foldFile, transcriptExists, rotateReason, rotate, carryLine, rotateBytes: ROTATE_BYTES }
+  return { foldFile, transcriptExists, transcriptPathOf, rotateReason, rotate, carryLine, rotateBytes: ROTATE_BYTES }
 }

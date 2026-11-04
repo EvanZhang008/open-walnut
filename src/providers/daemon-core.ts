@@ -18,7 +18,7 @@
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
 import { userLineContent } from './user-line-images-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, type LineFate, type LineFateKind, type LineFateScan, type LineWritten } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -188,6 +188,8 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   fifoBootWriteDeadlineMs?: number
   /** Checked inside the final FIFO serializer, before any cost-producing line. */
   allowBudgetFn?: (sid: string) => Promise<BudgetGate>
+  /** The Claude Code transcript of this session's CLI, or null (line-answer-v1 asks it when the stream lost a line's frames). */
+  transcriptPathFn?: (sid: string, session: S) => Promise<string | null>
   logger: (level: string, msg: string, meta?: Record<string, unknown>) => void
   /** Broadcasts `{ev:'session_state', sid, state, ...extra}` to all wsClients. */
   broadcastSessionStateFn: (payload: Record<string, unknown>) => void
@@ -303,7 +305,7 @@ export type SendResult =
   // the line is written, but the CLI may exit on what that write left without running it.
   // writtenAt / quiet: a waiting line's write time, and that the CLI printed nothing since (line-fate-core.ts).
   // noticeLeftOut: a host delivery's line went without its instruction notice (createNoticeOnce).
-  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; writtenAt?: number; quiet?: true; cut?: true; noticeLeftOut?: true }
+  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; writtenAt?: number; quiet?: true; answer?: 'yes' | 'pending'; cut?: true; noticeLeftOut?: true }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'budget_paused' | 'budget_checking' }
   // written (on a user line's failed write): how much of it went into the pipe
@@ -354,13 +356,19 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * lone newline: a fragment the CLI holds is then ended on its own, never glued
    * onto the line (a whole body that only lacked its newline parses as the
    * first copy, and the CLI skips this one by its uuid).
+   *
+   * `opts.answers` (line-answer-v1, with dedupe): the server tells a taken
+   * line from an answered one. A line a process that is gone took and never
+   * answered is then `unanswered` (else `ran`, as before), and when the stream
+   * no longer holds the line's frames the CLI's transcript is asked
+   * (transcriptPathFn, transcriptLineScan).
    */
   handleSendCommand: (
     sid: string | undefined,
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean },
+    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean; answers?: boolean },
   ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
@@ -1054,13 +1062,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     rawMessage: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean },
+    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean; answers?: boolean },
   ): Promise<SendResult> {
     if (!sid || !rawMessage) return { error: 'send: missing sid or message' }
     const normalized = normalizeMarkers(markers)
     if ('error' in normalized) return { error: normalized.error }
     const dedupe = opts?.dedupe === true && normalized.markers.length > 0
     const lostPid = dedupe && typeof opts?.lostPid === 'number' ? opts.lostPid : null
+    const answers = dedupe && opts?.answers === true
 
     const session = sessions.get(sid)
     if (!session) return { ok: false, reason: 'not_found' }
@@ -1118,7 +1127,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       const deadlineAt = opts?.bootWait === true ? bootWriteDeadline(session) : undefined
       const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
         deadlineAt,
-        fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid, torn) : undefined,
+        fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid, torn, answers ? sid : null) : undefined,
         begin: ids.length > 0 ? (on: boolean) => recordLineBegun(session, uuid, ids, on) : undefined,
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
         // A rewrite already starts with its newline: one is enough.
@@ -1129,12 +1138,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       if (typeof result === 'object') {
         logger('info', 'send: the line was not written again', {
           sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state ?? null,
-          writtenAt: result.writtenAt ?? null, quiet: result.quiet === true,
+          writtenAt: result.writtenAt ?? null, quiet: result.quiet === true, answer: result.answer ?? null,
         })
         return {
           ok: true, duplicate: true, fate: result.fate, ...(result.state ? { state: result.state } : {}),
           ...(typeof result.writtenAt === 'number' ? { writtenAt: result.writtenAt } : {}),
           ...(result.quiet === true ? { quiet: true as const } : {}),
+          // Whether a taken line was answered (line-answer-v1, line-fate-core.ts).
+          ...(result.answer ? { answer: result.answer } : {}),
         }
       }
       if (result === 'ok') {
@@ -1333,14 +1344,26 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    */
   async function lineFateInProcess(
     session: S, uuid: string | undefined, messageIds: string[], lostPid: number | null = null,
-    torn?: { end: boolean; cut: boolean },
+    torn?: { end: boolean; cut: boolean }, answersSid: string | null = null,
   ): Promise<LineFate | null> {
-    const q = { uuid: uuid ?? '', messageIds, pid: session.pid, lostPid }
+    const q = { uuid: uuid ?? '', messageIds, pid: session.pid, lostPid, answers: !!answersSid }
     let scan: LineFateScan | null = null
     await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan) })
     let records = ''
     await scanTail(lineRecordPath(session.jsonlPath), LINE_RECORD_SCAN_BYTES, (text) => { records += text })
-    const verdict = lineFateVerdict(scan, records, q)
+    let verdict = lineFateVerdict(scan, records, q)
+    // line-answer-v1: the stream no longer holds the line's frames (a rotated
+    // file, a window passed): the CLI's transcript says whether it took the line
+    // and answered it. Keep in sync with daemon-source.ts lineFateInProcess.
+    if (verdict === null && answersSid && q.uuid && deps.transcriptPathFn) {
+      const transcript = await deps.transcriptPathFn(answersSid, session).catch(() => null)
+      if (transcript) {
+        let tscan: TranscriptLineScan | null = null
+        await scanTail(transcript, DEDUPE_SCAN_BYTES, (text) => { tscan = transcriptLineScan(text, q.uuid, tscan) })
+        verdict = transcriptLineVerdict(tscan)
+        if (verdict) logger('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate })
+      }
+    }
     // An earlier attempt into this process that died part way: end what it left first
     // (lineTornEnd), and say so when that may be a cut body the CLI will exit on (lineWriteCut).
     const begunAt = lineWriteBegun(records, q)

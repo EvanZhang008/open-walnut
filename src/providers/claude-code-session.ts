@@ -51,6 +51,7 @@ import {
   getAllSessionsWithPending,
   getQueue,
   removeTaken,
+  requeueUnanswered,
   revertIfQueued,
   parkIfQueued,
   unmarkUnwritten,
@@ -58,9 +59,10 @@ import {
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
-  takeLine, takeUntold, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
+  announceReclaimed, answeredLines, awaitAnswer, awaitLine, orderAnswer, awaitedLines, dropLine, forgetLineState, hasAnsweringLines, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
+  takeAnswering, takeLine, takeUntold, unansweredLines, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
+import { lineAnswerFrame } from './line-fate-core.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
@@ -673,6 +675,25 @@ function resumeProfileOpts(
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 /** How long a resumed line whose process ended waits for that process's last stream lines. */
 const RESUME_LINE_SETTLE_MS = 2_000
+/**
+ * A line Claude Code took twice and never answered (line-answer-v1): parked for
+ * a Retry, and its asker told (undelivered-requests.ts parkMeansNeverRan).
+ */
+export const LINE_NOT_ANSWERED_REASON = 'Not answered: Claude Code read this message and stopped before answering it, '
+  + 'twice (its process ended both times). Retry sends it again.'
+/** The user's stop (or the task's completion) ended the process while a line it took waited for its answer: nobody is told to resend. */
+export const LINE_ENDED_UNANSWERED_REASON = 'The session ended before Claude Code answered this message'
+/** Teardowns that are the user's own choice (a Stop, the task completed); any other one Walnut chose itself. */
+const USER_TEARDOWNS = new Set(['user_terminated', 'task_completed'])
+/**
+ * Walnut ended the process itself (idle reap, capacity, orphan cleanup) while a
+ * line it took waited for its answer: parked, not sent again on its own (that
+ * would bring back the session just ended), and its asker told it was not answered.
+ */
+export function lineTornDownReason(reason: string | undefined): string {
+  return `Not answered: Walnut ended this session (${reason || 'teardown'}) after Claude Code read this message and before it answered. `
+    + 'Retry sends it again.'
+}
 const LIVENESS_INTERVAL_MS = 3000
 const INTERRUPT_ACK_TIMEOUT_MS = 5_000
 const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
@@ -2867,7 +2888,12 @@ export class ClaudeCodeSession {
     this._cutPid = null
     // A hold left by the previous process is settled by what that process showed.
     this.parkUnreadResumeLine()
+    // Lines the replaced process took and never answered (its end was never seen
+    // here: a restart, a stop before a respawn): the daemon judges them on resend.
+    if (this.claudeSessionId) this.handBackAnsweringLines(this.claudeSessionId, unansweredLines(this.claudeSessionId), 'replaced', true)
+    this._startedMarks.clear()
     this._initSeenThisProcess = false
+    this._initAnswerCount = null
 
     const isResume = !!resumeSessionId && !forkSession
     // Pre-assigned id (init-only spawn) names the stream/FIFO files directly —
@@ -4095,7 +4121,7 @@ export class ClaudeCodeSession {
     // process, so the daemon writes the line again instead of trusting its record.
     const lost = uuid && opts?.dedupe ? this._lostLines.get(uuid) : undefined
     const lostPid = lost && lost.pid === this.pid ? lost.pid : undefined
-    let known: { fate: string; state?: string; writtenAt?: number; quiet?: true } | undefined
+    let known: { fate: string; state?: string; writtenAt?: number; quiet?: true; answer?: 'yes' | 'pending' } | undefined
     const cut = this.cutLineHold(uuid, rows, lineSid, opts?.markers ?? [], undefined, callerOnCut)
     let ownCut = false
     // The line waited behind one whose answer was still being asked for.
@@ -4390,8 +4416,11 @@ export class ClaudeCodeSession {
   private noteInitCapabilities(capabilities: unknown, replayed: boolean): void {
     const reports = Array.isArray(capabilities) && capabilities.includes('msg_lifecycle_v1')
     if (!replayed) {
+      // The process's first init: its first line's answer is any answer read after it.
+      if (!this._initSeenThisProcess) this._initAnswerCount = this._answerCount
       this._initSeenThisProcess = true
-      this.releaseResumeLine()
+      // Read, not answered: a CLI that names its lines is held to its answer (line-answer-v1).
+      this.releaseResumeLine(reports || this._sawCommandLifecycle ? 'read' : 'answered')
     }
     if (reports) {
       this._sawCommandLifecycle = true
@@ -4437,6 +4466,143 @@ export class ClaudeCodeSession {
     if (why !== 'cancelled' && why !== 'stopped') reportDelivered(sid, ids, this.turnGen)
   }
 
+  // ── Taken is not answered (line-answer-v1) ──
+  //
+  // `started` says the CLI took a line for a turn. A CLI killed before its first
+  // word leaves that message unanswered, and it used to count as delivered (the
+  // rows left the queue at `started`), so nothing ever sent it again. Now every
+  // path that learns the CLI took a line comes through settleTakenLine: the user
+  // is told it is delivered (the model has it), and the rows stay queued until
+  // this process answers (noteLineAnswered) or ends (reclaimUntakenLines hands
+  // them back, and the daemon, reading the CLI's stdout, says ran or
+  // unanswered). Only with a daemon that judges answers; without one, the old
+  // rule (taken is delivered). See line-consumption.ts.
+
+  /** Main-thread answers (lineAnswerFrame) this object has seen from its processes. */
+  private _answerCount = 0
+  /** For each line seen `started` here: the answer count at that frame. A later answer is its answer. */
+  private _startedMarks = new Map<string, number>()
+  /** The answer count at this process's first init (null: none read yet). */
+  private _initAnswerCount: number | null = null
+
+  /** The transport's daemon tells a taken line from an answered one (line-answer-v1). */
+  private get judgesAnswers(): boolean { return this._transport?.judgesAnswers === true }
+
+  /**
+   * Has this object read an answer after the line's `started` frame? Both come
+   * from the one stream in file order, so the count at the frame orders them.
+   * Never paired by arrival time: a fate the daemon sends back is not ordered
+   * against the stream this object reads (it may be behind), so a line whose
+   * started frame was not read here waits for an answer read after it is
+   * registered, its turn's `completed`, or its process's end (then the daemon,
+   * reading the whole stream, judges).
+   */
+  private answeredSince(uuid: string): boolean {
+    const mark = uuid ? this._startedMarks.get(uuid) : undefined
+    return mark !== undefined && this._answerCount > mark
+  }
+
+  /**
+   * The one way a line the CLI took settles: its `started` frame, a daemon's ran
+   * (or the registry's word that the CLI said started), the first line of a resume
+   * read at the process's init. `answered`: the CLI's answer is already known
+   * (completed, or the daemon read it). Otherwise the rows wait for this process's
+   * answer, unless one was read after its started frame (answeredSince). `after`:
+   * the answer count where its start was read when no mark was kept for it (a
+   * replayed frame: answers read from here on are after it).
+   */
+  private settleTakenLine(uuid: string, rows: QueuedMessage[], state: string, answered: boolean, after: number | null = null): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    if (answered || !uuid || !this.judgesAnswers || this.answeredSince(uuid)) {
+      this.releaseLineRows(rows, state)
+      return
+    }
+    log.session.info('the CLI took a line: its rows wait for its answer', { sessionId: sid, uuid, pid: this.pid, state, messageIds: rows.map((r) => r.id) })
+    this.awaitLineAnswer(uuid, rows, this._startedMarks.get(uuid) ?? after)
+    // Delivered (the model has it), told once (takeUntold): the rows only stay queued.
+    reportDelivered(sid, rows.map((r) => r.id), this.turnGen)
+  }
+
+  /**
+   * Hold a taken line's rows for this process's answer (awaitAnswer). `after`:
+   * the answer count at its start as read here, null when its start was not read
+   * (no answer counts until it is, orderAnswer). Past the registry's bound the
+   * oldest line settles by the old rule.
+   */
+  private awaitLineAnswer(uuid: string, rows: QueuedMessage[], after: number | null): void {
+    awaitAnswer(this.claudeSessionId, uuid, rows, this.pid, after, (evicted) => this.releaseLineRows(evicted, 'started'))
+  }
+
+  /** This process printed an answer: every line it took before it is answered, and its rows leave the queue. */
+  private noteLineAnswered(): void {
+    this._answerCount++
+    const sid = this.claudeSessionId
+    if (!sid || !hasAnsweringLines(sid, this.pid)) return
+    for (const line of answeredLines(sid, this.pid, this._answerCount)) this.releaseLineRows(line.rows, 'answered')
+  }
+
+  /**
+   * The daemon read the CLI's stdout: a process that is gone took this line and
+   * never answered it (line-fate-core.ts `unanswered`). The rows go out once more,
+   * under a new uuid (the CLI would skip the old one as already in its transcript
+   * and call it completed); a second time they are parked, and the sender and the
+   * asker are told it was not answered (undelivered-requests.ts parkMeansNeverRan).
+   */
+  private resendUnanswered(uuid: string, rows: QueuedMessage[], state?: string): void {
+    const sid = this.claudeSessionId
+    if (!sid || rows.length === 0) return
+    if (uuid) takeAnswering(sid, uuid)
+    log.session.warn('the CLI took a line and stopped before answering it: it goes out once more under a new uuid', {
+      sessionId: sid, uuid, state: state ?? null, messageIds: rows.map((r) => r.id),
+    })
+    // Started synchronously: the queue's writes run in call order, so a delivery
+    // started after this call already sees the rows pending (as handBackLines).
+    const requeued = requeueUnanswered(rows, uuid || undefined).catch((err) => {
+      log.session.warn('sending an unanswered line again failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+      return { resent: [] as QueuedMessage[], exhausted: [] as QueuedMessage[] }
+    })
+    this._lineReclaims++
+    this._lineReclaimDone = requeued.then(() => {})
+    void requeued.then(({ resent, exhausted }) => {
+      // Its uuid is in the CLI's transcript: a Retry goes out under a new one.
+      if (exhausted.length > 0) this.parkLineRows(exhausted, LINE_NOT_ANSWERED_REASON, true, true)
+      if (resent.length > 0) announceReclaimed(sid)
+    })
+  }
+
+  /**
+   * The process these lines were taken in is gone and never answered them here.
+   * They go back to pending under their uuid, so the next delivery asks the
+   * daemon, which reads that process's stdout: ran (its answer is there) or
+   * unanswered (resendUnanswered). A teardown Walnut asked for parks them: worded
+   * as a stop for the user's own (nobody is told to resend), as not answered for
+   * one Walnut chose (the asker is told).
+   */
+  private handBackAnsweringLines(sid: string, lines: UntakenLine[], why: string, announce: boolean): void {
+    if (lines.length === 0) return
+    const rows = lines.flatMap((line) => line.rows)
+    for (const line of lines) {
+      // Its resend asks the daemon, not the `started` this process said.
+      forgetLineState(sid, line.uuid)
+      this._startedMarks.delete(line.uuid)
+    }
+    if (this._expectedTeardown) {
+      // Its uuid is in the CLI's transcript: a Retry goes out under a new one.
+      this.parkLineRows(rows, USER_TEARDOWNS.has(this._teardownReason ?? '') ? LINE_ENDED_UNANSWERED_REASON : lineTornDownReason(this._teardownReason), true, true)
+      return
+    }
+    log.session.warn('the CLI ended before answering lines it took: they go back to the queue for the daemon to judge', {
+      sessionId: sid, why, messageIds: rows.map((r) => r.id),
+    })
+    const reverted = revertIfQueued(rows).catch((err) => {
+      log.session.warn('returning unanswered lines to the queue failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+    this._lineReclaims++
+    this._lineReclaimDone = reverted
+    if (announce) void reverted.then(() => announceReclaimed(sid))
+  }
+
   /** The old rule, for a CLI that does not report its queue: the write is the last word. */
   private removeWrittenRows(rows: QueuedMessage[]): void {
     const sid = this.claudeSessionId
@@ -4452,11 +4618,11 @@ export class ClaudeCodeSession {
    * the text kept for a Retry. `freshLine`: the CLI saw the uuid and dropped it,
    * so a Retry goes out as a new line.
    */
-  private parkLineRows(rows: QueuedMessage[], reason: string, freshLine = false): void {
+  private parkLineRows(rows: QueuedMessage[], reason: string, freshLine = false, transcribed = false): void {
     const sid = this.claudeSessionId
     if (!sid || rows.length === 0) return
     log.session.warn('a line never ran: its rows are parked and the user is told', { sessionId: sid, reason, messageIds: rows.map((r) => r.id) })
-    void parkIfQueued(rows, reason, { freshLine }).catch(() => []).then((parked) => {
+    void parkIfQueued(rows, reason, { freshLine, transcribed }).catch(() => []).then((parked) => {
       if (parked.length === 0) return
       reportBatchFailed(sid, parked.map((m) => m.id), reason)
     })
@@ -4469,7 +4635,7 @@ export class ClaudeCodeSession {
    * follows the old rule (its rows leave now).
    */
   private settleLineFate(uuid: string, rows: QueuedMessage[], markers: Array<{ message: string; messageId: string }>,
-    known: { fate: string; state?: string }, untracked = false): void {
+    known: { fate: string; state?: string; answer?: 'yes' | 'pending' }, untracked = false): void {
     const sid = this.claudeSessionId
     if (!sid || rows.length === 0) return
     if (known.fate === 'waiting') {
@@ -4477,7 +4643,13 @@ export class ClaudeCodeSession {
       return
     }
     if (uuid) takeLine(sid, uuid)
-    if (known.fate === 'ran') { this.releaseLineRows(rows, known.state ?? 'ran'); return }
+    if (known.fate === 'ran') {
+      // A line the CLI took is answered once it says completed or the daemon read its
+      // answer; one it only started waits for that answer (line-answer-v1).
+      this.settleTakenLine(uuid, rows, known.state ?? 'ran', known.state !== 'started' || known.answer === 'yes')
+      return
+    }
+    if (known.fate === 'unanswered') { this.resendUnanswered(uuid, rows, known.state); return }
     if (known.fate === 'cancelled') {
       this.releaseLineRows(rows, 'cancelled')
       this.returnToComposer(markers.length ? markers : rows.map((r) => ({ message: r.message, messageId: r.id })))
@@ -4624,18 +4796,48 @@ export class ClaudeCodeSession {
 
   /** Hold `rows` until this process reads them. False when it already did (remove them now). */
   holdResumeLineUntilRead(rows: QueuedMessage[], endsBefore: number): boolean {
-    if (rows.length === 0 || this._initSeenThisProcess) return false
+    // Read already: its init came first, or it named the line started (line-answer-v1).
+    if (rows.length === 0 || this._initSeenThisProcess || this.resumeLineStarted(rows)) return false
     this._resumeLineHold = rows
     // The process ended while the spawn was being confirmed: it never read them.
     if (this._processEnds !== endsBefore) this.parkUnreadResumeLine(RESUME_LINE_SETTLE_MS)
     return true
   }
 
-  private releaseResumeLine(): void {
+  /**
+   * The resumed process read its first line. `read` (its init, from a CLI that
+   * names its lines): the CLI took it, and the rows wait for its answer like any
+   * taken line (settleTakenLine). `answered` (its result, or a CLI that names
+   * nothing): they leave the queue now.
+   */
+  /** The CLI said `started` for this resume line (line-answer-v1: then it read it, answered or not). */
+  private resumeLineStarted(rows: QueuedMessage[]): boolean {
+    const uuid = rows[0]?.lineUuid
+    return !!uuid && this.judgesAnswers && this._startedMarks.has(uuid)
+  }
+
+  /** The first line of a resume this process already read (its init came before the spawn was confirmed). */
+  settleReadResumeLine(rows: QueuedMessage[]): void {
+    if (rows.length === 0) return
+    this._resumeLineHold = rows
+    this.releaseResumeLine(this._sawCommandLifecycle ? 'read' : 'answered')
+  }
+
+  private releaseResumeLine(how: 'read' | 'answered' = 'answered'): void {
     const rows = this._resumeLineHold
     const sid = this.claudeSessionId
     this._resumeLineHold = null
     if (!rows || !sid) return
+    const uuid = rows[0]?.lineUuid
+    // Its answer: one read after its started frame, or after the process's first init (its first turn).
+    const after = uuid ? this._startedMarks.get(uuid) ?? this._initAnswerCount : null
+    if (how === 'read' && uuid && this.judgesAnswers && !(after !== null && this._answerCount > after)) {
+      // Its process already ended: no answer will come from it, the daemon judges.
+      if (this._processEnded) { this.handBackAnsweringLines(sid, [{ uuid, rows }], 'exit', true); return }
+      log.session.info('the resumed process read its first line: its rows wait for its answer', { sessionId: sid, uuid, pid: this.pid, messageIds: rows.map((r) => r.id) })
+      this.awaitLineAnswer(uuid, rows, after)
+      return
+    }
     removeProcessed(sid, rows.map((m) => m.id)).catch((err) => {
       log.session.warn('removeProcessed failed after the resumed process read its first line', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
     })
@@ -4649,7 +4851,9 @@ export class ClaudeCodeSession {
   private parkUnreadResumeLine(settleMs = 0): void {
     const held = this._resumeLineHold
     if (!held) return
-    if (this._initSeenThisProcess) { this.releaseResumeLine(); return }
+    if (this._initSeenThisProcess) { this.releaseResumeLine(this._sawCommandLifecycle ? 'read' : 'answered'); return }
+    // The CLI named it started (before any init, as Claude Code does): it read it.
+    if (this.resumeLineStarted(held)) { this.releaseResumeLine('read'); return }
     if (settleMs > 0) {
       const timer = setTimeout(() => { if (this._resumeLineHold === held) this.parkUnreadResumeLine() }, settleMs)
       timer.unref?.()
@@ -4694,6 +4898,8 @@ export class ClaudeCodeSession {
     const sid = this.claudeSessionId
     if (!sid) return
     this.handBackLines(sid, untakenLines(sid, this.pid), why, announce)
+    // Lines it took and never answered: the daemon judges them on their resend.
+    this.handBackAnsweringLines(sid, unansweredLines(sid, this.pid), why, announce)
   }
 
   /** Process ends seen (each calls reclaimUntakenLines once): compare across a write. */
@@ -5009,6 +5215,9 @@ export class ClaudeCodeSession {
     const untaken = untakenLines(this.claudeSessionId).flatMap((line) => line.rows)
     this.releaseLineRows(untaken, 'stopped')
     this.returnToComposer(untaken.map((r) => ({ message: r.message, messageId: r.id })))
+    // Lines it took and was still answering: the user stopped that turn, as Esc does
+    // in Claude Code (the prompt stays in the conversation). Never sent again.
+    this.releaseLineRows(unansweredLines(this.claudeSessionId).flatMap((line) => line.rows), 'started')
     // The daemon confirmed the stop, and its exit event lands after stopMonitoring(),
     // so nothing else reports it: the record would stay 'running' with a dead pid.
     this.pid = null
@@ -5791,6 +6000,9 @@ export class ClaudeCodeSession {
       && !(event as { parent_tool_use_id?: string }).parent_tool_use_id
       && this._isReplayedByOffset() !== true) this.setForegroundActive(true)
 
+    // The CLI's answer to the lines it took (line-answer-v1): their rows leave the queue.
+    if (!isWalnutInjected && this._isReplayedByOffset() !== true && lineAnswerFrame(event)) this.noteLineAnswered()
+
     // Subagent lanes of the speed readout (see feedTurnSpeedLanes). An
     // observer like the main meter's tap in the stream_event case: whatever it
     // throws must not cost the line its handling.
@@ -5808,6 +6020,8 @@ export class ClaudeCodeSession {
 
         // A rotated stream file opens with what its old file had armed (stream-fold-core.ts
         // rotate): the resumed CLI revives those crons and that wakeup without a line of its own.
+        // The daemon's note that a process began (line-answer-v1, line-fate-core.ts): nothing to show or do.
+        if (sys.subtype === 'walnut_process') break
         if (sys.subtype === 'walnut_fold_carry') {
           const ids = Array.isArray(sys.cron_ids) ? sys.cron_ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
           for (const id of ids) this._cronJobIds.add(id)
@@ -8039,7 +8253,8 @@ export class ClaudeCodeSession {
         this._provisionalLines.clear()
         this.saveLifecyclePid()
         if (typeof lc.command_uuid !== 'string' || typeof lc.state !== 'string') break
-        noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState)
+        // A replayed frame may be another process's word: no pid for it.
+        noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState, this._isReplayedByOffset() === true ? null : this.pid ?? null)
         // The CLI named the line: no question about it is needed (send-lost-line-v1).
         this.clearLineAck(lc.command_uuid)
         this._lineQuiet.delete(lc.command_uuid)
@@ -8067,8 +8282,27 @@ export class ClaudeCodeSession {
         }
         if (lc.state === 'started' || lc.state === 'completed') {
           this._queuedLines.delete(lc.command_uuid)
-          // The model has the line: only now do its rows leave the queue.
-          this.releaseLineRows(takeLine(this.claudeSessionId, lc.command_uuid), lc.state)
+          const rows = takeLine(this.claudeSessionId, lc.command_uuid)
+          if (lc.state === 'completed') {
+            // The turn that took it is over: answered (line-answer-v1).
+            this.releaseLineRows([...rows, ...takeAnswering(this.claudeSessionId, lc.command_uuid)], 'completed')
+            break
+          }
+          // The model has the line; its rows leave the queue once this process answers it.
+          if (this._isReplayedByOffset() !== true) {
+            this._startedMarks.delete(lc.command_uuid)
+            this._startedMarks.set(lc.command_uuid, this._answerCount)
+            if (this._startedMarks.size > 256) this._startedMarks.delete(this._startedMarks.keys().next().value!)
+          }
+          // A line held on the daemon's word, its start now read: later answers are its.
+          orderAnswer(this.claudeSessionId, lc.command_uuid, this._answerCount)
+          // A replayed start is no answer either: the process may still be on it (a
+          // restart while it thinks). Answers read from here on are after it, and a
+          // replayed `completed` or the process's end settles it.
+          this.settleTakenLine(lc.command_uuid, rows, 'started', false, this._answerCount)
+          // The first line of a resume, named started: read (the init that says so comes after it).
+          if (this._resumeLineHold && this.resumeLineStarted(this._resumeLineHold)
+            && this._resumeLineHold[0]?.lineUuid === lc.command_uuid) this.releaseResumeLine('read')
           break
         }
         // discarded / refused: it never ran and never will in this session. Not taken:
@@ -12784,11 +13018,8 @@ export class SessionRunner {
     }
     // The resumed process's first line: it takes it at start, before anything else,
     // unless it ends first (it could not load the session): kept until its init.
-    if (!session.holdResumeLineUntilRead(msgs, first.endsBefore ?? session.processEndCount)) {
-      removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
-        log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
-      })
-    }
+    // Read already (its init came first): settled as a read line (line-answer-v1).
+    if (!session.holdResumeLineUntilRead(msgs, first.endsBefore ?? session.processEndCount)) session.settleReadResumeLine(msgs)
     reportDelivered(sessionId, ids, session.turnGen)
     this.logDeliveryLatency(sessionId, 'resume', msgs, session)
   }

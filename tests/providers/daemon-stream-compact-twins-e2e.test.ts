@@ -126,6 +126,8 @@ function daemonLog(dirs: Dirs): string {
 }
 
 const L = (o: unknown) => JSON.stringify(o) + '\n'
+/** The stream without the daemon's note of each process it spawned (line-answer-v1): the rest is the CLI's stdout. */
+const withoutNotes = (text: string) => text.split('\n').filter((l) => !l.includes('"subtype":"walnut_process"')).join('\n')
 const isDrop = (l: string) => l.startsWith('{"type":"stream_event",') || l.startsWith('{"type":"system","subtype":"thinking_tokens",')
 const epochOf = (file: string) => { const st = fs.statSync(file); return `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}` }
 
@@ -186,7 +188,7 @@ describe.each(TWINS)('stream compaction: $name', (twin) => {
     const liveEpoch = epochOf(jsonl)
     await new Promise((r) => setTimeout(r, 1500))
     expect(fs.statSync(jsonl).ino).toBe(liveIno)
-    expect(fs.readFileSync(jsonl, 'utf8').startsWith(content)).toBe(true)
+    expect(withoutNotes(fs.readFileSync(jsonl, 'utf8')).startsWith(content)).toBe(true)
     expect(daemonLog(dirs)).not.toContain('stream compacted')
 
     // Gone: the next sweep compacts it.
@@ -201,7 +203,7 @@ describe.each(TWINS)('stream compaction: $name', (twin) => {
     const after = fs.readFileSync(jsonl, 'utf8')
     const expected = content.split('\n').slice(0, -1).filter((l) => !isDrop(l)).map((l) => l + '\n').join('')
     // The daemon may append its own lines after the CLI's (exit markers): those stay.
-    expect(after.startsWith(expected)).toBe(true)
+    expect(withoutNotes(after).startsWith(expected)).toBe(true)
     expect(after.split('\n').filter(isDrop)).toEqual([])
     expect(fs.statSync(jsonl).ino).not.toBe(liveIno)
     // Retention reads the mtime: the copy keeps the original's.
@@ -282,7 +284,7 @@ describe.each(TWINS)('stream compaction: $name', (twin) => {
     expect(compactLines()).toMatch(/stream compaction skipped[^\n]*"reason":"(aborted|changed)"/)
     expect(compactLines()).not.toContain('"stream compacted"')
     expect(fs.statSync(jsonl).ino).toBe(ino)
-    expect(fs.readFileSync(jsonl, 'utf8').startsWith(content)).toBe(true)
+    expect(withoutNotes(fs.readFileSync(jsonl, 'utf8')).startsWith(content)).toBe(true)
     await rpc({ cmd: 'stop', sid: 'cmp-2' })
   }, 120_000)
 })

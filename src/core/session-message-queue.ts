@@ -58,7 +58,7 @@ export {
   migrateSessionQueue, rollbackSessionQueueMigration, type SessionQueueMigration,
 } from './session-queue-park.js';
 // The lines that went out (session-queue-lines.ts): rows the CLI took, rows put back unconfirmed.
-export { removeTaken, revertIfQueued, settledLineUuid, unmarkUnwritten } from './session-queue-lines.js';
+export { removeTaken, requeueUnanswered, revertIfQueued, settledLineUuid, unmarkUnwritten } from './session-queue-lines.js';
 
 // ── Public API ──
 

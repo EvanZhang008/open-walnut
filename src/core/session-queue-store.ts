@@ -69,6 +69,12 @@ export interface QueuedMessage {
    */
   lineInDoubt?: true;
   /**
+   * A CLI took this row's line and stopped before answering it (line-answer-v1,
+   * line-fate-core.ts `unanswered`), so it was sent once more under a new uuid.
+   * A second time it is parked instead, and the sender told.
+   */
+  unansweredResent?: true;
+  /**
    * Who sent it, read from the send's source (queueSentBy): `person` for words
    * someone typed (the console, the phone, the CLI, a letter), `agent` for
    * everything Walnut or another task sent. The session panel folds an agent's

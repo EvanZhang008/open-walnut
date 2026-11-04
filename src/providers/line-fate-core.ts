@@ -6,9 +6,20 @@
  *
  * Evidence, strongest first:
  * - The CLI's own word: `command_lifecycle` frames for the line's uuid in the
- *   stream file (the CLI's stdout). started / completed: it ran (in whatever
- *   process). cancelled: a Stop dropped it. discarded / refused: it never ran
- *   and never will in that session.
+ *   stream file (the CLI's stdout). completed: it ran (in whatever process).
+ *   cancelled: a Stop dropped it. discarded / refused: it never ran and never
+ *   will in that session. started: the CLI took it for a turn, which is no
+ *   proof of an answer (the CLI may die before its first word). Claude Code's
+ *   own rule (conversationRecovery.ts detectTurnInterruption) is that a turn
+ *   whose last message is the user's prompt was never answered, and that an
+ *   assistant message after it (not an API error) means it was. The stream file
+ *   is the CLI's stdout itself, and the CLI prints each assistant message as it
+ *   files it in its transcript, so the stream holds every answer the transcript
+ *   can: a main-thread assistant frame or a `result` after `started` is the
+ *   answer (lineAnswerFrame). Without one, a line started by the process running
+ *   now may still be answered (ran, answer 'pending'), and a line started by a
+ *   process that is gone never will be: `unanswered`, and the server sends it
+ *   once more under a new uuid (line-answer-v1).
  * - The daemon's write record (`<stream>.lines`, appended only AFTER the final
  *   newline went into the pipe): the whole line went into the stdin pipe of
  *   process `pid`, so the CLI holds it or is about to read it. Unless another
@@ -40,11 +51,17 @@
  * CLI's own uuid check still skips a line its process already received).
  */
 
-export type LineFateKind = 'ran' | 'cancelled' | 'dropped' | 'waiting'
+export type LineFateKind = 'ran' | 'cancelled' | 'dropped' | 'waiting' | 'unanswered'
 
 export interface LineFate {
   fate: LineFateKind
   state?: string
+  /**
+   * ran with state started (line-answer-v1): 'yes', the CLI printed its answer;
+   * 'pending', the process running now took it and has not answered yet. Absent
+   * from an older daemon, which cannot tell the two apart.
+   */
+  answer?: 'yes' | 'pending'
   /** waiting, from a write record: when that whole write went into the process (ms). */
   writtenAt?: number
   /** waiting, from a write record: the line's marker is in view and the CLI printed nothing after it. */
@@ -63,6 +80,13 @@ export interface LineFateQuery {
    * as the scan saw this process's marker for the line (else they still do).
    */
   lostPid?: number | null
+  /**
+   * line-answer-v1: the server sending this line tells a taken line from an
+   * answered one, so a start with no answer from a process that is gone is
+   * `unanswered`. Without it (an older server), such a start is `ran` as before:
+   * that server would take `unanswered` for a fate it does not know.
+   */
+  answers?: boolean
 }
 
 /** What a scan of stream lines has found so far (lineFateScan folds pieces in order). */
@@ -81,6 +105,18 @@ export interface LineFateScan {
    * (turn_retry, turn_retry_stopped, scheduled_task_fire).
    */
   outputAfterMarker?: boolean
+  /** A `started` frame for the uuid was seen. */
+  startedSeen?: boolean
+  /** The CLI printed its answer (lineAnswerFrame) after the newest `started` frame for the uuid. */
+  answered?: boolean
+  /** A marker of the running pid for these ids came before the newest `started` frame: that process took it. */
+  startedHere?: boolean
+  /** A `cancelled` frame for the uuid came after its newest `started` one: a Stop ended that turn. */
+  stoppedAfterStart?: boolean
+  /** The process the newest delivery marker (any line) went to: the CLI printing now, as far as the stream says. */
+  curPid?: number | null
+  /** curPid at the newest `started` frame for the uuid: the process that took it. */
+  startPid?: number | null
 }
 
 /**
@@ -99,6 +135,12 @@ export function lineFateScan(text: string, q: LineFateQuery, prev: LineFateScan 
   let queuedAfterMarker = prev ? prev.queuedAfterMarker : false
   let markerAt = prev && typeof prev.markerAt === 'number' ? prev.markerAt : null
   let outputAfterMarker = prev ? prev.outputAfterMarker === true : false
+  let startedSeen = prev ? prev.startedSeen === true : false
+  let answered = prev ? prev.answered === true : false
+  let startedHere = prev ? prev.startedHere === true : false
+  let stoppedAfterStart = prev ? prev.stoppedAfterStart === true : false
+  let curPid = prev && typeof prev.curPid === 'number' ? prev.curPid : null
+  let startPid = prev && typeof prev.startPid === 'number' ? prev.startPid : null
   const body = text || ''
   let start = 0
   while (start < body.length) {
@@ -111,17 +153,52 @@ export function lineFateScan(text: string, q: LineFateQuery, prev: LineFateScan 
       try { ev = JSON.parse(line) } catch { ev = null }
       if (!ev || ev.type !== 'command_lifecycle' || ev.command_uuid !== uuid || typeof ev.state !== 'string') continue
       if (ev.state === 'queued') { if (markerSeen) queuedAfterMarker = true; continue }
+      if (ev.state === 'started') {
+        // The newest start is the one whose answer counts; which process took it
+        // is the one whose marker for these ids came last before it.
+        startedSeen = true
+        answered = false
+        startedHere = markerSeen
+        stoppedAfterStart = false
+        startPid = curPid
+      } else if (ev.state === 'cancelled' && startedSeen) {
+        stoppedAfterStart = true
+      }
       if (rank[ev.state] && (best === null || rank[ev.state] > rank[best])) best = ev.state
-    } else if (pid && ids.length > 0 && line.indexOf('walnut-injected') !== -1 && line.indexOf('"walnutPid"') !== -1) {
+    } else if (startedSeen && !answered && curPid === startPid
+      && (line.indexOf('"type":"assistant"') !== -1 || line.indexOf('"type":"result"') !== -1)) {
+      // Is this the CLI's answer to the started line? Same rule as lineAnswerFrame
+      // (kept inline: the twins run this function's text alone). Only from the
+      // process that took it: once a line went to another process (its marker
+      // names another pid), what the stream holds is that process's output.
+      let ev: { type?: string; parent_tool_use_id?: unknown; error?: unknown; message?: { content?: unknown } } | null = null
+      try { ev = JSON.parse(line) } catch { ev = null }
+      if (ev && ev.type === 'result') answered = true
+      else if (ev && ev.type === 'assistant' && !ev.parent_tool_use_id && !ev.error && ev.message && Array.isArray(ev.message.content)) {
+        for (const block of ev.message.content as Array<{ type?: unknown; text?: unknown }>) {
+          if (!block || typeof block !== 'object' || block.type === 'thinking' || block.type === 'redacted_thinking') continue
+          if (block.type === 'text' && !(typeof block.text === 'string' && block.text.trim() !== '')) continue
+          answered = true
+          break
+        }
+      }
+      if (markerSeen) outputAfterMarker = true
+    } else if (line.indexOf('walnut-injected') !== -1 && line.indexOf('"walnutPid"') !== -1) {
       let mk: { subtype?: string; walnutPid?: number; walnutMessageId?: string; timestamp?: string } | null = null
       try { mk = JSON.parse(line) } catch { mk = null }
-      if (mk && mk.subtype === 'walnut-injected' && mk.walnutPid === pid && typeof mk.walnutMessageId === 'string'
+      if (mk && mk.subtype === 'walnut-injected' && typeof mk.walnutPid === 'number') curPid = mk.walnutPid
+      if (pid && ids.length > 0 && mk && mk.subtype === 'walnut-injected' && mk.walnutPid === pid && typeof mk.walnutMessageId === 'string'
         && ids.indexOf(mk.walnutMessageId) !== -1) {
         markerSeen = true
         outputAfterMarker = false
         const at = typeof mk.timestamp === 'string' ? Date.parse(mk.timestamp) : NaN
         if (Number.isFinite(at) && (markerAt === null || at > markerAt)) markerAt = at
       }
+    } else if (line.indexOf('"subtype":"walnut_process"') !== -1) {
+      // The daemon spawned a process: its output begins here, whatever it prints.
+      let sp: { type?: string; subtype?: string; walnutPid?: number } | null = null
+      try { sp = JSON.parse(line) } catch { sp = null }
+      if (sp && sp.type === 'system' && sp.subtype === 'walnut_process' && typeof sp.walnutPid === 'number') curPid = sp.walnutPid
     } else if (markerSeen && line && line.indexOf('walnut-injected') === -1
       && !(line.indexOf('"type":"system"') !== -1 && (line.indexOf('"subtype":"turn_retry') !== -1
         || line.indexOf('"subtype":"scheduled_task_fire"') !== -1))) {
@@ -129,7 +206,11 @@ export function lineFateScan(text: string, q: LineFateQuery, prev: LineFateScan 
       outputAfterMarker = true
     }
   }
-  return { best: best, markerSeen: markerSeen, queuedAfterMarker: queuedAfterMarker, markerAt: markerAt, outputAfterMarker: outputAfterMarker }
+  return {
+    best: best, markerSeen: markerSeen, queuedAfterMarker: queuedAfterMarker, markerAt: markerAt, outputAfterMarker: outputAfterMarker,
+    startedSeen: startedSeen, answered: answered, startedHere: startedHere, stoppedAfterStart: stoppedAfterStart,
+    curPid: curPid, startPid: startPid,
+  }
 }
 
 /** The fate a finished scan and the daemon's write records prove, or null. */
@@ -138,7 +219,32 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
   const pid = q.pid
   if (!q.uuid && ids.length === 0) return null
   const best = scan ? scan.best : null
-  if (best === 'started' || best === 'completed') return { fate: 'ran', state: best }
+  if (best === 'completed') return { fate: 'ran', state: best }
+  if (best === 'started') {
+    // line-answer-v1: taken is not answered (see the header).
+    if (scan!.answered) return { fate: 'ran', state: best, answer: 'yes' }
+    // A Stop ended the turn it started: the user's choice, never sent again (as answered: nothing waits for more).
+    if (scan!.stoppedAfterStart) return { fate: 'ran', state: best, answer: 'yes' }
+    // Taken by the process running now: its answer may still come. A whole write of
+    // these ids into it says so as well as a marker does (the marker may be out of view).
+    let here = !!pid && scan!.startedHere === true
+    if (!here && pid && ids.length > 0 && writesText) {
+      const records = writesText.split('\n')
+      for (let i = records.length - 1; i >= 0 && !here; i--) {
+        if (!records[i]) continue
+        let rec: { pid?: number; uuid?: string; ids?: unknown } | null = null
+        try { rec = JSON.parse(records[i]) } catch { rec = null }
+        if (!rec || rec.pid !== pid || !Array.isArray(rec.ids)) continue
+        if (q.uuid && rec.uuid && rec.uuid !== q.uuid) continue
+        const got = rec.ids as unknown[]
+        if (ids.every((id) => got.indexOf(id) !== -1)) here = true
+      }
+    }
+    if (here) return { fate: 'ran', state: best, answer: 'pending' }
+    // Taken by a process that is gone, which never answered: it never will. An
+    // older server knows no such fate: for it, taken is ran (as before).
+    return q.answers ? { fate: 'unanswered', state: best } : { fate: 'ran', state: best }
+  }
   if (best === 'cancelled') return { fate: 'cancelled', state: best }
   if (best === 'discarded' || best === 'refused') return { fate: 'dropped', state: best }
   // A lostPid sets the records aside only while this process's marker for the
@@ -166,6 +272,106 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
   }
   if (scan && scan.markerSeen && scan.queuedAfterMarker) return { fate: 'waiting', state: 'queued' }
   return null
+}
+
+/**
+ * Is this stream frame the CLI's answer to the line it took (line-answer-v1)?
+ * Claude Code's rule for an answered turn (conversationRecovery.ts
+ * detectTurnInterruption, after its filters): an assistant message on the main
+ * thread that is not an API error (`error` set: isApiErrorMessage) and not only
+ * thinking or blank text (filterOrphanedThinkingOnlyMessages,
+ * filterWhitespaceOnlyAssistantMessages). A tool call counts, unlike CC's resume
+ * filter for an unresolved one: the tool may have run, and a second run of the
+ * prompt would run it again. A `result` ends the turn whatever it says (an error
+ * result is shown to the user as the turn's end). lineFateScan applies the same
+ * rule inline; a parity test holds the two together.
+ */
+export function lineAnswerFrame(ev: unknown): boolean {
+  if (!ev || typeof ev !== 'object') return false
+  const e = ev as { type?: unknown; parent_tool_use_id?: unknown; error?: unknown; message?: { content?: unknown } }
+  if (e.type === 'result') return true
+  if (e.type !== 'assistant' || e.parent_tool_use_id || e.error || !e.message || !Array.isArray(e.message.content)) return false
+  for (const block of e.message.content as Array<{ type?: unknown; text?: unknown }>) {
+    if (!block || typeof block !== 'object' || block.type === 'thinking' || block.type === 'redacted_thinking') continue
+    if (block.type === 'text' && !(typeof block.text === 'string' && block.text.trim() !== '')) continue
+    return true
+  }
+  return false
+}
+
+/** What a scan of a Claude Code transcript has found for one line so far (transcriptLineScan). */
+export interface TranscriptLineScan {
+  /** The line is in the transcript: the CLI took it (its prompt entry, or the queued_command it was folded into). */
+  found: boolean
+  /** An answer to it followed (same rule as lineAnswerFrame, on transcript entries). */
+  answered: boolean
+  /** A later prompt began another turn before any answer: the line's turn ended unanswered. */
+  closed: boolean
+}
+
+/**
+ * line-answer-v1, when the stream no longer holds the line's frames (a resume
+ * left a stream file of STREAM_ROTATE_BYTES, or they fell out of the scan
+ * window): what Claude Code's own transcript says of the line. Read the
+ * harness's way (sessionStorage.ts, conversationRecovery.ts): the line is in
+ * the session when an entry carries its uuid (print.ts doesMessageExistInSession:
+ * such a line is skipped as a duplicate and acked `completed`, never run), or a
+ * queued_command attachment names it as `source_uuid` (a line taken mid-turn).
+ * Its turn was answered when a main-thread assistant entry (not isSidechain,
+ * not isApiErrorMessage, not only thinking or blank text) comes after it before
+ * the next prompt; a prompt first (a user entry that is not meta, not a compact
+ * summary, not a tool result) means the turn ended unanswered. The text must
+ * hold whole lines in file order; pieces fold like lineFateScan.
+ */
+export function transcriptLineScan(text: string, uuid: string, prev: TranscriptLineScan | null): TranscriptLineScan {
+  let found = prev ? prev.found : false
+  let answered = prev ? prev.answered : false
+  let closed = prev ? prev.closed : false
+  const body = text || ''
+  let start = 0
+  while (uuid && start < body.length) {
+    let end = body.indexOf('\n', start)
+    if (end === -1) end = body.length
+    const line = body.slice(start, end)
+    start = end + 1
+    const named = line.indexOf(uuid) !== -1
+    if (!named && (!found || answered || closed)) continue
+    if (!named && line.indexOf('"type":"assistant"') === -1 && line.indexOf('"type":"user"') === -1) continue
+    let e: {
+      type?: string; uuid?: string; isSidechain?: boolean; isMeta?: boolean; isCompactSummary?: boolean; isApiErrorMessage?: boolean
+      attachment?: { type?: string; source_uuid?: string }; message?: { content?: unknown }
+    } | null = null
+    try { e = JSON.parse(line) } catch { e = null }
+    if (!e || typeof e !== 'object' || e.isSidechain === true) continue
+    if (e.uuid === uuid || (e.type === 'attachment' && e.attachment && e.attachment.type === 'queued_command' && e.attachment.source_uuid === uuid)) {
+      // The newest entry of the line is the one whose answer counts.
+      found = true
+      answered = false
+      closed = false
+      continue
+    }
+    if (!found || answered || closed) continue
+    const content = e.message ? e.message.content : undefined
+    if (e.type === 'assistant') {
+      if (e.isApiErrorMessage === true || !Array.isArray(content)) continue
+      for (const block of content as Array<{ type?: unknown; text?: unknown }>) {
+        if (!block || typeof block !== 'object' || block.type === 'thinking' || block.type === 'redacted_thinking') continue
+        if (block.type === 'text' && !(typeof block.text === 'string' && block.text.trim() !== '')) continue
+        answered = true
+        break
+      }
+    } else if (e.type === 'user' && e.isMeta !== true && e.isCompactSummary !== true) {
+      const toolResult = Array.isArray(content) && content.some((b: { type?: unknown } | null) => !!b && b.type === 'tool_result')
+      if (!toolResult) closed = true
+    }
+  }
+  return { found: found, answered: answered, closed: closed }
+}
+
+/** The fate a transcript scan proves for a line whose stream frames are gone, or null (the CLI never took it). */
+export function transcriptLineVerdict(scan: TranscriptLineScan | null): LineFate | null {
+  if (!scan || !scan.found) return null
+  return scan.answered ? { fate: 'ran', state: 'started', answer: 'yes' } : { fate: 'unanswered', state: 'started' }
 }
 
 /**

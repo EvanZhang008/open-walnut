@@ -96,7 +96,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict } from './line-fate-core.js'
 import { createBudgetPersistence } from './usage-budget-persistence.js'
 
 /**
@@ -326,6 +326,8 @@ export function getDaemonSource(): string {
     ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
     ['__LINE_WRITTEN_PART__', lineWrittenPart.toString()],
+    ['__TRANSCRIPT_LINE_SCAN__', transcriptLineScan.toString()],
+    ['__TRANSCRIPT_LINE_VERDICT__', transcriptLineVerdict.toString()],
     ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
@@ -680,6 +682,26 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (verdictOf(scanOf(marker, q, null), '', q) !== null) throw new Error('line fate took a bare marker as proof')
       // Two pieces fold like one: the daemon scans a long tail piece by piece.
       if (verdictOf(scanOf(started, q, scanOf(marker + '\n', q, null)), '', q)?.fate !== 'ran') throw new Error('line fate missed a started line')
+      // line-answer-v1: taken is not answered. A start with no answer from a process
+      // that is gone is unanswered; the CLI's answer after it makes it ran.
+      // Only for a server that tells them apart (answers); to an older one it stays ran.
+      const answer = JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'ok' }] } })
+      const qa = { ...q, answers: true }
+      if (verdictOf(scanOf(started, qa, null), '', qa)?.fate !== 'unanswered') throw new Error('line fate took a started line with no answer as ran')
+      if (verdictOf(scanOf(started, q, null), '', q)?.fate !== 'ran') throw new Error('line fate told an older server a fate it does not know')
+      if (verdictOf(scanOf(started + '\n' + answer, qa, null), '', qa)?.answer !== 'yes') throw new Error('line fate missed the answer to a started line')
+      // Another process's output after the line went to it is not its answer.
+      const other = JSON.stringify({ type: 'user', subtype: 'walnut-injected', walnutMessageId: 'o', walnutPid: 8 })
+      const q8 = { ...qa, pid: 8 }
+      if (verdictOf(scanOf(marker + '\n' + started + '\n' + other + '\n' + answer, q8, null), '', q8)?.fate !== 'unanswered') throw new Error("line fate took another process's output for the answer")
+      const tScanOf = reconstructed['__TRANSCRIPT_LINE_SCAN__'] as typeof transcriptLineScan | undefined
+      const tVerdictOf = reconstructed['__TRANSCRIPT_LINE_VERDICT__'] as typeof transcriptLineVerdict | undefined
+      const prompt = JSON.stringify({ type: 'user', uuid: 'u', message: { role: 'user', content: 'q' } })
+      const reply = JSON.stringify({ type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'ok' }] } })
+      if (!tScanOf || !tVerdictOf || tVerdictOf(tScanOf(prompt, 'u', null))?.fate !== 'unanswered'
+        || tVerdictOf(tScanOf(reply, 'u', tScanOf(prompt + '\n', 'u', null)))?.answer !== 'yes' || tVerdictOf(tScanOf(reply, 'u', null)) !== null) {
+        throw new Error("line fate did not read the CLI's transcript by the rule")
+      }
       if (verdictOf(null, JSON.stringify({ pid: 7, ids: ['m'] }), q)?.fate !== 'waiting') throw new Error('line fate missed a write record')
       // A resend of a uuid line nothing proves in, with this process's marker in, ends what a dead
       // write left first; one with no marker of this process, or without a uuid, does not.
@@ -7336,6 +7358,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       ...secretsSessionEnv(),
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      // line-answer-v1: Walnut sends a line Claude Code took and never answered once more
+      // itself; the CLI's own auto-resume of that turn (an empty value is off) would answer
+      // it twice. Keep in sync with the other twin.
+      CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
       ...(process.env.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
         ? {}
@@ -7388,6 +7414,11 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd);
     throw new Error('spawn failed: process did not start');
   }
+  // line-answer-v1: where this process's output begins, so a line an earlier process
+  // took is never answered by this one's output (line-fate-core.ts lineFateScan). Silent
+  // (no words, no uuid, no session_id). Written before the CLI boots. Keep in sync with
+  // daemon-standalone.ts.
+  try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid }) + '\\n'); } catch {}
 
   // Write initial message to FIFO — only when one was provided. Empty message =
   // "spawn idle" (restart-to-reinitialize): CLI emits init but runs no turn.
@@ -10484,7 +10515,8 @@ async function sendSessionMessage(ws, id, cmd) {
   // dedupe (send-dedupe-v1): a resend after an unanswered send; written only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; it is written again.
   // bootWait (send-boot-wait-v1): the first line after a start; a CLI still booting gets until its boot deadline.
-  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true });
+  // answers (line-answer-v1, with dedupe): the server tells a taken line from an answered one.
+  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true, answers: cmd.answers === true });
   // written: how much of the line went in before the write failed (daemon-core.ts SendResult).
   if (result.error) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined);
   return sendOk(ws, id, result);
@@ -10503,6 +10535,7 @@ async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
   if (markers.error) return { error: markers.error };
   const dedupe = !!(opts && opts.dedupe === true) && markers.list.length > 0;
   const lostPid = dedupe && typeof opts.lostPid === 'number' ? opts.lostPid : null;
+  const answers = dedupe && opts.answers === true;
   const session = sessions.get(sid);
   if (!session) return { ok: false, reason: 'not_found' };
   if (session.state === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
@@ -10542,7 +10575,7 @@ async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
     const deadlineAt = opts && opts.bootWait === true ? bootWriteDeadline(session) : undefined;
     const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
       deadlineAt: deadlineAt,
-      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid, torn); } : undefined,
+      fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid, torn, answers ? sid : null); } : undefined,
       begin: ids.length > 0 ? function (on) { recordLineBegun(session, uuid, ids, on); } : undefined,
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
       // A rewrite already starts with its newline: one is enough.
@@ -10551,12 +10584,14 @@ async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
     });
     if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result };
     if (result && typeof result === 'object') {
-      logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null, writtenAt: typeof result.writtenAt === 'number' ? result.writtenAt : null, quiet: result.quiet === true });
+      logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null, writtenAt: typeof result.writtenAt === 'number' ? result.writtenAt : null, quiet: result.quiet === true, answer: result.answer || null });
       const out = { ok: true, duplicate: true, fate: result.fate };
       if (result.state) out.state = result.state;
       // A waiting line's write time, and that the CLI printed nothing since (line-fate-core.ts).
       if (typeof result.writtenAt === 'number') out.writtenAt = result.writtenAt;
       if (result.quiet === true) out.quiet = true;
+      // Whether a taken line was answered (line-answer-v1, line-fate-core.ts).
+      if (result.answer === 'yes' || result.answer === 'pending') out.answer = result.answer;
       return out;
     }
     if (result === 'ok') {
@@ -10732,6 +10767,8 @@ const lineTornEnd = (__LINE_TORN_END__);
 const lineWriteBegun = (__LINE_WRITE_BEGUN__);
 const lineWriteCut = (__LINE_WRITE_CUT__);
 const lineWrittenPart = (__LINE_WRITTEN_PART__);
+const transcriptLineScan = (__TRANSCRIPT_LINE_SCAN__);
+const transcriptLineVerdict = (__TRANSCRIPT_LINE_VERDICT__);
 async function scanTail(filePath, max, onText) {
   let fh;
   try { fh = await fs.promises.open(filePath, 'r'); } catch { return; }
@@ -10755,13 +10792,25 @@ async function scanTail(filePath, max, onText) {
     await fh.close().catch(() => {});
   }
 }
-async function lineFateInProcess(session, uuid, messageIds, lostPid, torn) {
-  const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid, lostPid: typeof lostPid === 'number' ? lostPid : null };
+// answersSid (line-answer-v1): the server tells a taken line from an answered one;
+// when the stream no longer holds the line's frames, the CLI's transcript says
+// whether it took the line and answered it (transcriptLineScan).
+async function lineFateInProcess(session, uuid, messageIds, lostPid, torn, answersSid) {
+  const q = { uuid: typeof uuid === 'string' ? uuid : '', messageIds: messageIds, pid: session.pid, lostPid: typeof lostPid === 'number' ? lostPid : null, answers: !!answersSid };
   let scan = null;
   await scanTail(session.jsonlPath, DEDUPE_SCAN_BYTES, (text) => { scan = lineFateScan(text, q, scan); });
   let records = '';
   await scanTail(session.jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
-  const verdict = lineFateVerdict(scan, records, q);
+  let verdict = lineFateVerdict(scan, records, q);
+  if (verdict === null && answersSid && q.uuid) {
+    const transcript = await streamFold.transcriptPathOf(CLAUDE_PROJECTS_DIRS, cliOwner.transcriptIdOf(session.args || []) || answersSid).catch(() => null);
+    if (transcript) {
+      let tscan = null;
+      await scanTail(transcript, DEDUPE_SCAN_BYTES, (text) => { tscan = transcriptLineScan(text, q.uuid, tscan); });
+      verdict = transcriptLineVerdict(tscan);
+      if (verdict) logMsg('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate });
+    }
+  }
   // An earlier attempt into this process that died part way: end what it left first
   // (lineTornEnd), and say so when that may be a cut body the CLI will exit on (lineWriteCut).
   const begunAt = lineWriteBegun(records, q);

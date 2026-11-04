@@ -70,6 +70,7 @@ describe('echo-claim text vs prepareOutbound rewrite', () => {
       lastPreparedOutbound: PREPARED_TEXT,
       // The resumed CLI already read the line (its init came), so nothing is held.
       holdResumeLineUntilRead: () => false,
+      settleReadResumeLine: () => {},
     };
     (runner as unknown as {
       settleResumeSuccess: (sid: string, session: typeof fakeSession, msgs: typeof batch) => void;
@@ -95,6 +96,7 @@ describe('echo-claim text vs prepareOutbound rewrite', () => {
       writeSyntheticUserEvent: vi.fn(),
       lastPreparedOutbound: undefined,
       holdResumeLineUntilRead: () => false,
+      settleReadResumeLine: () => {},
     };
     (runner as unknown as {
       settleResumeSuccess: (sid: string, session: typeof fakeSession, msgs: typeof batch) => void;

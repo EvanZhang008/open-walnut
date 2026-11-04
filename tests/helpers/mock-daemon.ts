@@ -474,6 +474,8 @@ export class MockDaemon {
     })
 
     const pid = proc.pid ?? 0
+    // As the real daemons: where this process's output begins (line-answer-v1).
+    if (pid) { try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: pid }) + '\n') } catch { /* the spawn failed */ } }
     let markExited!: () => void
     const exited = new Promise<void>((resolve) => { markExited = resolve })
     // Generation guard, as in daemon-standalone's proc 'exit' handler: once a
@@ -622,7 +624,7 @@ export class MockDaemon {
     if (cmd.dedupe === true && session.exitCode === null) {
       let stream = ''
       try { stream = fs.readFileSync(session.jsonlPath, 'utf8') } catch { /* no output yet */ }
-      const known = lineFate(stream, this._lineRecords.get(sid) ?? '', { uuid: uuid ?? '', messageIds: ids, pid: session.pid })
+      const known = lineFate(stream, this._lineRecords.get(sid) ?? '', { uuid: uuid ?? '', messageIds: ids, pid: session.pid, answers: cmd.answers === true })
       if (known) return this.sendOk(ws, id, { ok: true, duplicate: true, ...known })
     }
 

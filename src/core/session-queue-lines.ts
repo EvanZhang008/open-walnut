@@ -6,6 +6,7 @@
  * callers import it from session-message-queue.ts.
  */
 
+import { randomUUID } from 'node:crypto';
 import { log } from '../logging/index.js';
 import { fateOf, isPhoneMessageId, noteDelivered, setFate } from './relay-fates.js';
 import { getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
@@ -84,6 +85,40 @@ export async function revertIfQueued(messages: QueuedMessage[]): Promise<void> {
       row.status = 'pending';
       if (row.lineUuid) row.lineInDoubt = true;
     }
+  });
+}
+
+/**
+ * A CLI took these rows' line and stopped before answering it (line-answer-v1):
+ * the rows still in the queue go back to pending ONCE, under a new uuid (the
+ * CLI skips a uuid its transcript already holds, and acks it `completed`
+ * without running it), so the next delivery sends them again as a first send.
+ * A row already sent again this way is left as it is and returned in
+ * `exhausted`, for the caller to park and tell the sender. Never re-inserts a
+ * missing row (the CLI's word removed it).
+ */
+export async function requeueUnanswered(messages: QueuedMessage[], uuid?: string): Promise<{ resent: QueuedMessage[]; exhausted: QueuedMessage[] }> {
+  if (messages.length === 0) return { resent: [], exhausted: [] };
+  return mutateStore((s) => {
+    const resent: QueuedMessage[] = [];
+    const exhausted: QueuedMessage[] = [];
+    // One line in, one line out: the rows of the line keep going together.
+    const fresh = randomUUID();
+    for (const m of messages) {
+      const row = s.queues[m.sessionId]?.find((q) => q.id === m.id);
+      if (!row || row.status === 'parked') continue;
+      // A row that went out in another line since (a Retry) is not this line's any more.
+      if (uuid && row.lineUuid && row.lineUuid !== uuid) continue;
+      if (row.unansweredResent) { exhausted.push({ ...row }); continue; }
+      row.status = 'pending';
+      row.lineUuid = fresh;
+      row.lineTries = 0;
+      row.unansweredResent = true;
+      delete row.lineTracked;
+      delete row.lineInDoubt;
+      resent.push({ ...row });
+    }
+    return { resent, exhausted };
   });
 }
 

@@ -437,11 +437,13 @@ describe('RemoteSessionManager session rename', () => {
     })
 
     // Wait for the init event to arrive so we can extract the session_id
+    // (The daemon's note of the spawned process, line-answer-v1, may come first.)
+    const initLine = () => lines.find((l) => (JSON.parse(l) as { subtype?: string }).subtype === 'init')
     await vi.waitFor(() => {
-      expect(lines.length).toBeGreaterThanOrEqual(1)
+      expect(initLine()).toBeTruthy()
     }, { timeout: 5_000, interval: 50 })
 
-    const initEvent = JSON.parse(lines[0])
+    const initEvent = JSON.parse(initLine()!)
     expect(initEvent.type).toBe('system')
     const realSessionId = initEvent.session_id
     expect(realSessionId).toBeTruthy()

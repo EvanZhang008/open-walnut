@@ -81,12 +81,15 @@ export async function parkMessages(messages: QueuedMessage[], reason: string, st
  * Park the rows still in the queue (never re-inserting a missing one: the CLI
  * took it). `freshLine`: the CLI dropped the line for good, so a Retry must go
  * out as a new line (the old uuid would be skipped as already seen). Returns
- * the rows it parked.
+ * the rows it parked. `transcribed` (with freshLine): the CLI's transcript holds
+ * the line (it took it and never answered, line-answer-v1), so even a row with
+ * a pre-assigned userUuid goes out under a new uuid: under its own, Claude Code
+ * would skip the Retry as a duplicate and ack it `completed`, never running it.
  */
 export async function parkIfQueued(
   messages: QueuedMessage[],
   reason: string,
-  opts?: { freshLine?: boolean },
+  opts?: { freshLine?: boolean; transcribed?: boolean },
 ): Promise<QueuedMessage[]> {
   if (messages.length === 0) return [];
   const parkedAt = new Date().toISOString();
@@ -100,7 +103,7 @@ export async function parkIfQueued(
       row.parkedReason = reason;
       if (opts?.freshLine) {
         // Plain rows derive their UUID from the unchanged id unless a fresh one is kept.
-        if (!row.userUuid) {
+        if (!row.userUuid || opts.transcribed) {
           row.lineUuid = randomUUID();
           row.lineTries = 0;
         } else {
@@ -176,6 +179,8 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
     if (stopFence) msg.stopFence = stopFence;
     else delete msg.stopFence;
     msg.status = 'pending';
+    // A Retry of a line Claude Code took and never answered gets its one resend again.
+    delete msg.unansweredResent;
     if (!msg.lineUuid && !msg.userUuid) {
       msg.lineUuid = randomUUID();
       msg.lineTries = 0;

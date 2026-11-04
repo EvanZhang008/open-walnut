@@ -67,6 +67,11 @@ const seen = new Set()
 let lose = modes.includes('--lose-first')
 const readAfter = (modes.find((m) => m.startsWith('--read-after=')) || '').slice('--read-after='.length)
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
+// --answer-at-boot: a turn of its own before any line comes (a cron fire in a resumed session).
+if (modes.includes('--answer-at-boot')) {
+  process.stdout.write(JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'cron' }] } }) + '\\n')
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'cron' }) + '\\n')
+}
 setTimeout(() => process.exit(0), 40000).unref()
 let buf = ''
 const listen = () => process.stdin.on('data', (chunk) => {
@@ -85,11 +90,22 @@ const listen = () => process.stdin.on('data', (chunk) => {
     if (msg.type !== 'user') continue
     if (lose) { lose = false; continue }
     if (modes.includes('--dedupe-uuid') && msg.uuid) { if (seen.has(msg.uuid)) continue; seen.add(msg.uuid) }
-    fs.appendFileSync(received, JSON.stringify({ pid: process.pid, uuid: msg.uuid || null, content: msg.message.content }) + '\\n')
+    fs.appendFileSync(received, JSON.stringify({ pid: process.pid, uuid: msg.uuid || null, content: msg.message.content, ...(mode === '--start-then-die' ? { resumeTurn: process.env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN ?? null } : {}) }) + '\\n')
     if (mode === '--lifecycle' && msg.uuid) {
       for (const state of ['queued', 'started', 'completed']) {
         process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: msg.uuid, state }) + '\\n')
       }
+    }
+    if (mode === '--start-then-die' && msg.uuid) {
+      // Takes the line and dies before its turn ends (line-answer-v1); a line saying
+      // "answer" gets one assistant message first.
+      for (const state of ['queued', 'started']) {
+        process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: msg.uuid, state }) + '\\n')
+      }
+      if (String(msg.message.content).includes('answer')) {
+        process.stdout.write(JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } }) + '\\n')
+      }
+      process.kill(process.pid, 'SIGKILL')
     }
   }
 })
@@ -117,6 +133,8 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     WALNUT_STREAMS_DIR: dirs.streams,
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
+    // line-answer-v1: set where the daemon runs; its CLIs must not inherit it (they would answer a taken line twice).
+    CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
   }
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -172,16 +190,16 @@ async function waitFor(check: () => boolean, ms = 10_000): Promise<boolean> {
   return check()
 }
 
-const received = (dirs: Dirs): Array<{ pid: number; uuid?: string | null; content?: string; parseError?: string; blank?: true }> =>
+const received = (dirs: Dirs): Array<{ pid: number; uuid?: string | null; content?: string; parseError?: string; blank?: true; resumeTurn?: string | null }> =>
   fs.existsSync(dirs.received) ? fs.readFileSync(dirs.received, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 
 /** The daemon reply minus the envelope id. */
 const body = (r: Record<string, unknown>) => { const { id: _id, ...rest } = r; return rest }
 
-async function start(dirs: Dirs, sid: string, lifecycle: boolean | string[]): Promise<{ pid: number; outputFile: string }> {
+async function start(dirs: Dirs, sid: string, lifecycle: boolean | string[], resume = false): Promise<{ pid: number; outputFile: string }> {
   const modes = Array.isArray(lifecycle) ? lifecycle : lifecycle ? ['--lifecycle'] : []
   const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(dirs.received)}${modes.map((m) => ' ' + m).join('')}`
-  const r = await rpc({ cmd: 'start', sid, cwd: root, message: '', mode: 'default', args: ['/bin/sh', '-c', sh, 'sh'] })
+  const r = await rpc({ cmd: 'start', sid, cwd: root, message: '', mode: 'default', args: ['/bin/sh', '-c', sh, 'sh'], ...(resume ? { resume: true } : {}) })
   const pid = r.pid as number
   expect(typeof pid).toBe('number')
   cliPids.add(pid)
@@ -189,13 +207,15 @@ async function start(dirs: Dirs, sid: string, lifecycle: boolean | string[]): Pr
   return { pid, outputFile: r.outputFile as string }
 }
 
-const send = (sid: string, message: string, uuid: string, ids: string[], dedupe = false, lostPid?: number) => rpc({
+/** `dedupe` 'answers': a server that tells a taken line from an answered one (line-answer-v1). */
+const send = (sid: string, message: string, uuid: string, ids: string[], dedupe: boolean | 'answers' = false, lostPid?: number) => rpc({
   cmd: 'send', sid, message, uuid, markers: ids.map((messageId) => ({ message, messageId })), ...(dedupe ? { dedupe: true } : {}),
+  ...(dedupe === 'answers' ? { answers: true } : {}),
   ...(lostPid != null ? { lostPid } : {}),
 })
 
 /** Ask until the restarted daemon has adopted the session (its first moments answer not_found). */
-async function sendAfterRestart(sid: string, message: string, uuid: string, ids: string[], dedupe = false): Promise<Record<string, unknown>> {
+async function sendAfterRestart(sid: string, message: string, uuid: string, ids: string[], dedupe: boolean | 'answers' = false): Promise<Record<string, unknown>> {
   let reply: Record<string, unknown> = {}
   const until = Date.now() + 15_000
   do {
@@ -389,6 +409,48 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     expect(await resend('dd-rec', 'hold me', recUuid, 'qm-5')).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
     await new Promise((r) => setTimeout(r, 300))
     expect(received(dirs).map((r) => r.content).sort()).toEqual(['hold me', 'run me'])
+  }, 90_000)
+
+  // line-answer-v1 (2026-11-04, rehearsal binary-restart): the CLI said `started`
+  // and was killed before its first word. The daemon answered "ran", and the
+  // message was never answered. A process that is gone and never answered is
+  // `unanswered` now (nothing written; the server sends it once more under a new
+  // uuid), and one that answered before it died is still ran.
+  it('a line a dead CLI took and never answered is unanswered; one it answered is ran (line-answer-v1)', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    const quiet = 'aaaaaaaa-0000-4000-8000-0000000000a1'
+    const spoke = 'aaaaaaaa-0000-4000-8000-0000000000a2'
+    for (const [sid, uuid, text] of [['dd-quiet', quiet, 'die quiet'], ['dd-spoke', spoke, 'die after an answer']] as const) {
+      const first = await start(dirs, sid, ['--start-then-die'])
+      expect(body(await send(sid, text, uuid, [`qm-${sid}`]))).toMatchObject({ ok: true })
+      expect(await waitFor(() => fs.readFileSync(first.outputFile, 'utf8').includes('"started"'))).toBe(true)
+      expect(await waitFor(() => { try { process.kill(first.pid, 0); return false } catch { return true } })).toBe(true)
+      // The resumed session's new process, which answers a turn of its own first: the resend asks after it.
+      await start(dirs, sid, ['--lifecycle', '--answer-at-boot'], true)
+    }
+    expect(await sendAfterRestart('dd-quiet', 'die quiet', quiet, ['qm-dd-quiet'], 'answers')).toEqual({ ok: true, duplicate: true, fate: 'unanswered', state: 'started' })
+    expect(await sendAfterRestart('dd-spoke', 'die after an answer', spoke, ['qm-dd-spoke'], 'answers')).toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'started', answer: 'yes' })
+    // A server that does not tell them apart hears ran, as before.
+    expect(await sendAfterRestart('dd-quiet', 'die quiet', quiet, ['qm-dd-quiet'], true)).toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'started' })
+
+    // The stream lost the line's frames (as after a rotation): the CLI's transcript says it was taken, never answered.
+    const rotated = 'aaaaaaaa-0000-4000-8000-0000000000a3'
+    const first = await start(dirs, 'dd-rot', ['--start-then-die'])
+    expect(body(await send('dd-rot', 'die and rotate', rotated, ['qm-dd-rot']))).toMatchObject({ ok: true })
+    expect(await waitFor(() => { try { process.kill(first.pid, 0); return false } catch { return true } })).toBe(true)
+    fs.writeFileSync(first.outputFile, '')
+    const project = path.join(dirs.home, '.claude', 'projects', 'p')
+    fs.mkdirSync(project, { recursive: true })
+    fs.writeFileSync(path.join(project, 'dd-rot.jsonl'), JSON.stringify({ type: 'user', uuid: rotated, isSidechain: false, message: { role: 'user', content: 'die and rotate' } }) + '\n')
+    await start(dirs, 'dd-rot', true, true)
+    expect(await sendAfterRestart('dd-rot', 'die and rotate', rotated, ['qm-dd-rot'], 'answers')).toEqual({ ok: true, duplicate: true, fate: 'unanswered', state: 'started' })
+
+    await new Promise((r) => setTimeout(r, 300))
+    // Each text was taken once, by the process that died: none was written again.
+    expect(received(dirs).map((r) => r.content).sort()).toEqual(['die after an answer', 'die and rotate', 'die quiet'])
+    // The CLI's own auto-resume of an interrupted turn is off in every process the daemon spawned.
+    expect(received(dirs).map((r) => r.resumeTurn)).toEqual(['', '', ''])
   }, 90_000)
 
   // send-lost-line-v1. The write record only says the line went into the pipe.

@@ -348,7 +348,7 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toContain('chainFifoWrite(sid, session, buf, beforeNewline, {')
     }
     // send-lost-line-v1 rides the same options (behavior: the same two test files).
-    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, [^\n]*, markers, \{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true \}\)/)
+    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, [^\n]*, markers, \{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true, answers: cmd\.answers === true \}\)/)
   })
 
   it.each(['standalone', 'template'])('deferred resume adopts a live process without writing or signalling: %s', async (twin) => {

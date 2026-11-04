@@ -4,7 +4,10 @@
  * every rule is pinned here; the twins run the same function text.
  */
 import { describe, it, expect } from 'vitest'
-import { lineFate, lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart } from '../../src/providers/line-fate-core.js'
+import {
+  lineAnswerFrame, lineFate, lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart,
+  transcriptLineScan, transcriptLineVerdict,
+} from '../../src/providers/line-fate-core.js'
 
 const marker = (id: string, pid?: number) => JSON.stringify({
   type: 'user', subtype: 'walnut-injected', message: { role: 'user', content: 'x' },
@@ -58,7 +61,8 @@ describe('lineFate', () => {
   });
 
   it('the CLI\'s own word wins in any process, strongest state first', () => {
-    expect(lineFate(lines(lc('u-1', 'started')), '', { ...q, pid: 99 })).toEqual({ fate: 'ran', state: 'started' })
+    // started alone is taken, not answered (line-answer-v1, pinned below).
+    expect(lineFate(lines(lc('u-1', 'started')), '', { ...q, pid: 99, answers: true })).toEqual({ fate: 'unanswered', state: 'started' })
     expect(lineFate(lines(lc('u-1', 'completed')), '', q)).toEqual({ fate: 'ran', state: 'completed' })
     expect(lineFate(lines(lc('u-1', 'cancelled')), '', q)).toEqual({ fate: 'cancelled', state: 'cancelled' })
     expect(lineFate(lines(lc('u-1', 'discarded')), '', q)).toEqual({ fate: 'dropped', state: 'discarded' })
@@ -67,8 +71,8 @@ describe('lineFate', () => {
     expect(lineFate(lines(lc('u-1', 'started'), lc('u-1', 'completed')), '', q)).toEqual({ fate: 'ran', state: 'completed' })
     expect(lineFate(lines(lc('u-1', 'started'), lc('u-1', 'cancelled')), '', q)?.fate).toBe('ran')
     expect(lineFate(lines(lc('u-1', 'discarded'), lc('u-1', 'cancelled')), '', q)?.fate).toBe('cancelled')
-    // ...and outranks a record that says it is only waiting.
-    expect(lineFate(lines(lc('u-1', 'started')), lines(rec(41, ['qm-1'])), q)?.fate).toBe('ran')
+    // ...and outranks a record that says it is only waiting (the process running now took it).
+    expect(lineFate(lines(lc('u-1', 'started')), lines(rec(41, ['qm-1'])), q)).toEqual({ fate: 'ran', state: 'started', answer: 'pending' })
   })
 
   it('frames for another uuid, quoted text and torn lines are ignored', () => {
@@ -107,7 +111,7 @@ describe('lineFate with lostPid: the server proved the process read past the lin
   it('the CLI\'s own word still wins: a queued frame means it has the line', () => {
     expect(lineFate(lines(marker('qm-1', 41), lc('u-1', 'queued')), lines(rec(41, ['qm-1'])), lost))
       .toEqual({ fate: 'waiting', state: 'queued' })
-    expect(lineFate(lines(lc('u-1', 'started')), lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'ran', state: 'started' })
+    expect(lineFate(lines(lc('u-1', 'started')), lines(rec(41, ['qm-1'])), lost)).toEqual({ fate: 'ran', state: 'started', answer: 'pending' })
     expect(lineFate(lines(lc('u-1', 'discarded')), '', lost)).toEqual({ fate: 'dropped', state: 'discarded' })
   })
 
@@ -248,6 +252,127 @@ describe('lineWrittenPart: how much of a failed write went into the pipe', () =>
   })
 })
 
+// line-answer-v1: Claude Code says `started` when it takes a line for a turn,
+// before its first word. A CLI killed in between leaves a message nobody answers,
+// so `started` alone is no proof the line was answered.
+describe('lineFate: taken is not answered (line-answer-v1)', () => {
+  const text = (t: string) => ({ type: 'text', text: t })
+  const assistant = (content: unknown[], extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content }, ...extra })
+  const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
+  const started = lc('u-1', 'started')
+  // The server sending the line tells a taken line from an answered one.
+  const qa = { ...q, answers: true }
+
+  it('started by a process that is gone, with no answer after it: unanswered', () => {
+    expect(lineFate(lines(marker('qm-1', 40), started), '', qa)).toEqual({ fate: 'unanswered', state: 'started' })
+    // No process at all now.
+    expect(lineFate(lines(marker('qm-1', 41), started), lines(rec(41, ['qm-1'])), { ...qa, pid: null })).toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('the CLI printed its answer after started: ran, answered, in any process', () => {
+    for (const answer of [assistant([text('hi')]), assistant([{ type: 'tool_use', id: 't', name: 'Bash', input: {} }]), result]) {
+      expect(lineFate(lines(marker('qm-1', 40), started, answer), '', qa)).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+    }
+    // completed is the end of the turn, answered or not.
+    expect(lineFate(lines(started, lc('u-1', 'completed')), '', qa)).toEqual({ fate: 'ran', state: 'completed' })
+  })
+
+  it('what Claude Code does not count as an answer is none here either', () => {
+    const none = [
+      assistant([{ type: 'thinking', thinking: 'hm' }]),
+      assistant([{ type: 'redacted_thinking', data: 'x' }]),
+      assistant([text('  \n ')]),
+      assistant([text('API Error: overloaded')], { error: 'server_error' }),
+      // A subagent's message is not the main thread's answer.
+      assistant([text('sub')], { parent_tool_use_id: 'toolu_1' }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'partial' } } }),
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'x' } }),
+    ]
+    for (const frame of none) {
+      expect(lineFate(lines(marker('qm-1', 40), started, frame), '', qa)).toEqual({ fate: 'unanswered', state: 'started' })
+      expect(lineAnswerFrame(JSON.parse(frame))).toBe(false)
+    }
+  })
+
+  it('an answer before started is an earlier turn\'s, not this line\'s', () => {
+    expect(lineFate(lines(assistant([text('old')]), result, started), '', qa)).toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('started by the process running now, no answer yet: ran, answer pending (its answer may still come)', () => {
+    expect(lineFate(lines(marker('qm-1', 41), started), '', qa)).toEqual({ fate: 'ran', state: 'started', answer: 'pending' })
+    // The marker may be out of view: the whole-write record into this process says it too.
+    expect(lineFate(lines(started), lines(rec(41, ['qm-1'])), qa)).toEqual({ fate: 'ran', state: 'started', answer: 'pending' })
+    // A marker of this pid AFTER the start is a later write, not the one it took.
+    expect(lineFate(lines(started, marker('qm-1', 41)), '', qa)).toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('a line taken mid-turn is answered by the turn going on after it', () => {
+    expect(lineFate(lines(assistant([text('turn A')]), marker('qm-1', 40), lc('u-1', 'queued'), started, assistant([text('turn A, seeing the line')])), '', qa))
+      .toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('a Stop that cancelled the started line\'s turn: ran, never sent again, nothing waits for more', () => {
+    expect(lineFate(lines(marker('qm-1', 40), started, lc('u-1', 'cancelled')), '', qa)).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('an older server (no answers flag) hears ran, as before: it knows no unanswered fate', () => {
+    expect(lineFate(lines(marker('qm-1', 40), started), '', q)).toEqual({ fate: 'ran', state: 'started' })
+    expect(lineFate(lines(marker('qm-1', 40), started, assistant([text('hi')])), '', q)).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('output after the line went to another process is that process\'s, not this line\'s answer', () => {
+    // Process 40 took it and died; process 42 (resumed) answered a line of its own first.
+    const other = marker('qm-9', 42)
+    expect(lineFate(lines(marker('qm-1', 40), started, other, assistant([text('another turn')]), result), '', { ...qa, pid: 42 }))
+      .toEqual({ fate: 'unanswered', state: 'started' })
+    // A later line into the same process: its turn's output still answers the one taken mid-turn.
+    expect(lineFate(lines(marker('qm-1', 40), started, marker('qm-2', 40), assistant([text('both')])), '', qa))
+      .toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+    // A process that printed before any line of its own went to it (a cron turn, an
+    // init-only restart): the daemon's spawn note marks where its output begins.
+    const spawned = JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: 42 })
+    expect(lineFate(lines(marker('qm-1', 40), started, spawned, assistant([text('a cron turn')]), result), '', { ...qa, pid: 42 }))
+      .toEqual({ fate: 'unanswered', state: 'started' })
+    // The note of the process that then took the line comes before its start: its answer counts.
+    expect(lineFate(lines(spawned, marker('qm-1', 42), started, assistant([text('hi')])), '', { ...qa, pid: 42 }))
+      .toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+    // The marker that names another pid can fall on a piece boundary.
+    const whole = lines(marker('qm-1', 40), started, other, assistant([text('x')]))
+    const cut = whole.indexOf(other)
+    const q42 = { ...qa, pid: 42 }
+    expect(lineFateVerdict(lineFateScan(whole.slice(cut), q42, lineFateScan(whole.slice(0, cut), q42, null)), '', q42))
+      .toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('a second start counts from itself: the answer after the first does not answer the second', () => {
+    expect(lineFate(lines(started, assistant([text('a')]), started), '', qa)).toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('folds piece by piece like one scan', () => {
+    const whole = lines(marker('qm-1', 40), started, assistant([text('hi')]))
+    const cut = whole.indexOf(started) + started.length + 1
+    const scan = lineFateScan(whole.slice(cut), q, lineFateScan(whole.slice(0, cut), qa, null))
+    expect(lineFateVerdict(scan, '', qa)).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('lineAnswerFrame and the inlined rule in lineFateScan agree on every frame', () => {
+    const frames = [
+      assistant([text('hi')]), assistant([{ type: 'tool_use', id: 't', name: 'x', input: {} }]), assistant([{ type: 'thinking', thinking: 'a' }, text('b')]),
+      assistant([{ type: 'thinking', thinking: 'a' }]), assistant([text(' ')]), assistant([text('e')], { error: 'rate_limit' }),
+      assistant([text('s')], { parent_tool_use_id: 'p' }), assistant([{ type: 'image', source: {} }]), assistant([]),
+      JSON.stringify({ type: 'assistant', message: { content: 'not an array' } }), result,
+      JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true }),
+      JSON.stringify({ type: 'user', message: { content: [text('u')] } }),
+    ]
+    for (const frame of frames) {
+      const byScan = lineFateVerdict(lineFateScan(lines(started, frame), qa, null), '', qa)?.answer === 'yes'
+      expect(byScan, frame).toBe(lineAnswerFrame(JSON.parse(frame)))
+    }
+  })
+})
+
 describe('the inlined text survives a bundler that keeps names', () => {
   it('scan and verdict hold no named inner function, so no name helper lands inside them', async () => {
     // esbuild with keepNames (as tsx runs the server) wraps every NAMED function
@@ -256,7 +381,63 @@ describe('the inlined text survives a bundler that keeps names', () => {
     const src = (await import('node:fs')).readFileSync(new URL('../../src/providers/line-fate-core.ts', import.meta.url), 'utf8')
     const out = transformSync(src, { loader: 'ts', keepNames: true, format: 'esm' }).code
     const wrapped = [...out.matchAll(/__name\(([^,]+),/g)].map((m) => m[1].trim())
-    expect(wrapped.every((name) => ['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineWriteBegun', 'lineWriteCut', 'lineWrittenPart', 'lineFate'].includes(name))).toBe(true)
-    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart]) expect(fn.toString()).not.toContain('__name(')
+    expect(wrapped.filter((name) => !['lineFateScan', 'lineFateVerdict', 'lineTornEnd', 'lineWriteBegun', 'lineWriteCut', 'lineWrittenPart', 'lineFate', 'lineAnswerFrame',
+      'transcriptLineScan', 'transcriptLineVerdict'].includes(name))).toEqual([])
+    for (const fn of [lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict]) {
+      expect(fn.toString()).not.toContain('__name(')
+    }
+  })
+})
+
+// line-answer-v1 when the stream lost the line's frames (a rotated file, a window
+// passed): Claude Code's transcript, read the harness's way (sessionStorage.ts,
+// conversationRecovery.ts detectTurnInterruption).
+describe('transcriptLineScan: the CLI\'s transcript says whether it took and answered a line', () => {
+  const entry = (e: Record<string, unknown>) => JSON.stringify({ parentUuid: null, isSidechain: false, sessionId: 's', ...e })
+  const prompt = (uuid: string, content: unknown = 'the question') => entry({ type: 'user', uuid, message: { role: 'user', content } })
+  const reply = (content: unknown[], extra: Record<string, unknown> = {}) => entry({ type: 'assistant', uuid: `a-${Math.random()}`, message: { role: 'assistant', content }, ...extra })
+  const text = (t: string) => ({ type: 'text', text: t })
+  const verdict = (t: string) => transcriptLineVerdict(transcriptLineScan(t, 'u-1', null))
+
+  it('not in the transcript: null (the CLI never took it; the line is written)', () => {
+    expect(verdict(lines(prompt('u-0'), reply([text('hi')])))).toBeNull()
+    expect(verdict('')).toBeNull()
+  })
+
+  it('its prompt with an answer after it: ran, answered', () => {
+    expect(verdict(lines(prompt('u-1'), reply([text('hi')])))).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+    expect(verdict(lines(prompt('u-1'), reply([{ type: 'tool_use', id: 't', name: 'Bash', input: {} }])))).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('its prompt last, or only what is no answer after it: unanswered', () => {
+    expect(verdict(lines(prompt('u-1')))).toEqual({ fate: 'unanswered', state: 'started' })
+    for (const none of [
+      reply([{ type: 'thinking', thinking: 'hm' }]), reply([text(' ')]),
+      reply([text('API Error')], { isApiErrorMessage: true }),
+      reply([text('sub')], { isSidechain: true }),
+      entry({ type: 'system', subtype: 'informational', content: 'x' }),
+      entry({ type: 'user', isMeta: true, message: { role: 'user', content: 'caveat' } }),
+    ]) expect(verdict(lines(prompt('u-1'), none)), none).toEqual({ fate: 'unanswered', state: 'started' })
+  })
+
+  it('the next prompt before any answer: its turn ended unanswered, a later answer is that prompt\'s', () => {
+    expect(verdict(lines(prompt('u-1'), prompt('u-2'), reply([text('to u-2')])))).toEqual({ fate: 'unanswered', state: 'started' })
+    // A tool result is the same turn going on, not a new prompt.
+    const result = entry({ type: 'user', uuid: 'r', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] } })
+    expect(verdict(lines(prompt('u-1'), result, reply([text('done')])))).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('a line taken mid-turn is its queued_command attachment (source_uuid), answered by the turn after it', () => {
+    const attached = entry({ type: 'attachment', uuid: 'att', attachment: { type: 'queued_command', prompt: 'later', source_uuid: 'u-1' } })
+    expect(verdict(lines(reply([text('before')]), attached))).toEqual({ fate: 'unanswered', state: 'started' })
+    expect(verdict(lines(reply([text('before')]), attached, reply([text('after')])))).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+  })
+
+  it('text that quotes the uuid is not the line; pieces fold like one scan', () => {
+    expect(verdict(lines(reply([text('see u-1')])))).toBeNull()
+    const whole = lines(prompt('u-1'), reply([text('hi')]))
+    const cut = whole.indexOf('\n') + 1
+    expect(transcriptLineVerdict(transcriptLineScan(whole.slice(cut), 'u-1', transcriptLineScan(whole.slice(0, cut), 'u-1', null))))
+      .toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
   })
 })

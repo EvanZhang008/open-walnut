@@ -301,6 +301,8 @@ if (inputFormat === 'stream-json') {
     for (const state of ['queued', 'started']) {
       process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state, session_id: outputSessionId }) + '\n');
     }
+    const c = parsed.message?.content;
+    dieOnTakenLine(typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => b?.text ?? '').join('\n') : '');
   }
   function handleStdinLine(line) {
     {
@@ -473,6 +475,43 @@ function persistWriteTurn(sid, prompt, userUuid, lines) {
   fs.appendFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
 const outputSessionId = sessionId || 'mock-session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+/**
+ * line-answer-v1 (MOCK_CLAUDE_DIE_COUNT_FILE): a taken line whose text holds
+ * `die-after-start:N` kills this process right after `started`, before a word
+ * of an answer, the first N times any process takes that text (the count lives
+ * in the file, so a resumed process sees it). `answer-then-die:N` prints one
+ * assistant message first, then dies the same way (no result, no completed).
+ * stdout is the stream file, so what was printed is on disk before the kill.
+ */
+function dieOnTakenLine(text) {
+  const file = process.env.MOCK_CLAUDE_DIE_COUNT_FILE;
+  if (!file) return;
+  const m = text.match(/(die-after-start|answer-then-die):(\d+)/);
+  if (!m) return;
+  let counts = {};
+  try { counts = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first take */ }
+  const n = counts[text] ?? 0;
+  if (n >= Number(m[2])) return;
+  counts[text] = n + 1;
+  fs.writeFileSync(file, JSON.stringify(counts));
+  if (m[1] === 'answer-then-die') {
+    process.stdout.write(JSON.stringify({
+      type: 'assistant', parent_tool_use_id: null, session_id: outputSessionId,
+      message: { id: `msg_die_${process.pid}`, type: 'message', role: 'assistant', model: 'mock', content: [{ type: 'text', text: `partial answer to ${text}` }] },
+    }) + '\n');
+  }
+  process.kill(process.pid, 'SIGKILL');
+}
+// The first line, read at startup, is taken as Claude Code takes any line: named
+// queued then started (only here, for the die modes: other modes keep printing
+// nothing for it).
+if (inputFormat === 'stream-json' && process.env.MOCK_CLAUDE_DIE_COUNT_FILE && lastInputUserUuid && /(die-after-start|answer-then-die):\d+/.test(message)) {
+  for (const state of ['queued', 'started']) {
+    process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: lastInputUserUuid, state, session_id: outputSessionId }) + '\n');
+  }
+  dieOnTakenLine(message);
+}
 
 // Simulate error — exit non-zero with stderr
 if (message === 'error') {

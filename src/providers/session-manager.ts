@@ -139,7 +139,7 @@ export interface TransportStartResult {
    */
   cut?: boolean
   /** The daemon wrote no first line: it knew what became of it (LineWriteOptions.onFate). */
-  fate?: { fate: string; state?: string }
+  fate?: { fate: string; state?: string; answer?: 'yes' | 'pending' }
 }
 
 // ── Attach Result ──
@@ -178,7 +178,7 @@ export interface LineWriteOptions {
    * A waiting answer may carry when the line went in (`writtenAt`) and that the CLI
    * printed nothing since (`quiet`), line-fate-core.ts.
    */
-  onFate?: (fate: { fate: string; state?: string; writtenAt?: number; quiet?: true }) => void
+  onFate?: (fate: { fate: string; state?: string; writtenAt?: number; quiet?: true; answer?: 'yes' | 'pending' }) => void
   /** This line waits behind one whose answer is still being asked for. */
   onHeld?: () => void
   /** True once the user stopped the session: stop asking about this line. */
@@ -384,6 +384,13 @@ export interface SessionManager {
 
   /** Whether the manager has an active write pipe (FIFO). */
   readonly hasPipe: boolean
+
+  /**
+   * The daemon tells a line the CLI took from one it answered (line-answer-v1):
+   * only then are a taken line's rows held until the answer. Optional: a transport
+   * without it keeps the old rule (taken counts as delivered).
+   */
+  readonly judgesAnswers?: boolean
 
   /** Current byte offset in the output file. */
   readonly tailOffset: number

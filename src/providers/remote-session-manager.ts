@@ -63,6 +63,7 @@ export function remoteOutputSentinel(hostKey: string, sid: string): string {
 const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
 /** A dedupe `send` carrying `lostPid` writes the line again into the process that read past it. */
 const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
+const LINE_ANSWER_CAPABILITY = 'line-answer-v1'
 /** A `send` or `start` carrying `bootWait` waits through the boot of the CLI it starts. */
 const SEND_BOOT_WAIT_CAPABILITY = 'send-boot-wait-v1'
 
@@ -250,6 +251,8 @@ export class RemoteSessionManager implements SessionManager {
    */
   get outputFile(): string | null { return this._sid ? remoteOutputSentinel(this.hostKey, this._sid) : null }
   get hasPipe(): boolean { return this._hasPipe }
+  /** The daemon tells a line the CLI took from one it answered (line-answer-v1, line-fate-core.ts). */
+  get judgesAnswers(): boolean { return this.conn?.hasCapability(LINE_ANSWER_CAPABILITY) ?? false }
   /** See _lastPreparedOutbound — the echo-claim text source for delivery points. */
   get lastPreparedOutbound(): string | undefined { return this._lastPreparedOutbound }
   get tailOffset(): number { return this._fileSize }
@@ -437,7 +440,7 @@ export class RemoteSessionManager implements SessionManager {
     // (the CLI may exit on the piece without running the line) or a fate the
     // daemon already knew (nothing written) is not a plain delivery.
     let cut = false
-    let fate: { fate: string; state?: string } | undefined
+    let fate: { fate: string; state?: string; answer?: 'yes' | 'pending' } | undefined
     if (sendAfterStart) {
       // bootWait: a CLI resuming a huge transcript reads stdin only after 20s or more
       // (2026-10-30, 136MB: killed twice mid-boot by the plain write deadline).
@@ -778,6 +781,8 @@ export class RemoteSessionManager implements SessionManager {
         ...(c.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
         ...(c.hasCapability('send-markers-v1') && opts?.markers?.length ? { markers: opts.markers } : {}),
         ...(dedupe ? { dedupe: true } : {}),
+        // line-answer-v1: this server tells a taken line from an answered one (the daemon may say unanswered).
+        ...(dedupe && c.hasCapability(LINE_ANSWER_CAPABILITY) ? { answers: true } : {}),
         ...(rewrite && dedupe && opts?.lostPid != null && c.hasCapability(SEND_LOST_LINE_CAPABILITY)
           && !this.rewriteAlreadyAttempted(sid, opts) ? { lostPid: opts.lostPid } : {}),
       })
@@ -851,6 +856,8 @@ export class RemoteSessionManager implements SessionManager {
           // How long the process has been still (line-fate-core.ts); older daemons send neither.
           ...(typeof result.writtenAt === 'number' ? { writtenAt: result.writtenAt } : {}),
           ...(result.quiet === true ? { quiet: true as const } : {}),
+          // Whether a taken line was answered (line-answer-v1); older daemons send none.
+          ...(result.answer === 'yes' || result.answer === 'pending' ? { answer: result.answer } : {}),
         })
       }
       // Written, but behind a cut copy of the line that the CLI will exit on: the

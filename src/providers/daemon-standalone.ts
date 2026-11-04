@@ -2273,6 +2273,8 @@ const core = createDaemonCore<SessionData>({
   orphanStartTimeCheckMs: 30_000,
   logger: logMsg,
   allowBudgetFn: (sid) => budgetAllowance(sid),
+  // line-answer-v1: the CLI's transcript, asked when the stream lost a line's frames (daemon-core.ts lineFateInProcess).
+  transcriptPathFn: (sid, session) => streamFold.transcriptPathOf(CLAUDE_PROJECTS_DIRS, cliOwner.transcriptIdOf(session.args ?? []) ?? sid),
   broadcastSessionStateFn: (payload) => {
     const session = sessions.get(payload.sid)
     if (session) updateCronMetadata(payload.sid, session)
@@ -6391,6 +6393,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       ...secretsSessionEnv(),
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      // line-answer-v1: Walnut sends a line Claude Code took and never answered once more
+      // itself; the CLI's own auto-resume of that turn (an empty value is off) would answer
+      // it twice. Keep in sync with the other twin.
+      CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
       ...(process.env.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
         ? {}
@@ -6455,6 +6461,11 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     proc.on('error', () => {})
     throw new Error(`spawn failed: process could not start on ${os.hostname()} (cwd: ${cwd})`)
   }
+  // line-answer-v1: where this process's output begins, so a line an earlier process
+  // took is never answered by this one's output (line-fate-core.ts lineFateScan). Silent
+  // (no words, no uuid, no session_id). Written before the CLI boots. Keep in sync with
+  // daemon-source.ts.
+  try { fs.writeSync(outputFd, JSON.stringify({ type: 'system', subtype: 'walnut_process', walnutPid: proc.pid }) + '\n') } catch {}
 
   // Handle late spawn errors (shouldn't happen after pid is set, but defensive)
   proc.on('error', (err) => {
@@ -9076,7 +9087,7 @@ async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: 
   // dedupe (send-dedupe-v1): a resend after an unanswered send; core writes it only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; core writes it again.
   // bootWait (send-boot-wait-v1): the first line after a start; a CLI still booting gets until its boot deadline.
-  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true })
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true, answers: cmd.answers === true })
   // `written`: how much of the line went in before the write failed (daemon-core.ts SendResult).
   if ('error' in result) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
