@@ -14,6 +14,13 @@
  * Against a real browser and the real hook; the history endpoint is mocked so
  * the answers' shapes and timing are exact: Phase 1 (the local stream read)
  * shows two messages, then the full read answers as the server does.
+ *
+ * Every read here is of what the user SEES (innerText), never of the DOM text
+ * (textContent): `/sessions?id=` mounts the column under Home while Home is
+ * still hidden (`visibility: hidden` off its route) until the route change to
+ * `/` commits, which took about 6 s on a busy CI runner. A textContent wait
+ * passed in that window, and the watch's first innerText read then saw an empty
+ * column ("not-shown") that was only Home not shown yet (CI, 2026-11-04).
  */
 import { test, expect, type Page } from '@playwright/test';
 
@@ -54,6 +61,17 @@ async function mockSessionDetail(page: Page, sessionId: string, messageCount = 2
 }
 
 /**
+ * The column's history, never the Ask Walnut slot's (an embedded panel of its
+ * own, earlier in the DOM).
+ */
+function columnHistory(page: Page) {
+  return page.locator('.main-page-session-column .session-history').first();
+}
+
+/** What the user sees: innerText, so a wait cannot pass while Home is still hidden. */
+const SHOWN = { useInnerText: true } as const;
+
+/**
  * Every 250ms until `done`: what the column says, in order, without repeats.
  * `done` judges the same read that was noted, so the last state noted is the
  * one that ended the watch (a second read could see a newer state than the
@@ -62,7 +80,9 @@ async function mockSessionDetail(page: Page, sessionId: string, messageCount = 2
 async function watch(page: Page, done: (text: string) => boolean, ms: number): Promise<string[]> {
   const seen: string[] = [];
   const note = (s: string) => { if (seen[seen.length - 1] !== s) seen.push(s); };
-  const history = page.locator('.session-history').first();
+  const history = columnHistory(page);
+  // Only once the user can see the column: before that every read is empty.
+  await expect(history).toBeVisible({ timeout: 30_000 });
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     const text = await history.innerText().catch(() => '');
@@ -137,8 +157,8 @@ test('a history still loading: the column keeps what it shows, says so, and swap
   });
   await mockSessionDetail(page, sid);
   await page.goto(`/sessions?id=${sid}`);
-  const history = page.locator('.session-history').first();
-  await expect(history).toContainText('Answer the column already shows', { timeout: 30_000 });
+  const history = columnHistory(page);
+  await expect(history).toContainText('Answer the column already shows', { ...SHOWN, timeout: 30_000 });
   const seen = await watch(page, (text) => text.includes('Answer read from the host'), 30_000);
   // Shown the whole time, the loading line while the read went on, then the history.
   expect(seen).toContain('shown+loading-line');
@@ -160,12 +180,12 @@ test('a stale answer with fewer messages than shown: what is shown stays, under 
   });
   await mockSessionDetail(page, sid);
   await page.goto(`/sessions?id=${sid}`);
-  const history = page.locator('.session-history').first();
-  await expect(history).toContainText('Answer the column already shows', { timeout: 30_000 });
+  const history = columnHistory(page);
+  await expect(history).toContainText('Answer the column already shows', { ...SHOWN, timeout: 30_000 });
   await expect(page.locator('.session-history-stale-banner').first()).toBeVisible({ timeout: 15_000 });
   // Several retries come and go (500ms here); none of them takes the history away.
   await expect.poll(() => fullAsks, { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
-  await expect(history).toContainText('Answer the column already shows');
+  await expect(history).toContainText('Answer the column already shows', SHOWN);
   await expect(history).not.toContainText('No conversation history found');
 });
 
@@ -227,8 +247,8 @@ test('a turn-end delta cut while the host still sends: the column says it is loa
   });
   await mockSessionDetail(page, sid);
   await page.goto(`/sessions?id=${sid}`);
-  const history = page.locator('.session-history').first();
-  await expect(history).toContainText('Answer the column already shows', { timeout: 30_000 });
+  const history = columnHistory(page);
+  await expect(history).toContainText('Answer the column already shows', { ...SHOWN, timeout: 30_000 });
   await expect.poll(() => fullAsks, { timeout: 30_000 }).toBe(1);
   await endTurn(page, sid);
   const seen = await watch(page, (text) => text.includes('Answer read from the host'), 30_000);
@@ -268,8 +288,8 @@ test('an empty column and a turn-end delta cut while the host still sends: the l
   });
   await mockSessionDetail(page, sid, 0);
   await page.goto(`/sessions?id=${sid}`);
-  const history = page.locator('.session-history').first();
-  await expect(history).toContainText('No conversation history found', { timeout: 30_000 });
+  const history = columnHistory(page);
+  await expect(history).toContainText('No conversation history found', { ...SHOWN, timeout: 30_000 });
   await expect.poll(() => fullAsks, { timeout: 30_000 }).toBe(1);
   await endTurn(page, sid);
   const seen = await watch(page, (text) => text.includes('Answer read from the host'), 30_000);
