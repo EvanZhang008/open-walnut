@@ -110,6 +110,25 @@ export function startPointsOf(doc) {
   return { latest, nightly, lastNode, points: [...new Set([latest, nightly, lastNode].filter(Boolean))] }
 }
 
+/**
+ * The start points a field run updates from, and the ones it leaves out. A version the
+ * registry lists that is not older than the release was published after the release's
+ * version was picked (2026-11-04: a CI run picked 0.6.25-rehearsal.1 while npm's latest was
+ * 0.6.24, then 0.6.25 came out before its field job read the start points). No install of it
+ * updates to this build, so it is left out and named. Points passed by hand, or none left,
+ * are an error: then field-packs.mjs picked a version that is not newer.
+ */
+export function startFrom(release, found, given = null) {
+  const notOlder = (p) => compareVersions(release, p) <= 0
+  const points = given ?? found.points
+  const later = given ? [] : points.filter(notOlder)
+  const kept = points.filter((p) => !later.includes(p))
+  const bad = kept.filter(notOlder)
+  if (bad.length) throw new Error(`the release ${release} is not newer than ${bad.join(', ')}: field-packs.mjs builds one that is`)
+  if (!kept.length) throw new Error(`the release ${release} is not newer than any start point (${points.join(', ')}): field-packs.mjs builds one that is`)
+  return { points: kept, later }
+}
+
 export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch } = {}) {
   const res = await fetchImpl(`${upstream}/${PACKAGE}`, { headers: { accept: 'application/vnd.npm.install-v1+json' }, signal: AbortSignal.timeout(60_000) })
   if (!res.ok) throw new Error(`the registry answered HTTP ${res.status} for ${PACKAGE}`)
@@ -724,9 +743,11 @@ export async function rehearseField({ work, fieldJson, scenario, walnuts, opts =
   let points = null
   await scenario('field-start', async () => {
     const found = await fetchStartPoints({ upstream: o.upstream })
-    points = o.points ?? found.points
-    for (const p of points) if (compareVersions(field.release.version, p) <= 0) throw new Error(`the release ${field.release.version} is not newer than ${p}: field-packs.mjs builds one that is`)
-    return `from ${points.join(', ')} (npm latest ${found.latest}, nightly ${found.nightly}, newest Node form ${found.lastNode}) to ${field.release.version}${field.next ? `, then ${field.next.version}` : ''}`
+    // Set only once the check passed: a failed field-start runs no scenario.
+    const start = startFrom(field.release.version, found, o.points)
+    points = start.points
+    const later = start.later.length ? `; not from ${start.later.join(', ')}, published after ${field.release.version} was picked` : ''
+    return `from ${points.join(', ')} (npm latest ${found.latest}, nightly ${found.nightly}, newest Node form ${found.lastNode}) to ${field.release.version}${field.next ? `, then ${field.next.version}` : ''}${later}`
   })
   if (!points) return 1
   const kinds = {

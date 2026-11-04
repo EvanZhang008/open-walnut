@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { judgeDaemon, nodeForm, pruneToLogs, releaseArchive, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { judgeDaemon, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
 import { buildPackument, startRegistry } from '../../scripts/release-rehearsal/registry.mjs'
 import { compareVersions } from '../../scripts/release-rehearsal/version-order.mjs'
 import { TARGETS, builtName } from '../../scripts/release-files.mjs'
@@ -40,6 +40,30 @@ describe('fieldVersions', () => {
     expect(compareVersions(fieldVersions(['0.6.18', '0.6.18']).release, '0.6.18')).toBeGreaterThan(0)
     expect(fieldVersions([null, '0.6.14']).release).toBe('0.6.15-rehearsal.1')
     expect(() => fieldVersions([null])).toThrow('no version to go above')
+  })
+})
+
+describe('startFrom', () => {
+  it('leaves out a start point published after the release was picked, and names it', () => {
+    // 2026-11-04: 0.6.25-rehearsal.1 was picked while latest was 0.6.24; 0.6.25 came out
+    // before the field job read the start points, and every 0.6.25 scenario failed.
+    const found = { points: ['0.6.25', '0.6.24-nightly.20261102.605', '0.6.19'] }
+    expect(startFrom('0.6.25-rehearsal.1', found)).toEqual({ points: ['0.6.24-nightly.20261102.605', '0.6.19'], later: ['0.6.25'] })
+    expect(startFrom('0.6.26-rehearsal.1', found)).toEqual({ points: found.points, later: [] })
+  })
+
+  it('fails when no start point is older, or one passed by hand is not', () => {
+    expect(() => startFrom('0.6.25-rehearsal.1', { points: ['0.6.25'] })).toThrow('not newer than any start point (0.6.25)')
+    expect(() => startFrom('0.6.25-rehearsal.1', { points: ['0.6.19'] }, ['0.6.25', '0.6.19'])).toThrow('is not newer than 0.6.25')
+    expect(startFrom('0.6.25-rehearsal.1', { points: ['0.6.25'] }, ['0.6.19'])).toEqual({ points: ['0.6.19'], later: [] })
+  })
+
+  it('field-start runs no scenario when its check fails', () => {
+    // It set the start points before the check threw, so the scenarios ran from them anyway.
+    const src = fs.readFileSync(path.join(import.meta.dirname, '../../scripts/release-rehearsal/field.mjs'), 'utf8')
+    const body = src.slice(src.indexOf("scenario('field-start'"), src.indexOf('if (!points) return 1'))
+    expect(body.indexOf('startFrom(')).toBeGreaterThan(-1)
+    expect(body.indexOf('startFrom(')).toBeLessThan(body.indexOf('points = '))
   })
 })
 
