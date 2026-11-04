@@ -155,7 +155,7 @@ function cmdStart(ws, id, cmd) {
   const initialOffset = resume ? (() => { try { return fs.statSync(jsonlPath).size } catch { return 0 } })() : 0
   let markExited
   const exited = new Promise((resolve) => { markExited = resolve })
-  const session = { proc, pid: proc.pid, pipePath, jsonlPath, pollTimer: null, offset: initialOffset, exitCode: null, exited }
+  const session = { proc, pid: proc.pid, pipePath, jsonlPath, pollTimer: null, subscriber: ws, offset: initialOffset, exitCode: null, exited }
 
   proc.on('exit', (code) => {
     session.exitCode = code ?? 1
@@ -207,6 +207,7 @@ function cmdAttach(ws, id, cmd) {
   }
 
   // Start polling JSONL for the new WS connection
+  session.subscriber = ws
   session.pollTimer = setInterval(() => pollJsonl(ws, sid, session), 50)
 
   sendOk(ws, id, { pid: session.pid, alive: session.exitCode === null })
@@ -234,7 +235,10 @@ function cmdSendRaw(ws, id, cmd) {
 function writeFifo(ws, id, sid, line, what) {
   const session = sessions.get(sid)
   if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' })
-  if (session.exitCode !== null) return sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: reapExitCode(session) })
+  if (session.exitCode !== null) {
+    drainBeforeDeath(sid, session)
+    return sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: reapExitCode(session) })
+  }
   try {
     const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
     try { fs.writeSync(fd, Buffer.from(line)) } finally { fs.closeSync(fd) }
@@ -242,10 +246,22 @@ function writeFifo(ws, id, sid, line, what) {
   } catch (err) {
     // A readerless FIFO means the CLI is gone: the real daemon reaps it and
     // answers with reapSession's normalized exit code.
-    if (err.code === 'ENXIO') return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+    if (err.code === 'ENXIO') {
+      drainBeforeDeath(sid, session)
+      return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+    }
     if (err.code === 'EAGAIN') return sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
     sendError(ws, id, `${what} failed: ${err.message}`)
   }
+}
+
+/**
+ * A death goes out after the lines the CLI wrote before it, as daemon-core's
+ * reapSession drains the stream (C18, drainSessionFold) before it answers. Same
+ * rule as drainBeforeDeath in mock-daemon.ts (tests/providers/mock-daemon-death-order.test.ts).
+ */
+function drainBeforeDeath(sid, session) {
+  if (session.subscriber) pollJsonl(session.subscriber, sid, session)
 }
 
 /** reapSession's exit-code normalization (daemon-core isTurnCompleteExit): a CLI

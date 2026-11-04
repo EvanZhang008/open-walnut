@@ -657,7 +657,12 @@ describe('a prompt for the human, and the way back to work', () => {
     await peer(b, 'status-permission-test:Bash')
     const prompted = await until('prompt', async () => (await req('GET', `/api/sessions/${b.sid}`)).json, (j) => !!(j?.session ?? j)?.pendingPermission)
     const pending = (prompted.session ?? prompted).pendingPermission
-    expect((await task(b.taskId)).phase).toBe('NEED_ACTION')
+    // The prompt is stored on the session and the phase flips from the prompt's bus event:
+    // two writes, so a read between them saw the prompt with IN_PROGRESS (2026-11-04, on a
+    // loaded host). "Now" means while the prompt still waits, before any answer.
+    await until('Need Action while the prompt waits', () => task(b.taskId), (t) => t.phase === 'NEED_ACTION')
+    const still = (await req('GET', `/api/sessions/${b.sid}`)).json
+    expect((still?.session ?? still)?.pendingPermission?.requestId, 'the prompt still waits').toBe(pending.requestId)
     expect(interruptedWaits().has(b.taskId)).toBe(false)
     const ans = await req('POST', `/api/sessions/${b.sid}/permission`, { requestId: pending.requestId, allow: true })
     expect(ans.status, JSON.stringify(ans.json)).toBeLessThan(300)

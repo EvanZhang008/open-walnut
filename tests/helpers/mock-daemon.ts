@@ -37,6 +37,8 @@ interface DaemonSession {
   pipePath: string
   jsonlPath: string
   pollTimer: ReturnType<typeof setInterval> | null
+  /** The connection the poll timer streams this session's lines to (start / attach). */
+  subscriber?: WebSocket | null
   offset: number
   exitCode: number | null
   /** Resolves once the CLI has exited and its `exit` event went out. */
@@ -503,6 +505,7 @@ export class MockDaemon {
       pipePath,
       jsonlPath,
       pollTimer: null,
+      subscriber: ws,
       offset: startOffset,
       exitCode: null,
       exited,
@@ -565,6 +568,7 @@ export class MockDaemon {
     }
 
     // Start polling JSONL for the new WS connection
+    session.subscriber = ws
     session.pollTimer = setInterval(() => {
       this.pollJsonl(ws, session.sid, session)
     }, 50)
@@ -598,6 +602,7 @@ export class MockDaemon {
         case 'ENXIO':
           // Daemon-level semantics: ENXIO reaps the session. Mirror that so
           // follow-up sends hit session_dead.
+          this.drainBeforeDeath(sid)
           this._deadSessions.set(sid, -1)
           this.broadcastSessionState(sid, 'dead', { exitCode: -1, reason: 'send-enxio' })
           return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
@@ -649,6 +654,7 @@ export class MockDaemon {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'ENXIO') {
+        this.drainBeforeDeath(sid)
         const exitCode = reapExitCode(session)
         session.exitCode = exitCode
         this._deadSessions.set(sid, exitCode)
@@ -684,6 +690,7 @@ export class MockDaemon {
         case 'session_dead':
           return this.sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: -1 })
         case 'ENXIO':
+          this.drainBeforeDeath(sid)
           this._deadSessions.set(sid, -1)
           this.broadcastSessionState(sid, 'dead', { exitCode: -1, reason: 'sendraw-enxio' })
           return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
@@ -708,7 +715,10 @@ export class MockDaemon {
       // answers with reapSession's normalized code: 0 when the stream ends in a
       // completed turn (the mock CLI exits right after its result, so a control
       // request sent at turn end races that exit), never a blanket -1.
-      if (code === 'ENXIO') return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+      if (code === 'ENXIO') {
+        this.drainBeforeDeath(sid)
+        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
+      }
       if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
       this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
     }
@@ -1028,6 +1038,21 @@ export class MockDaemon {
 
   // ── JSONL Polling ──
 
+  /**
+   * Every death this daemon reports goes out after the lines the CLI wrote
+   * before it, as daemon-core's reapSession drains the stream (C18,
+   * drainSessionFold) before it answers ENXIO or broadcasts `dead`. Without it
+   * a mock CLI that exits right after its answer, met by a control write in
+   * the 50 ms between polls, was reported dead before its `result` reached the
+   * server: the server took the answered line as unanswered and sent it again
+   * (2026-11-04, CI run 41870554237: one peer message ran three turns, and the
+   * extra turns ran into the next tests of task-wait-resume.test.ts).
+   */
+  private drainBeforeDeath(sid: string): void {
+    const session = this.sessions.get(sid)
+    if (session?.subscriber) this.pollJsonl(session.subscriber, sid, session)
+  }
+
   private pollJsonl(ws: WebSocket, sid: string, session: DaemonSession): void {
     if (ws.readyState !== WebSocket.OPEN) {
       if (session.pollTimer) clearInterval(session.pollTimer)
@@ -1115,6 +1140,7 @@ export class MockDaemon {
    * and a session_state=dead event is broadcast to all clients.
    */
   simulateDeath(sid: string, exitCode: number = 1): void {
+    this.drainBeforeDeath(sid)
     this._deadSessions.set(sid, exitCode)
     const session = this.sessions.get(sid)
     if (session) {
