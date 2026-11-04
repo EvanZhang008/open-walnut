@@ -72,4 +72,48 @@ describe('a sticky bulk result', () => {
     await vi.advanceTimersByTimeAsync(61_000);
     expect(mailListStatusSnapshot(VIEW)).toEqual([]);
   });
+
+  // 2026-11-04 (CI): a second press on the same group took its slot, so the first line's Retry did
+  // nothing and its Undo reverted the second job. Each line's buttons act on that line's own job.
+  describe('after a second press on the same group', () => {
+    async function twoPresses(): Promise<void> {
+      await pressWithFailures();
+      await vi.advanceTimersByTimeAsync(1_000);
+      api.markMailGroupRead.mockResolvedValue({ jobId: 'job-4', total: 2 });
+      await startBulkRead({ scope: SCOPE, groupId: 'g-1', groupLabel: 'Newsletters' }, { watermark: { at: 2, seq: 2 }, rulesRev: 'r1', total: 2 });
+      finish('job-4', { changedCount: 2, failedCount: 0 });
+    }
+    const lineWith = (testId: string) => mailListStatusSnapshot(VIEW).filter((one) => one.actions?.some((a) => a.testId === testId));
+    const firstLine = () => mailListStatusSnapshot(VIEW).find((one) => one.actions?.some((a) => a.testId === 'mail-bulk-retry'))!;
+
+    it('the first line keeps its Retry, which retries the first job', async () => {
+      await twoPresses();
+      expect(lineWith('mail-bulk-undo')).toHaveLength(2);
+      firstLine().actions!.find((a) => a.testId === 'mail-bulk-retry')!.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.retryMailBulkJob).toHaveBeenCalledWith('job-1');
+    });
+
+    it("each line's Undo reverts its own job", async () => {
+      await twoPresses();
+      const second = mailListStatusSnapshot(VIEW).find((one) => !one.actions?.some((a) => a.testId === 'mail-bulk-retry'))!;
+      firstLine().actions!.find((a) => a.testId === 'mail-bulk-undo')!.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.undoMailBulkJob).toHaveBeenLastCalledWith('job-1');
+      finish('job-3', { changedCount: 8, failedCount: 0 });
+      mailListStatusSnapshot(VIEW).find((one) => one.id === second.id)!.actions!.find((a) => a.testId === 'mail-bulk-undo')!.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.undoMailBulkJob).toHaveBeenLastCalledWith('job-4');
+    });
+
+    it('a line pressed while another job runs on the group starts nothing', async () => {
+      await pressWithFailures();
+      const retry = action('mail-bulk-retry')!;
+      api.markMailGroupRead.mockResolvedValue({ jobId: 'job-4', total: 2 });
+      await startBulkRead({ scope: SCOPE, groupId: 'g-1' }, { watermark: { at: 2, seq: 2 }, rulesRev: 'r1', total: 2 });
+      retry.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.retryMailBulkJob).not.toHaveBeenCalled();
+    });
+  });
 });

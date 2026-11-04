@@ -88,6 +88,18 @@ async function setParent(groupId: string, parentId: string): Promise<void> {
   if (!res.ok) throw new Error(`folder parent failed: ${res.status} ${await res.text()}`)
 }
 
+/**
+ * The list without the task completed just before the page loaded. A completed task stays drawn for
+ * its grace window (~3 s, TodoPanel `GRACE_MS`), and, as the folder's most recently updated member,
+ * it is the folder's lead row, the one the folder header (and so its open menu and picker) is drawn
+ * in. When it leaves, the header moves to the next member's row and everything open on it closes:
+ * on a fast runner that landed between the Sprint picker opening and the pick (CI, 2026-11-04, both
+ * attempts). So a gesture on the folder waits for that row to be gone.
+ */
+async function completedRowGone(page: Page, id: string): Promise<void> {
+  await expect(page.locator(`.todo-panel [data-task-id="${id}"]`)).toHaveCount(0, { timeout: 15_000 })
+}
+
 async function complete(id: string): Promise<void> {
   const res = await fetch(`${API}/api/tasks/${id}`, {
     method: 'PATCH',
@@ -207,6 +219,7 @@ test('folder Pinned pins every open task of the folder and its subfolder, and th
   await openListProject(page, project)
   const row = folderHeader(page, parent)
   await expect(row).toBeVisible({ timeout: 15_000 })
+  await completedRowGone(page, done)
 
   let menu = await openMenu(page, row, 'folder-ctx-menu', 'Focus')
   await expect(menu.getByRole('group', { name: 'Pin to' })).toBeVisible()
@@ -272,6 +285,7 @@ test('Sprint on a folder writes one batch naming exactly its open tasks', async 
   await openListProject(page, project)
   const row = folderHeader(page, groupId)
   await expect(row).toBeVisible({ timeout: 15_000 })
+  await completedRowGone(page, done)
   let menu = await openMenu(page, row, 'folder-ctx-menu', /^Sprint/)
   const sprintRow = menu.getByRole('menuitem', { name: /^Sprint/ })
   await expect(sprintRow).toContainText('Set…')

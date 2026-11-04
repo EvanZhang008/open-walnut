@@ -12,7 +12,7 @@ import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, type Browser, type Locator, type Page } from '@playwright/test'
 import { withCssColor } from './css-color'
 
 export const PANE = '.mail-accounts-pane'
@@ -181,6 +181,22 @@ export async function openMail(page: Page, port: number): Promise<void> {
   }
   await page.getByTestId('sidebar-core-app-mail').click()
   await expect(page.locator(PANE)).toBeVisible({ timeout: 90_000 })
+}
+
+/**
+ * Pay a fresh fixture's first visit in the hook that started it. Each fixture runs its own Vite with
+ * its own empty cache, so the first page compiles the whole SPA and the Mail chunk: ~20 s idle and
+ * over a minute on a loaded runner, which is more than a test's 60 s when it falls inside the first
+ * test (2026-11-04 CI: mail-context-independent's first three tests timed out in their first load,
+ * each attempt on its own fresh fixture, and every later test of the file passed).
+ */
+export async function warmMail(browser: Browser, port: number): Promise<void> {
+  const page = await browser.newPage()
+  try {
+    await openMail(page, port)
+  } finally {
+    await page.close()
+  }
 }
 
 export function smartRow(page: Page, role: string): Locator {

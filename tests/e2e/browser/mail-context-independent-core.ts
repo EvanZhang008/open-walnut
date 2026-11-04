@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, folderRow, openMail } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, openMail, warmMail } from './mail-review-helpers'
 
 const SHOTS = '/tmp/mail-context-verify'
 const WRITER = 'fixture:ctx-writer@example.invalid'
@@ -36,11 +36,12 @@ export function registerIndependentAll(engine: 'chromium' | 'webkit'): void {
     test.describe.configure({ mode: 'default' })
     const server = new MailFixtureServer()
 
-    test.beforeAll(async ({ browserName }) => {
+    test.beforeAll(async ({ browser, browserName }) => {
       test.setTimeout(300_000)
       tag = browserName
       await fs.mkdir(SHOTS, { recursive: true })
       port = (await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '' })).port
+      await warmMail(browser, port)
     })
     test.afterAll(async () => { await server.stop() })
 

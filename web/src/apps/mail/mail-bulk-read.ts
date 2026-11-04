@@ -139,10 +139,13 @@ function showResult(slot: BulkSlot, result: BulkResult, ms = RESULT_MS): void {
     text: result.text,
     tone: result.tone,
     ...(result.sticky ? { sticky: true } : { ttlMs: ms }),
+    // Each button acts on THIS line's job, never on whatever job holds the group's slot when it is
+    // pressed: a second press on the same group takes the slot, and the first line's Retry then did
+    // nothing and its Undo reverted the second job (2026-11-04, mail-grouping-bulk on CI).
     actions: [
-      ...(result.undoJobId ? [{ label: 'Undo', testId: 'mail-bulk-undo', run: () => { void undoBulk(slot.key); } }] : []),
-      ...(result.retryJobId ? [{ label: retryLabel(result.retryCount ?? 0), testId: 'mail-bulk-retry', run: () => { void retryBulk(slot.key); } }] : []),
-      ...(result.tryAgain && slot.last ? [{ label: 'Try again', testId: 'mail-bulk-try-again', run: () => { tryAgainBulk(slot.key); } }] : []),
+      ...(result.undoJobId ? [{ label: 'Undo', testId: 'mail-bulk-undo', run: () => { void undoBulk(slot.key, next); } }] : []),
+      ...(result.retryJobId ? [{ label: retryLabel(result.retryCount ?? 0), testId: 'mail-bulk-retry', run: () => { void retryBulk(slot.key, next); } }] : []),
+      ...(result.tryAgain && slot.last ? [{ label: 'Try again', testId: 'mail-bulk-try-again', run: () => { tryAgainBulk(slot.key, next); } }] : []),
     ],
   });
 }
@@ -310,9 +313,19 @@ function conclude(slot: BulkSlot, done: BulkDone, reason: string): void {
   showResult({ ...slot, phase: 'result' }, result, slot.kind === 'unread' && done.failedCount === 0 ? SHORT_MS : RESULT_MS);
 }
 
+/**
+ * The slot a strip line's button acts for: the line's own (`from`), else the group's current one.
+ * Null while another job runs on the group: the slot follows one job at a time.
+ */
+function lineSlot(key: string, from?: BulkSlot): BulkSlot | null {
+  const current = slots.get(key);
+  if (current && current.phase !== 'result') return null;
+  return from ?? current ?? null;
+}
+
 /** `Undo`: its own job, with the same progress and the same partial failure as the mark (9.2). */
-export async function undoBulk(key: string): Promise<void> {
-  const slot = slots.get(key);
+export async function undoBulk(key: string, from?: BulkSlot): Promise<void> {
+  const slot = lineSlot(key, from);
   const jobId = slot?.result?.undoJobId;
   if (!slot || !jobId) return;
   clearTimer(key);
@@ -333,8 +346,8 @@ export async function undoBulk(key: string): Promise<void> {
 }
 
 /** `Retry N`: only the failures of that job, as a new job of the same kind. */
-export async function retryBulk(key: string): Promise<void> {
-  const slot = slots.get(key);
+export async function retryBulk(key: string, from?: BulkSlot): Promise<void> {
+  const slot = lineSlot(key, from);
   const jobId = slot?.result?.retryJobId;
   if (!slot || !jobId) return;
   put({ ...slot, phase: 'starting', result: null });
@@ -354,8 +367,8 @@ export async function retryBulk(key: string): Promise<void> {
  * `Try again` after a refusal: the same press with the numbers the group shows NOW (the refusal
  * already re-read the groups), so a stale watermark is not simply sent again.
  */
-export function tryAgainBulk(key: string): void {
-  const slot = slots.get(key);
+export function tryAgainBulk(key: string, from?: BulkSlot): void {
+  const slot = lineSlot(key, from);
   if (!slot) return;
   slots.delete(key);
   clearTimer(key);

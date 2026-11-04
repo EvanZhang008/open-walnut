@@ -286,10 +286,30 @@ export async function openGroupLine(page: Page, id: string): Promise<Locator> {
  * pointer over another line, where a click waits out the test for a tool that is not drawn
  * (2026-11-02: mail-grouping-bulk's Retry test, 240 s, on CI). So the hover and the press are one
  * step, tried again until the press lands.
+ *
+ * "Lands" is what the page saw, never the click call's own answer: on a loaded runner the click is
+ * delivered and the call still runs past its 2 s, and pressing again was a second Mark (a second
+ * job once the first had ended) or a second More that closed the menu again (2026-11-04: the Retry
+ * test read no rerun at all on CI). A capture listener records a click delivered to this line's tool.
  */
 export async function pressGroupTool(line: Locator, testId: 'mail-group-mark' | 'mail-group-more'): Promise<void> {
   const tool = line.getByTestId(testId)
+  const page = line.page()
+  const groupId = await line.getAttribute('data-group-id')
+  const key = `__groupPress_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  await page.evaluate(({ key, selector }) => {
+    const flags = window as unknown as Record<string, boolean>
+    flags[key] = false
+    const onClick = (event: Event): void => {
+      if (!(event.target instanceof Element) || !event.target.closest(selector)) return
+      flags[key] = true
+      document.removeEventListener('click', onClick, true)
+    }
+    document.addEventListener('click', onClick, true)
+  }, { key, selector: `[data-testid="mail-group-row"][data-group-id="${groupId}"] [data-testid="${testId}"]` })
+  const landed = (): Promise<boolean> => page.evaluate((k) => (window as unknown as Record<string, boolean>)[k] === true, key)
   await expect(async () => {
+    if (await landed()) return
     await line.hover()
     await tool.click({ timeout: 2_000 })
   }).toPass({ timeout: 60_000 })
