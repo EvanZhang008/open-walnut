@@ -114,7 +114,7 @@ final class SessionQueueModel {
         do {
             try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
             onWithdrawn?(row.id)
-            offerUndo(of: row)
+            offerUndo(of: row, wasLast: original.last?.id == row.id)
             AppLog.info("session", "queued message withdrawn", ["sessionId": sessionId, "messageId": row.id])
         } catch let error as APIError where error.isConflict {
             notice = "That message already started delivering."
@@ -125,9 +125,9 @@ final class SessionQueueModel {
         }
     }
 
-    private func offerUndo(of row: SessionQueuedMessage) {
+    private func offerUndo(of row: SessionQueuedMessage, wasLast: Bool) {
         withdrawnClear?.cancel()
-        withdrawn = WithdrawnQueuedMessage(id: row.id, text: row.message)
+        withdrawn = WithdrawnQueuedMessage(id: row.id, text: row.message, wasLast: wasLast)
         withdrawnClear = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.undoWindow))
             guard !Task.isCancelled else { return }
@@ -200,6 +200,8 @@ final class SessionQueueModel {
 struct WithdrawnQueuedMessage: Equatable {
     let id: String
     let text: String
+    /// Undo sends it again, so it takes the back of the line; the page says so when others stood behind it.
+    let wasLast: Bool
 }
 
 extension Array where Element == SessionQueuedMessage {
@@ -239,10 +241,10 @@ extension SessionQueuedMessage {
         }
     }
 
-    /// Only a pending row can be edited; a pending or set-aside one can be withdrawn or sent
-    /// now (a person's Send now puts a set-aside row back in line). A row being delivered or
-    /// held on the companion can be none of them (the server answers 409).
-    var canEdit: Bool { status == "pending" }
+    /// A pending or set-aside row can be edited, withdrawn or sent now (a person's Send now
+    /// puts a set-aside row back in line). A row being delivered or held on the companion
+    /// can be none of them (the server answers 409).
+    var canEdit: Bool { status == "pending" || status == "parked" }
     var canWithdraw: Bool { status == "pending" || status == "parked" }
     var canSendNow: Bool { status == "pending" || status == "parked" }
 }

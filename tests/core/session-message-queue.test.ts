@@ -690,6 +690,21 @@ describe('parked rows (dead-letter)', () => {
     expect(after[0].message).toBe('undeliverable');
   });
 
+  it('a parked row can be edited by its owner, stays parked, and goes out with the new words', async () => {
+    await enqueueMessage('sess-park', 'old words');
+    await parkMessages(await markProcessing('sess-park'), 'a Stop set it aside');
+
+    expect(await editMessage('sess-park', (await getQueue('sess-park'))[0].id, 'new words')).toBe(true);
+
+    const [row] = await getQueue('sess-park');
+    expect(row.status).toBe('parked');
+    expect(row.message).toBe('new words');
+    // A row being delivered is still not editable.
+    await unparkMessage('sess-park', row.id);
+    await markProcessing('sess-park');
+    expect(await editMessage('sess-park', row.id, 'too late')).toBe(false);
+  });
+
   it('parking is idempotent (a second park of the same batch changes nothing)', async () => {
     await enqueueMessage('sess-park', 'once');
     const batch = await markProcessing('sess-park');

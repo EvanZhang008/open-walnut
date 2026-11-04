@@ -9,6 +9,8 @@ struct SessionQueueSheet: View {
     let queue: SessionQueueModel
     /// A turn runs: the rows wait for its end.
     let turnRunning: Bool
+    /// Put a message the person just withdrew back in line.
+    let onUndo: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var managing: QueueRowRef?
@@ -51,6 +53,13 @@ struct SessionQueueSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .safeAreaInset(edge: .bottom) {
+                if let gone = queue.withdrawn {
+                    QueueUndoLine(queue: queue, gone: gone, onUndo: onUndo, identifier: "session.queue.list.undo")
+                        .padding(.vertical, 4)
+                        .background(.bar)
+                }
+            }
             .navigationTitle("Queued Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -81,7 +90,8 @@ struct SessionQueueSheet: View {
                 HStack(spacing: 6) {
                     Text(message.statusNote ?? "Queued")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(message.status == "processing" ? Theme.success : Theme.warning)
+                        .foregroundStyle(message.status == "processing" ? Theme.doneText
+                                         : message.statusNote == nil ? Color.secondary : Theme.needsText)
                     if let when = message.enqueuedDate {
                         Text(AppClock.relativeNamed(when))
                             .font(.caption2)

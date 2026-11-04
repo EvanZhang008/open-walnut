@@ -547,7 +547,8 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
 }
 
 /**
- * Edit a pending message's text. Returns true on success.
+ * Edit a pending or parked message's text (a parked one is waiting for its owner to send
+ * it, so its words are his to change). Returns true on success.
  * Returns false if message not found or already processing.
  */
 export async function editMessage(
@@ -558,7 +559,7 @@ export async function editMessage(
     if (!queue) return false;
 
     const msg = queue.find((m) => m.id === messageId);
-    if (!msg || msg.status !== 'pending') return false;
+    if (!msg || (msg.status !== 'pending' && msg.status !== 'parked')) return false;
     if (opts?.onlyUnsent && (msg.lineUuid || msg.lineTries || msg.lineInDoubt)) return false;
 
     // Its hint blocks stay (their state is already recorded); the new words are escaped.

@@ -339,6 +339,9 @@ struct ComposerBar: View {
     }
 
     @State private var seatTaps = SeatTapGuard()
+    /// The seat is dimmed for the moment after a send, while a tap on it would be ignored.
+    @State private var seatSettling = false
+    @State private var seatSettleTask: Task<Void, Never>?
 
     /// The composer came on screen: what `onAppear` does, also run when a page
     /// pushed over it pops (`composerCovered`).
@@ -1092,7 +1095,8 @@ struct ComposerBar: View {
             if useLongDraftEditor {
                 LongDraftEditor(text: draft, isFocused: $longDraftFocused, visibleLines: maximumInputLines)
             } else {
-                TextField(waitingForReply ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
+                TextField(waitingForReply ? (busyAcceptsSend ? "Queue a message, or interrupt…" : "Waiting for reply…") : placeholder,
+                          text: draft, axis: .vertical)
                     .lineLimit(1...maximumInputLines)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
@@ -1130,7 +1134,10 @@ struct ComposerBar: View {
             if showsModePill || showsModelPill {
                 Self.pillLayout(stacked: dynamicTypeSize.isAccessibilitySize) {
                     if showsModePill {
+                        // Short and safety-relevant: it keeps its word at the large sizes,
+                        // and the longer model name gives way first.
                         ComposerModePill(mode: mode, away: controls.unreachable)
+                            .layoutPriority(2)
                     }
                     if showsModelPill {
                         ComposerModelPill(controls: controls)
@@ -1507,6 +1514,7 @@ struct ComposerBar: View {
                 .foregroundStyle(Theme.onTint)
                 .frame(width: 32, height: 32)
                 .background(Theme.tint, in: Circle())
+                .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(disabled)
         .accessibilityLabel("Voice mode")
@@ -1543,6 +1551,7 @@ struct ComposerBar: View {
             }
             .frame(width: 32, height: 32)
             .background(Theme.danger, in: Circle())
+            .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(stopping)
         .accessibilityIdentifier("chat.stop")
@@ -1574,8 +1583,21 @@ struct ComposerBar: View {
         .accessibilityHint("Stops the running turn and sends this message now")
     }
 
-    private func gatedInterruptSend() {
+    /// A send puts the seat's next tap out of reach for `SeatTapGuard.window`: the seat
+    /// turns into Stop under the finger that just sent, and a second tap must not stop the agent.
+    private func settleSeat() {
         seatTaps.record()
+        seatSettling = true
+        seatSettleTask?.cancel()
+        seatSettleTask = Task {
+            try? await Task.sleep(for: .seconds(SeatTapGuard.window))
+            guard !Task.isCancelled else { return }
+            seatSettling = false
+        }
+    }
+
+    private func gatedInterruptSend() {
+        settleSeat()
         sendGate.send { _ in send(interrupting: true) }
     }
 
@@ -1606,7 +1628,7 @@ struct ComposerBar: View {
     /// Send, or (while the mic records or a transcription is on its way) wait for
     /// the words and then send; a second tap while it waits cancels the wait.
     private func gatedSend() {
-        seatTaps.record()
+        settleSeat()
         // A quick-action take whose Stop already started its transcription would
         // send its words on its own (`deliver`); a Send tapped meanwhile takes them
         // instead, into the draft and out as ONE message with what is typed.

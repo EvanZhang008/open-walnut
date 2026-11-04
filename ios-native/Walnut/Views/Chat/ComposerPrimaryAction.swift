@@ -75,11 +75,14 @@ enum ComposerPrimaryAction: Equatable {
 /// a double tap lands on a different control; a stop or voice tap that close behind the last
 /// tap on the seat is not a decision to stop the agent or to start talking, and does nothing.
 struct SeatTapGuard: Equatable {
-    static let window: TimeInterval = 1.0
+    static let window: TimeInterval = 2.0
+    let span: TimeInterval
     private(set) var lastTap = Date.distantPast
 
+    init(span: TimeInterval = SeatTapGuard.window) { self.span = span }
+
     func allows(at now: Date = Date()) -> Bool {
-        now.timeIntervalSince(lastTap) >= Self.window
+        now.timeIntervalSince(lastTap) >= span
     }
 
     mutating func record(at now: Date = Date()) {

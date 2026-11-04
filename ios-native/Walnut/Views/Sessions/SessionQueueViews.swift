@@ -22,6 +22,10 @@ struct SessionQueueStrip: View {
     /// Rows listed in the strip; the rest are one tap away in the list.
     static let visibleRows = 3
 
+    /// The rows move up when one goes, so the second tap of a double tap would land on the
+    /// next row's cross or Send: a row action right behind another one is ignored.
+    @State private var rowTaps = SeatTapGuard(span: 1.0)
+
     var body: some View {
         if queue.hasRows || queue.withdrawn != nil {
             VStack(alignment: .leading, spacing: 0) {
@@ -110,27 +114,9 @@ struct SessionQueueStrip: View {
     }
 
     private func undoLine(_ gone: WithdrawnQueuedMessage) -> some View {
-        HStack(spacing: 8) {
-            Text("Message withdrawn")
-                .font(.footnote)
-                .foregroundStyle(Theme.secondaryOnCard)
-            Spacer(minLength: 8)
-            Button {
-                queue.clearUndo()
-                onUndo(gone.text)
-            } label: {
-                Text("Undo")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.tint)
-                    .frame(minWidth: 44, minHeight: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("session.queue.undo")
-        }
-        .padding(.horizontal, 14)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("session.queue.withdrawn")
+        QueueUndoLine(queue: queue, gone: gone, onUndo: onUndo, identifier: "session.queue.undo")
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("session.queue.withdrawn")
     }
 
     private func rowView(_ row: SessionQueuedMessage) -> some View {
@@ -138,19 +124,27 @@ struct SessionQueueStrip: View {
             Button {
                 onOpen(QueueRowRef(id: row.id))
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.message)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    if let note = row.statusNote {
-                        Text(note)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(row.status == "processing" ? Theme.success : Theme.warning)
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.message)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if let note = row.statusNote {
+                            Text(note)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(row.status == "processing" ? Theme.doneText : Theme.needsText)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if row.canEdit {
+                        Image(systemName: "pencil")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryOnCard)
+                            .accessibilityHidden(true)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 14)
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
@@ -163,6 +157,8 @@ struct SessionQueueStrip: View {
             if row.status == "parked", !turnRunning, !queue.busyIds.contains(row.id) {
                 // Nothing runs, so Send just puts it back in line: one tap, no sheet.
                 Button {
+                    guard rowTaps.allows() else { return }
+                    rowTaps.record()
                     Task { _ = await queue.sendNow(row, interrupt: false) }
                 } label: {
                     Text("Send")
@@ -172,6 +168,7 @@ struct SessionQueueStrip: View {
                         .frame(minWidth: 44, minHeight: 32)
                         .background(Theme.tintSoft, in: Capsule())
                         .contentShape(Capsule())
+                        .padding(.trailing, 4)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("session.queue.send.\(row.id)")
@@ -181,6 +178,8 @@ struct SessionQueueStrip: View {
                 ProgressView().controlSize(.small).frame(width: 44, height: 44)
             } else if row.canWithdraw {
                 Button {
+                    guard rowTaps.allows() else { return }
+                    rowTaps.record()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task { await queue.withdraw(row) }
                 } label: {
@@ -201,6 +200,37 @@ struct SessionQueueStrip: View {
     }
 }
 
+/// "Message withdrawn · Undo": shown over the strip and inside the full list, so the way back
+/// is where the person's eyes are.
+struct QueueUndoLine: View {
+    let queue: SessionQueueModel
+    let gone: WithdrawnQueuedMessage
+    let onUndo: (String) -> Void
+    let identifier: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(gone.wasLast ? "Message withdrawn" : "Withdrawn \u{00B7} Undo puts it last")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryOnCard)
+            Spacer(minLength: 8)
+            Button {
+                queue.clearUndo()
+                onUndo(gone.text)
+            } label: {
+                Text("Undo")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.tint)
+                    .frame(minWidth: 44, minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(identifier)
+        }
+        .padding(.horizontal, 14)
+    }
+}
+
 // MARK: - One queued message
 
 /// Edit one queued message, send it now, or withdraw it. The row is read live from the
@@ -216,6 +246,7 @@ struct SessionQueuedMessageSheet: View {
     @State private var text = ""
     @State private var seeded = false
     @State private var saving = false
+    @State private var askDiscard = false
     @FocusState private var focused: Bool
 
     private var row: SessionQueuedMessage? { queue.rows.first { $0.id == rowID } }
@@ -296,7 +327,11 @@ struct SessionQueuedMessageSheet: View {
             .navigationTitle("Queued message")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        if changed { askDiscard = true } else { dismiss() }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let row else { return }
@@ -306,6 +341,14 @@ struct SessionQueuedMessageSheet: View {
                     .accessibilityIdentifier("session.queue.save")
                 }
             }
+        }
+        .presentationBackground(Color(.systemBackground))
+        .interactiveDismissDisabled(changed)
+        .alert("Discard your changes?", isPresented: $askDiscard) {
+            Button("Keep editing", role: .cancel) {}
+            Button("Discard changes", role: .destructive) { dismiss() }
+        } message: {
+            Text("The new words have not been saved.")
         }
         .onAppear {
             if !seeded, let row {
@@ -331,7 +374,7 @@ struct SessionQueuedMessageSheet: View {
                 ? "Waiting to go in. You can edit it until it does."
                 : "About to go out."
         case "processing": return "This message is with the agent now."
-        case "parked": return "Not sent: a Stop set it aside. Send puts it back in line."
+        case "parked": return "Not sent: a Stop set it aside. Edit it if you like, then send it."
         case "held": return "Waiting for your Mac to come back online."
         default: return ""
         }

@@ -265,13 +265,14 @@ struct SessionConversationView: View {
                     .presentationDragIndicator(.visible)
             }
         }
-        // The keyboard would cover the list in a half-height sheet.
-        .onChange(of: showQueue) { _, shown in
+        // The composer's keyboard would cover a half-height sheet: whichever opens, it goes first.
+        .onChange(of: anySheetShown) { _, shown in
             if shown { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
         }
         // Wave-2 extras: queue / plan / side questions / files.
         .sheet(isPresented: $showQueue) {
-            SessionQueueSheet(queue: queue, turnRunning: store.streaming)
+            SessionQueueSheet(queue: queue, turnRunning: store.streaming,
+                              onUndo: { text in Task { _ = await store.sendFromComposer(text) } })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -366,6 +367,11 @@ struct SessionConversationView: View {
         // queue drains at its end), and the server accepts a message (it may be waiting).
         .onChange(of: store.streaming) { _, _ in Task { await queue.refresh() } }
         .onChange(of: store.acceptedSends) { _, _ in Task { await queue.refresh() } }
+    }
+
+    private var anySheetShown: Bool {
+        showInfo || showControls || showTask || showMemory || showQueue || managingQueueRow != nil
+            || showPlan || showSideQuestions || showFiles || showNote || showFork || showLatestUpdate || showRename
     }
 
     private var queueStrip: some View {

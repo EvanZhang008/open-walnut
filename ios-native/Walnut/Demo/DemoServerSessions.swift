@@ -275,7 +275,7 @@ extension DemoServer {
                 return .missing
             }
             if r.method == "PATCH" {
-                guard rows[at].status == "pending", let edit, !edit.isEmpty else { return .started }
+                guard rows[at].status == "pending" || rows[at].status == "parked", let edit, !edit.isEmpty else { return .started }
                 rows[at].text = edit
             } else {
                 guard rows[at].status != "processing" else { return .started }

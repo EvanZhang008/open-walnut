@@ -141,9 +141,20 @@ final class SessionQueueModelTests: XCTestCase {
         let m = model(t)
         await m.refresh()
         await m.withdraw(m.rows[0])
-        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words"))
+        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words", wasLast: true))
         m.clearUndo()
         XCTAssertNil(m.withdrawn)
+    }
+
+    func testUndoSaysWhenTheMessageWillComeBackLast() async {
+        let t = Transport()
+        t.rows = [row("qm-a", "first"), row("qm-b", "second")]
+        let m = model(t)
+        await m.refresh()
+        await m.withdraw(m.rows[0])
+        XCTAssertEqual(m.withdrawn?.wasLast, false, "others stood behind it: Undo puts it at the back")
+        await m.withdraw(m.rows[0])
+        XCTAssertEqual(m.withdrawn?.wasLast, true)
     }
 
     func testTheOfferToTakeItBackLapses() async {
@@ -306,7 +317,7 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertNil(pending.statusNote)
 
         let parked = row("b", status: "parked")
-        XCTAssertFalse(parked.canEdit)
+        XCTAssertTrue(parked.canEdit)
         XCTAssertTrue(parked.canWithdraw)
         XCTAssertTrue(parked.canSendNow)
         XCTAssertEqual(parked.statusNote, "Not sent")

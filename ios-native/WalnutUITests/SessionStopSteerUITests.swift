@@ -181,6 +181,23 @@ final class SessionStopSteerUITests: XCTestCase {
         attach(app, "8-double-tap")
     }
 
+    func testADoubleTapOnTheCrossWithdrawsOnlyThatMessage() throws {
+        let app = openLongSession()
+        type("First waiting words", in: app)
+        element(app, "chat.send").tap()
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        type("Second waiting words", in: app)
+        element(app, "chat.send").tap()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        let deadline = Date().addingTimeInterval(20)
+        while rows.count < 2 && Date() < deadline { usleep(200_000) }
+        XCTAssertEqual(rows.count, 2, "both messages wait in the strip")
+        elements(app, beginningWith: "session.queue.withdraw.").firstMatch.doubleTap()
+        sleep(2)
+        XCTAssertEqual(rows.count, 1, "one double tap withdrew more than the message it touched")
+        attach(app, "10-cross-double-tap")
+    }
+
     // MARK: - Stop with a message waiting
 
     func testStopSetsTheWaitingMessageAsideAndSendPutsItBack() throws {
@@ -202,6 +219,39 @@ final class SessionStopSteerUITests: XCTestCase {
         send.tap()
         XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send was not answered")
         XCTAssertTrue(element(app, "session.queue.strip").waitForNonExistence(timeout: 10))
+    }
+
+    func testASetAsideMessageCanBeCorrectedAndAnUnsavedCorrectionIsNotLostSilently() throws {
+        let app = openLongSession()
+        type("Then check the archive", in: app)
+        element(app, "chat.send").tap()
+        let row = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the queued message is not listed")
+        tapStop(app)
+        XCTAssertTrue(element(app, "chat.stop").waitForNonExistence(timeout: 20), "the turn did not stop")
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.send.").firstMatch.waitForExistence(timeout: 20),
+                      "a set-aside message offers Send")
+        row.tap()
+        let editor = element(app, "session.queue.edit.text")
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue(editor.isEnabled, "a message a Stop set aside can still be corrected")
+        editor.tap()
+        editor.press(forDuration: 1.0)
+        if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
+        editor.typeText("Then check the archive from last year")
+        // Closing with words not saved asks before it throws them away.
+        app.buttons["Close"].tap()
+        let keep = app.buttons["Keep editing"]
+        XCTAssertTrue(keep.waitForExistence(timeout: 5), "Close dropped the unsaved words without asking")
+        attach(app, "9-discard-asked")
+        keep.tap()
+        element(app, "session.queue.save").tap()
+        XCTAssertTrue(element(app, "session.queue.edit.text").waitForNonExistence(timeout: 10), "Save left the sheet up")
+        let saved = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        XCTAssertTrue(saved.label.contains("from last year"), "the strip does not show the corrected words")
+        elements(app, beginningWith: "session.queue.send.").firstMatch.tap()
+        XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send was not answered")
     }
 
     // MARK: - Interrupt & send
