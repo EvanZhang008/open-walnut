@@ -49,3 +49,49 @@
 }
 .compact-offer-btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
 .compact-offer-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Walnut's idle compaction row: opens to why it ran and its setting (components/sessions/IdleCompactLine.tsx). */
+.idle-compact-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.idle-compact-toggle .session-system-text { flex: 1 1 auto; min-width: 0; font-weight: 500; }
+.idle-compact-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.idle-compact-body {
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.idle-compact-why { color: var(--fg); }
+.idle-compact-setting { display: flex; flex-direction: column; gap: 4px; }
+.idle-compact-setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.idle-compact-setting-row label { font-weight: 500; cursor: pointer; }
+.idle-compact-setting-at, .idle-compact-setting-unit { color: var(--fg-muted); }
+.idle-compact-percent {
+  width: 3.4em;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: right;
+}
+.idle-compact-percent:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.idle-compact-percent[aria-invalid='true'] { border-color: var(--warning); }
+.idle-compact-percent:disabled { opacity: 0.5; }
+.idle-compact-saved { color: var(--fg-muted); font-size: 11px; }
+.idle-compact-setting-help { color: var(--fg-muted); font-size: 11px; }
+.idle-compact-setting-help a { color: var(--accent); }
+.idle-compact-error { color: var(--warning); font-size: 11px; }

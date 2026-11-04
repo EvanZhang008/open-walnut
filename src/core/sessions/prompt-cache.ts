@@ -17,8 +17,22 @@
 export const ONE_HOUR_MS = 60 * 60_000;
 export const FIVE_MINUTES_MS = 5 * 60_000;
 
-/** Below this many tokens a cold re-read is cheap, and compacting loses context for little saving. */
+/** Below this many tokens a cold re-read is cheap: the cold-cache offer stays away (compact-offer.ts). */
 export const DEFAULT_IDLE_COMPACT_MIN_TOKENS = 200_000;
+/**
+ * The idle compaction runs only for a session this full: this share of where it compacts by itself
+ * (its auto-compaction window, else the model's). Measured 2026-11-04 on Claude Code 2.1.312, a
+ * `/compact` writes the whole conversation to the cache once, warm or cold, so it pays only for a
+ * session that would soon compact anyway. Below 90%: the CLI keeps room for its answer and compacts
+ * on its own near 93% of a 500K window, and a busy session could get there first.
+ */
+export const DEFAULT_IDLE_COMPACT_LIMIT_PERCENT = 85;
+/** The share a setting may name; outside it (or unset) the default holds. */
+export const IDLE_COMPACT_LIMIT_PERCENT_RANGE = { min: 50, max: 99 } as const;
+export function resolveIdleCompactLimitPercent(value: unknown): number {
+  const { min, max } = IDLE_COMPACT_LIMIT_PERCENT_RANGE;
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : DEFAULT_IDLE_COMPACT_LIMIT_PERCENT;
+}
 /** The compaction is sent this long before the cache expires: enough to resume a stopped CLI. */
 export const IDLE_COMPACT_LEAD_MS = 3 * 60_000;
 /**
@@ -42,6 +56,19 @@ export interface PromptCacheFacts {
   expiresAt?: string;
   /** The context was compacted at this time and holds `tokens` since. */
   compactedAt?: string;
+  /** Where this session compacts by itself, when known: its auto-compaction window, else the model's. */
+  compactsAt?: number;
+  /** Which of the two `compactsAt` is. */
+  compactsAtSource?: CompactsAtSource;
+}
+
+/** 'auto-compact': the session's or host's auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW); 'model': the model's context window. */
+export type CompactsAtSource = 'auto-compact' | 'model';
+
+/** The size an idle session must reach to be compacted, or null when where it compacts is unknown (then it is never compacted). */
+export function idleCompactThreshold(facts: Pick<PromptCacheFacts, 'compactsAt'> | undefined, limitPercent: number = DEFAULT_IDLE_COMPACT_LIMIT_PERCENT): number | null {
+  if (!facts?.compactsAt || facts.compactsAt <= 0) return null;
+  return Math.round(facts.compactsAt * limitPercent / 100);
 }
 
 /** The usage counters a Claude request reports (message_start, message_delta, assistant). */
@@ -110,6 +137,7 @@ export function noteCompaction(prev: PromptCacheFacts | undefined, postTokens: n
   return withExpiry({
     tokens: postTokens && postTokens > 0 ? postTokens : 0,
     ...(prev?.ttlMs ? { ttlMs: prev.ttlMs } : {}),
+    ...(prev?.compactsAt ? { compactsAt: prev.compactsAt, ...(prev.compactsAtSource ? { compactsAtSource: prev.compactsAtSource } : {}) } : {}),
     requestAt: at,
     compactedAt: at,
   });
@@ -131,16 +159,18 @@ export interface IdleCompactionWindow {
 
 /**
  * When an idle session with these facts should compact, or null when it should
- * not: too small, already compacted since, a lifetime unknown or too short to
- * be worth it, or a cache that has expired already.
+ * not: below its share of where it compacts by itself (or that is unknown),
+ * already compacted since, a lifetime unknown or too short to be worth it, or a
+ * cache that has expired already.
  */
 export function idleCompactionWindow(
   facts: PromptCacheFacts | undefined,
   nowMs: number,
-  opts: { minTokens?: number; leadMs?: number; minTtlMs?: number } = {},
+  opts: { limitPercent?: number; leadMs?: number; minTtlMs?: number } = {},
 ): IdleCompactionWindow | null {
   if (!facts || facts.compactedAt) return null;
-  if (facts.tokens < (opts.minTokens ?? DEFAULT_IDLE_COMPACT_MIN_TOKENS)) return null;
+  const threshold = idleCompactThreshold(facts, opts.limitPercent);
+  if (threshold === null || facts.tokens < threshold) return null;
   if (!facts.ttlMs || facts.ttlMs < (opts.minTtlMs ?? IDLE_COMPACT_MIN_TTL_MS)) return null;
   const expiresAtMs = Date.parse(facts.expiresAt ?? '');
   if (!Number.isFinite(expiresAtMs) || nowMs >= expiresAtMs) return null;
@@ -156,6 +186,29 @@ export const IDLE_COMPACT_UUID_PREFIX = 'cc0a1d1e-';
 export function idleCompactLineUuid(random: string): string {
   return IDLE_COMPACT_UUID_PREFIX + random.slice(IDLE_COMPACT_UUID_PREFIX.length);
 }
+/** Why one idle compaction ran: kept on the session record (idleCompactionLog), shown on its row. */
+export interface IdleCompactReason {
+  /** Context tokens when it was sent. */
+  tokens: number;
+  /** The size it had to reach: limitPercent of compactsAt. */
+  threshold: number;
+  limitPercent: number;
+  compactsAt: number;
+  source: CompactsAtSource;
+}
+
+function shortTokens(n: number): string {
+  return n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : `${Math.round(n / 1000)}K`;
+}
+
+/** "400K tokens, past 85% (383K) of the 450K auto-compaction window set for this session". */
+export function idleCompactReasonText(r: IdleCompactReason): string {
+  const base = r.source === 'auto-compact'
+    ? `the ${shortTokens(r.compactsAt)} auto-compaction window set for this session`
+    : `the model's ${shortTokens(r.compactsAt)} context window (no auto-compaction window is set)`;
+  return `${shortTokens(r.tokens)} tokens, past ${r.limitPercent}% (${shortTokens(r.threshold)}) of ${base}`;
+}
+
 /** The history row that stands for the idle compaction's command line. */
 export const IDLE_COMPACT_HISTORY_TEXT = 'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.';
 /** Walnut's own lines about an idle compaction: the live note (idle-compaction.ts) and the history row. */

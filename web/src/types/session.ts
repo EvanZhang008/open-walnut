@@ -194,6 +194,8 @@ export interface SessionRecord {
   contextTokens?: number;
   /** The prompt cache facts of the last main-loop request, stored at each turn end. */
   promptCache?: import('../../../src/core/sessions/prompt-cache').PromptCacheFacts;
+  /** Why each recent idle compaction ran, by its command line's uuid (IdleCompactLine.tsx). */
+  idleCompactionLog?: Array<{ lineUuid: string; sentAt: string } & import('../../../src/core/sessions/prompt-cache').IdleCompactReason>;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

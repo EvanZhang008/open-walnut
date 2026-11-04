@@ -16,7 +16,7 @@ const T0 = Date.parse('2026-11-04T10:00:00.000Z');
 const SID = 'sess-idle-1';
 const facts = (over: Partial<PromptCacheFacts> = {}): PromptCacheFacts => ({
   tokens: 400_000, ttlMs: ONE_HOUR_MS, requestAt: new Date(T0).toISOString(),
-  expiresAt: new Date(T0 + ONE_HOUR_MS).toISOString(), ...over,
+  expiresAt: new Date(T0 + ONE_HOUR_MS).toISOString(), compactsAt: 450_000, compactsAtSource: 'auto-compact', ...over,
 });
 const record = (over: Partial<SessionRecord> = {}): SessionRecord => ({
   claudeSessionId: SID, taskId: 'task-1', process_status: 'idle', last_status_change: new Date(T0 + 30_000).toISOString(),
@@ -125,8 +125,13 @@ describe('when it fires', () => {
     await h.runDue();
     expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
     expect(isQuietTurn(SID)).toBe(true);
-    expect(h.notes[0]).toMatch(/Compacting this idle session \(400K tokens\) before its prompt cache expires in about 3 min/);
+    expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 85% (383K) of the 450K auto-compaction window set for this session.');
     expect(h.state.rec?.idleCompaction).toMatchObject({ priorTurnEnd: new Date(T0 + 30_000).toISOString(), tokens: 400_000 });
+    // Its history row says why: kept by the command line's uuid.
+    expect(h.state.rec?.idleCompactionLog).toEqual([{
+      lineUuid: expect.stringMatching(/^cc0a1d1e-/), sentAt: new Date(h.now.ms).toISOString(),
+      tokens: 400_000, threshold: 382_500, limitPercent: 85, compactsAt: 450_000, source: 'auto-compact',
+    }]);
   });
 
   it('a second fire for the same request sends nothing: one compaction per request', async () => {
@@ -286,8 +291,9 @@ describe('when it fires', () => {
   // 2026-11-04 review: switched back on, or the threshold lowered, and a big session already idle
   // was not compacted until its next turn. A config change arms (and disarms) every session now.
   it('a settings change re-arms the idle sessions under the new switch and threshold', async () => {
-    const cfg = { enabled: true, min: 500_000 };
-    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: cfg.enabled, min_tokens: cfg.min } }, {}) });
+    // 400K of a 450K window is 89%.
+    const cfg = { enabled: true, min: 95 };
+    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: cfg.enabled, limit_percent: cfg.min } }, {}) });
     await h.ic.onTurnEnd(SID);
     expect(h.ic.armedFor(SID)).toBeUndefined();
     const changed = async () => {
@@ -296,7 +302,7 @@ describe('when it fires', () => {
       await h.runDue();
       for (let i = 0; i < 20; i++) await settle();
     };
-    cfg.min = 300_000;
+    cfg.min = 85;
     await changed();
     expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
     cfg.enabled = false;
@@ -305,19 +311,19 @@ describe('when it fires', () => {
     cfg.enabled = true;
     await changed();
     expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
-    cfg.min = 450_000;
+    cfg.min = 90;
     await changed();
     expect(h.ic.armedFor(SID)).toBeUndefined();
     // Already sent for this request: a change does not arm it again.
-    cfg.min = 300_000;
+    cfg.min = 85;
     h.state.rec = record({ idleCompaction: { sentAt: new Date(T0 + 50 * 60_000).toISOString(), rowId: 'qm-quiet-idle-compact-b' } });
     await changed();
     expect(h.ic.armedFor(SID)).toBeUndefined();
   });
 
   it('a session disarmed by a stopped turn stays disarmed through a settings change, until its next clean turn', async () => {
-    const cfg = { min: 500_000 };
-    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: true, min_tokens: cfg.min } }, {}) });
+    const cfg = { min: 95 };
+    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { limit_percent: cfg.min } }, {}) });
     const changed = async () => {
       h.ic.handleEvent(ev(EventNames.CONFIG_CHANGED, {}, 'config'));
       h.now.ms += 1_000;
@@ -325,7 +331,7 @@ describe('when it fires', () => {
       for (let i = 0; i < 20; i++) await settle();
     };
     h.ic.handleEvent(ev(EventNames.SESSION_RESULT, { sessionId: SID, interrupted: true }));
-    cfg.min = 300_000;
+    cfg.min = 85;
     await changed();
     expect(h.ic.armedFor(SID)).toBeUndefined();
     await h.ic.onTurnEnd(SID);
@@ -377,12 +383,12 @@ describe('at boot', () => {
 
 describe('the settings', () => {
   it('reads enabled, the threshold and the test lead', () => {
-    // Off by default (2026-11-04: a compaction writes the whole conversation once, come back or not).
-    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: false, minTokens: 200_000, leadMs: IDLE_COMPACT_LEAD_MS });
-    expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: true, min_tokens: 120_000 } }, { WALNUT_IDLE_COMPACT_LEAD_MS: '3590000' }))
-      .toEqual({ enabled: true, minTokens: 120_000, leadMs: 3_590_000 });
-    expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: true } }, { WALNUT_IDLE_COMPACTION: '0' }).enabled).toBe(false);
-    expect(resolveIdleCompactionConfig({}, { WALNUT_IDLE_COMPACTION: '1' }).enabled).toBe(true);
+    expect(resolveIdleCompactionConfig(undefined, {})).toEqual({ enabled: true, limitPercent: 85, leadMs: IDLE_COMPACT_LEAD_MS });
+    expect(resolveIdleCompactionConfig({ idle_compaction: { limit_percent: 90 } }, { WALNUT_IDLE_COMPACT_LEAD_MS: '3590000' }))
+      .toEqual({ enabled: true, limitPercent: 90, leadMs: 3_590_000 });
+    expect(resolveIdleCompactionConfig({ idle_compaction: { limit_percent: 20 } }, {}).limitPercent).toBe(85);
+    expect(resolveIdleCompactionConfig({ idle_compaction: { enabled: false } }, {}).enabled).toBe(false);
+    expect(resolveIdleCompactionConfig({}, { WALNUT_IDLE_COMPACTION: '0' }).enabled).toBe(false);
   });
 
   it('skipReason is the one decision, pure', () => {

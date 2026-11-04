@@ -37,6 +37,8 @@ import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
 import { envelopeSteps, foldStepsPhrase, systemRunLabel } from './fold-steps';
+import { IdleCompactLine } from './IdleCompactLine';
+import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
@@ -440,6 +442,8 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
   const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content(`sys-${variant}`, message), false);
   const toggleOpen = () => setOpen((o) => !o);
   const icon = systemLineIcon(variant);
+  // Walnut's idle compaction opens to why it ran and the setting that decides it.
+  if (isIdleCompactLine(message)) return <IdleCompactLine message={message} time={time} noticeId={noticeId} />;
   if (detail && detail.length > 80) {
     return (
       <div className="tool-run-row">
@@ -513,6 +517,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
               message={member.message}
               detail={member.detail}
               time={member.time}
+              {...(member.key ? { noticeId: member.key } : {})}
             />
           ))}
         </div>

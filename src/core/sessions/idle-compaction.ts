@@ -1,7 +1,12 @@
 /**
- * Idle compaction: a big Claude Code session left idle is compacted shortly
- * before its prompt cache expires, so the next message reads a small summary
- * instead of paying a full uncached read of the whole context (2026-11-04).
+ * Idle compaction: a Claude Code session left idle that is close to compacting by
+ * itself (`session.idle_compaction.limit_percent`, 85% by default, of its
+ * auto-compaction window, else of the model's window; never when neither is
+ * known) is compacted shortly before its prompt cache expires (2026-11-04).
+ * Measured on Claude Code 2.1.312, a `/compact` writes the whole conversation to
+ * the cache once, warm or cold (it read 13K of a 299K prefix), so it pays only
+ * for a session that would soon compact anyway: then the next message, and
+ * every one after, reads the summary.
  *
  * At every turn end the session's prompt cache facts (sessions/prompt-cache.ts,
  * kept by the runner from the request's own usage) are stored on its record,
@@ -15,19 +20,16 @@
  * under memory pressure), an armed compaction goes out then, while the CLI and
  * its cache are alive.
  *
- * Skipped: a session below `session.idle_compaction.min_tokens` (200K), a cache
+ * Skipped: a session below its threshold, a cache
  * that lives under 30 minutes (5-minute caches: the web's cold-cache offer
  * covers them), a session already compacted since, a running turn, a prompt for
  * the user, queued messages, work that outlives the turn (a background command,
  * a wakeup, a CLI cron), a lane or ACP session, a completed task, an org node
  * while the org is off, and a session whose CLI process is gone (stopped: a
  * resume would build its prompt again and likely miss the cache, so it would pay
- * the full read the compaction exists to save). Off unless
- * `session.idle_compaction.enabled: true` (or WALNUT_IDLE_COMPACTION=1): measured on Claude Code
- * 2.1.312 (2026-11-04), `/compact` does not read the warm cache (13K of a 299K prefix), so it writes
- * the whole conversation once at the cache-write price whether or not anyone comes back.
- * `WALNUT_IDLE_COMPACTION=0` turns it off over the setting. Primary only (server.ts). The timers are rebuilt from the
- * records at boot.
+ * the full read the compaction exists to save). `session.idle_compaction.enabled:
+ * false` or WALNUT_IDLE_COMPACTION=0 turns it off. Primary only (server.ts). The
+ * timers are rebuilt from the records at boot.
  *
  * The `/compact` row has its own id and a user uuid, so it always goes out alone
  * (batch-uuid.ts splitBatchAtUuid) and the quiet turn is bound to it. A quiet turn
@@ -39,7 +41,8 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import {
-  DEFAULT_IDLE_COMPACT_MIN_TOKENS, IDLE_COMPACT_LEAD_MS, idleCompactLineUuid, idleCompactionWindow, type PromptCacheFacts,
+  IDLE_COMPACT_LEAD_MS, idleCompactLineUuid, idleCompactionWindow, idleCompactReasonText, idleCompactThreshold,
+  resolveIdleCompactLimitPercent, type IdleCompactReason, type PromptCacheFacts,
 } from './prompt-cache.js';
 import {
   beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, onQuietTurnEnd, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
@@ -54,20 +57,20 @@ const TOO_LATE_MS = 15_000;
 
 export interface IdleCompactionConfig {
   enabled: boolean;
-  minTokens: number;
+  /** Compacts a session at this share (%) of where it compacts by itself. */
+  limitPercent: number;
   leadMs: number;
 }
 
 export function resolveIdleCompactionConfig(
-  session: { idle_compaction?: { enabled?: boolean; min_tokens?: number | null } } | undefined,
+  session: { idle_compaction?: { enabled?: boolean; limit_percent?: number | null } } | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): IdleCompactionConfig {
-  const min = session?.idle_compaction?.min_tokens;
   // Tests and demos move the send earlier (a lead near the whole lifetime fires right after the turn).
   const lead = Number(env.WALNUT_IDLE_COMPACT_LEAD_MS);
   return {
-    enabled: env.WALNUT_IDLE_COMPACTION === '1' || (session?.idle_compaction?.enabled === true && env.WALNUT_IDLE_COMPACTION !== '0'),
-    minTokens: typeof min === 'number' && Number.isFinite(min) && min > 0 ? min : DEFAULT_IDLE_COMPACT_MIN_TOKENS,
+    enabled: session?.idle_compaction?.enabled !== false && env.WALNUT_IDLE_COMPACTION !== '0',
+    limitPercent: resolveIdleCompactLimitPercent(session?.idle_compaction?.limit_percent),
     leadMs: Number.isFinite(lead) && lead > 0 ? lead : IDLE_COMPACT_LEAD_MS,
   };
 }
@@ -152,14 +155,20 @@ type RunnerView = {
 };
 let liveRunner: RunnerView | null = null;
 
-function formatTokens(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
+/** The words of the timeline note when an idle compaction starts (it says why, and from what). */
+export function idleCompactNote(reason: IdleCompactReason, minutesLeft: number): string {
+  return `Compacting this idle session before its prompt cache expires in about ${Math.max(1, Math.round(minutesLeft))} min: ${idleCompactReasonText(reason)}.`;
 }
 
-/** The words of the timeline note when an idle compaction starts. */
-export function idleCompactNote(tokens: number, minutesLeft: number): string {
-  return `Compacting this idle session (${formatTokens(tokens)} tokens) before its prompt cache expires in about ${Math.max(1, Math.round(minutesLeft))} min, so your next message starts from a summary instead of re-reading everything.`;
+/** Why these facts compact under these settings, or null when they would not. */
+export function idleCompactReasonOf(facts: PromptCacheFacts | undefined, limitPercent: number): IdleCompactReason | null {
+  const threshold = idleCompactThreshold(facts, limitPercent);
+  if (!facts || threshold === null || !facts.compactsAt) return null;
+  return { tokens: facts.tokens, threshold, limitPercent, compactsAt: facts.compactsAt, source: facts.compactsAtSource ?? 'model' };
 }
+
+/** How many past idle compactions a record keeps the reasons of (their rows show them). */
+const REASON_LOG_MAX = 20;
 
 /** Why a due compaction is not sent now, or null to send it. Pure; exported for tests. */
 export function skipReason(input: {
@@ -185,7 +194,7 @@ export function skipReason(input: {
   if (input.orgOff) return 'org-off';
   if (!facts || facts.requestAt !== input.scheduledFor) return 'newer-request';
   if (rec.idleCompaction && Date.parse(rec.idleCompaction.sentAt) >= Date.parse(facts.requestAt)) return 'already-compacted';
-  const window = idleCompactionWindow(facts, nowMs, { minTokens: cfg.minTokens, leadMs: cfg.leadMs });
+  const window = idleCompactionWindow(facts, nowMs, { limitPercent: cfg.limitPercent, leadMs: cfg.leadMs });
   if (!window) return 'no-window';
   if (window.expiresAtMs - nowMs < TOO_LATE_MS) return 'too-late';
   if (live.inTurn === true) return 'turn-running';
@@ -320,7 +329,7 @@ export class IdleCompaction {
   async schedule(sessionId: string, facts: PromptCacheFacts | undefined): Promise<void> {
     if (this.stopped) return;
     const cfg = await this.deps.config();
-    const window = cfg.enabled ? idleCompactionWindow(facts, this.deps.now(), { minTokens: cfg.minTokens, leadMs: cfg.leadMs }) : null;
+    const window = cfg.enabled ? idleCompactionWindow(facts, this.deps.now(), { limitPercent: cfg.limitPercent, leadMs: cfg.leadMs }) : null;
     if (!window || !facts) { this.cancel(sessionId, 'no-window'); return; }
     const prev = this.timers.get(sessionId);
     if (prev?.requestAt === facts.requestAt) return;
@@ -377,10 +386,13 @@ export class IdleCompaction {
       return 'busy';
     }
     this.deps.announce(sessionId, true);
+    const lineUuid = idleCompactLineUuid(randomUUID());
+    // skipReason passed, so the facts are past a known threshold.
+    const reason = idleCompactReasonOf(facts, cfg.limitPercent)!;
     try {
       await this.deps.send(sessionId, IDLE_COMPACT_TEXT, {
         source: IDLE_COMPACT_SOURCE, ...(rec!.taskId ? { taskId: rec!.taskId } : {}),
-        messageId: rowId, userUuid: idleCompactLineUuid(randomUUID()), stillWanted: mineStill,
+        messageId: rowId, userUuid: lineUuid, stillWanted: mineStill,
       });
       if (!mineStill()) {
         // Someone else took the session while the row was being stored: it goes no further.
@@ -388,17 +400,20 @@ export class IdleCompaction {
         return 'superseded';
       }
       // Stored once it is on its way: status-reconcile reads the turn before it, a restart finds its row.
+      const sentAt = new Date(now).toISOString();
       await this.deps.saveSession(sessionId, {
         idleCompaction: {
-          sentAt: new Date(now).toISOString(),
+          sentAt,
           ...(rec!.last_status_change ? { priorTurnEnd: rec!.last_status_change } : {}),
           tokens: facts!.tokens,
           rowId,
         },
+        // Its row says why (session-history route): kept by the line's uuid, the row's id.
+        idleCompactionLog: [...(rec!.idleCompactionLog ?? []).slice(-(REASON_LOG_MAX - 1)), { lineUuid, sentAt, ...reason }],
       });
       if (!mineStill()) await this.noteQuietEnd(sessionId);
       const expiresAtMs = Date.parse(facts!.expiresAt ?? '');
-      this.deps.emitNote(sessionId, rec!.taskId, idleCompactNote(facts!.tokens, (expiresAtMs - now) / 60_000));
+      this.deps.emitNote(sessionId, rec!.taskId, idleCompactNote(reason, (expiresAtMs - now) / 60_000));
       log.session.info('idle compaction sent', { sessionId, taskId: rec!.taskId, tokens: facts!.tokens, expiresAt: facts!.expiresAt });
       return 'sent';
     } catch (err) {

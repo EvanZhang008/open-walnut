@@ -11,6 +11,7 @@ import { useSerialSave, type OnSave } from './GeneralSection';
 import { DefaultEngineRow } from './DefaultEngineRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
+import { DEFAULT_IDLE_COMPACT_LIMIT_PERCENT, IDLE_COMPACT_LIMIT_PERCENT_RANGE } from '../../../../../src/core/sessions/prompt-cache';
 
 interface Props {
   config: Config;
@@ -79,9 +80,18 @@ export function SessionsSection({ config, onSave }: Props) {
     { rowKey: 'sessions.max-idle', kind: 'number' },
   );
   const idleCompact = useOptimisticSetting<boolean>(
-    config.session?.idle_compaction?.enabled === true,
+    config.session?.idle_compaction?.enabled !== false,
     (v) => saveIdleCompaction({ enabled: v }, 'sessions.idle-compaction'),
     { rowKey: 'sessions.idle-compaction' },
+  );
+  // The share of where a session compacts by itself. Empty = 85; outside 50..99 it is pulled in on commit.
+  const compactPercent = useCommitField<number | undefined>(
+    config.session?.idle_compaction?.limit_percent ?? undefined,
+    (v) => saveIdleCompaction({ limit_percent: v ?? null }, 'sessions.idle-compaction-percent'),
+    {
+      rowKey: 'sessions.idle-compaction-percent', kind: 'number',
+      clamp: (v) => (v == null ? v : Math.min(IDLE_COMPACT_LIMIT_PERCENT_RANGE.max, Math.max(IDLE_COMPACT_LIMIT_PERCENT_RANGE.min, Math.round(v)))),
+    },
   );
   // Shown and typed in thousands of tokens; stored in tokens. Empty = the server's 200K. The server
   // reads 0 or less as unset, so the field clears to that on commit instead of showing a 0 it ignores.
@@ -154,7 +164,7 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="idle-compaction-row"
           label="Compact idle sessions before the cache expires"
-          help="A big Claude Code session left idle is summarized a few minutes before its one-hour prompt cache runs out. The summary costs about one message to the whole conversation, even if you never come back; every message after it reads the short summary instead. Off, a session with a cold cache offers the same compaction when you return."
+          help="A Claude Code session left idle that is close to compacting by itself is summarized a few minutes before its one-hour prompt cache runs out, so your next message reads the short summary. The summary costs about one message to the whole conversation, so it is kept for sessions that would compact soon anyway."
           htmlFor="idle-compaction"
           error={idleCompact.error}
           control={
@@ -163,9 +173,22 @@ export function SessionsSection({ config, onSave }: Props) {
         />
         <SettingsRow
           indent
+          anchor="idle-compaction-percent-row"
+          label="When the context reaches"
+          help={`Of the session's auto-compaction limit: its auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW on its host), else its model's context window. When neither is known Walnut does not compact. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
+          htmlFor="idle-compaction-percent"
+          error={compactPercent.error}
+          control={(
+            <NumberInput
+              id="idle-compaction-percent" field={compactPercent.inputProps} placeholder={String(DEFAULT_IDLE_COMPACT_LIMIT_PERCENT)}
+              min={IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} max={IDLE_COMPACT_LIMIT_PERCENT_RANGE.max} unit="% of the limit"
+            />
+          )}
+        />
+        <SettingsRow
           anchor="idle-compaction-min-row"
-          label="Only sessions above"
-          help="Smaller sessions are cheap to re-read and keep their full history; empty uses 200K. The same size decides when a session with a cold cache offers to compact first, also with the switch above off."
+          label="Offer Compact first above"
+          help="A session whose prompt cache expired offers to compact before your next message when it is at least this big; smaller ones are cheap to store again. Empty uses 200K."
           htmlFor="idle-compaction-min"
           error={compactMin.error}
           control={<NumberInput id="idle-compaction-min" field={compactMin.inputProps} placeholder="200" min={1} unit="K tokens" />}

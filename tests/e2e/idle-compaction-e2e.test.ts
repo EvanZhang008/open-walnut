@@ -72,7 +72,8 @@ async function startBig(message: string): Promise<{ sid: string; taskId: string 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   process.env.WALNUT_IDLE_COMPACT_LEAD_MS = String(LEAD_MS)
-  process.env.WALNUT_IDLE_COMPACTION = '1'
+  // The model's window the mock reports; no auto-compaction window is set, so the threshold is 85% of it (382.5K).
+  process.env.MOCK_CONTEXT_WINDOW = '450000'
   process.env.MOCK_COMPACT_MS = '2500'
   daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
@@ -84,7 +85,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.WALNUT_IDLE_COMPACT_LEAD_MS
-  delete process.env.WALNUT_IDLE_COMPACTION
+  delete process.env.MOCK_CONTEXT_WINDOW
   delete process.env.MOCK_COMPACT_MS
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
@@ -96,7 +97,7 @@ describe('a big idle session with a 1-hour cache', () => {
   it('is compacted before the cache expires, quietly', async () => {
     const w = await startBig('big-context-turn:400000:1h')
     const facts = await until('facts stored', () => getSessionByClaudeId(w.sid), (r) => !!r?.promptCache?.expiresAt)
-    expect(facts!.promptCache).toMatchObject({ tokens: 400_040, ttlMs: 3_600_000 })
+    expect(facts!.promptCache).toMatchObject({ tokens: 400_040, ttlMs: 3_600_000, compactsAt: 450_000, compactsAtSource: 'model' })
     const before = await task(w.taskId)
 
     // The compaction goes out as the bare command.
@@ -118,6 +119,10 @@ describe('a big idle session with a 1-hour cache', () => {
     const rec = await until('compacted facts', () => getSessionByClaudeId(w.sid), (r) => !!r?.promptCache?.compactedAt)
     expect(rec!.promptCache!.tokens).toBe(18_000)
     expect(rec!.idleCompaction).toMatchObject({ tokens: 400_040 })
+    // Why it ran, by its command line's uuid (the row shows it).
+    expect(rec!.idleCompactionLog).toEqual([expect.objectContaining({
+      lineUuid: expect.stringMatching(/^cc0a1d1e-/), tokens: 400_040, threshold: 382_500, limitPercent: 85, compactsAt: 450_000, source: 'model',
+    })])
     expect(Date.parse(rec!.idleCompaction!.priorTurnEnd!)).toBeLessThanOrEqual(Date.parse(rec!.idleCompaction!.sentAt))
     await until('quiet end stored', () => getSessionByClaudeId(w.sid), (r) => !!r?.idleCompaction?.endedAt)
 
@@ -204,13 +209,17 @@ describe('a big idle session with a 1-hour cache', () => {
     } finally { bus.unsubscribe(sub) }
   }, 90_000)
 
-  it('a 5-minute cache and a small session are left alone', async () => {
+  // 2026-11-04, Evan: a 300K session compacted while idle was "too sensitive"; only one near where it
+  // compacts by itself is (85% of its window here: 382.5K of 450K).
+  it('a 5-minute cache, a small session and a 300K one below the threshold are left alone', async () => {
     const short = await startBig('big-context-turn:400000:5m')
     const small = await startBig('big-context-turn:60000:1h')
+    const below = await startBig('big-context-turn:300000:1h')
     await new Promise((r) => setTimeout(r, 9_000))
-    expect(sentTexts(short.sid).some((s) => s.trim() === '/compact')).toBe(false)
-    expect(sentTexts(small.sid).some((s) => s.trim() === '/compact')).toBe(false)
-    expect((await getSessionByClaudeId(short.sid))?.idleCompaction).toBeUndefined()
-    expect((await getSessionByClaudeId(small.sid))?.idleCompaction).toBeUndefined()
+    for (const w of [short, small, below]) {
+      expect(sentTexts(w.sid).some((s) => s.trim() === '/compact')).toBe(false)
+      expect((await getSessionByClaudeId(w.sid))?.idleCompaction).toBeUndefined()
+    }
+    expect((await getSessionByClaudeId(below.sid))?.promptCache).toMatchObject({ tokens: 300_040, compactsAt: 450_000 })
   }, 90_000)
 })

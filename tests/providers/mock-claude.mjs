@@ -1257,7 +1257,11 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'message_stop' }));
         persistMockTurn(sid, effectiveMessage, { message: { ...assistant, stop_reason: 'end_turn', usage: final } },
           process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
-        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 60, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.01), usage: final });
+        // MOCK_CONTEXT_WINDOW: the model's window, reported the way the CLI does (result.modelUsage),
+        // which is where the idle compaction's threshold comes from when no auto-compaction window is set.
+        const window = Number(process.env.MOCK_CONTEXT_WINDOW) || 0;
+        const modelUsage = window > 0 ? { [modelFlag || 'mock-model']: { contextWindow: window } } : undefined;
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 60, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.01), usage: final, ...(modelUsage ? { modelUsage } : {}) });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
         armSnapshotNextTurn();
       }, Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300));

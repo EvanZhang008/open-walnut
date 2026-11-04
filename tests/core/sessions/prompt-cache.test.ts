@@ -4,8 +4,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  FIVE_MINUTES_MS, ONE_HOUR_MS, IDLE_COMPACT_LEAD_MS, cacheExpiresAtMs, idleCompactionWindow, noteCompaction,
-  noteRequestUsage, ttlFromUsage, type PromptCacheFacts,
+  FIVE_MINUTES_MS, ONE_HOUR_MS, IDLE_COMPACT_LEAD_MS, cacheExpiresAtMs, idleCompactionWindow, idleCompactReasonText,
+  idleCompactThreshold, noteCompaction, noteRequestUsage, resolveIdleCompactLimitPercent, ttlFromUsage, type PromptCacheFacts,
 } from '../../../src/core/sessions/prompt-cache.js';
 
 const T0 = Date.parse('2026-11-04T10:00:00.000Z');
@@ -80,16 +80,40 @@ describe('the facts after each report of a request', () => {
 describe('when an idle session compacts', () => {
   const facts = (over: Partial<PromptCacheFacts> = {}): PromptCacheFacts => ({
     tokens: 400_000, ttlMs: ONE_HOUR_MS, requestAt: new Date(T0).toISOString(),
-    expiresAt: new Date(T0 + ONE_HOUR_MS).toISOString(), ...over,
+    expiresAt: new Date(T0 + ONE_HOUR_MS).toISOString(), compactsAt: 450_000, compactsAtSource: 'auto-compact', ...over,
   });
 
   it('a big session with a 1-hour cache compacts a few minutes before it expires', () => {
     expect(idleCompactionWindow(facts(), T0 + 1000)).toEqual({ fireAtMs: T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS, expiresAtMs: T0 + ONE_HOUR_MS });
   });
 
-  it('never: too small, a 5-minute cache, an unknown lifetime, compacted already, or expired', () => {
-    expect(idleCompactionWindow(facts({ tokens: 150_000 }), T0)).toBeNull();
-    expect(idleCompactionWindow(facts({ tokens: 150_000 }), T0, { minTokens: 100_000 })).not.toBeNull();
+  // 2026-11-04, Evan: "it should be 80% of the auto compaction limit defined ... if can't find use max,
+  // if don't know don't do" (85% by default). A 300K session under a 500K window is left alone.
+  it('only past its share of where it compacts by itself, and never when that is unknown', () => {
+    expect(idleCompactionWindow(facts({ tokens: 300_000, compactsAt: 500_000 }), T0)).toBeNull();
+    expect(idleCompactionWindow(facts({ tokens: 425_000, compactsAt: 500_000 }), T0)).not.toBeNull();
+    expect(idleCompactionWindow(facts({ tokens: 300_000, compactsAt: 500_000 }), T0, { limitPercent: 60 })).not.toBeNull();
+    expect(idleCompactionWindow(facts({ compactsAt: undefined }), T0)).toBeNull();
+    expect(idleCompactThreshold({ compactsAt: 500_000 })).toBe(425_000);
+    expect(idleCompactThreshold({ compactsAt: 500_000 }, 90)).toBe(450_000);
+    expect(idleCompactThreshold({})).toBeNull();
+    expect([resolveIdleCompactLimitPercent(undefined), resolveIdleCompactLimitPercent(null), resolveIdleCompactLimitPercent(40),
+      resolveIdleCompactLimitPercent(100), resolveIdleCompactLimitPercent(90)]).toEqual([85, 85, 85, 85, 90]);
+  });
+
+  it('a compaction carries where its session compacts by itself across it', () => {
+    const after = noteCompaction(facts(), 18_000, T0 + 5000);
+    expect(after).toMatchObject({ tokens: 18_000, compactsAt: 450_000, compactsAtSource: 'auto-compact' });
+  });
+
+  it('says why it ran: the tokens, the threshold, and where the threshold came from', () => {
+    expect(idleCompactReasonText({ tokens: 430_000, threshold: 425_000, limitPercent: 85, compactsAt: 500_000, source: 'auto-compact' }))
+      .toBe('430K tokens, past 85% (425K) of the 500K auto-compaction window set for this session');
+    expect(idleCompactReasonText({ tokens: 900_000, threshold: 850_000, limitPercent: 85, compactsAt: 1_000_000, source: 'model' }))
+      .toBe("900K tokens, past 85% (850K) of the model's 1M context window (no auto-compaction window is set)");
+  });
+
+  it('never: a 5-minute cache, an unknown lifetime, compacted already, or expired', () => {
     expect(idleCompactionWindow(facts({ ttlMs: FIVE_MINUTES_MS, expiresAt: new Date(T0 + FIVE_MINUTES_MS).toISOString() }), T0)).toBeNull();
     expect(idleCompactionWindow(facts({ ttlMs: undefined, expiresAt: undefined }), T0)).toBeNull();
     expect(idleCompactionWindow(facts({ compactedAt: new Date(T0).toISOString() }), T0)).toBeNull();

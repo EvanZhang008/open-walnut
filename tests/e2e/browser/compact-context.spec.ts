@@ -70,8 +70,9 @@ async function bigSession(page: Page, request: APIRequestContext, title: string)
   return { taskId, sid }
 }
 
-async function idleCompactionConfig(request: APIRequestContext): Promise<{ enabled?: boolean; min_tokens?: number } | undefined> {
-  const body = await (await request.get('/api/config')).json() as { config?: { session?: { idle_compaction?: { enabled?: boolean; min_tokens?: number } } } }
+type IdleCompactionSetting = { enabled?: boolean; min_tokens?: number | null; limit_percent?: number | null }
+async function idleCompactionConfig(request: APIRequestContext): Promise<IdleCompactionSetting | undefined> {
+  const body = await (await request.get('/api/config')).json() as { config?: { session?: { idle_compaction?: IdleCompactionSetting } } }
   return body.config?.session?.idle_compaction
 }
 
@@ -182,14 +183,71 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   await min.fill('300')
   await min.press('Enter')
   await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
-  // Off by default; the size still decides the cold-cache offer, so it stays editable with the switch off.
-  await expect(page.locator('#idle-compaction')).not.toBeChecked()
-  await expect(page.locator('#idle-compaction-min')).toBeEnabled()
+  // On by default, at 85% of where a session compacts by itself; the share is pulled into 50..99.
+  await expect(page.locator('#idle-compaction')).toBeChecked()
+  const pct = page.locator('#idle-compaction-percent')
+  await expect(pct).toHaveAttribute('placeholder', '85')
+  await pct.fill('90')
+  await pct.press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)
+  await pct.fill('30')
+  await pct.press('Enter')
+  await expect(pct).toHaveValue('50')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(50)
+  await pct.fill('')
+  await pct.press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(null)
   await page.locator('#idle-compaction').click()
-  await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(true)
+  await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(false)
+  // The offer's size is its own: still editable with the switch off.
+  await expect(page.locator('#idle-compaction-min')).toBeEnabled()
   await row.locator('xpath=ancestor::*[contains(@class,"settings-group")][1]').screenshot({ path: `${SHOTS}/${info.project.name}-settings.png` }).catch(() => {})
   // Back to the defaults for the specs after this one.
   await page.locator('#idle-compaction').click()
   await page.locator('#idle-compaction-min').fill('')
   await page.locator('#idle-compaction-min').press('Enter')
+})
+
+// Needs a server whose idle compaction fires right after a turn (WALNUT_IDLE_COMPACT_LEAD_MS=3580000) and a
+// mock that reports a 450K model window (MOCK_CONTEXT_WINDOW=450000): 400K is then past 85% of it.
+// 2026-11-04, Evan: the row says why it ran, and its setting can be changed "when they see this message".
+test('the idle compaction row says why it ran and changes its setting in place', async ({ page, request }, info) => {
+  test.skip(!process.env.WALNUT_IDLE_COMPACT_LEAD_MS || !process.env.MOCK_CONTEXT_WINDOW,
+    'needs WALNUT_IDLE_COMPACT_LEAD_MS and MOCK_CONTEXT_WINDOW on the test server')
+  test.setTimeout(120_000)
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/')
+  const { taskId, sid } = await bigSession(page, request, `Idle row ${info.project.name}`)
+  const panel = await openTask(page, taskId, sid)
+  const history = panel.locator('.session-history')
+  const fold = history.getByText(/^Compacted by Walnut while idle/).last()
+  await expect(fold).toBeVisible({ timeout: 60_000 })
+  await fold.click()
+  const line = history.getByTestId('idle-compact-line').first()
+  await expect(line).toBeVisible()
+  await line.locator('.idle-compact-toggle').click()
+  await expect(line.getByTestId('idle-compact-why')).toHaveText(
+    "Why: 400K tokens, past 85% (383K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })
+  const pct = line.getByTestId('idle-compact-percent')
+  await expect(pct).toHaveValue('85')
+  // Out of range: said so, nothing saved.
+  await pct.fill('120')
+  await pct.press('Enter')
+  await expect(line.locator('.idle-compact-error')).toContainText('50% to 99%')
+  expect((await idleCompactionConfig(request))?.limit_percent ?? null).toBe(null)
+  await pct.fill('90')
+  await pct.press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(90)
+  await line.screenshot({ path: `${SHOTS}/${info.project.name}-idle-row.png` }).catch(() => {})
+  // The same value Settings shows.
+  await page.goto('/settings')
+  await page.getByTestId('settings-nav-sessions').click()
+  await expect(page.locator('#idle-compaction-percent')).toHaveValue('90', { timeout: 20_000 })
+  // Back to the default for the specs after this one.
+  await page.locator('#idle-compaction-percent').fill('')
+  await page.locator('#idle-compaction-percent').press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(null)
+  expect(errors).toEqual([])
 })

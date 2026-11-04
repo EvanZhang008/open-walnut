@@ -925,8 +925,15 @@ export class ClaudeCodeSession {
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
 
-  /** The prompt cache facts of the main loop's last live request; undefined until one reported usage. */
-  get promptCache(): PromptCacheFacts | undefined { return this._promptCache }
+  /** The prompt cache facts of the main loop's last live request, with where this session compacts by
+   *  itself (the idle compaction's threshold is a share of it); undefined until one reported usage. */
+  get promptCache(): PromptCacheFacts | undefined {
+    if (!this._promptCache) return undefined
+    const { window, autoCompactAt } = this.contextLimits()
+    const compactsAt = autoCompactAt ?? window
+    if (!compactsAt) return this._promptCache
+    return { ...this._promptCache, compactsAt, compactsAtSource: autoCompactAt != null ? 'auto-compact' : 'model' }
+  }
 
   /** A live main-loop request reported usage: its time, size and cache lifetime. */
   private notePromptCacheUsage(messageId: string | null | undefined, usage: ClaudeUsageLike | undefined): void {

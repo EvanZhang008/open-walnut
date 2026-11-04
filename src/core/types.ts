@@ -1689,13 +1689,16 @@ export interface Config {
      *  list is about 220 KB of schemas sent on every model call, which a local model on
      *  OpenCode reads in full each turn (src/providers/acp-worker/protocol.ts walnutMcpToolSet). */
     acp_walnut_tools?: 'core' | 'all';
-    /** Compact a big idle Claude Code session shortly before its prompt cache expires
-     *  (src/core/sessions/idle-compaction.ts), so the next message reads a small summary
-     *  instead of paying a full uncached read of the whole context. */
+    /** Compact an idle Claude Code session close to compacting by itself shortly before its
+     *  prompt cache expires (src/core/sessions/idle-compaction.ts), so the next message reads a
+     *  small summary instead of writing the whole context to the cache again. */
     idle_compaction?: {
-      /** Default false: a compaction writes the whole conversation to the cache once, come back or not. */
+      /** Default true. */
       enabled?: boolean;
-      /** Only sessions holding at least this many context tokens. Default 200000; null (a cleared field) is the default. */
+      /** Compact a session at this share (%) of where it compacts by itself: its auto-compaction
+       *  window, else its model's window (never when neither is known). Default 85; 50 to 99. */
+      limit_percent?: number | null;
+      /** The cold-cache offer comes for sessions holding at least this many context tokens. Default 200000; null (a cleared field) is the default. */
       min_tokens?: number | null;
     };
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
@@ -3322,6 +3325,16 @@ export interface SessionRecord {
     /** The queue row that carries the /compact (QueuedMessage.id): a restart finds it still waiting. */
     rowId?: string;
   };
+  /** Why each recent idle compaction ran (the last 20), by its command line's uuid: its history row shows it. */
+  idleCompactionLog?: Array<{
+    lineUuid: string;
+    sentAt: string;
+    tokens: number;
+    threshold: number;
+    limitPercent: number;
+    compactsAt: number;
+    source: 'auto-compact' | 'model';
+  }>;
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
