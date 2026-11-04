@@ -5,7 +5,7 @@
  * saved as a task for later. The same Walnut data and rules as everywhere (a test run's writes
  * stay a test run's).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Task } from '@open-walnut/core';
 import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
@@ -26,9 +26,11 @@ export function PopoutExtTasks() {
 function ExtTasks() {
   const { tasks } = useTasksContext();
   const [current, setCurrent] = useState<PanelPage | null>(null);
-  const [saving, setSaving] = useState<'' | 'busy' | 'done' | 'error'>('');
-  const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
+  /** The save of the page the person is on now; a save of a page they left is never shown here. */
+  const [save, setSave] = useState<{ url: string; state: 'busy' | 'done' | 'error'; id?: string; title?: string } | null>(null);
   const [open, setOpen] = useState('');
+  /** Each reply's words and its send, by task: a row moving between sections keeps them. */
+  const [replies, setReplies] = useState<Record<string, ReplyState>>({});
   const lists = useMemo(() => extTaskLists(tasks), [tasks]);
 
   useEffect(() => {
@@ -40,47 +42,50 @@ function ExtTasks() {
     toParent({ type: 'ready' });
     return () => window.removeEventListener('message', on);
   }, []);
-  useEffect(() => { setSaving(''); }, [current?.url]);
+  const saving = save && save.url === current?.url ? save : null;
 
   const savePage = useCallback(async () => {
     if (!current) return;
-    setSaving('busy');
+    const url = current.url;
+    setSave({ url, state: 'busy' });
     try {
       const task = await createTask(pageTaskInput(current));
-      setSaved({ id: task.id, title: task.title });
-      setSaving('done');
-      log.info('ext-tasks', 'page saved as a task', { taskId: task.id, host: hostOf(current.url) });
+      log.info('ext-tasks', 'page saved as a task', { taskId: task.id, host: hostOf(url) });
+      setSave((s) => (s?.url === url ? { url, state: 'done', id: task.id, title: task.title } : s));
     } catch (err) {
-      setSaving('error');
       log.warn('ext-tasks', 'saving the page as a task failed', { error: err instanceof Error ? err.message : String(err) });
+      setSave((s) => (s?.url === url ? { url, state: 'error' } : s));
     }
   }, [current]);
 
   return <div className="ext-panel ext-tasks" data-testid="ext-tasks">
     <div className="ext-tasks-save">
-      <button type="button" className="btn btn-sm" data-testid="ext-tasks-save-page" disabled={!current || saving === 'busy'} onClick={() => void savePage()}
+      <button type="button" className="btn btn-sm" data-testid="ext-tasks-save-page" disabled={!current || saving?.state === 'busy' || saving?.state === 'done'} onClick={() => void savePage()}
         title={current ? `A task for later: ${current.title ?? hostOf(current.url)}` : 'Open a web page to save it as a task'}>
-        {saving === 'busy' ? 'Saving…' : 'Save this page as a task'}
+        {saving?.state === 'busy' ? 'Saving…' : saving?.state === 'done' ? 'Saved as a task' : 'Save this page as a task'}
       </button>
-      {saving === 'done' && saved && <span className="ext-tasks-note" data-testid="ext-tasks-saved" data-task-id={saved.id}>Saved: {saved.title}</span>}
-      {saving === 'error' && <span className="ext-tasks-note ext-panel-error" role="alert">Could not save the page.</span>}
+      {saving?.state === 'done' && <span className="ext-tasks-note" data-testid="ext-tasks-saved" data-task-id={saving.id}>Saved: {saving.title}</span>}
+      {saving?.state === 'error' && <span className="ext-tasks-note ext-panel-error" role="alert">Could not save the page.</span>}
     </div>
     <div className="ext-tasks-lists">
-      <Section title="Needs you" testid="ext-tasks-needs" rows={lists.needs} empty="Nothing needs you." open={open} onOpen={setOpen} />
-      <Section title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty="No Focus tasks." open={open} onOpen={setOpen} />
+      <Section title="Needs you" testid="ext-tasks-needs" rows={lists.needs} empty="Nothing needs you." open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
+      <Section title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty="No Focus tasks." open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
     </div>
   </div>;
 }
 
-function Section(p: { title: string; testid: string; rows: ExtTaskRow[]; empty: string; open: string; onOpen: (id: string) => void }) {
+type ReplyState = { text: string; state: '' | 'sending' | 'sent' | 'error' };
+type Replies = { replies: Record<string, ReplyState>; setReplies: Dispatch<SetStateAction<Record<string, ReplyState>>> };
+
+function Section(p: { title: string; testid: string; rows: ExtTaskRow[]; empty: string; open: string; onOpen: (id: string) => void } & Replies) {
   return <section className="ext-tasks-section" data-testid={p.testid}>
     <h3 className="ext-tasks-heading">{p.title} <span className="ext-tasks-count">{p.rows.length}</span></h3>
     {p.rows.length === 0 && <p className="ext-tasks-empty">{p.empty}</p>}
-    {p.rows.map((r) => <TaskRow key={r.task.id} row={r} open={p.open === r.task.id} onToggle={() => p.onOpen(p.open === r.task.id ? '' : r.task.id)} />)}
+    {p.rows.map((r) => <TaskRow key={r.task.id} row={r} open={p.open === r.task.id} onToggle={() => p.onOpen(p.open === r.task.id ? '' : r.task.id)} replies={p.replies} setReplies={p.setReplies} />)}
   </section>;
 }
 
-function TaskRow({ row, open, onToggle }: { row: ExtTaskRow; open: boolean; onToggle: () => void }) {
+function TaskRow({ row, open, onToggle, replies, setReplies }: { row: ExtTaskRow; open: boolean; onToggle: () => void } & Replies) {
   const { task } = row;
   return <div className={`ext-task${open ? ' is-open' : ''}`} data-testid="ext-task" data-task-id={task.id} data-state={row.state}>
     <button type="button" className="ext-task-head" onClick={onToggle} aria-expanded={open}>
@@ -90,24 +95,22 @@ function TaskRow({ row, open, onToggle }: { row: ExtTaskRow; open: boolean; onTo
         <span className="ext-task-line">{row.line ? `${row.label} · ${row.line}` : row.label}</span>
       </span>
     </button>
-    {open && <TaskReply task={task} />}
+    {open && <TaskReply task={task} reply={replies[task.id] ?? { text: '', state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { text: '', state: '' }), ...r } }))} />}
   </div>;
 }
 
-function TaskReply({ task }: { task: Task }) {
+function TaskReply({ task, reply, onChange }: { task: Task; reply: ReplyState; onChange: (r: Partial<ReplyState>) => void }) {
   const sessionId = resolveTaskSessionId(task);
-  const [text, setText] = useState('');
-  const [state, setState] = useState<'' | 'sending' | 'sent' | 'error'>('');
+  const { text, state } = reply;
   const send = async () => {
     const message = text.trim();
-    if (!message || !sessionId) return;
-    setState('sending');
+    if (!message || !sessionId || state === 'sending') return;
+    onChange({ state: 'sending' });
     try {
       await wsClient.sendRpc('session:send', { sessionId, message });
-      setText('');
-      setState('sent');
+      onChange({ text: '', state: 'sent' });
     } catch (err) {
-      setState('error');
+      onChange({ state: 'error' });
       log.warn('ext-tasks', 'reply not sent', { taskId: task.id, sessionId, error: err instanceof Error ? err.message : String(err) });
     }
   };
@@ -116,8 +119,13 @@ function TaskReply({ task }: { task: Task }) {
     {sessionId
       ? <>
         <textarea className="ext-task-input" data-testid="ext-task-input" rows={2} value={text} placeholder={`Reply to ${task.title.slice(0, 40)}`}
-          onChange={(e) => { setText(e.target.value); if (state === 'sent') setState(''); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
+          onChange={(e) => onChange({ text: e.target.value, ...(state === 'sent' || state === 'error' ? { state: '' as const } : {}) })}
+          onKeyDown={(e) => {
+            // Enter that picks an input method's word is not a send.
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+            e.preventDefault();
+            void send();
+          }} />
         <div className="ext-task-actions">
           <button type="button" className="btn btn-sm btn-primary" data-testid="ext-task-send" disabled={!text.trim() || state === 'sending'} onClick={() => void send()}>
             {state === 'sending' ? 'Sending…' : 'Send'}

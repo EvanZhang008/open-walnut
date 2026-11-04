@@ -112,8 +112,10 @@ async function start(): Promise<void> {
     if (!d || d.walnut !== MSG) return
     if (d.type === 'ready') {
       ready.add(e.source)
-      if (e.source === frame.contentWindow && heldSelection) { postAsk({ type: 'ask-selection', text: heldSelection }); heldSelection = '' }
-      void push().then(pending)
+      // The page first (it picks the conversation), then a selection held for the Ask view.
+      void push().then(() => {
+        if (e.source === frame.contentWindow && heldSelection) { postAsk({ type: 'ask-selection', text: heldSelection }); heldSelection = '' }
+      }).then(pending)
       return
     }
     if (d.type === 'refresh') { soon(); return }

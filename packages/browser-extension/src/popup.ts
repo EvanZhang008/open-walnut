@@ -19,6 +19,8 @@ const embedded = params.get('embed') === 'panel'
 /** A window of its own (the unlock window), which closes when its work is done. */
 const inWindow = params.has('window') && !embedded
 const panelWindow = embedded ? Number(params.get('window')) || undefined : undefined
+/** How long a password shown in the side panel stays on show. */
+const REVEAL_MS = 20_000
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
 let windowId: number | undefined
@@ -163,15 +165,24 @@ function itemRow(it: Item, fillable: boolean): HTMLElement {
   if (embedded && (!it.type || it.type === 'login')) {
     let shown = false
     const eye = h('button', { class: 'icon-btn', type: 'button', title: 'Show password', 'aria-label': 'Show password', 'data-testid': 'reveal-password' }, icon('eye')) as HTMLButtonElement
+    let hideTimer: ReturnType<typeof setTimeout> | undefined
+    const hide = () => {
+      clearTimeout(hideTimer)
+      shown = false; sub.textContent = it.username || it.site || ''; sub.classList.remove('mono'); eye.title = 'Show password'
+      document.removeEventListener('visibilitychange', hide)
+    }
     eye.onclick = async (e: Event) => {
       e.stopPropagation()
-      if (shown) { shown = false; sub.textContent = it.username || it.site || ''; sub.classList.remove('mono'); eye.title = 'Show password'; return }
+      if (shown) { hide(); return }
       const r = await ask<{ value: string }>({ type: 'copy-secret', id: it.id, field: 'password' })
       if (!r.ok) { toast(r.error ?? 'Could not show it.'); return }
       shown = true
       sub.textContent = r.value
       sub.classList.add('mono')
       eye.title = 'Hide password'
+      // Never left on show: hidden again after a while, or once the person leaves this tab.
+      hideTimer = setTimeout(hide, REVEAL_MS)
+      document.addEventListener('visibilitychange', hide)
     }
     actions.prepend(eye)
   }
@@ -345,3 +356,19 @@ async function render(): Promise<void> {
 }
 
 void render()
+
+// In the side panel the view stays open while the person moves on: it follows the page in its
+// window (another tab, another address), unless they are typing in it.
+if (embedded && panelWindow) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const follow = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      const typing = document.activeElement instanceof HTMLInputElement && document.activeElement.value !== ''
+      if (!typing && document.visibilityState === 'visible') void render()
+    }, 300)
+  }
+  ext.tabs.onActivated.addListener((info) => { if (info.windowId === panelWindow) follow() })
+  ext.tabs.onUpdated.addListener((_id, change, tab) => { if (tab.windowId === panelWindow && tab.active && (change.url || change.status === 'complete')) follow() })
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') follow() })
+}
