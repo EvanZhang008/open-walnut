@@ -5220,6 +5220,19 @@ function helloReadOps(raw) {
 function relayAttemptMs(deadline, now, hubTimeoutMs) {
   return Math.max(0, Math.min(hubTimeoutMs, deadline - now));
 }
+// Mirror of gateway-core.ts: a call the server refused as busy (no slot, nothing ran) goes again.
+var GATEWAY_BUSY_AGAIN_MS = 1000;
+var BUSY_AGAIN_OPS = new Set(['host_exec']);
+var BUSY_REFUSAL_PREFIX = 'Walnut API error (busy):';
+function busyRelayMinLeftMs(hubTimeoutMs) {
+  return Math.max(GATEWAY_MIN_RELAY_MS, hubTimeoutMs);
+}
+function busyRelayAgainMs(opName, errorText, deadline, now, hubTimeoutMs) {
+  if (typeof opName !== 'string' || !BUSY_AGAIN_OPS.has(opName)) return null;
+  if (typeof errorText !== 'string' || errorText.indexOf(BUSY_REFUSAL_PREFIX) !== 0) return null;
+  var left = deadline - (now + GATEWAY_BUSY_AGAIN_MS);
+  return left >= busyRelayMinLeftMs(hubTimeoutMs) ? GATEWAY_BUSY_AGAIN_MS : null;
+}
 
 // oldSid → newSid, maintained by cmdRename (a CLI's WALNUT_SESSION_ID env is
 // frozen at spawn; fresh spawns use a tmp sid that rename re-keys).
@@ -5227,6 +5240,8 @@ var gatewaySidAliases = new Map();
 
 var gatewayRelayCounter = 0;
 var gatewayRelayPending = new Map();
+// A gateway caller's answer function, and whether its socket closed (startGatewayListener).
+var gatewayCallerLeft = new WeakMap();
 
 function gatewayError(code, message, detail) {
   return { ok: false, error: detail === undefined ? { code: code, message: message } : { code: code, message: message, detail: detail } };
@@ -6685,11 +6700,12 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
 // Calls waiting for a server of their Walnut (nothing of them was sent yet); twin
 // of daemon-standalone.ts waitForPrimary / wakeGatewayCalls.
 var gatewayWaiting = new Set();
-function waitForPrimary(deadline, retry, respond) {
+function waitForPrimary(deadline, retry, respond, atMostMs) {
   var left = deadline - GATEWAY_MIN_RELAY_MS - Date.now();
   if (left <= 0 || daemonCommands.closed) return false;
   var w = { retry: retry, respond: respond, timer: undefined };
-  w.timer = setTimeout(function () { if (gatewayWaiting.delete(w)) retry(); }, left);
+  // atMostMs: go sooner (a busy call's pause before it is asked again).
+  w.timer = setTimeout(function () { if (gatewayWaiting.delete(w)) retry(); }, typeof atMostMs === 'number' ? Math.min(left, atMostMs) : left);
   gatewayWaiting.add(w);
   return true;
 }
@@ -6797,7 +6813,10 @@ function sendRelayAttempt(relayId, target) {
   entry.timer = setTimeout(function () { relayAttemptEnded(relayId); }, relayAttemptMs(call.deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS));
   logMsg('info', call.attempts === 1 ? 'gateway: relaying to primary server' : 'gateway: relaying to primary server again', { relayId: relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts });
   // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
-  sendEvent(target, 'gateway-request', { relayId: relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload });
+  var ev = { relayId: relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload };
+  // busyAgain: this host asks a busy call again; it paid its write at its first ask (capability-router.ts).
+  if (call.busyAgain) ev.busyAgain = call.busyAgain;
+  sendEvent(target, 'gateway-request', ev);
 }
 
 // An attempt had no answer in time: again where it may with time left, else as before.
@@ -6847,9 +6866,44 @@ function cmdGatewayResult(ws, id, cmd) {
       errObj.error.detail = detail;
       if (detail && typeof detail.retryAfterMs === 'number') errObj.error.retryAfterMs = detail.retryAfterMs;
     }
-    pending.respond(errObj);
+    // Refused for want of a slot, so nothing ran: asked again while the call has time.
+    var call = pending.call;
+    var again = call ? busyRelayAgainMs(call.capability === 'tools.call' ? call.payload.name : undefined, error, call.deadline, Date.now(), GATEWAY_HUB_TIMEOUT_MS) : null;
+    if (call && again !== null) busyAskAgain(relayId, call, pending.respond, errObj, again);
+    else pending.respond(errObj);
   }
   sendOk(ws, id, {});
+}
+
+// A call the server refused as busy goes again after 'inMs' as a NEW relay; meanwhile it
+// waits with the calls that wait for a server. A caller that left is not asked for again
+// (twin of daemon-standalone.ts busyAskAgain).
+function busyAskAgain(relayId, call, respond, refusal, inMs) {
+  var attempt = (call.busyAgain || 0) + 1;
+  function go() {
+    var left = gatewayCallerLeft.get(respond);
+    if (left && left()) {
+      logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempt: attempt });
+      return;
+    }
+    var target = gatewayTargetFor(call.home);
+    var spare = call.deadline - busyRelayMinLeftMs(GATEWAY_HUB_TIMEOUT_MS) - Date.now();
+    if (!target || spare < 0) {
+      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare)) return;
+      return respond(refusal);
+    }
+    gatewayRelayCounter += 1;
+    var next = gatewayRelayCounter;
+    logMsg('info', 'gateway: host_exec waits for a slot; asking again', {
+      relayId: relayId, next: next, callerSid: call.callerSid, op: call.payload.name, attempt: attempt, leftMs: call.deadline - Date.now(),
+    });
+    gatewayRelayPending.set(next, {
+      respond: respond, timer: undefined,
+      call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline, sentOn: null, run: undefined, attempts: 0, busyAgain: attempt },
+    });
+    sendRelayAttempt(next, target);
+  }
+  if (!waitForPrimary(call.deadline, go, respond, inMs)) respond(refusal);
 }
 
 // A plugin job's call: to the server of the Walnut that runs the job and no other,
@@ -6913,6 +6967,7 @@ function startGatewayListener() {
       var chunks = [];
       var bytes = 0;
       var done = false;
+      var closed = false;
       var reply = function (resp) {
         if (done) return;
         done = true;
@@ -6931,8 +6986,10 @@ function startGatewayListener() {
         if (nl === -1) return;
         var line = Buffer.concat(chunks).toString('utf-8');
         chunks = [];
+        gatewayCallerLeft.set(reply, function () { return closed; });
         handleGatewayLine(line, reply);
       });
+      socket.on('close', function () { closed = true; });
       socket.on('error', function () { /* client went away — pending timer self-cleans */ });
     });
     server.on('error', function (err) {

@@ -15,12 +15,18 @@
  * first use.
  */
 import type { GatewayError } from '../../providers/gateway-core.js';
-import { EXTERNAL_CALLER_SID, isExternalCallerSid } from '../../providers/gateway-core.js';
+import { EXTERNAL_CALLER_SID, isBusyAgainOp, isExternalCallerSid } from '../../providers/gateway-core.js';
 import { GATEWAY_WRITE_MAX_PER_WINDOW, PeerThrottle } from './peer-throttle.js';
 
 export type CapabilityOutcome =
   | { ok: true; result: Record<string, unknown> }
   | { ok: false; error: GatewayError };
+
+/** What the host's daemon says about a relay beside the caller's own payload. */
+export interface GatewayRelayMeta {
+  /** The daemon asks a busy call again (gateway-core.ts busyRelayAgainMs): the how-manyth time. */
+  busyAgain?: number;
+}
 
 export interface CapabilityRouterDeps {
   throttle: PeerThrottle;
@@ -81,6 +87,7 @@ export async function handleGatewayCapability(
   payload: Record<string, unknown> | undefined,
   host: string,
   deps?: CapabilityRouterDeps,
+  meta: GatewayRelayMeta = {},
 ): Promise<CapabilityOutcome> {
   const d = deps ?? (await defaultDeps());
   if (d.cloudMode) {
@@ -92,7 +99,7 @@ export async function handleGatewayCapability(
     case 'tools.list':
       return handleToolsList(payload ?? {}, host, callerSid);
     case 'tools.call':
-      return handleToolsCall(callerSid, payload ?? {}, host, d);
+      return handleToolsCall(callerSid, payload ?? {}, host, d, meta);
     case 'history.fetch':
       return handleHistoryFetch(payload ?? {}, host);
     // Old daemons / old shims still speak these — answer with the replacement
@@ -225,6 +232,7 @@ async function handleToolsCall(
   payload: Record<string, unknown>,
   host: string,
   deps: CapabilityRouterDeps,
+  meta: GatewayRelayMeta,
 ): Promise<CapabilityOutcome> {
   const name = payload.name;
   if (typeof name !== 'string' || !name) {
@@ -259,8 +267,10 @@ async function handleToolsCall(
   }
   const refusal = gatewayRefusal(op, host, getOpOwner(name));
   if (refusal) return err('bad_request', refusal);
-  // Writes ride a per-sender rate budget; reads are free.
-  if (!op.tags.readonly) {
+  // Writes ride a per-sender rate budget; reads are free. A call the host's gateway asks again
+  // after a busy refusal (gateway-core.ts busyRelayAgainMs) paid at its first ask: one call, one write.
+  const askedAgain = typeof meta.busyAgain === 'number' && meta.busyAgain > 0 && isBusyAgainOp(name);
+  if (!op.tags.readonly && !askedAgain) {
     const decision = deps.throttle.admitWrite(throttleKey(callerSid, host));
     if (!decision.allowed) {
       // The shim prints `detail` on stdout and the message on stderr, and a

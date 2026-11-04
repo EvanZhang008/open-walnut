@@ -2944,7 +2944,10 @@ export class DaemonConnection {
       await this.sendGatewayResult(await seen.reply, relayId, seen, { capability, callerSid })
       return
     }
-    const reply = this.answerGatewayRequest(receivedAt, relayId, capability, callerSid, payload)
+    // The daemon's own word beside the caller's payload: it asks a busy call again.
+    const busyAgain = (event as unknown as { busyAgain?: unknown }).busyAgain
+    const meta = typeof busyAgain === 'number' && Number.isFinite(busyAgain) && busyAgain > 0 ? { busyAgain } : {}
+    const reply = this.answerGatewayRequest(receivedAt, relayId, capability, callerSid, payload, meta)
       .catch((err: unknown): Record<string, unknown> => ({ relayId, error: err instanceof Error ? err.message : String(err), errorCode: 'internal' }))
     if (key) this.rememberGatewayRelay(key, reply)
     const acked = await this.sendGatewayResult(await reply, relayId, key ? DaemonConnection.gatewayRelays.get(key) : undefined, { capability, callerSid })
@@ -3084,7 +3087,7 @@ export class DaemonConnection {
 
   /** Run one relayed call (the journal first) and build its gateway-result. Never throws. */
   private async answerGatewayRequest(
-    receivedAt: number, relayId: number, capability: string, callerSid: string, payload: unknown,
+    receivedAt: number, relayId: number, capability: string, callerSid: string, payload: unknown, meta: { busyAgain?: number } = {},
   ): Promise<Record<string, unknown>> {
     // The host delivers messages between its own sessions itself and journals
     // them; its nudge reaches us before this request (one socket, in order).
@@ -3105,6 +3108,8 @@ export class DaemonConnection {
         callerSid,
         body,
         this.hostKey,
+        undefined,
+        meta,
       // Fresh: this relay's own deadline, never one of a call still running in whose context the link was made.
       ), { fresh: true })
       if (outcome.ok) {

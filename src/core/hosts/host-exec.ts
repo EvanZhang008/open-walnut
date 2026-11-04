@@ -332,15 +332,17 @@ async function takeSlot(caller: Caller, host: string, jobId: string, since: numb
     }
     const left = waitUntil - Date.now()
     if (left <= 0) {
-      const waited = `waited ${Math.round((Date.now() - since) / 1000)} s for one to end`
+      // Worded for both callers: one that hears this at once, and one whose host's gateway
+      // asked again until its call's time ran out (gateway-core.ts busyRelayAgainMs).
+      const late = 'and no slot came free in time for this call; nothing ran'
       // The caps count host_exec runs, wherever they run (2026-11-05 review: "on other hosts" for four runs on __local__).
       if (taskFull) {
         // Named, so the caller knows which to read or stop (2026-11-05 review).
         const jobs = [...running].filter(([id, r]) => mine(r) && id !== jobId && !r.pending).map(([id, r]) => ({ jobId: id, host: r.host }))
-        const named = jobs.length ? `: ${jobs.map((j) => `${j.jobId} on ${j.host}`).join(', ')}` : ''
-        throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} host_exec commands, the most it may run at once on all hosts together (${waited})${named}; wait for one (host_exec_read) or stop one (host_exec_stop).`, 429, 'busy', jobs.length ? { running: jobs } : {})
+        const named = jobs.length ? ` (${jobs.map((j) => `${j.jobId} on ${j.host}`).join(', ')})` : ''
+        throw new HostExecError(`This task already runs ${MAX_RUNNING_PER_TASK} host_exec commands${named}, the most it may run at once on all hosts together, ${late}. Wait for one (host_exec_read) or stop one (host_exec_stop), then run it again.`, 429, 'busy', jobs.length ? { running: jobs } : {})
       }
-      throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} host_exec commands, the most it runs at once for all tasks (${waited}); try again in a moment.`, 429, 'busy')
+      throw new HostExecError(`${await hostName(host)} already runs ${MAX_RUNNING_PER_HOST} host_exec commands, the most it runs at once for all tasks, ${late}. Try again in a moment.`, 429, 'busy')
     }
     await slotFreed(Math.min(left, SLOT_POLL_MS, Math.max(1, refreshAt - Date.now())))
   }

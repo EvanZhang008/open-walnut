@@ -212,6 +212,8 @@ import {
   GATEWAY_MIN_RELAY_MS,
   relayAttemptMs,
   relayMayResendTo,
+  busyRelayAgainMs,
+  busyRelayMinLeftMs,
   helloReadOps,
   EXTERNAL_CALLER_SID,
   CALLER_PROOF_CAPABILITY,
@@ -3936,6 +3938,8 @@ type GatewayRelayCall = {
   attempts: number
   /** The server it last went to names its op read-only (serverReadsOp): it may be sent again after a stop. */
   readOnly?: boolean
+  /** How many times this call was asked again after a busy refusal (busyAskAgain). */
+  busyAgain?: number
 }
 const gatewayRelayPending = new Map<number, {
   respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined
@@ -3946,6 +3950,9 @@ const gatewayRelayPending = new Map<number, {
   /** A relay to the primary (relayToPrimary); absent for the bridge's. */
   call?: GatewayRelayCall
 }>()
+
+/** A gateway caller's answer function, and whether its socket closed (startGatewayListener). */
+const gatewayCallerLeft = new WeakMap<(resp: GatewayResponse) => void, () => boolean>()
 
 function gatewayError(code: GatewayErrorCode, message: string, detail?: unknown): GatewayResponse {
   return { ok: false, error: detail === undefined ? { code, message } : { code, message, detail } }
@@ -5416,13 +5423,14 @@ const gatewayWaiting = new Set<{ retry: () => void; respond: (resp: GatewayRespo
 /**
  * Park a call until a server says hello, names its Walnut or speaks again after
  * missed beats (wakeGatewayCalls), or until it must go anyway: a relay still gets
- * GATEWAY_MIN_RELAY_MS of the call's time. False when there is no time to wait.
+ * GATEWAY_MIN_RELAY_MS of the call's time (or after `atMostMs`, when sooner).
+ * False when there is no time to wait.
  */
-function waitForPrimary(deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void): boolean {
+function waitForPrimary(deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void, atMostMs = Number.POSITIVE_INFINITY): boolean {
   const left = deadline - GATEWAY_MIN_RELAY_MS - Date.now()
   if (left <= 0 || daemonCommands.closed) return false
   const w: { retry: () => void; respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined } = { retry, respond, timer: undefined }
-  w.timer = setTimeout(() => { if (gatewayWaiting.delete(w)) retry() }, left)
+  w.timer = setTimeout(() => { if (gatewayWaiting.delete(w)) retry() }, Math.min(left, atMostMs))
   gatewayWaiting.add(w)
   return true
 }
@@ -5553,7 +5561,11 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
     relayId, capability: call.capability, callerSid: call.callerSid, attempt: call.attempts, to: wsId(target),
   })
   // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
-  sendEvent(target, 'gateway-request', { relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload })
+  // `busyAgain`: this host asks a busy call again; it paid its write at its first ask (capability-router.ts).
+  sendEvent(target, 'gateway-request', {
+    relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload,
+    ...(call.busyAgain ? { busyAgain: call.busyAgain } : {}),
+  })
 }
 
 /** Less time left than this, a relay is not sent again. */
@@ -5622,9 +5634,48 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
       const ra = (detail as { retryAfterMs?: unknown } | null)?.retryAfterMs
       if (typeof ra === 'number') errObj.error.retryAfterMs = ra
     }
-    pending.respond(errObj)
+    // Refused for want of a slot, so nothing ran: asked again while the call has time.
+    const call = pending.call
+    const again = call ? busyRelayAgainMs(call.capability === 'tools.call' ? call.payload.name : undefined, error, call.deadline, Date.now(), gatewayHubTimeoutMs()) : null
+    if (call && again !== null) busyAskAgain(relayId as number, call, pending.respond, errObj, again)
+    else pending.respond(errObj)
   }
   sendOk(ws, id, {})
+}
+
+/**
+ * A call the server refused as busy (busyRelayAgainMs) goes again after `inMs` as a NEW relay:
+ * the server answers a relay id it saw with the same refusal. Meanwhile it waits with the calls
+ * that wait for a server, so a server's hello sends it at once and a daemon that stops tells it
+ * (nothing of it is at a server). With no server when it is due, it waits for one while a relay
+ * would still have its whole hub timeout; else the refusal is the answer. A caller that left
+ * (its `walnut` was stopped) is not asked for again: nobody would read the run. Keep in sync
+ * with daemon-source.ts.
+ */
+function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: GatewayResponse) => void, refusal: GatewayResponse, inMs: number): void {
+  const attempt = (call.busyAgain ?? 0) + 1
+  const go = () => {
+    if (gatewayCallerLeft.get(respond)?.()) {
+      logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId, callerSid: call.callerSid, op: call.payload.name, attempt })
+      return
+    }
+    const target = gatewayTargetFor(call.home)
+    const spare = call.deadline - busyRelayMinLeftMs(gatewayHubTimeoutMs()) - Date.now()
+    if (!target || spare < 0) {
+      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare)) return
+      return respond(refusal)
+    }
+    const next = ++gatewayRelayCounter
+    logMsg('info', 'gateway: host_exec waits for a slot; asking again', {
+      relayId, next, callerSid: call.callerSid, op: call.payload.name, attempt, leftMs: call.deadline - Date.now(),
+    })
+    gatewayRelayPending.set(next, {
+      respond, timer: undefined,
+      call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline, sentOn: null, attempts: 0, busyAgain: attempt },
+    })
+    sendRelayAttempt(next, target)
+  }
+  if (!waitForPrimary(call.deadline, go, respond, inMs)) respond(refusal)
 }
 
 /**
@@ -5790,7 +5841,7 @@ function startGatewayListener() {
     // characters (corrupt JSON), and re-measuring/re-scanning the accumulated
     // string per chunk is O(line²) — ~1.6GB of rescanning for 10MB in 64KB
     // chunks.
-    type GwSockData = { chunks: Uint8Array[]; bytes: number; done: boolean; out?: Buffer; sent?: number; openedAt?: number }
+    type GwSockData = { chunks: Uint8Array[]; bytes: number; done: boolean; out?: Buffer; sent?: number; openedAt?: number; closed?: boolean }
     type GwSocket = { data: GwSockData; write(s: string | Buffer): number; end(): void }
     // Bun.listen raw sockets do PARTIAL writes: write() returns the bytes the
     // kernel buffer took (~8KB) and end() closes immediately, silently
@@ -5837,9 +5888,12 @@ function startGatewayListener() {
           d.done = true
           const line = Buffer.concat(d.chunks).toString('utf-8')
           d.chunks = []
-          handleGatewayLine(line, (resp) => reply(socket, resp), socket.fd, d.openedAt)
+          const respond = (resp: GatewayResponse) => reply(socket, resp)
+          gatewayCallerLeft.set(respond, () => d.closed === true)
+          handleGatewayLine(line, respond, socket.fd, d.openedAt)
         },
         drain(socket) { pump(socket) },
+        close(socket) { if (socket.data) socket.data.closed = true },
         error() { /* client went away — pending timer self-cleans */ },
       },
     })

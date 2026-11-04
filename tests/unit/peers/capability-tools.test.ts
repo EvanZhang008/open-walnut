@@ -194,6 +194,47 @@ describe('gateway tools.call — policy gates', () => {
     expect(detail.next).toContain('task_update_bulk');
   });
 
+  it('a busy host_exec its host\'s gateway asks again is not charged again; its first ask, and other ops, are', async () => {
+    // The gateway asks a busy host_exec again every few seconds while the call has time
+    // (gateway-core.ts busyRelayAgainMs) and marks each ask `busyAgain`: one call, one write.
+    let t = 5_000_000;
+    const throttle = new PeerThrottle(() => t);
+    const d = deps(throttle);
+    // Anything not mocked meets a closed port, never a real server.
+    const prevBase = process.env.OPEN_WALNUT_API_URL;
+    process.env.OPEN_WALNUT_API_URL = 'http://127.0.0.1:1';
+    const busy = () => new Response(JSON.stringify({ error: 'This task already runs 4 commands on other hosts', code: 'busy' }), { status: 429 });
+    const fetcher = vi.spyOn(globalThis, 'fetch');
+    const call = (name: string, args: Record<string, unknown>, busyAgain?: number) =>
+      handleGatewayCapability('tools.call', CALLER, { name, args }, 'devbox', d, busyAgain === undefined ? undefined : { busyAgain });
+    try {
+      for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW - 1; i++) { expect(throttle.admitWrite(CALLER).allowed).toBe(true); t += 10; }
+      // The first ask pays the last write left, though it was refused.
+      fetcher.mockResolvedValueOnce(busy());
+      const first = await call('host_exec', { host: 'macbox', command: 'true' });
+      expect(!first.ok && first.error.message).toMatch(/^Walnut API error \(busy\): /);
+      expect(throttle.admitWrite(CALLER).allowed).toBe(false);
+      // The asks again run at a full budget, and are refused by the server, not the throttle.
+      for (const n of [1, 2, 3]) {
+        fetcher.mockResolvedValueOnce(busy());
+        const again = await call('host_exec', { host: 'macbox', command: 'true' }, n);
+        expect(!again.ok && again.error.code, String(n)).toBe('internal');
+        expect(!again.ok && again.error.message, String(n)).toMatch(/^Walnut API error \(busy\): /);
+      }
+      expect(fetcher).toHaveBeenCalledTimes(4);
+      // No mark, a mark of 0, or another op's mark: charged as ever, so throttled here.
+      for (const [name, n] of [['host_exec', undefined], ['host_exec', 0], ['host_http', 1], ['task_create', 1]] as const) {
+        const r = await call(name, name === 'task_create' ? { title: 'x' } : { host: 'macbox', url: 'https://example.com/', command: 'true' }, n);
+        expect(!r.ok && r.error.code, `${name} ${String(n)}`).toBe('throttled');
+      }
+      expect(fetcher).toHaveBeenCalledTimes(4);
+    } finally {
+      fetcher.mockRestore();
+      if (prevBase === undefined) delete process.env.OPEN_WALNUT_API_URL;
+      else process.env.OPEN_WALNUT_API_URL = prevBase;
+    }
+  });
+
   it('bookkeeping writes do not spend the peer-send budget, and sends do not spend the write budget', () => {
     let t = 3_000_000;
     const throttle = new PeerThrottle(() => t);

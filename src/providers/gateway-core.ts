@@ -180,6 +180,50 @@ export function relayAttemptMs(deadline: number, now: number, hubTimeoutMs: numb
   return Math.max(0, Math.min(hubTimeoutMs, deadline - now));
 }
 
+/** Between a busy refusal and asking again. */
+export const GATEWAY_BUSY_AGAIN_MS = 1_000;
+
+/**
+ * Ops whose `busy` refusal comes before anything starts and after the server
+ * already waited for a slot (host-exec.ts takeSlot): asking again runs nothing
+ * twice. host_copy, host_http and host_mcp_* refuse before anything starts too,
+ * but at once: asking again there would poll the server every second.
+ */
+const BUSY_AGAIN_OPS: ReadonlySet<string> = new Set(['host_exec']);
+
+/** The op executor's words for a 429 `busy` (src/ops/executor.ts). */
+const BUSY_REFUSAL_PREFIX = 'Walnut API error (busy):';
+
+/** An op whose busy refusal a host's gateway asks again (BUSY_AGAIN_OPS). */
+export function isBusyAgainOp(opName: unknown): boolean {
+  return typeof opName === 'string' && BUSY_AGAIN_OPS.has(opName);
+}
+
+/** A server's "no slot free, nothing ran" answer to one of BUSY_AGAIN_OPS. */
+export function isBusyRefusal(opName: unknown, errorText: unknown): boolean {
+  return isBusyAgainOp(opName) && typeof errorText === 'string' && errorText.startsWith(BUSY_REFUSAL_PREFIX);
+}
+
+/**
+ * How long to wait before a relayed call the server refused as busy goes again
+ * as a NEW relay (the server answers a relay id it saw with the same refusal),
+ * or null to hand the refusal back. 2026-11-04: 12 host_exec at once from
+ * clouddev, 4 refused after a 4 s wait though each run took 2 s. The resend
+ * must still have a whole hub timeout: the server times its holds as if the
+ * relay had that (daemon-connection.ts answerGatewayRequest), so a run it
+ * starts gets its answer back in time.
+ */
+export function busyRelayAgainMs(opName: unknown, errorText: unknown, deadline: number, now: number, hubTimeoutMs: number): number | null {
+  if (!isBusyRefusal(opName, errorText)) return null;
+  const left = deadline - (now + GATEWAY_BUSY_AGAIN_MS);
+  return left >= busyRelayMinLeftMs(hubTimeoutMs) ? GATEWAY_BUSY_AGAIN_MS : null;
+}
+
+/** What a busy call asked again must still have of its time when it goes. */
+export function busyRelayMinLeftMs(hubTimeoutMs: number): number {
+  return Math.max(GATEWAY_MIN_RELAY_MS, hubTimeoutMs);
+}
+
 /** Effective hub timeout — WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only). */
 export function gatewayHubTimeoutMs(): number {
   const raw = typeof process !== 'undefined' ? process.env?.WALNUT_GATEWAY_TIMEOUT_MS : undefined;

@@ -398,13 +398,13 @@ describe('host_exec', () => {
     const done = await api('GET', `/api/v1/hosts/macbox/exec/${b.body.jobId}?offset=0&wait_ms=10000`, undefined, SID)
     expect(done.body).toMatchObject({ running: false, exitCode: 0, output: 'one\ntwo\n' })
     // Four still run: a fifth waits for a slot (a relayed caller: half of what its answer time
-    // leaves), then is refused with how long it waited.
+    // leaves), then is refused, saying nothing ran.
     const e = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'sleep 30', background: true }, SID)
     expect(e.body.running).toBe(true)
     const t0 = Date.now()
     const full = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)
     expect(full).toMatchObject({ status: 429, body: { code: 'busy' } })
-    expect(full.body.error).toMatch(/already runs 4 host_exec commands, the most it may run at once on all hosts together \(waited \d+ s for one to end\)/)
+    expect(full.body.error).toMatch(/already runs 4 host_exec commands \(hx-[^)]+ on macbox\), the most it may run at once on all hosts together, and no slot came free in time for this call; nothing ran\. Wait for one \(host_exec_read\)/)
     expect(Date.now() - t0).toBeGreaterThan(2_000)
     // A stop while a call waits: it takes the freed slot and runs.
     const waiting = api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo got-a-slot' }, SID)

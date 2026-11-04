@@ -281,3 +281,81 @@ describe('a call\'s time budget and resends', () => {
     expect(relayAttemptMs(100_000, 120_000, 20_000)).toBe(0);
   });
 });
+
+// 2026-11-04: 12 host_exec at once from clouddev, 4 refused busy after a 4 s wait though each
+// run took 2 s. A busy refusal ran nothing, so the host's gateway asks again while the call has time.
+import {
+  busyRelayAgainMs,
+  busyRelayMinLeftMs,
+  isBusyAgainOp,
+  isBusyRefusal,
+  GATEWAY_BUSY_AGAIN_MS,
+} from '../../../src/providers/gateway-core.js';
+import { getDaemonSource } from '../../../src/providers/daemon-source.js';
+
+const BUSY = 'Walnut API error (busy): This task already runs 4 commands on other hosts, and no slot came free in time for this call; nothing ran.';
+
+describe('a busy host_exec is asked again', () => {
+  it('only the server\'s busy refusal of host_exec, by its code prefix', () => {
+    expect(isBusyRefusal('host_exec', BUSY)).toBe(true);
+    // An older server's words: the code is what counts, not the sentence.
+    expect(isBusyRefusal('host_exec', 'Walnut API error (busy): This task already runs 4 commands on other hosts (waited 4 s for one to end)')).toBe(true);
+    for (const text of [
+      'Walnut API error (host_offline): Walnut lost devbox while it answered. It may have started there as job hx-1',
+      'Walnut API error (busy_x): no',
+      'Walnut API error (429): busy',
+      ' Walnut API error (busy): leading space is not the op executor\'s',
+      'primary server timed out',
+      undefined, null, 42,
+    ]) expect(isBusyRefusal('host_exec', text), String(text)).toBe(false);
+    // Other ops answer busy at once (no wait at the server), or never: not asked again.
+    for (const op of ['host_copy', 'host_http', 'host_mcp_call', 'host_mcp_tools', 'task_send', '', undefined, 7]) {
+      expect(isBusyRefusal(op, BUSY), String(op)).toBe(false);
+      expect(isBusyAgainOp(op), String(op)).toBe(false);
+    }
+    expect(isBusyAgainOp('host_exec')).toBe(true);
+  });
+
+  it('waits a second, while a resend still has a whole hub timeout of the call', () => {
+    const hub = 20_000;
+    expect(busyRelayMinLeftMs(hub)).toBe(hub);
+    expect(busyRelayMinLeftMs(1_500)).toBe(GATEWAY_MIN_RELAY_MS);
+    // A newer CLI's 90 s call refused 5 s in: asked again in a second.
+    expect(busyRelayAgainMs('host_exec', BUSY, 90_000, 5_000, hub)).toBe(GATEWAY_BUSY_AGAIN_MS);
+    // Exactly enough left after the wait, and one ms short.
+    expect(busyRelayAgainMs('host_exec', BUSY, 100_000, 100_000 - hub - GATEWAY_BUSY_AGAIN_MS, hub)).toBe(GATEWAY_BUSY_AGAIN_MS);
+    expect(busyRelayAgainMs('host_exec', BUSY, 100_000, 100_000 - hub - GATEWAY_BUSY_AGAIN_MS + 1, hub)).toBeNull();
+    // A caller that named no waitMs has one hub timeout in all: its refusal is handed back as before.
+    expect(busyRelayAgainMs('host_exec', BUSY, 20_000, 4_000, hub)).toBeNull();
+    // Past the deadline, and anything that is not a busy host_exec.
+    expect(busyRelayAgainMs('host_exec', BUSY, 10_000, 20_000, hub)).toBeNull();
+    expect(busyRelayAgainMs('host_copy', BUSY, 90_000, 5_000, hub)).toBeNull();
+    expect(busyRelayAgainMs('host_exec', 'Walnut API error (host_offline): x', 90_000, 5_000, hub)).toBeNull();
+  });
+
+  it('the JS twin\'s copy (daemon-source.ts) decides the same', () => {
+    const src = getDaemonSource();
+    // From `from` to the end of the line or function that follows `through`.
+    const slice = (from: string, through: string, end: string) => {
+      const a = src.indexOf(from);
+      const b = src.indexOf(end, src.indexOf(through, a));
+      expect(a, from).toBeGreaterThan(-1);
+      expect(b, through).toBeGreaterThan(a);
+      return src.slice(a, b + end.length);
+    };
+    const minRelay = slice('var GATEWAY_MIN_RELAY_MS =', '=', ';');
+    const rule = slice('var GATEWAY_BUSY_AGAIN_MS =', 'function busyRelayAgainMs(', '\n}\n');
+    const twin = new Function(`${minRelay}\n${rule}\nreturn { busyRelayAgainMs, busyRelayMinLeftMs, GATEWAY_BUSY_AGAIN_MS };`)() as {
+      busyRelayAgainMs: typeof busyRelayAgainMs; busyRelayMinLeftMs: typeof busyRelayMinLeftMs; GATEWAY_BUSY_AGAIN_MS: number;
+    };
+    expect(twin.GATEWAY_BUSY_AGAIN_MS).toBe(GATEWAY_BUSY_AGAIN_MS);
+    const ops = ['host_exec', 'host_copy', 'host_http', 'task_send', undefined, 3];
+    const texts = [BUSY, 'Walnut API error (busy):', 'Walnut API error (host_offline): x', ' Walnut API error (busy): y', 'busy', undefined];
+    const times: Array<[number, number, number]> = [[90_000, 5_000, 20_000], [20_000, 4_000, 20_000], [100_000, 79_000, 20_000], [100_000, 79_001, 20_000], [20_000, 100, 1_500], [9_000, 100, 1_500], [0, 1, 1]];
+    for (const hub of [1, 1_500, 8_000, 20_000, 60_000]) expect(twin.busyRelayMinLeftMs(hub), String(hub)).toBe(busyRelayMinLeftMs(hub));
+    for (const op of ops) for (const text of texts) for (const [deadline, now, hub] of times) {
+      expect(twin.busyRelayAgainMs(op, text, deadline, now, hub), JSON.stringify([op, text, deadline, now, hub]))
+        .toBe(busyRelayAgainMs(op, text, deadline, now, hub));
+    }
+  });
+});
