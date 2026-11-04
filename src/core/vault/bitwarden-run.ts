@@ -11,8 +11,8 @@
  * the master password there (keychain-unlock.ts), and locks it again after. Otherwise the sync is skipped and the
  * reason shows in Settings ("Last sync: not synced, Passwords is locked"); no letter is sent.
  */
-import os from 'node:os'
 import { runVaultHelper } from './child-run.js'
+import { readKeychainSecret } from './keychain-secret.js'
 import { noteSyncSkipped, syncFromBitwarden, type SyncOptions, type SyncReport, type SyncTrigger } from './bitwarden-sync.js'
 
 const SYNC_TIMEOUT_MS = 120_000
@@ -24,12 +24,7 @@ let running: Promise<SyncReport> | null = null
 async function bwSession(): Promise<string | null> {
   const env = process.env.BW_SESSION?.trim()
   if (env) return env
-  if (process.platform !== 'darwin') return null
-  let user = ''
-  try { user = os.userInfo().username } catch { user = process.env.USER ?? '' }
-  const r = await runVaultHelper('security', ['find-generic-password', '-a', user, '-s', 'BW_SESSION', '-w'], { timeoutMs: 10_000, maxBytes: 64 * 1024 })
-  const v = r.code === 0 ? r.stdout.trim() : ''
-  return v || null
+  return readKeychainSecret('BW_SESSION')
 }
 
 /** Run bw with the first path that exists. */

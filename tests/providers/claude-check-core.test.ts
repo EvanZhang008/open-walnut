@@ -428,7 +428,7 @@ describe('sign-in on macOS: the keychain is asked whether an item exists, never 
     expect(ranCli(calls)).toBe(false)
   })
 
-  it('class guard: no Walnut code reads a keychain secret, and only this gated check runs `claude auth status`', () => {
+  it('class guard: no Walnut code reads a keychain secret except the vault\'s one gated reader, and only this gated check runs `claude auth status`', () => {
     const root = path.resolve(__dirname, '../..')
     const files: string[] = []
     const walk = (d: string) => {
@@ -452,7 +452,11 @@ describe('sign-in on macOS: the keychain is asked whether an item exists, never 
         if (/['"]auth['"]\s*,\s*['"]status['"]|exec "\$0" auth status/.test(line)) authStatus.push(at)
       })
     }
-    expect(secretReads).toEqual([])
+    // The one registered reader: the password manager reads back only the items the person put in the
+    // keychain for it (master password, Bitwarden session), behind the gate keychain-secret.ts describes.
+    const READER = 'src/core/vault/keychain-secret.ts:'
+    expect(secretReads.filter((at) => !at.startsWith(READER))).toEqual([])
+    expect(secretReads.filter((at) => at.startsWith(READER))).toHaveLength(1)
     expect(authStatus.every((at) => at.startsWith('src/providers/claude-check-core.ts:'))).toBe(true)
     expect(authStatus.length).toBeGreaterThan(0)
   })

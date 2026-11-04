@@ -12,6 +12,7 @@ import path from 'node:path'
 import { derivePasswordKey, randomBytes, toB64 } from '../../../src/core/vault/crypto.js'
 import { closeVault, isOpen, resetVaultForTest, setupVault } from '../../../src/core/vault/store.js'
 import { setVaultRunnerForTest, type VaultRunner } from '../../../src/core/vault/child-run.js'
+import { resetKeychainSecretForTest } from '../../../src/core/vault/keychain-secret.js'
 import { KEYCHAIN_SERVICE, keychainItemPresent, removeKeychainItem, setKeychainPlatformForTest, unlockFromKeychain } from '../../../src/core/vault/keychain-unlock.js'
 import { liveSessionCount, resetSessionsForTest, unlockWaitMs, useSession } from '../../../src/core/vault/sessions.js'
 
@@ -50,6 +51,7 @@ beforeEach(() => {
   closeVault()
   stored = MASTER
   calls.length = 0
+  resetKeychainSecretForTest()
 })
 
 describe('unlock from the keychain', () => {
@@ -62,7 +64,9 @@ describe('unlock from the keychain', () => {
     expect(liveSessionCount()).toBe(1)
     // The default length (48 h) has a clock.
     expect(r.session.expiresAt).toEqual(expect.any(String))
-    expect(calls[0]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', os.userInfo().username, '-w'])
+    // Presence first (no secret), then the one read (keychain-secret.ts).
+    expect(calls[0]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', os.userInfo().username])
+    expect(calls[1]).toEqual(['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', os.userInfo().username, '-w'])
     expect(JSON.stringify(r)).not.toContain(MASTER)
   })
 

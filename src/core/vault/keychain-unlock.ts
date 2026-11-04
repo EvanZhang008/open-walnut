@@ -1,8 +1,8 @@
 /**
  * Unlock with this Mac's keychain (docs/reference/passwords.md, "Unlocking"). The person may keep
  * the master password in the macOS keychain as a generic password, service KEYCHAIN_SERVICE,
- * account = the OS user. Walnut reads it with `security find-generic-password -w` in a child
- * process (child-run.ts, a deadline, never a sync call), derives the password key with the
+ * account = the OS user. Walnut reads it through keychain-secret.ts (the one gated keychain
+ * secret read: a child process with a deadline, at most one failed read per start), derives the password key with the
  * vault's own KDF and unlocks exactly as a typed password does: under the wrong-password brake,
  * the Secret Key from machine.json, and a session of the person's "Keep Passwords unlocked"
  * length. The password is never logged, returned or written anywhere.
@@ -13,6 +13,7 @@
  */
 import os from 'node:os'
 import { runVaultHelper } from './child-run.js'
+import { readKeychainSecret } from './keychain-secret.js'
 
 export const KEYCHAIN_SERVICE = 'walnut-vault-master'
 const TIMEOUT_MS = 10_000
@@ -36,11 +37,7 @@ function account(): string {
 /** The master password from the keychain, or null when there is none (or it cannot be read). */
 async function readMaster(): Promise<string | null> {
   if (!keychainAvailable()) return null
-  const r = await runVaultHelper('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account(), '-w'], { timeoutMs: TIMEOUT_MS, maxBytes: 64 * 1024 })
-  if (r.code !== 0 || !r.stdout) return null
-  // `-w` prints the password and one newline; anything else is the password's own.
-  const pw = r.stdout.endsWith('\n') ? r.stdout.slice(0, -1) : r.stdout
-  return pw || null
+  return readKeychainSecret(KEYCHAIN_SERVICE, 'darwin')
 }
 
 let presentCache: { at: number; present: boolean } | null = null
