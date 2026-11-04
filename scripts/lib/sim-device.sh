@@ -25,7 +25,7 @@
 #         ACQUIRED lane <lane> for <name> (holder pid <pid>)
 #         BOOTED lane <lane> simulator <UDID> (<n>s)
 #       and the UDID is read from the BOOTED line only, which must name the lane
-#       asked for. Anything else (BUSY, QUEUED, ACQUIRE FAILED, a non-zero exit, a
+#       asked for. Anything else (BUSY, QUEUED, WAIT, ACQUIRE FAILED, a non-zero exit, a
 #       lease with no BOOTED line or another lane's) is a refusal, shown to the user
 #       as the queue wrote it; a lease already taken is given back first. A caller that wants to wait for its turn joins the queue
 #       first (`join <name>`) and acquires once the queue says MAY.
@@ -124,7 +124,7 @@ walnut_sim_resolve() {
     WALNUT_SIM_FROM=""
     # Only a lane someone else holds or is next for is worth waiting for.
     case "$out" in
-      *BUSY*|*QUEUED*) hint=" To wait for a turn, join the queue first: SIM_LANE=$SIM_LANE bash $WALNUT_SIM_QUEUE_SCRIPT join $name" ;;
+      *BUSY*|*QUEUED*|*WAIT*) hint=" To wait for a turn, join the queue first: SIM_LANE=$SIM_LANE bash $WALNUT_SIM_QUEUE_SCRIPT join $name" ;;
     esac
     walnut_sim_refuse "the simulator queue lent no simulator on lane $SIM_LANE for $name (exit $rc). The queue said: ${out:-nothing}.$hint"
     return 2

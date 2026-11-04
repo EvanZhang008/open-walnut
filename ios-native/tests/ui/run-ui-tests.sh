@@ -58,6 +58,9 @@
 #   WALNUT_HEAVY_SLOT_SCRIPT  machine-wide heavy-command admission script.
 #   WALNUT_UITEST_ISOLATED=1  confirms the loopback fixture, never a paired live server.
 #   WALNUT_UITEST_DD      derived data path. Default: /tmp/walnut-uitest-dd.
+#   WALNUT_UITEST_LEASE_HELD=1  the caller already holds the simulator alone (the fleet's
+#                         remote-run.sh: its own lock, or a queue lease), so no lane lock is
+#                         taken here.
 #
 # The default server is deliberately a dead port, and it touches nobody's data.
 # Pairing only has to be SHAPED right for the app to leave SetupView: a transport
@@ -163,6 +166,8 @@ fi
 # blocks the machine for everyone.
 if [ "$WALNUT_SIM_FROM" = queue ]; then
   say "simulator lease held (lane $SIM_LANE, from the queue)"
+elif [ "${WALNUT_UITEST_LEASE_HELD:-}" = 1 ]; then
+  say "simulator held by the caller (WALNUT_UITEST_LEASE_HELD=1)"
 else
 # The lane locks live in /tmp, where the machine's queue keeps them; a queue under test
 # keeps them in SIM_QUEUE_DIR, and WALNUT_SIM_LOCK_DIR (test-only) points them anywhere.

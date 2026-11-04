@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const SCRIPT = path.resolve(__dirname, '../../scripts/ios-fleet-test.sh')
@@ -522,5 +522,184 @@ describe('remote-run.sh (the Mac half)', () => {
     const r = spawnSync('bash', [REMOTE, path.join(dir, 'run'), 'unit', '--bogus'], { encoding: 'utf8', env: { HOME: dir, PATH: guardedPath([], '/usr/bin:/bin') } })
     expect(r.status).toBe(64)
     expect(fs.existsSync(path.join(dir, 'run'))).toBe(false)
+  })
+})
+
+describe('mac-share.sh (what the Mac half asks of the Mac before it takes anything)', () => {
+  // 2026-11-04: a run that fell back to this Walnut's own Mac made a third simulator there
+  // ("Walnut Fleet Test", beside the owner's own and their gate lane), and runs went on while the
+  // owner was on a call at a load of 736. A call now makes a Mac busy, and an owner's queue can
+  // lend fleet runs a lane so they make no simulator of their own.
+  const SHARE = path.resolve(__dirname, '../../ios-native/tests/fleet/mac-share.sh')
+  const SIMLIB = path.resolve(__dirname, '../../scripts/lib/sim-device.sh')
+  const WATCHDOG = path.resolve(__dirname, '../../ios-native/tests/fleet/watchdog.py')
+  const UITESTS = path.resolve(__dirname, '../../ios-native/tests/ui/run-ui-tests.sh')
+  const sh = (script: string, input = '', env: Record<string, string> = {}) =>
+    spawnSync('bash', ['-c', `set -uo pipefail; . "${SIMLIB}"; . "${SHARE}"; ${script}`],
+      { encoding: 'utf8', input, env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: dir, TMPDIR: dir, ...env } })
+  const line = (app: string, age: string, type: string, name: string) =>
+    `   pid 4242(${app}): [0x00012a5500018cfb] ${age} ${type} named: "${name}"  `
+  const calls = (lines: string[]) => sh('fleet_call_apps', ['Listed by owning process:', ...lines].join('\n') + '\n').stdout.trim()
+  // A fake queue: records every call, lends lane b's device unless FAKE_QUEUE says otherwise.
+  const fakeQueue = () => {
+    const q = path.join(dir, 'queue.sh')
+    fs.writeFileSync(q, [
+      '#!/bin/bash',
+      `echo "$SIM_LANE $*" >> "${path.join(dir, 'queue.calls')}"`,
+      'case "$1" in',
+      ' acquire)',
+      '   case "${FAKE_QUEUE:-}" in',
+      '     wait) echo "WAIT a call is on (zoom.us pid 7) (no lease taken; queued at position 1 on lane b)"; exit 1 ;;',
+      '     broken) echo "sim-queue: something broke"; exit 3 ;;',
+      '   esac',
+      '   echo "ACQUIRED lane $SIM_LANE for $2 (holder pid $4)"; echo "BOOTED lane $SIM_LANE simulator a4dd19a8-bf72-4a5a-870a-6c8208c7dd0e (3s)" ;;',
+      ' release) echo "RELEASED lane $SIM_LANE" ;;',
+      'esac',
+    ].join('\n') + '\n')
+    return q
+  }
+  const queueCalls = () => {
+    const f = path.join(dir, 'queue.calls')
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n') : []
+  }
+
+  it('a call app holding the display awake is a call; the same app with a system-sleep hold is not', () => {
+    expect(calls([line('zoom.us', '00:12:09', 'PreventUserIdleDisplaySleep', 'Zoom meeting')])).toBe('zoom.us')
+    expect(calls([line('zoom.us', '00:12:09', 'PreventUserIdleSystemSleep', 'Zoom')])).toBe('')
+  })
+
+  it('updates, video playback and a hold over 12 hours are not calls', () => {
+    expect(calls([
+      line('zoom.us', '00:01:00', 'NoDisplaySleepAssertion', 'Zoom update download'),
+      line('Google Chrome', '00:03:00', 'PreventUserIdleDisplaySleep', 'Video Wake Lock'),
+      line('MSTeams', '13:00:00', 'NoDisplaySleepAssertion', 'call'),
+      line('caffeinate', '12:12:59', 'PreventUserIdleDisplaySleep', 'caffeinate command-line tool'),
+    ])).toBe('')
+  })
+
+  it('any process holding a WebRTC call is one; each app is named once', () => {
+    expect(calls([
+      line('Google Chrome Helper (Renderer)', '00:03:00', 'PreventUserIdleSystemSleep', 'WebRTC has active PeerConnections'),
+      line('MSTeams', '00:20:00', 'NoDisplaySleepAssertion', 'call'),
+      line('MSTeams', '00:20:01', 'PreventUserIdleDisplaySleep', 'call'),
+    ])).toBe('Google Chrome Helper (Renderer), MSTeams')
+  })
+
+  it('reading the call state costs no fixed wait: the 5 s bound does not hold the answer', () => {
+    const pm = path.join(dir, 'pmset')
+    fs.writeFileSync(pm, `#!/bin/bash\nprintf '%s\\n' 'Listed by owning process:' '${line('zoom.us', '00:00:30', 'PreventUserIdleDisplaySleep', 'm')}'\n`)
+    fs.chmodSync(pm, 0o755)
+    const t0 = Date.now()
+    const r = sh('echo "[$(fleet_call_now)]"', '', { FLEET_PMSET: pm })
+    expect(r.stdout.trim()).toBe('[zoom.us]')
+    expect(Date.now() - t0).toBeLessThan(3000)
+  })
+
+  it('an owner lends a lane with two lines (export and quotes allowed); one line, lane a or a missing script is refused', () => {
+    const env = path.join(dir, 'fleet.env')
+    const q = fakeQueue()
+    const lent = () => sh(`fleet_lent_lane "${env}"; echo "rc=$? q=$FLEET_LENT_QUEUE l=$FLEET_LENT_LANE e=$FLEET_LENT_ERROR"`).stdout.trim()
+    expect(lent()).toBe('rc=0 q= l= e=')
+    fs.writeFileSync(env, `WALNUT_FLEET_SIM_QUEUE_SCRIPT=${q}\nWALNUT_FLEET_SIM_LANE=b\n`)
+    expect(lent()).toBe(`rc=0 q=${q} l=b e=`)
+    fs.writeFileSync(env, `export WALNUT_FLEET_SIM_QUEUE_SCRIPT="${q}"\n  export WALNUT_FLEET_SIM_LANE='b'  \n`)
+    expect(lent()).toBe(`rc=0 q=${q} l=b e=`)
+    fs.writeFileSync(env, 'WALNUT_FLEET_SIM_LANE=b\n')
+    expect(lent()).toBe(`rc=1 q= l= e=${env} names only one of WALNUT_FLEET_SIM_QUEUE_SCRIPT and WALNUT_FLEET_SIM_LANE`)
+    fs.writeFileSync(env, `WALNUT_FLEET_SIM_QUEUE_SCRIPT=${q}\nWALNUT_FLEET_SIM_LANE=a\n`)
+    expect(lent()).toContain('rc=1 q= l= e=')
+    expect(lent()).toContain('not a (the owner\'s own): a')
+    fs.writeFileSync(env, `WALNUT_FLEET_SIM_QUEUE_SCRIPT=${q}.gone\nWALNUT_FLEET_SIM_LANE=b\n`)
+    expect(lent()).toContain('is not a file')
+  })
+
+  it('a lent lane is named in the lock dir before the queue is asked, and the run\'s exit gives it back', () => {
+    const q = fakeQueue()
+    const lock = path.join(dir, 'lock'); fs.mkdirSync(lock)
+    // The run's own shape: take, set the trap, then leave by a refusal-style exit.
+    const r = sh(`FLEET_LENT_QUEUE="${q}"; FLEET_LENT_LANE=b
+      fleet_take_lent "20261104T1200 ui" "${lock}"; rc=$?
+      trap 'fleet_give_back "${lock}"' EXIT
+      echo "pid=$$ rc=$rc device=$WALNUT_SIM_DEVICE lease=$(tr '\\n' ' ' < "${lock}/lease")"; exit 75`)
+    expect(r.status).toBe(75)
+    const pid = /pid=(\d+)/.exec(r.stdout)?.[1]
+    expect(r.stdout).toContain(`rc=0 device=A4DD19A8-BF72-4A5A-870A-6C8208C7DD0E lease=${pid} ${q} b `)
+    expect(queueCalls()).toEqual([`b acquire fleet-20261104T1200-ui --pid ${pid}`, `b release --pid ${pid}`])
+    expect(fs.existsSync(path.join(lock, 'lease'))).toBe(false)
+  })
+
+  it('a queue that lends nothing now is busy (1); a queue that fails is a setup fault (2); neither leaves a lease named', () => {
+    const q = fakeQueue()
+    const lock = path.join(dir, 'lock'); fs.mkdirSync(lock)
+    const take = (mode: string) => sh(`FLEET_LENT_QUEUE="${q}"; FLEET_LENT_LANE=b; fleet_take_lent run1 "${lock}"; echo "rc=$?"`, '', { FAKE_QUEUE: mode })
+    let r = take('wait')
+    expect(r.stdout.trim()).toBe('rc=1')
+    expect(r.stderr).toContain('WAIT a call is on (zoom.us pid 7)')
+    expect(r.stderr).toContain('join the queue first')
+    expect(fs.existsSync(path.join(lock, 'lease'))).toBe(false)
+    r = take('broken')
+    expect(r.stdout.trim()).toBe('rc=2')
+    expect(r.stderr).toContain('something broke')
+    expect(fs.existsSync(path.join(lock, 'lease'))).toBe(false)
+  })
+
+  it('the watchdog gives a lent lane back once the run is killed outright, and only then', () => {
+    const q = fakeQueue()
+    const lock = path.join(dir, 'lock'); fs.mkdirSync(lock)
+    const run = spawn('sleep', ['30'], { stdio: 'ignore' })
+    const pid = String(run.pid)
+    fs.writeFileSync(path.join(lock, 'pid'), `${pid}\n`)
+    fs.writeFileSync(path.join(lock, 'lease'), `${pid}\n${q}\nb\n`)
+    // Alive past the watchdog's max time: it touches nothing.
+    let w = spawnSync('python3', [WATCHDOG, pid, lock, '1'], { encoding: 'utf8', timeout: 20000 })
+    expect(w.status).toBe(0)
+    expect(queueCalls()).toEqual([])
+    expect(fs.existsSync(path.join(lock, 'lease'))).toBe(true)
+    // Killed with no trap run: the lease goes back and the lock is freed.
+    run.kill('SIGKILL')
+    w = spawnSync('python3', [WATCHDOG, pid, lock, '60'], { encoding: 'utf8', timeout: 20000 })
+    expect(w.status).toBe(0)
+    expect(queueCalls()).toEqual([`b release --pid ${pid}`])
+    expect(fs.existsSync(lock)).toBe(false)
+  })
+
+  it('a lease file naming another pid is left alone by the watchdog', () => {
+    const q = fakeQueue()
+    const lock = path.join(dir, 'lock'); fs.mkdirSync(lock)
+    fs.writeFileSync(path.join(lock, 'lease'), `999999\n${q}\nb\n`)
+    const w = spawnSync('python3', [WATCHDOG, '999998', lock, '60'], { encoding: 'utf8', timeout: 20000 })
+    expect(w.status).toBe(0)
+    expect(queueCalls()).toEqual([])
+  })
+
+  it('a UI run whose caller holds the simulator takes no lane lock of the machine (lane a is the owner\'s)', () => {
+    const bin = path.join(dir, 'bin'); fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'xcodegen'), '#!/bin/bash\nexit 1\n'); fs.chmodSync(path.join(bin, 'xcodegen'), 0o755)
+    const locks = path.join(dir, 'locks'); fs.mkdirSync(locks)
+    const ui = (held: string) => spawnSync('bash', [UITESTS], {
+      encoding: 'utf8', timeout: 30000,
+      env: { PATH: guardedPath([], `${bin}:/usr/bin:/bin`), HOME: dir, TMPDIR: dir,
+        WALNUT_SIM_UDID: 'A4DD19A8-BF72-4A5A-870A-6C8208C7DD0E', WALNUT_SIM_LOCK_DIR: locks,
+        ...(held ? { WALNUT_UITEST_LEASE_HELD: held } : {}) },
+    })
+    let r = ui('1')
+    expect(r.stdout).toContain('simulator held by the caller (WALNUT_UITEST_LEASE_HELD=1)')
+    expect(r.stderr).toContain('xcodegen generate failed')
+    expect(fs.readdirSync(locks)).toEqual([])
+    // Without it the run takes lane a's lock (and gives it back at its exit), as before.
+    r = ui('')
+    expect(r.stdout).toContain('simulator lease held')
+    expect(r.stdout).not.toContain('held by the caller')
+  })
+
+  it('the Mac half asks before it takes a simulator, and never powers a lent one itself', () => {
+    const src = fs.readFileSync(REMOTE, 'utf8')
+    const at = (s: string) => src.indexOf(s)
+    expect(at('CALL=$(fleet_call_now)')).toBeGreaterThan(0)
+    expect(at('fleet_lent_lane "$HOME/.config/walnut/fleet.env"')).toBeGreaterThan(at('CALL=$(fleet_call_now)'))
+    expect(at('elif [ -n "$FLEET_LENT_LANE" ]; then')).toBeGreaterThan(at('fleet_lent_lane "$HOME'))
+    expect(at('simctl create')).toBeGreaterThan(at('elif [ -n "$FLEET_LENT_LANE" ]; then'))
+    expect(src).toContain('if [ -z "$LENT" ] && /usr/bin/xcrun simctl boot "$UDID"')
+    expect(src).toContain('ui) WALNUT_UITEST_LEASE_HELD=1 ')
   })
 })

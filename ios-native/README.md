@@ -97,8 +97,25 @@ the next Mac, and when every Mac is busy it waits its turn: up to `--wait` minut
 30 by default, so start it in the background when it may wait), boots its own simulator ("Walnut Fleet Test") headless with
 `simctl` (no Simulator window, nothing takes focus), builds at utility priority
 with half the cores, keeps its build products in the task's directory on that
-Mac, and shuts its simulator down at the end. The first run for a task on a Mac
-asks the user to allow it (the `host_exec` grant).
+Mac, and shuts its simulator down at the end. It also counts the Mac as busy while
+a call is on there (a call app such as Zoom or Teams, or a browser, keeps the
+display awake for the call). The first run for a task on a Mac asks the user to
+allow it (the `host_exec` grant).
+
+A Mac whose owner already runs a simulator queue (the protocol in
+`scripts/lib/sim-device.sh`) can lend fleet runs one of its test lanes instead,
+so a run makes no simulator of its own there. Two lines in
+`~/.config/walnut/fleet.env` on that Mac:
+
+```bash
+WALNUT_FLEET_SIM_QUEUE_SCRIPT=/absolute/path/to/the/queue/script
+WALNUT_FLEET_SIM_LANE=b
+```
+
+A run then takes that lane's simulator from the queue and gives it back at the
+end; while the queue lends nothing (someone holds the lane or is next, or the
+queue says the Mac must wait), the Mac counts as busy and the run tries the next
+Mac or waits its turn.
 
 ## Architecture
 

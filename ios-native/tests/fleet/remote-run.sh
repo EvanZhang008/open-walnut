@@ -12,14 +12,16 @@
 #
 # The Mac may be someone else's computer in use, so the run stays out of their way:
 #   - it refuses to start (exit 75, "BUSY") while the load per CPU is over --max-load
-#     (default 0.75) or another fleet run holds this Mac's test simulator;
+#     (default 0.75), a call is on (mac-share.sh), or another fleet run holds this Mac's test
+#     simulator;
 #   - xcodebuild runs at utility QoS and nice 10 with half the cores, so the person's
 #     own apps keep the machine;
 #   - the simulator boots headless (simctl, never Simulator.app), so no window opens
 #     and nothing takes focus;
 #   - it drives only the simulator it made for itself here, "Walnut Fleet Test", by the
-#     UDID it wrote down when it made it (never a lookup by name or by state), or the one
-#     --udid names; a WALNUT_SIM_UDID their login shell exports is ignored, and their
+#     UDID it wrote down when it made it (never a lookup by name or by state), the one
+#     --udid names, or the one the Mac's owner lends from their simulator queue
+#     (~/.config/walnut/fleet.env, see mac-share.sh), in which case it makes none; a WALNUT_SIM_UDID their login shell exports is ignored, and their
 #     WALNUT_SIM_PROTECTED_UDIDS is honoured (scripts/lib/sim-device.sh); it shuts down
 #     only a simulator it started, also when the run is killed (a watchdog outside the
 #     run's process group does it), and it refuses while Simulator is open;
@@ -57,7 +59,7 @@ mkdir -p "$OUT"
 T0=$(date +%s); RUN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-UDID=""; REC_PID=""; STATUS=0; XCODE=""; RUNTIME_NAME=""
+UDID=""; REC_PID=""; STATUS=0; XCODE=""; RUNTIME_NAME=""; LENT=""
 # The test counts and xcodebuild's own time (build and tests) from the result bundle's summary,
 # as JSON members
 # (empty without one). plutil, never python3: on a Mac without the Command Line Tools,
@@ -95,6 +97,7 @@ XCODE=$(/usr/bin/xcodebuild -version 2>/dev/null | awk 'NR == 1 {print $2}')
 SIM_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/sim-device.sh"
 [ -f "$SIM_LIB" ] || refuse 69 "the sent sources have no scripts/lib/sim-device.sh" missing
 . "$SIM_LIB"
+. "$(dirname "${BASH_SOURCE[0]}")/mac-share.sh" || refuse 69 "the sent sources have no ios-native/tests/fleet/mac-share.sh" missing
 
 CPUS=$(sysctl -n hw.ncpu)
 LOAD1=$(sysctl -n vm.loadavg | awk '{print $2}')
@@ -105,6 +108,10 @@ fi
 if pgrep -x Simulator >/dev/null 2>&1; then
   refuse 75 "BUSY: Simulator is open on this Mac; try another Mac or later" busy
 fi
+# Its person is on a call: a build and a booting simulator would compete with it.
+CALL=$(fleet_call_now)
+[ -z "$CALL" ] || refuse 75 "BUSY: a call is on this Mac ($CALL); try another Mac or later" busy
+fleet_lent_lane "$HOME/.config/walnut/fleet.env" || refuse 64 "$FLEET_LENT_ERROR" failed
 FREE_KB=$(df -k "$RUN_DIR" | awk 'NR == 2 {print $4}')
 [ "${FREE_KB:-0}" -ge $((6 * 1024 * 1024)) ] || refuse 70 "only $((FREE_KB / 1024 / 1024)) GB free on this Mac, the build needs 6" no-room
 
@@ -130,38 +137,26 @@ trap finish EXIT
 trap 'exit 143' HUP INT TERM
 
 # A stop from host_exec kills this whole process group (SIGTERM, SIGKILL 3 s later), which
-# can end the run before its trap shuts the simulator down. A watchdog in its own session
-# outlives the group: once this script's pid is gone it shuts down the simulator this run
-# started (named in the lock dir) and frees the lock if it is still ours. At most 3 hours.
-/usr/bin/python3 - "$$" "$LOCK_DIR" >/dev/null 2>&1 </dev/null <<'PY' &
-import os, subprocess, sys, time
-os.setsid()
-pid, lock = int(sys.argv[1]), sys.argv[2]
-end = time.time() + 3 * 3600
-while time.time() < end:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        break
-    time.sleep(2)
-# "<pid> <udid>": a run that took the lock since then wrote its own, which is not ours to stop.
-try:
-    owner, udid = (open(os.path.join(lock, "started")).read().split() + ["", ""])[:2]
-except OSError:
-    owner, udid = "", ""
-if udid and owner == str(pid):
-    subprocess.run(["/usr/bin/xcrun", "simctl", "shutdown", udid], capture_output=True, timeout=120)
-try:
-    if open(os.path.join(lock, "pid")).read().strip() == str(pid):
-        subprocess.run(["/bin/rm", "-rf", lock])
-except OSError:
-    pass
-PY
+# can end the run before its trap cleans up. watchdog.py, in its own session, outlives the
+# group: once this script's pid is gone it gives back a lent simulator, shuts down the one this
+# run started and frees the lock if it is still ours.
+/usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/watchdog.py" "$$" "$LOCK_DIR" >/dev/null 2>&1 </dev/null &
 
-# The simulator: the one --udid names, else the one this tool made here (its UDID in
-# SIM_FILE), made on the newest iOS runtime when it is missing or gone.
+# The simulator: the one --udid names, else the one the owner lends from their queue, else the
+# one this tool made here (its UDID in SIM_FILE), made on the newest iOS runtime when it is
+# missing or gone.
 if [ -n "$ASKED_UDID" ]; then
   UDID=$ASKED_UDID
+elif [ -n "$FLEET_LENT_LANE" ]; then
+  LENT_RC=0; fleet_take_lent "$(basename "$RUN_DIR")" "$LOCK_DIR" 2>"$OUT/lease.txt" || LENT_RC=$?
+  # walnut_sim_resolve set its own EXIT trap; this run's cleanup gives the lease back first.
+  trap 'fleet_give_back "$LOCK_DIR"; finish' EXIT
+  trap 'exit 143' HUP INT TERM
+  sed 's/^/remote-run: /' "$OUT/lease.txt" >&2
+  [ "$LENT_RC" != 1 ] || refuse 75 "BUSY: this Mac's simulator queue lends nothing on lane $FLEET_LENT_LANE now; try another Mac or later" busy
+  [ "$LENT_RC" = 0 ] || refuse 64 "this Mac's simulator queue could not lend lane $FLEET_LENT_LANE (see its words above; ~/.config/walnut/fleet.env names it)" failed
+  UDID=$WALNUT_SIM_DEVICE; LENT=$UDID
+  echo "remote-run: lane $FLEET_LENT_LANE of this Mac's simulator queue lent $UDID; no simulator of the run's own here"
 else
   UDID=$(cat "$SIM_FILE" 2>/dev/null || true)
   if [ -n "$UDID" ] && ! /usr/bin/xcrun simctl list -j devices available | /usr/bin/python3 -c '
@@ -199,7 +194,8 @@ for rt, devs in json.load(sys.stdin)["devices"].items():
 echo "remote-run: simulator $UDID (${RUNTIME_NAME:-runtime unknown}, Xcode ${XCODE:-unknown}); load $LOAD1 on $CPUS CPUs"
 # A boot that works is this run's to undo; one that fails found it running already (or
 # broken, which bootstatus says next).
-if /usr/bin/xcrun simctl boot "$UDID" >/dev/null 2>&1; then
+# A lent simulator is the queue's to boot and shut down, never this run's.
+if [ -z "$LENT" ] && /usr/bin/xcrun simctl boot "$UDID" >/dev/null 2>&1; then
   STARTED=$UDID; echo "$$ $UDID" > "$LOCK_DIR/started"
 fi
 /usr/bin/xcrun simctl bootstatus "$UDID" -b >/dev/null || refuse 1 "the simulator $UDID did not boot" failed
@@ -223,7 +219,9 @@ XCB=(-project Walnut.xcodeproj -scheme Walnut -destination "platform=iOS Simulat
 case $MODE in
   unit) "${POLITE[@]}" xcodebuild test "${XCB[@]}" -resultBundlePath "$OUT/Test.xcresult" -only-testing:WalnutTests "$@" & ;;
   build) "${POLITE[@]}" xcodebuild build-for-testing "${XCB[@]}" "$@" & ;;
-  ui) WALNUT_UITEST_DD="$DERIVED" WALNUT_UITEST_RESULT_BUNDLE="$OUT/Test.xcresult" "${POLITE[@]}" bash tests/ui/run-ui-tests.sh "$@" & ;;
+  # This run holds its simulator alone (its own lock, or the queue's lease): the UI runner takes
+  # no lane lock of the machine's on top (one would be the owner's own lane a).
+  ui) WALNUT_UITEST_LEASE_HELD=1 WALNUT_UITEST_DD="$DERIVED" WALNUT_UITEST_RESULT_BUNDLE="$OUT/Test.xcresult" "${POLITE[@]}" bash tests/ui/run-ui-tests.sh "$@" & ;;
   run) "${POLITE[@]}" "$@" & ;;
   *) refuse 64 "unknown mode $MODE (unit, ui, build, run)" failed ;;
 esac
