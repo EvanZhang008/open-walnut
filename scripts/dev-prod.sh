@@ -629,6 +629,29 @@ drain_active_turns() {
   return 0
 }
 
+# ── Planned-restart marker ──────────────────────────────────────────────────
+# The outgoing server reads (and removes) this when it stops, so its feature-node
+# connection journal says "deploy" instead of a bare SIGTERM
+# (src/core/planned-restart.ts). Called only after every guard has passed, right
+# before the stop. Best effort: a deploy never fails on it. In the data home's
+# local/ (never git-synced); the same home rule as PLUGINS_DIR below.
+PLANNED_RESTART_FILE="${REHEARSAL_HOME:-$HOME/.open-walnut}/local/planned-restart.json"
+write_planned_restart() {
+  local home build tmp
+  home="$(dirname "$(dirname "$PLANNED_RESTART_FILE")")"
+  [[ -d "$home" ]] || return 0
+  mkdir -p "$(dirname "$PLANNED_RESTART_FILE")" 2>/dev/null || return 0
+  build="$(git -C "$REPO_ROOT" rev-parse --short=9 HEAD 2>/dev/null || true)"
+  [[ "$build" =~ ^[0-9a-f]{4,40}$ ]] || build=""
+  tmp="$PLANNED_RESTART_FILE.$$.tmp"
+  if printf '{"at":"%s","reason":"deploy","build":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$build" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$PLANNED_RESTART_FILE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 # What this deploy runs, in words, for the dry run and the log.
 RUNTIME_DESC="the compiled file walnut-$SELF_TARGET (bun $BUN_VERSION at $BUN_BIN)"
 
@@ -1174,6 +1197,7 @@ fi
 # and the smoke boot (those take minutes — draining first would just let new turns
 # start), and before `launchctl remove`, which is itself a kill.
 drain_active_turns
+write_planned_restart
 
 # ── One launchd domain for the job's whole life ─────────────────────────────
 # The job is loaded with `launchctl bootstrap <domain>`, and every later look at
@@ -1320,6 +1344,8 @@ fi
 
 if [[ -n "$(listener_pids)" ]]; then
   echo "Existing server did not stop; refusing to start a competing process." >&2
+  # It still runs: the marker must not name its next, unrelated stop a deploy.
+  if [[ -n "${PLANNED_RESTART_FILE:-}" ]]; then rm -f "$PLANNED_RESTART_FILE" 2>/dev/null || true; fi
   exit 1
 fi
 

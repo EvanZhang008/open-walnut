@@ -5,6 +5,7 @@ import {
 } from '../../core/feature-nodes/protocol.js'
 import { sendFrame, type ReadTransport } from '../../core/feature-nodes/connections.js'
 import { readAuthority, type Authority } from '../../core/feature-nodes/contracts.js'
+import { journalNodeId, type ConnectionLog, type DisconnectCause } from '../../core/feature-nodes/connection-journal.js'
 
 export interface FeatureNodeIdentity {
   authority: Authority
@@ -15,9 +16,17 @@ export interface FeatureNodeStatus {
   generation: string
   capabilities: readonly CapabilityRef[]
 }
+/** Why this server stops, for the journal and the nodes' 1012 close (feature-node-runtime.ts). */
+export interface FeatureNodeStop {
+  reason: string
+  build?: string
+  signal?: string
+  nextBuild?: string
+}
 interface Peer {
   identity: FeatureNodeIdentity
   generation: string
+  connectedAt: number
   transport: ReadTransport
   capabilities: readonly CapabilityRef[]
   listeners: Array<() => void>
@@ -37,6 +46,8 @@ interface Verification {
   result: Promise<Authority | undefined>
 }
 
+const INVALID_FRAME = [1008, 'invalid feature frame'] as const
+
 export class FeatureNodeHub {
   private readonly peers = new Map<string, Peer>()
   private readonly verification = new Map<string, Verification>()
@@ -48,20 +59,22 @@ export class FeatureNodeHub {
   private pendingBytes = 0
   private closed = false
 
-  constructor(private readonly clock: Clock) {}
+  constructor(private readonly clock: Clock, private readonly journal?: ConnectionLog) {}
 
   attach(identity: FeatureNodeIdentity, transport: ReadTransport): Outcome<FeatureNodeStatus> {
     const authority = readAuthority(() => identity.authority, identity.authority.nodeId, identity.authority.accountId)
-    if (!authority) return { success: false, code: 'denied' }
-    if (this.closed || this.sequence >= Number.MAX_SAFE_INTEGER) return { success: false, code: 'offline' }
-    try { if (transport.state() !== 'open') return { success: false, code: 'offline' } }
-    catch { return { success: false, code: 'offline' } }
-    if (!this.peers.has(authority.nodeId) && this.peers.size >= 32) return { success: false, code: 'busy' }
-    const peer: Peer = { identity: { authority, verify: () => identity.verify() }, transport,
+    if (!authority) return this.refuse(identity, 'denied')
+    if (this.closed || this.sequence >= Number.MAX_SAFE_INTEGER) return this.refuse(authority, 'offline')
+    try { if (transport.state() !== 'open') return this.refuse(authority, 'offline') }
+    catch { return this.refuse(authority, 'offline') }
+    if (!this.peers.has(authority.nodeId) && this.peers.size >= 32) return this.refuse(authority, 'busy')
+    const peer: Peer = { identity: { authority, verify: () => identity.verify() }, transport, connectedAt: this.now(),
       generation: `${this.nonce}:${++this.sequence}`, capabilities: [], listeners: [], pending: new Map(), closed: false }
     const prior = this.peers.get(authority.nodeId)
     this.peers.set(authority.nodeId, peer)
-    if (prior) this.drop(prior, 'offline')
+    if (prior) this.drop(prior, 'offline', 'replaced')
+    // Before the subscriptions: a transport that closes while they register still reads connected, then disconnected.
+    this.note({ type: 'connected', nodeId: authority.nodeId, generation: peer.generation })
     const subscribe = (register: () => () => void) => {
       if (peer.closed) return
       const dispose = register()
@@ -69,10 +82,39 @@ export class FeatureNodeHub {
     }
     try {
       subscribe(() => transport.onMessage((raw) => this.receive(peer, raw)))
-      subscribe(() => transport.onClose(() => this.drop(peer, 'offline')))
-      subscribe(() => transport.onError(() => this.drop(peer, 'offline')))
-    } catch { this.drop(peer, 'offline') }
+      subscribe(() => transport.onClose((code, reason) => this.drop(peer, 'offline',
+        typeof code === 'number' && code !== 1006 ? 'closed_by_node' : 'abnormal',
+        { ...(typeof code === 'number' ? { closeCode: code } : {}), ...(reason ? { closeReason: reason } : {}) })))
+      subscribe(() => transport.onError(() => this.drop(peer, 'offline', 'transport_error')))
+    } catch { this.drop(peer, 'offline', 'transport_error') }
     return this.current(peer) ? { success: true, payload: this.status(peer) } : { success: false, code: 'offline' }
+  }
+
+  private now(): number {
+    try { return this.clock.now() } catch { return Date.now() }
+  }
+
+  private note(event: Parameters<ConnectionLog['record']>[0]): void {
+    try { this.journal?.record(event) } catch { /* evidence never stops a connection */ }
+  }
+
+  private refuse(who: { nodeId?: unknown } | FeatureNodeIdentity, code: 'denied' | 'offline' | 'busy'): Outcome<FeatureNodeStatus> {
+    let nodeId: string | null = null
+    try { nodeId = journalNodeId('authority' in who ? who.authority.nodeId : who.nodeId) } catch { /* unreadable identity */ }
+    this.note({ type: 'disconnected', nodeId, cause: 'refused', code })
+    return { success: false, code }
+  }
+
+  /** End a node's connection from outside (the runtime's periodic check), when it is still that generation. */
+  disconnect(nodeId: string, generation: string, cause: DisconnectCause): void {
+    const peer = this.peers.get(nodeId)
+    if (peer && peer.generation === generation) this.drop(peer, 'offline', cause)
+  }
+
+  /** The current connection of a node, whether or not its credential still verifies: evidence, not authority. */
+  connection(nodeId: string): { generation: string; connectedAt: number } | null {
+    const peer = this.peers.get(nodeId)
+    return peer && !peer.closed ? { generation: peer.generation, connectedAt: peer.connectedAt } : null
   }
 
   private status(peer: Peer): FeatureNodeStatus {
@@ -133,26 +175,27 @@ export class FeatureNodeHub {
     const flight = { peer, result }
     this.verification.set(nodeId, flight)
     let timer: unknown
-    const finish = (value: Authority | undefined) => {
+    // `failed`: the check timed out or threw (this server's trouble), not an answer that the credential is gone.
+    const finish = (value: Authority | undefined, failed = false) => {
       const bound = peer.identity.authority
       const parsed = readAuthority(() => value, bound.nodeId, bound.accountId)
       if (!parsed || parsed.permissionVersion !== bound.permissionVersion) {
-        this.drop(peer, 'denied')
+        this.drop(peer, 'denied', failed ? 'credential_check_failed' : 'revoked')
         settle(undefined)
       } else settle(this.current(peer) ? parsed : undefined)
     }
     try {
-      timer = this.clock.setTimeout(() => finish(undefined), 1000)
+      timer = this.clock.setTimeout(() => finish(undefined, true), 1000)
       const source = Promise.resolve().then(() => peer.identity.verify())
-      const settled = (value: Authority | undefined) => {
+      const settled = (value: Authority | undefined, failed = false) => {
         if (this.verification.get(nodeId) === flight) this.verification.delete(nodeId)
-        finish(value)
+        finish(value, failed)
       }
-      void source.then(settled, () => settled(undefined)).finally(() => {
+      void source.then((value) => settled(value), () => settled(undefined, true)).finally(() => {
         if (timer !== undefined) { try { this.clock.clearTimeout(timer) } catch {} }
       }).catch(() => {})
     } catch {
-      finish(undefined)
+      finish(undefined, true)
       this.verification.delete(nodeId)
     }
     return result
@@ -205,7 +248,7 @@ export class FeatureNodeHub {
           if (!peer.capabilities.some((ref) => capabilityKey(ref) === capabilityKey(frame.capability))) {
             this.end(peer, pending, rejected('unavailable')); return
           }
-          if (!sendFrame(peer.transport, frame)) this.drop(peer, 'offline')
+          if (!sendFrame(peer.transport, frame)) this.drop(peer, 'offline', 'send_failed')
         }).catch(() => this.end(peer, pending, rejected('internal')))
       } catch { this.end(peer, pending, rejected('internal')) }
     })
@@ -214,13 +257,13 @@ export class FeatureNodeHub {
   private receive(peer: Peer, raw: unknown): void {
     if (!this.current(peer)) return
     const decoded = decodeFrame(raw)
-    if (!decoded.success) { this.drop(peer, 'malformed'); return }
+    if (!decoded.success) { this.drop(peer, 'malformed', 'protocol_error', {}, INVALID_FRAME); return }
     const frame = decoded.payload
     if (frame.type === 'manifest') {
       peer.capabilities = Object.freeze(frame.capabilities.map((ref) => Object.freeze({ ...ref })))
       return
     }
-    if (frame.type !== 'result') { this.drop(peer, 'malformed'); return }
+    if (frame.type !== 'result') { this.drop(peer, 'malformed', 'protocol_error', {}, INVALID_FRAME); return }
     if (frame.generation !== peer.generation) return
     const pending = peer.pending.get(frame.correlationId)
     if (!pending || pending.settling) return
@@ -234,7 +277,7 @@ export class FeatureNodeHub {
         this.end(peer, pending, { protocolVersion: 1, type: 'result',
           generation: frame.generation, correlationId: frame.correlationId, success: false, code: 'expired' })
       } else this.end(peer, pending, frame)
-    }).catch(() => this.drop(peer, 'denied'))
+    }).catch(() => this.drop(peer, 'denied', 'credential_check_failed'))
   }
 
   private end(peer: Peer, pending: Pending, result: ResultFrame): void {
@@ -246,21 +289,33 @@ export class FeatureNodeHub {
     pending.resolve({ ...result, generation: pending.original.generation, correlationId: pending.original.correlationId })
   }
 
-  private drop(peer: Peer, code: FailureCode): void {
+  private drop(peer: Peer, code: FailureCode, cause: DisconnectCause,
+    detail: { closeCode?: number; closeReason?: string } = {}, closeWith?: readonly [number, string]): void {
     if (peer.closed) return
     peer.closed = true
     if (this.peers.get(peer.identity.authority.nodeId) === peer) this.peers.delete(peer.identity.authority.nodeId)
+    // closeCode: the node's close frame, or the one this server sends now.
+    this.note({ type: 'disconnected', nodeId: peer.identity.authority.nodeId, generation: peer.generation, cause,
+      ...(closeWith ? { closeCode: closeWith[0] } : {}), ...detail, connectedForMs: Math.max(0, this.now() - peer.connectedAt) })
     for (const pending of peer.pending.values()) this.end(peer, pending, {
       protocolVersion: 1, type: 'result', generation: pending.frame.generation,
       correlationId: pending.frame.correlationId, success: false, code,
     })
     for (const dispose of peer.listeners.splice(0)) { try { dispose() } catch {} }
-    try { peer.transport.close() } catch {}
+    try { if (closeWith) peer.transport.close(...closeWith); else peer.transport.close() } catch {}
   }
 
-  close(): void {
+  /**
+   * The server stops: `server_stopping` first, then every node closed with 1012 (service
+   * restart) so it reads a deliberate restart, not a crash. Resolves once the journal has them.
+   */
+  close(stop: FeatureNodeStop = { reason: 'unknown' }): Promise<void> {
+    const first = !this.closed
     this.closed = true
-    for (const peer of [...this.peers.values()]) this.drop(peer, 'offline')
+    if (first) this.note({ type: 'server_stopping', build: 'unknown', ...stop })
+    const closeWith = [1012, `server stopping: ${stop.reason}`.replace(/[^\x20-\x7e]/g, '').slice(0, 100)] as const
+    for (const peer of [...this.peers.values()]) this.drop(peer, 'offline', 'server_stopping', {}, closeWith)
+    try { return this.journal?.flush?.().catch(() => {}) ?? Promise.resolve() } catch { return Promise.resolve() }
   }
 
   get size(): number { return this.peers.size }

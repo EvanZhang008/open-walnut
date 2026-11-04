@@ -10,9 +10,11 @@ export interface ReadTransport {
   bufferedBytes(): number;
   send(text: string): boolean | number;
   onMessage(listener: (text: unknown) => void): () => void;
-  onClose(listener: () => void): () => void;
+  /** `code`/`reason`: the close frame's, when the transport has one (1006: none arrived). */
+  onClose(listener: (code?: number, reason?: string) => void): () => void;
   onError(listener: () => void): () => void;
-  close(): void;
+  /** With a code, a close frame (e.g. 1012 at a server restart); without one, the connection just ends. */
+  close(code?: number, reason?: string): void;
 }
 export interface NodeConnection {
   readonly nodeId: string;

@@ -17,10 +17,12 @@
 import { execFile, spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { WALNUT_HOME } from '../../constants.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { execNeedsBunBeBun } from '../../lib/runtime.js'
 import { createSubsystemLogger } from '../../logging/index.js'
 import { installScript, parseInstallState, stateScript, type InstallState } from '../host-server/install.js'
+import { writePlannedRestart } from '../planned-restart.js'
 import { dirs, errText, exists, knobMs, readJson, readLine, rmFile, sha256File, sizeOf, writeAtomic, type Dirs } from './box-files.js'
 import { smokeBoot } from './box-smoke.js'
 import {
@@ -53,6 +55,8 @@ export function runningBuild(env: NodeJS.ProcessEnv = process.env): BoxBuildStat
 export interface BoxHooks {
   /** Hand the box back to its launcher (the default ends this process like systemd would). */
   restartSelf: () => void
+  /** Say the coming stop is this update (core/planned-restart.ts), so the stopping server records why. */
+  planRestart: (id: string) => Promise<void>
   /** Free bytes where builds live, or null when unknown. */
   freeBytes: (dir: string) => Promise<number | null>
 }
@@ -71,6 +75,7 @@ async function statfsFree(dir: string): Promise<number | null> {
 
 const defaultHooks: BoxHooks = {
   restartSelf: () => { if (process.pid > 1) process.kill(process.pid, 'SIGTERM') },
+  planRestart: (id) => writePlannedRestart(WALNUT_HOME, { reason: 'companion-update', build: id }),
   freeBytes: statfsFree,
 }
 let hooks: BoxHooks = defaultHooks
@@ -394,13 +399,30 @@ async function runActivation(d: Dirs, id: string): Promise<void> {
       log.info('smoke boot passed: the launcher starts it as the trial', { id, ms: result.ms })
       setTimeout(() => {
         log.info('restarting into the trial', { id })
-        hooks.restartSelf()
+        void restartIntoTrial(id)
       }, 1_000).unref()
       return
     }
     await failActivation(d, id, result.reason ?? 'the smoke boot failed', result.logTail, result.ms)
   } catch (err) {
     await failActivation(d, id, `the smoke boot could not run: ${errText(err)}`, [], 0).catch(() => {})
+  }
+}
+
+/**
+ * The planned-restart marker first, so the stopping server's journal says companion-update,
+ * then the restart. Bounded: a stuck disk never holds the restart up.
+ */
+export async function restartIntoTrial(id: string, waitMs = 1_000): Promise<void> {
+  let waited: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => hooks.planRestart(id)).catch((err) => log.warn('planned-restart marker not written', { id, error: errText(err) })),
+      new Promise<void>((resolve) => { waited = setTimeout(resolve, waitMs); waited.unref() }),
+    ])
+  } finally {
+    if (waited) clearTimeout(waited)
+    hooks.restartSelf()
   }
 }
 

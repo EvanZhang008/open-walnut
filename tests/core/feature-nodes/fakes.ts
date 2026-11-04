@@ -49,10 +49,12 @@ export class FakeTransport implements ReadTransport {
   status: 'open' | 'closing' | 'closed' = 'open';
   buffered = 0;
   closeCalls = 0;
+  /** The code and reason of each close() call (none: the connection just ended). */
+  readonly closedWith: Array<[number | undefined, string | undefined]> = [];
   sendHook?: (frame: Frame) => boolean | number;
   readonly sent: Frame[] = [];
   readonly messages = new Set<(raw: unknown) => void>();
-  readonly closes = new Set<() => void>();
+  readonly closes = new Set<(code?: number, reason?: string) => void>();
   readonly errors = new Set<() => void>();
 
   state(): 'open' | 'closing' | 'closed' { return this.status; }
@@ -66,7 +68,7 @@ export class FakeTransport implements ReadTransport {
     this.messages.add(listener);
     return () => { this.messages.delete(listener); };
   }
-  onClose(listener: () => void): () => void {
+  onClose(listener: (code?: number, reason?: string) => void): () => void {
     this.closes.add(listener);
     return () => { this.closes.delete(listener); };
   }
@@ -74,10 +76,16 @@ export class FakeTransport implements ReadTransport {
     this.errors.add(listener);
     return () => { this.errors.delete(listener); };
   }
-  close(): void {
+  close(code?: number, reason?: string): void {
     this.closeCalls++;
+    this.closedWith.push([code, reason]);
     this.status = 'closed';
-    for (const listener of [...this.closes]) listener();
+    for (const listener of [...this.closes]) listener(code, reason);
+  }
+  /** The other side ended it: a close frame's code and reason, or nothing at all (1006). */
+  remoteClose(code?: number, reason?: string): void {
+    this.status = 'closed';
+    for (const listener of [...this.closes]) listener(code, reason);
   }
   deliver(frame: unknown): void { this.deliverRaw(JSON.stringify(frame)); }
   deliverRaw(raw: unknown): void { for (const listener of [...this.messages]) listener(raw); }

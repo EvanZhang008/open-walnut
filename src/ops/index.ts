@@ -35,6 +35,7 @@ import './task-lifecycle.js'
 import './hints.js'
 import './task-watch.js'
 import './private-tasks.js'
+import './feature-nodes.js'
 
 export {
   defineOp,

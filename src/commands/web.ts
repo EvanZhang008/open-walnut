@@ -167,7 +167,8 @@ export async function runWeb(options: {
   // (peak 43 concurrent) until the Mac starved and macOS killed the user's GUI
   // apps. Handler first, then arm, then boot.
   let shuttingDown = false
-  const shutdown = async () => {
+  // `signal`: the name Node passes a signal listener; it becomes the stop's reason (stopServer).
+  const shutdown = async (signal?: unknown) => {
     if (shuttingDown) return // a second signal must not race a teardown in flight
     shuttingDown = true
     // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck).
@@ -183,7 +184,7 @@ export async function runWeb(options: {
       process.exit(1)
     }, SHUTDOWN_BAIL_MS)
     try {
-      await stopServer()
+      await stopServer({ reason: typeof signal === 'string' ? signal : undefined })
     } catch {
       // A failed teardown must still terminate — never leave an immune process.
     } finally {
@@ -199,7 +200,7 @@ export async function runWeb(options: {
   // The Mac app that started this died without stopping it: stop as it would have.
   watchForOrphan(orphanParent, () => {
     try { fs.appendFileSync(exitTraceFile(), `[${new Date().toISOString()}] SERVER EXIT: the app that started it is gone pid=${process.pid}\n`) } catch { /* best-effort */ }
-    void shutdown()
+    void shutdown('parent_gone')
   })
 
   await startServer({ port, dev: !!options.dev })
@@ -288,14 +289,14 @@ async function runHostReplica(options: { port?: string; dev?: boolean }): Promis
   initLogging()
   const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
   let shuttingDown = false
-  const shutdown = async () => {
+  const shutdown = async (signal?: unknown) => {
     if (shuttingDown) return
     shuttingDown = true
     const bail = setTimeout(() => {
       try { fs.appendFileSync(path.join(LOG_DIR, 'exit.log'), `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}\n`) } catch { /* best-effort */ }
       process.exit(1)
     }, SHUTDOWN_BAIL_MS)
-    try { await stopServer() } catch { /* a failed teardown must still terminate */ } finally { clearTimeout(bail) }
+    try { await stopServer({ reason: typeof signal === 'string' ? signal : undefined }) } catch { /* a failed teardown must still terminate */ } finally { clearTimeout(bail) }
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

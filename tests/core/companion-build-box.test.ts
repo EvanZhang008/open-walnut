@@ -18,7 +18,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   _setBoxHooksForTesting, boxBuildStatus, putPackageChunk, runningBuild, startActivate, startInstall, startTrialConfirm, installEnv, smokeRuntime,
-  dependencyInstallProblem,
+  dependencyInstallProblem, restartIntoTrial,
 } from '../../src/core/companion-build/box.js'
 import { MAX_CHUNK_BYTES, MAX_PACKAGE_BYTES, type InstallRequest } from '../../src/core/companion-build/wire.js'
 
@@ -32,6 +32,9 @@ let saved: Record<string, string | undefined> = {}
 let R = ''
 let free: number | null = 100 * 1024 ** 3
 let restarts = 0
+/** The builds a planned-restart marker was written for, and how many were written when each restart came. */
+let planned: string[] = []
+let plannedAtRestart: number[] = []
 const pids: number[] = []
 const children: ChildProcess[] = []
 
@@ -145,7 +148,13 @@ beforeEach(() => {
   process.env.WALNUT_COMPANION_MAC_BUILDS = '1'
   free = 100 * 1024 ** 3
   restarts = 0
-  _setBoxHooksForTesting({ restartSelf: () => { restarts++ }, freeBytes: async () => free })
+  planned = []
+  plannedAtRestart = []
+  _setBoxHooksForTesting({
+    restartSelf: () => { restarts++; plannedAtRestart.push(planned.length) },
+    planRestart: async (id) => { planned.push(id) },
+    freeBytes: async () => free,
+  })
 })
 
 afterEach(() => {
@@ -335,6 +344,22 @@ describe('the status', () => {
   })
 })
 
+describe('the restart into a trial', () => {
+  it('writes the planned-restart marker first, and restarts anyway when it fails or hangs', async () => {
+    await restartIntoTrial('t1')
+    expect(planned).toEqual(['t1'])
+    expect(plannedAtRestart).toEqual([1])
+    _setBoxHooksForTesting({ restartSelf: () => { restarts++ }, planRestart: async () => { throw new Error('disk full') } })
+    await restartIntoTrial('t2')
+    expect(restarts).toBe(2)
+    _setBoxHooksForTesting({ restartSelf: () => { restarts++ }, planRestart: () => new Promise<void>(() => {}) })
+    const t0 = Date.now()
+    await restartIntoTrial('t3', 200)
+    expect(restarts).toBe(3)
+    expect(Date.now() - t0).toBeLessThan(2_000)
+  })
+})
+
 describe('install and activate on a real tree', () => {
   it('a good build installs, passes the smoke boot, becomes the trial, and the box restarts', async () => {
     write('companion/failed/g1', 'smoke: an earlier try\n')
@@ -356,6 +381,9 @@ describe('install and activate on a real tree', () => {
     expect(await startActivate({ id: 'g1' })).toEqual({ ok: true, state: 'smoking' })
     expect(await startActivate({ id: 'other' })).toMatchObject({ ok: false })
     await waitFor('the restart', () => restarts === 1)
+    // The marker is written first, so the stopping server's journal says companion-update.
+    expect(planned).toEqual(['g1'])
+    expect(plannedAtRestart).toEqual([1])
     expect(read('companion/trial')).toBe('g1')
     // The launcher runs a dist build only on the runtime its smoke boot passed on.
     expect(read('app/g1/.runtime')).toBe(process.versions.bun ? 'bun' : 'node')

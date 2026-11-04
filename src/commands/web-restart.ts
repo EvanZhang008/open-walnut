@@ -58,7 +58,7 @@ export interface LiveRestartOptions {
   supervised: boolean
   /** The signal shutdown's bail (web.ts SHUTDOWN_BAIL_MS): the restart's teardown gets the same. */
   bailMs: number
-  stopServer: (opts?: { dropConnections?: boolean }) => Promise<void>
+  stopServer: (opts?: { dropConnections?: boolean; reason?: string }) => Promise<void>
   exitTraceFile: () => string
   /** Claims the process's one teardown (web.ts shuttingDown); false when a shutdown already runs. */
   beginTeardown: () => boolean
@@ -70,7 +70,7 @@ async function teardown(stopServer: LiveRestartOptions['stopServer'], bailMs: nu
   const bail = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), bailMs) })
   try {
     // An open window's keep-alive socket would hold the close past the bail: they go now.
-    return await Promise.race([stopServer({ dropConnections: true }).then(() => true as const, () => true as const), bail])
+    return await Promise.race([stopServer({ dropConnections: true, reason: 'self-update' }).then(() => true as const, () => true as const), bail])
   } finally {
     clearTimeout(timer)
   }

@@ -61,6 +61,9 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['GET', '/sessions/abc/history', 'paged'],
     ['GET', '/sessions/launch-options', 'launch'],
     ['POST', '/sessions', 'launch'],
+    // A node's connection journal is on the server it attaches to.
+    ['GET', '/feature-nodes/connections', 'feature-nodes'],
+    ['HEAD', '/feature-nodes/connections', 'feature-nodes'],
   ])('%s %s stays on the companion (%s)', (method, rel, why) => {
     expect(companionAnswers(method, rel)).toBe(why)
   })
@@ -105,6 +108,8 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['POST', '/actions/invoke'],
     ['GET', '/memory/user'],
     ['GET', '/memory/global'],
+    ['POST', '/feature-nodes/connections'],
+    ['GET', '/feature-nodes/connections/extra'],
   ])('%s %s goes to the Mac while it answers', (method, rel) => {
     expect(companionAnswers(method, rel)).toBeNull()
   })

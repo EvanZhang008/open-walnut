@@ -4537,6 +4537,12 @@ import { offlineConflictsV1Router } from './offline-conflicts-v1.js'
 
 apiV1Router.use(offlineConflictsV1Router)
 
+// --- Feature-node connection journal (read only; the companion answers it itself) ---
+
+import { featureNodesV1Router } from './feature-nodes-v1.js'
+
+apiV1Router.use(featureNodesV1Router)
+
 // ─── Apple Health (the phone uploads HealthKit data to the primary) ────────
 // Same device auth as the rest of /api/v1; a replica relays every call.
 

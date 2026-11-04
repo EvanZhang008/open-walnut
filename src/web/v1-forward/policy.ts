@@ -32,6 +32,7 @@ export const FORWARD_TARGET_TIMEOUT_MS = 20_000
 /** Why the companion answers a route itself, whoever else is up. */
 export type CompanionReason =
   | 'stream' | 'send' | 'chat' | 'identity' | 'bytes' | 'device-data' | 'task-copy' | 'paged' | 'launch' | 'secret'
+  | 'feature-nodes'
 
 interface CompanionRoute {
   methods?: readonly string[]
@@ -67,6 +68,8 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   { re: /^\/(status|canary|me|instance|routes|client-logs)(\/|$)/, why: 'identity' },
   // The host network's machine list and invites are the companion's own (routes/net-v1.ts).
   { re: /^\/net(\/|$)/, why: 'identity' },
+  // The feature nodes attached to the companion, and so their connection journal, are its own.
+  { methods: ['GET'], re: /^\/feature-nodes\/connections$/, why: 'feature-nodes' },
   // File and media bytes do not ride the bridge. The speech vocabulary is a word
   // list, not bytes: the Mac answers it and takes its words (the box reads its copy
   // only while away, and a word added there needs the Mac: routes/stt.ts).

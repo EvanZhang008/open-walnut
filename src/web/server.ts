@@ -6674,7 +6674,7 @@ function startPluginSyncPolling(): void {
 /**
  * Gracefully shut down the server.
  */
-export async function stopServer(opts: { dropConnections?: boolean } = {}): Promise<void> {
+export async function stopServer(opts: { dropConnections?: boolean; reason?: string } = {}): Promise<void> {
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()
@@ -6686,6 +6686,9 @@ export async function stopServer(opts: { dropConnections?: boolean } = {}): Prom
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  // While every socket still stands: each feature node gets a 1012 close and the connection
+  // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
+  try { await (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason) } catch { /* best-effort */ }
   ;(await import('../core/net/net-mac.js')).stopNet()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await (await import('../core/page-visits.js')).flushVisitsNow().catch(() => {})
