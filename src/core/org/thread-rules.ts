@@ -2,8 +2,9 @@
  * The one rule every Org node follows to keep its Threads clean, in the words each place says it:
  * the node's prompt (sessions/session-context.ts THREADS_LINE), the `threads` hint on each of the
  * user's messages and the `threads-tidy` reminder (thread-capture.ts), and the thread ops
- * (ops/org-threads.ts). THREADS_OPEN_RULE, when a node opens a thread itself, rides the prompt and
- * the threads hint. tests/core/org/thread-rules-guard.test.ts fails when one of them loses either.
+ * (ops/org-threads.ts). THREADS_OPEN_RULE, when a node opens a thread itself, and
+ * THREAD_ONE_PLACE_RULE, a thread's news never also a letter, ride the prompt and the threads hint.
+ * tests/core/org/thread-rules-guard.test.ts fails when one of them loses either.
  *
  * 2026-11-01, the user: "you should proactively clean the thread, make a decision if the user
  * already knows"; "make sure this is a Walnut feature, not just your memory"; then, after a node
@@ -24,9 +25,24 @@ export const THREADS_KNOWN_RULE =
 /** A node may open a thread itself (2026-11-01, the user: "not only limited to threads I started"), never as a feed. */
 export const THREADS_OPEN_RULE =
   'You may open a thread yourself (thread_create) for something that reached you he must act on or asked to follow: a mail he '
-  + 'must answer, a team\'s question only he can settle, news he asked to hear about. Never as a progress feed. While he is away a '
-  + 'decision still goes to his inbox as a letter: the thread names the letter (ref), never repeats it. A thread that waits on him '
+  + 'must answer, a team\'s question only he can settle, news he asked to hear about. Never as a progress feed, and never beside a '
+  + 'letter about the same thing: one subject lives in one place. A thread that waits on him '
   + '(the default) names its user_kind and user_kind_why, or Walnut refuses it.';
+
+/**
+ * One place per update (2026-11-04, the user, after a VP sent each thread result as a letter too
+ * while he was away: "Only choose one, put it in thread or inbox, don't cluster and duplicate
+ * everything everywhere, inbox leave for something else ... if it is just a thread just put it there
+ * without sending it to inbox"). Walnut refuses such a letter (human-inbox/thread-instead.ts).
+ * tests/core/org/thread-one-place-guard.test.ts fails when a place loses it or tells a node to
+ * mail a thread's result.
+ */
+export const THREAD_ONE_PLACE_RULE =
+  'One place per update, the thread first: a result, answer or update about one of his threads goes to that thread only '
+  + '(thread_update: its summary and state; Walnut files your chat reply under his message), whether he is in your chat or away, '
+  + 'never also a letter; a decision about it is that thread\'s needs state (with user_kind), not a letter. His inbox is only for '
+  + 'what needs him and has no thread. Walnut refuses a letter from you about an open thread (409 thread_instead): one naming a '
+  + 'task of the thread, or a report naming no task right after you put a result in a thread.';
 
 /**
  * His Threads view shows only what has something for him (2026-11-01, the user: "if a task is just

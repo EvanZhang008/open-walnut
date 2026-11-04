@@ -61,6 +61,10 @@ defineOp({
     + 'A task answering another task\'s request (Main, a lead) sends its result in its reply to that task, '
     + 'which tells the user; a report letter (info, completion, review) about that work is refused (409, '
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
+    + 'One place per update: Main and the leads (a VP is a lead) put a result, answer or update about one of the user\'s '
+    + 'Threads in that thread only (thread_update), whether he is in the chat or away; their letter about an open thread '
+    + '(it names a task of the thread, or is a report naming none right after they put a result in a thread) is refused (409 thread_instead, '
+    + 'the thread named). '
     + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
     + 'snooze_reason says why it cannot wait for that date. '
     + 'One letter per question: the same subject again within 10 minutes is refused (409 duplicate_letter, '
@@ -101,7 +105,8 @@ defineOp({
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
     user_asked: z.boolean().optional().describe(
       'The user themself asked this task for this letter or report. Only then does a report letter go out '
-      + 'while this task answers another task\'s request'),
+      + 'while this task answers another task\'s request, or a letter of Main or a lead about one of its open threads '
+      + '(only when he asked in his own words for it as a letter, not just for the result)'),
     snooze_reason: z.string().optional().describe(
       'Required when this task, or one in task_refs, is snoozed (its start date is still to come): one line '
       + 'the user reads saying why this cannot wait for that date. It leads the letter'),

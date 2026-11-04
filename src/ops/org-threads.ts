@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import type { OpCall } from './core.js'
-import { PROOF_IN_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 
@@ -16,7 +16,7 @@ const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thr
   + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
   + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
-  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE
+  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
 
 async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> {
   const id = typeof args.task === 'string' && args.task.trim()
@@ -94,8 +94,8 @@ defineOp({
   title: 'Open a Thread yourself',
   description: `${THREADS_SCOPE} Opens a thread of your own for something that reached you the user must act on or asked to follow `
     + '(a mail he must answer, a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as '
-    + 'opened by you and where from, and his reply is filed under it. Never a progress feed. While he is away a decision still goes to '
-    + 'his inbox as a letter: the thread names the letter (ref), never repeats it. task defaults to your own task.',
+    + 'opened by you and where from, and his reply is filed under it. Never a progress feed, and never beside a letter about the same '
+    + 'thing: what is on a thread stays there, a decision as its needs state. task defaults to your own task.',
   input: {
     title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
     text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),

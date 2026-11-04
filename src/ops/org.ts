@@ -201,7 +201,7 @@ defineOp({
   description:
     'Main\'s or a lead\'s report for the user, built from Walnut\'s live record: what needs him (each with the one-tap '
     + 'way to answer: its decision letter, or its options), what finished and what moved since a time, and your Brief. '
-    + 'Alone it returns the report; send:true sends it to his inbox now; at schedules it ("08:00" = the next time the '
+    + 'Alone it returns the report; send:true sends it to his inbox now (only when he asked for a report); at schedules it ("08:00" = the next time the '
     + 'clock reads it, an ISO time, or "8h"), and Walnut sends it then by itself, covering everything since you asked. '
     + 'Use at when he asks for a report at a time ("give me a report tomorrow morning"); one per node, a new time '
     + 'replaces the old. It is a letter he asked for, so it is never refused as a report.',

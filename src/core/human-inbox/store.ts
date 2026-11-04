@@ -63,7 +63,7 @@ const BODIES_DIR = path.join(INBOX_DIR, 'bodies');
 export class LetterError extends Error {
   constructor(
     message: string,
-    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
+    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'thread_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
       | 'duplicate_letter' | 'duplicate_reply',
     readonly status: number,
   ) {

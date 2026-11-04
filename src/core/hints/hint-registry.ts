@@ -36,6 +36,7 @@ import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
 import { orgHandOnHint } from '../org/core-instructions.js';
+import { THREAD_ONE_PLACE_RULE } from '../org/thread-rules.js';
 
 export { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection };
 
@@ -195,10 +196,11 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'user-away',
     label: 'User away',
-    description: 'Main and the leads: the user has not been in this chat for a while, so an important update goes to his inbox; and that he is back.',
+    description: 'Main and the leads: the user has not been in this chat for a while, so what needs him and is on none of his threads goes to his inbox; and that he is back. A thread\'s news stays in that thread.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
     // 2026-10-31, the user: when he is not in a node's chat, an important update goes to his inbox.
+    // 2026-11-04, the user: one place per update; a thread's news stays in its thread (thread-rules.ts).
     // No time in it: a restart that forgets a heartbeat must not make the same absence news again.
     identity: (i) => (!i.away ? null : i.away.away ? 'away' : 'present'),
     render: (i) => {
@@ -262,13 +264,13 @@ const BUILT_IN: readonly HintSpec[] = [
 /** What a node hears while the user is away from its chat (org/user-away.ts). */
 export function userAwayText(lastSeenAt: number | null): string {
   const when = lastSeenAt ? `since ${new Date(lastSeenAt).toISOString().slice(0, 16)}Z` : 'for as long as Walnut knows';
-  return `the user has not been in this chat ${when}, and it is not open anywhere. An update that needs him (a decision only he `
-    + 'can make, something to review, a result he asked for) goes to his inbox now with human_inbox_send, a decision as '
+  return `the user has not been in this chat ${when}, and it is not open anywhere. What needs him and is on none of his threads `
+    + '(a decision only he can make, something to review) goes to his inbox now with human_inbox_send, a decision as '
     + 'action_required with its options so one tap answers it; Walnut adds your letters of this absence to one thread and his '
-    + 'phone buzzes once. Anything else stays in this chat and is never a letter.';
+    + 'phone buzzes once. Anything else stays in this chat and is never a letter. ' + THREAD_ONE_PLACE_RULE;
 }
 
-export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
+export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again (a thread\'s in its thread), not to his inbox.';
 
 const BUILT_IN_BY_KIND = new Map(BUILT_IN.map((s) => [s.kind, s]));
 

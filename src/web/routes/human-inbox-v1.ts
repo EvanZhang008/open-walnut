@@ -97,6 +97,8 @@ const ERROR_CODES: Record<string, string> = {
   human_approval: 'human-approval-required',
   // A report letter from a task that answers another task's request: the asker tells the user.
   reply_instead: 'conflict',
+  // A letter from Main or a lead about one of its open threads: the thread holds it (thread-instead.ts).
+  thread_instead: 'thread_instead',
   // A task answering for the user without quoting the user's words.
   user_words: 'bad_request',
   // A letter from or about a snoozed task without a stated `snooze_reason` (snooze-letter.ts).

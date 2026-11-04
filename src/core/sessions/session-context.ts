@@ -93,7 +93,7 @@
  * in the manual, which sessions pull live with `walnut guide`.
  */
 
-import { PROOF_IN_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -276,13 +276,15 @@ export const MAIN_NEWS_ONCE_LINE =
  * you here", an important update goes to the inbox, in one thread; and a morning report on request).
  * Walnut says when he is away (the `user-away` hint, org/user-away.ts), threads the letters of one
  * absence (human-inbox/away-thread.ts) and sends the report he asks for (org/morning-report.ts).
+ * 2026-11-04, the user: one place per update, so what is on one of his Threads stays there, away or
+ * not (THREAD_ONE_PLACE_RULE, human-inbox/thread-instead.ts).
  */
 export const AWAY_INBOX_LINE =
-  'When the user is away from your chat, Walnut says so on the message (a user-away note). An update that needs '
-  + 'him then (a decision only he can make, something to review, a result he asked for) goes to his inbox with '
+  'When the user is away from your chat, Walnut says so on the message (a user-away note). What needs him then and is '
+  + 'on none of his threads (a decision only he can make, something to review) goes to his inbox with '
   + 'human_inbox_send instead of waiting here, a decision as action_required with its options so one tap answers it. '
   + 'Walnut adds your letters of that absence to one thread and his phone buzzes once; anything else stays in this '
-  + 'chat and is never a letter. When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
+  + 'chat and is never a letter. ' + THREAD_ONE_PLACE_RULE + ' When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
   + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved. '
   + 'A letter of that absence never takes the proof out of the chat: ' + PROOF_IN_PLACE_RULE + '\n\n'
 

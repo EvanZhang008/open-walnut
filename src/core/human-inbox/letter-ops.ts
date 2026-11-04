@@ -187,6 +187,22 @@ export async function sendLetterAsCallerOnce(
       throw new LetterError(replyInsteadMessage(hit), 'reply_instead', 409);
     }
   }
+  // A letter from Main or a lead about one of its open threads: the thread holds it (thread-instead.ts).
+  // A host's journal op is never refused on the way in, as a report above.
+  if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) {
+    const { findThreadInstead, threadInsteadMessage } = await import('./thread-instead.js');
+    const refs = input.taskRefs ?? input.task_refs;
+    const hit = await findThreadInstead({
+      type: input.type,
+      taskRefs: Array.isArray(refs) ? refs.filter((r): r is string => typeof r === 'string') : [],
+      pinned: input.pin === true,
+      items: Array.isArray(input.items) && input.items.length > 0,
+    }, sender);
+    if (hit) {
+      log.notif.info('human-inbox: letter refused, it belongs to an open thread', { taskId: sender.taskId, threadId: hit.threadId, why: hit.why });
+      throw new LetterError(threadInsteadMessage(hit), 'thread_instead', 409);
+    }
+  }
   // A snoozed task is not raised before its date unless the session says why or the user asked
   // for the letter (snooze-letter.ts). A host's journal op is never refused on the way in, as a
   // report above: it was written while the server was away and the host holds no snooze check.

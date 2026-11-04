@@ -37,7 +37,8 @@ describe('the rule says what the user said', () => {
   it('a node opens a thread itself only for what he must act on or asked to follow, never as a feed', () => {
     expect(THREADS_OPEN_RULE).toContain('thread_create')
     expect(THREADS_OPEN_RULE).toContain('Never as a progress feed')
-    expect(THREADS_OPEN_RULE).toContain('inbox as a letter')
+    // 2026-11-04, the user: one subject in one place, never a thread and a letter (thread-one-place-guard.test.ts).
+    expect(THREADS_OPEN_RULE).toContain('never beside a letter about the same thing')
   })
 
   it('a card is its title, a summary latest first and only what he has not seen; news updates the summary', () => {
