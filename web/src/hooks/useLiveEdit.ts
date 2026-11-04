@@ -463,6 +463,11 @@ export interface LiveEdit {
   cancelPending: () => void;
 }
 
+/** A conflict as the live editor showed it (see shownConflictRef). */
+interface ShownConflict { path: string; host?: string; disk: string; lock: string | undefined; ours: string }
+const sameConflict = (a: ShownConflict | null, b: ShownConflict): boolean =>
+  !!a && a.path === b.path && a.host === b.host && a.disk === b.disk && a.lock === b.lock && a.ours === b.ours;
+
 export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   const { path, host, sessionId, canEdit } = opts;
 
@@ -527,6 +532,11 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
   // Write tool calls aimed at THIS file, awaiting their result.
   const agentWriteIdsRef = useRef(new Set<string>());
   const pullInFlightRef = useRef(false);
+  // The conflict already shown, as what decides it: the file, its disk bytes, the lock the
+  // buffer sits on, and the buffer. A later check that finds the same has nothing new to say,
+  // and saying it again replaced a newer message (Save's "Press Save again") or brought the
+  // banner back after a Save that landed (2026-11-04, a CI run).
+  const shownConflictRef = useRef<ShownConflict | null>(null);
   const pullTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pullPendingRef = useRef<PullReason | null>(null);
   const pullRef = useRef<(reason: PullReason) => Promise<void>>(async () => {});
@@ -749,7 +759,11 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
     // The disk bytes are real information either way — the pane's notion of
     // "what is on disk" should not stay wrong just because we can't fold it in.
     o.onDiskContent(disk.content, disk.contentHash, disk.size);
-    if (decision.action === 'give-up') { giveUp(); return; }
+    if (decision.action === 'give-up') {
+      shownConflictRef.current = { path: rec.path, host: rec.host, disk: disk.contentHash, lock: o.lockHashRef.current, ours };
+      giveUp();
+      return;
+    }
 
     // The user has now SEEN their bytes, so the lock may advance. base stays the
     // bytes the lock refers to (disk), NOT the merged text: if this write 409s
@@ -1081,11 +1095,14 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       // comes from the editor, so the base must too.
       const base = cur.getBaseText();
       const ours = cur.getText();
+      // This very conflict is on screen already: nothing new to say.
+      if (ours != null && sameConflict(shownConflictRef.current, { path: rec.path, host: rec.host, disk: disk.contentHash, lock: cur.lockHashRef.current, ours })) return;
       const merge = base != null && ours != null
         ? threeWayMerge(base, ours, disk.content)
         : ({ ok: false, conflicts: 1 } as MergeResult);
       cur.onDiskContent(disk.content, disk.contentHash, disk.size);
       if (!merge.ok) {
+        if (ours != null) shownConflictRef.current = { path: rec.path, host: rec.host, disk: disk.contentHash, lock: cur.lockHashRef.current, ours };
         // Both the agent's bytes and the user's typing are real work. Deliberately
         // NO overwrite hash: no write was attempted, so the next explicit Save
         // must still hit the warn-once conflict gate.

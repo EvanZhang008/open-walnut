@@ -86,6 +86,15 @@ async function replace(p: Page, locator: Locator, needle: string, replacement: s
   }, needle)
   await p.keyboard.insertText(replacement)
 }
+/** One more agent event, and the disk read it starts answered and applied. */
+async function recheck(p: Page) {
+  const read = p.waitForResponse((r) => r.url().includes('/api/file-content?') && r.request().method() === 'GET')
+  await tool(p)
+  await read
+  // What the read changes is drawn in the next frames; give them room before the caller
+  // checks that nothing changed.
+  await p.waitForTimeout(500)
+}
 async function settled(p: Page, abs: string, ours: string, theirs: string) {
   await expect.poll(() => readFile(abs, 'utf8'), { timeout: 12000 }).toContain(ours)
   await expect.poll(() => readFile(abs, 'utf8')).toContain(theirs)
@@ -263,11 +272,17 @@ test('true conflict requires an explicit second Save before replacing disk', asy
   await expect(error(page)).toContainText('overlap')
   await save(page).click()
   await expect(error(page)).toContainText('Press Save again')
+  // A later check that finds the same disk bytes has nothing new: it keeps Save's warning
+  // (2026-11-04 CI: a pull behind the conflict put the overlap banner back over it).
+  await recheck(page)
+  await expect(error(page)).toContainText('Press Save again')
   expect(await readFile(abs, 'utf8')).toBe(theirs)
   await expect(preview(page)).toContainText('human-choice')
   await save(page).click()
   await expect(save(page)).toBeDisabled()
   expect(await readFile(abs, 'utf8')).toContain('human-choice')
+  await expect(error(page)).toHaveCount(0)
+  await recheck(page)
   await expect(error(page)).toHaveCount(0)
 })
 
