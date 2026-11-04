@@ -96,6 +96,18 @@ final class ChatPlaceUITests: XCTestCase {
         }
     }
 
+    /// The Tasks tab with nothing in Recently opened shows its board drawer first, and
+    /// the tab bar steps aside while that drawer is out (`TasksTabView.restore`). A
+    /// conversation opened in the chat itself records no session there, so leaving the
+    /// tab the way a person does means shutting the drawer first (its scrim), as
+    /// DemoModeUITests does.
+    private func shutTasksDrawer(_ app: XCUIApplication) {
+        let scrim = app.descendants(matching: .any)["tasks.drawer.scrim"]
+        guard scrim.exists else { return }
+        scrim.tap()
+        XCTAssertTrue(scrim.waitForNonExistence(timeout: 5), "the Tasks drawer stayed open")
+    }
+
     /// Every way back to the Chat tab, each followed by `check`: the user is where
     /// they were.
     private func everyReturn(_ start: XCUIApplication, step: String, check: (XCUIApplication, String) -> Void) {
@@ -103,7 +115,10 @@ final class ChatPlaceUITests: XCTestCase {
         for tab in ["Inbox", "Notes", "Settings", "Tasks"] {
             app.tabBars.buttons[tab].tap()
             pause(1.2)
-            app.tabBars.buttons["Chat"].tap()
+            shutTasksDrawer(app)
+            let chatTab = app.tabBars.buttons["Chat"]
+            XCTAssertTrue(chatTab.waitForExistence(timeout: 10), "\(step): no tab bar on \(tab)")
+            chatTab.tap()
             pause(1.2)
             check(app, "\(step): back from \(tab)")
         }
