@@ -6,7 +6,7 @@ import { NotesEditor } from './NotesEditor';
 import { NotesFormatToolbar } from './NotesFormatToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
 import { RawMarkdownView } from './RawMarkdownView';
-import { useNotesListCorpus, useNoteTagsCorpus } from '@/stores/notes-corpus-store';
+import { notesListCorpus, useNotesListCorpus, useNoteTagsCorpus } from '@/stores/notes-corpus-store';
 import type { NoteListItem, TagCount } from '@/api/notes-v2';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
 import { splitFrontmatter, joinFrontmatter } from './frontmatter';
@@ -18,6 +18,9 @@ import {
   applyScrollFraction,
 } from './scroll-memory';
 import './notes-width.css';
+
+/** A link drawn as missing: the shared notes list looks again (it can lag a bulk write). */
+const recheckNotesList = () => notesListCorpus.recheck();
 
 /**
  * MarkdownEditorPanel — the ONE reusable editor shell for EVERY markdown surface
@@ -589,6 +592,7 @@ export function MarkdownEditorPanel({
             enableWikiLinks={enableWikiLinks}
             enableBlockTools={enableBlockTools}
             wikiLinkNotes={notesList}
+            onWikiLinkMissing={wikiLinkNotes ? undefined : recheckNotesList}
             tagSuggestions={tagList}
             onWikiLinkClick={onWikiLinkClick}
             attachmentNotePath={attachmentNotePath ?? undefined}

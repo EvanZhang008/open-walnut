@@ -99,6 +99,30 @@ describe('round-trip: links', () => {
     expectByteClean('See [issue #5](https://example.com/issues#5) here'));
 });
 
+// ─── [[wiki links]] — written as they are, never `\[\[…\]\]` ────────────────
+// The notes index (backlinks), Obsidian and every tool that moves notes and fixes links read only
+// the bare form; prosemirror-markdown's escaping of `[` used to save every link as `\[\[…\]\]`.
+describe('round-trip: [[wiki links]]', () => {
+  it('a plain link', () => expectByteClean('See [[Projects/Plan]] here'));
+  it('a link with an alias', () => expectByteClean('[[Import from Notion/Home/Child A/Child A|Child A]]'));
+  it('links in a list', () => expectByteClean('- [[A/B|B]]\n- [[C]]'));
+  it('a link with a table-escaped alias pipe', () => expectByteClean('| x |\n| --- |\n| [[A/B\\|B]] |\n'));
+  it('a link beside text that still needs escaping', () => expectByteClean('*not em* but \\*star\\* and [[A]]'));
+  it('a note saved escaped heals to the bare form', () => {
+    const once = h.roundTrip('See \\[\\[A/B|B\\]\\] here');
+    expect(once).toBe('See [[A/B|B]] here');
+    expect(h.roundTrip(once)).toBe(once);
+  });
+  it('a lone bracket is still escaped', () => expectByteClean('a \\[b\\] c'));
+  // A name with markdown punctuation stays one link: no emphasis or code opens inside it.
+  it('a link whose name has stars', () => expectByteClean('See [[Notes/a *b* c|a *b* c]] here'));
+  it('a link whose name has underscores', () => expectByteClean('[[snake_case_name]] and [[_leading_]]'));
+  it('a link whose name has backticks', () => expectByteClean('[[Code `x` notes]]'));
+  it('a link whose title has a tag-shaped run', () => expectByteClean('See [[Notes/Use div|Use <div> wisely]] here'));
+  it('a tag-shaped run outside a link keeps its entity', () => expectByteClean('[[A|x <b> y]] then &lt;i&gt; here'));
+  it('a link with stars inside a table', () => expectByteClean('| x |\n| --- |\n| [[A/*b*\\|*b*]] |\n'));
+});
+
 // ─── ![[embed]] — atom inline node, literal-write serialize (BUG 2) ──────────
 // The disk form MUST stay literally `![[path]]`. Without the WikiEmbedNode the
 // default text serializer escapes `[` `]` `_` → `!\[\[...\]\]` / `\_attachment`

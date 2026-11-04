@@ -27,6 +27,8 @@ import type {
   TaskFilingInput,
   TaskFilingResult,
   WalnutServerApi,
+  NoteEntry,
+  NotesService,
 } from './server.js'
 import { createFakeDatabase } from './testing-database.js'
 
@@ -170,6 +172,105 @@ export interface FakeWalnutResult {
   tagLinkDefaults: Map<string, string>
   /** The board's pin groups, seeded ones and those the plugin ensured, in order. */
   pinGroups: Array<{ id: string; label: string }>
+  /** The fake notes vault (`walnut.notes`): vault path to text (a note) or bytes (a file). */
+  notes: Map<string, string | Uint8Array>
+}
+
+/** An in-memory notes vault with the host's path rules: notes are text, files are bytes. */
+function fakeNotes(): { service: NotesService; entries: Map<string, string | Uint8Array> } {
+  const entries = new Map<string, string | Uint8Array>()
+  const folders = new Set<string>()
+  const hashOf = (text: string): string => {
+    let h = 0x811c9dc5
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
+    return h.toString(16)
+  }
+  const clean = (name: string): string => {
+    const normalized = String(name ?? '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+    if (!normalized || normalized.split('/').some((part) => part === '..' || part === '.' || part === '')) {
+      throw Object.assign(new Error(`Not a path inside the notes vault: ${name}`), { code: 'invalid_path' })
+    }
+    return normalized
+  }
+  const note = (name: string) => { const p = clean(name); return p.endsWith('.md') ? p : `${p}.md` }
+  const addParents = (p: string) => {
+    const parts = p.split('/')
+    for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join('/'))
+  }
+  let nextId = 1
+  const service: NotesService = {
+    dir: '/tmp/fake-walnut-notes',
+    async list(folder) {
+      const prefix = folder ? `${clean(folder)}/` : ''
+      const out: NoteEntry[] = []
+      // As the real one: hidden names (and office lock files) are left out.
+      const hidden = (p: string) => p.slice(prefix.length).split('/').some((part) => part.startsWith('.') || part.startsWith('~$'))
+      for (const f of [...folders].sort()) if (f.startsWith(prefix) && !hidden(f)) out.push({ path: f, type: 'folder' })
+      for (const [p, v] of [...entries].sort(([a], [b]) => a.localeCompare(b))) {
+        if (!p.startsWith(prefix) || hidden(p)) continue
+        out.push({ path: p, type: p.endsWith('.md') ? 'note' : 'file', size: typeof v === 'string' ? v.length : v.byteLength })
+      }
+      return out
+    },
+    async read(name) {
+      const p = note(name)
+      const v = entries.get(p)
+      return typeof v === 'string' ? { path: p, content: v, hash: hashOf(v) } : null
+    },
+    async write(name, content, opts = {}) {
+      const p = note(name)
+      const current = entries.get(p)
+      if (opts.createOnly && current !== undefined) {
+        throw Object.assign(new Error(`A note is already at ${p}`), { code: 'note_exists', currentHash: typeof current === 'string' ? hashOf(current) : '' })
+      }
+      if (opts.expectedHash && typeof current === 'string' && hashOf(current) !== opts.expectedHash) {
+        throw Object.assign(new Error(`The note ${p} changed since it was read`), { code: 'note_conflict', currentHash: hashOf(current) })
+      }
+      let body = content
+      let id = /^---\n[\s\S]*?^id:\s*(\S+)/m.exec(content)?.[1]
+      if (!id) {
+        id = (typeof current === 'string' ? /^---\n[\s\S]*?^id:\s*(\S+)/m.exec(current)?.[1] : undefined) ?? `n_fake${nextId++}`
+        body = content.startsWith('---\n') ? `---\nid: ${id}\n${content.slice(4)}` : `---\nid: ${id}\n---\n${content}`
+      }
+      addParents(p)
+      entries.set(p, body)
+      return { path: p, hash: hashOf(body), id, created: current === undefined }
+    },
+    async readFile(name) {
+      const v = entries.get(clean(name))
+      return v === undefined ? null : typeof v === 'string' ? new TextEncoder().encode(v) : v
+    },
+    async writeFile(name, bytes) {
+      const p = clean(name)
+      if (!/\.(png|jpe?g|gif|webp|heic|heif|pdf|docx?|xlsx?|pptx?)$/i.test(p)) {
+        throw Object.assign(new Error(`Notes keep images, PDFs and office files; ${p} is not one`), { code: 'unsupported_type' })
+      }
+      addParents(p)
+      entries.set(p, bytes)
+      return { path: p }
+    },
+    async mkdir(name) { const p = clean(name); addParents(`${p}/x`); folders.add(p) },
+    async move(from, to) {
+      const a = entries.has(clean(from)) ? clean(from) : note(from)
+      const b = a.endsWith('.md') && !clean(to).endsWith('.md') ? note(to) : clean(to)
+      if (!entries.has(a)) throw Object.assign(new Error('Source note not found'), { code: 'not_found' })
+      if (entries.has(b)) throw Object.assign(new Error('Destination note already exists'), { code: 'exists' })
+      addParents(b)
+      entries.set(b, entries.get(a) as string | Uint8Array)
+      entries.delete(a)
+    },
+    async remove(name) {
+      const p = clean(name)
+      if (folders.has(p)) {
+        for (const key of [...entries.keys()]) if (key.startsWith(`${p}/`)) entries.delete(key)
+        for (const f of [...folders]) if (f === p || f.startsWith(`${p}/`)) folders.delete(f)
+        return
+      }
+      // Exactly this path, as the real one: a missing folder never stands for a note of its name.
+      entries.delete(p)
+    },
+  }
+  return { service, entries }
 }
 
 const SYNCED_TEXT_EXTENSIONS = ['.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.csv', '.toml']
@@ -277,6 +378,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   // concurrency test passes against the fake and loses data in production.
   const updateChains = new Map<string, Promise<unknown>>()
   const secrets = new Map<string, string>()
+  const notes = fakeNotes()
   let config = structuredClone(options.config ?? {})
   const controller = new AbortController()
   let nextTask = 1
@@ -891,6 +993,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       files: Object.assign(fakeFileArea('/tmp/fake-walnut-plugin-files', true), { async flush() { return undefined } }),
       tmp: fakeFileArea('/tmp/fake-walnut-plugin-tmp', false),
     },
+    notes: notes.service,
     secrets: {
       async get(name) { return secrets.get(name) },
       async set(name, value) { secrets.set(name, value) },
@@ -943,5 +1046,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, approvals, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, approvals, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls, notes: notes.entries }
 }

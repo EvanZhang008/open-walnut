@@ -265,6 +265,56 @@
 .notes-callout-danger { border-left-color: var(--error, #ef4444); }
 .notes-callout-danger::before { content: 'Danger'; color: var(--error, #ef4444); }
 
+/* Foldable callout (`> [!kind]- Title` / `> [!kind]+ Title`): the kind label
+   spans the top row, then the chevron sits left of the title (the first
+   paragraph). Folded shows the title only; the state is the view's, never
+   written to the file. */
+.notes-callout-foldable {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 4px;
+  align-items: start;
+}
+.notes-callout-foldable::before { grid-column: 1 / -1; }
+/* A plain foldable note (a Notion toggle) reads as its title: the "Note" label adds nothing. */
+.notes-callout-foldable.notes-callout-note::before { display: none; }
+.notes-callout-foldable > .notes-callout-content { grid-column: 2; min-width: 0; }
+.notes-callout-content > *:first-child { margin-top: 0; }
+.notes-callout-content > *:last-child { margin-bottom: 0; }
+.notes-callout-foldable.is-collapsed > .notes-callout-content > :not(:first-child) { display: none; }
+.notes-callout-fold-toggle {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 1.6em;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--fg-muted, #8e8e93);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.notes-callout-fold-toggle:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); color: var(--fg, inherit); }
+.notes-callout-fold-toggle:focus-visible { outline: 2px solid var(--accent, #6366f1); outline-offset: 1px; }
+/* Chevron: points down when open, right when folded. */
+.notes-callout-fold-toggle::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.notes-callout-foldable.is-collapsed > .notes-callout-fold-toggle::before { transform: translateX(-1px) rotate(-45deg); }
+@media (prefers-reduced-motion: reduce) {
+  .notes-callout-fold-toggle::before { transition: none; }
+}
+
 /* ── Bubble (selection) toolbar ────────────────────────────────────────── */
 .notes-bubble-menu {
   display: flex;

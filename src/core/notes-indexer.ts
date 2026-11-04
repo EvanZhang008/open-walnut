@@ -54,6 +54,9 @@ import { sortedByName } from '../lib/dir-order.js'
 // Wiki-link: [[target]] or [[target|label]]. We resolve on `target` (the part
 // before a real `|alias`), matching the on-disk Obsidian-native form (§2.2).
 const WIKI_LINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g
+// The same link as the notes editor saved it before 2026-11-04: every `[`, `]` (and `_`, `*`, …)
+// escaped (`\[\[folder/my\_note|Title\]\]`). Read as the bare link, a table's `\|` kept.
+const ESCAPED_WIKI_LINK_RE = /\\\[\\\[((?:[^\]\n\\]|\\[^\n])+?)\\\]\\\]/g
 
 // Inline #hashtag: `#` at start-of-string or after whitespace, immediately
 // followed by a letter, then tag chars. Excludes `C#` (letter before `#`),
@@ -135,9 +138,12 @@ function sectionHeadings(body: string): string {
 function extractLinks(srcId: string, body: string): LinkEdge[] {
   const edges: LinkEdge[] = []
   let m: RegExpExecArray | null
+  if (body.includes('\\[\\[')) body = body.replace(ESCAPED_WIKI_LINK_RE, (_w, inner: string) => `[[${inner.replace(/\\([^|])/g, '$1')}]]`)
   WIKI_LINK_RE.lastIndex = 0
   while ((m = WIKI_LINK_RE.exec(body)) !== null) {
-    const target = m[1].trim()
+    // Inside a table the alias pipe is written `\|` (the editor's own table cells, Obsidian's):
+    // the target stops before that backslash.
+    const target = m[1].replace(/\\$/, '').trim()
     if (!target) continue
     const start = Math.max(0, m.index - 30)
     const end = Math.min(body.length, m.index + m[0].length + 30)

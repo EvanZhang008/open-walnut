@@ -130,10 +130,18 @@ export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
         </span>
       ) : isPdf ? (
         <span className="notes-wikiembed-pdf">
+          {/* Above the frame, so Open and Download are plain to see, also where the frame stays empty. */}
+          <span className="notes-wikiembed-pdf-bar">
+            <span className="notes-wikiembed-pdf-badge" aria-hidden>PDF</span>
+            <span className="notes-wikiembed-pdf-name">{fileNameOf(target)}</span>
+            <a href={url} target="_blank" rel="noreferrer" className="notes-wikiembed-pdf-action notes-wikiembed-open" aria-label={`Open ${fileNameOf(target)}`}>
+              Open
+            </a>
+            <a href={url} download={fileNameOf(target)} className="notes-wikiembed-pdf-action notes-wikiembed-download" aria-label={`Download ${fileNameOf(target)}`}>
+              Download
+            </a>
+          </span>
           <iframe src={url} title={fileNameOf(target)} className="notes-wikiembed-pdf-frame" />
-          <a href={url} target="_blank" rel="noreferrer" className="notes-wikiembed-open">
-            Open {fileNameOf(target)}
-          </a>
         </span>
       ) : (
         <a href={url} target="_blank" rel="noreferrer" className="notes-wikiembed-card">

@@ -50,6 +50,29 @@ export function escapeMarkupRuns(text: string): string {
   return text.replace(MARKUP_RUN_RE, (run) => `&lt;${run.slice(1, -1)}&gt;`);
 }
 
+/**
+ * A `[[target]]` / `[[target|alias]]` wiki link. prosemirror-markdown escapes every `[` and `]`, so
+ * it was saved as `\[\[target\]\]`: the editor still drew it as a link, but the notes index
+ * (backlinks), Obsidian and every tool that moves notes and fixes links read only the bare form
+ * (2026-11-04: an organize run's link fixing and its Undo skipped every link of a note edited in
+ * Walnut). A wiki link is written as it is; the text around it is escaped as before.
+ */
+const WIKI_LINK_RUN_RE = /\[\[[^[\]\n]+\]\]/g;
+
+/** `text` cut into its wiki-link runs and the text between them, in order. */
+export function splitWikiLinks(text: string): Array<{ text: string; link: boolean }> {
+  if (!text.includes('[[')) return [{ text, link: false }];
+  const parts: Array<{ text: string; link: boolean }> = [];
+  let at = 0;
+  for (const m of text.matchAll(WIKI_LINK_RUN_RE)) {
+    if (m.index! > at) parts.push({ text: text.slice(at, m.index), link: false });
+    parts.push({ text: m[0], link: true });
+    at = m.index! + m[0].length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), link: false });
+  return parts;
+}
+
 /** The two state fields the line-start check reads; public at runtime, not in the typings. */
 type StateInternals = { out: string; atBlockStart: boolean };
 
@@ -58,21 +81,44 @@ export const LiteralText = Text.extend({
     return {
       markdown: {
         serialize(state: MarkdownSerializerState, node: { text?: string | null }) {
-          const text = escapeMarkupRuns(node.text ?? '');
           const { out, atBlockStart } = state as unknown as StateInternals;
-          if (out !== '' && out.endsWith('\n') && !atBlockStart) {
-            // Line start after a hard break: `state.text` would skip the
-            // start-of-line escapes here (see header), so apply them ourselves.
-            state.write(state.esc(text, true));
-            return;
-          }
-          // `state.text` applies prosemirror-markdown's own escaping (`*`, `_`,
-          // a block-leading `>` or `#`), which is what keeps a typed `> quote`
-          // a quote and a typed `*` a star.
-          state.text(text);
+          const afterBreak = out !== '' && out.endsWith('\n') && !atBlockStart;
+          splitWikiLinks(node.text ?? '').forEach((link, i) => {
+            // A wiki link as it is (see WIKI_LINK_RUN_RE): the link rule reads it before any HTML
+            // rule could, so a `<b>` in its title needs no entity (one would be read back as text).
+            if (link.link) { state.text(link.text, false); return; }
+            const part = { text: escapeMarkupRuns(link.text) };
+            if (i === 0 && afterBreak) {
+              // Line start after a hard break: `state.text` would skip the
+              // start-of-line escapes here (see header), so apply them ourselves.
+              state.write(state.esc(part.text, true));
+              return;
+            }
+            // `state.text` applies prosemirror-markdown's own escaping (`*`, `_`,
+            // a block-leading `>` or `#`), which is what keeps a typed `> quote`
+            // a quote and a typed `*` a star.
+            state.text(part.text);
+          });
         },
         parse: {
-          // handled by markdown-it
+          setup(md: any) {
+            // A wiki link reads as its own literal text, so a `*`, `_` or backtick in a note's name
+            // never opens emphasis or code inside it (which split the link across marks and lost
+            // it on the next save). A table's `\|` alias pipe reads as `|`, as the escape rule
+            // would have read it.
+            md.inline.ruler.before('escape', 'wnut_wiki_link', (state: any, silent: boolean) => {
+              const start = state.pos;
+              if (state.src.charCodeAt(start) !== 0x5b /* [ */ || state.src.charCodeAt(start + 1) !== 0x5b) return false;
+              const m = /^\[\[[^[\]\n]+\]\]/.exec(state.src.slice(start, state.posMax));
+              if (!m) return false;
+              if (!silent) {
+                const token = state.push('text', '', 0);
+                token.content = m[0].replace(/\\\|/g, '|');
+              }
+              state.pos += m[0].length;
+              return true;
+            });
+          },
         },
       },
     };

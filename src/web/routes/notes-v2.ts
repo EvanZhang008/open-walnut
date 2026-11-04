@@ -626,84 +626,111 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
   }
 })
 
+/**
+ * Create or update one note: the body of PUT /content/*path, shared with the plugin notes
+ * service (src/core/plugins/notes-service.ts) so a plugin's write stamps the id, takes the
+ * file lock, honours `expectedHash` and announces the change exactly as the editor's does.
+ * Throws NotesOpError (400 path, 413 size); a hash mismatch answers `{ conflict }`.
+ */
+export async function writeNoteContent(
+  notePath: string,
+  content: unknown,
+  expectedHash?: unknown,
+  /** Only make a new note: a note already at the path is left as it is (`exists`). */
+  options: { createOnly?: boolean } = {},
+): Promise<
+  | { ok: true; path: string; updatedAt: string; contentHash: string; id: string; created: boolean }
+  | { ok: false; conflict: string; exists?: true }
+> {
+  ensureIndexBootstrap()
+  if (typeof content !== 'string') throw new NotesOpError('content (string) is required', 400)
+  if (content.length > MAX_NOTE_SIZE) throw new NotesOpError(`Content too large (max ${MAX_NOTE_SIZE} bytes)`, 413)
+  const fullPath = resolveSafePath(notePath)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
+  const expected = typeof expectedHash === 'string' && expectedHash ? expectedHash : undefined
+
+  // IDENTITY: stamp an id into frontmatter at create time (not lazily) so the
+  // bytes written — and hence contentHash — reflect the stamped content. The
+  // FE refreshes its expected hash from the response id+hash without a spurious
+  // 409. Existing frontmatter is preserved byte-for-byte except the id: line.
+  // A body sent without an id keeps the note's current one (withNoteId).
+  let id = readId(parseFrontmatter(content).data)
+  let finalContent = content
+
+  // Optimistic locking: reject if file was modified externally.
+  // Optional for backward compatibility — callers that don't send
+  // expectedHash accept last-write-wins semantics.
+  // check+write run under the file lock — the agent's writeFileChecked path
+  // locks too, so an agent write can't slip between our check and write.
+  await fsp.mkdir(path.dirname(filePath), { recursive: true })
+  let created = false
+  let exists = false
+  const conflict = await withUserFileLock(filePath, async () => {
+    if (options.createOnly) {
+      try {
+        const current = await fsp.readFile(filePath, 'utf-8')
+        exists = true
+        return computeContentHash(current)
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') throw err
+      }
+    }
+    // A new file changes the tree; an overwrite only changes bytes. Only the
+    // former drops the tree snapshot (typing must never trigger a re-walk).
+    // The current bytes are read only when the lock or the id needs them.
+    let currentContent: string | null = null
+    if (expected || !id) {
+      try {
+        currentContent = await fsp.readFile(filePath, 'utf-8')
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') throw err
+        created = true // file doesn't exist: no conflict possible
+      }
+    } else {
+      try { await fsp.access(filePath) } catch { created = true }
+    }
+    if (expected && currentContent !== null) {
+      const currentHash = computeContentHash(currentContent)
+      if (currentHash !== expected) return currentHash
+    }
+    if (!id) {
+      const stamped = withNoteId(content, currentContent)
+      finalContent = stamped.content
+      id = stamped.id
+    }
+    await fsp.writeFile(filePath, finalContent, 'utf-8')
+    return null
+  })
+  if (conflict) return exists ? { ok: false, conflict, exists: true } : { ok: false, conflict }
+
+  if (created) invalidateNotesTree()
+  const stat = await fsp.stat(filePath)
+  const contentHash = computeContentHash(finalContent)
+  const normalizedPath = notePath.replace(/\.md$/, '')
+  log.memory.info('Note updated', { path: notePath, size: finalContent.length })
+  // source format `notes/{path}` is a shared contract with files-tools.ts and useNoteContent.ts
+  bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
+  return { ok: true, path: toRelPath(filePath), updatedAt: stat.mtime.toISOString(), contentHash, id: id as string, created }
+}
+
 // PUT /api/notes-v2/content/*path — create/update note. Stamps id at create time.
 notesV2Router.put('/content/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
     const notePath = getWildcardPath(req)
     if (!notePath) { res.status(400).json({ error: 'path required' }); return }
-
     const { content, expectedHash } = req.body
-    if (typeof content !== 'string') {
-      res.status(400).json({ error: 'content (string) is required' })
+    const result = await writeNoteContent(notePath, content, expectedHash)
+    if (!result.ok) {
+      res.status(409).json({ error: 'Content was modified externally', currentHash: result.conflict })
       return
     }
-    if (content.length > MAX_NOTE_SIZE) {
-      res.status(413).json({ error: `Content too large (max ${MAX_NOTE_SIZE} bytes)` })
-      return
-    }
-
-    const fullPath = resolveSafePath(notePath)
-    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
-
-    const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
-
-    // IDENTITY: stamp an id into frontmatter at create time (not lazily) so the
-    // bytes written — and hence contentHash — reflect the stamped content. The
-    // FE refreshes its expected hash from the response id+hash without a spurious
-    // 409. Existing frontmatter is preserved byte-for-byte except the id: line.
-    // A body sent without an id keeps the note's current one (withNoteId).
-    let id = readId(parseFrontmatter(content).data)
-    let finalContent = content
-
-    // Optimistic locking: reject if file was modified externally.
-    // Optional for backward compatibility — callers that don't send
-    // expectedHash accept last-write-wins semantics.
-    // check+write run under the file lock — the agent's writeFileChecked path
-    // locks too, so an agent write can't slip between our check and write.
-    await fsp.mkdir(path.dirname(filePath), { recursive: true })
-    let created = false
-    const conflict = await withUserFileLock(filePath, async () => {
-      // A new file changes the tree; an overwrite only changes bytes. Only the
-      // former drops the tree snapshot (typing must never trigger a re-walk).
-      // The current bytes are read only when the lock or the id needs them.
-      let currentContent: string | null = null
-      if (expectedHash || !id) {
-        try {
-          currentContent = await fsp.readFile(filePath, 'utf-8')
-        } catch (err: any) {
-          if (err.code !== 'ENOENT') throw err
-          created = true // file doesn't exist: no conflict possible
-        }
-      } else {
-        try { await fsp.access(filePath) } catch { created = true }
-      }
-      if (expectedHash && currentContent !== null) {
-        const currentHash = computeContentHash(currentContent)
-        if (currentHash !== expectedHash) return currentHash
-      }
-      if (!id) {
-        const stamped = withNoteId(content, currentContent)
-        finalContent = stamped.content
-        id = stamped.id
-      }
-      await fsp.writeFile(filePath, finalContent, 'utf-8')
-      return null
-    })
-    if (conflict) {
-      res.status(409).json({ error: 'Content was modified externally', currentHash: conflict })
-      return
-    }
-
-    if (created) invalidateNotesTree()
-    const stat = await fsp.stat(filePath)
-    const contentHash = computeContentHash(finalContent)
-    const normalizedPath = notePath.replace(/\.md$/, '')
-    log.memory.info('Note updated', { path: notePath, size: finalContent.length })
-    // source format `notes/{path}` is a shared contract with files-tools.ts and useNoteContent.ts
-    bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
-    res.json({ ok: true, updatedAt: stat.mtime.toISOString(), contentHash, id })
+    res.json({ ok: true, updatedAt: result.updatedAt, contentHash: result.contentHash, id: result.id })
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -999,9 +1026,16 @@ function cleanSnippetText(s: string): string {
     .replace(/!\[\[[^\]]*?\.(png|jpe?g|gif|webp|svg|pdf)\]\]/gi, '[img]')
     .replace(/!\[\[[^\]]*?\]\]/g, '[embed]')
     .replace(/\[\[([^\]]+?)\]\]/g, (_m, inner: string) => {
-      const s2 = inner.split('|')[0] // alias
-      return s2.split('/').pop() ?? s2
+      // `[[target|alias]]` reads as its alias (`\|` inside a table), else the target's last part.
+      const [target, alias] = inner.split(/\\?\|/)
+      return alias?.trim() || (target.split('/').pop() ?? target)
     })
+    // A window cut through a link: its tail (`…/Title|Title]]`) reads as the alias, its head goes.
+    .replace(/^[^[\]]*?\\?\|([^[\]|]*)\]\]/, '$1')
+    .replace(/^[^[\]]*\]\]/, '')
+    .replace(/\[\[[^\]]*$/, '')
+    .replace(/^[ \t]*(?:>[ \t]?)+/gm, '') // quote and callout markers
+    .replace(/\[![a-z]+\][-+]?[ \t]*/gi, '') // callout kinds (`[!note]-`)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '[img]') // standard md image
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // standard md link → text
     .replace(/^[ \t]*#{1,6}[ \t]+/gm, '') // heading markers

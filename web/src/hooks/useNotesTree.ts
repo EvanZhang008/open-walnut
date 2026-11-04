@@ -13,6 +13,17 @@ import { wsClient, type ConnectionState } from '@/api/ws';
  */
 let cachedTree: NoteTreeNode[] | null = null;
 let prefetchInFlight: Promise<void> | null = null;
+/**
+ * The vault changed since the cached tree was fetched (a note removed while the Notes page was
+ * closed, say): the cache still paints, but it no longer proves which notes exist.
+ */
+let cacheStale = false;
+wsClient.onEvent('notes:tree-changed', () => { cacheStale = true; });
+
+/** Whether the cached tree is as the vault is now (fetched, nothing changed since). */
+export function isNotesTreeCacheCurrent(): boolean {
+  return cachedTree != null && !cacheStale;
+}
 
 /**
  * Warm the tree cache while the user is elsewhere. Low priority: waits for a
@@ -22,7 +33,7 @@ export function prefetchNotesTree(): Promise<void> {
   if (cachedTree) return Promise.resolve();
   if (!prefetchInFlight) {
     prefetchInFlight = fetchNotesTree({ priority: 'low' })
-      .then((tree) => { cachedTree = tree; })
+      .then((tree) => { cachedTree = tree; cacheStale = false; })
       .catch(() => {})
       .finally(() => { prefetchInFlight = null; });
   }
@@ -32,18 +43,23 @@ export function prefetchNotesTree(): Promise<void> {
 /** Test hook: forget the cached tree. */
 export function resetNotesTreeCacheForTests(): void {
   cachedTree = null;
+  cacheStale = false;
 }
 
 export function useNotesTree() {
   const [tree, setTree] = useState<NoteTreeNode[]>(() => cachedTree ?? []);
   const [loading, setLoading] = useState(cachedTree == null);
   const [error, setError] = useState<string | null>(null);
+  /** A tree fetched since this mount: it says which notes exist now. */
+  const [fetched, setFetched] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
+      cacheStale = false;
       const data = await fetchNotesTree();
       cachedTree = data;
       setTree(data);
+      setFetched(true);
       setError(null);
     } catch (err: any) {
       setError(err.message || 'Failed to load notes tree');
@@ -100,5 +116,5 @@ export function useNotesTree() {
     await refresh();
   }, [refresh]);
 
-  return { tree, loading, error, refresh, addFolder, removeNote, removeFolder, removeAttachment, renameNote };
+  return { tree, loading, fetched, error, refresh, addFolder, removeNote, removeFolder, removeAttachment, renameNote };
 }

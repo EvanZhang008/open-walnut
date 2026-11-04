@@ -288,7 +288,9 @@ async function flush() {
   if (!prefs) return;
   await mergeWithServer(prefs);
   try {
-    await apiPut('/api/ui-prefs', { prefs });
+    // keepalive: a navigation that starts while the batch is in flight (a click on a link, a
+    // reload) must not cancel it, or the change is lost and WebKit logs the cancel as an error.
+    await apiPut('/api/ui-prefs', { prefs }, { keepalive: true });
   } catch {
     // Offline / transient failure: drop silently — localStorage still has the
     // truth for this browser; the next write re-syncs the touched keys.

@@ -64,6 +64,22 @@ describe('notes corpus store', () => {
     expect(api.fetchNotesList.mock.calls[0][0]).toEqual({ priority: 'low' })
   })
 
+  it('a link drawn as missing asks the list again, at most once per window', async () => {
+    await store.notesListCorpus.ensure()
+    api.fetchNotesList.mockClear()
+    store.notesListCorpus.recheck()
+    store.notesListCorpus.recheck()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(api.fetchNotesList).toHaveBeenCalledTimes(1)
+    store.notesListCorpus.recheck()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(api.fetchNotesList).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(15_000)
+    store.notesListCorpus.recheck()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(api.fetchNotesList).toHaveBeenCalledTimes(2)
+  })
+
   it('a tree change refreshes the list but not the tags', async () => {
     store.wireNotesCorpusEvents()
     await store.notesListCorpus.ensure()

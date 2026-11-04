@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { useSearchParams } from 'react-router-dom';
-import { useNotesTree } from '@/hooks/useNotesTree';
+import { useNavigationType, useSearchParams } from 'react-router-dom';
+import { useNotesTree, isNotesTreeCacheCurrent } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { prefetchNoteOnHover } from '@/stores/note-content-cache';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -19,7 +19,7 @@ import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_EXPAND } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
-import { createNote, moveNote, treeFilePaths } from '@/api/notes-v2';
+import { createNote, moveNote, treeFilePaths, fetchNoteContent, type NoteTreeNode } from '@/api/notes-v2';
 import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
@@ -67,6 +67,8 @@ function readWidth(): number {
 interface PersistedTabs {
   tabs: OpenTab[];
   activePath: string | null;
+  /** Hydration only: the note tabs that came from the saved workspace (they existed once). */
+  restored?: string[];
 }
 
 /** One Claude Code session tab in the chat column. */
@@ -127,11 +129,13 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
 
   let tabs: OpenTab[] = [];
   let activePath: string | null = null;
+  let restored: string[] = [];
   try {
     const raw = localStorage.getItem(LS_TABS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PersistedTabs>;
       tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter(isValidTab) : [];
+      restored = tabs.filter((t) => t.kind === 'note').map((t) => t.path);
       const wanted = typeof parsed.activePath === 'string' ? parsed.activePath : null;
       activePath = tabs.some((t) => t.path === wanted) ? wanted : (tabs[0]?.path ?? null);
     }
@@ -141,7 +145,16 @@ function hydrateTabs(searchParams: URLSearchParams): PersistedTabs {
     if (!tabs.some((t) => t.path === urlTab.path)) tabs = [...tabs, urlTab];
     activePath = urlTab.path;
   }
-  return { tabs, activePath };
+  return { tabs, activePath, restored };
+}
+
+/** Every note path in the tree. */
+function notePathsOf(nodes: NoteTreeNode[], out = new Set<string>()): Set<string> {
+  for (const node of nodes) {
+    if (node.type === 'folder') notePathsOf(node.children ?? [], out);
+    else if (node.kind !== 'attachment') out.add(node.path);
+  }
+  return out;
 }
 
 /**
@@ -205,7 +218,12 @@ const JUMP_FLASH_CLASS = 'notes-jump-flash';
 
 export function NotesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { tree, loading: treeLoading, error: treeError, refresh: refreshTree, addFolder, removeNote, removeFolder, removeAttachment, renameNote } = useNotesTree();
+  const navigationType = useNavigationType();
+  // A link followed inside a note adds a history entry, so Back returns to the note it was in
+  // (every other tab change replaces the entry). 2026-11-04: imported notes are read by following
+  // links, and Back left Notes.
+  const followedLinkRef = useRef(false);
+  const { tree, loading: treeLoading, fetched: treeFetched, error: treeError, refresh: refreshTree, addFolder, removeNote, removeFolder, removeAttachment, renameNote } = useNotesTree();
   const { favoriteNotes, toggleFavoriteNote, isNoteFavorite } = useFavorites();
 
   // ── Open-tabs model (replaces the old single selectedPath + attachmentPath) ──
@@ -385,7 +403,14 @@ export function NotesPage() {
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
   // useNoteContent only ever sees a NOTE path; attachment tabs (and "no tab") → null
   // so the markdown editor never loads a binary file and the hook clears.
-  const activeNotePath = activeTab?.kind === 'note' ? activeTab.path : null;
+  // A tab from the saved workspace opens once a tree says its note is still there (an organize
+  // Undo, an agent or another window may have removed it while this page was closed): a note
+  // that is gone closes its tab without being asked for (2026-11-04: a reload asked for it, 404).
+  const unconfirmedRef = useRef(new Set(initial.current.restored ?? []));
+  const [cacheCurrentAtMount] = useState(isNotesTreeCacheCurrent);
+  const holding = activeTab?.kind === 'note' && unconfirmedRef.current.has(activeTab.path) && !treeFetched
+    && !(cacheCurrentAtMount && notePathsOf(tree).has(activeTab.path));
+  const activeNotePath = activeTab?.kind === 'note' && !holding ? activeTab.path : null;
 
   const {
     content,
@@ -400,6 +425,7 @@ export function NotesPage() {
     renameOpenNote,
     remountKey,
     ownSave,
+    hasUnsavedEdits,
   } = useNoteContent(activeNotePath);
   // Phone: the open note is a layer (Back = the tree) and reads until Edit. A note
   // renamed after its title is the same note (its editor's remount key), so Edit stays on.
@@ -528,9 +554,12 @@ export function NotesPage() {
     }
     const next: Record<string, string> =
       activeTab.kind === 'attachment' ? { attachment: activeTab.path } : { path: activeTab.path };
+    const followed = followedLinkRef.current;
+    followedLinkRef.current = false;
     // A phone layer's history entry carries its marker: keep that state.
     if (noteLayer.phone) { replaceUrlKeepingState(next); return; }
-    setSearchParams(next, { replace: true });
+    const already = activeTab.kind === 'attachment' ? searchParams.get('attachment') === activeTab.path : searchParams.get('path') === activeTab.path;
+    setSearchParams(next, { replace: !followed || already || (!searchParams.get('path') && !searchParams.get('attachment')) });
   // setSearchParams is stable; intentionally exclude searchParams to avoid a sync loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -545,7 +574,8 @@ export function NotesPage() {
     const urlPath = searchParams.get('path');
     const target = urlAttachment ?? urlPath;
     if (target && target !== activePath) {
-      openInTab(target, urlAttachment ? 'attachment' : 'note', { newTab: true });
+      // Back or Forward through followed links opens the note where the reader is.
+      openInTab(target, urlAttachment ? 'attachment' : 'note', { newTab: navigationType !== 'POP' });
     }
   // Only react to URL changes — activePath churn is the mirror effect's domain.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -597,6 +627,10 @@ export function NotesPage() {
     setAttachmentFind(q ? { path, query: q } : null);
     openInTab(path, 'attachment');
   }, [openInTab]);
+  const handleFollowLink = useCallback((path: string) => {
+    if (path !== activePath) followedLinkRef.current = true;
+    handleSelect(path);
+  }, [handleSelect, activePath]);
 
   const handleActivateTab = useCallback((path: string) => { setActivePath(path); }, []);
 
@@ -616,6 +650,47 @@ export function NotesPage() {
       return next;
     });
   }, []);
+
+  // A note removed outside this page (an organize Undo, an agent, another window) closes its
+  // tab, as deleting it in the tree does: an open tab used to show it as an empty note to type
+  // into, and a reload kept asking for it (2026-11-04). Only a tab whose note existed (it loaded
+  // from disk, or came back from the saved workspace) is closed, and only once the server says
+  // the note is gone, so a tab opened for a note not written yet (a new link) stays, and a tree
+  // a moment behind a save never closes one.
+  const existedRef = useRef(new Set(initial.current.restored ?? []));
+  useEffect(() => {
+    if (activeNotePath && updatedAt) existedRef.current.add(activeNotePath);
+  }, [activeNotePath, updatedAt]);
+  useEffect(() => {
+    if (!treeFetched) return;
+    const present = notePathsOf(tree);
+    // The saved workspace's tabs, checked against the first tree of this visit.
+    if (unconfirmedRef.current.size) {
+      for (const path of [...unconfirmedRef.current]) {
+        unconfirmedRef.current.delete(path);
+        if (!present.has(path) && tabs.some((t) => t.kind === 'note' && t.path === path)) {
+          existedRef.current.delete(path);
+          handleCloseTab(path);
+        }
+      }
+      return;
+    }
+    const gone = tabs.filter((t) => t.kind === 'note' && existedRef.current.has(t.path) && !present.has(t.path));
+    if (!gone.length) return;
+    let cancelled = false;
+    for (const tab of gone) {
+      fetchNoteContent(tab.path).then(() => undefined, (err) => {
+        if (cancelled || err?.status !== 404) return;
+        // Words typed into it and not saved yet stay on screen: their save writes the note again.
+        if (tab.path === activeNotePath && hasUnsavedEdits()) return;
+        existedRef.current.delete(tab.path);
+        handleCloseTab(tab.path);
+      });
+    }
+    return () => { cancelled = true; };
+  // Tabs and save state are read as of the tree that changed; a new tree runs it again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree, treeFetched]);
 
   // Tab right-click: keep only the clicked tab / drop the whole workspace. Both
   // go through the same setTabs+setActivePath pair as handleCloseTab so the
@@ -1035,6 +1110,8 @@ export function NotesPage() {
         <div className="notes-editor-body">
           {activeTab?.kind === 'attachment' ? (
             <AttachmentPreview notePath={activeTab.path} findQuery={attachmentFind?.path === activeTab.path ? attachmentFind.query : undefined} />
+          ) : holding ? (
+            <LoadingSpinner />
           ) : !activeNotePath ? (
             <NotesEmptyState onNewNote={() => void handleNewNote('')} />
           ) : contentLoading ? (
@@ -1064,7 +1141,7 @@ export function NotesPage() {
                 updatedAt={updatedAt}
                 saveStatus={saveStatus}
                 onEditorUpdate={onEditorUpdate}
-                onNavigate={handleSelect}
+                onNavigate={handleFollowLink}
                 onLocate={() => revealInTree(activeNotePath)}
                 onBreadcrumbNavigate={revealInTree}
                 pendingExternal={pendingExternal}

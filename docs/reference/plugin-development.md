@@ -181,6 +181,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.events` | Subscribe to host events and emit namespaced plugin events. |
 | `walnut.http` | Register plugin routes and make outbound requests with a deadline. |
 | `walnut.storage` | Files in the plugin data directory, plus a private SQLite database. `storage.files` (synced text) and `storage.tmp` (scratch) when the manifest declares them. |
+| `walnut.notes` | Read and write the person's notes: list a folder, read and write notes with a content hash, add attachments, make folders, move and remove. |
 | `walnut.secrets` | Credentials, stored outside synced config. |
 | `walnut.timers` | Timeouts and intervals that stop on disposal. |
 | `walnut.registry` | Tools, Ops, Hooks, Cron actions, Agents, Providers, Commands, Skills, task sync, and their metadata. |
@@ -207,6 +208,29 @@ A pin group is one of the user's custom tiers beside Focus, Satellite, Backlog a
 Every agent session Walnut runs has a task underneath, so a plugin that starts sessions (with the `task_create` op through `walnut.ops.call`, or `walnut.tasks.create`) makes tasks. Most plugins want them on the board: the user follows the work there. A plugin whose agent lives only inside its own App declares `"taskVisibility": "plugin"` in its manifest. Then every task it creates is kept to its own view: it still has a project and a session, and `walnut.tasks.get`, `list`, `query` and the session views work on it as before, but the board, the task lists, default search results, the Org page, its project's VP card and every needs-you count, on the web and on the phone, leave it out, and its state never reaches a VP or Main. Such a task is born unpinned and never syncs to a task service, even in a project one claims. A task its session files (when the user asks the agent for one) is ordinary work on the board. The task carries `pluginOnly: true`, and your App opens it with `walnut.ui.views.SessionView`.
 
 Tasks your plugin made before it declared the option stay on the board until it calls `walnut.tasks.keepInPlugin(ids)`, usually once at `activate` with the task ids it keeps in its own storage. `keepInPlugin(ids, false)` gives tasks back to the board. Only the tasks named change, a kept task is unpinned, a task another plugin keeps is skipped, a task that already syncs keeps syncing, and the answer lists what changed and what was skipped. When a plugin is removed, or its manifest no longer says `"plugin"`, Walnut gives its tasks back to the board by itself (at the next start, and at once when the plugin is removed from Settings); a disabled plugin keeps them for when it is enabled again. An older Walnut has no `keepInPlugin` and ignores the manifest field, so check `typeof walnut.tasks.keepInPlugin === 'function'` and expect your tasks on the board there.
+
+#### Notes
+
+`walnut.notes` reaches the person's notes vault: real folders of Markdown files (frontmatter on
+top, attachments beside them, `[[folder/Note|Title]]` links between them). Paths are relative to
+the vault and never leave it.
+
+```ts
+const notes = walnut.notes
+if (!notes) throw new Error('This needs a newer Walnut') // absent on an older one
+await notes.mkdir('Imports')
+const note = await notes.read('Imports/Hello.md')
+// expectedHash makes a write fail (code 'note_conflict') when the note changed since you read it,
+// so a person's edit is never overwritten.
+await notes.write('Imports/Hello.md', '# Hello\n', { expectedHash: note?.hash })
+await notes.writeFile('Imports/_attachment/photo.png', bytes) // images, PDF and office files, up to 50 MB
+```
+
+`list(folder)` walks a folder depth first; `move` refuses to overwrite; `remove` takes a note, a
+file or a whole folder. `dir` is the vault's absolute path, for an `ai.run` that reads notes
+(`needs: { files: 'read', cwd }`); write through the methods, which keep the index, links and
+other windows up to date. Every write is refused on a replica. A plugin that changes many notes
+keeps its own backup first: there is no undo for it.
 
 #### Hosts
 

@@ -881,6 +881,46 @@ export interface StorageService {
   readonly tmp: PluginFileArea
 }
 
+/** One entry of `walnut.notes.list`: a note (`.md`), another file (an attachment) or a folder. */
+export interface NoteEntry {
+  /** Vault-relative, forward slashes; a note keeps its `.md`. */
+  path: string
+  type: 'note' | 'file' | 'folder'
+  size?: number
+  modifiedAt?: string
+}
+
+/**
+ * The person's notes vault (`WALNUT_HOME/notes`), for a plugin that brings notes in from
+ * somewhere else or keeps a folder of its own. Paths are vault-relative (`Folder/Note.md`; a note
+ * path may leave out `.md`); `..` and absolute paths are refused. Writes go through the notes
+ * routes' own path, so a note gets its `id` frontmatter stamped, the tree, search and every open
+ * editor hear about it, and `expectedHash` refuses to overwrite a note that changed since it was
+ * read (`write` then rejects with `code: 'note_conflict'` and `currentHash`). Change only what your
+ * plugin made or the person asked it to: everything here is the person's own writing. Absent on an
+ * older Walnut: check `walnut.notes` before use. On a replica every write rejects.
+ */
+export interface NotesService {
+  /** The vault's absolute folder, to hand to an AI run (`ai.run` needs.cwd). Write through the methods. */
+  readonly dir: string
+  /** Every folder, note and file under `folder` (the whole vault when absent), depth first. Hidden names are left out. */
+  list(folder?: string): Promise<NoteEntry[]>
+  read(path: string): Promise<{ path: string; content: string; hash: string } | null>
+  /**
+   * `expectedHash`: fail (code `note_conflict`) when the note changed since it was read.
+   * `createOnly`: only make a new note; fail (code `note_exists`) when one is already there.
+   */
+  write(path: string, content: string, options?: { expectedHash?: string; createOnly?: boolean }): Promise<{ path: string; hash: string; id: string; created: boolean }>
+  readFile(path: string): Promise<Uint8Array | null>
+  /** An attachment beside notes: png, jpg, gif, webp, heic, pdf and office files, at most 50 MB. Other types reject with `code: 'unsupported_type'`. */
+  writeFile(path: string, bytes: Uint8Array): Promise<{ path: string }>
+  mkdir(path: string): Promise<void>
+  /** Rename or move a note or a file; refuses to overwrite. */
+  move(from: string, to: string): Promise<void>
+  /** Delete the note, file or whole folder at exactly this path (a note by its `.md` path). A missing path is not an error. */
+  remove(path: string): Promise<void>
+}
+
 export interface SecretService {
   get(name: string): Promise<string | undefined>
   set(name: string, value: string): Promise<void>
@@ -1875,6 +1915,8 @@ export interface WalnutServerApi {
   readonly http: HttpService
   readonly storage: StorageService
   readonly secrets: SecretService
+  /** The notes vault (absent on an older Walnut). */
+  readonly notes?: NotesService
   readonly timers: TimerService
   readonly registry: RegistryService
   readonly model: ModelService

@@ -165,7 +165,9 @@ export async function fetchNoteContent(
   notePath: string,
   opts?: CorpusFetchOptions,
 ): Promise<{ content: string; updatedAt: string; contentHash: string }> {
-  return apiGet<{ content: string; updatedAt: string; contentHash: string }>(`/api/notes-v2/content/${notePath}`, undefined, opts);
+  // A note deleted since it was opened (a restored tab, a link to it) is an expected answer: the
+  // caller shows it as gone, so the 404 is no error in the log.
+  return apiGet<{ content: string; updatedAt: string; contentHash: string }>(`/api/notes-v2/content/${notePath}`, undefined, { ...opts, quietStatuses: [404] });
 }
 
 export async function saveNoteContent(

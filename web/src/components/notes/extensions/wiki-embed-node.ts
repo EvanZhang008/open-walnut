@@ -66,7 +66,12 @@ export const WikiEmbedNode = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(WikiEmbedView);
+    // A press on a link inside the embed (the PDF bar's Open and Download) is the link's, not the
+    // editor's: ProseMirror would focus itself with the caret at the top and scroll the note there.
+    return ReactNodeViewRenderer(WikiEmbedView, {
+      stopEvent: ({ event }) => /^(mousedown|mouseup|click|pointerdown|pointerup)$/.test(event.type)
+        && event.target instanceof Element && !!event.target.closest('a'),
+    });
   },
 
   addStorage() {

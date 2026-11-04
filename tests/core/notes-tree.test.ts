@@ -110,6 +110,12 @@ describe('walk shape', () => {
     expect(tree.find((n) => n.name === 'empty-folder')!.children).toEqual([]);
   });
 
+  it('names sort as people read them: "Notes" before "Notes (2)", "Day 2" before "Day 10"', async () => {
+    for (const name of ['Notes (2).md', 'Notes.md', 'Day 10.md', 'Day 2.md', 'Day 1.md']) await write(name);
+    const { tree } = await getNotesTree();
+    expect(names(tree)).toEqual(['Day 1.md', 'Day 2.md', 'Day 10.md', 'Notes.md', 'Notes (2).md']);
+  });
+
   it('a missing vault root yields an empty tree, and is never treated as current', async () => {
     await fs.rm(NOTES_DIR, { recursive: true, force: true });
     const first = await getNotesTree();

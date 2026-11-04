@@ -1,0 +1,75 @@
+/* Math in the notes editor (math-render.ts). The source stays in the document;
+   while the cursor is elsewhere it is hidden and the rendered formula shows. */
+
+.tiptap pre.notes-math-source-hidden,
+.tiptap .notes-math-source-hidden,
+/* The decoration wraps the text inside the inline <code>; hide the code box too, or its
+   padding and background stay on screen as an empty chip. */
+.tiptap code:has(> .notes-math-source-hidden) {
+  display: none;
+}
+
+.tiptap .notes-math-block {
+  display: block;
+  margin: 0.5em 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  cursor: text;
+}
+
+.tiptap .notes-math-block:hover {
+  background: var(--bg-secondary);
+}
+
+/* While the source is being edited, the preview sits right under it. */
+.notes-editor .tiptap pre:has(+ .notes-math-block.is-editing) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+/* `.notes-editor` outweighs the editor's `.tiptap > * + *` block spacing. */
+.notes-editor .tiptap .notes-math-block.is-editing {
+  margin-top: 0;
+  border: 1px dashed var(--border);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+}
+
+.tiptap .notes-math-inline {
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.tiptap .notes-math-inline:hover {
+  background: var(--bg-secondary);
+}
+
+.tiptap .notes-math-block .katex-display {
+  margin: 0;
+}
+
+/* KaTeX not loaded yet: the source, quietly. */
+.tiptap .notes-math-pending {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+}
+
+/* Invalid latex (or KaTeX failed to load): the source in red, the message on hover. */
+.tiptap .notes-math-error {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  color: var(--error, #cc0000);
+  background: color-mix(in srgb, var(--error, #cc0000) 8%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--error, #cc0000) 40%, transparent);
+}
+
+.tiptap .notes-math-error .katex-error {
+  color: inherit !important;
+}

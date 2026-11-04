@@ -315,6 +315,9 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
       'examples/plugins/walnut-demo/src/web/views-section.tsx#sessionDraft': 'a session id typed into a one-line field before Open: a form, not text being written',
       'examples/plugins/walnut-demo/src/web/server-section.tsx#probeUrl': 'a URL to try one request with, prefilled: a form field, not text being written',
       'plugin-store/walnut-rhythm/src/web/music-card.tsx#link': 'a playlist link pasted and added at once: a form field, not text being written',
+      'plugin-store/notes-import/src/web/import-panel.tsx#folder': 'the notes folder to import into, prefilled with the last one: a form field, not text being written',
+      'plugin-store/notes-import/src/web/organize-panel.tsx#organizeFolder': 'the notes folder to organize, prefilled with the last one: a form field, not text being written',
+      'plugin-store/notes-import/src/web/connect.tsx#secret': 'a Notion secret pasted before Connect: it must never be kept anywhere, a draft least of all',
     };
     const off = pluginSources().flatMap((f) => draftsOffDevice(f.src).map((d) => `${f.rel}#${d.name}`));
     expect(off.filter((k) => !(k in notDrafts)), 'keep a draft with walnut.ui.useDraft(name, { id }), or list it in notDrafts with why').toEqual([]);

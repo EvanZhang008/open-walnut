@@ -10,6 +10,7 @@ import { jumpNeedles, findQueries } from './jump-target';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { MicInput } from '@/components/common/BoxMic';
+import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -179,7 +180,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // A note needs no name first (onNewNote), so only a folder asks for one.
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NoteTreeNode } | null>(null);
+  // `folderNote` is set when the right-clicked row is a folder that opens its own
+  // note (`X/X.md`, see folder-note.ts): the menu then offers note actions too,
+  // since that note has no row of its own to right-click.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NoteTreeNode; folderNote?: NoteTreeNode } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -221,9 +225,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     });
     // Defer scroll until the newly-expanded rows have rendered.
     const t = setTimeout(() => {
-      const el = bodyRef.current?.querySelector(
-        `[data-node-path="${(window as unknown as { CSS?: typeof CSS }).CSS?.escape ? CSS.escape(revealPath) : revealPath}"]`,
-      ) as HTMLElement | null;
+      const esc = (window as unknown as { CSS?: typeof CSS }).CSS?.escape ? CSS.escape(revealPath) : revealPath;
+      // A folder note has no row of its own: its folder's row stands in for it.
+      const el = (bodyRef.current?.querySelector(`[data-node-path="${esc}"]`)
+        ?? (folderOfFolderNote(revealPath) ? bodyRef.current?.querySelector(`[data-folder-note="${esc}"]`) : null)) as HTMLElement | null;
       el?.scrollIntoView({ block: 'nearest' });
     }, 60);
     return () => clearTimeout(t);
@@ -553,10 +558,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     setNewItemName('');
   }, [newItemName, creatingIn, onCreateFolder]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, node: NoteTreeNode) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, node: NoteTreeNode, folderNote?: NoteTreeNode) => {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, node });
+    setContextMenu({ x: e.clientX, y: e.clientY, node, ...(folderNote ? { folderNote } : {}) });
   }, []);
 
   /**
@@ -630,9 +635,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     setRenaming(null);
   }, [renaming, renameValue, onRenameNote]);
 
-  const handleDeleteFromMenu = useCallback(async () => {
-    if (!contextMenu) return;
-    const { node } = contextMenu;
+  // `node` is the menu's own node, or a folder-note row's note ("Delete note").
+  const handleDeleteNode = useCallback(async (node: NoteTreeNode) => {
     setContextMenu(null);
 
     if (node.type === 'folder') {
@@ -672,7 +676,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     } catch (e) {
       await alert({ title: 'Delete failed', message: e instanceof Error ? e.message : 'Could not delete the file.' });
     }
-  }, [contextMenu, onDeleteNote, onDeleteFolder, onDeleteAttachment, confirm, alert, dropFromSearchResults]);
+  }, [onDeleteNote, onDeleteFolder, onDeleteAttachment, confirm, alert, dropFromSearchResults]);
 
   // Local-machine actions (context menu): Finder / default app / VS Code /
   // Copy path. Failures (cloud mode 400, clipboard denial) surface via alert —
@@ -806,25 +810,63 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       // resolve to THIS folder via resolveDropFolder, instead of bubbling to the
       // root drop zone. The highlight is driven by dropTarget matching this path.
       const isDropTarget = dropTarget === node.path && !isInvalidDrop(draggingPath, node.path);
+      // Folder note (`X/X.md`, see folder-note.ts): the folder row opens it and
+      // the note is not listed again below. The chevron alone folds/unfolds.
+      const folderNote = folderNoteOf(node);
+      const children = visibleFolderChildren(node, folderNote);
+      const isFolderNoteSelected = !!folderNote && selectedPath === folderNote.path;
+      const isFiles = isAttachmentFolder(node);
+      const isRenamingFolderNote = !!folderNote && renaming === folderNote.path;
       return (
         <div key={node.path} data-drop-folder={node.path} className={isDropTarget ? 'notes-tree-folder-drop' : undefined}>
           <div
-            className={`notes-tree-item notes-tree-folder depth-${depth}${isDropTarget ? ' notes-tree-drop-target' : ''}`}
+            className={`notes-tree-item notes-tree-folder depth-${depth}${folderNote ? ' notes-tree-folder-note' : ''}${isFiles ? ' notes-tree-attachments' : ''}${isFolderNoteSelected ? ' selected' : ''}${isDropTarget ? ' notes-tree-drop-target' : ''}`}
             data-node-path={node.path}
-            onClick={() => toggleFolder(node.path)}
-            onContextMenu={(e) => handleContextMenu(e, node)}
+            data-folder-note={folderNote?.path}
+            title={folderNote ? `Open ${node.name}` : isFiles ? 'Images and files of the notes in this folder (_attachment)' : undefined}
+            onClick={(e) => {
+              if (isRenamingFolderNote) return;
+              const action = folderRowClickAction(folderNote, isExpanded);
+              if (action.open) onSelect(action.open, { newTab: e.metaKey || e.ctrlKey });
+              if (action.expand === 'toggle') toggleFolder(node.path);
+              else if (action.expand === 'expand') setExpandedFolders((prev) => new Set(prev).add(node.path));
+            }}
+            onMouseEnter={folderNote && onHoverNote ? () => onHoverNote(folderNote.path) : undefined}
+            onContextMenu={(e) => handleContextMenu(e, node, folderNote ?? undefined)}
             style={{ paddingLeft: `${12 + depth * 16}px` }}
           >
-            <span className={`notes-tree-arrow ${isExpanded ? 'expanded' : ''}`}>
+            <span
+              className={`notes-tree-arrow ${isExpanded ? 'expanded' : ''}${folderNote && children.length === 0 ? ' notes-tree-arrow-empty' : ''}`}
+              // On a folder-note row the name opens the note, so the chevron is
+              // the only fold control; on a plain folder the click bubbles to the
+              // row's toggle exactly as before.
+              onClick={folderNote ? (e) => { e.stopPropagation(); toggleFolder(node.path); } : undefined}
+              aria-label={folderNote ? (isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`) : undefined}
+            >
               <ChevronIcon />
             </span>
-            <FolderIcon />
-            <span className="notes-tree-name">{node.name}</span>
+            {folderNote ? <FolderNoteIcon /> : <FolderIcon />}
+            {isRenamingFolderNote ? (
+              <input data-no-draft="rename"
+                ref={renameInputRef}
+                className="notes-tree-inline-input"
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleConfirmRename();
+                  if (e.key === 'Escape') setRenaming(null);
+                }}
+                onBlur={handleConfirmRename}
+                onClick={e => e.stopPropagation()}
+              />
+            ) : (
+              <span className="notes-tree-name">{isFiles ? 'Attachments' : node.name}</span>
+            )}
           </div>
           {isExpanded && node.children && (
             <div className="notes-tree-children">
               {creatingIn === node.path && renderNewItemInput(depth + 1)}
-              {node.children.map(child => renderNode(child, depth + 1))}
+              {children.map(child => renderNode(child, depth + 1))}
             </div>
           )}
         </div>
@@ -1085,6 +1127,24 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           className="notes-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
+          {/* A folder-note row stands for two things: its note first (it has no
+              row of its own), then the folder. Labels say which one they act on. */}
+          {contextMenu.folderNote && (() => {
+            const fn = contextMenu.folderNote;
+            return (
+              <>
+                <button onClick={() => { setContextMenu(null); onSelect(fn.path, { newTab: true }); }}>
+                  Open in new tab
+                </button>
+                <button onClick={() => { setContextMenu(null); onToggleFavorite(fn.path); }}>
+                  {favoriteNotes.includes(fn.path) ? 'Remove bookmark' : 'Bookmark'}
+                </button>
+                <button onClick={() => handleStartRename(fn)}>Rename note</button>
+                <button className="danger" onClick={() => void handleDeleteNode(fn)}>Delete note</button>
+                <div className="notes-context-menu-divider" />
+              </>
+            );
+          })()}
           {contextMenu.node.type === 'folder' && (
             <>
               <button onClick={() => { handleNewItem(contextMenu.node.path, 'file'); setContextMenu(null); }}>
@@ -1132,7 +1192,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <button onClick={() => handleReveal(contextMenu.node.path, 'vscode')}>Open in VS Code</button>
           {/* Delete — every node type. Notes/attachments get a plain confirm; folders a
               recursive-delete confirm with the contained note/attachment count. */}
-          <button className="danger" onClick={handleDeleteFromMenu}>
+          <button className="danger" onClick={() => void handleDeleteNode(contextMenu.node)}>
             {contextMenu.node.type === 'folder' ? 'Delete folder' : 'Delete'}
           </button>
         </div>
@@ -1155,6 +1215,20 @@ function FolderIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16" className="notes-tree-icon">
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+/**
+ * A folder that opens its own note (folder note): the folder outline with two
+ * text lines inside, the quiet cue that clicking the name opens a page.
+ */
+function FolderNoteIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16" className="notes-tree-icon notes-tree-icon-folder-note" aria-hidden="true">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+      <line x1="7" y1="12" x2="17" y2="12" strokeWidth="1.6" />
+      <line x1="7" y1="16" x2="13" y2="16" strokeWidth="1.6" />
     </svg>
   );
 }

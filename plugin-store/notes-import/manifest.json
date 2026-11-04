@@ -1,0 +1,22 @@
+{
+  "id": "notes-import",
+  "name": "Import notes",
+  "category": "other",
+  "description": "Bring your Notion pages into Walnut notes: the page tree, text formatting, tables, databases, images and files, with links between pages kept. Run it again to bring in only what changed. Then let Walnut propose how to organize them.",
+  "version": "0.1.0",
+  "icon": "icon.svg",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.6.25"
+  },
+  "server": "dist/server.mjs",
+  "web": "dist/web.mjs",
+  "build": {
+    "server": "src/server.ts",
+    "web": "src/web.tsx"
+  },
+  "catalog": {
+    "adds": ["App"],
+    "docs": "plugin-store/notes-import/README.md"
+  }
+}

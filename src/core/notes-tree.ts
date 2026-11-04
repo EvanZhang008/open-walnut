@@ -120,11 +120,13 @@ async function walk(dirPath: string, relBase: string, dirs: Map<string, number>)
   }
   dirs.set(dirPath, mtimeMs)
 
-  // Sort: folders first, then alphabetical
+  // Sort: folders first, then by name as people read it: without `.md` (so "Notes" comes before
+  // "Notes (2)"), and numbers in order ("Day 2" before "Day 10").
+  const stem = (name: string) => name.replace(/\.md$/i, '')
   entries.sort((a, b) => {
     if (a.isDirectory() && !b.isDirectory()) return -1
     if (!a.isDirectory() && b.isDirectory()) return 1
-    return a.name.localeCompare(b.name)
+    return stem(a.name).localeCompare(stem(b.name), undefined, { numeric: true }) || a.name.localeCompare(b.name)
   })
 
   const nodes = await Promise.all(entries.map(async (entry): Promise<TreeNode | null> => {

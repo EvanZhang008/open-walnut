@@ -1,5 +1,4 @@
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { PluginAppPage } from '@/pages/PluginAppPage'
 import { PluginBounds } from '@/plugins/PluginBounds'
@@ -35,7 +34,17 @@ export function AppHostPage() {
   const app = params.appId ? catalog.findByRouteId(params.appId) : undefined
 
   if (!app) {
-    if (!runtime.ready || runtime.loading || catalog.loadingWebviews) return <LoadingSpinner />
+    // Words beside the spinner: a first visit can wait a while for the Apps to load.
+    if (!runtime.ready || runtime.loading || catalog.loadingWebviews) {
+      return (
+        <div className="plugin-app-page" data-testid="plugin-app-page">
+          <div className="plugin-app-loading">
+            <div className="plugin-app-spinner" />
+            <span>Loading apps…</span>
+          </div>
+        </div>
+      )
+    }
     // A bookmark to a disabled or uninstalled App must SAY so. Bouncing to Home
     // silently is the dead-end answer this repo keeps banning: the user is left
     // wondering whether they mistyped, whether the App broke, or whether Walnut

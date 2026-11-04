@@ -25,7 +25,7 @@ import type { SlashCommandState } from './slash-commands/types';
 import type { WikiLinkState } from './wiki-link/WikiLinkExtension';
 import { WikiLinkExtension } from './wiki-link/WikiLinkExtension';
 import { WikiLinkAutocomplete } from './wiki-link/WikiLinkAutocomplete';
-import { WikiLinkClickExtension } from './wiki-link/WikiLinkClickExtension';
+import { WikiLinkClickExtension, WIKI_LINK_REFRESH } from './wiki-link/WikiLinkClickExtension';
 import { WikiLinkDisambiguation } from './wiki-link/WikiLinkDisambiguation';
 import { resolveWikiLinkTarget } from './wiki-link/resolve-wiki-link';
 import { tableExtensions } from './extensions/table-kit';
@@ -40,6 +40,7 @@ import { normalizeForEditor } from './notes-content-preprocess';
 import { TagNode } from './extensions/tag-node';
 import { Callout } from './extensions/callout-node';
 import { WikiEmbedNode } from './extensions/wiki-embed-node';
+import { MathRender } from './extensions/math-render';
 import { TagTrigger } from './extensions/tag-trigger';
 import type { TagTriggerState } from './extensions/tag-trigger';
 import { ResolvedImage } from './extensions/resolved-image';
@@ -82,6 +83,8 @@ interface NotesEditorProps {
   enableWikiLinks?: boolean;
   /** Available notes for wiki link autocomplete */
   wikiLinkNotes?: NoteListItem[];
+  /** A link was drawn as missing: the owner of the notes list may look again (it can lag a bulk write). */
+  onWikiLinkMissing?: () => void;
   /** Called when a wiki link is clicked */
   onWikiLinkClick?: (target: string) => void;
   /**
@@ -213,7 +216,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkMissing, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -259,6 +262,20 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
       // (the backend assigns an id on first save; never an id in link text).
       navigate?.(target.includes('/') ? `${target}.md` : `${target}.md`);
     }
+  }, []);
+
+  // A link whose note is not in the vault is drawn as missing. Unknown (null) until the notes list
+  // has loaded, and for a link to a file that is not a note.
+  const onWikiLinkMissingRef = useRef(onWikiLinkMissing);
+  onWikiLinkMissingRef.current = onWikiLinkMissing;
+  const isMissingLink = useCallback((target: string): boolean | null => {
+    const notes = wikiLinkNotesRef.current;
+    if (!notes?.length) return null;
+    const bare = target.replace(/#.*$/, '').trim();
+    if (!bare || /\.(?!md$)[A-Za-z0-9]{1,5}$/i.test(bare)) return null;
+    const missing = resolveWikiLinkTarget(bare, notes).kind === 'unresolved';
+    if (missing) onWikiLinkMissingRef.current?.();
+    return missing;
   }, []);
 
   // Ref so the paste/drop closures (built once) always see the current path.
@@ -336,6 +353,9 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
       ...tableExtensions,
       TagNode,
       Callout,
+      // $`latex`$ and ```math blocks typeset with KaTeX (loaded on first use). Decorations
+      // only: the document and the saved markdown keep the plain source.
+      MathRender,
       TagTrigger.configure({
         onStateChange: setTagState,
       }),
@@ -348,6 +368,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         // plain [[Title]], so the byte-clean round-trip is untouched (§3.5).
         WikiLinkClickExtension.configure({
           onLinkClick: handleWikiLinkNavigate,
+          isMissing: isMissingLink,
         }),
         // Render ![[attachment]] embeds inline (image / PDF / click-card). Atom
         // inline node with a literal-write serialize + a parse rule registered
@@ -527,6 +548,12 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
+
+  // The notes list came or changed: links are drawn again, so a missing one shows as missing.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(editor.state.tr.setMeta(WIKI_LINK_REFRESH, true).setMeta('addToHistory', false));
+  }, [editor, wikiLinkNotes]);
 
   // Read only <-> editable without remounting (the phone's Edit / Done). Going
   // editable puts the caret at the end, which raises the keyboard.

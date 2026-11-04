@@ -69,6 +69,11 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
           ) : failure !== 'missing' && (
             <a className="notes-attachment-open" href={url} download={name}>Download</a>
           )}
+          {/* A browser that hands a PDF to its downloads instead of showing it (no viewer in the
+              frame, a new tab left blank) still gets the file. */}
+          {isPdf && failure !== 'missing' && (
+            <a className="notes-attachment-open" href={url} download={name}>Download</a>
+          )}
         </div>
       </div>
       <div className="notes-attachment-preview">

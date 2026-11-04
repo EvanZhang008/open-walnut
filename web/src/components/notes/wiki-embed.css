@@ -52,17 +52,47 @@
   border-radius: var(--radius-sm, 6px);
   background: #fff;
 }
-.notes-wikiembed-open {
-  display: inline-block;
-  margin-top: 4px;
+.notes-wikiembed-pdf-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #2a2d34);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg-secondary, transparent);
+  font-size: 13px;
+}
+.notes-wikiembed-pdf-bar + .notes-wikiembed-pdf-frame { border-top-left-radius: 0; border-top-right-radius: 0; }
+.notes-wikiembed-pdf-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #d93025;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.notes-wikiembed-pdf-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg, inherit);
+}
+.notes-wikiembed-pdf-action {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border, #2a2d34);
+  border-radius: 5px;
+  background: var(--card-bg, transparent);
+  color: var(--fg, inherit);
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
   text-decoration: none;
 }
-.notes-wikiembed-open:hover {
-  color: var(--text, #e6e6e6);
-  text-decoration: underline;
-}
+.notes-wikiembed-pdf-action:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); text-decoration: none; }
 
 /* ── Click-to-open card (unknown type / failed image) ─────────────────── */
 .notes-wikiembed-card {

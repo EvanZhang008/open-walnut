@@ -587,7 +587,7 @@ export function apiPatch<T>(path: string, body?: unknown, opts?: { timeoutMs?: n
   return request<T>('PATCH', path, body, opts);
 }
 
-export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string; headers?: Record<string, string> }): Promise<T> {
+export function apiPut<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; opId?: string; headers?: Record<string, string>; keepalive?: boolean }): Promise<T> {
   return request<T>('PUT', path, body, opts);
 }
 

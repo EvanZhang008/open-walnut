@@ -67,9 +67,23 @@ class Corpus<T> {
     }, delayMs);
   }
 
+  private lastRecheck = 0;
+  /**
+   * A reader found a name the list does not have: after a bulk write (an import, an organize run)
+   * the list may still lag the vault's index, so look again a little later, at most once per
+   * `windowMs`.
+   */
+  recheck(delayMs = 2500, windowMs = 15_000): void {
+    const now = Date.now();
+    if (now - this.lastRecheck < windowMs) return;
+    this.lastRecheck = now;
+    this.scheduleRefresh(delayMs);
+  }
+
   /** Test hook: forget everything. */
   reset(): void {
     this.value = null;
+    this.lastRecheck = 0;
     this.inflight = null;
     if (this.refreshTimer) { clearTimeout(this.refreshTimer); this.refreshTimer = null; }
     this.notify();

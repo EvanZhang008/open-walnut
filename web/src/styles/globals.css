@@ -13898,6 +13898,28 @@ body.walnut-dragging {
   text-decoration: none;
 }
 
+/* [[wiki links]]: plain text on disk, a link on screen. An aliased one shows only its alias
+   until the cursor reaches it (WikiLinkClickExtension). */
+.notes-editor .tiptap .notes-wikilink-ref {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.notes-editor .tiptap .notes-wikilink-ref:hover {
+  text-decoration: underline;
+}
+/* A link to a note that is not there (deleted, or not made yet): dimmed and dashed, as Obsidian
+   draws an unresolved link, so it never looks like one that leads to a note. */
+.notes-editor .tiptap .notes-wikilink-missing {
+  opacity: 0.6;
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+
+.notes-editor .tiptap .notes-wikilink-syntax {
+  display: none;
+}
+
 /* ===== Slash Command Panel ===== */
 
 .notes-slash-portal {
@@ -24348,6 +24370,12 @@ a.tag-chip:focus-visible,
   transform: rotate(90deg);
 }
 
+/* Folder note row (`X/X.md`): nothing left to unfold, but the chevron keeps its
+   space so the name lines up with its siblings. */
+.notes-tree-arrow.notes-tree-arrow-empty {
+  visibility: hidden;
+}
+
 .notes-tree-icon {
   flex-shrink: 0;
   opacity: 0.6;
@@ -24360,6 +24388,9 @@ a.tag-chip:focus-visible,
   flex: 1;
   min-width: 0;
 }
+/* The `_attachment` folder holds the files of the notes beside it: shown after them, quieter. */
+.notes-tree-attachments .notes-tree-name { color: var(--fg-muted); font-size: 0.95em; }
+.notes-tree-attachments svg { opacity: 0.6; }
 
 .notes-tree-inline-input {
   flex: 1;

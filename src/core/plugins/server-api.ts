@@ -51,6 +51,7 @@ import { isFollower } from '../server-role.js'
 import { createPluginMacos } from './plugin-macos.js'
 import { createPluginMcp } from './plugin-mcp.js'
 import { createPluginExpose } from './plugin-expose.js'
+import { createPluginNotes } from './notes-service.js'
 import { getDb } from '../task-db.js'
 import type { AgentDefinition, Task, TaskPhase, TaskPriority } from '../types.js'
 import type { SlimTask } from '../task-manager.js'
@@ -1560,6 +1561,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }))
       },
     },
+
+    // The person's notes vault, through the notes routes' own write path (notes-service.ts).
+    notes: createPluginNotes(),
 
     get unsafe(): { readonly database: unknown; readonly bus: unknown; readonly walnutHome: string; readonly host: unknown } {
       if (!unsafeWarned) {

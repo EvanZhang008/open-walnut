@@ -104,7 +104,8 @@ export default defineConfig({
     // when it finds them mid-session — which drops the preview that just
     // mounted, and made the browser tests flake on whichever office spec ran
     // first in a cold run.
-    include: ['xlsx', 'docx-preview', 'pptx-preview', 'pdfjs-dist'],
+    // katex: the notes editor's math rendering, imported the first time a note holds math.
+    include: ['xlsx', 'docx-preview', 'pptx-preview', 'pdfjs-dist', 'katex'],
   },
   build: {
     outDir: '../dist/web/static',
