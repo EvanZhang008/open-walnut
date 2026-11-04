@@ -338,6 +338,8 @@ struct ComposerBar: View {
             .availableWithStop(onStop != nil)
     }
 
+    @State private var seatTaps = SeatTapGuard()
+
     /// The composer came on screen: what `onAppear` does, also run when a page
     /// pushed over it pops (`composerCovered`).
     private func composerAppeared() {
@@ -1495,7 +1497,11 @@ struct ComposerBar: View {
     }
 
     private func voiceModeButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            guard seatTaps.allows() else { return }
+            seatTaps.record()
+            action()
+        } label: {
             Image(systemName: Symbol.voiceMode)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.onTint)
@@ -1520,6 +1526,8 @@ struct ComposerBar: View {
     /// the top-right of the chat can be empty.
     private var stopButton: some View {
         Button {
+            guard seatTaps.allows() else { return }
+            seatTaps.record()
             Task { await onStop?() }
         } label: {
             ZStack {
@@ -1567,6 +1575,7 @@ struct ComposerBar: View {
     }
 
     private func gatedInterruptSend() {
+        seatTaps.record()
         sendGate.send { _ in send(interrupting: true) }
     }
 
@@ -1597,6 +1606,7 @@ struct ComposerBar: View {
     /// Send, or (while the mic records or a transcription is on its way) wait for
     /// the words and then send; a second tap while it waits cancels the wait.
     private func gatedSend() {
+        seatTaps.record()
         // A quick-action take whose Stop already started its transcription would
         // send its words on its own (`deliver`); a Send tapped meanwhile takes them
         // instead, into the draft and out as ONE message with what is typed.

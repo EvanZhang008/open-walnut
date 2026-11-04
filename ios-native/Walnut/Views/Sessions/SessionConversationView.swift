@@ -171,11 +171,15 @@ struct SessionConversationView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let voiceMode {
-                VoiceModeBar(
-                    voice: voiceMode, activity: store.activity, working: store.streaming,
-                    needsAnswer: !lifecycle.pendingPermissions.isEmpty,
-                    onExit: { stopVoiceMode() }
-                )
+                // The queue stays in view while the voice bar holds the composer's seat.
+                VStack(spacing: 0) {
+                    queueStrip
+                    VoiceModeBar(
+                        voice: voiceMode, activity: store.activity, working: store.streaming,
+                        needsAnswer: !lifecycle.pendingPermissions.isEmpty,
+                        onExit: { stopVoiceMode() }
+                    )
+                }
             } else {
                 composer
                     // Covered by the host's page, or by this page's own fork.
@@ -260,6 +264,10 @@ struct SessionConversationView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
+        }
+        // The keyboard would cover the list in a half-height sheet.
+        .onChange(of: showQueue) { _, shown in
+            if shown { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
         }
         // Wave-2 extras: queue / plan / side questions / files.
         .sheet(isPresented: $showQueue) {
@@ -360,6 +368,14 @@ struct SessionConversationView: View {
         .onChange(of: store.acceptedSends) { _, _ in Task { await queue.refresh() } }
     }
 
+    private var queueStrip: some View {
+        SessionQueueStrip(
+            queue: queue, turnRunning: store.streaming,
+            onOpen: { managingQueueRow = $0 }, onShowAll: { showQueue = true },
+            onUndo: { text in Task { _ = await store.sendFromComposer(text) } }
+        )
+    }
+
     private var composer: some View {
         ComposerBar(
             placeholder: "Message this session",
@@ -372,12 +388,7 @@ struct SessionConversationView: View {
             onInterruptSend: { text, images, files in
                 await store.sendFromComposer(text, images: images, files: files, interrupt: true)
             },
-            topAccessory: AnyView(
-                SessionQueueStrip(
-                    queue: queue, turnRunning: store.streaming,
-                    onOpen: { managingQueueRow = $0 }, onShowAll: { showQueue = true }
-                )
-            ),
+            topAccessory: AnyView(queueStrip),
             disabled: !store.canSend,
             disabledNotice: store.composerNotice,
             busyAcceptsSend: true,

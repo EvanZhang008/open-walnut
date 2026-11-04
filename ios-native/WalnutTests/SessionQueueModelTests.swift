@@ -135,6 +135,51 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertTrue(m.busyIds.isEmpty)
     }
 
+    func testAWithdrawnMessageCanBeTakenBackForAMoment() async {
+        let t = Transport()
+        t.rows = [row("qm-a", "keep these words")]
+        let m = model(t)
+        await m.refresh()
+        await m.withdraw(m.rows[0])
+        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words"))
+        m.clearUndo()
+        XCTAssertNil(m.withdrawn)
+    }
+
+    func testTheOfferToTakeItBackLapses() async {
+        SessionQueueModel.undoWindow = 0.05
+        defer { SessionQueueModel.undoWindow = 6 }
+        let t = Transport()
+        t.rows = [row("qm-a")]
+        let m = model(t)
+        await m.refresh()
+        await m.withdraw(m.rows[0])
+        XCTAssertNotNil(m.withdrawn)
+        let deadline = Date().addingTimeInterval(3)
+        while m.withdrawn != nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNil(m.withdrawn, "the offer ends by itself")
+    }
+
+    func testAFailedWithdrawOffersNoUndo() async {
+        let t = Transport()
+        t.rows = [row("qm-a")]
+        t.writeError = APIError.server(status: 503, code: "bridge_offline", message: "x", serverHash: nil, serverContent: nil)
+        let m = model(t)
+        await m.refresh()
+        await m.withdraw(m.rows[0])
+        XCTAssertNil(m.withdrawn)
+    }
+
+    func testTheHeadlineSaysWhatIsAboutToHappen() {
+        XCTAssertEqual([row("a")].headline(turnRunning: true), "Waiting to go in")
+        XCTAssertEqual([row("a")].headline(turnRunning: false), "Going out now")
+        XCTAssertEqual([row("a", status: "processing")].headline(turnRunning: true), "Going out now")
+        XCTAssertEqual([row("a", status: "parked")].headline(turnRunning: false), "Stopped \u{00B7} not sent")
+        XCTAssertEqual([row("a", status: "held")].headline(turnRunning: false), "Waiting for your Mac")
+        // A message that will go out wins over one that was set aside: the line is true of the next delivery.
+        XCTAssertEqual([row("a", status: "parked"), row("b")].headline(turnRunning: true), "Waiting to go in")
+    }
+
     func testAFailedWithdrawBringsTheRowBackWithAReason() async {
         let t = Transport()
         t.rows = [row("qm-a")]
@@ -264,7 +309,7 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertFalse(parked.canEdit)
         XCTAssertTrue(parked.canWithdraw)
         XCTAssertTrue(parked.canSendNow)
-        XCTAssertEqual(parked.statusNote, "Set aside")
+        XCTAssertEqual(parked.statusNote, "Not sent")
 
         let processing = row("c", status: "processing")
         XCTAssertFalse(processing.canEdit)
@@ -315,5 +360,30 @@ final class ComposerInterruptSendTests: XCTestCase {
         XCTAssertFalse(offers(importingFiles: 1), "a file is still being read")
         XCTAssertFalse(offers(voiceIdle: false), "the recorder holds the field")
         XCTAssertFalse(offers(sendWaiting: true), "a send already waits for its words")
+    }
+}
+
+
+/// A double tap on the composer's trailing seat must not stop the agent or open voice mode.
+final class SeatTapGuardTests: XCTestCase {
+    func testAFreshSeatTakesATap() {
+        XCTAssertTrue(SeatTapGuard().allows())
+    }
+
+    func testATapRightAfterATapOnTheSeatIsIgnored() {
+        var seat = SeatTapGuard()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        seat.record(at: t0)
+        XCTAssertFalse(seat.allows(at: t0.addingTimeInterval(0.05)), "a double tap")
+        XCTAssertFalse(seat.allows(at: t0.addingTimeInterval(0.6)), "a slow double tap")
+        XCTAssertFalse(seat.allows(at: t0.addingTimeInterval(SeatTapGuard.window - 0.01)))
+    }
+
+    func testALaterTapIsADecision() {
+        var seat = SeatTapGuard()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        seat.record(at: t0)
+        XCTAssertTrue(seat.allows(at: t0.addingTimeInterval(SeatTapGuard.window)))
+        XCTAssertTrue(seat.allows(at: t0.addingTimeInterval(30)))
     }
 }

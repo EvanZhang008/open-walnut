@@ -74,6 +74,21 @@ final class SessionStopSteerUITests: XCTestCase {
         composer.typeText(words)
     }
 
+    /// Stop, tapped until the page says it is stopping: a Stop pressed in the instant after a
+    /// send is ignored on purpose (the second tap of a double tap), so one more tap follows.
+    private func tapStop(_ app: XCUIApplication) {
+        let stop = element(app, "chat.stop")
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), "no Stop to tap")
+        for _ in 0..<4 {
+            stop.tap()
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                if !stop.exists || stop.label == "Stopping" { return }
+                usleep(100_000)
+            }
+        }
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -87,10 +102,12 @@ final class SessionStopSteerUITests: XCTestCase {
         let app = openLongSession()
         attach(app, "1-running")
         XCTAssertFalse(element(app, "session.interruptSend").exists, "nothing typed: nothing to interrupt with")
-        element(app, "chat.stop").tap()
+        tapStop(app)
         XCTAssertTrue(element(app, "chat.stop").waitForNonExistence(timeout: 20), "the turn did not stop")
         XCTAssertTrue(text(app, containing: "38 of 120 shards").waitForExistence(timeout: 10),
                       "what the turn had written is kept")
+        XCTAssertTrue(text(app, containing: "stopped before it finished").waitForExistence(timeout: 10),
+                      "Stop leaves a card saying the turn was stopped")
         attach(app, "2-stopped")
         // The session is alive: a new message starts a new turn.
         type("Carry on, please", in: app)
@@ -107,7 +124,10 @@ final class SessionStopSteerUITests: XCTestCase {
         element(app, "chat.send").tap()
         let strip = element(app, "session.queue.strip")
         XCTAssertTrue(strip.waitForExistence(timeout: 20), "the queued message is not listed")
-        XCTAssertTrue(element(app, "chat.queuedBadge").waitForExistence(timeout: 10), "the bubble does not say it is queued")
+        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Waiting to go in"),
+                      "the strip says when it goes out")
+        XCTAssertFalse(element(app, "chat.queuedBadge").exists, "the message is listed once: no second copy in the conversation")
+        XCTAssertTrue(text(app, containing: "Skip the slow shards").exists, "the strip shows the words")
         attach(app, "3-queued")
         let row = elements(app, beginningWith: "session.queue.row.").firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
@@ -128,10 +148,60 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(edited.waitForExistence(timeout: 10))
         XCTAssertTrue(edited.label.contains("older than a week"), "the strip does not show the edited words")
 
-        // Withdraw it with the cross.
+        // Withdraw it with the cross, take it back, withdraw it for good.
         elements(app, beginningWith: "session.queue.withdraw.").firstMatch.tap()
-        XCTAssertTrue(strip.waitForNonExistence(timeout: 10), "the withdrawn message is still listed")
-        XCTAssertFalse(text(app, containing: "older than a week").exists, "its bubble is still on the page")
+        XCTAssertTrue(element(app, "session.queue.undo").waitForExistence(timeout: 10), "no way to take it back")
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForNonExistence(timeout: 10),
+                      "the withdrawn message is still listed")
+        attach(app, "4b-withdrawn")
+        element(app, "session.queue.undo").tap()
+        let again = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(again.waitForExistence(timeout: 20), "Undo did not bring the message back")
+        XCTAssertTrue(again.label.contains("older than a week"))
+        elements(app, beginningWith: "session.queue.withdraw.").firstMatch.tap()
+        XCTAssertTrue(again.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(text(app, containing: "older than a week").exists, "its words are still on the page")
+    }
+
+    // MARK: - A double tap on Send
+
+    func testADoubleTapOnSendQueuesOnceAndDoesNotStopTheAgent() throws {
+        let app = openLongSession()
+        type("Check the thumbnails too", in: app)
+        // The seat turns into Stop under the finger: the second tap must not reach it.
+        element(app, "chat.send").doubleTap()
+        let row = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the queued message is not listed")
+        // The second tap landed on the seat the send turned into Stop: it must not have stopped anything.
+        sleep(2)
+        let stop = element(app, "chat.stop")
+        XCTAssertTrue(stop.exists, "the turn was stopped by the second tap")
+        XCTAssertEqual(stop.label, "Stop", "Stop is already in progress")
+        XCTAssertEqual(elements(app, beginningWith: "session.queue.row.").count, 1, "the message was queued twice")
+        attach(app, "8-double-tap")
+    }
+
+    // MARK: - Stop with a message waiting
+
+    func testStopSetsTheWaitingMessageAsideAndSendPutsItBack() throws {
+        let app = openLongSession()
+        type("Then check the archive", in: app)
+        element(app, "chat.send").tap()
+        let row = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the queued message is not listed")
+        tapStop(app)
+        XCTAssertTrue(element(app, "chat.stop").waitForNonExistence(timeout: 20), "the turn did not stop")
+        let headline = element(app, "session.queue.headline")
+        XCTAssertTrue(headline.waitForExistence(timeout: 20))
+        let said = NSPredicate(format: "label CONTAINS[c] %@", "not sent")
+        expectation(for: said, evaluatedWith: headline)
+        waitForExpectations(timeout: 20)
+        attach(app, "7-stopped-with-queue")
+        let send = elements(app, beginningWith: "session.queue.send.").firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "a set-aside message offers Send")
+        send.tap()
+        XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send was not answered")
+        XCTAssertTrue(element(app, "session.queue.strip").waitForNonExistence(timeout: 10))
     }
 
     // MARK: - Interrupt & send

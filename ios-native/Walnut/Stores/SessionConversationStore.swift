@@ -1012,11 +1012,12 @@ final class SessionConversationStore {
             digest.combine(m.sentBy)
             digest.combine(m.sentTo)
             digest.combine(m.about)
+            digest.combine(m.source)
             let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
             var row = ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
-                                  createdAt: m.createdAt, kind: m.kind,
+                                  createdAt: m.createdAt, kind: m.kind, source: m.source,
                                   detail: m.detail, resultPreview: m.resultPreview,
                                   agent: m.agent, thinkingText: m.thinkingText,
                                   inputPreview: m.inputPreview, detailRef: m.detailRef, isError: m.isError)
@@ -1115,9 +1116,24 @@ final class SessionConversationStore {
         }
     }
 
+    /// The CLI's abort line, in both forms it writes.
+    static func isInterruptMarker(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t == "[Request interrupted by user]" || t == "[Request interrupted by user for tool use]"
+    }
+
     /// One transcript row as a timeline message. Ids are assigned after a merge
     /// (`assignStableIDs`), because they must be unique across it.
     private static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
+        if m.role == "user", isInterruptMarker(text ?? m.text) {
+            // The CLI writes this line into the conversation when a turn is stopped
+            // (the phone's Stop, an interrupting send, or the person at the terminal).
+            // It is plumbing, not words the person typed: a card, like the web console's.
+            return ChatMessage(
+                id: "", role: "user", text: "Turn stopped before it finished.",
+                createdAt: m.timestamp, kind: .notification, source: "interrupt"
+            )
+        }
         var row = ChatMessage(
             id: "",
             role: m.role,

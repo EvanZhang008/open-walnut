@@ -40,9 +40,13 @@ struct SessionQueueSheet: View {
                             queueRow(message)
                         }
                     } footer: {
-                        Text(turnRunning
-                             ? "Pending messages go out when the session finishes its current turn. Tap one to edit it or send it now; swipe to withdraw."
-                             : "Pending messages are about to go out. Tap one to edit it or send it now; swipe to withdraw.")
+                        if queue.rows.contains(where: { $0.status == "parked" }) {
+                            Text("Messages marked Not sent were set aside by a Stop. Tap one to send it; swipe to withdraw.")
+                        } else {
+                            Text(turnRunning
+                                 ? "Waiting messages go in as soon as the session can take them. Tap one to edit it or send it now; swipe to withdraw."
+                                 : "Pending messages are about to go out. Tap one to edit it or send it now; swipe to withdraw.")
+                        }
                     }
                 }
             }
@@ -75,7 +79,7 @@ struct SessionQueueSheet: View {
                     .lineLimit(4)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
-                    Text(message.statusNote ?? "Waiting")
+                    Text(message.statusNote ?? "Queued")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(message.status == "processing" ? Theme.success : Theme.warning)
                     if let when = message.enqueuedDate {

@@ -16,16 +16,20 @@ struct SessionQueueStrip: View {
     let turnRunning: Bool
     let onOpen: (QueueRowRef) -> Void
     let onShowAll: () -> Void
+    /// Put a message the person just withdrew back in line.
+    let onUndo: (String) -> Void
 
     /// Rows listed in the strip; the rest are one tap away in the list.
     static let visibleRows = 3
 
     var body: some View {
-        if queue.hasRows {
+        if queue.hasRows || queue.withdrawn != nil {
             VStack(alignment: .leading, spacing: 0) {
-                header
-                ForEach(queue.rows.prefix(Self.visibleRows)) { row in
-                    rowView(row)
+                if queue.hasRows {
+                    header
+                    ForEach(queue.rows.prefix(Self.visibleRows)) { row in
+                        rowView(row)
+                    }
                 }
                 if queue.rows.count > Self.visibleRows {
                     Button(action: onShowAll) {
@@ -46,6 +50,9 @@ struct SessionQueueStrip: View {
                         .padding(.bottom, 8)
                         .accessibilityIdentifier("session.queue.notice")
                 }
+                if let gone = queue.withdrawn {
+                    undoLine(gone)
+                }
             }
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill)
@@ -62,27 +69,68 @@ struct SessionQueueStrip: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "tray.full")
-                .font(.caption.weight(.semibold))
-            Text("Queued")
-                .font(.footnote.weight(.semibold))
-            Text("\(queue.rows.count)")
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Theme.tintSoft, in: Capsule())
-                .foregroundStyle(Theme.tint)
-            Spacer(minLength: 8)
-            Text(turnRunning ? "Goes out when this turn ends" : "Going out now")
-                .font(.caption)
-                .lineLimit(1)
+        // One line when it fits; the status drops under the title at large text sizes
+        // instead of being cut short.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                title
+                Spacer(minLength: 8)
+                headline.lineLimit(1)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) { title }
+                headline
+            }
         }
         .foregroundStyle(Theme.secondaryOnCard)
         .padding(.horizontal, 14)
         .padding(.top, 9)
         .padding(.bottom, 3)
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var title: some View {
+        Image(systemName: "tray.full")
+            .font(.caption.weight(.semibold))
+        Text("Queued")
+            .font(.footnote.weight(.semibold))
+        Text("\(queue.rows.count)")
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Theme.tintSoft, in: Capsule())
+            .foregroundStyle(Theme.tint)
+    }
+
+    private var headline: some View {
+        Text(queue.rows.headline(turnRunning: turnRunning))
+            .font(.caption)
+            .accessibilityIdentifier("session.queue.headline")
+    }
+
+    private func undoLine(_ gone: WithdrawnQueuedMessage) -> some View {
+        HStack(spacing: 8) {
+            Text("Message withdrawn")
+                .font(.footnote)
+                .foregroundStyle(Theme.secondaryOnCard)
+            Spacer(minLength: 8)
+            Button {
+                queue.clearUndo()
+                onUndo(gone.text)
+            } label: {
+                Text("Undo")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.tint)
+                    .frame(minWidth: 44, minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("session.queue.undo")
+        }
+        .padding(.horizontal, 14)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session.queue.withdrawn")
     }
 
     private func rowView(_ row: SessionQueuedMessage) -> some View {
@@ -112,6 +160,23 @@ struct SessionQueueStrip: View {
             .accessibilityHint("Opens it to edit, send now or withdraw")
             .accessibilityIdentifier("session.queue.row.\(row.id)")
 
+            if row.status == "parked", !turnRunning, !queue.busyIds.contains(row.id) {
+                // Nothing runs, so Send just puts it back in line: one tap, no sheet.
+                Button {
+                    Task { _ = await queue.sendNow(row, interrupt: false) }
+                } label: {
+                    Text("Send")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .padding(.horizontal, 10)
+                        .frame(minWidth: 44, minHeight: 32)
+                        .background(Theme.tintSoft, in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("session.queue.send.\(row.id)")
+            }
+
             if queue.busyIds.contains(row.id) {
                 ProgressView().controlSize(.small).frame(width: 44, height: 44)
             } else if row.canWithdraw {
@@ -124,6 +189,7 @@ struct SessionQueueStrip: View {
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(Theme.secondaryOnCard)
                         .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Withdraw")
@@ -153,6 +219,11 @@ struct SessionQueuedMessageSheet: View {
     @FocusState private var focused: Bool
 
     private var row: SessionQueuedMessage? { queue.rows.first { $0.id == rowID } }
+
+    /// The words were deleted: there is nothing to send (the saved ones would go out instead).
+    private var emptied: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     private var changed: Bool {
         guard let row else { return false }
@@ -193,7 +264,8 @@ struct SessionQueuedMessageSheet: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(Theme.tint)
-                            .disabled(saving || queue.busyIds.contains(row.id))
+                            .foregroundStyle(Theme.onTint)
+                            .disabled(saving || queue.busyIds.contains(row.id) || emptied)
                             .accessibilityIdentifier("session.queue.sendNow")
                         }
                         if row.canWithdraw {
@@ -207,6 +279,7 @@ struct SessionQueuedMessageSheet: View {
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
                             .buttonStyle(.bordered)
+                            .tint(Theme.danger)
                             .disabled(saving || queue.busyIds.contains(row.id))
                             .accessibilityIdentifier("session.queue.withdrawSheet")
                         }
@@ -255,10 +328,10 @@ struct SessionQueuedMessageSheet: View {
         switch row.status {
         case "pending":
             return turnRunning
-                ? "Goes out when this turn ends. Edit it until then."
+                ? "Waiting to go in. You can edit it until it does."
                 : "About to go out."
-        case "processing": return "This message is being delivered now."
-        case "parked": return "Set aside, for example by a Stop. Send now puts it back in line."
+        case "processing": return "This message is with the agent now."
+        case "parked": return "Not sent: a Stop set it aside. Send puts it back in line."
         case "held": return "Waiting for your Mac to come back online."
         default: return ""
         }

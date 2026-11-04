@@ -28,8 +28,8 @@ struct SessionTimelineBody: View {
     var keyboardGeometryFrozen: () -> Bool = { false }
     /// Pull-to-refresh (SwiftUI .refreshable can't reach the hosted list).
     var onRefresh: (() async -> Void)? = nil
-    /// The messages waiting in the session's queue: a bubble that is one of them wears the
-    /// same "Queued" badge and Withdraw the chat tab's banked messages wear.
+    /// The messages waiting in the session's queue: they are listed above the composer, so
+    /// their bubbles stay out of the conversation until they start going out.
     var queue: SessionQueueModel? = nil
 
     @State private var previewTarget: FilePreviewTarget?
@@ -44,16 +44,23 @@ struct SessionTimelineBody: View {
     /// reference opens, so a task reads the same wherever it was cited.
     @State private var openedTask: InboxTaskDestination?
 
-    /// Which bubbles are still waiting in the queue (`pending`), and which are being delivered.
-    private var queuedStates: [String: QueuedSend.Status] {
+    /// The queue rows by the id of the message they hold (the bubble's `clientMessageId`).
+    private var queueRowsByMessage: [String: SessionQueuedMessage] {
         guard let queue, queue.hasRows else { return [:] }
-        var states: [String: QueuedSend.Status] = [:]
-        for message in store.messages {
-            guard let id = message.clientMessageId,
-                  let row = queue.rows.first(where: { $0.id == id }) else { continue }
-            states[message.id] = row.status == "processing" ? .processing : .pending
+        return Dictionary(queue.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// A message in the queue lives in the tray above the composer, once: its bubble joins
+    /// the conversation when the queue lets go of it, and the transcript's own row
+    /// replaces that. Two copies of one message, each with its own controls, read as
+    /// two messages.
+    private var visibleMessages: [ChatMessage] {
+        let rows = queueRowsByMessage
+        guard !rows.isEmpty else { return store.messages }
+        return store.messages.filter { message in
+            guard let id = message.clientMessageId else { return true }
+            return rows[id] == nil
         }
-        return states
     }
 
     var body: some View {
@@ -64,7 +71,7 @@ struct SessionTimelineBody: View {
         // are genuinely scrollable.
         ZStack {
             TimelineHost(
-                messages: store.messages,
+                messages: visibleMessages,
                 streaming: store.streaming,
                 liveText: store.liveText,
                 liveTextTruncated: store.liveTextTruncated,
@@ -78,7 +85,6 @@ struct SessionTimelineBody: View {
                 // folds into one line, and the conversation above it is one tap away.
                 showLoadEarlier: store.showsLoadEarlier,
                 loadEarlierState: store.loadEarlierState,
-                queuedMessageStates: queuedStates,
                 afterLiveMessageIDs: store.afterLiveMessageIDs,
                 // The server's "always show what Walnut added"; off, each bubble's
                 // long-press item shows it for that message (TimelineTurnFold).
@@ -97,13 +103,6 @@ struct SessionTimelineBody: View {
                     case .discard(let messageID):
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
-                        }
-                    case .withdrawQueued(let messageID):
-                        if let queue,
-                           let message = store.messages.first(where: { $0.id == messageID }),
-                           let row = queue.rows.first(where: { $0.id == message.clientMessageId }),
-                           row.canWithdraw {
-                            Task { await queue.withdraw(row) }
                         }
                     case .loadEarlier:
                         Task { await store.loadEarlier() }

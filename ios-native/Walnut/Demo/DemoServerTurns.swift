@@ -298,6 +298,10 @@ extension DemoServer {
                     SessionTranscript.Message(role: "assistant", text: partial, timestamp: nowISO, kind: nil)
                 )
             }
+            // The CLI writes this line when a turn is stopped; the phone draws it as a card.
+            state.sessions[i].transcript.append(
+                SessionTranscript.Message(role: "user", text: "[Request interrupted by user]", timestamp: nowISO, kind: nil)
+            )
             state.sessions[i].processStatus = "idle"
             state.sessions[i].lastActiveAt = nowISO
             if parkQueue {

@@ -129,6 +129,32 @@ final class SessionStopAndInterruptTests: XCTestCase {
         }
     }
 
+    func testTheCLIsAbortLineIsACardNotAUserBubble() async {
+        for line in ["[Request interrupted by user]", "[Request interrupted by user for tool use]"] {
+            let transport = MockSessionSendTransport()
+            transport.transcript = SessionTranscript(
+                sessionId: "stop-line", exportedAt: "2026-11-04T10:00:00Z", truncated: false,
+                messages: [
+                    SessionTranscript.Message(role: "user", text: "run the shards", timestamp: "2026-11-04T10:00:01Z", kind: nil),
+                    SessionTranscript.Message(role: "user", text: line, timestamp: "2026-11-04T10:00:09Z", kind: nil),
+                ]
+            )
+            let store = SessionConversationStore(session: ScriptedSSE.session(id: "stop-line"), transport: transport)
+            await store.open()
+            let rows = store.messages
+            XCTAssertEqual(rows.count, 2, line)
+            XCTAssertEqual(rows.last?.kind, .notification, line)
+            XCTAssertEqual(rows.last?.source, "interrupt", line)
+            XCTAssertFalse(rows.contains { $0.text.contains("Request interrupted") }, "the plumbing text never shows")
+        }
+    }
+
+    func testWordsThatMerelyMentionTheAbortLineStayABubble() {
+        XCTAssertFalse(SessionConversationStore.isInterruptMarker("please explain [Request interrupted by user]"))
+        XCTAssertFalse(SessionConversationStore.isInterruptMarker("Request interrupted by user"))
+        XCTAssertTrue(SessionConversationStore.isInterruptMarker("  [Request interrupted by user]\n"))
+    }
+
     func testAStopThatFindsNothingRunningReadsTheTranscriptSoThePageSettles() async {
         let (store, transport) = store("stale")
         store.handle(event("turn-start"))

@@ -23,6 +23,12 @@ final class SessionQueueModel {
     private(set) var busyIds: Set<String> = []
     /// One line the page shows under the list: why an action did not go through.
     var notice: String?
+    /// The message the person just withdrew: the strip offers to put it back for a few
+    /// seconds, so a stray tap on the cross costs nothing.
+    private(set) var withdrawn: WithdrawnQueuedMessage?
+    @ObservationIgnored private var withdrawnClear: Task<Void, Never>?
+    /// How long a withdrawn message can be taken back.
+    nonisolated(unsafe) static var undoWindow: TimeInterval = 6
 
     /// The queue row with this id was withdrawn (server confirmed).
     @ObservationIgnored var onWithdrawn: ((String) -> Void)?
@@ -90,6 +96,7 @@ final class SessionQueueModel {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        clearUndo()
     }
 
     // MARK: - Writing
@@ -107,6 +114,7 @@ final class SessionQueueModel {
         do {
             try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
             onWithdrawn?(row.id)
+            offerUndo(of: row)
             AppLog.info("session", "queued message withdrawn", ["sessionId": sessionId, "messageId": row.id])
         } catch let error as APIError where error.isConflict {
             notice = "That message already started delivering."
@@ -115,6 +123,23 @@ final class SessionQueueModel {
             rows = original
             notice = SessionConversationStore.queueFailureText(error)
         }
+    }
+
+    private func offerUndo(of row: SessionQueuedMessage) {
+        withdrawnClear?.cancel()
+        withdrawn = WithdrawnQueuedMessage(id: row.id, text: row.message)
+        withdrawnClear = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.undoWindow))
+            guard !Task.isCancelled else { return }
+            self?.withdrawn = nil
+        }
+    }
+
+    /// The offer ends: it was taken, or the page moved on.
+    func clearUndo() {
+        withdrawnClear?.cancel()
+        withdrawnClear = nil
+        if withdrawn != nil { withdrawn = nil }
     }
 
     /// Save new words for a pending row. True = the server holds them now.
@@ -171,6 +196,25 @@ final class SessionQueueModel {
     }
 }
 
+/// A queued message the person withdrew a moment ago.
+struct WithdrawnQueuedMessage: Equatable {
+    let id: String
+    let text: String
+}
+
+extension Array where Element == SessionQueuedMessage {
+    /// The one line over the list: what is about to happen to the messages in it.
+    func headline(turnRunning: Bool) -> String {
+        if contains(where: { $0.status == "processing" }) { return "Going out now" }
+        if contains(where: { $0.status == "pending" }) {
+            return turnRunning ? "Waiting to go in" : "Going out now"
+        }
+        if contains(where: { $0.status == "parked" }) { return "Stopped \u{00B7} not sent" }
+        if contains(where: { $0.status == "held" }) { return "Waiting for your Mac" }
+        return ""
+    }
+}
+
 extension SessionConversationStore {
     /// A queue write failed: the sentence says what to do, never a status code.
     static func queueFailureText(_ error: Error) -> String {
@@ -189,7 +233,7 @@ extension SessionQueuedMessage {
     var statusNote: String? {
         switch status {
         case "processing": return "Delivering…"
-        case "parked": return "Set aside"
+        case "parked": return "Not sent"
         case "held": return "Waiting for your Mac"
         default: return nil
         }

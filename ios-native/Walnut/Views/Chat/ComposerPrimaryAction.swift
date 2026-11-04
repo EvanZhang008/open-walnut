@@ -1,3 +1,5 @@
+import Foundation
+
 /// What the composer's trailing button does right now.
 ///
 /// ONE seat, never two: a stop that sits beside the send arrow makes the row's
@@ -64,5 +66,23 @@ enum ComposerPrimaryAction: Equatable {
     /// no turn behind that to abort, so it keeps the greyed send it always had.
     func availableWithStop(_ canStop: Bool) -> ComposerPrimaryAction {
         self == .stop && !canStop ? .disabled : self
+    }
+}
+
+/// Taps on the composer's trailing seat. The seat changes under the finger that just tapped
+/// it: a send empties the field and the seat turns into stop (a turn is running) or voice
+/// mode, and a stop ends the turn and the seat turns into voice mode. So the second tap of
+/// a double tap lands on a different control; a stop or voice tap that close behind the last
+/// tap on the seat is not a decision to stop the agent or to start talking, and does nothing.
+struct SeatTapGuard: Equatable {
+    static let window: TimeInterval = 1.0
+    private(set) var lastTap = Date.distantPast
+
+    func allows(at now: Date = Date()) -> Bool {
+        now.timeIntervalSince(lastTap) >= Self.window
+    }
+
+    mutating func record(at now: Date = Date()) {
+        lastTap = now
     }
 }
