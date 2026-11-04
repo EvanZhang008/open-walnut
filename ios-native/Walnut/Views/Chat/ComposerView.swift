@@ -1496,6 +1496,11 @@ struct ComposerBar: View {
 
     private var micButton: some View {
         Button {
+            // The seat next to it changes under a finger that just tapped Send / Queue: the second
+            // and third tap of a quick triple land on the mic. A mic tap right behind a tap on the
+            // seat is not a decision to start recording.
+            guard seatTaps.allows() else { return }
+            seatTaps.record()
             Task { _ = await voice.start() }
         } label: {
             if voice.state == .transcribing {

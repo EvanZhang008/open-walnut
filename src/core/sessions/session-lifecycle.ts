@@ -811,6 +811,9 @@ export async function interruptSession(sessionId: string, source: string): Promi
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
   log.session.info('session interrupt requested', { sessionId, source });
+  // A Stop is the person taking the session back: what they lined up for the turn's end
+  // waits for their word (Send all / Send now) instead of starting by itself.
+  await (await import('./queue-after-turn.js')).setAsideAfterTurnHolds(sessionId);
   bus.emit(EventNames.SESSION_INTERRUPT, { sessionId }, ['session-runner'], { source });
   return { status: 'interrupted', sessionId, wasRunning: record.process_status === 'running' };
 }

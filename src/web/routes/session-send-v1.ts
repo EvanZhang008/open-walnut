@@ -86,6 +86,15 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       return
     }
     const interrupt = rawInterrupt === true
+    // Additive: `afterTurn: true` = line this message up for after the running turn instead of
+    // writing it into the live CLI. Held in the queue, it can be edited or withdrawn until the
+    // turn ends; with no turn running it is sent at once. `interrupt` wins when both are set.
+    const rawAfterTurn = req.body?.afterTurn
+    if (rawAfterTurn !== undefined && typeof rawAfterTurn !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'afterTurn must be a boolean')
+      return
+    }
+    const afterTurn = rawAfterTurn === true && !interrupt
 
     // Cloud-owned session (cloud.exec): the CLI is on THIS box, so it takes the
     // primary-box path below: same durable queue, same session-runner delivery,
@@ -192,11 +201,14 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
       ...(interruptNow ? { interrupt: true } : {}),
+      ...(afterTurn ? { afterTurn: true } : {}),
       hinted: true,
     })
     await outputMode.commit()
-    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice, interrupt })
-    res.status(202).json({ messageId: msg.id })
+    const { isAfterTurnHold } = await import('../../core/sessions/queue-after-turn.js')
+    const heldForTurn = afterTurn && isAfterTurnHold(msg)
+    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice, interrupt, afterTurn: heldForTurn })
+    res.status(202).json({ messageId: msg.id, ...(heldForTurn ? { afterTurn: true } : {}) })
   } catch (err) {
     next(err)
   }

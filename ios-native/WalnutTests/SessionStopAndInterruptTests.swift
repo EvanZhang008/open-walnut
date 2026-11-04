@@ -201,6 +201,40 @@ final class SessionStopAndInterruptTests: XCTestCase {
         XCTAssertEqual(Set(transport.messageIds.compactMap { $0 }).count, 1, "one id: the server stops the turn once")
     }
 
+    func testAPlainSendIsLinedUpBehindTheRunningTurn() async {
+        let (store, transport) = store("lined")
+        await store.open()
+        store.handle(event("turn-start"))
+        _ = await store.sendFromComposer("then this")
+        XCTAssertEqual(transport.afterTurnFlags, [true], "the server holds it in its queue until the turn ends")
+        XCTAssertEqual(transport.interruptFlags, [false])
+    }
+
+    func testAnInterruptingSendIsNeverLinedUp() async {
+        let (store, transport) = store("not-lined")
+        await store.open()
+        store.handle(event("turn-start"))
+        _ = await store.sendFromComposer("instead", interrupt: true)
+        XCTAssertEqual(transport.afterTurnFlags, [false])
+        XCTAssertEqual(transport.interruptFlags, [true])
+    }
+
+    func testEveryRetryOfALinedUpSendCarriesTheFlagUnderOneId() async {
+        let (store, transport) = store("lined-retry")
+        await store.open()
+        transport.failuresRemaining = 1
+        transport.failureError = APIError.server(
+            status: 503, code: "bridge_offline", message: "No live bridge", serverHash: nil, serverContent: nil
+        )
+        _ = await store.send("after the job")
+        guard let failed = store.messages.last(where: { $0.failed == true }) else {
+            return XCTFail("the failed send keeps a retryable bubble")
+        }
+        await store.retry(failed)
+        XCTAssertEqual(transport.afterTurnFlags, [true, true])
+        XCTAssertEqual(Set(transport.messageIds.compactMap { $0 }).count, 1)
+    }
+
     func testAPlainSendAfterAnInterruptingOneIsPlain() async {
         let (store, transport) = store("mixed")
         await store.open()

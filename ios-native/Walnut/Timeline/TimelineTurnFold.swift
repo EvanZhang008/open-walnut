@@ -263,6 +263,11 @@ private final class Planner {
         // a second one above the bubble (the web's `ridersFolded`; 2026-10-31, Main's
         // chat read "Received 13 messages" right above "Received 2 messages").
         func person(_ item: TimelineToolRunFold.Part) {
+            // A Stop's marker right before a row the person reads (their interrupting message, the
+            // agent's next words) ends the stretch it closes: it stays in view, not counted among the
+            // steps, so the one sign that the tap worked is not hidden in a folded count.
+            var stop: TimelineToolRunFold.Part?
+            if case .message(let m)? = quiet.last, TimelineTurnShape.isStopMarker(m) { stop = quiet.removeLast() }
             var folded = false
             if additions.showAll, !quiet.isEmpty, case .message(let m) = item, TimelineTurnShape.isPerson(m),
                m.sentBy != nil, let split = TimelineInboundMessage.splitRiders(TimelineTurnFold.ownText(m)) {
@@ -270,13 +275,13 @@ private final class Planner {
                 folded = true
             }
             flushQuiet()
+            if let stop { out += defaultParts([stop]) }
             out += defaultParts([item], ridersFolded: folded)
         }
-        // The line a Stop leaves at the very end of the page stays in view: folded into the red
-        // "failed" count above it, the one sign that the person's own tap worked would be hidden.
-        // With anything after it, it joins the stretch around it like any other notice.
+        // The line a Stop leaves at the very end of the page stays in view too. In the middle of a
+        // stretch of work it joins that stretch like any other notice.
         let endsOnStop: Bool = {
-            if case .message(let m)? = parts.last?.part { return m.kind == .notification && m.source == "interrupt" }
+            if case .message(let m)? = parts.last?.part { return TimelineTurnShape.isStopMarker(m) }
             return false
         }()
         func place(_ item: TimelineToolRunFold.Part) {

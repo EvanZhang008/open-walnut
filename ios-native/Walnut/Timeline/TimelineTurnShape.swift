@@ -158,9 +158,20 @@ enum TimelineTurnShape {
                 .hasPrefix("In this team your questions go to your leader")
     }
 
-    /// A failed step the reader must be able to see: a tool error, an error card.
+    /// The line a Stop (or an interrupting message) leaves in the transcript.
+    static func isStopMarker(_ m: ChatMessage) -> Bool {
+        m.kind == .notification && m.source == "interrupt"
+    }
+
+    /// A call the person stopped: its result is the CLI's abort line, which is what they asked for.
+    static func isInterruptedCall(_ m: ChatMessage) -> Bool {
+        m.kind == .tool && (m.resultPreview ?? "").drop(while: \.isWhitespace).hasPrefix("[Request interrupted by user")
+    }
+
+    /// A failed step the reader must be able to see: a tool error, an error card. A call the
+    /// person stopped is not one: the Stop marker beside it says what happened.
     static func isFailure(_ m: ChatMessage) -> Bool {
-        if m.kind == .tool { return m.isError == true && !isRoutedQuestion(m) }
+        if m.kind == .tool { return m.isError == true && !isRoutedQuestion(m) && !isInterruptedCall(m) }
         return m.kind == .notification && NotificationStyling(message: m).isError
     }
 

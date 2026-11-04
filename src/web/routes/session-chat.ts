@@ -473,7 +473,8 @@ export function registerSessionChatRpc(): void {
     // unanswered permission prompt. A confirm hold on a row back in pending (its
     // write failed) is stale until the next attempt releases it, so it says nothing.
     const held = heldRows(data.sessionId)
-    const messages = (await getQueue(data.sessionId)).map((m) => {
+    const { presentAfterTurn } = await import('../../core/sessions/queue-after-turn.js')
+    const messages = (await getQueue(data.sessionId)).map(presentAfterTurn).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       return holds ? { ...m, heldReason: why } : m

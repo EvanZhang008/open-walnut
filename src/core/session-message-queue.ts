@@ -225,6 +225,8 @@ export async function sendMessageToSession(
     hinted?: boolean;
     /** Asked right before the row is stored: false drops the send (SendNoLongerWantedError). */
     stillWanted?: () => boolean;
+    /** Line it up for after the running turn instead of writing it into the live CLI: it can be edited or withdrawn until then (sessions/queue-after-turn.ts). */
+    afterTurn?: boolean;
   },
 ): Promise<QueuedMessage> {
   // A person's own words: they are using Walnut, so a live update waits (idle-gate.ts).
@@ -241,6 +243,10 @@ export async function sendMessageToSession(
   // Its task is moving to another host: the row is held here and goes with the task.
   const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
   const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;
+  // A message lined up for after the running turn waits in the queue, parked, until that turn ends.
+  const { AFTER_TURN_REASON, holdsForRunningTurn, noteAfterTurnHold } = await import('./sessions/queue-after-turn.js');
+  const heldForTurn = !heldForMove && opts?.afterTurn === true && opts?.interrupt !== true && await holdsForRunningTurn(sessionId)
+    ? AFTER_TURN_REASON : undefined;
   // A task that moved since its session was told rides a place note on this
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
@@ -299,7 +305,7 @@ export async function sendMessageToSession(
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
-      ...(heldForMove ? { heldReason: heldForMove } : {}),
+      ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
     });
   } catch (err) {
     appState?.release();
@@ -338,15 +344,19 @@ export async function sendMessageToSession(
   // Again at the edge itself: a quiet turn begun while this send was on its way is no longer quiet
   // when any reader of this edge asks.
   noteQuietTurnSend(sessionId, opts?.source);
-  // Tell session-runner to process the queued message (a row held for a move waits for it)
-  if (!heldForMove) bus.emit(EventNames.SESSION_SEND, {
-    sessionId,
-    taskId: opts?.taskId,
-    message,
-    mode: opts?.mode,
-    interrupt: opts?.interrupt || undefined,
-    ...(opts?.endsWait ? { endsWait: true } : {}),
-  }, ['session-runner'], { source });
+  // A repeat collapsed onto a row already queued is no hold of this call.
+  const holdsRow = heldForTurn !== undefined && msg.status === 'parked' && msg.parkedReason === heldForTurn;
+  if (holdsRow) noteAfterTurnHold(sessionId);
+
+  // Tell session-runner to process the queued message (a row held for a move or for the turn's end waits for it)
+  if (!heldForMove && !holdsRow) bus.emit(EventNames.SESSION_SEND, {
+  sessionId,
+  taskId: opts?.taskId,
+  message,
+  mode: opts?.mode,
+  interrupt: opts?.interrupt || undefined,
+  ...(opts?.endsWait ? { endsWait: true } : {}),
+}, ['session-runner'], { source });
 
   // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
   // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.

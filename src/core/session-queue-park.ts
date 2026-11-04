@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
+import { AFTER_TURN_REASON, STOP_PARKED_REASON } from './relay-fates.js';
 
 /**
  * Age backstop for the parking policy: a pending row this old is parked instead
@@ -191,6 +192,36 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
   });
   if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
   return ok;
+}
+
+/**
+ * Rows lined up for after the running turn that a Stop came ahead of: parked under the
+ * stop's reason, like every other row a stop sets aside. With `keepFence` given (even
+ * null), only the rows queued before the latest stop are set aside.
+ */
+export async function setAsideHeld(sessionId: string, keepFence?: string | null): Promise<number> {
+  const parkedAt = new Date().toISOString();
+  const n = await mutateStore((s) => {
+    let count = 0;
+    for (const row of s.queues[sessionId] ?? []) {
+      if (row.status !== 'parked' || row.parkedReason !== AFTER_TURN_REASON) continue;
+      if (keepFence !== undefined && (row.stopFence ?? null) === keepFence) continue;
+      row.parkedAt = parkedAt;
+      row.parkedReason = STOP_PARKED_REASON;
+      count++;
+    }
+    return count;
+  });
+  if (n > 0) log.session.info('rows held for the turn end set aside by a stop', { sessionId, count: n });
+  return n;
+}
+
+/** Sessions that still hold a row lined up for after a turn (a restart's leftovers). */
+export async function sessionsWithHeld(): Promise<string[]> {
+  const peek = await readQueueFileFresh();
+  return Object.entries(peek.queues)
+    .filter(([, rows]) => rows.some((r) => r.status === 'parked' && r.parkedReason === AFTER_TURN_REASON))
+    .map(([sid]) => sid);
 }
 
 export interface SessionQueueMigration {

@@ -83,6 +83,13 @@ final class SessionConversationStore {
     /// The server stops the turn only on the FIRST arrival of the bubble's id, so a retry
     /// after a lost answer cannot cut off the turn its own first send started.
     @ObservationIgnored private var interruptBubbleIDs: Set<String> = []
+    /// Bubbles sent while the page may be mid-turn without "Interrupt & send": every attempt
+    /// carries `afterTurn: true`, so the server holds the message in its queue (editable and
+    /// withdrawable) until the running turn ends instead of writing it into that turn. With
+    /// no turn running the server sends it at once.
+    @ObservationIgnored private var afterTurnBubbleIDs: Set<String> = []
+    /// A tool call came after the live words: the next words start a new paragraph.
+    @ObservationIgnored private var liveTextBreaksBeforeNext = false
     /// When each file send's progress was last written to its kept copy.
     @ObservationIgnored private var heldSavedAt: [String: Date] = [:]
     private var isActive = true
@@ -1252,7 +1259,7 @@ final class SessionConversationStore {
         // Spoken (voice mode): every attempt of this bubble, retries included,
         // goes out with `voice: true`.
         if voice { voiceBubbleIDs.insert(optimistic.id) }
-        if interrupt { interruptBubbleIDs.insert(optimistic.id) }
+        if interrupt { interruptBubbleIDs.insert(optimistic.id) } else { afterTurnBubbleIDs.insert(optimistic.id) }
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -1386,10 +1393,12 @@ final class SessionConversationStore {
             let wireText = try await textWithUploadedFiles(bubbleID: bubbleID, text: text)
             let receipt = try await api.sendSessionMessage(
                 id: sessionId, text: wireText, images: payloads, messageId: messageId,
-                voice: voiceBubbleIDs.contains(bubbleID), interrupt: interruptBubbleIDs.contains(bubbleID)
+                voice: voiceBubbleIDs.contains(bubbleID), interrupt: interruptBubbleIDs.contains(bubbleID),
+                afterTurn: afterTurnBubbleIDs.contains(bubbleID)
             )
             voiceBubbleIDs.remove(bubbleID)
             interruptBubbleIDs.remove(bubbleID)
+            afterTurnBubbleIDs.remove(bubbleID)
             // Accepted: the server holds the message under this bubble's id, so
             // what follows is written whatever the page is doing: on screen, in the
             // background, closed, or this attempt's task cancelled (a manual retry
@@ -1714,6 +1723,7 @@ final class SessionConversationStore {
         retryTasks[message.id] = nil
         voiceBubbleIDs.remove(message.id)
         interruptBubbleIDs.remove(message.id)
+        afterTurnBubbleIDs.remove(message.id)
         if let files = pendingUser.first(where: { $0.id == message.id })?.localFiles {
             for file in files { forgetUpload(file) }
         }
@@ -1890,6 +1900,9 @@ final class SessionConversationStore {
             }
             return
         }
+        // A tool call between two stretches of words: the next words are a new paragraph, not a
+        // continuation ("...shard-1-doneStep 2 complete" read as one sentence).
+        if event.event == "tool", !liveText.isEmpty || !pendingDelta.isEmpty { liveTextBreaksBeforeNext = true }
         // The three arms both live streams share. This store DOES honour
         // `impliesStreaming` (a CLI tool call is proof its own turn is running,
         // which is why the page has always flipped `streaming` here); the chat
@@ -1914,6 +1927,7 @@ final class SessionConversationStore {
             liveText = ""
             liveTextTruncated = false
             pendingDelta = ""
+            liveTextBreaksBeforeNext = false
             clearLiveThinking()
             setActivity(nil)
         case "text-delta":
@@ -2214,6 +2228,13 @@ final class SessionConversationStore {
     /// Buffer a streamed text delta and schedule a coalesced flush — SwiftUI
     /// sees `liveText` change at a bounded cadence regardless of delta rate.
     private func appendDelta(_ delta: String) {
+        if liveTextBreaksBeforeNext {
+            liveTextBreaksBeforeNext = false
+            if let last = (pendingDelta.isEmpty ? liveText : pendingDelta).last, !last.isNewline,
+               let first = delta.first, !first.isNewline {
+                pendingDelta += "\n\n"
+            }
+        }
         pendingDelta += delta
         scheduleLiveFlush()
     }

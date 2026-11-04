@@ -18,13 +18,16 @@ extension WalnutAPI {
     }
 
     /// `sendSessionMessage` that first stops the running turn (the console's "Interrupt &
-    /// send"). The server stops the turn only on the FIRST arrival of a `messageId`, so a
-    /// retry under the same id after a lost 202 cannot cut off the turn its own first
-    /// send started. `interrupt: false` is the plain send, byte for byte.
+    /// send"), or lines the message up for after it (`afterTurn`: the server keeps it in its
+    /// queue, editable and withdrawable, until the running turn ends; with no turn running
+    /// it goes out at once). The server stops the turn only on the FIRST arrival of a
+    /// `messageId`, so a retry under the same id after a lost 202 cannot cut off the turn
+    /// its own first send started. Neither flag is the plain send, byte for byte.
     func sendSessionMessage(
-        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool, interrupt: Bool
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool,
+        interrupt: Bool, afterTurn: Bool
     ) async throws -> SessionSendReceipt {
-        guard interrupt else {
+        guard interrupt || afterTurn else {
             return try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId, voice: voice)
         }
         struct Body: Encodable {
@@ -32,14 +35,16 @@ extension WalnutAPI {
             let images: [ImagePayload]?
             let messageId: String?
             let voice: Bool?
-            let interrupt: Bool
+            let interrupt: Bool?
+            let afterTurn: Bool?
         }
         struct Accepted: Codable { let messageId: String; let queued: Bool? }
         let validID = messageId.flatMap { SendRetryPolicy.isValidMessageId($0) ? $0 : nil }
         let accepted: Accepted = try await send(
             "POST", "/sessions/\(escape(id))/messages",
             body: Body(text: text, images: images.isEmpty ? nil : images, messageId: validID,
-                       voice: voice ? true : nil, interrupt: true),
+                       voice: voice ? true : nil, interrupt: interrupt ? true : nil,
+                       afterTurn: interrupt ? nil : true),
             timeout: images.isEmpty ? nil : 180,
             // The id makes the POST idempotent, the interrupt included (see above).
             retrySafe: validID != nil

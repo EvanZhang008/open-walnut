@@ -120,8 +120,12 @@ struct SessionQueueStrip: View {
     }
 
     private var showAllButton: some View {
-        Button(action: onShowAll) {
-            Text("Show all \(queue.rows.count)")
+        Button {
+            if queue.rows.count == 1, let only = queue.rows.first { onOpen(QueueRowRef(id: only.id)) } else { onShowAll() }
+        } label: {
+            // One message left behind the squeezed tray: "Show all 1" reads oddly, and what the button
+            // opens for it is the edit sheet.
+            Text(queue.rows.count == 1 ? "Edit" : "Show all \(queue.rows.count)")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Theme.tint)
                 .frame(minHeight: 36)

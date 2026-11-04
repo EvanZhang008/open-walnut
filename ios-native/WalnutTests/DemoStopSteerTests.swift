@@ -146,6 +146,28 @@ final class DemoStopSteerTests: XCTestCase {
         XCTAssertEqual(rows.map(\.id), ["qm-demo-steer-6"])
     }
 
+    func testSendingTwoHeldMessagesAgainLeavesNeitherHeldBack() async throws {
+        try await send("held one", id: "qm-demo-steer-7")
+        try await send("held two", id: "qm-demo-steer-8")
+        _ = try await api.interruptSession(id: session)
+        settle()
+        let held = try await queue()
+        XCTAssertEqual(held.map(\.status), ["parked", "parked"])
+        // The first starts a turn; the second, sent while that turn runs, is back in line behind it.
+        try await api.sendQueuedNow(messageId: "qm-demo-steer-7", interrupt: false)
+        try await api.sendQueuedNow(messageId: "qm-demo-steer-8", interrupt: false)
+        // Either the first turn is still running (the second waits in line, no longer held back) or it
+        // already ended (the second went in too): never left "Not sent".
+        let now = try await queue()
+        XCTAssertTrue(now.isEmpty || now.map(\.status) == ["pending"], "no longer held back: \(now.map(\.status))")
+        settle()
+        let rows = try await transcript()
+        XCTAssertTrue(rows.contains { $0.role == "user" && $0.text == "held one" })
+        XCTAssertTrue(rows.contains { $0.role == "user" && $0.text == "held two" }, "the second one went in too")
+        let left = try await queue()
+        XCTAssertTrue(left.isEmpty)
+    }
+
     func testSendNowOfAMessageThatIsNotQueuedIsAConflict() async throws {
         do {
             try await api.sendQueuedNow(messageId: "qm-demo-nothing", interrupt: true)

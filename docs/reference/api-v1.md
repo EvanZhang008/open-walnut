@@ -2587,6 +2587,18 @@ primary box the same endpoints serve directly — no bridge involved.
     (`503 bridge_offline`) nothing is sent. Only the first arrival of a `messageId`
     stops the turn: a retry under the same id (after a lost `202`) stops nothing
     again, so it cannot cut off the turn the first send started.
+  - `afterTurn` (additive, 2026-11, a body field beside these) — `true` lines the message up for AFTER
+    the running turn instead of writing it into the live CLI, where it would reach the model at
+    its next tool boundary and could no longer be edited or withdrawn. While a turn runs the row
+    is held in the durable queue: `GET /sessions/:id/queue` lists it as an ordinary `pending` row
+    (with `"afterTurn": true`), `PATCH` and `DELETE` on it work, and `POST /messages/:id/send-now`
+    sends it now (with `interrupt: true` it stops the turn first). When the turn ends the oldest
+    held row is sent as the next turn, one row at a time. A Stop (`POST /sessions/:id/interrupt`)
+    sets every held row aside as `parked`, to be sent on a person's word. The `202` answer
+    carries `"afterTurn": true` when the row was held; with no turn running the message is sent
+    at once and the answer is the plain one. `interrupt` wins when both are sent. Not a boolean:
+    `400 bad_request`. Absent or `false`: unchanged. The cloud companion does not hold: it relays
+    the text and the message joins the running turn there.
   - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
     `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
     reuses the original id and collapses onto the already-queued/delivered

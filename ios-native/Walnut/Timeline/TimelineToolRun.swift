@@ -207,9 +207,10 @@ enum TimelineToolRunFold {
             .map { TimelineToolRunPhrase.Member(name: $0.text, detail: $0.detail) }
     }
 
-    /// How many of a run's calls came back as errors (the "N failed" badge).
+    /// How many of a run's calls came back as errors (the "N failed" badge). A call the person
+    /// stopped is not one: the Stop marker beside it says what happened.
     static func failCount(_ members: [ChatMessage]) -> Int {
-        members.filter { $0.kind == .tool && $0.isError == true }.count
+        members.filter { $0.kind == .tool && $0.isError == true && !TimelineTurnShape.isInterruptedCall($0) }.count
     }
 
     /// The run row's id: its key in the conversation's namespace plus a suffix no

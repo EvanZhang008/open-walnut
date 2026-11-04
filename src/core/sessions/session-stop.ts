@@ -263,6 +263,8 @@ export const sessionStops = new SessionStopCoordinator({
     const { STOP_PARKED_REASON } = await import('../relay-fates.js')
     const queue = (await getQueue(sid)).filter((message) => message.status !== 'parked')
     if (queue.length) await parkMessages(queue, STOP_PARKED_REASON, true)
+    // What a person lined up for the turn's end is set aside with the rest.
+    await (await import('./queue-after-turn.js')).setAsideAfterTurnHolds(sid)
   },
   connection: async (host) => (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(host),
   changed: (record) => {

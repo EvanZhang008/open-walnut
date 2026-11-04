@@ -2027,6 +2027,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: IS_EPHEMERAL })).catch(() => {})
     // Starts the running-subtask cap queued begin by themselves once a slot frees (src/core/sessions/start-queue.ts);
     // a companion never drains, an ephemeral server only what it queued itself.
+    // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
+    if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
     if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL, cloud: isCompanion() })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})

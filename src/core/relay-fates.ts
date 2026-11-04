@@ -49,6 +49,9 @@ export type WithdrawState =
 /** Why a stop parks a pending row (session-message-queue.ts markProcessing). */
 export const STOP_PARKED_REASON = 'Session stopped by user; retry explicitly to send';
 
+/** Why a message a person lined up for after the running turn waits (core/sessions/queue-after-turn.ts). */
+export const AFTER_TURN_REASON = 'Waiting for the running turn to finish';
+
 /** The slice of the queue store the fates work on. */
 export interface FateStore {
   queues: Record<string, Array<{ id: string; status: string; parkedReason?: string; lineInDoubt?: true }>>;

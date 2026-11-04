@@ -88,12 +88,16 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
 
     /// The interrupt flag of every attempt, in order ("Interrupt & send").
     private(set) var interruptFlags: [Bool] = []
+    /// The after-the-turn flag of every attempt, in order (a message lined up behind the running turn).
+    private(set) var afterTurnFlags: [Bool] = []
 
     func sendSessionMessage(
-        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool, interrupt: Bool
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool,
+        interrupt: Bool, afterTurn: Bool
     ) async throws -> SessionSendReceipt {
         lock.lock()
         interruptFlags.append(interrupt)
+        afterTurnFlags.append(afterTurn)
         lock.unlock()
         return try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId, voice: voice)
     }

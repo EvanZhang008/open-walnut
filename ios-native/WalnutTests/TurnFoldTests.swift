@@ -41,11 +41,11 @@ final class TurnFoldTests: XCTestCase {
     private func said(_ text: String) -> ChatMessage {
         ChatMessage(id: "a\(clock)", role: "assistant", text: text, createdAt: at(), kind: nil)
     }
-    private func tool(_ name: String, _ detail: String? = nil, isError: Bool? = nil) -> ChatMessage {
+    private func tool(_ name: String, _ detail: String? = nil, isError: Bool? = nil, result: String = "ok") -> ChatMessage {
         // A Bash row carries its input as the server sends it: the command is in
         // the input render, and `detail` may be the call's description instead.
         ChatMessage(id: "t\(clock)", role: "assistant", text: name, createdAt: at(), kind: .tool,
-                    detail: detail, resultPreview: "ok",
+                    detail: detail, resultPreview: result,
                     inputPreview: name == "Bash" ? detail.map { "command: \($0)" } : nil, isError: isError)
     }
     private var line: ChatMessage { said(tag) }
@@ -260,10 +260,34 @@ final class TurnFoldTests: XCTestCase {
         let ended = plan([person(), said("Running the shards."), tool("Bash", "sleep 25", isError: true), stop()])
         XCTAssertEqual(outline(ended).last, "bubble:Turn interrupted", "\(outline(ended))")
         XCTAssertFalse(outline(ended).contains { $0.hasPrefix("fold:") && $0.contains("bubble:Turn interrupted") })
-        // The same marker with a message after it (an interrupting send) is one more step of the stretch.
+        // The same marker with the person's interrupting message after it ends its stretch: it stays in
+        // view between the work and that message, and is not counted among the steps.
         let followed = plan([person(), said("Running the shards."), tool("Bash", "sleep 25", isError: true), stop(),
                              person("Just say hello."), said("Hello.")])
-        XCTAssertFalse(outline(followed).contains("bubble:Turn interrupted"), "\(outline(followed))")
+        let rows = outline(followed)
+        XCTAssertTrue(rows.contains("bubble:Turn interrupted"), "\(rows)")
+        XCTAssertFalse(rows.contains { $0.hasPrefix("fold:") && $0.contains("bubble:Turn interrupted") }, "\(rows)")
+        let markerAt = rows.firstIndex(of: "bubble:Turn interrupted")!
+        XCTAssertEqual(rows[markerAt + 1], "bubble:Just say hello.", "the marker sits right above the message that interrupted")
+        // A marker in the middle of a stretch of work (more work follows it) still folds with it.
+        let middle = plan([person(), said("Running."), tool("Bash", "a"), stop(), tool("Bash", "b"), said("Done.")])
+        XCTAssertFalse(outline(middle).contains("bubble:Turn interrupted"), "\(outline(middle))")
+    }
+
+    func testACallThePersonStoppedIsNotCountedAsFailed() {
+        func stop() -> ChatMessage {
+            ChatMessage(id: "n\(clock)", role: "user", text: "Turn interrupted", createdAt: at(),
+                        kind: .notification, source: "interrupt")
+        }
+        let cut = tool("Bash", "sleep 25", isError: true, result: "[Request interrupted by user for tool use]")
+        let broken = tool("Bash", "make", isError: true, result: "make: *** [all] Error 2")
+        XCTAssertFalse(TimelineTurnShape.isFailure(cut))
+        XCTAssertTrue(TimelineTurnShape.isFailure(broken), "a real error still counts")
+        XCTAssertEqual(TimelineToolRunFold.failCount([cut]), 0, "a lone stopped call carries no red badge either")
+        XCTAssertEqual(TimelineToolRunFold.failCount([cut, broken]), 1)
+        // Stopped in the middle of work, then the person's message: no red count over the work.
+        let parts = plan([person(), said("Running the shards."), cut, stop(), person("Just say hello."), said("Hello.")])
+        for part in parts { if case .fold(let f) = part { XCTAssertEqual(f.failCount, 0) } }
     }
 
     func testAQuestionToThePersonAndWordsStillEndAStretch() {

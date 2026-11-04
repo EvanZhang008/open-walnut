@@ -307,12 +307,18 @@ extension DemoServer {
         }
         if r.bool("interrupt") == true { interruptSessionTurn(found.session, parkQueue: false) }
         let running = withState { $0.liveTurns["s:\(found.session)"] != nil }
-        // Still running (no interrupt): the message keeps its place and goes with the turn's end.
+        // Still running (no interrupt): the message keeps its place, back in line if a Stop had held it
+        // (the person asked for it to go), and goes with the turn's end.
         if !running {
             withState { state in
                 state.sessionQueue[found.session]?.removeAll { $0.id == messageID }
             }
             sendToSession(found.session, text: found.text, messageID: messageID)
+        } else {
+            withState { state in
+                guard let at = state.sessionQueue[found.session]?.firstIndex(where: { $0.id == messageID }) else { return }
+                state.sessionQueue[found.session]?[at].status = "pending"
+            }
         }
         return .object(["sent": true, "messageId": messageID, "sessionId": found.session])
     }

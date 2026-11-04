@@ -192,6 +192,28 @@ final class SessionStopSteerUITests: XCTestCase {
         attach(app, "8-double-tap")
     }
 
+    func testATapOnTheMicrophoneRightAfterQueueingDoesNotStartARecording() throws {
+        let app = openLongSession()
+        // A first message, to see where the microphone stands once the field is empty and the keyboard is up.
+        type("First waiting words", in: app)
+        element(app, "chat.send").tap()
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        let micFrame = element(app, "chat.mic").frame
+        // Both points are taken before the tap (the Queue button is gone after it), so the second tap
+        // follows the first within a fraction of a second, as a finger's would.
+        type("Then summarise the findings", in: app)
+        let sendFrame = element(app, "chat.send").frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: sendFrame.midX, dy: sendFrame.midY)).tap()
+        origin.withOffset(CGVector(dx: micFrame.midX, dy: micFrame.midY)).tap()
+        sleep(1)
+        XCTAssertEqual(elements(app, beginningWith: "session.queue.row.").count, 2, "both messages are listed once")
+        XCTAssertTrue(element(app, "chat.mic").isEnabled, "the microphone is busy: the tap started a recording")
+        XCTAssertEqual(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count, 0,
+                       "the tap asked for the microphone")
+        attach(app, "8b-mic-after-queue")
+    }
+
     func testADoubleTapOnTheCrossWithdrawsOnlyThatMessage() throws {
         let app = openLongSession()
         type("First waiting words", in: app)
@@ -361,6 +383,8 @@ final class SessionStopSteerUITests: XCTestCase {
         sendAll.tap()
         XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 40), "Send all was not answered")
         XCTAssertFalse(element(app, "session.queue.sendAll").exists)
+        // Both go in, one after the other: nothing is left held back.
+        XCTAssertTrue(element(app, "session.queue.strip").waitForNonExistence(timeout: 90), "a held message was left behind")
         attach(app, "17-send-all-done")
     }
 
