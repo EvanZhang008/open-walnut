@@ -29,6 +29,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type Locator, type Page } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
+import { expectQrEncodes } from './phone-link-qr-check'
 
 test.setTimeout(180_000)
 
@@ -202,8 +203,8 @@ test.describe('Open from a browser', () => {
     await expect(page.getByTestId('browser-access-enabled')).toHaveAttribute('aria-checked', 'true')
     await expect(state).toContainText('Connected through Custom command.', { timeout: 30_000 })
     // Once connected, the phone link is there by itself: the tunnel's address with a
-    // fresh one-time code after #pair=, nothing to press, no QR, one link only. The
-    // text hides the code (a screenshot must not sign anyone in); the href carries it.
+    // fresh one-time code after #pair=, nothing to press, one link only, with the QR of
+    // that link beside it. The text hides the code; the href and the QR carry it.
     const row = page.getByTestId('browser-access-code')
     const shown = page.getByTestId('browser-access-link')
     await expect(shown).toHaveAttribute('href', /^http:\/\/127\.0\.0\.1:\d+\/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
@@ -212,7 +213,8 @@ test.describe('Open from a browser', () => {
     await expect(shown).toHaveText(`${tunnelUrl}/#pair=••••-••••`)
     await expect(row).not.toContainText(link.split('#pair=')[1]!)
     await expect(row.getByTestId('browser-access-link')).toHaveCount(1)
-    await expect(row.locator('img')).toHaveCount(0)
+    await expect(row.locator('img')).toHaveCount(1)
+    await expectQrEncodes(row.getByTestId('browser-access-qr'), link)
     await expect(page.getByTestId('browser-access-copy-link')).toBeVisible()
     await expect(page.getByTestId('browser-access-code-value')).toHaveCount(0)
     await shot(page, '2-connected-code', group)

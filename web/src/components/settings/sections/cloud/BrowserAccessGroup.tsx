@@ -10,11 +10,15 @@
  *                      (src/core/expose/placement.ts); shown only when there is a host to pick
  *   Open from anywhere the switch, with one sentence of state and Retry when it waits
  *   Open on your phone ONE link, made by itself once connected: opened on the phone, Walnut opens
- *                      there signed in (its one-time code rides in the link). No QR, no second
- *                      address (2026-11-03, the user asked for one link that just opens). It goes
- *                      to an always-on host's tunnel first; shown with its code hidden, copied
- *                      whole; kept across visits, and replaced when it runs out, when a phone
- *                      signed in with it (browser:signed-in), or when the address changed.
+ *                      there signed in (its one-time code rides in the link). No second address
+ *                      (2026-11-03, the user asked for one link that just opens). Beside it, the
+ *                      QR code of that same link, for the phone's camera (2026-11-04, the user:
+ *                      "the QR code is still needed"); it shows only once drawn for the link on
+ *                      screen. It goes to an always-on host's tunnel first; the text hides its
+ *                      code, Copy takes it whole; kept across visits, and replaced when it runs
+ *                      out, when a phone signed in with it (browser:signed-in), or when the
+ *                      address changed. The QR carries the code, which is single use and lasts
+ *                      ten minutes.
  *
  * State comes from GET /api/expose, every 3s while the tunnel is moving or waits
  * on the person and every 30s once settled, never while the tab is hidden.
@@ -34,6 +38,7 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { saveErrorMessage } from '../../settings-pane-context';
 import { describeExpose, exposePollMs, type ExposeResponse, type ExposeStatus, optionFits } from './browser-access-status';
 import { isDeviceCaller } from './device-caller';
+import { PHONE_LINK_QR_SHOWN, phoneLinkQr } from './phone-link-qr';
 import '@/styles/browser-access.css';
 
 const PATH = '/api/expose';
@@ -60,6 +65,10 @@ interface BrowserCode {
 
 /** The link this page made last (see the code state below). */
 let sharedCode: BrowserCode | null = null;
+
+/** QR codes drawn for links, by link, so a QR shows with its link at once on a revisit. Few: a
+ *  link lasts ten minutes. */
+const drawnQr = new Map<string, string>();
 
 /** The server's word that a browser signed in with a link's code (src/web/routes/browser-pair.ts). */
 const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in';
@@ -251,6 +260,21 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
     return () => clearTimeout(timer);
   }, [code, setCode]);
   useEvent(BROWSER_SIGNED_IN_EVENT, () => { setCode(null); });
+  // The QR of the link on screen, looked up by that link: while one is drawn for a new link, the
+  // old link's QR never shows.
+  const [, setQrDrawn] = useState(0);
+  const phoneLink = code?.addresses[0]?.link;
+  useEffect(() => {
+    if (!phoneLink || drawnQr.has(phoneLink)) return;
+    let live = true;
+    void phoneLinkQr(phoneLink).then((data) => {
+      if (!data) { log.warn('browser-access', 'the phone link QR code could not be drawn'); return; }
+      drawnQr.set(phoneLink, data);
+      if (drawnQr.size > 4) drawnQr.delete(drawnQr.keys().next().value!);
+      if (live) setQrDrawn((n) => n + 1);
+    });
+    return () => { live = false; };
+  }, [phoneLink]);
 
   if (!data) {
     return (
@@ -406,6 +430,7 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
       ) : (() => {
         const address = code?.addresses[0];
         const until = code ? new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+        const qrData = address ? drawnQr.get(address.link) : undefined;
         return (
           <SettingsRow
             label="Open on your phone"
@@ -417,17 +442,30 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
                 : !address
                   ? <>No address reaches this computer from outside yet. Meanwhile, type <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span> into Walnut on the other device; it works until {until}.</>
                   : (
-                    <>
-                      <a
-                        className="settings-addons-link settings-addons-mono browser-access-link"
-                        href={address.link}
-                        title="Click to copy. Open it on the phone, not here: opening it here signs this browser in and uses the link up."
-                        onClick={(e) => { e.preventDefault(); void copyTextRobust(address.link); }}
-                        onAuxClick={(e) => e.preventDefault()}
-                        data-testid="browser-access-link"
-                      >{maskedLink(address.link)}</a>
-                      <span className="browser-access-link-note">{` Copy it to the phone and open it there: Walnut opens signed in, and stays signed in. One phone, once, until ${until}; then a new link shows here.`}</span>
-                    </>
+                    <span className="browser-access-phone">
+                      {qrData && (
+                        <img
+                          className="browser-access-qr"
+                          src={qrData}
+                          alt="QR code that opens Walnut on the phone, signed in"
+                          width={PHONE_LINK_QR_SHOWN}
+                          height={PHONE_LINK_QR_SHOWN}
+                          data-for={address.link}
+                          data-testid="browser-access-qr"
+                        />
+                      )}
+                      <span className="browser-access-phone-text">
+                        <a
+                          className="settings-addons-link settings-addons-mono browser-access-link"
+                          href={address.link}
+                          title="Click to copy. Open it on the phone, not here: opening it here signs this browser in and uses the link up."
+                          onClick={(e) => { e.preventDefault(); void copyTextRobust(address.link); }}
+                          onAuxClick={(e) => e.preventDefault()}
+                          data-testid="browser-access-link"
+                        >{maskedLink(address.link)}</a>
+                        <span className="browser-access-link-note">{`Scan the QR code with the phone's camera, or copy the link to the phone and open it there: Walnut opens signed in, and stays signed in. One phone, once, until ${until}; then a new link and QR code show here.`}</span>
+                      </span>
+                    </span>
                   )}
             error={codeError ?? undefined}
             control={address && linkReady ? <CopyButton text={address.link} data-testid="browser-access-copy-link" /> : undefined}

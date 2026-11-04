@@ -29,6 +29,29 @@
 
 
 
+/* Open on your phone: the link's QR code beside its text. */
+.browser-access-phone {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.browser-access-phone-text {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.browser-access-qr {
+  flex: 0 0 auto;
+  border-radius: 8px;
+  /* Black on white in a dark theme too, as a phone camera expects. */
+  background: #fff;
+  border: 1px solid var(--border);
+  /* The border sits outside the drawn size, so the code is not scaled down by it. */
+  box-sizing: content-box;
+}
+
 .browser-access-link {
   display: block;
   min-width: 0;

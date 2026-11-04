@@ -1,13 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { expectQrEncodes } from './phone-link-qr-check'
 
 /**
  * "Open on your phone" with more than one address (BrowserAccessGroup.tsx): once the
  * tunnel is connected the ONE phone link is made by itself (nothing to press), and it
  * goes to a host server's always-on tunnel first (while this computer sleeps it still
- * opens that host's copy), else to this computer's own tunnel. No QR, no address
- * switch, no second link. Its text hides the code; the href and Copy carry the whole
- * link. The link is kept across visits to the page (no second mint). An older
+ * opens that host's copy), else to this computer's own tunnel. Beside it, the QR code
+ * of that same link for the phone's camera, following it when a new link replaces it.
+ * No address switch, no second link. Its text hides the code; the href and Copy carry
+ * the whole link. The link is kept across visits to the page (no second mint). An older
  * server's one-link answer still gives that link, and an answer with no address
  * shows the code to type. A hidden provider option shows its field only when the
  * value saved for it no longer fits its pattern.
@@ -83,13 +85,20 @@ async function openBrowserLink(page: Page) {
   return group
 }
 
-/** Nothing of the old layout: no QR, no address switch or note, no "Can't scan it?", no Address row. */
+/** The QR on screen encodes the link on screen. */
+async function expectQrOfShownLink(page: Page) {
+  const href = (await page.getByTestId('browser-access-link').getAttribute('href'))!
+  await expectQrEncodes(page.getByTestId('browser-access-qr'), href)
+}
+
+/** One link and its QR code, nothing of the old layout: no address switch or note, no "Can't
+ *  scan it?", no Address row. A usable link always comes with its QR (2026-11-04, the user). */
 async function expectOneLinkOnly(page: Page) {
   const row = page.getByTestId('browser-access-code')
   await expect(page.getByTestId('browser-access-link')).toHaveCount(1)
-  await expect(row.locator('img')).toHaveCount(0)
+  await expect(row.locator('img')).toHaveCount(1)
+  await expectQrOfShownLink(page)
   await expect(page.locator('[data-testid^="browser-access-address-"]')).toHaveCount(0)
-  await expect(page.getByTestId('browser-access-qr')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-manual')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-make-code')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-url')).toHaveCount(0)
@@ -118,7 +127,7 @@ test('the one link is made by itself, goes to the always-on host first, hides it
   await expect(link).toHaveText(`${DEVBOX}/#pair=••••-••••`)
   await expect(row).not.toContainText('ABCD')
   await expect(row).not.toContainText('EFGH')
-  await expect(row).toContainText('Copy it to the phone and open it there: Walnut opens signed in, and stays signed in.')
+  await expect(row).toContainText("Scan the QR code with the phone's camera, or copy the link to the phone and open it there: Walnut opens signed in, and stays signed in.")
   // The code rides in the link; it is not shown again on its own.
   await expect(page.getByTestId('browser-access-code-value')).toHaveCount(0)
   await expectOneLinkOnly(page)
@@ -190,6 +199,8 @@ test('with no address in the answer, the code is shown to type', async ({ page }
   await expect(page.getByTestId('browser-access-code')).toContainText('No address reaches this computer from outside yet.')
   await expect(page.getByTestId('browser-access-link')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-copy-link')).toHaveCount(0)
+  // Nothing to scan: a QR is only ever of a link.
+  await expect(page.getByTestId('browser-access-qr')).toHaveCount(0)
   // A connected tunnel whose answer had no address yet is asked again a few seconds later,
   // then less and less often (5, 15, 45 s): each new code takes one of the five live ones.
   await expect.poll(() => mints.count, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
@@ -197,6 +208,30 @@ test('with no address in the answer, the code is shown to type', async ({ page }
   await page.waitForTimeout(8_000)
   expect(mints.count).toBe(second)
   await expect(page.getByTestId('browser-access-code-value')).toHaveText('HJKM-NPQR')
+})
+
+test('when a link runs out, the new link comes with its own QR, never the old one', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await serveConnected(page)
+  let n = 0
+  // The first link lasts eight seconds; the page drops it then and makes the next by itself.
+  const codes = ['FIRS-TAAA', 'SECO-NDBB']
+  const mints = await serveCode(page, () => {
+    const code = codes[Math.min(n, codes.length - 1)]!
+    const expiresAt = Date.now() + (n === 0 ? 8_000 : 600_000)
+    n++
+    return { code, expiresAt, url: MAC, link: `${MAC}/#pair=${code}`, addresses: [{ where: 'this-computer', label: 'This computer', url: MAC, link: `${MAC}/#pair=${code}`, alwaysOn: false }] }
+  })
+  await openBrowserLink(page)
+  await expect(page.getByTestId('browser-access-qr')).toHaveAttribute('data-for', `${MAC}/#pair=FIRS-TAAA`)
+  await expectQrOfShownLink(page)
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${MAC}/#pair=SECO-NDBB`, { timeout: 30_000 })
+  await expectQrOfShownLink(page)
+  await expect(page.getByTestId('browser-access-qr')).toHaveAttribute('data-for', `${MAC}/#pair=SECO-NDBB`)
+  expect(mints.count).toBe(2)
+  await pause(page)
+  expect(errors).toEqual([])
 })
 
 test('a hidden option shows its field only when the value saved for it does not fit', async ({ page }) => {
