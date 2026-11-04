@@ -21,4 +21,6 @@ useDefault = true
   regexes = [
     '''^abcdef123456$''',
     '''^devtok-abc123$''',
+    # "not a key" in base64: the passkey test's made-up unreadable key value.
+    '''^bm90IGEga2V5$''',
   ]
