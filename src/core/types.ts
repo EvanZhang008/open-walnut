@@ -899,6 +899,14 @@ export interface Task {
   /** The names sessions gave the task's links (target to 1 to 3 words, link-tags.ts), which a
    *  link pill reads instead of one made from its file name. */
   link_names?: Record<string, string>;
+  /** Live status of the pull requests the task links (its `pr:` link tags a provider reads),
+   *  keyed by URL: written only by the pull request watcher (core/pull-requests/pr-watch.ts). */
+  pr_status?: Record<string, import('./pull-requests/model.js').PrSnapshot>;
+  /** Complete this task when its pull request merges. Unset = the config default (on). */
+  pr_auto_complete?: boolean;
+  /** Wake this task's session when a check fails, someone comments or reviews, or the branch
+   *  conflicts. Unset = the config default (on). */
+  pr_wake?: boolean;
   source: TaskSource;
   external_url?: string;
   created_at: string;
@@ -1940,6 +1948,17 @@ export interface Config {
    *  pattern matches becomes a `<key>:<url>` tag on its task. Adds to Walnut's own patterns
    *  (GitHub, GitLab, Jira, Linear); an entry replaces Walnut's for the same key, `''` turns it off. */
   link_tags?: Record<string, string>;
+  /** The pull request watcher (core/pull-requests/pr-watch.ts): a task's linked GitHub pull
+   *  requests show their checks, review and state, news wakes its session, and a merge completes
+   *  it. Each switch defaults to on; a task's own `pr_wake` / `pr_auto_complete` wins over it. */
+  pull_requests?: {
+    /** Read linked pull requests at all (default true). */
+    watch?: boolean;
+    /** Complete a task when its pull request merges (default true). */
+    auto_complete_on_merge?: boolean;
+    /** Wake the task's session on a failed check, a comment or review, or a conflict (default true). */
+    wake_agent?: boolean;
+  };
   /** Audio capture configuration (system audio recording) */
   audio?: {
     /** Bundle IDs of apps to exclude from recording (e.g. 'com.spotify.client') */

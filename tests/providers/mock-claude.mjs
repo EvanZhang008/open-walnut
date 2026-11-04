@@ -12,6 +12,7 @@
  *   - "error" → exits with code 1 (stderr output)
  *   - "parse-error" → outputs invalid JSON to stdout
  *   - "tool-test" → emits a tool_use + tool_result in stream-json mode
+ *   - "bash-steps:<json>" → runs the Bash steps it names, each with the output it names
  *   - anything else → outputs a valid response
  *
  * Supports --resume <session-id> flag (session ID as value of --resume).
@@ -1078,6 +1079,38 @@ if (outputFormat === 'stream-json') {
       const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
       if (THINK_MS > 0) setTimeout(body, THINK_MS);
       else body();
+      return;
+    }
+
+    // 2a.-1.2. "bash-steps:<json>": a turn that runs the given Bash steps, each with the output
+    //          the spec names, then answers. <json> (first line only) is
+    //          { steps: [{ command, output?, outputB64? }], text? }; e.g. a `gh pr create` that
+    //          prints the new pull request's URL, for the hook that links it to the task
+    //          (outputB64 keeps that URL out of the message itself, which is linked on its own).
+    //          Stays alive for the next FIFO turn.
+    if (effectiveMessage.startsWith('bash-steps:')) {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      let spec = {};
+      try { spec = JSON.parse(effectiveMessage.split('\n')[0].slice('bash-steps:'.length)); } catch { /* defaults */ }
+      const turn = ++snapshotTurnSeq;
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      (spec.steps || []).forEach((step, i) => {
+        const id = `toolu_bs_${process.pid}_${turn}_${i}`;
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: {
+          id: `msg_bs_${process.pid}_${turn}_${i}`, type: 'message', role: 'assistant', model: 'mock-model',
+          content: [{ type: 'tool_use', id, name: 'Bash', input: { command: String(step.command ?? '') } }],
+          stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 },
+        } });
+        emit({ type: 'user', session_id: sid, parent_tool_use_id: null, message: { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: id, content: step.outputB64 ? Buffer.from(String(step.outputB64), 'base64').toString('utf8') : String(step.output ?? 'ok') },
+        ] } });
+      });
+      const text = spec.text || 'Bash steps done.';
+      emit({ type: 'assistant', session_id: sid, message: { id: `msg_bs_${process.pid}_${turn}_done`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } } });
+      emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+      armSnapshotNextTurn();
       return;
     }
 

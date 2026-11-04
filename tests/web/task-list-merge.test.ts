@@ -8,6 +8,8 @@
  * content, order, additions and removals.
  */
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Task } from '@open-walnut/core';
 import { mergeFetchedTasks, listRowEqual } from '@/hooks/task-list-merge';
 
@@ -89,6 +91,27 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(b, { ...b, workspace: ws } as Task)).toBe(false);
     const next = mergeFetchedTasks([a], [{ ...a, workspace: { ...ws, state: 'ready' as const } } as Task]);
     expect(next[0].workspace?.state).toBe('ready');
+  });
+
+  it('detects a pull request status change and either PR switch, written raw (every pr_ field of Task)', () => {
+    const snap = {
+      provider: 'github', url: 'https://github.com/acme/app/pull/4', repo: 'acme/app', number: 4, state: 'open' as const,
+      checks: { total: 2, passed: 1, failed: 0, pending: 1, skipped: 0, items: [{ name: 'test', status: 'pending' as const }] }, checkedAt: '2026-11-04T10:00:00Z',
+    };
+    const a = task({ id: 'a', pr_status: { [snap.url]: snap } });
+    expect(listRowEqual(a, { ...a, pr_status: { [snap.url]: { ...snap } } } as Task)).toBe(true);
+    const failed = { ...snap, checks: { ...snap.checks, failed: 1, pending: 0, items: [{ name: 'test', status: 'failed' as const }] } };
+    expect(listRowEqual(a, { ...a, pr_status: { [snap.url]: failed } } as Task)).toBe(false);
+    expect(mergeFetchedTasks([a], [{ ...a, pr_status: { [snap.url]: failed } } as Task])[0].pr_status?.[snap.url]?.checks.failed).toBe(1);
+    // Every pr_ field the Task type declares counts: a new one the pill draws cannot be forgotten here.
+    const declared = [...fs.readFileSync(path.resolve(__dirname, '../../src/core/types.ts'), 'utf8').matchAll(/^ {2}(pr_\w+)\?:/gm)].map((m) => m[1]!);
+    expect(declared.length).toBeGreaterThanOrEqual(3);
+    const sample: Record<string, unknown> = { pr_status: { [snap.url]: failed }, pr_auto_complete: false, pr_wake: false };
+    const b = task({ id: 'b' });
+    for (const key of declared) {
+      expect(sample[key], `give ${key} a sample value here`).toBeDefined();
+      expect(listRowEqual(b, { ...b, [key]: sample[key] } as Task), key).toBe(false);
+    }
   });
 
   it('detects a rewritten Brief, whose write leaves updated_at alone', () => {

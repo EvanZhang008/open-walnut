@@ -1,0 +1,446 @@
+/* The pull request pill (PrPill.tsx): the shape of every status pill in a title row (the
+   Trigger pill's, .task-trigger-pill in globals.css), its tint saying what the pull request
+   needs: red for a failed check, a conflict or changes asked for, amber while checks run,
+   green once they pass or it is approved, violet once merged, grey when closed or unread.
+   Every selector pairs two classes: this file can load before globals.css. */
+.task-row-pill.pr-pill {
+  --pr-tone: var(--fg-secondary);
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  margin: 0;
+  height: auto;
+  padding: 1px 7px 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--pr-tone) 12%, transparent);
+  color: var(--pr-tone);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.task-row-pill.pr-pill:hover,
+.task-row-pill.pr-pill:focus-visible,
+.task-row-pill.pr-pill[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--pr-tone) 20%, transparent);
+  outline: none;
+}
+.task-row-pill.pr-pill:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pr-tone) 45%, transparent); }
+.pr-pill .pr-pill-glyph { flex: 0 0 auto; }
+
+/* Folded in a tight column (row-pill-fit.css draws other pills' data-short as one ::after):
+   this pill's parts are their own boxes, laid out right to left on one line that wraps, and
+   the wrapped line is cut off. So what does not fit goes whole, never as a fragment: the
+   number first, then whose; the state's word and the count of more always stay.
+   The text is generated (attr), so the pill's words are read and matched once. */
+.task-row-pill.pr-pill .pr-pill-short { display: none; }
+.home-navigation-scroll[data-row-fit="tight"] .task-row-pill.pr-pill[data-short]::after { content: none; }
+.home-navigation-scroll[data-row-fit="tight"] .task-row-pill.pr-pill .pr-pill-short {
+  display: inline-flex;
+  flex-flow: row-reverse wrap;
+  justify-content: flex-end;
+  align-items: center;
+  column-gap: 3px;
+  min-width: 0;
+  height: 1.2em;
+  overflow: hidden;
+}
+.pr-pill .pr-pill-short span { white-space: nowrap; line-height: 1.2em; }
+.pr-pill .pr-pill-short > span { flex: 0 0 auto; }
+.pr-pill .pr-pill-short span::before { content: attr(data-t); }
+/* The word is the line's first box, so it never wraps away; wider than the pill, its text is
+   cut with an ellipsis rather than spill, and how many more and "not current" stay whole. */
+.pr-pill .pr-pill-short > .pr-pill-word { display: inline-flex; flex-shrink: 1; min-width: 0; }
+.pr-pill .pr-pill-short .pr-pill-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pr-pill .pr-pill-short .pr-pill-more,
+.pr-pill .pr-pill-short .pr-pill-stale { flex: none; margin-left: 3px; opacity: 0.8; }
+.pr-pill .pr-pill-short .pr-pill-who { flex: none; margin-right: 3px; font-style: italic; }
+/* A narrower column drops the number from every pill at once (row-fit.ts), never row by row. */
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill .pr-pill-n { display: none; }
+/* ... with less padding, so whose it is still fits beside the word in the narrowest column. */
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill { padding-inline: 5px; gap: 3px; }
+/* ... and says the state in its short word ("Failed", "Changes"). */
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill .pr-pill-text::before { content: attr(data-tn); }
+/* What Walnut last saw is not news: there, "not current" takes the word's place. */
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill[data-stale="true"] .pr-pill-text { display: none; }
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill[data-stale="true"] .pr-pill-stale { margin-left: 0; }
+/* A list row with a pull request keeps its title on the first line and its pills on the second,
+   whatever the title's length: the rows read alike, and a pill that grows when its status arrives
+   never pushes itself onto a new line (home-navigation.css wraps the row). A class from the row
+   (TodoPanel.tsx), not :has(): WebKit does not restyle :has() reliably when a pill arrives late. */
+@media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll .todo-item-title-row > .todo-item-title.todo-item-title-own-line { flex-basis: 100%; }
+}
+/* On a phone the card takes the width, with the same margin on both sides. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .pr-card.pr-card { width: calc(100vw - 16px); }
+}
+/* The phone draws every row pill in words (phone-fixes-r3.css). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html .app-shell-navigation .home-navigation-scroll[data-row-fit] .task-row-pill.pr-pill .pr-pill-short { display: none; }
+}
+
+/* What Walnut saw before a read that failed (signed out, gh gone): grey, whatever it said. */
+/* :root + four: past the dark theme's tone rules. */
+:root .task-row-pill.pr-pill[data-stale="true"][data-tone] { --pr-tone: var(--fg-muted); }
+
+/* On a status card's meta line every tag reads as a word, not a pill (status-sections.css): no
+   fill, the line's own size, with the line's "·" in front. The tint stays, it carries the state.
+   `html` + four classes: past that file's rule and the dark theme's. */
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill,
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:hover,
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:focus-visible,
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[aria-expanded="true"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-size: 11px;
+  line-height: 15px;
+}
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:hover,
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[aria-expanded="true"] { text-decoration: underline; }
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+/* The line's "·" is this pill's own ::before: an inline-block keeps the underline off it. */
+.status-card-meta .pr-pill.task-row-pill::before { display: inline-block; }
+/* A meta line too short for the project's name and the pull request: the pill keeps the line
+   whole, and the name (with the pill's "·" after it) leaves rather than shrink to a letter. The
+   class comes from the row (StatusSections.tsx), not :has(): WebKit misses a pill arriving late. */
+.status-card-meta.status-card-meta-pr { container-type: inline-size; }
+@container (max-width: 200px) {
+  .status-card-meta.status-card-meta-pr > .status-card-project.status-card-project { display: none; }
+  .status-card-meta-pr > .pr-pill.task-row-pill::before { display: none; }
+}
+
+/* Another person's pull request: a dashed edge (a dotted underline as a word), since it is shown
+   and never acts on this task. */
+.task-row-pill.pr-pill[data-theirs="true"] { border: 1px dashed color-mix(in srgb, var(--pr-tone) 55%, transparent); }
+html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-theirs="true"] {
+  border: 0;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+/* Tones, shared by the pill and the card. The text colours are the darker variants so 10px
+   text keeps its contrast on the light theme; the dark theme uses the bright ones. The three
+   that ask for a fix differ at a glance: red for a failed check, orange for a conflict, pink
+   for changes asked for. */
+.pr-pill[data-tone="failed"] { --pr-tone: #d1242f; }
+.pr-pill[data-tone="conflict"] { --pr-tone: #bc4c00; }
+.pr-pill[data-tone="changes"] { --pr-tone: #bf3989; }
+.pr-pill[data-tone="pending"] { --pr-tone: #9a6700; }
+.pr-pill[data-tone="passed"] { --pr-tone: #1a7f37; }
+.pr-pill[data-tone="merged"] { --pr-tone: #8250df; }
+.pr-pill[data-tone="closed"], .pr-pill[data-tone="unknown"], .pr-pill[data-tone="draft"] { --pr-tone: var(--fg-muted); }
+.pr-pill[data-tone="open"] { --pr-tone: var(--accent-text, var(--accent)); }
+
+:root[data-theme="dark"] .pr-pill[data-tone="failed"] { --pr-tone: #ff7b72; }
+:root[data-theme="dark"] .pr-pill[data-tone="conflict"] { --pr-tone: #ffa657; }
+:root[data-theme="dark"] .pr-pill[data-tone="changes"] { --pr-tone: #f778ba; }
+:root[data-theme="dark"] .pr-pill[data-tone="pending"] { --pr-tone: #e3b341; }
+:root[data-theme="dark"] .pr-pill[data-tone="passed"] { --pr-tone: #56d364; }
+:root[data-theme="dark"] .pr-pill[data-tone="merged"] { --pr-tone: #bc8cff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .pr-pill[data-tone="failed"] { --pr-tone: #ff7b72; }
+  :root:not([data-theme]) .pr-pill[data-tone="conflict"] { --pr-tone: #ffa657; }
+  :root:not([data-theme]) .pr-pill[data-tone="changes"] { --pr-tone: #f778ba; }
+  :root:not([data-theme]) .pr-pill[data-tone="pending"] { --pr-tone: #e3b341; }
+  :root:not([data-theme]) .pr-pill[data-tone="passed"] { --pr-tone: #56d364; }
+  :root:not([data-theme]) .pr-pill[data-tone="merged"] { --pr-tone: #bc8cff; }
+}
+
+/* ── The card ── */
+.pr-card {
+  --pr-red: #d1242f;
+  --pr-orange: #bc4c00;
+  --pr-pink: #bf3989;
+  --pr-amber: #9a6700;
+  --pr-green: #1a7f37;
+  --pr-violet: #8250df;
+  position: fixed;
+  z-index: 9500;
+  width: min(400px, calc(100vw - 16px));
+  max-height: min(560px, calc(100vh - 16px));
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: auto;
+}
+:root[data-theme="dark"] .pr-card { --pr-red: #ff7b72; --pr-orange: #ffa657; --pr-pink: #f778ba; --pr-amber: #e3b341; --pr-green: #56d364; --pr-violet: #bc8cff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .pr-card { --pr-red: #ff7b72; --pr-orange: #ffa657; --pr-pink: #f778ba; --pr-amber: #e3b341; --pr-green: #56d364; --pr-violet: #bc8cff; }
+}
+
+.pr-card .pr-card-pr + .pr-card-pr { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.pr-card .pr-card-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.pr-card .pr-card-state {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  padding: 1px 7px 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--pr-green);
+}
+/* Open is the ordinary state: a plain outline, so the checks' and the review's colours are the
+   only ones that speak. */
+.pr-card .pr-card-state[data-tone="open"] { background: transparent; color: var(--fg-secondary); box-shadow: inset 0 0 0 1px var(--border); }
+.pr-card .pr-card-state[data-tone="merged"] { background: var(--pr-violet); }
+.pr-card .pr-card-state[data-tone="closed"] { background: var(--pr-red); }
+.pr-card .pr-card-state[data-tone="draft"] { background: var(--fg-muted); }
+:root[data-theme="dark"] .pr-card .pr-card-state:not([data-tone="open"]) { color: #0d1117; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .pr-card .pr-card-state:not([data-tone="open"]) { color: #0d1117; } }
+
+.pr-card .pr-card-title {
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.pr-card .pr-card-title:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+.pr-card .pr-card-number { color: var(--fg-muted); font-weight: 500; }
+.pr-card .pr-card-sub { margin: 4px 0 8px; color: var(--fg-muted); font-size: 11px; overflow-wrap: anywhere; }
+.pr-card .pr-card-sub code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--fg-secondary); }
+
+.pr-card .pr-card-facts { display: grid; grid-template-columns: 58px 1fr; gap: 5px 10px; margin: 0; }
+.pr-card .pr-card-facts dt { color: var(--fg-muted); font-size: 11px; padding-top: 1px; }
+.pr-card .pr-card-facts dd { margin: 0; min-width: 0; color: var(--fg); }
+.pr-card .pr-card-facts[data-stale="true"] { opacity: 0.55; }
+.pr-card .pr-card-facts dd[data-tone="failed"] { color: var(--pr-red); font-weight: 500; }
+.pr-card .pr-card-facts dd[data-tone="conflict"] { color: var(--pr-orange); font-weight: 500; }
+.pr-card .pr-card-facts dd[data-tone="changes"] { color: var(--pr-pink); font-weight: 500; }
+.pr-card .pr-card-facts dd[data-tone="passed"] { color: var(--pr-green); font-weight: 500; }
+.pr-card .pr-card-checks-line { font-weight: 500; }
+.pr-card .pr-card-checks-line[data-tone="failed"] { color: var(--pr-red); }
+.pr-card .pr-card-checks-line[data-tone="pending"] { color: var(--pr-amber); }
+.pr-card .pr-card-checks-line[data-tone="passed"] { color: var(--pr-green); }
+
+.pr-card .pr-card-checks { list-style: none; margin: 5px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.pr-card .pr-card-check { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 11.5px; }
+.pr-card .pr-card-check a, .pr-card .pr-card-check > span:not(.pr-card-check-mark):not(.pr-card-required) {
+  min-width: 0;
+  color: var(--fg-secondary);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Who reviewed opens the review. */
+.pr-card :is(.pr-card-review-by, .pr-card-comments) { color: inherit; text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
+.pr-card :is(.pr-card-review-by, .pr-card-comments)::after { content: ' ↗'; color: var(--fg-muted); font-size: 10px; }
+.pr-card :is(.pr-card-review-by, .pr-card-comments):hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+/* What the reviewer wrote with the decision, under it. */
+.pr-card .pr-card-review-quote { display: block; margin-top: 3px; color: var(--fg-secondary); overflow-wrap: anywhere; }
+/* A check's name opens its log: a link that looks like one. */
+.pr-card .pr-card-check a { text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
+.pr-card .pr-card-check a::after { content: ' ↗'; color: var(--fg-muted); font-size: 10px; }
+.pr-card .pr-card-check a:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+.pr-card .pr-card-check-mark { flex: 0 0 12px; text-align: center; font-weight: 700; }
+.pr-card .pr-card-check-mark[data-status="failed"] { color: var(--pr-red); }
+.pr-card .pr-card-check-mark[data-status="pending"] { color: var(--pr-amber); }
+.pr-card .pr-card-check-mark[data-status="passed"] { color: var(--pr-green); }
+.pr-card .pr-card-check-more { padding-left: 18px; }
+.pr-card .pr-card-check-more a { color: var(--accent-text, var(--accent)); }
+.pr-card .pr-card-required {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: 6px;
+  font-size: 9.5px;
+  color: var(--fg-muted);
+}
+
+.pr-card .pr-card-muted { color: var(--fg-muted); }
+.pr-card .pr-card-empty { padding: 4px 0; }
+.pr-card .pr-card-note { margin-top: 8px; font-size: 11.5px; color: var(--fg-secondary); }
+.pr-card .pr-card-error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pr-red) 9%, transparent);
+  color: var(--fg);
+  font-size: 11.5px;
+}
+.pr-card .pr-card-error code, .pr-card .pr-card-note code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
+.pr-card .pr-card-switches { margin-top: 12px; padding-top: 6px; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+.pr-card .pr-card-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* The text lines up with the card's other labels; the hover fill reaches past it. */
+  width: calc(100% + 8px);
+  margin: 0 -4px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-card .pr-card-switch:hover { background: var(--bg-hover); }
+.pr-card .pr-card-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pr-card .pr-card-switch-text { display: flex; flex-direction: column; min-width: 0; }
+.pr-card .pr-card-switch-label { font-size: 12px; font-weight: 500; }
+.pr-card .pr-card-switch-hint { font-size: 11px; color: var(--fg-muted); }
+.pr-card .pr-card-switch-track {
+  position: relative;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--fg-muted);
+  transition: background-color 120ms ease-out;
+}
+.pr-card .pr-card-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 120ms ease-out;
+}
+.pr-card .pr-card-switch[aria-checked="true"] .pr-card-switch-track { background: var(--accent); }
+.pr-card .pr-card-switch[aria-checked="true"] .pr-card-switch-track::after { transform: translateX(12px); }
+
+.pr-card .pr-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  /* A card taller than the room it has scrolls under its foot: Refresh and when it was read
+     stay in view. The foot covers the card's side and bottom padding so nothing shows past it
+     (a sticky box stops at the scroller's padding edge, hence the -10px). */
+  position: sticky;
+  bottom: -10px;
+  z-index: 1;
+  margin-inline: -14px;
+  margin-bottom: -10px;
+  padding: 8px 14px 10px;
+  background: var(--bg-elevated);
+}
+/* Its rule lines up with the card's other rules, inside the padding the foot covers. */
+.pr-card .pr-card-foot::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  border-top: 1px solid var(--border);
+}
+.pr-card :is(.pr-card-refresh, .pr-card-complete) {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  cursor: pointer;
+}
+.pr-card :is(.pr-card-refresh, .pr-card-complete):hover:not(:disabled) { border-color: var(--accent); }
+.pr-card :is(.pr-card-refresh, .pr-card-complete):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pr-card :is(.pr-card-refresh, .pr-card-complete):disabled { opacity: 0.55; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-card .pr-card-switch-track, .pr-card .pr-card-switch-track::after { transition-duration: 0ms; }
+}
+
+/* The phone's top bar (SessionPanel's kebab slot): a 44 px button with the glyph in its tone,
+   beside the wait's hourglass, as phone-session.css draws that one. The title's gutters grow by
+   one button for each. */
+.phone-topbar .phone-bar-slot .task-row-pill.pr-pill.is-compact {
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pr-tone) 14%, transparent);
+  color: var(--pr-tone);
+}
+.phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-icon svg { width: 16px; height: 16px; }
+.phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-icon { position: relative; }
+.phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-mark {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  border: 1.5px solid var(--bg);
+  background: var(--pr-tone);
+  color: var(--bg);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-mark::before { content: attr(data-t); }
+.phone-topbar .phone-bar-slot .pr-pill.is-compact:focus-visible .pr-pill-icon { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pr-tone) 45%, transparent); }
+.app-shell-navigation .phone-topbar:has(.phone-bar-slot .pr-pill) .phone-topbar-title {
+  left: calc(96px + var(--wn-safe-left));
+  right: calc(96px + var(--wn-safe-right));
+}
+.app-shell-navigation .phone-topbar:has(.phone-bar-slot .pr-pill):has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
+  left: calc(140px + var(--wn-safe-left));
+  right: calc(140px + var(--wn-safe-right));
+}
+
+/* A narrow session header (data-header-fit="tight", session-header-labels.css): the other state
+   pills read as one letter, so this one is its glyph in its tone; the words stay in its hover
+   text and label, and the card is one press away. */
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .pr-pill.task-row-pill[data-short]::after { content: none; }
+.session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .pr-pill.task-row-pill {
+  min-width: 16px;
+  padding-inline: 3px;
+  justify-content: center;
+}
+/* "Complete the task" under the note of a pull request merged before it was linked. */
+.pr-card .pr-card-note > .pr-card-complete { display: block; margin-top: 6px; }

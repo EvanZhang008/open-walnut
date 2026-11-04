@@ -513,7 +513,7 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
 
 /**
  * Sources the queue composes hints for: turns nobody typed, whose replies the user
- * still reads (a trigger fire, another task's message, the wait_until clock,
+ * still reads (a trigger fire, a pull request's news, another task's message, the wait_until clock,
  * Walnut's notices, a letter reply, an automatic continue or recovery), and a
  * person's `task_send` from the CLI or the Board. Every other source the queue sees
  * is escaped only. The paths that compose before they enqueue (web, phone, cloud
@@ -521,7 +521,7 @@ export async function prepareStartHints<T extends StartHintData>(data: T, opts: 
  */
 export const QUEUE_HINT_SOURCES: ReadonlySet<string> = new Set([
   'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'walnut-notify',
-  'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli', 'brief-refresh', 'choice-recheck',
+  'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli', 'brief-refresh', 'choice-recheck', 'pr-watch',
   'context-recovery', 'thread-recheck',
 ]);
 

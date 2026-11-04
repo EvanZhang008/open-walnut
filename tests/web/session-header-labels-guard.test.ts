@@ -61,8 +61,10 @@ describe('session header title row', () => {
       .replace(/<SessionHeaderLabels>[\s\S]*?<\/SessionHeaderLabels>/g, '<SessionHeaderLabels />')
       .replace(/\bheaderPills\b/g, 'HEADER_PILLS')
       // The phone has no title row: its own top bar carries the wait as an hourglass
-      // button beside its kebab (PhoneTopBar's action slot), and nothing else.
-      .replace('createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_WAIT, kebabSlot');
+      // button beside its kebab (PhoneTopBar's action slot), and a linked pull request's
+      // state as one more button (a phone has no other way to open its card), nothing else.
+      .replace('createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_WAIT, kebabSlot')
+      .replace('createPortal(<PrPill task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_PR, kebabSlot');
     const found = [...row.matchAll(PILL_LIKE)].map((m) => m[1]).filter((name) => !(name in ALLOWED_ON_ROW));
     expect(found, 'a label beside the title: put it in headerPills, or a tag in headerTags').toEqual([]);
     // A label drawn as a plain element (a badge span, a tag chip) counts too. The one badge the

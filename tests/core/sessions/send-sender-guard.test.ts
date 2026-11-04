@@ -136,6 +136,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/status-consistency.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
+  'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
   'src/core/task-wait-until.ts': 1,
   'src/core/transfer/transfer.ts': 1,
   'src/core/workspaces/manager.ts': 2,
@@ -183,7 +184,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
-  'brand-new-source': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent',
+  'brand-new-source': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'pr-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
 };

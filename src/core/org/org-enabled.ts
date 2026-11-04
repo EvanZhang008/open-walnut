@@ -123,7 +123,7 @@ export const ORG_OFF_MESSAGE = 'The org is off (Settings → Org): CEO and the V
  */
 export const ORG_OFF_BLOCKED_SOURCES: ReadonlySet<string> = new Set([
   'wait-until', 'trigger-check-failed', 'routine', 'routine-trigger', 'routine-watcher',
-  'needs-recheck', 'brief-refresh', 'status-report', 'task-watch', ORG_START_SOURCE_NAME,
+  'needs-recheck', 'brief-refresh', 'status-report', 'task-watch', 'pr-watch', ORG_START_SOURCE_NAME,
   'idle-compact', 'thread-recheck',
 ]);
 

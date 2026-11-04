@@ -98,6 +98,27 @@ describe('startSessionCommitJob', () => {
     expect(published.at(-1)!.state).toBe('succeeded')
   })
 
+  it('links the pull request a PR job opened (or found open) to the session\'s task; a failed one links nothing', async () => {
+    const linked: Array<[string, string]> = []
+    let outcome: 'ok' | 'fail' = 'ok'
+    const daemon: FakeDaemon = {
+      caps: ['git-commit-v1'], calls: [],
+      answer: (cmd) => (cmd === 'git.commitStart'
+        ? { ok: true, job: { id: 'gc-pr', state: 'running', step: 'pr', output: '' } }
+        : outcome === 'ok'
+          ? { ok: true, job: { id: 'gc-pr', state: 'succeeded', step: 'pr', output: '', result: { url: 'https://github.com/acme/app/pull/77', existed: false, branch: 'fix' } } }
+          : { ok: true, job: { id: 'gc-pr', state: 'failed', step: 'pr', output: '', error: { code: 'pr-failed', message: 'no' } } }),
+    }
+    setup(daemon, { linkPullRequest: async (taskId, url) => { linked.push([taskId, url]) } })
+    const job = await startSessionCommitJob('sess-1', { action: 'pr', repoRoot: '/work/repo', title: 'Fix it' })
+    expect((await settle('sess-1', job.id)).state).toBe('succeeded')
+    expect(linked).toEqual([['task-1', 'https://github.com/acme/app/pull/77']])
+    outcome = 'fail'
+    const again = await startSessionCommitJob('sess-1', { action: 'pr', repoRoot: '/work/repo', title: 'Fix it' })
+    expect((await settle('sess-1', again.id)).state).toBe('failed')
+    expect(linked).toHaveLength(1)
+  })
+
   it('refuses bad input before reaching the daemon, and a second job in the same repo', async () => {
     const daemon: FakeDaemon = { caps: ['git-commit-v1'], calls: [], answer: (cmd) => (cmd === 'git.commitStart' ? { ok: true, job: { id: 'gc-2', state: 'running', step: 'x', output: '' } } : new Promise<Record<string, unknown>>(() => { /* never answers */ })) }
     setup(daemon)

@@ -95,7 +95,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   // Drawn (the transfer links, a watched section, a link's name, the old sessions' list, the session
   // panel's fallback-engine banner) and some written raw (a transfer's far end, the fallback note):
   // compared whole, they are small.
-  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids', 'engine_fallback'] as const) {
+  // The pull request watcher's snapshots and the task's two switches (pull-requests/pr-watch.ts),
+  // written raw: the PR pill and its card draw them.
+  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids', 'engine_fallback', 'pr_status', 'pr_auto_complete', 'pr_wake'] as const) {
     if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
   }
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];

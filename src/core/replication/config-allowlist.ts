@@ -71,6 +71,7 @@ const ALLOW: Record<string, AllowSpec> = {
   tag_display: { '*': true },
   tag_links: { '*': true },
   link_tags: { '*': true },
+  pull_requests: { watch: true, auto_complete_on_merge: true, wake_agent: true },
   ui: { session_panels: true, show_priority: true, show_walnut_additions: true },
   time: {
     outside: { enabled: true },

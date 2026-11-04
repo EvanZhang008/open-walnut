@@ -107,6 +107,7 @@ async function titleRowParts(panel: Locator): Promise<string[]> {
       if (c.querySelector('.task-kebab-btn') || c.classList.contains('task-kebab-btn')) return 'kebab'
       if (c.matches('[data-testid="task-trigger-pill"]')) return 'trigger'
       if (c.matches('[data-testid="leader-pill"]')) return 'leader'
+      if (c.matches('[data-testid="pr-pill"]')) return 'pr'
       if (c.matches('[data-testid="subtask-pill"]')) return 'worker'
       if (c.matches('.session-cron-pill')) return 'cron'
       if (c.matches('.task-waiting-chip')) return 'wait'
@@ -199,7 +200,8 @@ for (const width of [1440, 900]) {
     await expect(panel.locator('.session-panel-title-meta [data-testid="task-trigger-pill"]')).toBeVisible({ timeout: 20_000 })
     await expect(panel.locator('.session-panel-title-meta [data-testid="leader-pill"]')).toHaveText(/^Leader · 2$/, { timeout: 20_000 })
     await expect(tags).toBeVisible({ timeout: 20_000 })
-    expect(await titleRowParts(panel)).toEqual(['trigger', 'leader', 'tags', 'kebab'])
+    // pw-task-links' tags include a pull request, whose status pill is a state pill: on the row.
+    expect(await titleRowParts(panel)).toEqual(['trigger', 'pr', 'leader', 'tags', 'kebab'])
     await expectNoStatus(panel)
     // No tag is drawn on the row itself: they all live in the control.
     await expect(panel.locator('.session-panel-header-top .task-tag-pills')).toHaveCount(0)

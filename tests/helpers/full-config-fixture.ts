@@ -82,6 +82,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     tag_display: { 'ticket-id:*': 'value' },
     tag_links: { 'ticket:*': 'https://tickets.example.com/{value}' },
     link_tags: { cr: String.raw`https://reviews\.example\.com/r/\d+` },
+    pull_requests: { watch: true, auto_complete_on_merge: false, wake_agent: true },
     audio: { retention_days: 7 },
     stt: { engine: 'openai', language: 'en', openai_api_key: sttKey, openai_model: 'acme-stt' },
     stt_corrections: { clouddev: ['Cloud Deep'], token: ['toe ken'] },

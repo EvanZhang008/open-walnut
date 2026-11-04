@@ -152,6 +152,7 @@ const SITES: Record<string, { closes: number; gates: number; why?: string }> = {
   'src/web/routes/api-v1.ts': { closes: 1, gates: 1 },
   'src/core/offline-merge/apply-v2.ts': { closes: 1, gates: 1 },
   'src/core/transfer/transfer.ts': { closes: 1, gates: 1 },
+  'src/core/pull-requests/pr-watch.ts': { closes: 1, gates: 1 },
   'src/core/task-manager.ts': { closes: 3, gates: 0, why: 'the definitions every route above calls; the gate sits in the route, where the caller is known' },
   'src/core/user-status.ts': { closes: 2, gates: 0, why: 'reads a phase, writes none' },
   'src/core/sessions/session-send-core.ts': { closes: 1, gates: 0, why: 'an error detail naming a COMPLETE target, no write' },

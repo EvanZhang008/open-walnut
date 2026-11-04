@@ -142,14 +142,20 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', wordDrawn: false, letter: 'W' })
   expect(await pillLook(row(f.loneTrigger), 'task-trigger-pill'), 'lone TRIGGER @306').toMatchObject({ text: 'Trigger', wordDrawn: false, letter: 'T' })
 
-  // Every pill the column draws, seeded or not, is a letter with its word hidden.
+  // Every pill the column draws, seeded or not, is a letter with its word hidden. A pull request
+  // pill (PrPill.tsx) folds to its own parts instead ("#12 Failed"), drawn in place of the letter.
   const column = await page.locator('.home-navigation-scroll').first().evaluate((scroller) => {
     const pills = [...scroller.querySelectorAll('.task-row-pill[data-short]')]
-    return pills.map((el) => ({
-      short: el.getAttribute('data-short'),
-      letter: getComputedStyle(el, '::after').content.replace(/^"|"$/g, ''),
-      wordHidden: getComputedStyle(el.querySelector('.task-pill-long')!).display === 'none',
-    }))
+    return pills.map((el) => {
+      const parts = el.querySelector('.pr-pill-short')
+      return {
+        short: el.getAttribute('data-short'),
+        letter: parts
+          ? (getComputedStyle(parts).display !== 'none' && getComputedStyle(el, '::after').content === 'none' ? el.getAttribute('data-short') : 'parts hidden')
+          : getComputedStyle(el, '::after').content.replace(/^"|"$/g, ''),
+        wordHidden: getComputedStyle(el.querySelector('.task-pill-long')!).display === 'none',
+      }
+    })
   })
   expect(column.length, 'pills in the column').toBeGreaterThan(10)
   for (const p of column) expect(p, 'every pill in a tight column').toEqual({ short: p.short, letter: p.short, wordHidden: true })

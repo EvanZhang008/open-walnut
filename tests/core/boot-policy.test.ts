@@ -96,6 +96,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'user-status': leaderOnly,
   'title-reconciler': leaderOnly,
   'link-tags': leaderOnly, // new: link tags are written on the Mac
+  'pr-watch': leaderOnly, // new: pull request status is written on the Mac
   'notes-indexer': leaderOnly, // 4d: the companion searches its copy of the Mac's notes
   'stt-auto-setup': always, // new: installs the voice model on the Mac and on the companion
   'host-exec-grants': leaderOnly, // new: grants for commands on other hosts are kept on the Mac

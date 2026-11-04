@@ -12,6 +12,7 @@ import { TriggerPill } from '@/components/routines/TriggerPill';
 import { SubtaskPill } from '@/components/tasks/SubtaskPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { LeaderPill } from '@/components/tasks/LeaderPill';
+import { PrPill } from '@/components/tasks/PrPill';
 import { CronJobsCard } from './CronJobsCard';
 import { stopSupervisedSession } from '@/stores/session-supervision-store';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
@@ -2438,6 +2439,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       )}
       <CronPill sessionId={sessionId} expanded={cronDetailOpen} onClick={() => setCronDetailOpen((open) => !open)} />
       <TriggerPill taskId={session?.taskId} />
+      {sessionTask && <PrPill task={sessionTask} />}
       {/* The team, as on the task rows: Worker lists this task's leader and its fellow
           workers, Leader lists its subtasks. A Personal AI ask is never a board row, so its
           session header is the one place an ask that split work off shows it. */}
@@ -3232,6 +3234,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {/* A phone draws its own top bar (no title row): the wait rides in its
                   action slot, before the kebab, and a tap shows its details. */}
               {!loading && kebabSlot && createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot, 'waiting-chip')}
+              {/* And a linked pull request's state, the one way a phone opens its card (a row's
+                  pills are labels there). */}
+              {!loading && kebabSlot && sessionTask && createPortal(<PrPill task={sessionTask} compact />, kebabSlot, 'pr-pill')}
               {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
                 <PhoneSessionHeaderRows
                   sessionId={sessionId}

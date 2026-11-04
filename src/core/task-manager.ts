@@ -4173,6 +4173,9 @@ export interface UpdateTaskInput {
   /** Link tags Walnut found (link-tags-apply.ts): each is added unless the task already
    *  holds its URL under any key or Walnut tagged that URL before (Task.auto_links). */
   add_link_tags?: string[];
+  /** The add_link_tags are links this task made itself (a pull request its session opened): they
+   *  are added past MAX_LINK_TAGS, since the task's own pull request is always one that matters. */
+  link_tags_made?: boolean;
   /** Names a session gave its links (target to 1 to 3 words, link-tags.ts): each is kept for a
    *  link the task holds that has no name yet. */
   add_link_names?: Record<string, string>;
@@ -4183,6 +4186,10 @@ export interface UpdateTaskInput {
   cwd_missing?: boolean;          // Flag when the cwd no longer exists on disk.
   /** Mark/unmark as an Ask Walnut (Personal-AI) task — see Task.walnut_agent. */
   walnut_agent?: boolean;
+  /** Complete the task when its pull request merges (Task.pr_auto_complete); null = the default. */
+  pr_auto_complete?: boolean | null;
+  /** Wake its session on pull request news (Task.pr_wake); null = the default. */
+  pr_wake?: boolean | null;
   /** WAITING only: when the wait ends by itself (ISO datetime; '' clears). Kept
    *  only while the task is WAITING after this update; applyPhase clears it on
    *  every move out. */
@@ -4659,6 +4666,12 @@ export async function updateTask(
   else if (updates.watched_at !== undefined) { delete task.watched_at; delete task.org_pins; }
   // Stored as presence-only (true or absent), mirroring addTask.
   if (updates.walnut_agent !== undefined) task.walnut_agent = updates.walnut_agent || undefined;
+  if (updates.pr_auto_complete !== undefined) {
+    if (updates.pr_auto_complete === null) delete task.pr_auto_complete; else task.pr_auto_complete = updates.pr_auto_complete;
+  }
+  if (updates.pr_wake !== undefined) {
+    if (updates.pr_wake === null) delete task.pr_wake; else task.pr_wake = updates.pr_wake;
+  }
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {
@@ -4797,7 +4810,7 @@ export async function updateTask(
     for (const { from, to } of relabelLinkTags(task, updates.add_link_tags)) {
       task.tags = (task.tags ?? []).map((tag) => (tag === from ? to : tag));
     }
-    const added = newLinkTags(task, updates.add_link_tags);
+    const added = newLinkTags(task, updates.add_link_tags, { uncapped: updates.link_tags_made === true });
     if (added.length) {
       task.tags = [...(task.tags ?? []), ...added];
       task.auto_links = [...(task.auto_links ?? []), ...added.map((tag) => linkTargetOfTag(tag)!)].slice(-MAX_AUTO_LINKS);
@@ -4917,7 +4930,7 @@ export async function updateTask(
   // blindness, not an edit). Input aliases map to their Task field.
   const touchedFields = Object.keys(updates)
     .filter((k) => (updates as Record<string, unknown>)[k] !== undefined)
-    .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags' || k === 'add_link_tags') ? 'tags'
+    .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags' || k === 'add_link_tags' || k === 'link_tags_made') ? 'tags'
       : k === 'add_link_names' ? 'link_names'
       : (k === 'set_depends_on' || k === 'add_depends_on' || k === 'remove_depends_on') ? 'depends_on'
       : k);

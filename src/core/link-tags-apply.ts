@@ -30,19 +30,21 @@ async function linkPatterns(): Promise<LinkPattern[]> {
 
 /** Add the candidates the task does not hold yet, and the names a session gave them (target to
  *  name). Returns the tags added. */
-export async function addLinkTags(taskId: string, candidates: readonly string[], source: string, names?: Record<string, string>): Promise<string[]> {
+export async function addLinkTags(taskId: string, candidates: readonly string[], source: string, names?: Record<string, string>, opts: { made?: boolean } = {}): Promise<string[]> {
   if (candidates.length === 0) return []
   try {
     const { getTask, updateTask } = await import('./task-manager.js')
     // Checked before the write so a mention of a known link costs no task write.
     const current = await getTask(taskId)
-    const added = newLinkTags(current, candidates)
+    const added = newLinkTags(current, candidates, { uncapped: opts.made === true })
     const named = names && Object.keys(names).length
       ? mergeLinkNames({ ...current, tags: [...(current.tags ?? []), ...added] }, names)
       : undefined
     if (added.length === 0 && relabelLinkTags(current, candidates).length === 0 && !named) return []
     const before = new Set(current.tags ?? [])
-    const { task } = await updateTask(taskId, { add_link_tags: [...candidates], ...(named ? { add_link_names: names } : {}) }, { source: 'link-tags' })
+    const { task } = await updateTask(taskId, {
+      add_link_tags: [...candidates], ...(opts.made ? { link_tags_made: true } : {}), ...(named ? { add_link_names: names } : {}),
+    }, { source: 'link-tags' })
     const tagged = (task.tags ?? []).filter((tag) => !before.has(tag))
     if (named) log.task.info('link names set', { taskId, source, names: task.link_names })
     if (tagged.length === 0) return []
@@ -52,6 +54,13 @@ export async function addLinkTags(taskId: string, candidates: readonly string[],
     log.task.debug('link tags skipped', { taskId, source, error: err instanceof Error ? err.message : String(err) })
     return []
   }
+}
+
+/** A pull request the task's own session opened (`gh pr create`, the Changed tab's Open PR): tagged
+ *  even past MAX_LINK_TAGS, so the pull request watcher (pull-requests/pr-watch.ts) follows it. */
+export async function tagCreatedPullRequest(taskId: string, url: string, source: string): Promise<string[]> {
+  const tags = linkTagsInText(url, await linkPatterns())
+  return addLinkTags(taskId, tags, source, undefined, { made: true })
 }
 
 export async function tagLinksInText(taskId: string, text: string, source: string): Promise<string[]> {

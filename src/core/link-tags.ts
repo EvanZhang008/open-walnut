@@ -315,6 +315,8 @@ export const MAX_LINK_TAGS = 3
 export function newLinkTags(
   task: { tags?: readonly string[]; auto_links?: readonly string[] },
   candidates: readonly string[],
+  /** uncapped: links the task made itself (its own pull request), added past MAX_LINK_TAGS. */
+  opts: { uncapped?: boolean } = {},
 ): string[] {
   const held = new Set<string>(task.auto_links ?? [])
   let count = 0
@@ -326,7 +328,7 @@ export function newLinkTags(
   for (const tag of candidates) {
     const target = linkTargetOfTag(tag)
     // A tag past the stored length would be clipped, and a clipped URL opens the wrong page.
-    if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || count >= MAX_LINK_TAGS) continue
+    if (!target || tag.length > MAX_TAG_LENGTH || held.has(target) || (count >= MAX_LINK_TAGS && !opts.uncapped)) continue
     const path = linkPathOfTag(tag)
     if (path && !isReviewablePath(path)) continue
     held.add(target)

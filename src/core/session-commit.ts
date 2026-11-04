@@ -73,6 +73,8 @@ export interface SessionCommitDeps {
   sleep(ms: number): Promise<void>
   taskTitle(taskId: string): Promise<string | null>
   askModel(system: string, prompt: string, ids?: { sessionId?: string; taskId?: string }): Promise<string | null>
+  /** The pull request a job opened (or found already open) becomes the task's link, so it is watched. */
+  linkPullRequest(taskId: string, url: string): Promise<void>
 }
 
 const jobs = new Map<string, ServerCommitJob>()
@@ -161,6 +163,10 @@ const realDeps: SessionCommitDeps = {
     } finally {
       clearTimeout(timer)
     }
+  },
+  async linkPullRequest(taskId, url) {
+    const { tagCreatedPullRequest } = await import('./link-tags-apply.js')
+    await tagCreatedPullRequest(taskId, url, 'commit-pr')
   },
 }
 
@@ -267,6 +273,12 @@ async function runJob(job: ServerCommitJob, info: SessionInfo, payload: Record<s
         sessionId: job.sessionId, jobId: job.id, error: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+  const prUrl = job.action === 'pr' && job.state === 'succeeded' && typeof job.result?.url === 'string' ? job.result.url : ''
+  if (prUrl && info.taskId) {
+    await deps.linkPullRequest(info.taskId, prUrl).catch((err) => log.session.warn('session-commit: could not link the pull request', {
+      sessionId: job.sessionId, taskId: info.taskId, error: err instanceof Error ? err.message : String(err),
+    }))
   }
   log.session.info('session-commit: job finished', {
     sessionId: job.sessionId, jobId: job.id, action: job.action, repoRoot: job.repoRoot, state: job.state,

@@ -175,6 +175,13 @@ describe('newLinkTags', () => {
     const tags = Array.from({ length: MAX_LINK_TAGS - 1 }, (_, i) => `link:https://a.example.com/${i}`)
     expect(newLinkTags({ tags }, ['pr:https://b.example.com/1', 'pr:https://b.example.com/2'])).toEqual(['pr:https://b.example.com/1'])
   })
+
+  it('a link the task made itself (its own pull request) goes past the cap, still once', () => {
+    const tags = Array.from({ length: MAX_LINK_TAGS }, (_, i) => `link:https://a.example.com/${i}`)
+    expect(newLinkTags({ tags }, ['pr:https://github.com/acme/app/pull/9'])).toEqual([])
+    expect(newLinkTags({ tags }, ['pr:https://github.com/acme/app/pull/9'], { uncapped: true })).toEqual(['pr:https://github.com/acme/app/pull/9'])
+    expect(newLinkTags({ tags, auto_links: ['https://github.com/acme/app/pull/9'] }, ['pr:https://github.com/acme/app/pull/9'], { uncapped: true })).toEqual([])
+  })
 })
 
 describe('tag model and display rules for link tags', () => {

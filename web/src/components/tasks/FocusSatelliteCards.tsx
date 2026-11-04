@@ -28,6 +28,7 @@ import { TaskTagPills } from './TaskTagPills';
 import * as ICONS from '../common/Icons';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { PrPill } from './PrPill';
 
 
 // The sentinel id scheme (`group:<gid>:<tier>`) and its helpers live in
@@ -457,6 +458,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a
           launch button would be a mis-click trap. */}
+      <PrPill task={task} />
       {!selectMode && (
         <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
       )}

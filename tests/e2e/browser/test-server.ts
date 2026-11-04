@@ -176,6 +176,12 @@ writeOwnerPid(tmpBase)
   await fs.mkdir(binDir, { recursive: true })
   const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
   await fs.writeFile(path.join(binDir, 'claude'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(mockCli)} "$@"\n`, { mode: 0o755 })
+  // The pull request watcher reads GitHub through gh: here a stand-in answering from files in
+  // <home>/fake-gh (tests/providers/fake-gh.mjs), so no test ever reads the real GitHub.
+  const fakeGh = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/fake-gh.mjs')
+  await fs.writeFile(path.join(binDir, 'fake-gh'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fakeGh)} "$@"\n`, { mode: 0o755 })
+  process.env.WALNUT_GH_BIN = path.join(binDir, 'fake-gh')
+  process.env.WALNUT_FAKE_GH_DIR = path.join(tmpBase, 'fake-gh')
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`
 }
 

@@ -59,6 +59,8 @@ import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { PrPill } from './PrPill';
+import { watchablePrUrls } from '../../../../src/core/pull-requests/model';
 import { AwaySyncMark } from './AwaySyncMark';
 import { countSubtasksByParent, resolveParentRef, withSubtaskContext } from './task-tree-index';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
@@ -1197,7 +1199,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           </button>
           <span
             {...titleProps}
-            className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
+            className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}${watchablePrUrls(task.tags).length ? ' todo-item-title-own-line' : ''}`}
             onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
           >
             {orgDisplayTitle(task)}
@@ -1206,6 +1208,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
           <WorkspacePill task={task} />
+          <PrPill task={task} />
           <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />
@@ -2185,6 +2188,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       </span>
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
+      <PrPill task={task} />
       <AwaySyncMark item={task} />
       {ago && <span className="todo-recent-ago" title={openedTitle(openedAt)}>{ago}</span>}
       {/* One-click ▶ Start — hover-revealed, before the kebab */}

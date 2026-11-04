@@ -22,6 +22,8 @@ import { TaskStartButton } from './TaskStartButton';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { PrPill } from './PrPill';
+import { watchablePrUrls } from '../../../../src/core/pull-requests/model';
 import { AwaySyncMark } from './AwaySyncMark';
 import { PhoneRowExtras } from './PhoneRowExtras';
 import { RowProjectName } from './RowProjectName';
@@ -227,6 +229,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       ) : null}
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
+      <PrPill task={task} />
       <AwaySyncMark item={task} />
     </>
   );
@@ -301,7 +304,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         // Flat: a small line with the project, its tags and the time, then the title alone,
         // then (a Waiting row) what it waits on.
         <span className="status-card-body">
-          <span className="status-card-meta">
+          {/* A row with a pull request: pr-pill.css gives its pill the line when the line is short. */}
+          <span className={`status-card-meta${watchablePrUrls(task.tags).length ? ' status-card-meta-pr' : ''}`}>
             <RowProjectName project={task.project || ''} className="status-card-project" onFilter={handlers.onFilterProject} />
             {pills}
             {reasonBelow ? null : reason}

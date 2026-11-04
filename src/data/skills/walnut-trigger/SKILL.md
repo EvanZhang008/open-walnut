@@ -22,6 +22,16 @@ a session (the same conversation, resumed if it has gone quiet; a new session on
 the same task only if none can be resumed). You write the script, test it, arm it.
 Nothing polls inside your session.
 
+## A pull request linked to the task needs no trigger
+
+Walnut watches every GitHub pull request the task links (a `pr:` link tag; a
+`gh pr create` in this session or the Changed tab's Open PR adds it by itself):
+a failed check, a comment or review from someone else, or a conflict wakes this
+session with the details, and a merge completes the task unless the user turned
+that off on the PR pill. To wait on its CI, park with `waiting_on` naming it;
+write a trigger only for what that does not cover (a pull request on another
+forge, a check on a repo you did not open a pull request in).
+
 ## Ready-made triggers first
 
 A plugin can offer a trigger that needs no script ("New message in a Slack

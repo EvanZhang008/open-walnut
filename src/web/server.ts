@@ -3288,6 +3288,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startLinkTagWatcher()
   }
 
+  // Linked pull requests: status on the task, news to its session, a merge completes it
+  // (core/pull-requests/pr-watch.ts). An ephemeral or test server reads only through a
+  // stand-in gh (WALNUT_GH_BIN), never the user's real GitHub account.
+  if (bootPolicy('pr-watch') && !process.env.VITEST && (!isEphemeral || process.env.WALNUT_GH_BIN)) {
+    void (async () => {
+      try {
+        const { startPrWatch } = await import('../core/pull-requests/pr-watch.js')
+        await startPrWatch()
+      } catch (err) {
+        log.web.warn('pull request watch wiring failed; linked pull requests show no live status', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
+  }
+
   if (bootPolicy('session-auto-recover') && !isEphemeral) {
     const { getConfig } = await import('../core/config-manager.js')
     const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')

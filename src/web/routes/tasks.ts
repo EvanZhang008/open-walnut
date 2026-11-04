@@ -1459,6 +1459,12 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'walnut_agent must be a boolean' })
       return
     }
+    for (const field of ['pr_auto_complete', 'pr_wake'] as const) {
+      if (req.body[field] !== undefined && req.body[field] !== null && typeof req.body[field] !== 'boolean') {
+        res.status(400).json({ error: `${field} must be a boolean, or null for the default` })
+        return
+      }
+    }
     if (req.body.wait_until !== undefined
         && !(typeof req.body.wait_until === 'string' && (req.body.wait_until === '' || Number.isFinite(Date.parse(req.body.wait_until))))) {
       res.status(400).json({ error: 'wait_until must be an ISO-8601 datetime, or "" to clear' })
@@ -1607,6 +1613,39 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
     log.web.info('task completed via REST', { taskId: id })
     bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui'], { source: 'api' })
     res.json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/tasks/:id/pull-requests: the task's linked pull requests with their live status
+// (core/pull-requests/pr-watch.ts), the last read of each, and the switches in force.
+tasksRouter.get('/:id/pull-requests', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const task = await getTask(param(req.params.id))
+    const { taskPrView } = await import('../../core/pull-requests/pr-watch.js')
+    res.json(await taskPrView(task))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/tasks/:id/pull-requests/refresh: read them now (the card's Refresh), then answer as GET.
+// A read queued behind a slow pass (gh has 60 s per call) answers what is stored after
+// PR_REFRESH_DEADLINE_MS with `stale: true`; the read goes on and its result arrives as a task event.
+const PR_REFRESH_DEADLINE_MS = 10_000
+tasksRouter.post('/:id/pull-requests/refresh', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = (await getTask(param(req.params.id))).id
+    const { prWatchRunning, refreshTaskPrs, taskPrView } = await import('../../core/pull-requests/pr-watch.js')
+    if (!prWatchRunning()) { res.status(409).json({ error: 'This Walnut does not watch pull requests.', code: 'pr_watch_off' }); return }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), PR_REFRESH_DEADLINE_MS) })
+    const read = refreshTaskPrs(id).catch(() => null)
+    const outcome = await Promise.race([read, late])
+    clearTimeout(timer)
+    const view = await taskPrView(await getTask(id))
+    res.json(outcome === 'late' ? { ...view, stale: true } : view)
   } catch (err) {
     next(err)
   }
