@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  FIVE_MINUTES_MS, ONE_HOUR_MS, IDLE_COMPACT_LEAD_MS, cacheExpiresAtMs, idleCompactionWindow, idleCompactReasonText,
+  FIVE_MINUTES_MS, ONE_HOUR_MS, IDLE_COMPACT_LEAD_MS, idleCompactionWindow, idleCompactReasonText,
   idleCompactThreshold, noteCompaction, noteRequestUsage, resolveIdleCompactLimitPercent, ttlFromUsage, type PromptCacheFacts,
 } from '../../../src/core/sessions/prompt-cache.js';
 
@@ -62,8 +62,6 @@ describe('the facts after each report of a request', () => {
     const facts = noteRequestUsage(undefined, big(null), T0, true)!;
     expect(facts.ttlMs).toBeUndefined();
     expect(facts.expiresAt).toBeUndefined();
-    // A reader that must assume one takes the longer lifetime.
-    expect(cacheExpiresAtMs(facts)).toBe(T0 + ONE_HOUR_MS);
   });
 
   it('a compaction leaves the small context and marks it; the next request clears the mark', () => {
@@ -116,7 +114,7 @@ describe('when an idle session compacts', () => {
     expect(idleCompactReasonText({ tokens: 900_000, threshold: 850_000, limitPercent: 85, compactsAt: 1_000_000, source: 'model' }))
       .toBe("900K tokens, past 85% (850K) of the model's 1M context window (no auto-compaction window is set)");
     expect(idleCompactReasonText({ tokens: 160_000, threshold: 155_000, limitPercent: 85, compactsAt: 200_000, source: 'model' }))
-      .toBe("160K tokens, past 155K: 45K under the model's 200K context window (no auto-compaction window is set), since Claude Code compacts by itself before 85% (170K)");
+      .toBe("160K tokens, past 155K, which is 45K below the model's 200K context window (no auto-compaction window is set). (85% would be 170K, after the point where Claude Code compacts by itself.)");
   });
 
   it('never: a 5-minute cache, an unknown lifetime, compacted already, or expired', () => {

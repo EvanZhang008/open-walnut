@@ -96,7 +96,7 @@ import { SessionKebabSection, type SessionViewItemsProps } from './SessionKebabS
 import { SessionMenuOpen } from './SessionMenuOpen';
 import { PinnedSessionFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
-import { useCompactContext } from './CompactContext';
+import { useCompactContext, useIdleCompacting } from './CompactContext';
 import { factsFromHistory } from './compact-offer';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -1909,13 +1909,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
     handleSend,
     macSessionAway ? 'Your Mac is away: sending waits until it is back.' : undefined,
   );
-  // Compact without typing /compact: a "+" row, and a line above the composer when a big
-  // session's prompt cache went cold. Not on a question page or with an engine switch picked:
-  // there the next message goes elsewhere.
+  // Compact without typing /compact: a "+" row. Not on a question page or with an engine switch
+  // picked: there the next message goes elsewhere.
   const compactHistoryFacts = useMemo(
     () => (historyLoading ? undefined : factsFromHistory(historyMessages)),
     [historyLoading, historyMessages],
   );
+  // Walnut's own idle compaction is quiet: the composer stays as it was (a send, never a Stop), and a
+  // message typed meanwhile goes out after it (the CLI runs it as its own turn).
+  const idleCompacting = useIdleCompacting(sessionId);
+  const composerStreaming = isStreaming && !idleCompacting;
   const compactContext = useCompactContext({
     sessionId: onQuestionPage || engineSwitch.pick ? undefined : sessionId,
     session,
@@ -2634,7 +2637,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSendRaw}
                           onStop={handleStopTurn}
-                          isStreaming={isStreaming}
+                          isStreaming={composerStreaming}
                           placeholder="Send a message while viewing plan..."
                           showCommands={false}
                           onToggleMode={session ? () => {
@@ -3180,7 +3183,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                 onSend={leftComposerSend}
                 onInterruptSend={leftInterruptSend}
                 onStop={handleStopTurn}
-                isStreaming={isStreaming}
+                isStreaming={composerStreaming}
                 sendBlocked={macSessionAway}
                 allowEmptySend={commentsStore.pending.length > 0}
               />
@@ -3268,7 +3271,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             onUndo={engineSwitch.clear}
           />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
-          {!macSessionAway && compactContext.offer}
           {/* A host replica's console with the Mac away: a session the Mac runs gets
               the line, and its composer stays mounted with the send controls hidden,
               so a presence flip never takes what is being typed. */}
@@ -3296,7 +3298,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             // Pending quotes and comments are a message by themselves.
             allowEmptySend={commentsStore.pending.length > 0}
             onStop={handleStopTurn}
-            isStreaming={isStreaming}
+            isStreaming={composerStreaming}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
               ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')

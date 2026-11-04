@@ -8,17 +8,20 @@
  * request's own usage says which lifetime it wrote: `cache_creation` splits the
  * written tokens into `ephemeral_1h_input_tokens` and `ephemeral_5m_input_tokens`.
  *
- * A big session left idle past its cache lifetime pays a full uncached read of
- * its whole context on the next message. Compacting it shortly before the
- * cache expires reads the context once at the cached price and leaves a small
- * summary for the next turn.
+ * A session left idle past its cache lifetime writes its whole context to the
+ * cache again on the next message. So does a `/compact`, warm or cold (measured
+ * on Claude Code 2.1.312, 2026-11-04: it read 13K of a 299K prefix): a
+ * compaction saves on every message after it, never on its own. The rule
+ * (Evan, 2026-11-04: "compact is user's own decision, only time we can do it
+ * auto or warn is the cache almost expired"): Walnut compacts by itself only
+ * while the cache is warm and about to expire, for a session near where it
+ * compacts by itself (idle-compaction.ts); once the cache has expired it neither
+ * compacts nor says anything.
  */
 
 export const ONE_HOUR_MS = 60 * 60_000;
 export const FIVE_MINUTES_MS = 5 * 60_000;
 
-/** Below this many tokens a cold re-read is cheap: the cold-cache offer stays away (compact-offer.ts). */
-export const DEFAULT_IDLE_COMPACT_MIN_TOKENS = 200_000;
 /**
  * The idle compaction runs only for a session this full: this share of where it compacts by itself
  * (its auto-compaction window, else the model's). Measured 2026-11-04 on Claude Code 2.1.312, a
@@ -44,11 +47,9 @@ export const IDLE_COMPACT_LEAD_MS = 3 * 60_000;
 /**
  * Only caches that live at least this long are compacted while idle. A 5-minute
  * cache would compact a session two minutes after every turn, while its user is
- * still reading the answer; the cold-cache offer covers those sessions instead.
+ * still reading the answer; compacting those is the user's call (the "+" menu).
  */
 export const IDLE_COMPACT_MIN_TTL_MS = 30 * 60_000;
-/** When no request told its lifetime, a reader assumes the longer one (the offer then only comes late). */
-export const FALLBACK_TTL_MS = ONE_HOUR_MS;
 
 /** The prompt cache facts of a session's last main-loop request (SessionRecord.promptCache). */
 export interface PromptCacheFacts {
@@ -149,13 +150,6 @@ export function noteCompaction(prev: PromptCacheFacts | undefined, postTokens: n
   });
 }
 
-/** When the cache of these facts expires, in epoch ms, assuming `fallbackTtlMs` when unknown. */
-export function cacheExpiresAtMs(facts: PromptCacheFacts, fallbackTtlMs = FALLBACK_TTL_MS): number {
-  const exact = Date.parse(facts.expiresAt ?? '');
-  if (Number.isFinite(exact)) return exact;
-  return Date.parse(facts.requestAt) + fallbackTtlMs;
-}
-
 export interface IdleCompactionWindow {
   /** When to send the compaction, epoch ms. */
   fireAtMs: number;
@@ -214,7 +208,7 @@ export function idleCompactReasonText(r: IdleCompactReason): string {
     : `the model's ${shortTokens(r.compactsAt)} context window (no auto-compaction window is set)`;
   const share = Math.round(r.compactsAt * r.limitPercent / 100);
   if (r.threshold < share) {
-    return `${shortTokens(r.tokens)} tokens, past ${shortTokens(r.threshold)}: ${shortTokens(r.compactsAt - r.threshold)} under ${base}, since Claude Code compacts by itself before ${r.limitPercent}% (${shortTokens(share)})`;
+    return `${shortTokens(r.tokens)} tokens, past ${shortTokens(r.threshold)}, which is ${shortTokens(r.compactsAt - r.threshold)} below ${base}. (${r.limitPercent}% would be ${shortTokens(share)}, after the point where Claude Code compacts by itself.)`;
   }
   return `${shortTokens(r.tokens)} tokens, past ${r.limitPercent}% (${shortTokens(r.threshold)}) of ${base}`;
 }

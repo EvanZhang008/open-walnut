@@ -93,14 +93,6 @@ export function SessionsSection({ config, onSave }: Props) {
       clamp: (v) => (v == null ? v : Math.min(IDLE_COMPACT_LIMIT_PERCENT_RANGE.max, Math.max(IDLE_COMPACT_LIMIT_PERCENT_RANGE.min, Math.round(v)))),
     },
   );
-  // Shown and typed in thousands of tokens; stored in tokens. Empty = the server's 200K. The server
-  // reads 0 or less as unset, so the field clears to that on commit instead of showing a 0 it ignores.
-  const compactMin = useCommitField<number | undefined>(
-    config.session?.idle_compaction?.min_tokens != null ? Math.round(config.session.idle_compaction.min_tokens / 1000) : undefined,
-    // null, not undefined: a save keeps a key it does not mention, so a cleared field sends null.
-    (v) => saveIdleCompaction({ min_tokens: v != null ? v * 1000 : null }, 'sessions.idle-compaction-min'),
-    { rowKey: 'sessions.idle-compaction-min', kind: 'number', clamp: (v) => (v != null && v > 0 ? v : undefined) },
-  );
   const permission = useOptimisticSetting<boolean>(
     config.session?.permission_prompt ?? true,
     (v) => saveSession({ permission_prompt: v }, 'sessions.permission-prompt'),
@@ -164,7 +156,7 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="idle-compaction-row"
           label="Compact idle sessions before the cache expires"
-          help="A Claude Code session left idle that is close to compacting by itself is summarized a few minutes before its one-hour prompt cache runs out, so your next message reads the short summary. The summary costs about one message to the whole conversation, so it is kept for sessions that would compact soon anyway."
+          help="A Claude Code session left idle that is close to compacting by itself is summarized a few minutes before its one-hour prompt cache runs out, so your next message reads the short summary. Summarizing costs about as much as one message that sends the whole conversation again, so Walnut does it only for sessions that would compact soon anyway."
           htmlFor="idle-compaction"
           error={idleCompact.error}
           control={
@@ -175,23 +167,16 @@ export function SessionsSection({ config, onSave }: Props) {
           indent
           anchor="idle-compaction-percent-row"
           label="When the context reaches"
-          help={`Of the session's auto-compaction limit: its auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW on its host), else its model's context window. Never closer than 45K to it, where Claude Code compacts by itself. When neither is known Walnut does not compact. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
+          help={`Of the session's auto-compaction limit: its auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW on its host), else its model's context window. It also stays at least 45K below the limit, so it runs before Claude Code compacts by itself. When neither is known Walnut does not compact. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
           htmlFor="idle-compaction-percent"
           error={compactPercent.error}
           control={(
             <NumberInput
               id="idle-compaction-percent" field={compactPercent.inputProps} placeholder={String(DEFAULT_IDLE_COMPACT_LIMIT_PERCENT)}
               min={IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} max={IDLE_COMPACT_LIMIT_PERCENT_RANGE.max} unit="% of the limit"
+              disabled={!idleCompact.value}
             />
           )}
-        />
-        <SettingsRow
-          anchor="idle-compaction-min-row"
-          label="Offer Compact first above"
-          help="A session whose prompt cache expired offers to compact before your next message when it is at least this big; smaller ones are cheap to store again. Empty uses 200K."
-          htmlFor="idle-compaction-min"
-          error={compactMin.error}
-          control={<NumberInput id="idle-compaction-min" field={compactMin.inputProps} placeholder="200" min={1} unit="K tokens" />}
         />
       </SettingsGroup>
 

@@ -2032,8 +2032,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL, cloud: isCompanion() })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
-    // A big idle Claude Code session is compacted shortly before its prompt cache expires, as a quiet
-    // turn, and every turn end stores the facts the panel's cold-cache offer reads (src/core/sessions/idle-compaction.ts).
+    // An idle Claude Code session near where it compacts by itself is compacted shortly before its
+    // prompt cache expires, as a quiet turn; every turn end stores the facts (src/core/sessions/idle-compaction.ts).
     if (role() === 'leader') {
       const { startIdleCompaction } = await import('../core/sessions/idle-compaction.js')
       const { sessionRunner: idleRunner } = await import('../providers/claude-code-session.js')

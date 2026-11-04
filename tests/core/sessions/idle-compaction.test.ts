@@ -350,6 +350,43 @@ describe('when it fires', () => {
     expect(h.ic.armedFor(SID)).toBe(newer.requestAt);
   });
 
+  // The rule (2026-11-04, Evan: "compact is user's own decision, only time we can do it auto or warn
+  // is the cache almost expired"): once the cache has expired, nothing compacts it, whichever way in.
+  it('once the cache has expired it never compacts: a late timer, a boot, a settings change, a reap', async () => {
+    const cfg = { pct: 85 };
+    const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { limit_percent: cfg.pct } }, {}) });
+    const warm = h.now.ms;
+    const expired = T0 + ONE_HOUR_MS + 1_000;
+    // A late timer.
+    await h.ic.onTurnEnd(SID);
+    expect(h.ic.armedFor(SID)).toBe(facts().requestAt);
+    h.now.ms = expired;
+    await h.runDue();
+    expect(await h.ic.fire(SID, facts().requestAt)).toBe('no-window');
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    // A boot.
+    h.state.live = undefined;
+    h.state.rec = record({ promptCache: facts() });
+    expect(await h.ic.rebuild()).toBe(0);
+    // A settings change: the same path arms it while warm, and arms nothing once expired.
+    h.now.ms = warm;
+    cfg.pct = 86;
+    expect(await h.ic.rearm()).toBe(1);
+    h.ic.cancel(SID, 'no-window');
+    h.now.ms = expired;
+    cfg.pct = 87;
+    expect(await h.ic.rearm()).toBe(0);
+    expect(h.ic.armedFor(SID)).toBeUndefined();
+    // A reap with a timer still armed (its time passed while the clock was not looking).
+    h.now.ms = warm;
+    cfg.pct = 88;
+    expect(await h.ic.rearm()).toBe(1);
+    h.now.ms = expired;
+    h.ic.handleEvent(ev(EventNames.SESSION_WILL_REAP, { sessionId: SID, remainingMs: 240_000 }, 'session-health-monitor'));
+    for (let i = 0; i < 20; i++) await settle();
+    expect(h.sends).toEqual([]);
+  });
+
   it('off in config, off everywhere', async () => {
     const h = harness({ config: async () => resolveIdleCompactionConfig({ idle_compaction: { enabled: false } }, {}) });
     await h.ic.onTurnEnd(SID);

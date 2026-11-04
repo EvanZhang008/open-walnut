@@ -1698,8 +1698,6 @@ export interface Config {
       /** Compact a session at this share (%) of where it compacts by itself: its auto-compaction
        *  window, else its model's window (never when neither is known). Default 85; 50 to 99. */
       limit_percent?: number | null;
-      /** The cold-cache offer comes for sessions holding at least this many context tokens. Default 200000; null (a cleared field) is the default. */
-      min_tokens?: number | null;
     };
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
@@ -3309,7 +3307,7 @@ export interface SessionRecord {
   contextTokens?: number;
   /** The prompt cache facts of the session's last main-loop request, written at each turn end
    *  (src/core/sessions/prompt-cache.ts): context size, cache lifetime, when it expires. The idle
-   *  compaction and the web's cold-cache offer read it. */
+   *  compaction and the "+" menu's token count read it. */
   promptCache?: import('./sessions/prompt-cache.js').PromptCacheFacts;
   /** Walnut's last idle compaction of this session (src/core/sessions/idle-compaction.ts). Its turn
    *  is quiet, so `priorTurnEnd` keeps when the session's last real turn ended. */

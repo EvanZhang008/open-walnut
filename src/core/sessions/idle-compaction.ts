@@ -21,8 +21,9 @@
  * its cache are alive.
  *
  * Skipped: a session below its threshold, a cache
- * that lives under 30 minutes (5-minute caches: the web's cold-cache offer
- * covers them), a session already compacted since, a running turn, a prompt for
+ * that lives under 30 minutes (5-minute caches: compacting is the user's call),
+ * a cache already expired (it would save nothing that time; never once expired,
+ * whichever way in), a session already compacted since, a running turn, a prompt for
  * the user, queued messages, work that outlives the turn (a background command,
  * a wakeup, a CLI cron), a lane or ACP session, a completed task, an org node
  * while the org is off, and a session whose CLI process is gone (stopped: a

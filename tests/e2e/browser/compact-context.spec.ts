@@ -4,10 +4,10 @@
  * and answers `/compact` with Claude Code's own compacting status and boundary.
  *
  *  · The "+" menu's "Compact context" row sends `/compact`; the timeline shows the compaction.
- *  · A big session whose cache went cold (the page's clock moved two hours on) offers
- *    "Compact first" above the composer; "Keep full context" hides it across a reload; "Compact
- *    first" compacts and the line does not come back.
+ *  · A big session whose cache went cold (the page's clock moved two hours on) shows nothing and
+ *    sends nothing: once the cache expired, compacting is the user's call.
  *  · Settings → Sessions has the idle compaction switch and its threshold.
+ *  · The idle compaction's row says why it ran and edits its setting in place.
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -70,7 +70,7 @@ async function bigSession(page: Page, request: APIRequestContext, title: string)
   return { taskId, sid }
 }
 
-type IdleCompactionSetting = { enabled?: boolean; min_tokens?: number | null; limit_percent?: number | null }
+type IdleCompactionSetting = { enabled?: boolean; limit_percent?: number | null }
 async function idleCompactionConfig(request: APIRequestContext): Promise<IdleCompactionSetting | undefined> {
   const body = await (await request.get('/api/config')).json() as { config?: { session?: { idle_compaction?: IdleCompactionSetting } } }
   return body.config?.session?.idle_compaction
@@ -121,44 +121,30 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   expect(errors).toEqual([])
 })
 
-test('a cold cache offers Compact first; Keep full context holds across a reload', async ({ page, request }, info) => {
-  test.setTimeout(150_000)
+// The rule (2026-11-04, Evan: "compact is user's own decision, only time we can do it auto or warn is the
+// cache almost expired"): once the cache has expired, Walnut neither compacts nor shows anything.
+test('a cold cache: no line above the composer, and no /compact sent', async ({ page, request }, info) => {
+  test.setTimeout(120_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
-  const kept = await bigSession(page, request, `Cold keep ${info.project.name}`)
-  const compacted = await bigSession(page, request, `Cold compact ${info.project.name}`)
-
+  const cold = await bigSession(page, request, `Cold ${info.project.name}`)
   // Two hours later, as far as the page can tell.
   await page.clock.setFixedTime(Date.now() + TWO_HOURS)
   await page.reload()
-  let panel = await openTask(page, kept.taskId, kept.sid)
-  const offer = panel.getByTestId('compact-offer')
-  await expect(offer).toBeVisible({ timeout: 20_000 })
-  await expect(offer).toContainText('Prompt cache expired 1 hour ago.')
-  await expect(offer).toContainText('stores all 400K tokens of this conversation in the cache again')
-  await offer.screenshot({ path: `${SHOTS}/${info.project.name}-offer.png` })
-  await panel.getByTestId('compact-offer-dismiss').click()
-  await expect(offer).toHaveCount(0)
-  await page.reload()
-  panel = await openTask(page, kept.taskId, kept.sid)
-  await expect(panel.locator('.session-history')).toContainText('Turn 1 done', { timeout: 25_000 })
+  const panel = await openTask(page, cold.taskId, cold.sid)
+  const history = panel.locator('.session-history')
+  await expect(history).toContainText('Turn 1 done', { timeout: 25_000 })
+  await page.waitForTimeout(2000)
   await expect(panel.getByTestId('compact-offer')).toHaveCount(0)
-
-  panel = await openTask(page, compacted.taskId, compacted.sid)
-  const offer2 = panel.getByTestId('compact-offer')
-  await expect(offer2).toBeVisible({ timeout: 20_000 })
-  await panel.getByTestId('compact-offer-compact').click()
-  await expect(offer2).toHaveCount(0)
-  await openNotices(panel)
-  await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
-  await page.reload()
-  panel = await openTask(page, compacted.taskId, compacted.sid)
-  await openNotices(panel)
-  await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
-  await expect(compactRows(panel)).toHaveCount(1)
-  await expect(panel.getByTestId('compact-offer')).toHaveCount(0)
+  await expect(panel.getByText(/Prompt cache (just )?expired/)).toHaveCount(0)
+  await expect(history).not.toContainText('/compact')
+  // The user's own call stays one click away.
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await expect(panel.locator('.session-panel-input .chat-plus-menu [data-action-id="compact-context"]')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await panel.screenshot({ path: `${SHOTS}/${info.project.name}-cold.png` })
   expect(errors).toEqual([])
 })
 
@@ -171,18 +157,9 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   const row = page.locator('#idle-compaction-row')
   await expect(row).toBeVisible({ timeout: 20_000 })
   await expect(row).toContainText('Compact idle sessions before the cache expires')
-  const min = page.locator('#idle-compaction-min')
-  await min.fill('300')
-  await min.press('Enter')
-  await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
-  // 0 is not a size: the field clears back to the 200K default instead of keeping a 0 that is ignored.
-  await min.fill('0')
-  await min.press('Enter')
-  await expect(min).toHaveValue('')
-  await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(null)
-  await min.fill('300')
-  await min.press('Enter')
-  await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
+  // No cold-cache line, so no setting for one.
+  await expect(page.locator('#cold-offer')).toHaveCount(0)
+  await expect(page.locator('#idle-compaction-min')).toHaveCount(0)
   // On by default, at 85% of where a session compacts by itself; the share is pulled into 50..99.
   await expect(page.locator('#idle-compaction')).toBeChecked()
   const pct = page.locator('#idle-compaction-percent')
@@ -199,13 +176,10 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   await expect.poll(async () => (await idleCompactionConfig(request))?.limit_percent ?? null, { timeout: 10_000 }).toBe(null)
   await page.locator('#idle-compaction').click()
   await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(false)
-  // The offer's size is its own: still editable with the switch off.
-  await expect(page.locator('#idle-compaction-min')).toBeEnabled()
   await row.locator('xpath=ancestor::*[contains(@class,"settings-group")][1]').screenshot({ path: `${SHOTS}/${info.project.name}-settings.png` }).catch(() => {})
   // Back to the defaults for the specs after this one.
   await page.locator('#idle-compaction').click()
-  await page.locator('#idle-compaction-min').fill('')
-  await page.locator('#idle-compaction-min').press('Enter')
+  await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(true)
 })
 
 // Needs a server whose idle compaction fires right after a turn (WALNUT_IDLE_COMPACT_LEAD_MS=3580000) and a
@@ -227,7 +201,8 @@ test('the idle compaction row says why it ran and changes its setting in place',
   await fold.click()
   const line = history.getByTestId('idle-compact-line').first()
   await expect(line).toBeVisible()
-  await line.locator('.idle-compact-toggle').click()
+  // Open already: the reason and the setting show as soon as the fold does.
+  await expect(line.locator('.idle-compact-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(line.getByTestId('idle-compact-why')).toHaveText(
     "Why: 400K tokens, past 85% (383K) of the model's 450K context window (no auto-compaction window is set).", { timeout: 15_000 })
   const pct = line.getByTestId('idle-compact-percent')

@@ -70,7 +70,8 @@ const everyKind = (() => {
     { role: 'user', injected: true, text: 'Base directory for this skill: /home/sample/.claude/skills/sample-notes\n\n# sample-notes\n\nWrite them short.', timestamp: at(n++) },
     { role: 'assistant', text: '', tools: [{ ...bash('k4', `walnut tools call task_send '{"to":"pw-task-fold","title":"Review applied","text":"review applied"}'`), result: 'Message queued for pw-task-fold. Accepted for delivery, not a completed reply. Do NOT resend.' }], timestamp: at(n++) },
     sys('info', 'Retrying the turn after an upstream error.', n++),
-    sys('compact', 'Conversation compacted', n++),
+    // The row a compaction leaves, as history and the live stream write it (COMPACTED_MESSAGE).
+    sys('compact', 'Context compacted', n++),
     sys('error', 'API error: 502 upstream unavailable', n++),
     { role: 'assistant', text: TAG, timestamp: at(n++) },
     // An answered turn a notice started: everything before its answer.
@@ -114,7 +115,8 @@ for (const [name, history, a, b, phrase] of [
     await expect(fold).toHaveAttribute('data-open', 'true');
     await expect(fold).toContainText(name === 'every step kind' ? 'Ran 2 commands' : 'Ran 4 commands');
     await expect(fold.locator('.tool-run-fail').nth(1)).toHaveText('1 failed');
-    await expect(fold).toContainText(name === 'every step kind' ? '3 system messages' : '20 errors');
+    // A run of runtime rows with a compaction in it is named by it (fold-steps.ts systemRunLabel).
+    await expect(fold).toContainText(name === 'every step kind' ? 'Context compacted \u00b7 2 more' : '20 errors');
   });
 }
 

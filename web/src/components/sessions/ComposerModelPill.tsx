@@ -71,7 +71,7 @@ export interface ComposerModelPillProps {
   /** Last assistant message carrying a model + usage, for the context-percent
    *  fallback on a session with no live usage event yet. A caller without
    *  history omits it and simply gets no fallback. */
-  fallbackAssistant?: { model?: string; usage?: unknown };
+  fallbackAssistant?: { model?: string; usage?: unknown; timestamp?: string };
   /** PENDING mode: no session exists yet, so no switch API is ever called. */
   pending?: ComposerModelPillPending;
   /** Extra sentence appended to the pill's tooltip (what the pick applies to). */
@@ -165,6 +165,26 @@ export function ComposerModelPill({
   if (contextPercent == null && engineUi.isAcp && session?.contextTokens && session.modelMaxWindow) {
     contextPercent = Math.round(session.contextTokens / session.modelMaxWindow * 100);
     badgeUsage = { ...liveUsage, inputTokens: session.contextTokens, contextWindow: session.modelMaxWindow };
+  }
+  // A compaction since that reply (Walnut's quiet one writes no reply of its own): the record's prompt
+  // cache facts hold what the context is now (2026-11-04 review: the pill read the 89% from before it).
+  // A panel open through the compaction still holds the live reading from before it: the compaction wins
+  // over a reading older than it.
+  const liveSeen = useRef<{ pct: number | null | undefined; at: number }>({ pct: undefined, at: 0 });
+  if (liveSeen.current.pct !== liveUsage.contextPercent) liveSeen.current = { pct: liveUsage.contextPercent, at: Date.now() };
+  const compactedAt = session?.promptCache?.compactedAt ? Date.parse(session.promptCache.compactedAt) : NaN;
+  const replyAt = fallbackAssistant?.timestamp ? Date.parse(fallbackAssistant.timestamp) : NaN;
+  const liveBeforeCompaction = contextPercent == null || liveSeen.current.at < compactedAt;
+  if (liveBeforeCompaction && Number.isFinite(compactedAt) && !(replyAt > compactedAt) && session?.promptCache) {
+    const totalInput = session.promptCache.tokens;
+    const ctxSize = session.modelMaxWindow ?? getContextWindowSize(rawModel, totalInput);
+    if (totalInput > 0 && ctxSize != null) {
+      contextPercent = Math.round(totalInput / ctxSize * 100);
+      badgeUsage = {
+        ...liveUsage, inputTokens: totalInput, contextWindow: ctxSize,
+        autoCompactAt: liveUsage.autoCompactAt ?? session.autoCompactAt,
+      };
+    }
   }
   if (contextPercent == null && fallbackAssistant?.usage) {
     const u = fallbackAssistant.usage as Record<string, number>;

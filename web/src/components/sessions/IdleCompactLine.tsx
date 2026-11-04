@@ -50,8 +50,8 @@ export function IdleCompactSetting() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const load = useCallback(() => {
-    fetchConfig().then((c) => {
+  const load = useCallback((fresh = false) => {
+    (fresh ? fetchFreshConfig() : fetchConfig()).then((c) => {
       const s = settingOf(c);
       setSetting(s);
       setDraft(String(s.percent));
@@ -60,7 +60,7 @@ export function IdleCompactSetting() {
   useEffect(() => { load(); }, [load]);
   useEvent('config:changed', useCallback((data: unknown) => {
     const { key } = (data ?? {}) as { key?: string };
-    if (!key || key === 'session') load();
+    if (!key || key === 'session') load(true);
   }, [load]));
 
   // A save merges into the config as it stands now: a save keeps a key it does not mention.
@@ -103,6 +103,7 @@ export function IdleCompactSetting() {
         <ToggleSwitch id="idle-compact-inline" checked={setting.enabled} busy={busy} onChange={(v: boolean) => void save({ enabled: v })} />
         <label htmlFor="idle-compact-inline">Compact idle sessions</label>
         <span className="idle-compact-setting-at">at</span>
+        <span className="idle-compact-percent-group">
         <input
           className="idle-compact-percent"
           data-testid="idle-compact-percent"
@@ -116,12 +117,15 @@ export function IdleCompactSetting() {
           onBlur={commitPercent}
           onKeyDown={onKey}
         />
-        <span className="idle-compact-setting-unit">% of the auto-compaction limit</span>
+        <span className="idle-compact-setting-unit">%</span>
+        </span>
+        <span className="idle-compact-setting-unit">of the auto-compaction limit</span>
         {saved && <span className="idle-compact-saved" role="status">Saved</span>}
       </div>
       <div className="idle-compact-setting-help">
         For every session; the default is {DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%. The limit is the session's auto-compaction
-        window, else its model's context window, and never closer than 45K to it; when neither is known Walnut does not compact.{' '}
+        window, else its model's context window, and it stays at least 45K below that so it runs before Claude Code compacts by
+        itself. When neither is known Walnut does not compact.{' '}
         <Link to="/settings#sessions">All session settings</Link>
       </div>
       {error && <div className="idle-compact-error" role="alert">{error}</div>}
@@ -132,7 +136,9 @@ export function IdleCompactSetting() {
 /** The idle compaction's line in a session's timeline: opens to its reason and its setting. */
 export function IdleCompactLine({ message, time, noticeId }: { message: string; time?: string; noticeId?: string }) {
   const sessionId = useContext(RowDisclosureScope);
-  const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content('sys-idle-compact', message), false);
+  // Open by default: why it ran and its setting are what this row is for (2026-11-04 review: closed,
+  // a reader who opened the fold saw only the generic line and took it for missing).
+  const [open, setOpen] = useRowDisclosure(noticeId ? `notice-${noticeId}` : disclosureIds.content('sys-idle-compact', message), true);
   // The live note already says why; a history row is the bare command line, its reason is on the record.
   const saysWhy = message.startsWith('Compacting this idle session');
   const reason = useIdleCompactReason(open && !saysWhy ? sessionId : null, noticeId);
