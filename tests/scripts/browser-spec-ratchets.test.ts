@@ -1602,3 +1602,39 @@ describe('a pending inbox email action ends when its spec says so', () => {
     expect(timedDelay.test("const first = mailItem('alias-first', 'hold-');")).toBe(false)
   })
 })
+
+describe('the session panel Changed chip', () => {
+  // The Changed chip carries the count its tab lists ("Changed" then "3", and "0" when nothing
+  // changed), so its accessible name is never exactly "Changed". Three specs still found it by
+  // that exact name and timed out on CI (2026-11-04: fullscreen-is-the-tab,
+  // session-scroll-boundary, session-popout-interactive). Find it by its test id,
+  // `session-changed-chip`; a substring name (`name: 'Changed'` without exact) still matches.
+  const panelSource = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/SessionPanel.tsx'), 'utf8')
+  const EXACT_NAME = /name:\s*(?:['"`]Changed['"`]\s*,\s*exact:\s*true|\/\^Changed\$\/)/
+  // A list of tab names with Changed in it, each looked up by an exact name.
+  const LOOPED = /\[[^\]\n]*['"`]Changed['"`][^\]\n]*\][\s\S]{0,400}?\{\s*name(?:\s*:\s*\w+)?\s*,\s*exact:\s*true\s*\}/
+  const offendersOf = (text: string): string[] => {
+    const out: string[] = []
+    text.split('\n').forEach((line, i) => { if (EXACT_NAME.test(line)) out.push(`${i + 1}: ${line.trim()}`) })
+    const looped = LOOPED.exec(text)
+    if (looped) out.push(`loop: ${looped[0].split('\n')[0]!.trim()}`)
+    return out
+  }
+
+  it('the chip still carries a count beside its word, under its test id', () => {
+    expect(panelSource).toContain('data-testid="session-changed-chip"')
+    expect(panelSource).toContain('session-chip-count')
+  })
+
+  it('no spec finds the chip by the exact name "Changed"', () => {
+    expect(sources.flatMap(({ file, text }) => offendersOf(text).map((o) => `${file}:${o}`))).toEqual([])
+  })
+
+  it('catches the shapes it was written for', () => {
+    expect(offendersOf("await panel.getByRole('button', { name: 'Changed', exact: true }).click()")).toHaveLength(1)
+    expect(offendersOf("for (const tab of ['Files', 'Changed'] as const) {\n  await panel.getByRole('button', { name: tab, exact: true }).click()")).toHaveLength(1)
+    expect(offendersOf("for (const name of ['Changed', 'Files']) {\n  const button = panel.getByRole('button', { name, exact: true })")).toHaveLength(1)
+    expect(offendersOf("await panel.getByRole('button', { name: 'Changed' }).click()")).toEqual([])
+    expect(offendersOf("await panel.getByTestId('session-changed-chip').click()")).toEqual([])
+  })
+})

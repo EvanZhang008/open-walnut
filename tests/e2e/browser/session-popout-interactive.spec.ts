@@ -89,8 +89,10 @@ test('dense history, view tools, fork recovery and reopen retain a usable compos
   const panel = child.locator('.popout-session-interactive > .session-panel')
   const input = child.locator('.session-panel-input textarea')
   await input.fill('Keep this draft across views')
-  for (const name of ['Changed', 'Files', 'Terminal']) {
-    const button = panel.getByRole('button', { name, exact: true })
+  // Changed carries the count its tab lists ("Changed 3", 0 when none): found by its test id,
+  // never by an exact name (browser-spec-ratchets: the Changed chip).
+  const tabs = [panel.getByTestId('session-changed-chip'), panel.getByRole('button', { name: 'Files', exact: true }), panel.getByRole('button', { name: 'Terminal', exact: true })]
+  for (const button of tabs) {
     await expect(button).toBeVisible()
     await button.click()
     await expect(panel).toHaveClass(/is-changed-open/)

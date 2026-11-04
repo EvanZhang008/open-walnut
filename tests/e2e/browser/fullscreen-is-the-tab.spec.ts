@@ -71,12 +71,15 @@ test('the sidebar stays usable in full screen, and the tab is still full screen 
 test('a second click on the open view\'s tab closes that view and stays full screen', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const split = panel.locator('.session-panel-split')
-  for (const tab of ['Files', 'Changed'] as const) {
-    await panel.getByRole('button', { name: tab, exact: true }).click()
+  // Changed carries the count its tab lists ("Changed 3", 0 when none), so it is found by
+  // its test id, never by an exact name (browser-spec-ratchets: the Changed chip).
+  const tabs = [panel.getByRole('button', { name: 'Files', exact: true }), panel.getByTestId('session-changed-chip')]
+  for (const tab of tabs) {
+    await tab.click()
     await expect(split).toHaveClass(/is-changed-open/, { timeout: 15_000 })
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     // The same tab again: the view goes, the chat fills the sheet, still full screen.
-    await panel.getByRole('button', { name: tab, exact: true }).click()
+    await tab.click()
     await expect(split).not.toHaveClass(/is-changed-open/)
     await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)

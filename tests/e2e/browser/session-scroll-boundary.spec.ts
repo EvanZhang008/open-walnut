@@ -70,11 +70,11 @@ test('a built long conversation scrolls in a column, fullscreen and after reload
   await page.reload();
   await expect(panel.locator('.session-history')).toContainText('outline filler reply 230', { timeout: 30_000 });
   await verifyScrolling(page, panel);
-  await panel.getByRole('button', { name: 'Changed', exact: true }).click();
+  await panel.getByTestId('session-changed-chip').click();
   await expect(panel.locator('.session-panel-split')).toHaveClass(/is-changed-open/);
   await verifyScrolling(page, panel);
   await panel.screenshot({ path: `${evidence}/${info.project.name}-split.png` });
-  await panel.getByRole('button', { name: 'Changed', exact: true }).click();
+  await panel.getByTestId('session-changed-chip').click();
   await verifyScrolling(page, panel);
   expect(errors).toEqual([]);
 });
