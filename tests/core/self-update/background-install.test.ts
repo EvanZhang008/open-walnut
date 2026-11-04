@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { installRunning, platformSpecFor, prefetchArgv, sequenceArgv, startDetachedInstall } from '../../../src/core/self-update/background-install.js'
+import { claimInstall, installRunning, platformSpecFor, prefetchArgv, sequenceArgv, startDetachedInstall } from '../../../src/core/self-update/background-install.js'
 import { processStart } from '../../../src/core/self-update/install-lock.js'
 
 let dir: string
@@ -136,5 +136,63 @@ describe('the download goes first', () => {
     const run = startDetachedInstall(job.file, job.args, { logFile, record, version: '0.7.0', tail: () => {} })
     expect(await run.done).toBe(3)
     expect(fs.readFileSync(out, 'utf8')).toBe("it's first\nsecond\n")
+  })
+})
+
+describe('claimInstall', () => {
+  it('one claimer wins; a live holder is named; a stale record is taken; release leaves another\'s record', async () => {
+    const started = async (pid: number) => `start-${pid}`
+    const a = await claimInstall(record, '0.6.0', { pid: 111, started, alive: () => true })
+    expect(a.ok).toBe(true)
+    const b = await claimInstall(record, '0.6.1', { pid: 222, started, alive: () => true })
+    expect(b).toEqual({ ok: false, held: { pid: 111, version: '0.6.0' } })
+    // The holder went: its record is stale and the next claimer takes it.
+    const c = await claimInstall(record, '0.6.1', { pid: 222, started, alive: (pid) => pid !== 111 })
+    expect(c.ok).toBe(true)
+    if (a.ok) a.release() // 111's release must not remove 222's record
+    expect(JSON.parse(fs.readFileSync(record, 'utf8')).pid).toBe(222)
+    if (c.ok) c.release()
+    expect(fs.existsSync(record)).toBe(false)
+  })
+
+  it('a record no one can read is taken once it is a few seconds old, never while its writer may be at it', async () => {
+    fs.mkdirSync(path.dirname(record), { recursive: true })
+    fs.writeFileSync(record, '') // a full disk, or a write cut by a crash
+    const t = fs.statSync(record).mtimeMs
+    expect(await claimInstall(record, '0.6.0', { now: () => t + 1_000 })).toMatchObject({ ok: false })
+    expect(fs.existsSync(record)).toBe(true)
+    const late = await claimInstall(record, '0.6.0', { now: () => t + 10_000 })
+    expect(late.ok).toBe(true)
+    if (late.ok) late.release()
+  })
+
+  it('a stale record another installer replaced meanwhile is left to it', async () => {
+    fs.mkdirSync(path.dirname(record), { recursive: true })
+    fs.writeFileSync(record, JSON.stringify({ pid: 999_999, version: '0.5.0', start: 'old' }))
+    // While this judge asks ps about the old pid, another installer takes the record.
+    const started = async () => {
+      fs.writeFileSync(record, JSON.stringify({ pid: 4242, version: '0.6.0', start: 'new' }))
+      return 'reused'
+    }
+    expect(await installRunning(record, { alive: () => true, started })).toBeNull()
+    expect(JSON.parse(fs.readFileSync(record, 'utf8')).pid).toBe(4242)
+  })
+
+  it('names a detached install at once, before ps has told its start time', () => {
+    const job = startDetachedInstall('/bin/sh', ['-c', 'sleep 1'], { logFile, record, version: '0.6.0', tail: () => {}, pollMs: 20 })
+    expect(JSON.parse(fs.readFileSync(record, 'utf8'))).toMatchObject({ version: '0.6.0' })
+    return job.done
+  })
+
+  it('a detached install writes its own pid over the claim, so a release after it never removes a running npm\'s record', async () => {
+    const claim = await claimInstall(record, '0.6.0')
+    expect(claim.ok).toBe(true)
+    const job = startDetachedInstall('/bin/sh', ['-c', 'sleep 2'], { logFile, record, version: '0.6.0', tail: () => {}, pollMs: 20 })
+    await waitFor(() => JSON.parse(fs.readFileSync(record, 'utf8')).pid !== process.pid)
+    if (claim.ok) claim.release()
+    expect(fs.existsSync(record)).toBe(true)
+    expect(await installRunning(record)).toMatchObject({ version: '0.6.0' })
+    expect(await job.done).toBe(0)
+    expect(fs.existsSync(record)).toBe(false)
   })
 })

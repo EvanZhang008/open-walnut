@@ -536,7 +536,11 @@ async function goneBack({ from, field, work, walnuts, opts }) {
 /** An install in use, updated while its server serves (by `how`), then restarted. */
 async function updatedWhileServing({ from, field, work, walnuts, opts, how }) {
   return withRegistry(field, from, opts, async (registry) => {
-    const w = walnutFor(work, `field-${how}-${from.version}`, registry, walnuts)
+    // The person's own update, as with updates.auto off: a start point that installs a new
+    // release itself would run its npm beside this one (2026-11-04: a nightly's live install
+    // and this `walnut update` failed on each other's bin link, EEXIST). Releases before the
+    // shared install record cannot wait for each other, and npm typed by hand never can.
+    const w = walnutFor(work, `field-${how}-${from.version}`, registry, walnuts, { WALNUT_NO_AUTO_UPDATE: '1' })
     await installStart(w, from, opts.upstream)
     const done = await putToWork(w, from)
     registry.setDistTags(tags(field.release.version))

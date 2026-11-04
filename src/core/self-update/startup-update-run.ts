@@ -26,10 +26,10 @@ export async function runStartupUpdate(
   const { UpdateChecker } = await import('./update-check.js')
   const { installFileVersion, registryBaseFor, rollBack, undoRollBack } = await import('./binary-install.js')
   const { badDirFor, clearBad, heldBack, markBad } = await import('./held-versions.js')
-  const { installRunning, noteInstalledInBackground, platformSpecFor, prefetchArgv, readUnverified, sequenceArgv, startDetachedInstall, writeUnverified } = await import('./background-install.js')
+  const { installRecordFile, installRunning, noteInstalledInBackground, platformSpecFor, prefetchArgv, readUnverified, sequenceArgv, startDetachedInstall, writeUnverified } = await import('./background-install.js')
   const { WALNUT_HOME } = await import('../../constants.js')
   const err = (line: string) => { process.stderr.write(`${line}\n`) }
-  const record = path.join(WALNUT_HOME, 'local', 'update-installing.json')
+  const record = installRecordFile(WALNUT_HOME)
   const unverifiedFile = path.join(WALNUT_HOME, 'local', 'update-unverified.json')
   return updateOnStart({
     checkNow: () => new UpdateChecker(o.current ? { current: o.current, currentKnown: true } : {}).checkNow(),

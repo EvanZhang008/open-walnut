@@ -115,13 +115,19 @@ export function startDetachedInstall(file: string, args: string[], o: DetachedIn
   const pid = child.pid ?? null
   let exited = false
   if (pid) {
-    void processStart(pid).then((start) => {
-      // A quick install may be over before its start time is known: no record then.
-      if (exited) return
+    const write = (start: string) => {
       try {
         fs.mkdirSync(path.dirname(o.record), { recursive: true })
         fs.writeFileSync(o.record, `${JSON.stringify({ pid, version: o.version, start } satisfies JobRecord)}\n`)
       } catch { /* a record is a courtesy to the next start */ }
+    }
+    // At once, by pid alone: another installer looking now must see this one (ps may take
+    // seconds to name its start time, and a `walnut update` started in that gap ran npm beside it).
+    write('')
+    void processStart(pid).then((start) => {
+      // A quick install may be over before its start time is known: its record is gone then.
+      if (exited || !start) return
+      write(start)
     })
   }
   const done = new Promise<number>((resolve, reject) => {
@@ -147,13 +153,79 @@ export async function installRunning(record: string, deps: { alive?: (pid: numbe
   } catch {
     return null
   }
-  const alive = deps.alive ?? pidAlive
+  // This process's own claim counts while it runs, also as pid 1 in a container (pidAlive says no to it).
+  const alive = deps.alive ?? ((pid: number) => pid === process.pid || pidAlive(pid))
   const started = deps.started ?? processStart
   if (Number.isInteger(rec.pid) && alive(rec.pid) && (!rec.start || (await started(rec.pid)) === rec.start)) {
     return { pid: rec.pid, version: rec.version }
   }
+  // Removed only if it is still the record judged: another installer may have taken it meanwhile.
+  try {
+    const now = JSON.parse(fs.readFileSync(record, 'utf8')) as JobRecord
+    if (now.pid !== rec.pid || now.start !== rec.start) return null
+  } catch { /* gone, or unreadable: the claimer judges it */ }
   fs.rmSync(record, { force: true })
   return null
+}
+
+const UNREADABLE_STALE_MS = 10_000
+
+function removeUnreadable(record: string, now: number): void {
+  try {
+    JSON.parse(fs.readFileSync(record, 'utf8'))
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return
+    try {
+      if (now - fs.statSync(record).mtimeMs >= UNREADABLE_STALE_MS) fs.rmSync(record, { force: true })
+    } catch { /* gone meanwhile */ }
+  }
+}
+
+/** Where every npm install of this data home says it runs: the server's (startup, live) and `walnut update`'s. */
+export function installRecordFile(home: string): string {
+  return path.join(home, 'local', 'update-installing.json')
+}
+
+export type InstallClaim =
+  | { ok: true; release: () => void }
+  | { ok: false; held: { pid: number; version: string } }
+
+/**
+ * Take the install record for this process before an npm install starts, made with an
+ * exclusive create, so two installers never both start: 2026-11-04, a nightly's server
+ * began its live install while `walnut update` ran npm into the same prefix, and one npm
+ * failed on the other's bin link (EEXIST). A record of a live install is `held`; a stale
+ * one is removed and taken. The detached install then writes its own pid over this one
+ * (startDetachedInstall); `release` removes the record only while it is still this
+ * process's, so it never takes away a running npm's.
+ */
+export async function claimInstall(record: string, version: string, deps: { alive?: (pid: number) => boolean; started?: (pid: number) => Promise<string>; pid?: number; now?: () => number } = {}): Promise<InstallClaim> {
+  const pid = deps.pid ?? process.pid
+  const start = await (deps.started ?? processStart)(pid)
+  fs.mkdirSync(path.dirname(record), { recursive: true })
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      fs.writeFileSync(record, `${JSON.stringify({ pid, version, start } satisfies JobRecord)}\n`, { flag: 'wx' })
+      return {
+        ok: true,
+        release: () => {
+          try {
+            const rec = JSON.parse(fs.readFileSync(record, 'utf8')) as JobRecord
+            if (rec.pid === pid) fs.rmSync(record, { force: true })
+          } catch { /* gone, or another's now */ }
+        },
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+    }
+    const held = await installRunning(record, deps)
+    if (held) return { ok: false, held }
+    // A record no one can read (a full disk, a write cut by a crash) is stale once it is a few
+    // seconds old; younger, its writer may still be at it.
+    removeUnreadable(record, deps.now?.() ?? Date.now())
+  }
+  const held = await installRunning(record, deps)
+  return { ok: false, held: held ?? { pid: 0, version: 'another version' } }
 }
 
 let installedVersion: string | null = null

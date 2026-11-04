@@ -4,6 +4,8 @@
  * the argv it would get).
  */
 import { describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-update-cmd'))
@@ -284,6 +286,67 @@ describe('what a launcher runs on its own (--auto), and an install that did not 
     expect(await runUpdateWith({}, { json: false }, d)).toBe(130)
     expect(err.at(-1)).toBe('Stopped by SIGINT; Open Walnut 0.5.1 is unchanged.')
     expect(stop.done).toHaveBeenCalled()
+  })
+})
+
+// 2026-11-04: a nightly's server began its live install while `walnut update` ran npm into the
+// same prefix; one npm failed on the other's bin link (EEXIST).
+describe('one npm at a time with the server\'s own install', () => {
+  const held = { ok: false as const, held: { pid: 4242, version: '0.6.0' } }
+
+  it('takes the install record around its npm, and gives it back', async () => {
+    const release = vi.fn()
+    const claim = vi.fn(async () => ({ ok: true as const, release }))
+    const { d, run } = deps(NPM_NEWER, { claim })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(0)
+    expect(claim).toHaveBeenCalledWith('0.6.0')
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for an install already running; when it put in this version, runs no npm of its own', async () => {
+    const release = vi.fn()
+    const answers = [held, held, { ok: true as const, release }]
+    const claim = vi.fn(async () => answers.shift()!)
+    const sleep = vi.fn(async () => {})
+    const { d, out, run } = deps(NPM_NEWER, { claim, sleep, versionOf: async () => '0.6.0' })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(0)
+    expect(out).toContain('Walnut is already installing Open Walnut 0.6.0 here (pid 4242); waiting for it to finish...')
+    expect(sleep).toHaveBeenCalledTimes(2)
+    expect(run).not.toHaveBeenCalled()
+    expect(out).toContain('Installed Open Walnut 0.6.0.')
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('installs itself once the other install ended without this version', async () => {
+    const release = vi.fn()
+    const answers = [held, { ok: true as const, release }]
+    const claim = vi.fn(async () => answers.shift()!)
+    const versionOf = vi.fn().mockResolvedValueOnce('0.5.1').mockResolvedValue('0.6.0')
+    const { d, run } = deps(NPM_NEWER, { claim, sleep: async () => {}, versionOf })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(0)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('a signal while it waits ends the command, with no npm run', async () => {
+    const stop = { signal: new AbortController().signal, received: () => 'SIGINT' as NodeJS.Signals, done: vi.fn() }
+    const { d, err, run } = deps(NPM_NEWER, { claim: async () => held, sleep: async () => {}, watch: () => stop })
+    expect(await runUpdateWith({}, { json: false }, d)).toBe(130)
+    expect(run).not.toHaveBeenCalled()
+    expect(err.at(-1)).toBe('Stopped by SIGINT; Open Walnut 0.5.1 is unchanged by this command.')
+    expect(stop.done).toHaveBeenCalled()
+  })
+
+  it('every npm install of a data home goes through the one record: the server\'s and this command\'s', () => {
+    const root = path.resolve(__dirname, '../..')
+    const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf8')
+    expect(read('src/core/self-update/live-update-deps.ts')).toMatch(/claimInstall\(RECORD\(\), version\)[\s\S]*startDetachedInstall\(/)
+    expect(read('src/commands/update.ts')).toContain('claimInstall(installRecordFile(WALNUT_HOME), version)')
+    // No second spelling of the record's path: every installer reads the same file.
+    for (const f of ['src/core/self-update/live-update-deps.ts', 'src/commands/update.ts', 'src/core/self-update/startup-update-run.ts']) {
+      expect(read(f), f).not.toMatch(/'update-installing\.json'/)
+    }
   })
 })
 

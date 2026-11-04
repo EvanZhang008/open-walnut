@@ -37,6 +37,7 @@ import type { GlobalOptions } from '../core/types.js'
 import type { UpdateChannel, UpdateStatus } from '../core/self-update/update-check.js'
 import { managerArgv, notWritableFix, type BinaryInstall, type InstallInfo } from '../core/self-update/install-kind.js'
 import type { UpdateStop } from '../core/self-update/startup-update.js'
+import type { InstallClaim } from '../core/self-update/background-install.js'
 import { apiBaseUrl } from '../utils/api-client.js'
 
 export interface UpdateOptions {
@@ -143,6 +144,10 @@ export interface UpdateDeps {
   watch?: () => UpdateStop
   /** Is a Walnut server answering at the default address? (It keeps the old code until restarted.) */
   serverRunning: () => Promise<boolean>
+  /** Take this data home's npm install record (background-install.ts claimInstall); absent: no record. */
+  claim?: (version: string) => Promise<InstallClaim>
+  /** How long to wait before looking at another install again (default 2 s). */
+  sleep?: (ms: number) => Promise<void>
   /** A Homebrew keg that updates itself: the `brew upgrade` line, or null (homebrew-keg.ts). */
   brewHint?: (status: UpdateStatus) => Promise<{ note: string } | null>
   out: (line: string) => void
@@ -189,6 +194,10 @@ export async function defaultDeps(): Promise<UpdateDeps> {
     clearHeld: (status, version) => clearBad(badDirFor(status.install, WALNUT_HOME), version),
     watch: () => watchStop(null),
     serverRunning: probeServer,
+    claim: async (version) => {
+      const { claimInstall, installRecordFile } = await import('../core/self-update/background-install.js')
+      return claimInstall(installRecordFile(WALNUT_HOME), version)
+    },
     brewHint: (status) => brewUpgradeHint(status.install.homebrewKeg, status.current).catch(() => null),
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
@@ -242,7 +251,29 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
   }
   if (!plan.install) return plan.exitCode
   const stop = deps.watch?.()
+  let claim: InstallClaim | null = null
   try {
+    // One npm in this prefix at a time: the server's own install (startup or live) is waited
+    // for, and the server waits for this one (2026-11-04: both ran, one failed with EEXIST).
+    claim = (await deps.claim?.(status.latest!)) ?? null
+    if (claim && !claim.ok) {
+      deps.out(`Walnut is already installing Open Walnut ${claim.held.version} here (pid ${claim.held.pid}); waiting for it to finish...`)
+      while (claim && !claim.ok) {
+        await (deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))))(2_000)
+        const signal = stop?.received()
+        if (signal) {
+          deps.err(`Stopped by ${signal}; Open Walnut ${status.current} is unchanged by this command.`)
+          return 128 + (os.constants.signals[signal] ?? 0)
+        }
+        claim = await deps.claim!(status.latest!)
+      }
+      // The other install may have put in this very version: nothing left to do.
+      const printed = await deps.versionOf?.(status.install).catch(() => null)
+      if (printed?.split(/\s/)[0] === status.latest) {
+        deps.clearHeld?.(status, status.latest!)
+        return finishInstalled(status, deps)
+      }
+    }
     let code: number
     try {
       code = await deps.run(plan.install.file, plan.install.args, stop)
@@ -258,6 +289,7 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
     const problem = await confirmNpmInstall({ status, version: status.latest!, argv: plan.install, run: deps.run, versionOf: deps.versionOf, stop, err: deps.err })
     if (problem) return 1
   } finally {
+    if (claim?.ok) claim.release()
     stop?.done()
   }
   deps.clearHeld?.(status, status.latest!)

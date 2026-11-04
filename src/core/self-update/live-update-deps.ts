@@ -18,7 +18,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { getConfig } from '../config-manager.js'
 import {
-  installRunning, noteInstalledInBackground, installedInBackground, platformSpecFor, prefetchArgv,
+  claimInstall, installRecordFile, installRunning, noteInstalledInBackground, installedInBackground, platformSpecFor, prefetchArgv,
   readUnverified, sequenceArgv, startDetachedInstall, writeUnverified,
 } from './background-install.js'
 import { installFileVersion, registryBaseFor, versionInUse } from './binary-install.js'
@@ -32,7 +32,7 @@ import { countInProcessTurns } from './idle-gate.js'
 import { getUpdateChecker, type UpdateStatus } from './update-check.js'
 import { isNewer } from './version-compare.js'
 
-const RECORD = () => path.join(WALNUT_HOME, 'local', 'update-installing.json')
+const RECORD = () => installRecordFile(WALNUT_HOME)
 const UNVERIFIED = () => path.join(WALNUT_HOME, 'local', 'update-unverified.json')
 const INSTALL_LOG = () => path.join(WALNUT_HOME, 'local', 'update-install.log')
 
@@ -43,9 +43,17 @@ async function installNpm(status: UpdateStatus, version: string): Promise<{ from
   const argv = managerArgv(manager, `open-walnut@${version}`, status.install.runtimePrefix)
   const ahead = prefetchArgv(argv, `open-walnut@${version}`, platformSpecFor(process.execPath, version))
   const job = sequenceArgv(ahead ? [ahead, argv] : [argv])
-  const run = startDetachedInstall(job.file, job.args, { logFile: INSTALL_LOG(), record: RECORD(), version, tail: () => {} })
-  run.quiet() // nobody waits at a terminal: its output stays in update-install.log
-  const code = await run.done
+  // Never beside another npm in this prefix (`walnut update` in a terminal): it is waited for.
+  const claim = await claimInstall(RECORD(), version)
+  if (!claim.ok) throw Object.assign(new Error(`the install of ${claim.held.version} another process began still runs (pid ${claim.held.pid})`), { code: 'update_busy' })
+  let code: number
+  try {
+    const run = startDetachedInstall(job.file, job.args, { logFile: INSTALL_LOG(), record: RECORD(), version, tail: () => {} })
+    run.quiet() // nobody waits at a terminal: its output stays in update-install.log
+    code = await run.done
+  } finally {
+    claim.release()
+  }
   if (code !== 0) throw new Error(`${argv.file} exited with ${code} (see ${INSTALL_LOG()})`)
   const printed = await relaunchVersion(status.install)
   if (printed?.split(/\s/)[0] !== version) {

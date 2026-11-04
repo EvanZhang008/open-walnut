@@ -58,6 +58,14 @@ describe('startFrom', () => {
     expect(startFrom('0.6.25-rehearsal.1', { points: ['0.6.25'] }, ['0.6.19'])).toEqual({ points: ['0.6.19'], later: [] })
   })
 
+  it('field-cli and field-hand update as the person, with the start point\'s own install held off', () => {
+    // 2026-11-04: a nightly start point's live install ran npm beside its `walnut update`; one
+    // failed on the other's bin link (EEXIST). Released start points cannot wait for each other.
+    const src = fs.readFileSync(path.join(import.meta.dirname, '../../scripts/release-rehearsal/field.mjs'), 'utf8')
+    const body = src.slice(src.indexOf('async function updatedWhileServing'), src.indexOf('async function lagging'))
+    expect(body).toMatch(/walnutFor\([^)]*\{ WALNUT_NO_AUTO_UPDATE: '1' \}\)/)
+  })
+
   it('field-start runs no scenario when its check fails', () => {
     // It set the start points before the check threw, so the scenarios ran from them anyway.
     const src = fs.readFileSync(path.join(import.meta.dirname, '../../scripts/release-rehearsal/field.mjs'), 'utf8')
