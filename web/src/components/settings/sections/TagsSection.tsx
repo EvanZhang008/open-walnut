@@ -131,7 +131,8 @@ export function TagsSection() {
   const loadCounts = () => {
     fetchTags()
       .then((tags) => setCounts(tags))
-      .catch((err) => { setCounts([]); setError(err instanceof Error ? err.message : 'Could not load the tags.'); });
+      // A failed read keeps the counts it had (an empty list only ends the first load).
+      .catch((err) => { setCounts((c) => c ?? []); setError(err instanceof Error ? err.message : 'Could not load the tags.'); });
   };
   useEffect(loadCounts, []);
   // Tags come and go with tasks; a filing plugin announces its bulk writes this way.

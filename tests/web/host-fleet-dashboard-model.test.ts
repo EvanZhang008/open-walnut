@@ -212,6 +212,8 @@ describe('a number slot with no number says why', () => {
   it('sessions: the host\'s count, Walnut\'s records, or why there is none', () => {
     expect(sessionsUnknown(host())).toBeNull()
     expect(sessionsTitle(host({ sessions: { running: 4, source: 'host', why: null } }), NOW)).toBe('Counted by the host itself')
+    const kept = host({ sessions: { running: 4, source: 'host', why: null, at: NOW - 19 * 60_000 }, now: { ...host().now!, at: NOW - 19 * 60_000, stale: true } })
+    expect(sessionsTitle(kept, NOW)).toBe('Counted by the host 19 min ago (its last reading)')
     const fromRecords = host({ sessions: { running: 4, source: 'records', why: null }, now: { ...host().now!, at: NOW - 19 * 60_000, stale: true } })
     expect(sessionsTitle(fromRecords, NOW)).toBe("From Walnut's session records (its own reading is 19 min old)")
     expect(sessionsUnknown(host({ sessions: { running: null, why: 'Walnut is not connected to it' } }))?.why).toBe('Walnut is not connected to it')

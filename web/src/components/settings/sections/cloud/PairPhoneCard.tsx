@@ -40,7 +40,8 @@ export function PairPhoneCard({ domain }: Props) {
       setTargets(res.targets ?? []);
     } catch (err) {
       log.warn('settings', 'cloud pair card: targets fetch failed', { error: String(err) });
-      setTargets([]);
+      // A failed read keeps the targets it listed (an empty list only ends the first load).
+      setTargets((t) => t ?? []);
     }
   }, []);
 

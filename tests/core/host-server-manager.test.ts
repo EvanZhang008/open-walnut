@@ -1198,3 +1198,44 @@ describe('host server manager: a newer build waits for a quiet window (update-ho
     expect(again.uploads.length).toBe(2)
   })
 })
+
+describe('host server manager: the last report is kept while the server does not answer', () => {
+  it('keeps the version, commit and tunnel it last reported, with when, through a stale report and a failed status read', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.reportBuild = { version: '0.6.7', commit: 'abc1234' }
+    await m.connected(host)
+    expect(m.view('devbox').phase).toBe('running')
+    const first = m.view('devbox')
+    expect(first.lastReport).toMatchObject({ version: '0.6.7', commit: 'abc1234' })
+    expect(typeof first.lastReportAt).toBe('number')
+
+    // The server stops answering its daemon: no report now.
+    host.reports = false
+    await m.retryExpose('devbox')
+    let v = m.view('devbox')
+    expect(v.phase).toBe('starting')
+    expect(v.server).toBeNull()
+    expect(v.lastReport).toMatchObject({ version: '0.6.7', commit: 'abc1234' })
+    expect(v.lastReportAt).toBe(first.lastReportAt)
+
+    // The daemon's status read itself fails: still kept.
+    const send = host.send.bind(host)
+    host.send = async (cmd, params, t) => { if (cmd === 'server.status') throw new Error('timed out'); return send(cmd, params, t) }
+    await m.retryExpose('devbox')
+    v = m.view('devbox')
+    expect(v.phase).toBe('error')
+    expect(v.lastReport).toMatchObject({ version: '0.6.7', commit: 'abc1234' })
+
+    // A new report replaces it.
+    host.send = send
+    host.reports = true
+    host.reportBuild = { version: '0.6.8', commit: 'def5678' }
+    await m.retryExpose('devbox')
+    v = m.view('devbox')
+    expect(v.phase).toBe('running')
+    expect(v.lastReport).toMatchObject({ version: '0.6.8', commit: 'def5678' })
+    expect(v.lastReportAt!).toBeGreaterThanOrEqual(first.lastReportAt!)
+    m.stop()
+  })
+})

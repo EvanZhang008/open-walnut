@@ -42,7 +42,7 @@ export function PasswordsSection({ config, onSave }: Props) {
   const refresh = useCallback(() => {
     vaultApi.status().then((st) => {
       setStatus(st)
-      if (st.unlocked) vaultApi.agentPolicy().then((p) => setAgents(p.agents)).catch(() => setAgents(null))
+      if (st.unlocked) vaultApi.agentPolicy().then((p) => setAgents(p.agents)).catch(() => {}) // a failed read keeps the switch it showed
       else setAgents(null)
     }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }, [])

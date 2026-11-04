@@ -85,7 +85,7 @@ describe('the long-running verdict', () => {
       'It was up 90% of the last 7 days.',
     ])
     expect(h.connection).toMatchObject({ since: null, rttMs: null, error: 'ssh refused' })
-    expect(h.sessions.running).toBeNull() // a stale reading does not count sessions
+    expect(h.sessions).toMatchObject({ running: 19, source: 'host' }) // a stale reading keeps its count, with its time
   })
 
   it('a host with no server, and the Mac as a laptop', () => {
@@ -104,13 +104,16 @@ describe('the long-running verdict', () => {
 })
 
 describe('the card', () => {
-  it('counts sessions by the host while its reading is fresh, else by Walnut\'s records, and says why when neither', () => {
-    expect(buildFleetHost(inputs({ recordedSessions: 4 })).sessions).toEqual({ running: 19, source: 'host', why: null })
+  it('counts sessions by the host\'s last reading, kept until a new one comes; Walnut\'s records for a host never read; says why when neither', () => {
+    const fresh = buildFleetHost(inputs({ recordedSessions: 4 })).sessions
+    expect(fresh).toMatchObject({ running: 19, source: 'host', why: null })
+    // An old reading keeps its own count with its time (2026-11-04: "cache should cache ... until the real data come").
     const stale = { value: vitals(), at: NOW - 19 * 60_000, stale: true }
-    expect(buildFleetHost(inputs({ vitals: stale, recordedSessions: 4 })).sessions).toEqual({ running: 4, source: 'records', why: null })
-    expect(buildFleetHost(inputs({ vitals: null, recordedSessions: 0 })).sessions).toEqual({ running: 0, source: 'records', why: null })
+    expect(buildFleetHost(inputs({ vitals: stale, recordedSessions: 4 })).sessions).toEqual({ running: 19, source: 'host', why: null, at: NOW - 19 * 60_000 })
+    expect(buildFleetHost(inputs({ vitals: stale, recordedSessions: 4, status: { ...inputs().status, connected: false } })).sessions.running).toBe(19)
+    expect(buildFleetHost(inputs({ vitals: null, recordedSessions: 0 })).sessions).toEqual({ running: 0, source: 'records', why: null, at: null })
     // Every combination with no number names why.
-    for (const vit of [stale, null]) for (const connected of [true, false]) for (const kind of ['ssh-tunnel', 'bridge'] as const) {
+    for (const vit of [null]) for (const connected of [true, false]) for (const kind of ['ssh-tunnel', 'bridge'] as const) {
       const s = buildFleetHost(inputs({ vitals: vit, kind, recordedSessions: null, status: { ...inputs().status, connected } })).sessions
       expect(s.running).toBeNull()
       expect(s.why, JSON.stringify({ vit: !!vit, connected, kind })).toBeTruthy()

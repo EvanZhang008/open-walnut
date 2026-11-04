@@ -87,7 +87,8 @@ export function BackupSection({ config, onSave }: Props) {
 
   useEffect(() => {
     apiGet<BackupStatus>('/api/backup/status').then(setStatus).catch(() => {});
-    fetchAwsProfiles().then(setProfiles).catch(() => setProfiles([]));
+    // A failed read keeps the profiles it listed before.
+    fetchAwsProfiles().then(setProfiles).catch(() => {});
   }, []);
 
   useEvent('backup:status', useCallback((data: unknown) => {

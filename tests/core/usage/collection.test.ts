@@ -57,7 +57,10 @@ describe('daemon-backed usage collection', () => {
       .mockRejectedValueOnce(new Error('Page timed out'));
     await collectUsage(undefined, '2026-10-14T00:00:00Z');
     expect(responseUsageStore().getOverview({}).accuracy.until).toBe('2026-10-13T00:00:00Z');
-    expect(responseUsageStore().getOverview({}).accuracy.checks[0].source).toBe('Host collection');
+    // The failure is said beside the checks of the last finished pass, which stay.
+    const checks = responseUsageStore().getOverview({}).accuracy.checks;
+    expect(checks.at(-1)?.source).toBe('Host collection');
+    expect(checks.some(check => check.source !== 'Host collection')).toBe(true);
     mocks.send.mockResolvedValueOnce(page('2026-10-14T00:00:00Z'));
     await collectUsage(undefined, '2026-10-14T00:00:00Z');
     expect(responseUsageStore().getOverview({}).accuracy.until).toBe('2026-10-14T00:00:00Z');

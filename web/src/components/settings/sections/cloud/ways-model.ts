@@ -35,6 +35,8 @@ export interface WaysInput {
   cloudWithheld?: boolean;
   /** GET /api/devices `tailscale`; absent from an older server. */
   tailscale?: { installed: boolean; running: boolean };
+  /** Set when `tailscale` is an earlier probe's answer: when it was probed (ISO). */
+  tailscaleAsOf?: string | null;
   /** GET /api/expose `status`; null while it loads, 'failed' when it could not be read. */
   expose: ExposeStatus | null | 'failed';
   /** What the browser link is called: a plugin's tunnel names it after itself (browser-link-name.ts). */
@@ -103,6 +105,14 @@ function cloudWay(i: WaysInput, inUse: boolean): Way {
 }
 
 function tailscaleWay(i: WaysInput): Way {
+  const way = tailscaleWayNow(i);
+  // An earlier probe's answer, shown until a fresh one lands: say how old it is.
+  if (!i.tailscale || !i.tailscaleAsOf) return way;
+  const ago = timeAgo(i.tailscaleAsOf, { long: true, now: i.now });
+  return ago ? { ...way, status: `${way.status} (as of ${ago})` } : way;
+}
+
+function tailscaleWayNow(i: WaysInput): Way {
   const base = {
     id: 'tailscale' as const,
     title: 'Tailscale',

@@ -8,39 +8,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
+import { keepLastGood, readLastGood } from '@/utils/last-good';
+import { timeAgo } from '@/utils/time';
 import { fetchDevicesList } from './devices-list';
 import { DEVICES_CHANGED_EVENT } from './device-rows-copy';
+import { EMPTY_DEVICES_VIEW, cloudErrorLine, isDevicesView, mergeDevicesReply, type DeviceEntry, type DevicesListResponse, type DevicesView } from './devices-reply';
 import type { ExposeStatus } from './browser-access-status';
 import type { PairingTarget, PairTargetKind } from './usePairDevice';
 
-/** Self-reported hardware identity, absent until the phone checks in once. */
-export interface DeviceSelfInfo {
-  model?: string;
-  os?: string;
-  deviceName?: string;
-  appVersion?: string;
-  reportedAt?: string;
-}
+export type { DeviceEntry, DeviceSelfInfo } from './devices-reply';
 
-export interface DeviceEntry {
-  name: string;
-  createdAt: string;
-  lastUsedAt?: string;
-  /** What this credential actually is: not everything in the list is a phone. */
-  role?: 'phone' | 'simulator' | 'mac' | 'self' | 'browser';
-  info?: DeviceSelfInfo;
-}
-
-/** GET /api/devices (its `tailscale` summary is read by the card through its own endpoint). */
-interface DevicesListResponse {
-  devices: DeviceEntry[];
-  cloudDevices?: DeviceEntry[];
-  targets?: PairingTarget[];
-  tailscale?: { installed: boolean; running: boolean };
-  cloudError?: string;
-  cloudUnpaired?: { origin: string };
-  cloudWithheld?: string;
-}
+/** The last view this browser showed, so a reopened page paints at once (and keeps it through a failed read). */
+const LAST_GOOD_KEY = 'walnut:last-good:devices:v1';
 
 export interface DevicesData {
   devices: DeviceEntry[];
@@ -50,8 +29,13 @@ export interface DevicesData {
   // that then vanish and pull a deep-linked section below them upward (C74).
   listState: 'loading' | 'ready' | 'failed';
   tailscale?: { installed: boolean; running: boolean };
-  /** The cloud half of the list failed to load (the reason, from the server). */
+  /** `tailscale` is an earlier probe's answer, made at `tailscaleAt` (ISO; null when not known). */
+  tailscaleStale: boolean;
+  tailscaleAt: string | null;
+  /** The cloud half of the list failed to load (the reason, from the server, and the age of the list kept beside it). */
   cloudError: string | null;
+  /** The cloud phones shown are the last list read, not this read's (`cloudError` says why). */
+  cloudStale: boolean;
   /** This Mac unpaired itself: the cloud half is gone on purpose. */
   cloudUnpaired: boolean;
   cloudWithheld: boolean;
@@ -65,14 +49,10 @@ export interface DevicesData {
  * main entry keeps its picker on an address still offered).
  */
 export function useDevicesData(opts: { replica: boolean; onTargets?: (kinds: PairTargetKind[]) => void }): DevicesData {
-  const [devices, setDevices] = useState<DeviceEntry[]>([]);
-  const [cloudDevices, setCloudDevices] = useState<DeviceEntry[]>([]);
-  const [targets, setTargets] = useState<PairingTarget[]>([]);
-  const [listState, setListState] = useState<DevicesData['listState']>('loading');
-  const [tailscale, setTailscale] = useState<DevicesData['tailscale']>(undefined);
-  const [cloudError, setCloudError] = useState<string | null>(null);
-  const [cloudUnpaired, setCloudUnpaired] = useState(false);
-  const [cloudWithheld, setCloudWithheld] = useState(false);
+  // Seeded from the last view kept here: shown at once, replaced by the first read.
+  const [seed] = useState(() => readLastGood(LAST_GOOD_KEY, isDevicesView)?.value ?? null);
+  const [view, setView] = useState<DevicesView>(seed ?? EMPTY_DEVICES_VIEW);
+  const [listState, setListState] = useState<DevicesData['listState']>(seed ? 'ready' : 'loading');
   const onTargets = useRef(opts.onTargets);
   onTargets.current = opts.onTargets;
 
@@ -84,17 +64,15 @@ export function useDevicesData(opts: { replica: boolean; onTargets?: (kinds: Pai
     try {
       const res = await fetchDevicesList<DevicesListResponse>();
       if (seq !== readSeq.current) return;
-      setDevices(res.devices);
-      setCloudDevices(res.cloudDevices ?? []);
-      setCloudError(res.cloudError ?? null);
-      setCloudUnpaired(Boolean(res.cloudUnpaired));
-      setTailscale(res.tailscale);
-      setCloudWithheld(Boolean(res.cloudWithheld));
-      const list = res.targets ?? [];
-      setTargets(list);
-      onTargets.current?.(list.map((t) => t.kind));
+      setView((prev) => {
+        const next = mergeDevicesReply(prev, res, new Date().toISOString());
+        keepLastGood(LAST_GOOD_KEY, next);
+        return next;
+      });
+      onTargets.current?.((res.targets ?? []).map((t) => t.kind));
       setListState('ready');
     } catch (err) {
+      // A failed read changes nothing shown.
       log.error('settings', 'devices list failed', { error: String(err) });
       if (seq !== readSeq.current) return;
       setListState((prev) => (prev === 'ready' ? prev : 'failed'));
@@ -113,22 +91,29 @@ export function useDevicesData(opts: { replica: boolean; onTargets?: (kinds: Pai
     return () => window.removeEventListener(DEVICES_CHANGED_EVENT, onChanged);
   }, [refresh]);
 
-  // The server leaves Tailscale out of the list until its first probe answers: ask
-  // again a few times, so the card does not sit on "Checking..." (an older server never says).
+  // The server leaves Tailscale out of the list until its first probe answers (a newer
+  // one sends the last probe's, marked stale): ask again a few times, so the card does
+  // not sit on "Checking..." or an old answer (an older server never says).
   // The count is state, not a ref: a read that still lacks the field changes nothing else,
   // and the next ask (and `settled` after the last) must still follow it.
   const [tailscaleAsks, setTailscaleAsks] = useState(0);
   const { replica } = opts;
+  const { tailscale, tailscaleStale } = view;
   useEffect(() => {
-    if (replica || listState !== 'ready' || tailscale || tailscaleAsks >= 3) return;
+    if (replica || listState !== 'ready' || (tailscale && !tailscaleStale) || tailscaleAsks >= 3) return;
     const t = setTimeout(() => {
       void refresh().finally(() => setTailscaleAsks((n) => n + 1));
     }, 4_000);
     return () => clearTimeout(t);
-  }, [replica, listState, tailscale, tailscaleAsks, refresh]);
+  }, [replica, listState, tailscale, tailscaleStale, tailscaleAsks, refresh]);
 
   const settled = listState !== 'loading' && (replica || listState === 'failed' || !!tailscale || tailscaleAsks >= 3);
-  return { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, settled, refresh };
+  const cloudError = cloudErrorLine(view, (iso) => timeAgo(iso, { long: true }));
+  return {
+    devices: view.devices, cloudDevices: view.cloudDevices, targets: view.targets, listState, tailscale,
+    tailscaleStale: !!tailscaleStale, tailscaleAt: view.tailscaleAt ?? null,
+    cloudError, cloudStale: view.cloudStale, cloudUnpaired: view.cloudUnpaired, cloudWithheld: view.cloudWithheld, settled, refresh,
+  };
 }
 
 /**

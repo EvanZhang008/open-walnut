@@ -65,7 +65,7 @@ export interface FleetHost {
    * included) while its reading is fresh, else Walnut's session records (`source`). `why`
    * says in words why there is no number, whenever `running` is null.
    */
-  sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null }
+  sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null; at?: number | null }
   /** Model spend of the sessions that ran there, last 30 days, at public list prices (not a bill). */
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null
   /** The Walnut server the host runs for this Mac (replica or plain host server); null for the Mac and the cloud box. */
@@ -192,14 +192,17 @@ export interface FleetInputs {
   now: number
 }
 
-/** The host's own count while its reading is fresh, else Walnut's records; never a number with no source. */
+/**
+ * The host's own count from its last reading, fresh or not, with when it was read (2026-11-04,
+ * the user: "cache should cache for long tie until the real data come"); Walnut's records only
+ * for a host never read; never a number with no source.
+ */
 function fleetSessions(i: FleetInputs): FleetHost['sessions'] {
   const v = i.vitals
-  if (v && !v.stale) return { running: v.value.stats.running, source: 'host', why: null }
-  if (typeof i.recordedSessions === 'number') return { running: i.recordedSessions, source: 'records', why: null }
+  if (v) return { running: v.value.stats.running, source: 'host', why: null, at: v.at }
+  if (typeof i.recordedSessions === 'number') return { running: i.recordedSessions, source: 'records', why: null, at: null }
   const why = i.kind === 'bridge' ? 'the cloud box runs no sessions of its own'
     : !i.status.connected ? 'Walnut is not connected to it'
-    : v ? 'its reading is old and Walnut could not read its session records'
     : 'not read yet'
   return { running: null, source: null, why }
 }
@@ -298,7 +301,8 @@ export function fleetHostLine(h: FleetHost): string {
   if (week?.online !== null && week?.online !== undefined) {
     parts.push(`up ${Math.round(week.online * 1000) / 10}% over ${recordedSpan(week.minutes)}`)
   }
-  if (h.sessions.running !== null) parts.push(`${h.sessions.running} sessions open`)
+  // A count kept from an old reading says so, as the CPU and memory beside it do.
+  if (h.sessions.running !== null) parts.push(`${h.sessions.running} sessions open${h.sessions.source === 'host' && h.now?.stale ? ' (last reading)' : h.sessions.source === 'records' ? " (Walnut's records)" : ''}`)
   if (h.spend) parts.push(`$${Math.round(h.spend.last30dUsd)} in 30 days (list price)`)
   if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phaseLabel}` : 'no Walnut server')
   if (h.placement.weight === 0) parts.push('placement never picks it (weight 0)')

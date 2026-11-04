@@ -51,7 +51,7 @@ let lastTabs: TabView[] | null = null;
 /** What the bar and the intros say, from the same reads the Devices tab makes (shared in flight). */
 export function usePhonesCloudView(): PhonesCloudView {
   const replica = useIsCloudReplica();
-  const { devices, cloudDevices, targets, listState, tailscale, cloudError, cloudUnpaired, cloudWithheld, settled } = useDevicesData({ replica });
+  const { devices, cloudDevices, targets, listState, tailscale, tailscaleStale, tailscaleAt, cloudError, cloudUnpaired, cloudWithheld, settled } = useDevicesData({ replica });
   const expose = useExposeStatus(replica);
   const linkName = useBrowserLinkName();
   const { now, ways } = deriveWays({
@@ -65,6 +65,7 @@ export function usePhonesCloudView(): PhonesCloudView {
     cloudUnpaired,
     cloudWithheld,
     tailscale,
+    tailscaleAsOf: tailscaleStale ? tailscaleAt : null,
     expose,
     linkName,
   });

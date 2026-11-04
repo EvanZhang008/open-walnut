@@ -468,19 +468,23 @@ test('Connect: the row waits, then the host comes back as a card; a refusal stay
 test('no other host is read while the page is just open; this computer\'s old card is read once; opening the Overview or Refresh reads them', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.clock.install()
-  // One fixed read time: the page's clock runs ahead of the real one, and this computer's own
-  // read on open makes the page read the cache again while it does.
+  // Fixed read times (the page's clock runs ahead of the real one): the box was read 12 minutes
+  // ago; this computer too, until its read on open lands, as a real read does.
   const readAt = Date.now() - 12 * MIN
-  serveFleet(page, () => FLEET.slice(0, 2).map((h) => ({ ...(h as object), readAt, refreshing: false, readError: null, readFailedAt: null })))
-  const asks = serveRefresh(page)
+  let localAt = readAt
+  let skew = 0 // how far the page's clock runs ahead of this one
+  serveFleet(page, () => FLEET.slice(0, 2).map((h) => ({ ...(h as object), readAt: (h as { local?: boolean }).local ? localAt : readAt, refreshing: false, readError: null, readFailedAt: null })))
+  const asks = serveRefresh(page, (hosts) => { if (!hosts || hosts.includes('__local__')) localAt = Date.now() + skew })
   await openRemoteHosts(page)
   const dash = page.getByTestId('host-fleet')
   await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2, { timeout: 30_000 })
-  // Five minutes on the page (the old page read every host every 30 s): the words age, no host is read.
+  const box = dash.locator('[data-testid="host-fleet-card"][data-host="fixture-remote"], [data-testid="host-fleet-card"]:not([data-host="__local__"])').first()
   // This computer's card is 12 minutes old: it alone is read, once (no network).
   await expect.poll(() => asks).toEqual([['__local__']])
+  // Five minutes on the page (the old page read every host every 30 s): the words age, no host is read.
   await page.clock.runFor(5 * MIN)
-  await expect(dash.getByTestId('host-fleet-read')).toHaveText('Read 17 min ago')
+  skew = 5 * MIN
+  await expect(box.getByTestId('host-fleet-read-age')).toHaveText('Read 17 min ago')
   expect(asks).toEqual([['__local__']])
 
   // Closing it reads nothing; opening it reads every host.
@@ -498,7 +502,7 @@ test('no other host is read while the page is just open; this computer\'s old ca
   await expect.poll(() => asks).toEqual([['__local__'], null, null])
 })
 
-test('this computer\'s card 19 minutes old: sessions from Walnut\'s records, read again on open; a slot with no number says why', async ({ page }) => {
+test('this computer\'s card 19 minutes old: its last session count stays, read again on open; a slot with no number says why', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   let read = false
   const local = FLEET[0] as Record<string, any>
@@ -508,7 +512,7 @@ test('this computer\'s card 19 minutes old: sessions from Walnut\'s records, rea
     const done = { refreshing: false, readError: null, readFailedAt: null }
     const mac = read
       ? { ...local, ...done, readAt: at, now: { ...local.now, at, stale: false }, sessions: { running: 5, source: 'host', why: null } }
-      : { ...local, ...done, readAt: at - 19 * MIN, now: { ...local.now, at: at - 19 * MIN, stale: true }, sessions: { running: 4, source: 'records', why: null } }
+      : { ...local, ...done, readAt: at - 19 * MIN, now: { ...local.now, at: at - 19 * MIN, stale: true }, sessions: { running: 4, source: 'host', why: null, at: at - 19 * MIN } }
     const box = { ...cloud, ...done, readAt: at - 12 * MIN, sessions: { running: null, source: null, why: 'the cloud box runs no sessions of its own' }, spend: null }
     return [mac, box]
   })
@@ -526,10 +530,10 @@ test('this computer\'s card 19 minutes old: sessions from Walnut\'s records, rea
   const dash = page.getByTestId('host-fleet')
   const mac = dash.locator('[data-testid="host-fleet-card"][data-host="__local__"]')
   const sessions = mac.getByTestId('host-fleet-sessions')
-  // The old reading still gives a count: Walnut's own session records, and the tooltip says so.
+  // The old reading keeps its own count, and the tooltip says how old it is.
   await expect(sessions.locator('.hf-big')).toHaveText('4', { timeout: 30_000 })
-  await expect(sessions).toHaveAttribute('data-source', 'records')
-  await expect(sessions).toHaveAttribute('title', "From Walnut's session records (its own reading is 19 min old)")
+  await expect(sessions).toHaveAttribute('data-source', 'host')
+  await expect(sessions).toHaveAttribute('title', 'Counted by the host 19 min ago (its last reading)')
   await expect(mac.locator('[data-num="unknown"]')).toHaveCount(0)
   await expect.poll(() => asks).toEqual([['__local__']])
   // The cloud box has no sessions of its own: its slot says so in words, never a bare "?".
@@ -542,9 +546,57 @@ test('this computer\'s card 19 minutes old: sessions from Walnut\'s records, rea
   release()
   // The read ends: the host's own count, read just now.
   await expect(sessions.locator('.hf-big')).toHaveText('5', { timeout: 15_000 })
-  await expect(sessions).toHaveAttribute('data-source', 'host')
+  await expect(sessions).toHaveAttribute('title', 'Counted by the host itself')
   await expect(mac.getByTestId('host-fleet-read-age')).toHaveText('Read just now')
   expect(asks).toEqual([['__local__']])
+})
+
+test('a reopened page shows the last cards at once, before the server answers; a reading hours old keeps every value', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const dev = FLEET[1] as Record<string, any>
+  let answer: 'first' | 'later' = 'first'
+  let hold: Promise<void> | null = null
+  await page.route((url) => url.pathname === '/api/v1/hosts', async (route) => {
+    if (hold) await hold
+    const at = Date.now()
+    const done = { refreshing: false, readError: null, readFailedAt: null }
+    if (answer === 'first') return route.fulfill({ json: { hosts: FLEET.slice(0, 2).map((h) => ({ ...(h as object), ...done, readAt: at - 2 * MIN })), checkedAt: at, refreshing: false } })
+    // Three hours later, never read since: the server still answers its last reading, marked stale.
+    const old = at - 3 * HOUR
+    const hosts = FLEET.slice(0, 2).map((h) => {
+      const x = h as Record<string, any>
+      return x.host === 'devbox'
+        ? { ...x, ...done, readAt: old, now: { ...dev.now, cpuUtil: 0.61, at: old, stale: true }, sessions: { running: 7, source: 'host', why: null, at: old } }
+        : { ...x, ...done, readAt: at - 2 * MIN }
+    })
+    return route.fulfill({ json: { hosts, checkedAt: at, refreshing: false } })
+  })
+  serveRefresh(page)
+  await openRemoteHosts(page)
+  const dash = page.getByTestId('host-fleet')
+  const devCard = dash.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
+  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%', { timeout: 30_000 })
+
+  // Reopen with the server slow to answer: the last cards paint at once from this browser.
+  let release = () => {}
+  hold = new Promise<void>((r) => { release = r })
+  answer = 'later'
+  await openRemoteHosts(page)
+  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%', { timeout: 10_000 })
+  await expect(devCard.getByTestId('host-fleet-sessions').locator('.hf-big')).toHaveText(/^\d+$/)
+  await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
+  await expect(page.locator('.hf-loading')).toHaveCount(0)
+  release()
+  hold = null
+  // The server's answer replaces them; three hours old, every value stays, with its age.
+  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('61%', { timeout: 10_000 })
+  await expect(devCard.getByTestId('host-fleet-sessions').locator('.hf-big')).toHaveText('7')
+  await expect(devCard.getByTestId('host-fleet-sessions')).toHaveAttribute('title', 'Counted by the host 3 h ago (its last reading)')
+  await expect(devCard.getByTestId('host-fleet-read-age')).toHaveText('Read 3 h ago')
+  await expect(devCard.locator('[data-num="unknown"]')).toHaveCount(0)
+  for (const g of await devCard.getByTestId('host-fleet-gauge').all()) await expect(g.locator('.hf-gauge-value')).not.toHaveText('?')
+  await expectEveryUnknownSaysWhy(page)
+  await expect(dash.getByTestId('host-fleet-stat-sessions').locator('[data-num="known"]')).toHaveText(/^\d+$/)
 })
 
 test('a read keeps the old cards with a mark on each one being read; each changes as it ends; a failed one says why', async ({ page }) => {

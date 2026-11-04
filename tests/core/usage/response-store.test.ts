@@ -116,7 +116,25 @@ describe('response-level usage storage', () => {
     await s.importHost('local', evidence([record('reply-2')]), owners);
     s.markHostUnavailable('local', 'Next page timed out');
     expect(s.getOverview({}).accuracy.until).toBe('2026-10-13T00:00:00Z');
-    expect(s.getOverview({}).accuracy.checks[0].status).toBe('unverified');
+    expect(s.getOverview({}).accuracy.checks.find(c => c.source === 'Host collection')?.status).toBe('unverified');
+  });
+  it('keeps the last finished checks when a host cannot be read, and says so beside them', async () => {
+    const s = store(); const first = await s.importHost('local', evidence([record()]), owners);
+    s.finishHost('local', '2026-10-13T00:00:00Z', first.checks);
+    const before = s.sourceChecks();
+    expect(before.length).toBeGreaterThan(0);
+    s.markHostUnavailable('local', 'Next page timed out', new Date('2026-10-14T08:00:00Z'));
+    s.markHostUnavailable('local', 'Still not answering', new Date('2026-10-14T09:00:00Z'));
+    const after = s.sourceChecks();
+    // Every earlier check is still there, unchanged; one failure row (the latest) beside them.
+    expect(after.filter(c => c.source !== 'Host collection')).toEqual(before);
+    const failures = after.filter(c => c.source === 'Host collection');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ status: 'unverified', failedAt: '2026-10-14T09:00:00.000Z' });
+    expect(failures[0].detail).toMatch(/Still not answering/);
+    // A finished pass replaces them all, the failure row included.
+    s.finishHost('local', '2026-10-15T00:00:00Z', first.checks);
+    expect(s.sourceChecks().some(c => c.source === 'Host collection')).toBe(false);
   });
   it('hides stale price verification until responses are repriced with the current table', async () => {
     const s = store(); await s.importHost('local', evidence([record()]), owners);

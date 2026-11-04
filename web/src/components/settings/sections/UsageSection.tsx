@@ -6,6 +6,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens as formatTokenCount } from '@/utils/format';
+import { timeAgo } from '@/utils/time';
 import { UsageBreakdownCard } from '@/components/usage/UsageBreakdownCard';
 import { dayLabel, periodDays } from '@/components/usage/breakdown-model';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
@@ -47,7 +48,7 @@ function volume(requests: number, tokens?: number): string {
 
 export function UsageSection() {
   const [time, setTime] = useState<TimeSelection>({ preset: '30d' });
-  const { report, current, loading, error, refresh, range } = useUsageCosts('all', time);
+  const { report, current, keptAt, loading, error, refresh, range } = useUsageCosts('all', time);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
   const update = async () => {
@@ -90,6 +91,9 @@ export function UsageSection() {
 
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
       {updateError && <SettingsNotice kind="error" role="alert">{updateError}</SettingsNotice>}
+      {keptAt !== null && (
+        <SettingsNotice kind="info"><span data-testid="usage-kept">{`Showing the report read ${timeAgo(new Date(keptAt).toISOString(), { long: true })}; reading it again.`}</span></SettingsNotice>
+      )}
       {shown && !shown.ready && <SettingsNotice kind="info">Adding up past usage. The numbers fill in within a minute.</SettingsNotice>}
 
       {!shown ? (

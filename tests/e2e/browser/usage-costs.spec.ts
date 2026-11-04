@@ -371,3 +371,33 @@ test('the Custom period opens in full above the card edge, applies a range and c
   await page.keyboard.press('Escape')
   await expect(pop).toHaveCount(0)
 })
+
+test('a reopened pane shows its last report at once while the server is slow, then the server\'s replaces it', async ({ page }) => {
+  // 2026-11-04, the user: "cache should cache for long tie until the real data come".
+  await page.goto('about:blank')
+  let hold = false
+  const held: Array<() => void> = []
+  await routeCosts(page, () => (hold ? new Promise<void>((resolve) => { held.push(resolve) }) : undefined))
+  await openUsage(page)
+  const total = (await page.getByTestId('usage-total-cost').textContent()) ?? ''
+  hold = true
+  const url = test.info().project.use.baseURL + '/'
+  await page.evaluate((u) => { window.location.href = u }, url)
+  await expect(page.locator('.app-shell')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  await page.getByTestId('settings-nav-usage').click()
+  // The server has not answered: the pane paints the report this browser kept, never "Loading usage...".
+  await expect(page.getByTestId('usage-total-cost')).toHaveText(total, { timeout: 10_000 })
+  await expect(page.getByText('Loading usage...')).toHaveCount(0)
+  // It says the numbers are the ones read before, and how old they are.
+  await expect(page.getByTestId('usage-kept')).toHaveText(/^Showing the report read (just now|\d+ min ago); reading it again\.$/)
+  try {
+    expect(held.length).toBeGreaterThan(0)
+  } finally {
+    hold = false
+    for (const r of held) r()
+  }
+  await expect(page.getByTestId('usage-costs')).not.toHaveAttribute('aria-busy', 'true')
+  await expect(page.getByTestId('usage-kept')).toHaveCount(0)
+  await expect(page.getByTestId('usage-total-cost')).toHaveText(total)
+})

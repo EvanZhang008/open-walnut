@@ -146,6 +146,13 @@ export interface HostServerView {
    * it was. A tunnel handover reads it (expose/placement.ts hostHolds).
    */
   exposeSince?: number
+  /**
+   * The server's last report that came in, kept while it does not answer now (`server` is
+   * null then): its version, commit and tunnel stay readable, with `lastReportAt` (this
+   * computer's clock) saying how old they are. Nothing decides from it: `server` alone says it runs.
+   */
+  lastReport?: NonNullable<HostServerView['server']>
+  lastReportAt?: number
   port?: number
   /**
    * Which program runs: what the daemon was told (the replica only where the host
@@ -531,6 +538,22 @@ export function createHostServerManager(deps: ManagerDeps) {
     return !!status?.report && age <= REPORT_STALE_MS && ours
   }
 
+  /**
+   * The last report to keep in the view: a newer one than the view holds (a fresh one, or an
+   * old one the daemon still has, dated by its age), else nothing changes. A failed status
+   * read or a stale report never takes the kept one away.
+   */
+  function keptReport(hostKey: string, status: HostServerStatus | undefined, fresh: HostServerView['server'], asked: number): Pick<HostServerView, 'lastReport' | 'lastReportAt'> {
+    const report = (fresh ?? status?.report) as HostServerView['server'] | undefined
+    if (!report) return {}
+    const at = typeof status?.reportAgeMs === 'number' ? asked - status.reportAgeMs
+      : typeof status?.reportedAt === 'number' ? status.reportedAt
+        : fresh ? asked : null
+    if (at === null) return {}
+    const was = view(hostKey).lastReportAt
+    return was !== undefined && at < was ? {} : { lastReport: report, lastReportAt: at }
+  }
+
   /** The daemon's supervision of the server and the server's last report. */
   async function refreshStatus(host: HostServerHost): Promise<HostServerStatus | undefined> {
     const asked = deps.now()
@@ -546,7 +569,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const exposeSince = e && typeof e.since === 'number' && typeof status?.reportedAt === 'number' && typeof status.reportAgeMs === 'number'
       ? asked - status.reportAgeMs - Math.max(0, status.reportedAt - e.since)
       : undefined
-    set(host.hostKey, { phase, message, daemon: status, server, exposeSince, program: programOf(host.hostKey, status), notice: server ? notices.get(host.hostKey) : undefined })
+    set(host.hostKey, { phase, message, daemon: status, server, exposeSince, program: programOf(host.hostKey, status), notice: server ? notices.get(host.hostKey) : undefined, ...keptReport(host.hostKey, status, server, asked) })
     return status
   }
 
@@ -665,7 +688,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       heldUntil.delete(hostKey)
       host?.keepStreamLane?.(false)
       await deps.releaseTunnelPort(`host-server:${hostKey}`)
-      set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined })
+      set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined, lastReport: undefined, lastReportAt: undefined })
       return
     }
     if (!host?.connected) {

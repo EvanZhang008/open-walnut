@@ -44,7 +44,7 @@ export function TaskProvidersSection({ config, onSave }: { config: Config; onSav
     let alive = true
     listTaskProviders()
       .then((r) => { if (alive) setProviders(r.providers) })
-      .catch((err) => { log.warn('settings', 'task providers not read', { error: String(err) }); if (alive) setProviders([]) })
+      .catch((err) => { log.warn('settings', 'task providers not read', { error: String(err) }); if (alive) setProviders((p) => p ?? []) })
     return () => { alive = false }
   }, [rulesKey])
   const tints = pluginTileTints(providers ?? [])

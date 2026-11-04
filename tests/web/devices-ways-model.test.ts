@@ -113,6 +113,13 @@ describe('the way cards', () => {
     expect(deriveWays(base({ tailscale: undefined })).ways[1]).toMatchObject({ dot: 'off', status: 'Checking...', tag: '' })
   })
 
+  it('tailscale: an earlier probe\'s answer, kept until a fresh one lands, says how old it is', () => {
+    expect(deriveWays(base({ tailscale: { installed: true, running: false }, tailscaleAsOf: ago(12) })).ways[1])
+      .toMatchObject({ dot: 'warn', status: 'Installed on this Mac, not running. (as of 12 min ago)' })
+    expect(deriveWays(base({ tailscale: { installed: true, running: false }, tailscaleAsOf: null })).ways[1].status).toBe('Installed on this Mac, not running.')
+    expect(deriveWays(base({ tailscale: undefined, tailscaleAsOf: ago(12) })).ways[1].status).toBe('Checking...')
+  })
+
   it('browser link: loading, unreadable, connected through a provider on a host, waiting on sign-in', () => {
     expect(deriveWays(base({ expose: null })).ways[2]).toMatchObject({ status: 'Checking...', tag: '' })
     expect(deriveWays(base({ expose: 'failed' })).ways[2].dot).toBe('warn')

@@ -30,6 +30,7 @@ import {
   MACHINE_PROOF_HEADER, MachineCredentialRefused, adoptMachineCredential, mintMachineCredential, revokeMachineCredential,
 } from '../../core/machine-credentials.js'
 import { machineProofHeaders } from '../../integrations/cloud-bridge-config.js'
+import { cloudListGeneration, dropCloudList, forgetCloudDevice, keepCloudList, keepTailscale, lastCloudList, lastTailscale } from '../../core/devices/last-known.js'
 
 export const devicesRouter = Router()
 
@@ -99,6 +100,8 @@ interface CloudDeviceList {
   unpaired?: string
   /** The companion refused this Mac's token (401) and this Mac did not unpair itself: the operator revoked it there. */
   refused?: boolean
+  /** `devices` is the last list the companion answered, read at this time (ISO): this read failed (`error`). */
+  staleAt?: string
 }
 
 /**
@@ -167,7 +170,22 @@ async function listCloudDevices(): Promise<CloudDeviceList> {
   const cloud = getCloudPairingEndpoint()
   if (!cloud) return { devices: [] }
   // Our own unpair: the token is revoked there, and asking again only earns the 401.
-  if (isCloudUnpaired(cloud)) return { devices: [], unpaired: cloud.origin }
+  if (isCloudUnpaired(cloud)) {
+    void dropCloudList()
+    return { devices: [], unpaired: cloud.origin }
+  }
+  const gen = cloudListGeneration()
+  const read = await readCloudDevices(cloud)
+  if (!read.error) {
+    void keepCloudList(cloud.origin, read.devices, read.caller, gen)
+    return read
+  }
+  // A failed read keeps showing the last list the companion answered, with the reason beside it.
+  const kept = await lastCloudList(cloud.origin)
+  return kept ? { ...read, devices: kept.devices, ...(kept.caller ? { caller: kept.caller } : {}), staleAt: kept.at } : read
+}
+
+async function readCloudDevices(cloud: { origin: string; token: string }): Promise<CloudDeviceList> {
   const missing = "so the phones paired there can't be listed."
   try {
     const res = await fetch(`${cloud.origin}/api/devices`, {
@@ -351,6 +369,10 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // the iOS simulator sit in the same list, and rendering all three
     // identically read as "3 phones I don't own" (reported 2026-07-29).
     const tailscale = CLOUD_MODE ? null : await tailscaleSummary()
+    if (tailscale) void keepTailscale(tailscale)
+    // While the first probe after a restart is still out, the last one it gave, marked with its time.
+    // The companion never probes, so it never kept one either.
+    const keptTailscale = tailscale ? null : await lastTailscale()
     // This Mac's own row is the cloud record its token matched, as the
     // companion says: never a name guess, and never a local lookup.
     // Other Macs are their own kind too (roleOf): no phone wording, no QR.
@@ -358,6 +380,7 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       devices: devices.map((d) => ({ ...d, role: roleOf(d, macs) })),
       cloudDevices: cloud.devices.map((d) => ({ ...d, role: d.name === cloud.caller ? 'self' : roleOf(d, macs) })),
       ...(cloud.error ? { cloudError: cloud.error } : {}),
+      ...(cloud.staleAt ? { cloudStale: true, cloudDevicesAt: cloud.staleAt } : {}),
       ...(cloud.unpaired ? { cloudUnpaired: { origin: cloud.unpaired } } : {}),
       // So Cloud Companion stops saying "Connected" for a token the companion refuses.
       ...(cloud.refused ? { cloudRefused: true } : {}),
@@ -367,7 +390,7 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       targets: targets.filter((t) => CLOUD_MODE || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
       // So the console can say "install Tailscale" when no tailnet target exists.
       // Absent = say nothing: on a companion, and while the first probe is still out.
-      ...(tailscale ? { tailscale } : {}),
+      ...(tailscale ? { tailscale } : keptTailscale ? { tailscale: keptTailscale.value, tailscaleStale: true, tailscaleAt: keptTailscale.at } : {}),
     })
   } catch (err) {
     next(err)
@@ -527,6 +550,7 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
         return
       }
       log.web.info('devices: revoked on cloud via console', { name })
+      void forgetCloudDevice(cloud.origin, name)
       // Removing this Mac's own record is an unpair: remember it (noteIfSelfUnpaired).
       const unpaired = await noteIfSelfUnpaired(cloud)
       res.json({ ok: true, target: 'cloud', ...(unpaired ? { unpaired: true } : {}) })

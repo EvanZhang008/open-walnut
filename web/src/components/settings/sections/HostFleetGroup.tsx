@@ -9,7 +9,9 @@
  * in the section beside the Hosts group, never inside one, so no card is nested
  * in a card.
  *
- * It opens on what each host answered last, at once, and says how old each card is
+ * It opens on what each host answered last, at once (the last answer this browser kept,
+ * fleet-last.ts, then the server's cached read), and says how old each card is; a value
+ * stays on screen until a newer reading replaces it, however old
  * (2026-11-03, the user: "just show cache and fetch when user click"). The hosts are
  * read again only on a press: opening the Overview, Refresh, a card's Details, a host's
  * "What Walnut knows", Connect or Set up. A host never read is read once on its own.
@@ -20,6 +22,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchFleet, onFleetRefresh, refreshFleet, setUpBootStart, type FleetHost } from '@/api/hosts-fleet';
+import { keepFleet, lastFleet } from '@/api/fleet-last';
 import { connectHost } from '@/api/hosts';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
@@ -27,7 +30,7 @@ import { useHostLinkChange } from '@/hooks/useHostLinkChange';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import { fleetSummary, isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
-import { followRead, markRefreshing, newestRead, readOnOpen, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
+import { followRead, markRefreshing, newestRead, READ_OLD_MS, readOnOpen, readAgo, replaceCard, shownHosts } from './host-fleet-read-model';
 import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFleetCard';
 import { HostFleetTopology } from './HostFleetTopology';
 import { FleetNumber } from './FleetNumber';
@@ -40,6 +43,14 @@ const POLL_MS = 1_500;
 /** The "read N min ago" words age on this clock; nothing is fetched by it. */
 const TICK_MS = 30_000;
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+
+/**
+ * When this page last read a host on its own (never read, or this computer's old card). Kept
+ * for the tab, not the mount: the section mounts again as hosts connect, and each mount must not
+ * read the host again.
+ */
+const openAsks = new Map<string, number>();
+const askedOnOpen = (host: string, now: number) => now - (openAsks.get(host) ?? -Infinity) < READ_OLD_MS;
 
 function errorText(err: unknown): string {
   return (err instanceof ApiError || err instanceof Error ? err.message : String(err)).replace(/[.\s]*$/, '');
@@ -56,7 +67,8 @@ function Stat({ value, label, tone, testId, title, why }: { value: string | null
 
 export function HostFleetGroup() {
   const [open, setOpen] = usePersistentState<boolean>('walnut-host-fleet-open', true, isBool);
-  const [hosts, setHosts] = useState<FleetHost[] | null>(null);
+  // The last answer this browser kept paints at once; the server's read replaces it.
+  const [hosts, setHosts] = useState<FleetHost[] | null>(lastFleet);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -70,8 +82,6 @@ export function HostFleetGroup() {
   const followSince = useRef<number | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
-  // Hosts never read that this page already asked to read once.
-  const firstReads = useRef(new Set<string>());
 
   const load = useCallback(async (): Promise<void> => {
     if (inflight.current) { readAgain.current = true; return; }
@@ -81,10 +91,11 @@ export function HostFleetGroup() {
       const r = await fetchFleet({ signal: ctrl.signal });
       // A host never read, or one whose card is old, is read once (only while the Overview is
       // open), marked as being read in this same paint so its empty card never flashes.
-      const unread = openRef.current ? readOnOpen(r.hosts, Date.now()).filter((h) => !firstReads.current.has(h)) : [];
+      const unread = openRef.current ? readOnOpen(r.hosts, Date.now()).filter((h) => !askedOnOpen(h, Date.now())) : [];
       const follow = followRead(followSince.current, r.refreshing === true, Date.now());
       followSince.current = follow.since;
       setHosts(unread.length ? markRefreshing(r.hosts, unread) : r.hosts);
+      keepFleet(r.hosts);
       setRefreshing(follow.poll || unread.length > 0);
       setError(null);
       setNow(Date.now());
@@ -92,7 +103,7 @@ export function HostFleetGroup() {
         pollTimer.current = window.setTimeout(() => { pollTimer.current = null; void load(); }, POLL_MS);
       }
       if (unread.length) {
-        for (const h of unread) firstReads.current.add(h);
+        for (const h of unread) openAsks.set(h, Date.now());
         void refreshFleet(unread).catch((err) => {
           // Not read after all: their cards show as not read yet, and Refresh is back.
           setRefreshError(errorText(err));

@@ -19,6 +19,8 @@ export interface SourceCheck {
   source: string; host: string; status: 'matched' | 'partial' | 'unverified';
   matchedCalls: number; unmatchedCalls: number; detail: string;
   residuals?: UsageEvidence['reconciliation']['residuals'];
+  /** A 'Host collection' row: when the host last could not be read (ISO). */
+  failedAt?: string;
 }
 
 interface StoredResponse {
@@ -178,10 +180,19 @@ export class ResponseUsageStore {
     return (this.db.prepare('SELECT checks FROM usage_checks').all() as { checks: string }[]).flatMap(r => JSON.parse(r.checks) as SourceCheck[]);
   }
 
-  markHostUnavailable(host: string, detail: string) {
-    const checks: SourceCheck[] = [{ source: 'Host collection', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0, detail }];
-    const previous = this.db.prepare('SELECT until FROM usage_checks WHERE host=?').get(host) as { until: string } | undefined;
-    this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, previous?.until ?? '', JSON.stringify(checks));
+  /**
+   * A pass on `host` failed: the checks of its last finished pass stay as they were (what was
+   * verified then is still true of what it counted), and one 'Host collection' row beside them
+   * says it could not be read now, and when. The next finished pass replaces them all.
+   */
+  markHostUnavailable(host: string, detail: string, now = new Date()) {
+    const previous = this.db.prepare('SELECT until, checks FROM usage_checks WHERE host=?').get(host) as { until: string; checks: string } | undefined;
+    let kept: SourceCheck[] = [];
+    try { kept = (JSON.parse(previous?.checks ?? '[]') as SourceCheck[]).filter(c => c.source !== 'Host collection'); } catch { /* unreadable: start over */ }
+    const when = now.toISOString();
+    const failure: SourceCheck = { source: 'Host collection', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0, failedAt: when,
+      detail: kept.length ? `Could not be read at ${when}: ${detail}. The checks shown are from its last finished pass.` : detail };
+    this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, previous?.until ?? '', JSON.stringify([...kept, failure]));
   }
 
   getOverview(filter: UsageFilter, limit = 100) {

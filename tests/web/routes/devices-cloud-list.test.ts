@@ -101,7 +101,9 @@ describe('the cloud half of the Mac\'s device list', () => {
   it('a 401 says the companion no longer accepts this Mac\'s token, instead of an empty list', async () => {
     mode = '401'
     const body = await list()
-    expect(body.cloudDevices).toEqual([])
+    // The list read before stays, marked as the last one read (devices-last-known.test.ts).
+    expect(body.cloudDevices.map((d) => d.name)).toEqual(['mac-primary', 'my-phone'])
+    expect((body as { cloudStale?: boolean }).cloudStale).toBe(true)
     expect(body.cloudError).toBe("The cloud companion no longer accepts this Mac's token, so the phones paired there can't be listed (this Mac may have been unpaired there).")
     // A 401 this Mac did not cause (no removal of its own just before) is not
     // taken for "unpaired": the next list asks the companion again.

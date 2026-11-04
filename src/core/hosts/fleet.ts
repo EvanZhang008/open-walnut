@@ -232,8 +232,9 @@ function refreshSpend(): Promise<void> {
     spendCache = { at: Date.now(), byHost, from }
     recordFleetSpend({ at: spendCache.at, from, byHost: Object.fromEntries(byHost) })
   })().catch((err) => {
-    // Remembered as unknown for the TTL, so a failing report never costs every read its wait.
-    spendCache = { at: Date.now(), byHost: null, from: '' }
+    // Tried again only after the TTL, so a failing report never costs every read its wait; the
+    // last spend it read stays shown until a report succeeds (2026-11-04: "cache ... until the real data come").
+    spendCache = { at: Date.now(), byHost: spendCache?.byHost ?? null, from: spendCache?.from ?? '' }
     log.web.warn('fleet: spend by host failed', { error: String(err) })
   })
     .finally(() => { spendRun = null })
@@ -245,10 +246,10 @@ async function spend(now: number): Promise<{ byHost: Map<string, number>; from: 
     const run = refreshSpend()
     if (!spendCache) await within(run, SPEND_FIRST_WAIT_MS, undefined)
   }
-  return spendCache?.byHost ? { byHost: spendCache.byHost, from: spendCache.from } : null
+  return spendSnapshot()
 }
 
-export type FleetSpendNow = Awaited<ReturnType<typeof spend>>
+export type FleetSpendNow = { byHost: Map<string, number>; from: string } | null
 
 /** The spend known now, never waiting: this process's last report, else the cached one. */
 export function spendSnapshot(): FleetSpendNow {

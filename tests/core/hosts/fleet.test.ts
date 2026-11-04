@@ -51,6 +51,7 @@ import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, BootStartCh
 import { judgeHost, type HostLoadView } from '../../../src/core/hosts/placement.js'
 import { readHostProfile } from '../../../src/core/hosts/host-profile.js'
 import { cachedFleet, fleetRefreshIdle, startFleetRefresh } from '../../../src/core/hosts/fleet-refresh.js'
+import { flushFleetCacheNow } from '../../../src/core/hosts/fleet-cache.js'
 
 const NOW = Date.now()
 function vitalsReply(running: number) {
@@ -132,11 +133,11 @@ describe('listFleet', () => {
     expect(Date.now() - again).toBeLessThan(1_000)
     expect(dev.sends.filter((s) => s.cmd === 'host.vitals')).toHaveLength(1)
     expect(slow.sends.filter((s) => s.cmd === 'host.vitals')).toHaveLength(1)
-    // The link drops: the card keeps what it knew, marked stale, and counts no sessions.
+    // The link drops: the card keeps what it knew, its session count included, marked stale.
     ;(dev.conn as { connected: boolean }).connected = false
     const devbox = (await listFleet()).find((h) => h.host === 'devbox')!
     expect(devbox.now).toMatchObject({ cpuUtil: 0.5, stale: true })
-    expect(devbox.sessions).toMatchObject({ running: 0, source: "records" }) // an old reading counts by Walnut's records, never "?"
+    expect(devbox.sessions).toMatchObject({ running: expect.any(Number), source: 'host', at: expect.any(Number) }) // never "?"
     expect(dev.sends.filter((s) => s.cmd === 'host.vitals')).toHaveLength(1)
   }, 20_000)
 
@@ -251,6 +252,37 @@ describe('checkHostBootStart (the Overview\'s Set up)', () => {
     expect(err).toMatchObject({ code: 'check_failed', message: 'Walnut could not check Dev box: ssh: connection reset' })
     bootConn.conn = null
   }, 15_000)
+})
+
+describe('a reading kept until the next one comes (2026-11-04: "cache should cache for long tie until the real data come")', () => {
+  it('hours later, with the host gone and the server restarted, every value stays on the card, marked stale', async () => {
+    await startFleetRefresh(['__local__', 'devbox'])
+    await fleetRefreshIdle()
+    await flushFleetCacheNow()
+    const fresh = (await cachedFleet()).hosts.find((h) => h.host === 'devbox')!
+    expect(fresh.sessions).toMatchObject({ running: 19, source: 'host' })
+    expect(fresh.spend?.last30dUsd).toBeCloseTo(1234.2)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 3 * 3_600_000)
+      ;(dev.conn as { connected: boolean }).connected = false
+      cost.fail = true
+      // A restart: the server's memory is gone, only the file is left.
+      __setFleetConnectionsForTesting(() => new Map([['__local__', [local.conn]], ['devbox', [dev.conn]]]) as never)
+      const later = (await cachedFleet()).hosts.find((h) => h.host === 'devbox')!
+      expect(later.now).toMatchObject({ cpuUtil: 0.5, stale: true })
+      expect(later.sessions).toMatchObject({ running: 19, source: 'host', at: fresh.now!.at })
+      expect(later.history?.windows.length).toBeGreaterThan(0)
+      expect(later.spend?.last30dUsd).toBeCloseTo(1234.2)
+      expect(later.readAt).toBe(fresh.readAt)
+      // A cost report that fails now keeps the spend it read before.
+      await listFleet()
+      expect((await cachedFleet()).hosts.find((h) => h.host === 'devbox')!.spend?.last30dUsd).toBeCloseTo(1234.2)
+    } finally {
+      vi.useRealTimers()
+      cost.fail = false
+    }
+  }, 20_000)
 })
 
 describe('a machine in config twice (found in ~/.ssh/config, then joined)', () => {

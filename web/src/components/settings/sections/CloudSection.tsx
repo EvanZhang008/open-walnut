@@ -150,8 +150,12 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
     let cancelled = false;
     type Listed = { targets?: { kind: string; origin: string }[]; cloudUnpaired?: { origin: string }; cloudRefused?: boolean };
     const readPairing = async () => {
-      const listed = await fetchDevicesList<Listed>().catch((): Listed => ({ targets: [] }));
-      if (cancelled) return;
+      // A failed read says nothing new: keep what the last good one showed.
+      const listed = await fetchDevicesList<Listed>().catch((err): null => {
+        log.warn('cloud-setup', 'devices list read failed', { error: String(err) });
+        return null;
+      });
+      if (cancelled || !listed) return;
       setCloudOrigin(listed.targets?.find((t) => t.kind === 'cloud')?.origin ?? null);
       setUnpairedOrigin(listed.cloudUnpaired?.origin ?? null);
       setCloudRefused(listed.cloudRefused === true);

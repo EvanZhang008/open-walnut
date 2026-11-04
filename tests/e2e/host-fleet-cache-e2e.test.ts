@@ -171,7 +171,8 @@ describe('the cached overview', () => {
     dev.conn.connected = false
     const away = byHost((await cached()).body).get('devbox')
     expect(away.now).toMatchObject({ cpuUtil: 0.5, stale: true })
-    expect(away.sessions.running).toBeNull()
+    // Its session count stays too, with when it was read (2026-11-04: "cache ... until the real data come").
+    expect(away.sessions).toMatchObject({ running: 3, source: 'host', at: away.now.at })
     expect(dev.asks).toBe(1)
   }, 30_000)
 
@@ -231,7 +232,7 @@ describe('the cached overview', () => {
     await fs.writeFile(CACHE_FILE(), JSON.stringify({ version: 1, hosts: { devbox: old }, spend: null }))
     useHosts() // a restart onto that file; the dev box is connected and answering
     const devbox = byHost((await cached()).body).get('devbox')
-    expect(devbox).toMatchObject({ readAt: at, readError: null, now: { cpuUtil: 0.5, stale: true }, sessions: { running: null } })
+    expect(devbox).toMatchObject({ readAt: at, readError: null, now: { cpuUtil: 0.5, stale: true }, sessions: { running: 3, source: 'host', at } })
     expect(devbox.line).toContain('(last reading)')
     expect(dev.asks).toBe(0)
     // A fresh read is now again.

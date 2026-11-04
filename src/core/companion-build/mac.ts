@@ -29,6 +29,7 @@ import {
   type BoxBuildStatus, type InstallRequest, type StepReply, type UploadReply,
 } from './wire.js'
 import { call, createGaveUpRecord, doorRefusal, look, requestError, sha256InSlices, type Endpoint, type Reply } from './mac-door.js'
+import { createLastSeenRecord, type LastSeen } from './last-seen.js'
 
 export type CompanionBuildState =
   | 'off' | 'no_companion' | 'checking' | 'current' | 'updating' | 'failed'
@@ -40,6 +41,11 @@ export interface CompanionBuildView {
   mine: string | null
   /** The build the companion runs, as it last said. */
   theirs: string | null
+  /**
+   * The build it was last seen running and when (ms), kept across restarts of this
+   * server: what the row shows while a look is still to come or could not reach it.
+   */
+  lastSeen?: Omit<LastSeen, 'origin'>
   /** `cloud_bridge.auto_update` (default on). */
   autoUpdate: boolean
   step?: 'uploading' | 'installing' | 'starting'
@@ -102,6 +108,35 @@ let retryBaseline: { id: string; at: number | null | undefined } | null = null
 const gaveUpRecord = createGaveUpRecord(() => path.join(WALNUT_HOME, 'cache', 'companion-build.json'))
 const readGaveUp = () => gaveUpRecord.read()
 const writeGaveUp = (change: Parameters<typeof gaveUpRecord.write>[0]) => gaveUpRecord.write(change)
+const lastSeenRecord = createLastSeenRecord(() => path.join(WALNUT_HOME, 'cache', 'companion-build-seen.json'))
+/** The last sighting (from disk, then each look), with the companion it was read from. */
+let lastSeen: LastSeen | null = null
+const originOf = (ep: Endpoint): string => { try { return new URL(ep.url).origin } catch { return ep.url } }
+/** Read the record from before this process; it reaches the view once a gate names its companion. */
+async function seedLastSeen(): Promise<void> {
+  const seen = await lastSeenRecord.read()
+  if (seen && !lastSeen) lastSeen = seen
+}
+void seedLastSeen()
+/**
+ * The view shows the build last seen only for the companion paired now: a box deployed anew
+ * or another origin never reads as running a build it was not seen running.
+ */
+function showLastSeenFor(ep: Endpoint): void {
+  const origin = originOf(ep)
+  if (lastSeen?.origin === origin) {
+    if (view.lastSeen?.theirs !== lastSeen.theirs || view.lastSeen.at !== lastSeen.at) view = { ...view, lastSeen: { theirs: lastSeen.theirs, at: lastSeen.at } }
+  } else if (view.lastSeen) {
+    const { lastSeen: _gone, ...rest } = view
+    view = rest
+  }
+}
+/** The box said which build it runs: kept in the view and on disk. */
+function sawTheirs(ep: Endpoint, id: string): void {
+  lastSeen = { theirs: id, at: Date.now(), origin: originOf(ep) }
+  view = { ...view, lastSeen: { theirs: id, at: lastSeen.at } }
+  void lastSeenRecord.write(lastSeen)
+}
 let shaCache: { id: string; size: number; sha: string } | null = null
 /** Packages the box found damaged (sha256 mismatch), per id: a few are sent again, then it is given up. */
 let shaMismatches: { id: string; n: number } | null = null
@@ -114,7 +149,7 @@ export function companionBuildView(): CompanionBuildView {
 function setView(gen: number, next: Partial<CompanionBuildView> & { state: CompanionBuildState }): void {
   if (gen !== generation) return
   const before = view
-  view = { mine: before.mine, theirs: before.theirs, autoUpdate: before.autoUpdate, ...next, at: Date.now() }
+  view = { mine: before.mine, theirs: before.theirs, autoUpdate: before.autoUpdate, ...(before.lastSeen ? { lastSeen: before.lastSeen } : {}), ...next, at: Date.now() }
   if (view.theirs && view.theirs !== before.theirs) companionBuildChanged(before.theirs ?? null, view.theirs)
   if (before.state !== view.state || before.step !== view.step) {
     log.session.info('companion build: state', {
@@ -277,6 +312,7 @@ async function runFlow(reason: string, gen: number): Promise<void> {
     setView(gen, { state: g.state, mine: g.mine, theirs: view.theirs, autoUpdate: g.autoUpdate, ...(g.message ? { message: g.message } : {}) })
     return
   }
+  showLastSeenFor(g.ep)
   const userAsked = reason === 'retry' || reason === 'settings'
   if (!userAsked && Date.now() < restUntil) return
   if (view.mine !== g.mine || view.state === 'off' || view.state === 'no_companion') {
@@ -293,6 +329,7 @@ async function runFlow(reason: string, gen: number): Promise<void> {
   }
   const status = first.status
   ctx.theirs = status.running.id
+  sawTheirs(ctx.ep, ctx.theirs)
   log.session.info('companion build: status', {
     reason, mine: ctx.mine, theirs: ctx.theirs, accepts: status.accepts, current: status.current,
     trial: status.trial?.id ?? null, upload: status.upload?.id ?? null, install: status.install?.state ?? null,
@@ -454,6 +491,7 @@ async function poll(ctx: Ctx, step: 'installing' | 'starting', deadlineMs: numbe
     if (l.kind === 'refused') return refused(ctx, l.kind, l.httpStatus)
     if (l.kind !== 'ok') continue
     ctx.theirs = l.status.running.id
+    sawTheirs(ctx.ep, ctx.theirs)
     const answer = done(l.status)
     if (answer !== 'wait') return answer
   }
@@ -511,6 +549,7 @@ export function tickCompanionBuild(reason: string): Promise<void> {
     if (before) await before // a stopped flow ends at its next step
     await runFlow(reason, gen)
     await gaveUpRecord.settled() // what this flow gave up on is on disk before the tick ends
+    await lastSeenRecord.settled()
   })().catch((err) => {
     log.session.warn('companion build: tick failed', { reason, error: err instanceof Error ? err.message : String(err) })
   }).finally(() => { if (inFlight === run) inFlight = null })
@@ -562,9 +601,12 @@ export async function refreshCompanionBuildView(timeoutMs = 3_000): Promise<Comp
         if (!g.autoUpdate) generation++
         setView(generation, { state: g.state, mine: g.mine, autoUpdate: g.autoUpdate, ...(g.message ? { message: g.message } : {}) })
       }
-    } else if (!inFlight && (view.state === 'off' || view.state === 'no_companion' || view.mine !== g.mine)) {
-      setView(generation, { state: 'checking', mine: g.mine, autoUpdate: true })
-      void tickCompanionBuild('settings')
+    } else {
+      showLastSeenFor(g.ep)
+      if (!inFlight && (view.state === 'off' || view.state === 'no_companion' || view.mine !== g.mine)) {
+        setView(generation, { state: 'checking', mine: g.mine, autoUpdate: true })
+        void tickCompanionBuild('settings')
+      }
     }
   } catch { /* the last view stands */ } finally {
     clearTimeout(t)
@@ -577,9 +619,13 @@ export async function _resetCompanionBuildForTesting(): Promise<void> {
   generation++
   await inFlight?.catch(() => {})
   await gaveUpRecord.settled()
+  await lastSeenRecord.settled()
   // A build change of the last test must not end a rest the next one sets.
   await buildChanges
   view = { state: 'checking', mine: null, theirs: null, autoUpdate: true, at: Date.now() }
+  lastSeen = null
+  lastSeenRecord.forget()
+  await seedLastSeen() // as a fresh start of this server reads it
   inFlight = null
   inFlightGen = -1
   deferred = null

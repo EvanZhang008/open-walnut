@@ -54,7 +54,7 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 import { WALNUT_HOME } from '../../src/constants.js'
 import { installRequestProblem, type BoxBuildStatus } from '../../src/core/companion-build/wire.js'
 import {
-  _companionBuildChangesForTesting, _resetCompanionBuildForTesting, companionAutoUpdateChanged, companionBuildView, retryCompanionBuild, tickCompanionBuild,
+  _companionBuildChangesForTesting, _resetCompanionBuildForTesting, companionAutoUpdateChanged, companionBuildView, refreshCompanionBuildView, retryCompanionBuild, tickCompanionBuild,
 } from '../../src/core/companion-build/mac.js'
 import { companionBuildRouter } from '../../src/web/routes/companion-build.js'
 
@@ -437,6 +437,45 @@ describe('tickCompanionBuild', () => {
     expect(companionBuildView()).toMatchObject({ state: 'off', mine: null, message: h.mineWhy })
     expect(box.puts).toEqual([])
     expect(h.builds).toBe(0)
+  })
+
+  it('remembers the build it saw, so a restart shows it with its time before the first look', async () => {
+    const seenFile = path.join(WALNUT_HOME, 'cache', 'companion-build-seen.json')
+    fs.rmSync(seenFile, { force: true })
+    await _resetCompanionBuildForTesting() // nothing seen yet
+    expect(companionBuildView().lastSeen).toBeUndefined()
+    box.accepts = false
+    const before = Date.now()
+    await tickCompanionBuild('probe')
+    expect(JSON.parse(fs.readFileSync(seenFile, 'utf8'))).toMatchObject({ theirs: OLD, origin: `http://127.0.0.1:${port}` })
+    // A restart of this server: the first read of the view (a gate naming the same companion)
+    // shows the record, not "nothing known", before any look.
+    await _resetCompanionBuildForTesting()
+    const view = await refreshCompanionBuildView() // starts a look; the view is answered before it
+    expect(view).toMatchObject({ state: 'checking', theirs: null, lastSeen: { theirs: OLD } })
+    expect(view.lastSeen!.at).toBeGreaterThanOrEqual(before)
+    expect(view.lastSeen).not.toHaveProperty('origin')
+    await tickCompanionBuild('retry') // joins that look
+    expect(companionBuildView()).toMatchObject({ state: 'box_off', theirs: OLD, lastSeen: { theirs: OLD } })
+    fs.rmSync(seenFile, { force: true })
+  })
+
+  it('never shows the build last seen of another companion (a new box, another origin)', async () => {
+    const seenFile = path.join(WALNUT_HOME, 'cache', 'companion-build-seen.json')
+    box.accepts = false
+    await tickCompanionBuild('probe')
+    expect(companionBuildView().lastSeen).toMatchObject({ theirs: OLD })
+    // Paired with another companion, in this process and after a restart alike.
+    h.endpoint = { url: 'http://127.0.0.1:1/bridge', token: TOKEN }
+    await tickCompanionBuild('retry')
+    expect(companionBuildView().state).toBe('unreachable')
+    expect(companionBuildView().lastSeen).toBeUndefined()
+    await _resetCompanionBuildForTesting()
+    expect((await refreshCompanionBuildView()).lastSeen).toBeUndefined()
+    await tickCompanionBuild('retry')
+    expect(companionBuildView()).toMatchObject({ state: 'unreachable' })
+    expect(companionBuildView().lastSeen).toBeUndefined()
+    fs.rmSync(seenFile, { force: true })
   })
 
   it('is no_companion without an endpoint', async () => {

@@ -29,6 +29,25 @@ export interface KeepAwakeStatus {
 
 interface Props { config: Config; onSave: OnSave; }
 
+/** The status shown, and when its last refresh failed (null: the last read worked). */
+export interface KeepAwakeRead { status: KeepAwakeStatus | null; failedAt: number | null }
+export const KEEP_AWAKE_UNREAD: KeepAwakeRead = { status: null, failedAt: null };
+
+/** A fresh state from the server (the one-click setup's answer): fresh, so no failure stands. */
+export function keepAwakeWithState(prev: KeepAwakeRead, state: KeepAwakeStatus['state']): KeepAwakeRead {
+  return prev.status ? { status: { ...prev.status, state }, failedAt: null } : prev;
+}
+
+/**
+ * One read's outcome folded into what is shown (pure, unit tested): a failure never
+ * takes a known status away. With nothing known yet it stays hidden (the route 404s
+ * where keep awake does not exist), so there is no failure to say either.
+ */
+export function keepAwakeAfterRead(prev: KeepAwakeRead, read: { ok: KeepAwakeStatus } | { failed: true }, now = Date.now()): KeepAwakeRead {
+  if ('ok' in read) return { status: read.ok, failedAt: null };
+  return { status: prev.status, failedAt: prev.status ? now : null };
+}
+
 /** Keep awake disclosure summary: plain words, no symbols (pure, unit tested). */
 export function keepAwakeSummary(enabled: boolean, status: KeepAwakeStatus['state'] | null | undefined): string {
   if (!enabled) return 'Off';
@@ -115,14 +134,20 @@ export function AdvancedSection({ config, onSave }: Props) {
   useEffect(() => { setKaEnabled(keepAwake.enabled === true); }, [keepAwake.enabled]);
   useEffect(() => { setSdkEnabled(config.session_server?.enabled ?? false); }, [config.session_server?.enabled]);
 
-  // Keep-Awake live status (macOS console feature; route 404s elsewhere -> hidden)
-  const [kaStatus, setKaStatus] = useState<KeepAwakeStatus | null>(null);
+  // Keep-Awake live status (macOS console feature; route 404s elsewhere -> hidden).
+  // A failed read keeps the last status it showed, with the failure beside it.
+  const [kaRead, setKaRead] = useState<KeepAwakeRead>(KEEP_AWAKE_UNREAD);
+  const kaStatus = kaRead.status;
   useEffect(() => {
-    apiGet<KeepAwakeStatus>('/api/keep-awake').then(setKaStatus).catch(() => setKaStatus(null));
+    apiGet<KeepAwakeStatus>('/api/keep-awake')
+      .then((s) => setKaRead((prev) => keepAwakeAfterRead(prev, { ok: s })))
+      .catch(() => setKaRead((prev) => keepAwakeAfterRead(prev, { failed: true })));
   }, []);
   const refreshKaStatus = useCallback(() => {
     // Force a poll so a toggle takes effect immediately, not after the next minute tick.
-    apiPost<KeepAwakeStatus>('/api/keep-awake/poll').then(setKaStatus).catch(() => {});
+    apiPost<KeepAwakeStatus>('/api/keep-awake/poll')
+      .then((s) => setKaRead((prev) => keepAwakeAfterRead(prev, { ok: s })))
+      .catch(() => setKaRead((prev) => keepAwakeAfterRead(prev, { failed: true })));
   }, []);
 
   // One-click setup: server pops the native macOS password dialog (osascript).
@@ -134,7 +159,7 @@ export function AdvancedSection({ config, onSave }: Props) {
     try {
       const res = await apiPost<{ ok: boolean; detail: string; state: KeepAwakeStatus['state'] }>('/api/keep-awake/setup');
       if (res.ok) {
-        setKaStatus((prev) => prev ? { ...prev, state: res.state } : prev);
+        setKaRead((prev) => keepAwakeWithState(prev, res.state));
         notifySaved();
       } else if (res.detail !== 'canceled') {
         setKaSetupError(res.detail);
@@ -254,7 +279,8 @@ export function AdvancedSection({ config, onSave }: Props) {
             <SettingsRow indent label="Linger after last session" htmlFor="ka-linger" disabled={!kaEnabled}
               control={<FormNumber id="ka-linger" defaultValue={keepAwake.linger_minutes} unit="minutes" placeholder="5" min={0} readOnly={!kaEnabled} />} />
             {kaState && (
-              <SettingsRow indent label="Status" help={keepAwakeStatusLine(kaState)} data-testid="ka-status" />
+              <SettingsRow indent label="Status" help={keepAwakeStatusLine(kaState)} data-testid="ka-status"
+                error={kaRead.failedAt ? <span data-testid="ka-status-stale">Could not refresh it just now; this is the last status Walnut read.</span> : undefined} />
             )}
           </SettingsDisclosure>
         )}

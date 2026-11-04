@@ -182,7 +182,9 @@ export function sessionsTitle(h: FleetHost, now: number): string {
     const age = h.now ? `its own reading is ${span(now - h.now.at)} old` : 'it sent no reading';
     return `From Walnut's session records (${age})`;
   }
-  return 'Counted by the host itself';
+  // A kept count says how old it is; it stays until the host's next reading replaces it.
+  const at = h.sessions.at ?? h.now?.at ?? null;
+  return at !== null && h.now?.stale ? `Counted by the host ${span(now - at)} ago (its last reading)` : 'Counted by the host itself';
 }
 
 function load(share: number | null): Tone {

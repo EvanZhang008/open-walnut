@@ -5,6 +5,7 @@
  */
 
 import type { ExposeProviderInfo, ExposeStatus, StatusDot } from './cloud/browser-access-status';
+import { timeAgo } from '@/utils/time';
 
 export type HostServerPhase = 'off' | 'waiting-for-host' | 'unsupported' | 'checking' | 'installing' | 'starting' | 'running' | 'error';
 
@@ -18,11 +19,18 @@ export interface HostServerView {
   port?: number;
   /** While it runs: why it runs an older build than this computer's (Try again starts this one). */
   notice?: string;
-  server?: {
-    route?: { kind: string; why?: string };
-    expose?: ExposeStatus;
-    version?: string;
-  } | null;
+  server?: HostServerReport | null;
+  /** The server's last report, kept while it does not answer now (an older server sends none). */
+  lastReport?: HostServerReport;
+  /** When that report came in, on this computer's clock. */
+  lastReportAt?: number;
+}
+
+export interface HostServerReport {
+  route?: { kind: string; why?: string };
+  expose?: ExposeStatus;
+  version?: string;
+  commit?: string | null;
 }
 
 /** Which kinds the Mac copies to a replica (core/replication/kinds/copy-kind.ts CopyChoice): every one on by default. */
@@ -107,7 +115,26 @@ function routeText(route: { kind: string; why?: string } | undefined): string {
   return 'Running on its own: neither this Mac nor your cloud companion answers it right now.';
 }
 
-export function describeHostServer(entry: HostServerEntry): HostServerLine {
+/**
+ * While the server does not answer now: what it said last and how long ago, so its build and
+ * address stay readable ('' when nothing came in yet).
+ */
+export function lastReportText(v: HostServerView, now = Date.now()): string {
+  const r = v.lastReport;
+  if (!r || v.phase === 'running' || typeof v.lastReportAt !== 'number') return '';
+  const build = r.version ? `Walnut ${r.version}${r.commit ? ` (${r.commit})` : ''}` : '';
+  const url = r.expose?.url ? `at ${r.expose.url.replace(/^https?:\/\//, '')}` : '';
+  const what = [build, url].filter(Boolean).join(', ');
+  return `Last answered ${timeAgo(new Date(v.lastReportAt).toISOString(), { long: true, now })}${what ? `: ${what}` : ''}.`;
+}
+
+export function describeHostServer(entry: HostServerEntry, now = Date.now()): HostServerLine {
+  const line = describeHostServerNow(entry);
+  const kept = entry.settings.enabled && entry.view ? lastReportText(entry.view, now) : '';
+  return kept ? { ...line, text: `${line.text} ${kept}` } : line;
+}
+
+function describeHostServerNow(entry: HostServerEntry): HostServerLine {
   const v = entry.view;
   if (!entry.settings.enabled) {
     return { dot: 'pending', text: 'Keeps a Walnut on this host that opens in a browser through its own tunnel, also while this Mac sleeps.', retry: false };

@@ -21,8 +21,11 @@ export interface FleetHost {
   system: { os: string | null; platform?: string | null; arch: string | null; cpus: number | null; memBytes: number | null; diskFreeBytes: number | null; kind: string; probedAt: string | null } | null;
   now: { cpus: number; cpuUtil: number | null; load: [number, number, number] | null; memTotalBytes: number; memAvailBytes: number | null; uptimeSec: number; bootedAt: number; linked: boolean; gpuUtil?: number | null; disk?: { totalBytes: number; freeBytes: number } | null; at: number; stale: boolean } | null;
   history: { coverageFrom: number | null; bucketMinutes: number; buckets: FleetBucket[]; windows: FleetWindow[]; outages: FleetOutage[]; boots: number[]; daemonStarts: number; recent?: FleetRecent } | null;
-  /** `source`: the host's own count, or Walnut's session records when its reading is old; `why` when null (absent from an older server). */
-  sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null };
+  /**
+   * `source`: the host's own count from its last reading (`at`, kept until a new one comes), or
+   * Walnut's session records for a host never read; `why` when null (absent from an older server).
+   */
+  sessions: { running: number | null; source?: 'host' | 'records' | null; why?: string | null; at?: number | null };
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null;
   /** `phaseLabel` is the phase in words; show it, never `phase`. */
   server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null;

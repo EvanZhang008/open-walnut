@@ -16,6 +16,8 @@ export interface CompanionBuildView {
   mine: string | null;
   /** The build the companion runs, as it last said. */
   theirs: string | null;
+  /** The build it was last seen running and when (ms), kept across server restarts (an older server sends none). */
+  lastSeen?: { theirs: string; at: number };
   /** `cloud_bridge.auto_update` (default on). */
   autoUpdate: boolean;
   step?: 'uploading' | 'installing' | 'starting';
