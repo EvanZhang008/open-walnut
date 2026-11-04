@@ -108,12 +108,11 @@ final class DemoStopSteerTests: XCTestCase {
         XCTAssertEqual(rows.first?.status, "parked")
         let ran = try await transcript().contains { $0.role == "user" && $0.text == "queued behind the turn" }
         XCTAssertFalse(ran, "a Stop does not start the next turn by itself")
-        do {
-            try await api.editQueuedMessage(sessionId: session, messageId: "qm-demo-steer-3", text: "changed")
-            XCTFail("only a pending message can be edited")
-        } catch let error as APIError {
-            XCTAssertEqual(error.code, "conflict")
-        }
+        // The words of a message a Stop set aside are still its owner's to change.
+        try await api.editQueuedMessage(sessionId: session, messageId: "qm-demo-steer-3", text: "changed")
+        let edited = try await queue()
+        XCTAssertEqual(edited.first?.message, "changed")
+        XCTAssertEqual(edited.first?.status, "parked")
         try await api.deleteQueuedMessage(sessionId: session, messageId: "qm-demo-steer-3")
     }
 

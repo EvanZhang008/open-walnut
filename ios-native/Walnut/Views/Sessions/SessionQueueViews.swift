@@ -25,17 +25,22 @@ struct SessionQueueStrip: View {
     /// The rows move up when one goes, so the second tap of a double tap would land on the
     /// next row's cross or Send: a row action right behind another one is ignored.
     @State private var rowTaps = SeatTapGuard(span: 1.0)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// The tray shares the screen with the composer and the keyboard: at the accessibility
+    /// sizes it lists one message and the rest are behind "Show all".
+    private var shownRows: Int { dynamicTypeSize.isAccessibilitySize ? 1 : Self.visibleRows }
 
     var body: some View {
         if queue.hasRows || queue.withdrawn != nil {
             VStack(alignment: .leading, spacing: 0) {
                 if queue.hasRows {
                     header
-                    ForEach(queue.rows.prefix(Self.visibleRows)) { row in
+                    ForEach(queue.rows.prefix(shownRows)) { row in
                         rowView(row)
                     }
                 }
-                if queue.rows.count > Self.visibleRows {
+                if queue.rows.count > shownRows {
                     Button(action: onShowAll) {
                         Text("Show all \(queue.rows.count)")
                             .font(.footnote.weight(.semibold))
@@ -58,6 +63,7 @@ struct SessionQueueStrip: View {
                     undoLine(gone)
                 }
             }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill)
             )

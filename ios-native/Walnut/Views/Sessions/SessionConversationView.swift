@@ -55,6 +55,7 @@ struct SessionConversationView: View {
     @State private var showFork = false
     @State private var showLatestUpdate = false
     @State private var showRename = false
+    @State private var askStop = false
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
     @State private var forceTerminateMessage: String?
@@ -265,6 +266,14 @@ struct SessionConversationView: View {
                     .presentationDragIndicator(.visible)
             }
         }
+        .alert("Stop the agent?", isPresented: $askStop) {
+            Button("Keep going", role: .cancel) {}
+            Button("Stop", role: .destructive) { Task { await store.stopTurn() } }
+        } message: {
+            Text(waitingToGoIn == 1
+                 ? "Your waiting message will be set aside, not sent."
+                 : "Your \(waitingToGoIn) waiting messages will be set aside, not sent.")
+        }
         // The composer's keyboard would cover a half-height sheet: whichever opens, it goes first.
         .onChange(of: anySheetShown) { _, shown in
             if shown { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
@@ -369,6 +378,14 @@ struct SessionConversationView: View {
         .onChange(of: store.acceptedSends) { _, _ in Task { await queue.refresh() } }
     }
 
+    /// Messages waiting in line that a Stop would set aside.
+    private var waitingToGoIn: Int { queue.rows.filter { $0.status == "pending" }.count }
+
+    /// Stop is one tap, unless messages are waiting: those would be set aside, so it asks.
+    private func requestStop() async {
+        if waitingToGoIn > 0 { askStop = true } else { await store.stopTurn() }
+    }
+
     private var anySheetShown: Bool {
         showInfo || showControls || showTask || showMemory || showQueue || managingQueueRow != nil
             || showPlan || showSideQuestions || showFiles || showNote || showFork || showLatestUpdate || showRename
@@ -389,7 +406,7 @@ struct SessionConversationView: View {
             // there are words (a send mid-turn joins the turn or waits behind it, and shows in
             // the queue above); "Interrupt & send" stops the turn first.
             busy: store.streaming,
-            onStop: { await store.stopTurn() },
+            onStop: { await requestStop() },
             stopping: store.stopRequestedAt != nil,
             onInterruptSend: { text, images, files in
                 await store.sendFromComposer(text, images: images, files: files, interrupt: true)

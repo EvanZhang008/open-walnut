@@ -484,9 +484,17 @@ struct ComposerBar: View {
             // only while it means something (a turn runs and there are words).
             Group {
                 if showsInterruptSend {
-                    HStack {
-                        Spacer(minLength: 0)
-                        interruptSendButton
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            stopChip
+                            interruptSendButton
+                        }
+                        VStack(alignment: .trailing, spacing: 0) {
+                            stopChip
+                            interruptSendButton
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     .padding(.horizontal, ComposerCard.sideInset + 4)
                     .padding(.top, 4)
@@ -1559,6 +1567,36 @@ struct ComposerBar: View {
     }
 
     /// "Interrupt & send": a soft tinted capsule with its whole name, 44pt to touch.
+    /// Stop, kept within reach while words are typed (the seat is Send then): a person who
+    /// started a message does not have to clear it to take the agent back.
+    private var stopChip: some View {
+        Button {
+            guard seatTaps.allows() else { return }
+            seatTaps.record()
+            Task { await onStop?() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: Symbol.stop)
+                    .font(.system(size: 11, weight: .bold))
+                Text("Stop")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.decideText)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 34)
+            .background(Theme.dangerSoft, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .opacity(seatSettling ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(stopping || onStop == nil)
+        .accessibilityIdentifier("session.stopWithDraft")
+        .accessibilityLabel(stopping ? "Stopping" : "Stop")
+        .accessibilityHint("Stops the running turn and keeps what you typed")
+    }
+
     private var interruptSendButton: some View {
         Button {
             gatedInterruptSend()
@@ -1621,7 +1659,9 @@ struct ComposerBar: View {
         }
         .disabled(!canSend && !sendGate.isWaiting)
         // VoiceOver read the arrow's symbol name, "Up".
-        .accessibilityLabel(sendGate.isWaiting ? DictationSendGate.waitingLabel : "Send")
+        .accessibilityLabel(sendGate.isWaiting ? DictationSendGate.waitingLabel
+                            : (waitingForReply && busyAcceptsSend ? "Queue message" : "Send"))
+        .accessibilityHint(waitingForReply && busyAcceptsSend ? "Goes in after the running turn, or when the agent can take it" : "")
         .accessibilityIdentifier("chat.send")
     }
 

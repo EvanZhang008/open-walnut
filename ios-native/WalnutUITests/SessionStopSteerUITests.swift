@@ -81,6 +81,9 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(stop.waitForExistence(timeout: 10), "no Stop to tap")
         for _ in 0..<4 {
             stop.tap()
+            // Messages waiting in line: Stop asks first, because a Stop sets them aside.
+            let confirm = app.alerts.buttons["Stop"]
+            if confirm.waitForExistence(timeout: 1.5) { confirm.tap() }
             let deadline = Date().addingTimeInterval(2)
             while Date() < deadline {
                 if !stop.exists || stop.label == "Stopping" { return }
@@ -252,6 +255,36 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(saved.label.contains("from last year"), "the strip does not show the corrected words")
         elements(app, beginningWith: "session.queue.send.").firstMatch.tap()
         XCTAssertTrue(text(app, containing: "get oriented").waitForExistence(timeout: 30), "Send was not answered")
+    }
+
+    func testStopStaysWithinReachWhileADraftIsTyped() throws {
+        let app = openLongSession()
+        type("Half a thought", in: app)
+        let chip = element(app, "session.stopWithDraft")
+        XCTAssertTrue(chip.waitForExistence(timeout: 5), "typing a draft left no way to take the agent back")
+        chip.tap()
+        XCTAssertTrue(element(app, "chat.stop").waitForNonExistence(timeout: 20), "the turn did not stop")
+        XCTAssertTrue(text(app, containing: "stopped before it finished").waitForExistence(timeout: 10))
+        XCTAssertTrue((element(app, "chat.composer").value as? String ?? "").contains("Half a thought"),
+                      "Stop threw the draft away")
+    }
+
+    func testStopWithAMessageWaitingAsksFirstAndKeepGoingChangesNothing() throws {
+        let app = openLongSession()
+        type("Then check the archive", in: app)
+        element(app, "chat.send").tap()
+        let row = elements(app, beginningWith: "session.queue.row.").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the queued message is not listed")
+        sleep(3)
+        element(app, "chat.stop").tap()
+        let keep = app.alerts.buttons["Keep going"]
+        XCTAssertTrue(keep.waitForExistence(timeout: 5), "Stop did not ask before setting a message aside")
+        attach(app, "11-stop-asks")
+        keep.tap()
+        XCTAssertTrue(element(app, "chat.stop").waitForExistence(timeout: 5), "the turn was stopped anyway")
+        XCTAssertEqual(element(app, "chat.stop").label, "Stop")
+        XCTAssertTrue(row.exists, "the waiting message went away")
+        XCTAssertTrue(element(app, "session.queue.headline").label.contains("Waiting to go in"))
     }
 
     // MARK: - Interrupt & send

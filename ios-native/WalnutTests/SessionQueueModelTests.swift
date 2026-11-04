@@ -397,4 +397,13 @@ final class SeatTapGuardTests: XCTestCase {
         XCTAssertTrue(seat.allows(at: t0.addingTimeInterval(SeatTapGuard.window)))
         XCTAssertTrue(seat.allows(at: t0.addingTimeInterval(30)))
     }
+
+    func testARowGuardHasItsOwnShorterSpan() {
+        var row = SeatTapGuard(span: 1.0)
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        row.record(at: t0)
+        XCTAssertFalse(row.allows(at: t0.addingTimeInterval(0.9)))
+        XCTAssertTrue(row.allows(at: t0.addingTimeInterval(1.0)))
+        XCTAssertLessThan(row.span, SeatTapGuard().span)
+    }
 }
