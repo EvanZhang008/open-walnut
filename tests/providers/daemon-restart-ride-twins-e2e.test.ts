@@ -20,6 +20,7 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
+import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -205,6 +206,39 @@ for (const twin of TWINS) {
       expect(r.err).not.toContain(WAIT_LINE)
       expect(r.ms).toBeGreaterThanOrEqual(1_500)
       expect(server.requests).toHaveLength(1)
+    }, 120_000)
+
+    // 2026-11-03 live: a `host_list` whose CLI connected while the daemon finished its
+    // stop got "read ECONNRESET" and failed. Only Linux promises that reset means unread.
+    it.runIf(process.platform === 'linux')('a call the exiting daemon never read waits and gets the next one\'s answer', async () => {
+      newRoot()
+      fs.mkdirSync(dirs().daemon, { recursive: true, mode: 0o700 })
+      fs.writeFileSync(dirs().mark, String(Math.floor(Date.now() / 1000)), { mode: 0o600 })
+      // The exiting daemon: it takes the connection, never reads it, and goes with it.
+      let took = 0
+      let gone = false
+      const exiting = net.createServer({ pauseOnConnect: true }, (s) => {
+        took += 1
+        setTimeout(() => {
+          s.destroy()
+          exiting.close(() => { gone = true })
+        }, 400)
+      })
+      await new Promise<void>((resolve) => exiting.listen(dirs().sock, () => resolve()))
+      const call = cli(twin, 'host_list')
+      expect(await waitFor(() => took === 1 && gone, 20_000)).toBe(true)
+      try { fs.unlinkSync(dirs().sock) } catch { /* removed with the server */ }
+      const next = await boot(twin, SUCCESSOR)
+      const server = await connect(next.port, 'run-b')
+      expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
+      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
+
+      const r = await call
+      expect(r.err).not.toContain('ECONNRESET')
+      expect(r.code).toBe(0)
+      expect(JSON.parse(r.out)).toEqual({ hosts: [] })
+      expect(server.requests).toHaveLength(1)
+      expect(took).toBe(1)
     }, 120_000)
 
     it('a read still at the server when the daemon stops is sent again through the next daemon', async () => {

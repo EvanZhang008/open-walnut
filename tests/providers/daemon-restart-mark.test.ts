@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -154,11 +155,47 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
     expect(slept.reduce((a, b) => a + b, 0)).toBe(RESTART_RIDE_MAX_MS)
   })
 
-  it('only nothing-sent failures wait: a socket that broke after the request, a timeout, or a server-away answer does not', async () => {
-    for (const step of [errno('EPIPE'), errno('ECONNRESET'), errno('EACCES'), new Error('agent socket closed without a response')]) {
+  // 2026-11-03: a CLI that connected while the daemon finished its stop got "read ECONNRESET".
+  it.each(['ECONNRESET', 'EPIPE'])('a call the exiting daemon never read (%s, on Linux) waits too', async (code) => {
+    const s = scripted([errno(code), errno('ENOENT'), OK])
+    const { d, told } = deps()
+    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request, platform: 'linux' })).resolves.toEqual(OK)
+    expect(s.calls).toBe(3)
+    expect(told).toHaveLength(1)
+  })
+
+  // The flag is set by the real socket client: the daemon wrote part of an answer, so it read the call.
+  it.runIf(process.platform === 'linux')('a reset after part of the answer came, over a real socket, does not wait', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrm-'))
+    const sockPath = path.join(dir, 'agent-gateway.sock')
+    let took = 0
+    const server = net.createServer({ pauseOnConnect: true }, (s) => {
+      took += 1
+      s.write('{"ok":')
+      setTimeout(() => s.destroy(), 200)
+    })
+    await new Promise<void>((resolve) => server.listen(sockPath, () => resolve()))
+    try {
+      const { d, told } = deps()
+      const err = await requestRidingRestart(sockPath, REQ, 5000, { ...d, platform: 'linux' }).catch((e: unknown) => e)
+      expect(err).toMatchObject({ code: 'ECONNRESET', answerStarted: true })
+      expect(took).toBe(1)
+      expect(told).toEqual([])
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('only failures where nothing ran wait: a reset after part of an answer, one on macOS, a timeout, a closed socket, or a server-away answer does not', async () => {
+    const midAnswer = Object.assign(errno('ECONNRESET'), { answerStarted: true })
+    for (const [step, platform] of [
+      [midAnswer, 'linux'], [errno('ECONNRESET'), 'darwin'], [errno('EPIPE'), 'darwin'],
+      [errno('EACCES'), 'linux'], [new Error('agent socket closed without a response'), 'linux'],
+    ] as Array<[Error, NodeJS.Platform]>) {
       const s = scripted([step, OK])
       const { d, told } = deps()
-      await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request })).rejects.toBe(step)
+      await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request, platform })).rejects.toBe(step)
       expect(s.calls).toBe(1)
       expect(told).toEqual([])
     }
@@ -212,5 +249,9 @@ describe('one rule in every reader: the TS CLI, the JS twin CLI and both user sh
       // A relay's answer is taken while it drains, never refused as new work.
       expect(twin).toMatch(/cmd\.cmd === 'gateway-result' \? work\(\) : daemonCommands\.admit\(work\)/)
     }
+  })
+
+  it('the JS twin CLI rides a call the exiting daemon never read, on Linux, before any answer, as wn-cli.ts does', () => {
+    expect(source).toContain(`if (process.platform === 'linux' && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && !buf && wnRide()) return;`)
   })
 })

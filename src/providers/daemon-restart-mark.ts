@@ -12,7 +12,8 @@
  * Nothing was sent in any of those cases, so waiting and sending again is safe
  * for every op.
  *
- * Readers: wn-cli.ts (connect refused, or the stopping daemon's answer) and the
+ * Readers: wn-cli.ts (connect refused, a call the exiting daemon never read, or the
+ * stopping daemon's answer) and the
  * user PATH shim (daemon-standalone.ts userWalnutShimText, the same file name and
  * age in shell). daemon-source.ts mirrors all of it.
  */

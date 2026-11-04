@@ -1387,6 +1387,8 @@ function runWnMinimal(argv, stdinText) {
   sock.on('error', function (e) {
     finish(function () {
       if (!sent && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') && wnRide()) return;
+      // Exited with the call unread (Linux only, no byte of an answer yet): nothing ran (twin of wn-cli.ts unreadReset).
+      if (process.platform === 'linux' && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && !buf && wnRide()) return;
       errOut('walnut: Walnut daemon socket unreachable at ' + sockPath + ': ' + e.message); if (sent) wnLostRun(); else wnAway(true); exitWn(6);
     });
   });

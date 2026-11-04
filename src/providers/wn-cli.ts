@@ -468,7 +468,8 @@ function requestOverSocket(
         }
       })
     })
-    sock.on('error', (err) => finish(() => reject(err)))
+    // Part of an answer came: the daemon read the call (unreadReset).
+    sock.on('error', (err) => finish(() => reject(buf ? Object.assign(err, { answerStarted: true }) : err)))
     sock.on('close', () => finish(() => reject(new Error('agent socket closed without a response'))))
   })
 }
@@ -524,6 +525,19 @@ function noListener(err: unknown): boolean {
   return code === 'ENOENT' || code === 'ECONNREFUSED'
 }
 
+/**
+ * The daemon exited with the call still unread, so nothing of it ran: Linux tells the
+ * peer ECONNRESET only when a unix socket closes with data it never read, or before it
+ * was accepted, and EPIPE means the request itself did not get through. 2026-11-03 on a
+ * dev box: a `host_list` whose CLI connected while the daemon finished its stop got
+ * "read ECONNRESET" and failed instead of waiting for the next daemon. Not on macOS,
+ * whose sockets promise no such thing, and not once any byte of an answer came.
+ */
+function unreadReset(err: unknown, platform: NodeJS.Platform): boolean {
+  const e = err as { code?: unknown; answerStarted?: unknown } | null
+  return platform === 'linux' && (e?.code === 'ECONNRESET' || e?.code === 'EPIPE') && e?.answerStarted !== true
+}
+
 /** A stopping daemon's answer: it ran nothing of the call, or only a read the server may run again. */
 export function stoppingAnswer(resp: GatewayResponse): boolean {
   return !resp.ok && resp.error.code === 'hub_unreachable'
@@ -536,13 +550,15 @@ export interface RideRestartDeps {
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   tell?: (line: string) => void
+  platform?: NodeJS.Platform
 }
 
 /**
  * requestOverSocket that rides a restart of this host's daemon. While a fresh
- * restart mark sits beside the socket, a call nothing listens for yet, or one the
- * stopping daemon turned away, waits for the next daemon and goes again: nothing
- * was sent, or only a read the server may run twice (a call that may have changed
+ * restart mark sits beside the socket, a call nothing listens for yet, one the
+ * exiting daemon never read (unreadReset), or one the stopping daemon turned away,
+ * waits for the next daemon and goes again: nothing ran, or only a read the server
+ * may run twice (a call that may have changed
  * something comes back hub_timeout instead), so this is safe. Says so once on stderr.
  * Without a mark, or past RESTART_RIDE_MAX_MS, it answers as requestOverSocket does.
  */
@@ -557,13 +573,15 @@ export async function requestRidingRestart(
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const now = deps.now ?? Date.now
   const tell = deps.tell ?? (() => tellRestartWait())
+  const platform = deps.platform ?? process.platform
   const until = now() + RESTART_RIDE_MAX_MS
   let told = false
   for (;;) {
     let resp: GatewayResponse | undefined
     let failure: unknown
     try { resp = await request(socketPath, req, timeoutMs) } catch (err) { failure = err }
-    const again = (resp ? stoppingAnswer(resp) : noListener(failure)) && now() < until && restarting(socketPath)
+    const again = (resp ? stoppingAnswer(resp) : noListener(failure) || unreadReset(failure, platform))
+      && now() < until && restarting(socketPath)
     if (!again) {
       if (resp) return resp
       throw failure
