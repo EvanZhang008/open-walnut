@@ -31,7 +31,7 @@ function region(from: string, to: string): string {
 /** Everything a locate runs: the focus effect, the ancestor/folder reveal, the section reveal, and
  *  the override's section opener. */
 const LOCATE_CODE = [
-  region('// Auto-switch tab, expand groups, and scroll to task when focusedTaskId changes', '}, [focusedTaskId, focusNonce, tasks, favorites, holdMoveTick]);'),
+  region('// Expand groups and scroll to the task when focusedTaskId changes', '}, [focusedTaskId, focusNonce, tasks, favorites, holdMoveTick]);'),
   region('revealAncestorsRef.current = (task: Task) => {', '\n  };\n'),
   region('revealInSectionRef.current = (t, locate) => {', '\n    };\n'),
   region('// Only for a locate: a page-load restore never opens (and saves) a section the user folded.', '}, [overrideId, overrideSection]);'),

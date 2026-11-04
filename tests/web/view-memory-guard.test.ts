@@ -82,6 +82,7 @@ const PASSING: Record<string, string> = {
   'components/tasks/TodoPanel.tsx#showCompletedResults': 'the results of one search',
   'components/tasks/TodoPanel.tsx#showStaleDonePins': 'the stale pins expanded for one look',
   'components/tasks/TodoPanel.tsx#selectMode': 'selecting tasks for one bulk action',
+  'components/tasks/TodoPanel.tsx#offView': 'the one-line note that a located task is not in the tab, for that one locate',
   'components/tasks/ViewDropdown.tsx#section': 'the view menu, a popover',
   'apps/mail/MailAccountFolders.tsx#filter': 'a typed search over one account\'s folders',
   'apps/mail/MailApp.tsx#showMailboxes': 'the mailbox drawer on a narrow window, an overlay',
