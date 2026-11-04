@@ -1,20 +1,17 @@
 /**
  * The home task panel's status sections (web/src/components/tasks/status-sections.ts):
  * which section a task is drawn in, the order inside each, the project runs, the
- * archive count, the exit-grace placement and the stored open state.
+ * archive count and the exit-grace placement (the open state is section-fold-rule.test.ts).
  */
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../src/core/types';
 import {
-  STATUS_SECTION_DEFAULT_OPEN,
   buildStatusSections,
   projectRuns,
-  readSectionOpen,
   sortSectionTasks,
   stateSectionNoNeeds,
   stateSectionOf,
   statusSectionOf,
-  writeSectionOpen,
 } from '../../web/src/components/tasks/status-sections';
 import { PANEL_DESIGNS, readPanelDesign } from '../../web/src/components/tasks/panel-design';
 
@@ -191,23 +188,6 @@ describe('buildStatusSections', () => {
     const m = buildStatusSections({ scope: [later], all: [], passes: () => true, snoozed: (x) => x.id === later.id });
     expect(ids(m.waiting)).toEqual([later.id]);
     expect(m.workingCount).toBe(0);
-  });
-});
-
-describe('readSectionOpen / writeSectionOpen', () => {
-  it('defaults: Watching, Needs you and Working open; Waiting and Completed folded', () => {
-    expect(readSectionOpen(null)).toEqual(STATUS_SECTION_DEFAULT_OPEN);
-    expect(STATUS_SECTION_DEFAULT_OPEN).toEqual({ watching: true, needs: true, working: true, waiting: false, done: false });
-  });
-  it('stores only what the user flipped, and reads it back', () => {
-    const raw = writeSectionOpen({ ...STATUS_SECTION_DEFAULT_OPEN, done: true, needs: false });
-    expect(JSON.parse(raw!)).toEqual({ needs: false, done: true });
-    expect(readSectionOpen(raw)).toEqual({ ...STATUS_SECTION_DEFAULT_OPEN, done: true, needs: false });
-    expect(writeSectionOpen(STATUS_SECTION_DEFAULT_OPEN)).toBeNull();
-  });
-  it('a corrupt or foreign value reads as the defaults', () => {
-    expect(readSectionOpen('{not json')).toEqual(STATUS_SECTION_DEFAULT_OPEN);
-    expect(readSectionOpen('{"done":"yes","bogus":true}')).toEqual(STATUS_SECTION_DEFAULT_OPEN);
   });
 });
 

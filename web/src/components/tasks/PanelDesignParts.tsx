@@ -1,11 +1,14 @@
 /**
  * The parts only the By project layout draws (panel-design.ts): its per-project folds.
  */
-import { useCallback, useState } from 'react';
+import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { LS_PROJECT_FOLDS_KEY, projectFoldKey } from './panel-design';
+import { NavigationChevron } from './NavigationSections';
 import { SECTION_ICONS, SectionRows, type SectionRowHandlers } from './StatusSections';
-import { STATUS_SECTION_TITLES, projectRuns, sortSectionTasks, stateSectionNoNeeds, isWatched } from './status-sections';
+import { FOLD_KEY_ATTR, foldIsOpen, projectFoldKind } from './section-fold-rule';
+import { useFoldStore } from './useFoldStore';
+import { statusFoldTooltip, projectRuns, sortSectionTasks, stateSectionNoNeeds, isWatched } from './status-sections';
 
 export interface ProjectFoldTasks { waiting: Task[]; done: Task[] }
 
@@ -35,25 +38,10 @@ export function foldTasksByProject(
   return out;
 }
 
-/** The open folds, stored across reloads. */
+/** The open folds, by the one fold rule (section-fold-rule.ts): folded by default, folded again 15 minutes after opening. */
 export function useProjectFolds(): [Set<string>, (key: string) => void] {
-  const [open, setOpen] = useState<Set<string>>(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(LS_PROJECT_FOLDS_KEY) ?? '[]') as unknown;
-      return new Set(Array.isArray(raw) ? raw.filter((k): k is string => typeof k === 'string') : []);
-    } catch { return new Set(); }
-  });
-  const toggle = useCallback((key: string) => {
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      try {
-        if (next.size) localStorage.setItem(LS_PROJECT_FOLDS_KEY, JSON.stringify([...next]));
-        else localStorage.removeItem(LS_PROJECT_FOLDS_KEY);
-      } catch { /* quota: the fold still flips for this page */ }
-      return next;
-    });
-  }, []);
+  const { store, toggle } = useFoldStore(LS_PROJECT_FOLDS_KEY, projectFoldKind);
+  const open = useMemo(() => new Set(Object.keys(store).filter((k) => foldIsOpen(store, k, projectFoldKind))), [store]);
   return [open, toggle];
 }
 
@@ -95,17 +83,21 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
               className={`project-status-fold project-status-fold-${k}${isOpen ? ' open' : ''}`}
               aria-expanded={isOpen}
               data-testid={`project-status-fold-${k}`}
-              title={`${STATUS_SECTION_TITLES[k]}. Click to ${isOpen ? 'collapse' : 'expand'}.`}
+              {...{ [FOLD_KEY_ATTR]: key }}
+              title={statusFoldTooltip(k, isOpen)}
               onClick={(e) => { e.stopPropagation(); onToggle(key); }}
             >
               <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS[k]}</span>
               {tasks[k].length} {FOLD_LABEL[k]}
+              <NavigationChevron collapsed={!isOpen} />
             </button>
           );
         })}
       </div>
       {kinds.map((k) => open.has(projectFoldKey(region, project, k)) && (
-        <SectionRows key={k} sectionKey={k} tasks={tasks[k]} total={tasks[k].length} handlers={rowHandlers} inProject />
+        <div key={k} className="project-status-fold-rows" {...{ [FOLD_KEY_ATTR]: projectFoldKey(region, project, k) }}>
+          <SectionRows sectionKey={k} tasks={tasks[k]} total={tasks[k].length} handlers={rowHandlers} inProject />
+        </div>
       ))}
     </div>
   );

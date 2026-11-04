@@ -78,6 +78,7 @@ struct TasksView: View {
     /// / snoozed and Completed folded), persisted. They replaced the filters menu's `Show
     /// done` / `Show waiting` switches (2026-10-29). See `BoardStatusSections`.
     @AppStorage(BoardStatusSectionPrefs.openKey, store: AppPrefs.defaults) private var sectionsOpenRaw = ""
+    @Environment(\.scenePhase) private var scenePhase
     /// Rows each status section draws before its "Show N more" row; a tap adds a batch.
     @State private var sectionShown: [BoardStatusSection: Int] = [:]
     // The board's three view decisions — WHICH TIER (the chip rail), how its rows are
@@ -159,6 +160,12 @@ struct TasksView: View {
             }
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
+            // Waiting / snoozed and Completed fold again 15 minutes after they were opened:
+            // when the board comes on screen or the app comes back, never under the hand.
+            .onAppear { foldDueSections() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { foldDueSections() }
+            }
             .onAppear {
                 // "The board is on screen" — the ONE thing that should make it reconcile
                 // because a person is looking at it.
@@ -995,10 +1002,10 @@ struct TasksView: View {
             statusSection(key, sections: sections, open: open[key] ?? key.defaultOpen)
         }
         BoardWorkingHeading(
-            count: sections.workingCount, open: open[.working] ?? true,
+            count: sections.workingCount, open: open[.working] ?? BoardStatusSection.working.defaultOpen,
             onToggle: { toggleSection(.working) }
         )
-        if open[.working] ?? true {
+        if open[.working] ?? BoardStatusSection.working.defaultOpen {
             boardSections(entries, isEmpty: isEmpty, drawsRows: sections.drawsRows)
         }
         ForEach([BoardStatusSection.waiting, .done].filter { sections.isShown($0) }) { key in
@@ -1025,6 +1032,11 @@ struct TasksView: View {
             newRowId: highlightedTaskId,
             resolvingRowId: router.resolvingRowId
         )
+    }
+
+    private func foldDueSections() {
+        let next = BoardStatusSectionPrefs.pruned(sectionsOpenRaw)
+        if next != sectionsOpenRaw { sectionsOpenRaw = next }
     }
 
     private func toggleSection(_ key: BoardStatusSection) {

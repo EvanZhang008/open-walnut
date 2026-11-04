@@ -320,27 +320,71 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     // MARK: - The stored open state
 
-    func testOpenStateRoundTripsAndStoresOnlyTheChanges() {
-        XCTAssertEqual(BoardStatusSectionPrefs.decode("")[.waiting], false)
-        XCTAssertEqual(BoardStatusSectionPrefs.decode("")[.watching], true)
-        var raw = BoardStatusSectionPrefs.toggling(.done, raw: "")
-        XCTAssertEqual(raw, #"{"done":true}"#)
+    private let t0 = Date(timeIntervalSince1970: 1_793_770_000)
+
+    func testFirstVisitFoldsWaitingAndCompleted() {
+        let open = BoardStatusSectionPrefs.decode("")
+        XCTAssertEqual(open[.watching], true)
+        XCTAssertEqual(open[.needs], true)
+        XCTAssertEqual(open[.working], true, "Working is the board itself on the phone")
+        XCTAssertEqual(open[.waiting], false)
+        XCTAssertEqual(open[.done], false)
+        XCTAssertEqual(BoardStatusSectionPrefs.autoCloseAfter, 15 * 60)
+    }
+
+    func testWatchingAndNeedsYouKeepTheUserChoiceWithNoClock() {
+        var raw = BoardStatusSectionPrefs.toggling(.needs, raw: "", now: t0)
+        XCTAssertEqual(raw, #"{"needs":false}"#)
+        let muchLater = t0.addingTimeInterval(30 * 24 * 3600)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: muchLater), raw, "no clock on a sticky choice")
+        raw = BoardStatusSectionPrefs.toggling(.needs, raw: raw, now: t0)
+        XCTAssertEqual(raw, "", "back at its default stores nothing")
+    }
+
+    func testAnOpenedSectionFoldsAgainFifteenMinutesLater() {
+        var raw = BoardStatusSectionPrefs.toggling(.done, raw: "", now: t0)
+        let stored = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Double]
+        XCTAssertEqual(stored, ["done": t0.timeIntervalSince1970], "an opened section holds its opening time")
         XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.done, raw: raw))
-        raw = BoardStatusSectionPrefs.toggling(.working, raw: raw)
-        XCTAssertEqual(raw, #"{"done":true,"working":false}"#)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: t0.addingTimeInterval(15 * 60 - 1)), raw)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: t0.addingTimeInterval(15 * 60)), "")
+        raw = BoardStatusSectionPrefs.toggling(.waiting, raw: raw, now: t0)
+        XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.waiting, raw: raw))
+        raw = BoardStatusSectionPrefs.toggling(.working, raw: raw, now: t0)
         XCTAssertFalse(BoardStatusSectionPrefs.isOpen(.working, raw: raw))
-        raw = BoardStatusSectionPrefs.toggling(.done, raw: raw)
-        raw = BoardStatusSectionPrefs.toggling(.working, raw: raw)
-        XCTAssertEqual(raw, "", "every section back at its default stores nothing")
+        XCTAssertTrue(BoardStatusSectionPrefs.pruned(raw, now: t0.addingTimeInterval(3600)).contains(#""working":false"#), "Working keeps the choice")
+        raw = BoardStatusSectionPrefs.toggling(.done, raw: raw, now: t0)
+        raw = BoardStatusSectionPrefs.toggling(.waiting, raw: raw, now: t0)
+        raw = BoardStatusSectionPrefs.toggling(.working, raw: raw, now: t0)
+        XCTAssertEqual(raw, "", "folded again stores nothing")
+    }
+
+    func testAnOpeningTimeAheadOfTheClockCountsFromNow() {
+        let ahead = #"{"done":\#(t0.timeIntervalSince1970 + 3600)}"#
+        let raw = BoardStatusSectionPrefs.pruned(ahead, now: t0)
+        let stored = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Double]
+        XCTAssertEqual(stored, ["done": t0.timeIntervalSince1970])
+    }
+
+    func testAnOlderBuildBooleanOnAnAutoSectionReadsFolded() {
+        let raw = #"{"done":true,"waiting":true,"working":false,"watching":false}"#
+        let open = BoardStatusSectionPrefs.decode(raw)
+        XCTAssertEqual(open[.done], false)
+        XCTAssertEqual(open[.waiting], false)
+        XCTAssertEqual(open[.working], false)
+        XCTAssertEqual(open[.watching], false)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: t0), #"{"watching":false,"working":false}"#)
     }
 
     func testGarbageInTheStoreReadsAsTheDefaults() {
-        for junk in ["not json", "[]", "3", #"{"done":"yes","waiting":1}"#] {
+        for junk in ["not json", "[]", "3", #"{"done":"yes","needs":1}"#] {
+            let raw = BoardStatusSectionPrefs.pruned(junk, now: t0)
             for section in BoardStatusSection.allCases {
-                XCTAssertEqual(BoardStatusSectionPrefs.isOpen(section, raw: junk), section.defaultOpen, junk)
+                XCTAssertEqual(BoardStatusSectionPrefs.isOpen(section, raw: raw), section.defaultOpen, junk)
             }
         }
-        XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.waiting, raw: #"{"waiting":true,"junk":5}"#))
+        // A number that is no recent opening time folds at the first prune.
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(#"{"waiting":1,"junk":5}"#, now: t0), "")
     }
 
     /// Persisted across launches: read back through `@AppStorage`, the way TasksView reads
@@ -352,10 +396,10 @@ final class BoardStatusSectionsTests: XCTestCase {
         func stored() -> AppStorage<String> {
             AppStorage(wrappedValue: "", BoardStatusSectionPrefs.openKey, store: defaults)
         }
-        XCTAssertFalse(BoardStatusSectionPrefs.isOpen(.done, raw: stored().wrappedValue))
-        stored().wrappedValue = BoardStatusSectionPrefs.toggling(.done, raw: stored().wrappedValue)
-        XCTAssertEqual(defaults.string(forKey: BoardStatusSectionPrefs.openKey), #"{"done":true}"#)
-        XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.done, raw: stored().wrappedValue), "a new reader sees it")
+        XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.needs, raw: stored().wrappedValue))
+        stored().wrappedValue = BoardStatusSectionPrefs.toggling(.needs, raw: stored().wrappedValue)
+        XCTAssertEqual(defaults.string(forKey: BoardStatusSectionPrefs.openKey), #"{"needs":false}"#)
+        XCTAssertFalse(BoardStatusSectionPrefs.isOpen(.needs, raw: stored().wrappedValue), "a new reader sees it")
     }
 
     // MARK: - The wire fields

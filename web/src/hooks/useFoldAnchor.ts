@@ -19,11 +19,24 @@ import { useEffect, type RefObject } from 'react';
  * its place in the list: scrolled until that place is where the heading was showing.
  * A click that changes nothing (its ··· menu) moves nothing.
  *
+ * A fold the clock makes (a status fold folding 15 minutes after it was opened) is held the
+ * same way: its toggle dispatches FOLD_PIN_EVENT right before it folds.
+ *
  * A fold near the end of the list is the case scrolling alone cannot answer: the
  * content gets shorter than the scroll position, the browser clamps it, and every
  * row moves down. The scroller then gets that much room past its end, which drains
  * as the user scrolls back up (only the part still on screen is kept).
  */
+
+/** A fold that folds by itself (a status fold's 15-minute clock, useFoldStore) asks for the
+ *  same hold as a click: it dispatches this event from its toggle just before it folds. */
+export const FOLD_PIN_EVENT = 'walnut-fold-pin';
+/** Its `detail`: `inView` lands a heading scrolled above the scroller on its top edge, since
+ *  nobody clicked it and the user would not see what folded, and adds no room past the end: a
+ *  list the fold made too short just ends, rather than leave a blank under it. */
+export type FoldPinDetail = { inView?: boolean };
+/** …and this one once its fold has committed, so the hold corrects before the frame paints. */
+export const FOLD_SETTLE_EVENT = 'walnut-fold-settle';
 
 const FOLD_ROWS = [
   '.navigation-heading', // Pinned, Projects and every tier heading
@@ -82,7 +95,7 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
     // resizes, so a change in `box`'s height says the fold has landed.
     let hold: {
       row: Element; stuck: HTMLElement | null; box: Element | null; boxHeight: number; top: number; list: number;
-      scroller: HTMLElement; frames: number; expected: number; anchor: string;
+      scroller: HTMLElement; frames: number; expected: number; anchor: string; settled: boolean; noRoom: boolean;
     } | null = null;
     let raf = 0;
     // The row a menu was opened from. Its fold items render in a portal outside the
@@ -132,12 +145,12 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       // is the fold's doing, not another scroll.
       const clamped = now < hold.expected && now >= scroller.scrollHeight - scroller.clientHeight - 1;
       if (!row.isConnected || (Math.abs(now - hold.expected) > 1 && !clamped)) { release(); return; }
-      const folded = !!hold.box && Math.abs(hold.box.getBoundingClientRect().height - hold.boxHeight) >= 0.5;
+      const folded = hold.settled || (!!hold.box && Math.abs(hold.box.getBoundingClientRect().height - hold.boxHeight) >= 0.5);
       const drift = listTop(row, hold.stuck) - (folded ? hold.top : hold.list);
       if (Math.abs(drift) >= 0.5) {
         const want = now + drift;
         const short = want - (scroller.scrollHeight - scroller.clientHeight);
-        if (short > 0) addEndRoom(scroller, short);
+        if (short > 0 && !hold.noRoom) addEndRoom(scroller, short);
         scroller.scrollTop = want;
       }
       // A fold that grew the content may have pushed earlier room off screen.
@@ -146,16 +159,17 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       if (--hold.frames > 0) raf = requestAnimationFrame(step);
       else release();
     };
-    const pin = (row: Element) => {
+    const pin = (row: Element, inView = false) => {
       const scroller = scrollParent(row, root);
       if (!scroller) return;
       release();
       const stuck = stickyOf(row, scroller);
       const box = stuck?.parentElement ?? null;
+      const shown = row.getBoundingClientRect().top;
       hold = {
         row, stuck, box, boxHeight: box?.getBoundingClientRect().height ?? 0,
-        top: row.getBoundingClientRect().top, list: listTop(row, stuck),
-        scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor,
+        top: inView ? Math.max(shown, scroller.getBoundingClientRect().top) : shown, list: listTop(row, stuck),
+        scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor, settled: false, noRoom: inView,
       };
       // Chromium's own anchoring would move the scroller by a rule of its own; off
       // for the hold, so both engines end up exactly here.
@@ -179,11 +193,24 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       if (e.target instanceof Element && root.contains(e.target)) menuOrigin = e.target;
     };
     const onContextMenu = (e: Event) => { if (e.target instanceof Element) menuOrigin = e.target; };
+    const onPin = (e: Event) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (target && root.contains(target)) pin(target.closest(FOLD_ROWS) ?? target, !!(e as CustomEvent<FoldPinDetail>).detail?.inView);
+    };
+    const onSettle = () => {
+      if (!hold) return;
+      // The fold has committed: from here the row keeps `top`, not its old place in the list.
+      hold.settled = true;
+      cancelAnimationFrame(raf);
+      step();
+    };
 
     const passive = { capture: true, passive: true } as const;
     document.addEventListener('click', onClick, true);
     root.addEventListener('pointerdown', onPress, true);
     root.addEventListener('contextmenu', onContextMenu, true);
+    root.addEventListener(FOLD_PIN_EVENT, onPin);
+    root.addEventListener(FOLD_SETTLE_EVENT, onSettle);
     root.addEventListener('wheel', release, passive);
     root.addEventListener('touchmove', release, passive);
     root.addEventListener('keydown', release, true);
@@ -193,6 +220,8 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       document.removeEventListener('click', onClick, true);
       root.removeEventListener('pointerdown', onPress, true);
       root.removeEventListener('contextmenu', onContextMenu, true);
+      root.removeEventListener(FOLD_PIN_EVENT, onPin);
+      root.removeEventListener(FOLD_SETTLE_EVENT, onSettle);
       root.removeEventListener('wheel', release, passive);
       root.removeEventListener('touchmove', release, passive);
       root.removeEventListener('keydown', release, true);

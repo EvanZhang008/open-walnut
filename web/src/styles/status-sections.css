@@ -56,7 +56,9 @@
 /* Flat: the wait sentence is its own third line under the title, with the whole width
    (2026-11-02, the user: on the top line it was cut, and it pushed the wake time off). */
 .status-card-body > .status-card-reason.status-card-wait-line { min-width: 0; font-size: 11.5px; line-height: 15px; }
-.status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: 11px; margin-left: 6px; }
+.status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: 11px; margin-left: 6px; min-width: 0; }
+/* A project's fold in a narrow panel: the title keeps a floor, the wait sentence gives way first. */
+.status-section-card.status-card-reason-inline > .todo-pinned-title { min-width: min(10ch, 34%); }
 /* The tags on the meta line read as words, not pills: no fill, the line's own size.
    `html` + four classes: past subtask-pill.css's dark theme (:root[data-theme] + two). */
 html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill,
@@ -102,6 +104,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .project-status-fold { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
 .project-status-fold:hover, .project-status-fold.open { background: var(--bg-hover); color: var(--fg-secondary); }
 .project-status-fold .project-status-count-icon svg { width: 11px; height: 11px; }
+.project-status-fold .navigation-chevron { width: 8px; height: 8px; }
 .home-navigation-scroll .project-status-folds-project { margin-top: 12px; }
 /* On a phone no text is under 12 px and every button takes a finger (phone-home.spec.ts
    C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */

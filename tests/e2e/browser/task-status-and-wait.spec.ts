@@ -355,6 +355,8 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
 
   const anyParked = page.locator(`[data-task-id="${parked.id}"]`)
   const plainCard = page.locator(`.todo-pinned-card[data-task-id="${plain.id}"]`)
+  // Working folds by default (section-fold-rule.ts): open it, the way a user does.
+  await setStatusSectionOpen(page, 'working', true)
   await expect(plainCard).toBeVisible({ timeout: 15_000 })
   await expect(anyParked).toHaveCount(0)
   await shot(page.locator('.todo-panel'), 'show-waiting-off', browserName)

@@ -8,6 +8,7 @@ import Foundation
 // status-sections.ts` is the web's half of this file):
 //
 //   Watching           open    tasks the user watches, whatever their state, from every tier
+//                              (open first, then the user's choice; so are Needs you, Working)
 //   Needs you          open    open tasks whose one user status says the user is needed, To read
 //                              ones included (nothing asked, a result or an answer to read:
 //                              2026-11-03, the user wants no separate To read), each row's third
@@ -15,6 +16,9 @@ import Foundation
 //   Working            open    everything else that is open: the board's own bands
 //   Waiting / snoozed  folded  phase WAITING, or a start date still to come under "Now"
 //   Completed          folded  done
+//
+// Waiting / snoozed and Completed fold again 15 minutes after they were opened
+// (`BoardStatusSectionPrefs`), as on the web (`autoFolds` says why Working does not here).
 //
 // A watched task is drawn in Watching only. Every rule here is a static function over plain
 // values, so WalnutTests drives the same logic the screen runs.
@@ -47,11 +51,18 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Open on a first visit: what is in front of the user now. Waiting and Completed fold.
-    var defaultOpen: Bool {
+    /// Open on a first visit: Watching, Needs you and Working; Waiting and Completed fold.
+    var defaultOpen: Bool { !autoFolds }
+
+    /// Folds by default and again `BoardStatusSectionPrefs.autoCloseAfter` after it was opened,
+    /// the web's `section-fold-rule.ts` kind `auto` (2026-11-04, the user: "by default auto
+    /// collapse ... only thing need open constantly is watch and need me"). The rest keep the
+    /// user's choice. The web folds Working too; here Working's rows are the board itself (its
+    /// tier bands, each with its own fold), the whole Tasks screen, so it stays the user's choice.
+    var autoFolds: Bool {
         switch self {
-        case .watching, .needs, .working: return true
-        case .waiting, .done: return false
+        case .watching, .needs, .working: return false
+        case .waiting, .done: return true
         }
     }
 }
@@ -277,29 +288,59 @@ enum BoardStatusSectionModel {
 
 // MARK: - Which sections are open, persisted
 
-/// The sections' open state in one defaults string: a JSON object holding only the sections
-/// the user flipped away from their default (the web's `walnut-todo-status-sections`), so a
-/// later change of a default reaches everyone who never touched that section.
+/// The sections' open state in one defaults string, the shape of the web's
+/// `walnut-todo-status-sections` (`section-fold-rule.ts`): a JSON object where Watching, Needs
+/// you and Working hold the user's boolean (only when it differs from the default, so a later
+/// change of a default reaches everyone who never touched them), and an open Waiting / snoozed
+/// or Completed holds the time it was opened (seconds since 1970; the web stores milliseconds, in
+/// its own key: the two never share one value). That one folds again
+/// `autoCloseAfter` later: `pruned` drops it when the board appears or the app comes back to the
+/// foreground, never while the board is in the user's hand.
 enum BoardStatusSectionPrefs {
     static let openKey = "tasks.board.statusSections"
+    /// An opened auto fold folds again this long after it was opened (the web's 15 minutes).
+    static let autoCloseAfter: TimeInterval = 15 * 60
 
-    /// Every section's open state. A value that is not JSON, not an object, or holds a
-    /// non-boolean reads as the defaults for what it cannot say: a preference is never worth
-    /// a section the user cannot open.
-    static func decode(_ raw: String) -> [BoardStatusSection: Bool] {
-        var open: [BoardStatusSection: Bool] = [:]
-        for section in BoardStatusSection.allCases { open[section] = section.defaultOpen }
+    /// The stored values: a real JSON boolean, or a number that is not one.
+    private static func values(_ raw: String) -> [String: Any] {
         guard
             let data = raw.data(using: .utf8), !data.isEmpty,
             let object = try? JSONSerialization.jsonObject(with: data),
             let dictionary = object as? [String: Any]
-        else { return open }
+        else { return [:] }
+        return dictionary
+    }
+
+    private static func isBool(_ value: Any?) -> Bool? {
+        // A real JSON boolean only: Foundation bridges `1` to `true` under `as? Bool`.
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    private static func openedAt(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let at = number.doubleValue
+        return at.isFinite ? at : nil
+    }
+
+    private static func encode(_ dictionary: [String: Any]) -> String {
+        guard
+            !dictionary.isEmpty,
+            let data = try? JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]),
+            let json = String(data: data, encoding: .utf8)
+        else { return "" }
+        return json
+    }
+
+    /// Every section's open state, as stored. A value that is not JSON, not an object, or holds
+    /// what its section cannot hold reads as the default: a preference is never worth a section
+    /// the user cannot open.
+    static func decode(_ raw: String) -> [BoardStatusSection: Bool] {
+        let stored = values(raw)
+        var open: [BoardStatusSection: Bool] = [:]
         for section in BoardStatusSection.allCases {
-            // A real JSON boolean only: Foundation bridges `1` to `true` under `as? Bool`.
-            if let number = dictionary[section.rawValue] as? NSNumber,
-               CFGetTypeID(number) == CFBooleanGetTypeID() {
-                open[section] = number.boolValue
-            }
+            let value = stored[section.rawValue]
+            open[section] = section.autoFolds ? openedAt(value) != nil : (isBool(value) ?? section.defaultOpen)
         }
         return open
     }
@@ -309,22 +350,36 @@ enum BoardStatusSectionPrefs {
     }
 
     /// The stored string with one section set; "" when every section is at its default.
-    static func setting(_ section: BoardStatusSection, open: Bool, raw: String) -> String {
-        var state = decode(raw)
-        state[section] = open
-        var diff: [String: Bool] = [:]
-        for key in BoardStatusSection.allCases where state[key] != key.defaultOpen {
-            diff[key.rawValue] = state[key]
+    static func setting(_ section: BoardStatusSection, open: Bool, raw: String, now: Date = AppClock.now()) -> String {
+        var stored = values(pruned(raw, now: now))
+        if section.autoFolds {
+            stored[section.rawValue] = open ? now.timeIntervalSince1970 : nil
+        } else {
+            stored[section.rawValue] = open == section.defaultOpen ? nil : open
         }
-        guard
-            !diff.isEmpty,
-            let data = try? JSONSerialization.data(withJSONObject: diff, options: [.sortedKeys]),
-            let json = String(data: data, encoding: .utf8)
-        else { return "" }
-        return json
+        return encode(stored)
     }
 
-    static func toggling(_ section: BoardStatusSection, raw: String) -> String {
-        setting(section, open: !isOpen(section, raw: raw), raw: raw)
+    static func toggling(_ section: BoardStatusSection, raw: String, now: Date = AppClock.now()) -> String {
+        setting(section, open: !isOpen(section, raw: raw), raw: raw, now: now)
+    }
+
+    /// The stored string without the auto folds whose time ran out, nor values a section cannot
+    /// hold (an older build's boolean for Working, Waiting or Completed reads as folded).
+    static func pruned(_ raw: String, now: Date = AppClock.now()) -> String {
+        let stored = values(raw)
+        var kept: [String: Any] = [:]
+        for section in BoardStatusSection.allCases {
+            let value = stored[section.rawValue]
+            if section.autoFolds {
+                if let at = openedAt(value), now.timeIntervalSince1970 < at + autoCloseAfter {
+                    // An opening time ahead of this clock counts from now.
+                    kept[section.rawValue] = min(at, now.timeIntervalSince1970)
+                }
+            } else if let open = isBool(value), open != section.defaultOpen {
+                kept[section.rawValue] = open
+            }
+        }
+        return encode(kept)
     }
 }

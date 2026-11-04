@@ -126,8 +126,10 @@ import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
 import { ProjectStatusFolds, foldTasksByProject, leftoverFoldProjects, useProjectFolds, type ProjectFoldTasks } from './PanelDesignParts';
 import { projectFoldKey, usePanelDesign } from './panel-design';
+import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
+import { useFoldStore } from './useFoldStore';
 import {
-  LS_STATUS_SECTIONS_KEY, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, readSectionOpen, writeSectionOpen, type StatusSectionKey,
+  LS_STATUS_SECTIONS_KEY, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, type StatusSectionKey,
 } from './status-sections';
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
@@ -4787,22 +4789,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const sectionsActive = !isSearchMode && statusOnSections;
   /** Flat draws Needs you as its own section; By project keeps those rows in the list. */
   const needsSection = sectionsActive && panelDesign === 'status';
-  const [sectionOpen, setSectionOpen] = useState(() => {
-    try { return readSectionOpen(localStorage.getItem(LS_STATUS_SECTIONS_KEY)); } catch { return readSectionOpen(null); }
-  });
+  // Open and fold by the one fold rule (section-fold-rule.ts): Watching and Needs you keep the
+  // user's choice, the rest fold by default and fold again 15 minutes after they were opened.
+  const sectionFolds = useFoldStore(LS_STATUS_SECTIONS_KEY, statusSectionFoldKind);
+  const sectionOpen = useMemo(() => statusSectionsOpen(sectionFolds.store), [sectionFolds.store]);
   const sectionOpenRef = useRef(sectionOpen);
   sectionOpenRef.current = sectionOpen;
-  const setSectionOpenTo = useCallback((key: StatusSectionKey, open: boolean) => {
-    setSectionOpen((prev) => {
-      if (prev[key] === open) return prev;
-      const next = { ...prev, [key]: open };
-      try {
-        const raw = writeSectionOpen(next);
-        if (raw) localStorage.setItem(LS_STATUS_SECTIONS_KEY, raw); else localStorage.removeItem(LS_STATUS_SECTIONS_KEY);
-      } catch { /* quota: the fold still flips for this page */ }
-      return next;
-    });
-  }, []);
+  const setSectionFold = sectionFolds.setOpen;
+  const setSectionOpenTo = useCallback((key: StatusSectionKey, open: boolean) => setSectionFold(key, open), [setSectionFold]);
   // Inside a project jump the sections fold on the jump's own state, never the saved one.
   const shownSectionOpen = jumpLive ? projectJump.open : sectionOpen;
   const toggleStatusSection = useCallback((key: StatusSectionKey) => {
@@ -4816,9 +4810,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const shownSectionOpenRef = useRef(shownSectionOpen);
   shownSectionOpenRef.current = shownSectionOpen;
   const openStatusSection = useCallback((key: StatusSectionKey) => {
-    if (shownSectionOpenRef.current[key]) return;
-    if (jumpLiveRef.current) setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: true } } : prev));
-    else setSectionOpenTo(key, true);
+    // Outside a jump an open auto fold still hears it: its 15 minutes start again for the row shown.
+    if (jumpLiveRef.current) {
+      if (shownSectionOpenRef.current[key]) return;
+      setProjectJump((prev) => (prev ? { ...prev, open: { ...prev.open, [key]: true } } : prev));
+    } else setSectionOpenTo(key, true);
   }, [setSectionOpenTo, setProjectJump]);
   /** The section each task was drawn in last render: one completed or parked from a
    *  section stays there through its exit grace instead of popping into the list. */
@@ -7785,6 +7781,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}
+      {...{ [FOLD_PANEL_ATTR]: '' }}
       // The person steers the panel from here on: a held locate lets go (locate-hold.ts). React
       // events bubble through portals, so a row menu or a fold menu counts as the panel too.
       onPointerDownCapture={endLocateHold} onKeyDownCapture={endLocateHold}

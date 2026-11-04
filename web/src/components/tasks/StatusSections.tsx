@@ -2,8 +2,8 @@
  * StatusSections: the home task panel's status headings and the rows under the
  * ones the panel draws itself (Watching, Needs you, Waiting, Completed). Working
  * is the view's own list (tiers, Recent, projects), so TodoPanel draws only its
- * heading from here. The model (which task goes where, order, stored open state)
- * is status-sections.ts.
+ * heading from here. The model (which task goes where, order) is status-sections.ts; when a
+ * section opens and folds is section-fold-rule.ts, read through useFoldStore by the drawer.
  *
  * The rows are plain cards: no drag, since a section's order is the state's own
  * (latest activity, soonest wake, latest completion), not a place the user keeps.
@@ -32,13 +32,14 @@ import { recentActivityTime, recentActivityTitle } from './recent-activity-time'
 import {
   STATUS_SECTION_BATCH,
   STATUS_SECTION_LABELS,
-  STATUS_SECTION_TITLES,
+  statusFoldTooltip,
   type StatusSectionKey,
   type StatusSectionsModel,
   needsLine,
   waitingReason,
 } from './status-sections';
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
+import { FOLD_KEY_ATTR } from './section-fold-rule';
 import '@/styles/status-sections.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
@@ -64,7 +65,7 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
         type="button"
         className="navigation-heading-open"
         aria-expanded={open}
-        title={`${STATUS_SECTION_TITLES[sectionKey]}. Click to ${open ? 'collapse' : 'expand'}.`}
+        title={statusFoldTooltip(sectionKey, open)}
         onClick={() => onToggle(sectionKey)}
       >
         {/* Each section's own mark (an eye, a red ring, an hourglass...), so Watching and
@@ -183,24 +184,29 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     <span
       className="todo-item-due-pill todo-item-wait-pill"
       data-testid="task-row-wait-until"
-      title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
+      title={`${!twoLine && reasonText ? `${reasonText}. ` : ''}Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
     >
-      until {formatWaitUntil(task.wait_until)}
+      {/* One line (a project's folds) is narrow: a time today needs no "Today", the title keeps the room. */}
+      until {twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, '')}
     </span>
   ) : null;
+  const inlineReason = twoLine || (wake && !need && reasonText !== 'Snoozed') ? null : reason;
   const agoEl = ago ? (
     <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
   ) : null;
   return (
     <div
       data-task-id={task.id}
-      className={`todo-pinned-card status-section-card${twoLine ? ' status-card-two-line' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card status-section-card${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (edit.isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         handlers.onClick(task, e);
       }}
       role="button"
+      // Named by its task alone: from its contents the name would also carry its buttons'
+      // ("Mark complete … More actions"), the same as the menu button inside it.
+      aria-label={task.title}
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' && !edit.isEditing) { e.preventDefault(); handlers.onClick(task); } }}
     >
@@ -250,10 +256,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           {reasonBelow ? reason : null}
         </span>
       ) : (
+        // One line (a project's folds): with a wake time beside it, the sentence of what it waits
+        // on would be squeezed to a sliver, so it moves into that time's tooltip.
         <>
           {title}
           {pills}
-          {reason}
+          {inlineReason}
           {wake ?? agoEl}
         </>
       )}
@@ -387,7 +395,7 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
         const archiveLeft = key === 'done' && model.archiveLeft;
         if (count === 0 && !archiveLeft) return null;
         return (
-          <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]}>
+          <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]} {...{ [FOLD_KEY_ATTR]: key }}>
             <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft} />
             {/* A folded Needs you still shows its approvals: a script is blocked on each, for minutes. */}
             {extra && <ApprovalRows list={waiting} variant="home" />}

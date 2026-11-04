@@ -51,19 +51,16 @@ export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
   waiting: 'It waits on something: not started, stopped, a watch, a time, another task, or you snoozed it',
 };
 
-/** Open on a first visit: what is in front of the user now. Waiting and Completed fold. */
-export const STATUS_SECTION_DEFAULT_OPEN: Record<StatusSectionKey, boolean> = {
-  watching: true,
-  needs: true,
-  working: true,
-  waiting: false,
-  done: false,
-};
+/** A fold's tooltip: what the section holds, then what a click does (one period, whichever
+ *  meaning it shows). */
+export function statusFoldTooltip(key: StatusSectionKey, open: boolean): string {
+  return `${STATUS_SECTION_TITLES[key].replace(/\.$/, '')}. Click to ${open ? 'collapse' : 'expand'}.`;
+}
 
 /** Rows a section draws before its "Show more" row. */
 export const STATUS_SECTION_BATCH = 30;
 
-/** localStorage key (walnut-todo-* keys sync across devices, ui-prefs-sync.ts). */
+/** localStorage key of the sections' fold store (section-fold-rule.ts; walnut-todo-* keys sync across devices, ui-prefs-sync.ts). */
 export const LS_STATUS_SECTIONS_KEY = 'walnut-todo-status-sections';
 
 type Watchable = Pick<Task, 'id'> & { watched_at?: string | null };
@@ -248,26 +245,4 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     doneUnloaded: input.archiveCounts ? input.archiveHidden ?? 0 : 0,
     archiveLeft: !input.archiveCounts && !!input.archiveOffered && (input.archiveHidden ?? 0) > 0,
   };
-}
-
-/** The stored open state: only the sections the user flipped away from the default. */
-export function readSectionOpen(raw: string | null): Record<StatusSectionKey, boolean> {
-  const open = { ...STATUS_SECTION_DEFAULT_OPEN };
-  if (!raw) return open;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object') {
-      for (const key of STATUS_SECTION_ORDER) {
-        const v = (parsed as Record<string, unknown>)[key];
-        if (typeof v === 'boolean') open[key] = v;
-      }
-    }
-  } catch { /* a corrupt value reads as the defaults */ }
-  return open;
-}
-
-export function writeSectionOpen(open: Record<StatusSectionKey, boolean>): string | null {
-  const diff: Partial<Record<StatusSectionKey, boolean>> = {};
-  for (const key of STATUS_SECTION_ORDER) if (open[key] !== STATUS_SECTION_DEFAULT_OPEN[key]) diff[key] = open[key];
-  return Object.keys(diff).length ? JSON.stringify(diff) : null;
 }

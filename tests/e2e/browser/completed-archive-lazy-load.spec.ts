@@ -120,6 +120,8 @@ test('a board load leaves old completions on the server; Status Complete loads t
 
   const rowFor = (title: string) =>
     page.locator('.todo-panel-item, .todo-pinned-card, .todo-focus-card', { hasText: title })
+  // Working folds by default (section-fold-rule.ts): open it, the way a user does.
+  await setStatusSectionOpen(page, 'working', true)
   await expect(rowFor(open.title).first()).toBeVisible({ timeout: 10_000 })
   // The completed task never reached the browser: not hidden by CSS, absent.
   await expect(rowFor(done.title)).toHaveCount(0)
