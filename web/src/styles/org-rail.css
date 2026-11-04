@@ -155,8 +155,9 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
   position: fixed; z-index: 1200; width: min(300px, calc(100vw - 16px)); overflow-y: auto;
   display: flex; flex-direction: column; gap: 8px; padding: 10px;
   border: 1px solid var(--border); border-radius: 10px;
-  /* Opaque where blur is missing; overlay-glass.css gives it the overlays' one glass. */
-  background: var(--card-bg, var(--bg)); color: var(--fg); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: 12.5px;
+  /* Solid in both themes, never the overlays' glass: the raised surface, one step
+     lighter than the page in dark (tests/web/org-overlays-opaque.test.ts). */
+  background: var(--bg-elevated, var(--card-bg, var(--bg))); color: var(--fg); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: 12.5px;
 }
 .org-answer-menu > * { flex-shrink: 0; }
 .org-answer-q { color: var(--fg-muted); line-height: 1.35; }

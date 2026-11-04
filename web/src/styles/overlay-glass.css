@@ -10,7 +10,10 @@
    the page behind it UNBLURRED. So the glass goes only on overlays portalled to
    <body> or mounted where no ancestor is a backdrop root, and an overlay that
    can open inside one stays opaque there (the second block). The folder picker,
-   the model picker and the board's card menu stay opaque by their own rules.
+   the model picker and the board's card menu stay opaque by their own rules, and so
+   do the Org page's own overlays (org-rail.css: a settings panel or a date picker
+   over the VP list is read word by word, and an engine without the blur showed that
+   list straight through it, 2026-11-04; tests/web/org-overlays-opaque.test.ts).
    Phones keep their opaque menus and panels (phone-layout.css, phone-fixes-r2.css,
    whose `html body` selectors outweigh these). */
 
@@ -69,7 +72,6 @@ html:root {
   html .cmd-menu,
   html .cmd-confirm-popover,
   html .cron-confirm-popover,
-  html .org-answer-menu,
   /* Its "more below" fade is a mask, which would clear the glass at the foot. */
   html .wn-context-menu:not([data-more='true']) {
     background: var(--overlay-glass-bg);

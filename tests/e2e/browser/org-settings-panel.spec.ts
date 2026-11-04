@@ -51,6 +51,13 @@ test('the Org page opens the org switch in place, and Settings → Org shows the
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.x + box.width).toBeLessThanOrEqual(vp.width)
   expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
+  // Solid: the VP list behind it never shows through (tests/web/org-overlays-opaque.test.ts).
+  const paint = await panel.evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { bg: s.backgroundColor, blur: s.backdropFilter || (s as unknown as Record<string, string>).webkitBackdropFilter || 'none' }
+  })
+  expect(paint.bg).toMatch(/^rgb\(/)
+  expect(paint.blur).toBe('none')
 
   // Off from the Org page.
   const toggle = panel.locator('#org-settings-enabled')
