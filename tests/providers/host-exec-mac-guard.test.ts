@@ -20,7 +20,7 @@ import type { PromptProbe } from '../../src/providers/host-exec-watch.js'
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-exec-mac-')))
 afterAll(() => { if (root.includes('walnut-host-exec-mac-')) fs.rmSync(root, { recursive: true, force: true }) })
 
-function macHost(name: string, probe: PromptProbe | null) {
+function macHost(name: string, probe: PromptProbe | null, clt = true) {
   const home = path.join(root, name, 'home')
   fs.mkdirSync(path.join(home, 'proj'), { recursive: true })
   const core = createHostExec({
@@ -28,7 +28,7 @@ function macHost(name: string, probe: PromptProbe | null) {
     killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
     shell: '/bin/sh', home, taskDirRoot: path.join(root, name, 'tasks'), stateDir: path.join(root, name, 'state'),
     env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home },
-    platform: 'darwin', promptProbe: probe, promptCheckMs: 150,
+    platform: 'darwin', promptProbe: probe, promptCheckMs: 150, cltInstalled: () => clt, runPath: () => '/usr/bin:/bin',
   })
   return { core, home }
 }
@@ -64,6 +64,23 @@ describe('host_exec on a Mac, on the host itself', () => {
     // Its own folder, and the same walk once the user agreed.
     expect(await core.run({ jobId: 'hx-mac-00004', taskId: 't-mac', command: 'du -sk ~/proj >/dev/null && echo ok' })).toMatchObject({ exitCode: 0, output: 'ok\n' })
     expect(await core.run({ jobId: 'hx-mac-00005', taskId: 't-mac', command: 'du -sk ~ >/dev/null && echo ok', allowPrompts: true })).toMatchObject({ exitCode: 0, output: 'ok\n' })
+  })
+
+  // 2026-11-04: `xcodebuild -version` put "Install Command Line Developer Tools" on a Mac owner's screen.
+  it('on a Mac without the Command Line Tools, a stub is refused before anything runs; allowPrompts runs it', async () => {
+    const { core } = macHost('no-clt', null, false)
+    await expect(core.run({ jobId: 'hx-mac-00020', taskId: 't-clt', command: 'xcodebuild -version' })).rejects.toMatchObject({ code: 'may_prompt', message: expect.stringContaining('Command Line Tools') })
+    await expect(core.run({ jobId: 'hx-mac-00021', taskId: 't-clt', argv: ['/usr/bin/git', '--version'] })).rejects.toMatchObject({ code: 'may_prompt' })
+    expect(await core.list({ taskId: 't-clt' })).toEqual({ jobs: [] })
+    expect(await core.run({ jobId: 'hx-mac-00022', taskId: 't-clt', command: 'echo fine' })).toMatchObject({ exitCode: 0, output: 'fine\n' })
+    expect(await core.run({ jobId: 'hx-mac-00023', taskId: 't-clt', command: 'echo agreed', allowPrompts: true })).toMatchObject({ exitCode: 0 })
+    // Looking one up runs none of them.
+    for (const [k, line] of ['command -v git; echo ok', 'type git >/dev/null 2>&1; echo ok', 'which git >/dev/null 2>&1; echo ok'].entries()) {
+      expect(await core.run({ jobId: `hx-mac-0003${k}`, taskId: 't-clt', command: line }), line).toMatchObject({ exitCode: 0 })
+    }
+    // With the tools there nothing is refused for it.
+    const { core: withTools } = macHost('clt', null, true)
+    await expect(withTools.run({ jobId: 'hx-mac-00024', taskId: 't-clt2', command: 'command -v git >/dev/null; echo ran' })).resolves.toMatchObject({ exitCode: 0, output: 'ran\n' })
   })
 
   it('stops a job that sits idle at a dialog, and says which', async () => {

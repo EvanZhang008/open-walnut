@@ -29,7 +29,7 @@
  */
 import path from 'node:path'
 import os from 'node:os'
-import { ASSIGN, BEFORE_COMMAND, WRAPPERS, permissionMessage, permissionRisk, tokenize, type CommandInput } from '../../providers/host-exec-guards.js'
+import { ANY_SHELL as SHELLS, ASSIGN, BEFORE_COMMAND, EXEC_FLAGS, WRAPPERS, permissionMessage, permissionRisk, shellInput as shellScript, stdinText, tokenize, type CommandInput } from '../../providers/host-exec-guards.js'
 
 export interface PromptRisk {
   /** The command as the refusal names it, e.g. "security find-generic-password". */
@@ -40,8 +40,6 @@ export interface PromptRisk {
 /** `security` subcommands that read no keychain: help, error codes, the search list settings. */
 const SAFE_SECURITY = new Set(['help', 'error', 'list-keychains', 'default-keychain', 'login-keychain'])
 
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'yash', 'fish', 'csh', 'tcsh'])
-const EXEC_FLAGS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 /** `security` as a standalone word anywhere in a line: not part of `--security-group`, `aws-security`, `security.txt`. */
 const SECURITY_WORD = /(?:^|[\s'"`;&|()<>/=])security(?=$|[\s'"`;&|()<>])/
 const ADMIN_PRIVILEGES = /with\s+administrator\s+privileges/i
@@ -88,26 +86,6 @@ function interpreterScript(spec: Interpreter, args: string[]): string[] | 'stdin
     return null
   }
   return code.length ? code : 'stdin'
-}
-
-/** A shell's script: its `-c` text, 'stdin' (`-s`, or no script operand), or null (a script file: not seen here). */
-function shellScript(args: string[]): string | 'stdin' | null {
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k]
-    if (a.startsWith('--command=')) return a.slice('--command='.length)
-    if (a === '--command' || /^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args.slice(k + 1).find((w) => !w.startsWith('-')) ?? null
-    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return 'stdin'
-    if (a === '--') return args[k + 1] === undefined ? 'stdin' : null
-    if (a === '-o' || a === '+o' || a === '-O' || a === '+O') { k++; continue }
-    if (a.startsWith('-') || a.startsWith('+')) continue
-    return null
-  }
-  return 'stdin'
-}
-
-/** What reaches a command's stdin as text: its heredocs and herestrings, and the commands piped into it. */
-function stdinText(input: CommandInput): string {
-  return [...input.heredocs, ...input.pipedFrom.flatMap((f) => [f.text, ...f.heredocs])].join('\n')
 }
 
 function securityRisk(args: string[]): PromptRisk | null {

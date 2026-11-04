@@ -32,6 +32,7 @@ import path from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { ensureTaskDir } from './task-dir-core.js'
 import { permissionMessage, permissionRisk } from './host-exec-guards.js'
+import { cltInstalled, cltMessage, cltStubRun, loginPath, type CltFs } from './host-exec-clt.js'
 import { IDLE_WINDOW_MS, createPromptWatcher, macPromptProbe, type PromptBlock, type PromptProbe } from './host-exec-watch.js'
 import { bad, commandLine, findBash, lineSpan, shellPlan, type ExecError } from './host-exec-line.js'
 
@@ -67,6 +68,12 @@ export interface HostExecDeps {
   now?: () => number
   /** This host's system (process.platform); the macOS guards apply on 'darwin'. */
   platform?: string
+  /** Whether a Mac has the Command Line Tools (default: read from its filesystem, host-exec-clt.ts). */
+  cltInstalled?: () => boolean
+  /** The filesystem the Command Line Tools check reads (tests). */
+  cltFs?: CltFs
+  /** The PATH a run gets (default: the login shell asked, host-exec-clt.ts loginPath). */
+  runPath?: () => string
   /** How a darwin run is checked for a dialog it waits on; null turns the check off (default: macPromptProbe). */
   promptProbe?: PromptProbe | null
   /** How often that check runs (IDLE_WINDOW_MS). */
@@ -165,6 +172,12 @@ export function createHostExec(deps: HostExecDeps) {
   // One watcher for every job here: one `ps` and at most one log read per look, whatever the number of jobs.
   const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now) : null) : deps.promptProbe
   const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
+  // A Mac's login shell PATH, asked only when the Command Line Tools are missing (host-exec-clt.ts).
+  let askedPath: (() => string) | null = null
+  const pathOfRun = (): string => (deps.runPath ?? (askedPath ??= loginPath({
+    spawn: deps.spawn, killGroup: deps.killGroup, env: deps.env, home: deps.home, now,
+    plan: (line) => { const login = deps.shell || '/bin/sh'; const p = shellPlan(login, bashPath(), line); return { cmd: login, args: p.args, env: p.env } },
+  })))()
 
   function audit(line: Record<string, unknown>): void {
     try {
@@ -241,6 +254,9 @@ export function createHostExec(deps: HostExecDeps) {
     if (mac && !allowPrompts) {
       const risk = permissionRisk(line, cwd, deps.home, taskDir ? { WALNUT_TASK_DIR: taskDir } : {})
       if (risk) return bad(permissionMessage(risk, 'this Mac'), 'may_prompt')
+      // A Mac without the Command Line Tools turns /usr/bin/git, cc, xcodebuild... into an install dialog.
+      const stub = (deps.cltInstalled ?? cltInstalled)() ? null : cltStubRun(line, pathOfRun(), deps.cltFs, cwd)
+      if (stub) return bad(cltMessage(stub, 'this Mac'), 'may_prompt')
     }
     const background = req.background === true
     const cap = background ? BACKGROUND_MAX_MS : FOREGROUND_MAX_MS

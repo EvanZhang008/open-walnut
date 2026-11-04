@@ -301,8 +301,36 @@ function walks(name: string, args: string[]): boolean {
 const NAMES_ONLY = new Set(['echo', 'printf', 'basename', 'dirname'])
 const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
+/** Every shell a line may hand a script to. */
+export const ANY_SHELL: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'yash', 'fish', 'csh', 'tcsh'])
+/** find's words that start a command of their own. */
+export const EXEC_FLAGS: ReadonlySet<string> = new Set(['-exec', '-execdir', '-ok', '-okdir'])
+
+/**
+ * What a shell given `args` runs: the `-c` / `--command` script, `'stdin'` when it reads its
+ * script from stdin (`-s`, no script file, `bash -o pipefail` and the like), or null for a file.
+ */
+export function shellInput(args: string[]): string | 'stdin' | null {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]
+    if (a.startsWith('--command=')) return a.slice('--command='.length)
+    if (a === '--command' || /^-[A-Za-z]*c[A-Za-z]*$/.test(a)) return args.slice(k + 1).find((w) => !w.startsWith('-')) ?? null
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(a)) return 'stdin'
+    if (a === '--') return args[k + 1] === undefined ? 'stdin' : null
+    if (a === '-o' || a === '+o' || a === '-O' || a === '+O') { k++; continue }
+    if (a.startsWith('-') || a.startsWith('+')) continue
+    return null
+  }
+  return 'stdin'
+}
+
+/** What a command reads as a script on stdin: its heredocs and herestrings, and what is piped in. */
+export function stdinText(input: CommandInput): string {
+  return [...input.heredocs, ...input.pipedFrom.flatMap((f) => [f.text, ...f.heredocs])].join('\n')
+}
+
 /** The script a shell runs with `-c` (`bash -lc '...'`), or null. */
-function shellScript(program: string, args: string[]): string | null {
+export function shellScript(program: string, args: string[]): string | null {
   if (!SHELL_NAMES.has(program)) return null
   for (let i = 0; i < args.length; i++) {
     if (/^-[A-Za-z]*c[A-Za-z]*$/.test(args[i])) return args[i + 1] ?? null

@@ -96,6 +96,7 @@ SOURCES=(
   src/providers/host-exec-core.ts
   src/providers/host-exec-line.ts
   src/providers/host-exec-guards.ts
+  src/providers/host-exec-clt.ts
   src/providers/host-exec-watch.ts
   src/providers/host-exec-run-id.ts
   src/providers/net-core.ts
