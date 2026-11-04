@@ -1,28 +1,48 @@
 import { test, expect } from '@playwright/test';
-import { expectContentActionsOnly, failedLegacyStart, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems } from './inbox-items-helpers';
+import { expectContentActionsOnly, failedLegacyStart, home, itemRow, mailItem, openLetter, providerReadCalls, receipt, releaseHeldMail, sendItems, sendLegacyItems } from './inbox-items-helpers';
 
 test('a second reader recovers a lost aliased mail response without another provider operation', async ({ page, context, request }) => {
-  const first = mailItem('alias-first', 'delay-');
+  // The order is fixed by the spec, never by a timed window (2026-11-04, CI on a loaded runner: the
+  // second click landed after the first read had finished, so its prepare met an already read email
+  // and nothing was aliased). The first execute waits until the second reader has clicked (before
+  // any receipt exists that could turn its button into a pending one), the second reader's prepare
+  // answers once the first execute was answered, and the provider holds the read until the second
+  // reader's write reached the server and its answer was lost.
+  const first = mailItem('alias-first', 'hold-');
   const second = { ...mailItem('alias-second'), source: first.source };
   const a = await sendItems(request, [first]); const b = await sendItems(request, [second]);
   const peer = await context.newPage();
+  let peerPrepared!: () => void; let firstExecuted!: () => void;
+  const prepared = new Promise<void>(resolve => { peerPrepared = resolve; });
+  const executed = new Promise<void>(resolve => { firstExecuted = resolve; });
   try {
     await home(page); await home(peer);
     const one = itemRow(await openLetter(page, a.subject), first.id);
     const two = itemRow(await openLetter(peer, b.subject), second.id);
-    let lostWrites = 0;
+    let lostWrites = 0; let firstStatus = 0;
+    await page.route(`**/human-inbox/${a.id}/items/${first.id}/execute`, async route => {
+      await prepared; const response = await route.fetch(); firstStatus = response.status();
+      firstExecuted(); await route.fulfill({ response });
+    });
+    await peer.route(`**/human-inbox/${b.id}/items/${second.id}/prepare`, async route => {
+      const response = await route.fetch(); peerPrepared(); await executed; await route.fulfill({ response });
+    });
     await peer.route(`**/human-inbox/${b.id}/items/${second.id}/execute`, async route => {
-      lostWrites++; await route.fetch(); await route.abort('failed');
+      await route.fetch(); lostWrites++; await route.abort('failed');
     });
     await one.getByRole('button', { name: /^Mark read for/ }).click();
     await two.getByRole('button', { name: /^Mark read for/ }).click();
+    await expect.poll(() => lostWrites).toBe(1);
+    expect(firstStatus).toBe(202);
+    await releaseHeldMail(request, first);
     await expect(one.locator('.hii-receipts')).toContainText('Marked read', { timeout: 15_000 });
     await expect(two.locator('.hii-receipts')).toContainText('Marked read', { timeout: 15_000 });
     await expect(two.locator('.hii-receipts')).not.toContainText('Status unconfirmed');
     const state = await receipt(request, b.id, second.id);
     expect(state.receipts).toHaveLength(1); expect(state.receipts[0].requestIds).toHaveLength(2);
     expect(lostWrites).toBe(1);
-  } finally { await peer.close(); }
+    expect(await providerReadCalls(request, first)).toBe(1);
+  } finally { peerPrepared(); firstExecuted(); await releaseHeldMail(request, first).catch(() => {}); await peer.close(); }
 });
 
 // Both letters are stored the way a Walnut before 2026-11-02 (5a28ae6c9) stored them: a new letter

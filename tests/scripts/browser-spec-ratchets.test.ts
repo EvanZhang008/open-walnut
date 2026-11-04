@@ -1557,3 +1557,32 @@ describe('a wait for a quick-parse answer', () => {
     expect(PARSE.test(text) && WAITS_ON_FINISHED.test(text)).toBe(true)
   })
 })
+
+describe('a pending inbox email action ends when its spec says so', () => {
+  // The inbox fixture's mail provider used to sleep 800 ms for a `delay-` email, and two specs
+  // counted on that window: a second client had to click before the first read finished. On a
+  // loaded CI runner the click came later (2026-11-04: human-inbox-items-concurrency and
+  // reviewed-recovery failed both tries), so the provider now holds a `hold-` email until the spec
+  // calls releaseHeldMail, and the specs order every step themselves.
+  const fixture = sources.find(({ file }) => file === 'inbox-items-fixture.ts')!.text
+  const timedDelay = /mailItem\([^)\n]*['"`]delay/
+
+  it('the fixture provider holds an email and never sleeps for one', () => {
+    expect(fixture).toContain("includes('hold-')")
+    // Its one timer is the release poll.
+    expect(fixture.match(/setTimeout\(/g)).toHaveLength(1)
+    expect(fixture).not.toMatch(/includes\(['"]delay/)
+  })
+
+  it('no spec asks for a timed provider delay, and every held email is released', () => {
+    const delayed = sources.filter(({ text }) => timedDelay.test(text)).map(({ file }) => file)
+    const unreleased = sources.filter(({ text }) => /mailItem\([^)\n]*['"`]hold-/.test(text) && !text.includes('releaseHeldMail('))
+      .map(({ file }) => file)
+    expect({ delayed, unreleased }).toEqual({ delayed: [], unreleased: [] })
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(timedDelay.test("const first = mailItem('alias-first', 'delay-');")).toBe(true)
+    expect(timedDelay.test("const first = mailItem('alias-first', 'hold-');")).toBe(false)
+  })
+})

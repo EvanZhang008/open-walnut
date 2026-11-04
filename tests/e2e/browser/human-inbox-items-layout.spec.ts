@@ -5,7 +5,7 @@ test.describe.configure({ mode: 'serial' });
 test('late receipt across pointer down and up keeps the lower item target stable', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 390, height: 844 });
-  const sent = await sendItems(request, [mailItem('layout-a', 'delay-'), mailItem('layout-b')]);
+  const sent = await sendItems(request, [mailItem('layout-a'), mailItem('layout-b')]);
   await home(page); const view = await openLetter(page, sent.subject);
   await view.evaluate(el => { (el as HTMLElement).style.width = '320px'; });
   const a = itemRow(view, 'layout-a'); const b = itemRow(view, 'layout-b');

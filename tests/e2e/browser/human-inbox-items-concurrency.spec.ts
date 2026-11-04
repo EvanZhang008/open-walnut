@@ -1,25 +1,43 @@
 import { test, expect, type APIResponse } from '@playwright/test';
-import { createCandidate, expectContentActionsOnly, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems } from './inbox-items-helpers';
+import { createCandidate, expectContentActionsOnly, home, itemRow, mailItem, meeting, openLetter, providerReadCalls, receipt, releaseHeldMail, sendItems, sendLegacyItems } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
 test('two independent clients confirm one exact read without a second provider attempt', async ({ browser, page, request }) => {
-  const sent = await sendItems(request, [mailItem('two-client-a', 'delay-')]);
+  // No timing window decides the outcome (2026-11-04, CI on a loaded runner: the second click
+  // landed after the first read had finished, or never, because that client's open view of the
+  // same letter had already turned its button into Already read). Both prepares wait for each
+  // other, so both clients are past their click before any receipt exists, and the provider holds
+  // the read until both executes were answered, so the second one meets the first still pending.
+  const item = mailItem('two-client-a', 'hold-');
+  const sent = await sendItems(request, [item]);
   const context = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const peer = await context.newPage();
+  const prepared = meeting(2);
   try {
     await home(page); await home(peer);
-    const a = itemRow(await openLetter(page, sent.subject), 'two-client-a');
-    const b = itemRow(await openLetter(peer, sent.subject), 'two-client-a');
-    await expect(a.getByRole('button', { name: 'Mark read for Email two-client-a', exact: true })).toBeEnabled();
-    await expect(b.getByRole('button', { name: 'Mark read for Email two-client-a', exact: true })).toBeEnabled();
-    await Promise.all([
-      a.getByRole('button', { name: 'Mark read for Email two-client-a', exact: true }).click(),
-      b.getByRole('button', { name: 'Mark read for Email two-client-a', exact: true }).click(),
-    ]);
+    const a = itemRow(await openLetter(page, sent.subject), item.id);
+    const b = itemRow(await openLetter(peer, sent.subject), item.id);
+    const name = `Mark read for ${item.subject}`;
+    await expect(a.getByRole('button', { name, exact: true })).toBeEnabled();
+    await expect(b.getByRole('button', { name, exact: true })).toBeEnabled();
+    for (const p of [page, peer]) {
+      await p.route(`**/human-inbox/${sent.id}/items/${item.id}/prepare`, async route => {
+        if (route.request().postDataJSON().actionId === item.actions[0].id) await prepared.arrive();
+        await route.continue();
+      });
+    }
+    const answered = Promise.all([page, peer].map(p => p.waitForResponse(r => r.request().method() === 'POST'
+      && r.url().endsWith(`/items/${item.id}/execute`)).then(r => r.status())));
+    answered.catch(() => {}); // Awaited below; a failed click must not leave it unhandled.
+    await Promise.all([a.getByRole('button', { name, exact: true }).click(), b.getByRole('button', { name, exact: true }).click()]);
+    expect(await answered).toEqual([202, 202]);
+    await releaseHeldMail(request, item);
     await expect(a.locator('.hii-receipts')).toContainText('Marked read');
     await expect(b.locator('.hii-receipts')).toContainText('Marked read');
-    expect((await receipt(request, sent.id, 'two-client-a')).receipts).toHaveLength(1);
-  } finally { await context.close(); }
+    const state = await receipt(request, sent.id, item.id);
+    expect(state.receipts).toHaveLength(1); expect(state.receipts[0].requestIds).toHaveLength(2);
+    expect(await providerReadCalls(request, item)).toBe(1);
+  } finally { prepared.open(); await releaseHeldMail(request, item).catch(() => {}); await context.close(); }
 });
 
 // A new letter's item has no Find task since 2026-11-02 (5a28ae6c9); a stored letter's find_task is

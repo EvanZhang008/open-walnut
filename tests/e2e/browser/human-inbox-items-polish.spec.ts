@@ -51,7 +51,7 @@ test('remote read restriction keeps the successful action history in a separate 
 });
 
 test('pending read separates the current observation and missing mail dates stay consistent', async ({ page, request }, info) => {
-  const item = mailItem('polish-pending', 'delay-'); item.display = { accountLabel: 'Mail' };
+  const item = mailItem('polish-pending'); item.display = { accountLabel: 'Mail' };
   const sent = await sendItems(request, [item]);
   await home(page); const row = itemRow(await openLetter(page, sent.subject), item.id);
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });

@@ -149,6 +149,28 @@ export async function settledCreate(request: APIRequestContext, letterId: string
 }
 
 /**
+ * Ends the provider hold of a `mailItem(id, 'hold-')` email: its mark read has been waiting in the
+ * fixture provider (inbox-items-fixture.ts) and now answers. Safe to call more than once.
+ */
+export async function releaseHeldMail(request: APIRequestContext, item: InboxLetterItem) {
+  const dir = path.join(await fixtureDataHome(request), 'inbox-provider-release');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, encodeURIComponent(item.source.message)), '');
+}
+/** How many times the fixture provider was asked to mark this exact email read. */
+export async function providerReadCalls(request: APIRequestContext, item: InboxLetterItem): Promise<number> {
+  const file = path.join(await fixtureDataHome(request), 'inbox-provider-calls.jsonl');
+  const lines = (await fs.readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+  return lines.filter(line => (JSON.parse(line) as { messages: string[] }).messages[0] === item.source.message).length;
+}
+/** A barrier: `arrive()` waits until `count` callers arrived (or `open()` was called). */
+export function meeting(count: number) {
+  let open!: () => void; let arrived = 0;
+  const all = new Promise<void>(resolve => { open = resolve; });
+  return { open, arrive: () => { if (++arrived >= count) open(); return all; } };
+}
+
+/**
  * The fixture mail provider now observes this email unread, as if it was marked unread in the
  * mailbox (inbox-items-fixture.ts reads its state file on every resolve). Then Check status
  * offers "Mark read again", the one confirmation every new letter's item still opens.

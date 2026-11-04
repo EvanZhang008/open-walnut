@@ -10,6 +10,16 @@ export async function installInboxItemsFixture(root: string) {
   const stateFile = path.join(root, 'inbox-provider-state.json');
   type Observation = { read: boolean; observedAt: string };
   let states: Record<string, Observation> = {};
+  const releases = path.join(root, 'inbox-provider-release');
+  /** Waits for the release mark of a held email; false after 30 s, so a lost release fails its spec instead of hanging it. */
+  async function released(message: string): Promise<boolean> {
+    const mark = path.join(releases, encodeURIComponent(message));
+    for (const end = Date.now() + 30_000; Date.now() < end;) {
+      if (await fs.access(mark).then(() => true, () => false)) return true;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    return false;
+  }
   const unregister = registerInboxMailSource({ resolve: async source => {
     if (!source.account.startsWith('fixture-') || !source.message.startsWith('fixture-')) throw new Error('Email unavailable');
     try { states = JSON.parse(await fs.readFile(stateFile, 'utf8')); } catch { /* No observation is unknown. */ }
@@ -21,7 +31,13 @@ export async function installInboxItemsFixture(root: string) {
     input: { account: z.string(), messages: z.array(z.string()), read: z.boolean() }, tags: { readonly: false, remote: 'deny' },
     handler: async args => {
       await fs.appendFile(calls, `${JSON.stringify({ ...args, at: new Date().toISOString() })}\n`);
-      if (args.messages[0].includes('delay')) await new Promise(resolve => setTimeout(resolve, 800));
+      // A `hold-` email stays in the provider until its spec releases it (releaseHeldMail in
+      // inbox-items-helpers.ts). There is no timed delay: a spec that needs an action still pending
+      // while another client acts says when it ends, since an 800 ms delay was over before a loaded
+      // CI runner's second click landed (2026-11-04).
+      if (args.messages[0].includes('hold-') && !await released(args.messages[0])) {
+        return JSON.stringify({ error: 'Fixture hold was never released' });
+      }
       if (args.messages[0].includes('fail')) return JSON.stringify({ account: args.account, read: true, changed: 0, failed: ['fixture provider rejected the flag'] });
       if (args.messages[0].includes('nonjson')) return 'Provider did not confirm the flag';
       if (args.messages[0].includes('wrong-account')) return JSON.stringify({ account: 'fixture-account-other', read: true, changed: 1, failed: [] });
