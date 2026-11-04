@@ -129,7 +129,8 @@ describe('passkey: registration and sign-in as a site verifies them', () => {
     expect(() => sign({ keyAlgorithm: 'EdDSA', keyValue: 'x' }, authData('a.com', 0), cd)).toThrow(/key type/)
     expect(() => sign({ keyCurve: 'P-384', keyValue: 'x' }, authData('a.com', 0), cd)).toThrow(/curve/)
     expect(() => sign({}, authData('a.com', 0), cd)).toThrow(/no key/)
-    expect(() => sign({ keyValue: 'bm90IGEga2V5' }, authData('a.com', 0), cd)).toThrow(/cannot be read/)
+    // Base64 that decodes to plain text, not a key (built here so secret scanners do not flag it).
+    expect(() => sign({ keyValue: Buffer.from('not a key').toString('base64') }, authData('a.com', 0), cd)).toThrow(/cannot be read/)
   })
 })
 
