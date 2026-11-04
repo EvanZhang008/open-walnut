@@ -33,7 +33,7 @@ export function createLetterCheck() {
   const MAX_TASK_REFS = 50
   const TASK_REF_MAX_CHARS = 200
   /** human_inbox_send's inputs (src/ops/human-inbox.ts): the op refuses any other key. */
-  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason']
+  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason', 'user_kind', 'user_kind_why', 'resend_reason', 'same_ask_reason']
 
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
