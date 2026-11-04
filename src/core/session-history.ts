@@ -31,6 +31,7 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workfl
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import { projectUserText } from './sessions/reference-cards.js';
 import type { CarriedHint } from './hints/hint-format.js';
+import type { PersistedHistoryInc } from './history-disk-cache.js';
 import { cutEnd } from './text-cut.js';
 import { COMPACTED_MESSAGE, compactedDetail } from './stream/compaction-notice.js';
 import { hookFailureNotice } from './stream/hook-notice.js';
@@ -72,6 +73,8 @@ interface ParsedHistoryCacheEntry {
   /** Incremental append-read state (see readSessionHistory). Absent when the
    *  last read couldn't establish it (no resolvable path / stat failed). */
   inc?: HistoryIncrementalState;
+  /** The incremental state the disk cache kept, not yet resumed (resumeFromKept). */
+  diskInc?: PersistedHistoryInc;
   /** Orphan finished-agent ids (getOrphanFinishedAgentIds) carried across
    *  incremental reads: the tail re-parse only sees the tail's notifications,
    *  and the merged [...prefix, ...tail] array is a NEW object the parser never
@@ -129,6 +132,10 @@ interface HistoryIncrementalState {
   lastLineCheck: JsonlLineCheck | null;
   /** Raw text of the current tail segment [tailStartByte, parsedBytes). */
   tailText: string;
+  /** Bytes of the tail the seed kept: the roll size counts from it (incrementalTailRolls). */
+  seedTailBytes?: number;
+  /** The recorded in-place rewinds the dead set below was computed from (rewindCutsKey). */
+  cutsKey?: string;
   /** tool_use ids in the FROZEN PREFIX that still lack a result (long-running
    *  tools, background Task agents). If an appended line references one (its
    *  tool_result finally arrived, or a <task-notification> proves the agent
@@ -2130,7 +2137,7 @@ async function tryIncrementalHistoryRead(
   newSize?: number,
   at?: { mtimeMs: number; size: number; epoch?: string },
 ): Promise<SessionHistoryMessage[] | null> {
-  const inc = cached.inc!;
+  let inc = cached.inc!;
   try {
     // Re-read from the last parsed line's start: verifies the file wasn't
     // rewritten in place (/compact) AND picks up the appended bytes in one RPC.
@@ -2157,15 +2164,6 @@ async function tryIncrementalHistoryRead(
     const completePart = lastNl >= 0 ? appended.slice(0, lastNl + 1) : '';
     const partialTail = lastNl >= 0 ? appended.slice(lastNl + 1) : appended;
 
-    const newTailText = inc.tailText + completePart;
-    if (Buffer.byteLength(newTailText, 'utf-8') > TAIL_SEGMENT_ROLL_BYTES) {
-      // Tail overgrown — drop the state; next read is a full read that re-seeds
-      // with a fresh boundary. (One full read per ~TAIL_SEGMENT_ROLL_BYTES of
-      // appended content, vs one per mtime change before this existed.)
-      cached.inc = undefined;
-      return null;
-    }
-
     // Cross-boundary tool completion: a prefix tool_use finally got its result
     // (or its background agent stopped). The segmented parse can't attach it —
     // bail to a full read for this (rare) event.
@@ -2178,6 +2176,18 @@ async function tryIncrementalHistoryRead(
       }
     }
 
+    const newTailText = inc.tailText + completePart;
+    // Tail overgrown: roll it in memory, never with a read of the whole file
+    // (2026-11-03: that read was 4 of the 5 left for a 28 MB transcript a day).
+    let rolledOrphans: Set<string> | undefined;
+    if (incrementalTailRolls(inc, newTailText)) {
+      const rolled = await rollIncrementalTail(sessionId, inc, newTailText);
+      if (!rolled) { cached.inc = undefined; return null; }
+      inc = rolled.inc;
+      cached.inc = rolled.inc;
+      rolledOrphans = rolled.orphanIds;
+    }
+
     // No seam guard on appended lines: the dead set is deterministic given
     // (cuts, file), appended lines sit after every cut's commit-time anchor and
     // can never join it, and a new rewind commit invalidates this whole cache
@@ -2187,7 +2197,9 @@ async function tryIncrementalHistoryRead(
     // Parse tail segment (+ any partial line + synthetic user events) fresh,
     // applying the SAME dead set + keys the seed's full parse computed —
     // the tail's rows must stay consistent with the frozen prefix.
-    const tailWithPartial = partialTail ? newTailText + partialTail : newTailText;
+    // A rolled state already holds this read's complete lines in its own tail.
+    const tailNow = rolledOrphans ? inc.tailText : newTailText;
+    const tailWithPartial = partialTail ? tailNow + partialTail : tailNow;
     const merged = await mergeSyntheticUserEvents(sessionId, tailWithPartial);
     const tailMessages = parseSessionMessages(merged, {
       chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys },
@@ -2204,6 +2216,7 @@ async function tryIncrementalHistoryRead(
     // finished-parent evidence can only absorb blocks correctly, never wrongly.
     const orphanUnion = new Set<string>(cached.orphanFinishedIds ?? []);
     for (const id of getOrphanFinishedAgentIds(tailMessages) ?? []) orphanUnion.add(id);
+    for (const id of rolledOrphans ?? []) orphanUnion.add(id);
     markOrphanFinishedAgentIds(messages, orphanUnion);
 
     // Rewind-filter facts must be answerable on EVERY handed-out array, not
@@ -2220,8 +2233,8 @@ async function tryIncrementalHistoryRead(
       bindEchoClaims(sessionId, messages);
     } catch { /* best-effort */ }
 
-    // Advance persisted state (complete lines only).
-    if (completePart) {
+    // Advance persisted state (complete lines only; a roll already did).
+    if (completePart && !rolledOrphans) {
       const lastLineStartInPart = completePart.lastIndexOf('\n', completePart.length - 2) + 1;
       const lastLine = completePart.slice(lastLineStartInPart, -1);
       // parsedBytes previously ended just past the verified line's '\n';
@@ -2251,8 +2264,10 @@ async function tryIncrementalHistoryRead(
     // Keep the restart-survival disk cache fresh (same as the full-read path).
     // mtime included so the post-restart mtime fast-path can validate it.
     if (messages.length > 0) {
+      // The state as of THIS read, taken now: the next read advances the same object.
+      const incForDisk = incrementalStateForDisk(inc);
       import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-        writeHistoryCache(sessionId, messages, newMtimeMs, [...orphanUnion], newSize);
+        writeHistoryCache(sessionId, messages, newMtimeMs, [...orphanUnion], newSize, incForDisk);
       }).catch(() => {});
     }
     return messages;
@@ -2263,6 +2278,44 @@ async function tryIncrementalHistoryRead(
     cached.inc = undefined;
     return null;
   }
+}
+
+/**
+ * A tail past the roll size, rolled in memory: a new boundary inside the tail, its
+ * first part frozen onto the prefix. The tail's own parse is the truth for every row
+ * past the prefix, so the new boundary is checked against that parse with the seed's
+ * own gate (seedIncrementalState over the tail), and no byte before the old boundary
+ * is read again. Undefined when no boundary passes: the caller then reads whole.
+ */
+async function rollIncrementalTail(
+  sessionId: string,
+  inc: HistoryIncrementalState,
+  tailText: string,
+): Promise<{ inc: HistoryIncrementalState; orphanIds: Set<string> } | undefined> {
+  const content = await mergeSyntheticUserEvents(sessionId, tailText);
+  const tailParse = parseSessionMessages(content, { chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys } });
+  chainFilterMarks.set(tailParse, { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys, droppedCount: inc.deadUuids?.size ?? 0 });
+  const why: { reason?: string } = {};
+  const st = seedIncrementalState(sessionId, { content, source: 'local', canonicalChars: tailText.length, resolvedRemotePath: inc.filePath }, tailParse, inc.filePath, why);
+  if (!st) {
+    log.session.debug('incremental tail roll found no boundary — full read', { sessionId, reason: why.reason });
+    return undefined;
+  }
+  const orphanIds = new Set(getOrphanFinishedAgentIds(st.prefixMessages) ?? []);
+  return {
+    inc: {
+      ...st,
+      tailStartByte: inc.tailStartByte + st.tailStartByte,
+      parsedBytes: inc.tailStartByte + st.parsedBytes,
+      lastLineStart: inc.tailStartByte + st.lastLineStart,
+      prefixMessages: [...inc.prefixMessages, ...st.prefixMessages],
+      pendingToolIds: [...inc.pendingToolIds, ...st.pendingToolIds],
+      deadUuids: inc.deadUuids,
+      queueDeadKeys: inc.queueDeadKeys,
+      ...(inc.cutsKey !== undefined ? { cutsKey: inc.cutsKey } : {}),
+    },
+    orphanIds,
+  };
 }
 
 /**
@@ -2277,9 +2330,11 @@ function seedIncrementalState(
   result: ReadSessionResult,
   fullMessages: SessionHistoryMessage[],
   statPath: string | undefined,
+  why?: { reason?: string },
 ): HistoryIncrementalState | undefined {
+  const skip = (reason: string): undefined => { if (why) why.reason = reason; return undefined; };
   const filePath = result.resolvedRemotePath ?? statPath;
-  if (!filePath) return undefined;
+  if (!filePath) return skip('no-path');
   // Byte offsets only map into the canonical prefix of `content` (synthetic
   // stream events are appended past it).
   const canonical = result.canonicalChars !== undefined
@@ -2288,15 +2343,13 @@ function seedIncrementalState(
   if (!canonical.endsWith('\n') && canonical.length > 0) {
     // Trailing partial line — boundaries would be ambiguous; skip this round.
     // (Rare: the CLI writes whole lines; a mid-write race lands here.)
-    return undefined;
+    return skip('partial-line');
   }
   // Candidate boundary: start of the line region occupying the last
   // TAIL_SEGMENT_KEEP_BYTES (in chars as a proxy; exact byte math done below).
   const keepFrom = Math.max(0, canonical.length - TAIL_SEGMENT_KEEP_BYTES);
-  const boundaryChar = keepFrom === 0 ? 0 : canonical.indexOf('\n', keepFrom) + 1;
-  if (boundaryChar <= 0 && keepFrom > 0) return undefined; // no newline past keepFrom
-  const tailText = canonical.slice(boundaryChar);
-  const prefixText = canonical.slice(0, boundaryChar);
+  let boundaryChar = keepFrom === 0 ? 0 : canonical.indexOf('\n', keepFrom) + 1;
+  if (boundaryChar <= 0 && keepFrom > 0) return skip('no-boundary'); // no newline past keepFrom
 
   // Self-validation: prefix-parse ++ tail-parse must equal the full parse.
   // fullMessages includes synthetic events parsed from the merged content; the
@@ -2311,51 +2364,70 @@ function seedIncrementalState(
   const deadUuids = mark?.deadUuids ?? null;
   const queueDeadKeys = mark?.queueDeadKeys ?? NO_QUEUE_DEAD_KEYS;
   const segFilter: ParseSessionMessagesOptions = { chainFilter: { deadUuids, queueDeadKeys } };
-  // The never-seed regime is a silent perf cliff — make a gate failure under an
-  // active rewind filter observable (one debug line per seed attempt).
-  const gateFailed = (): undefined => {
+  const syntheticSuffix = result.canonicalChars !== undefined
+    ? result.content.slice(result.canonicalChars)
+    : '';
+  // One boundary tried: the two segment parses, or why they are not the full parse.
+  const tryBoundary = (at: number): { prefixMessages: SessionHistoryMessage[]; tailMessages: SessionHistoryMessage[] } | { reason: string } => {
+    let prefixMessages: SessionHistoryMessage[];
+    let tailMessages: SessionHistoryMessage[];
+    try {
+      prefixMessages = at > 0 ? parseSessionMessages(canonical.slice(0, at), segFilter) : [];
+      tailMessages = parseSessionMessages(canonical.slice(at) + syntheticSuffix, segFilter);
+    } catch {
+      return { reason: 'parse-error' };
+    }
+    if (prefixMessages.length + tailMessages.length !== fullMessages.length) return { reason: 'count-mismatch' };
+    // A row still in the CLI's queue moves to where the CLI takes it, and that line
+    // lands after the boundary, where a tail re-parse cannot reach the enqueue: never
+    // freeze one into the prefix.
+    if (prefixMessages.some((m) => m.queued)) return { reason: 'queued-in-prefix' };
+    for (let i = 0; i < fullMessages.length; i++) {
+      const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
+      const full = fullMessages[i];
+      if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return { reason: 'row-mismatch' };
+      // Tools must match too — a tool_use in the prefix whose tool_result line
+      // sits in the tail would silently lose its result in the segmented parse
+      // (same text, different tool state). Compare name/result/error pairwise.
+      const segTools = seg.tools ?? [];
+      const fullTools = full.tools ?? [];
+      if (segTools.length !== fullTools.length) return { reason: 'tool-mismatch' };
+      for (let j = 0; j < fullTools.length; j++) {
+        if (segTools[j].name !== fullTools[j].name
+          || segTools[j].result !== fullTools[j].result
+          || segTools[j].isError !== fullTools[j].isError
+          || segTools[j].bgTaskFinished !== fullTools[j].bgTaskFinished) return { reason: 'tool-mismatch' };
+      }
+    }
+    return { prefixMessages, tailMessages };
+  };
+  // A boundary that splits a tool call from its result, or freezes a queued row,
+  // fails; the next try moves it before what it split (2026-11-03: one 28 MB
+  // transcript failed every seed this way and was read whole 54 times a day).
+  let tried = tryBoundary(boundaryChar);
+  // Each try parses the whole transcript on the loop: a very large one gets one.
+  const attempts = canonical.length > SEED_RETRY_MAX_CHARS ? 1 : SEED_ATTEMPTS;
+  for (let attempt = 1; 'reason' in tried && attempt < attempts; attempt++) {
+    const earlier = earlierSeedBoundary(canonical, boundaryChar, tried.reason);
+    if (earlier === null) break;
+    boundaryChar = earlier;
+    tried = tryBoundary(boundaryChar);
+  }
+  if ('reason' in tried) {
+    if (tried.reason === 'parse-error' || tried.reason === 'queued-in-prefix') return skip(tried.reason);
+    if (why) why.reason = tried.reason;
+    // The never-seed regime is a silent perf cliff — make a gate failure under an
+    // active rewind filter observable (one debug line per seed attempt).
     if (deadUuids && deadUuids.size > 0) {
       log.session.debug('incremental seed equality gate failed under rewind filter — session stays on full reads', {
         sessionId, deadUuids: deadUuids.size,
       });
     }
     return undefined;
-  };
-  let prefixMessages: SessionHistoryMessage[];
-  let tailMessages: SessionHistoryMessage[];
-  try {
-    prefixMessages = boundaryChar > 0
-      ? parseSessionMessages(prefixText, segFilter)
-      : [];
-    const syntheticSuffix = result.canonicalChars !== undefined
-      ? result.content.slice(result.canonicalChars)
-      : '';
-    tailMessages = parseSessionMessages(tailText + syntheticSuffix, segFilter);
-  } catch {
-    return undefined;
   }
-  if (prefixMessages.length + tailMessages.length !== fullMessages.length) return gateFailed();
-  // A row still in the CLI's queue moves to where the CLI takes it, and that line
-  // lands after the boundary, where a tail re-parse cannot reach the enqueue: never
-  // freeze one into the prefix (a later full read seeds at a grown boundary).
-  if (prefixMessages.some((m) => m.queued)) return undefined;
-  for (let i = 0; i < fullMessages.length; i++) {
-    const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
-    const full = fullMessages[i];
-    if (seg.msgId !== full.msgId || seg.role !== full.role || seg.text !== full.text) return gateFailed();
-    // Tools must match too — a tool_use in the prefix whose tool_result line
-    // sits in the tail would silently lose its result in the segmented parse
-    // (same text, different tool state). Compare name/result/error pairwise.
-    const segTools = seg.tools ?? [];
-    const fullTools = full.tools ?? [];
-    if (segTools.length !== fullTools.length) return gateFailed();
-    for (let j = 0; j < fullTools.length; j++) {
-      if (segTools[j].name !== fullTools[j].name
-        || segTools[j].result !== fullTools[j].result
-        || segTools[j].isError !== fullTools[j].isError
-        || segTools[j].bgTaskFinished !== fullTools[j].bgTaskFinished) return gateFailed();
-    }
-  }
+  const { prefixMessages } = tried;
+  const tailText = canonical.slice(boundaryChar);
+  const prefixText = canonical.slice(0, boundaryChar);
 
   // Prefix tool_use ids with no result yet — appended lines mentioning one
   // force a full re-read (see HistoryIncrementalState.pendingToolIds).
@@ -2379,11 +2451,186 @@ function seedIncrementalState(
     lastLineStart: parsedBytes - Buffer.byteLength(lastLine, 'utf-8') - 1,
     lastLineCheck: canonical.length > 0 ? historyLineCheckOf(lastLine) : null,
     tailText,
+    seedTailBytes: Buffer.byteLength(tailText, 'utf-8'),
     pendingToolIds,
     deadUuids,
     queueDeadKeys,
   };
 }
+
+/** Seed boundaries tried in all (each costs a parse of the transcript). */
+const SEED_ATTEMPTS = 3;
+/** Past this a transcript gets one seed try: a parse of it holds the loop too long to repeat. */
+const SEED_RETRY_MAX_CHARS = 64 * 1024 * 1024;
+/** A boundary is never moved so far back that the tail re-parsed on every read passes this. */
+const SEED_MAX_TAIL_CHARS = 3 * 1024 * 1024;
+
+/**
+ * A boundary before what the one at `at` split, or null: the line of the last
+ * prefix mention of a tool id the tail names without its tool_use (its result or
+ * its background agent's notice came after the boundary), and for a queued row
+ * the last enqueue before it; with neither, one keep window further back.
+ */
+export function earlierSeedBoundary(canonical: string, at: number, reason: string): number | null {
+  let to = at;
+  const tail = canonical.slice(at);
+  // Only as far back as a tail may grow: a mention further back cannot be reached anyway,
+  // and an id merely quoted in the tail (a grep of a transcript) must not scan the whole file.
+  const lo = Math.max(0, canonical.length - SEED_MAX_TAIL_CHARS);
+  const before = lo < at ? canonical.slice(lo, at) : '';
+  const calls = new Set<string>();
+  for (const m of tail.matchAll(/"id":"(toolu_[A-Za-z0-9_]{8,})"/g)) calls.add(m[1]!);
+  const seen = new Set<string>();
+  for (const m of tail.matchAll(/toolu_[A-Za-z0-9_]{8,}/g)) {
+    const id = m[0];
+    if (seen.has(id) || calls.has(id)) continue;
+    seen.add(id);
+    const prior = before.lastIndexOf(id);
+    if (prior >= 0 && lo + prior < to) to = lo + prior;
+  }
+  if (reason === 'queued-in-prefix') {
+    const enqueue = before.lastIndexOf('"operation":"enqueue"');
+    if (enqueue >= 0 && lo + enqueue < to) to = lo + enqueue;
+  }
+  if (to === at) to = at - TAIL_SEGMENT_KEEP_BYTES;
+  if (to <= 0) return canonical.length <= SEED_MAX_TAIL_CHARS && at > 0 ? 0 : null;
+  const line = canonical.lastIndexOf('\n', to) + 1;
+  if (line >= at || canonical.length - line > SEED_MAX_TAIL_CHARS) return null;
+  return line;
+}
+
+/**
+ * Whether the tail outgrew its segment: past the roll size, counted from the
+ * tail the seed kept (a boundary moved back keeps a bigger one).
+ */
+export function incrementalTailRolls(inc: { seedTailBytes?: number }, newTailText: string): boolean {
+  const limit = Math.max(TAIL_SEGMENT_ROLL_BYTES, (inc.seedTailBytes ?? 0) + TAIL_SEGMENT_ROLL_BYTES - TAIL_SEGMENT_KEEP_BYTES);
+  return Buffer.byteLength(newTailText, 'utf-8') > limit;
+}
+
+/** Which recorded rewinds a dead set was computed from: a state kept across another set is never resumed. */
+export function rewindCutsKey(cuts: readonly InPlaceRewindCut[] | undefined): string {
+  if (!cuts || cuts.length === 0) return '';
+  const last = cuts[cuts.length - 1]!;
+  return `${cuts.length}:${last.uuid}:${last.lastUuidAtCommit}`;
+}
+
+/** A row's identity for the restore check: its msgId, else its role and the head of its text. */
+const prefixRowKey = (m: SessionHistoryMessage | undefined): string => (m ? (m.msgId ?? `${m.role}:${m.text.slice(0, 64)}`) : '');
+
+/**
+ * The incremental state as the disk cache keeps it, beside `messages` (whose first
+ * prefixCount rows are its prefix). The tail's text is not kept: a resume reads it back
+ * from the transcript (one range read, from tailStartByte), so a write stays the size
+ * of the messages it already holds.
+ */
+export function incrementalStateForDisk(inc: HistoryIncrementalState): PersistedHistoryInc {
+  const n = inc.prefixMessages.length;
+  const children: number[] = [];
+  inc.prefixMessages.forEach((m, i) => { if (aboutChildRows.has(m)) children.push(i); });
+  return {
+    v: 2, filePath: inc.filePath, tailStartByte: inc.tailStartByte, parsedBytes: inc.parsedBytes,
+    lastLineStart: inc.lastLineStart, lastLineCheck: inc.lastLineCheck,
+    ...(inc.seedTailBytes !== undefined ? { seedTailBytes: inc.seedTailBytes } : {}),
+    pendingToolIds: [...inc.pendingToolIds], prefixCount: n,
+    ...(n > 0 ? { prefixLastKey: prefixRowKey(inc.prefixMessages[n - 1]) } : {}),
+    ...(children.length ? { aboutChildren: children } : {}),
+    cutsKey: inc.cutsKey ?? '',
+    deadUuids: inc.deadUuids ? [...inc.deadUuids] : null, queueDeadKeys: [...inc.queueDeadKeys],
+  };
+}
+
+/**
+ * The state back from the disk cache, its tail text still to be read (resumeIncrementalState),
+ * or undefined when `messages` is not the parse it was kept with.
+ */
+export function incrementalStateFromDisk(p: PersistedHistoryInc, messages: SessionHistoryMessage[]): HistoryIncrementalState | undefined {
+  if (p.prefixCount > messages.length) return undefined;
+  if (p.prefixCount > 0 && prefixRowKey(messages[p.prefixCount - 1]) !== p.prefixLastKey) return undefined;
+  const prefixMessages = messages.slice(0, p.prefixCount);
+  for (const i of p.aboutChildren ?? []) if (prefixMessages[i]) aboutChildRows.add(prefixMessages[i]!);
+  return {
+    filePath: p.filePath, tailStartByte: p.tailStartByte, prefixMessages,
+    parsedBytes: p.parsedBytes, lastLineStart: p.lastLineStart, lastLineCheck: p.lastLineCheck, tailText: '',
+    ...(p.seedTailBytes !== undefined ? { seedTailBytes: p.seedTailBytes } : {}),
+    cutsKey: p.cutsKey,
+    pendingToolIds: [...p.pendingToolIds],
+    deadUuids: p.deadUuids ? new Set(p.deadUuids) : null,
+    queueDeadKeys: p.queueDeadKeys.length ? new Set(p.queueDeadKeys) : NO_QUEUE_DEAD_KEYS,
+  };
+}
+
+/**
+ * Resume the incremental state the disk cache kept (2026-11-03: 126 of a day's 247 cold
+ * reads were a session's first after a restart, each then read whole), or null to read
+ * as before. Not for a full-history caller, another file, a shrunk file, a tail-bounded
+ * caller whose range would pass its window (a long run while nobody watched), or a dead
+ * set computed from rewinds other than the ones recorded now.
+ */
+async function resumeFromKept(
+  sessionId: string,
+  host: string | undefined,
+  entry: ParsedHistoryCacheEntry,
+  stat: { path: string; mtimeMs: number; size: number },
+  reader: InstanceType<(typeof import('./daemon-file-reader.js'))['DaemonFileReader']>,
+  options: ReadHistoryOptions | undefined,
+): Promise<SessionHistoryMessage[] | null> {
+  const kept = entry.diskInc!;
+  entry.diskInc = undefined;
+  if (!options?.skipSubagents || kept.filePath !== stat.path || stat.size < kept.parsedBytes) return null;
+  if (options.maxColdReadBytes && stat.size - kept.tailStartByte > options.maxColdReadBytes) return null;
+  if (kept.cutsKey !== rewindCutsKey(await getInPlaceRewinds(sessionId))) return null;
+  const inc = incrementalStateFromDisk(kept, entry.messages);
+  if (!inc) return null;
+  entry.inc = inc;
+  const out = await resumeIncrementalState(sessionId, host, entry, stat.mtimeMs, reader, stat.size).catch(() => null);
+  log.session.info(out ? 'history incremental read resumed from disk cache' : 'history incremental resume from disk cache failed — full read', {
+    sessionId, host: host ?? '__local__', fileSize: stat.size, appendedBytes: stat.size - kept.parsedBytes,
+  });
+  if (!out) entry.inc = undefined;
+  return out;
+}
+
+/**
+ * Resume a kept state on the transcript as it is now: one range read from the tail's
+ * start gives back the tail text (checked against the last parsed line) and whatever was
+ * appended since, which the incremental read then takes from the same bytes. Null when
+ * the transcript no longer holds what the state says (a rewrite), or the read failed.
+ */
+async function resumeIncrementalState(
+  sessionId: string,
+  host: string | undefined,
+  entry: ParsedHistoryCacheEntry,
+  newMtimeMs: number,
+  reader: InstanceType<(typeof import('./daemon-file-reader.js'))['DaemonFileReader']>,
+  newSize: number,
+): Promise<SessionHistoryMessage[] | null> {
+  const inc = entry.inc!;
+  const res = await reader.readFileRange(inc.filePath, inc.tailStartByte);
+  if (!res) return null;
+  const bytes = Buffer.from(res.content, 'utf-8');
+  const tailBytes = inc.parsedBytes - inc.tailStartByte;
+  if (bytes.length < tailBytes) return null;
+  const tailText = bytes.subarray(0, tailBytes).toString('utf-8');
+  if (tailBytes > 0) {
+    if (!tailText.endsWith('\n')) return null;
+    const lastLine = tailText.slice(tailText.lastIndexOf('\n', tailText.length - 2) + 1, -1);
+    if (inc.lastLineCheck && !historyLineMatches(lastLine, inc.lastLineCheck)) return null;
+  }
+  inc.tailText = tailText;
+  // The incremental read re-reads from the last parsed line: serve it from these bytes.
+  const fromLastLine = bytes.subarray(inc.lastLineStart - inc.tailStartByte).toString('utf-8');
+  const served = {
+    readFileRange: async (p: string, start: number) => (p === inc.filePath && start === inc.lastLineStart
+      ? { content: fromLastLine, fileSize: res.fileSize }
+      : reader.readFileRange(p, start)),
+  } as unknown as typeof reader;
+  return tryIncrementalHistoryRead(sessionId, host, entry, newMtimeMs, served, newSize);
+}
+
+/** The seed and its state shape, for tests and scripts/history-incremental-replay.ts. */
+export { seedIncrementalState as _seedIncrementalStateForTesting, rollIncrementalTail as _rollIncrementalTailForTesting, TAIL_SEGMENT_ROLL_BYTES as _TAIL_SEGMENT_ROLL_BYTES };
+export type { HistoryIncrementalState as _HistoryIncrementalState };
 
 /**
  * The JSONL path a window read uses, or undefined when it cannot be found.
@@ -2747,17 +2994,33 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
                 if (disk.finishedAgentIds?.length) {
                   markOrphanFinishedAgentIds(disk.messages, disk.finishedAgentIds);
                 }
-                // Seed the in-memory cache (no incremental state — that needs a
-                // real parse pass; the next mtime change does one full read and
-                // re-seeds it, same as any inc-state hazard).
+                // Seed the in-memory cache. The incremental state the entry kept
+                // rides along unread: the next mtime change resumes from it.
                 cacheSet(sessionId, {
                   mtimeMs, size: statResult.size, messages: disk.messages,
                   approxChars: statResult.size,
+                  ...(disk.inc ? { diskInc: disk.inc } : {}),
                   ...(disk.finishedAgentIds?.length ? { orphanFinishedIds: disk.finishedAgentIds } : {}),
                 }, host);
                 return handOff(disk.messages);
               }
+              // The transcript grew since the entry was written (a turn while the
+              // server restarted, or the entry was evicted from memory).
+              if (disk?.inc && disk.mtimeMs !== undefined) {
+                if (disk.finishedAgentIds?.length) markOrphanFinishedAgentIds(disk.messages, disk.finishedAgentIds);
+                const resumed = await resumeFromKept(sessionId, host, {
+                  mtimeMs: disk.mtimeMs, ...(disk.size !== undefined ? { size: disk.size } : {}),
+                  messages: disk.messages, approxChars: disk.inc.parsedBytes, diskInc: disk.inc,
+                  ...(disk.finishedAgentIds?.length ? { orphanFinishedIds: disk.finishedAgentIds } : {}),
+                }, statResult, reader, options);
+                if (resumed) return handOff(resumed);
+              }
             } catch { /* disk cache unusable — fall through to full read */ }
+          }
+          // A disk hit's kept state, its first change since: resume from it.
+          if (cached && !cached.inc && cached.diskInc) {
+            const resumed = await resumeFromKept(sessionId, host, cached, statResult, reader, options);
+            if (resumed) return handOff(resumed);
           }
           // mtime CHANGED but incremental state exists and the file only grew:
           // read + parse just the appended bytes instead of the whole file.
@@ -3026,6 +3289,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
 
   // Only cache when skipSubagents — attachSubagentMessages mutates tool.childMessages
   // in place, so caching with children attached would share mutable state across consumers.
+  let seeded: HistoryIncrementalState | undefined;
   if (mtimeMs !== undefined && options?.skipSubagents) {
     // Seed incremental append-read state so future mtime changes read only the
     // appended bytes (self-validating; undefined on any boundary hazard).
@@ -3034,6 +3298,8 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     const inc = (result && (result.source === 'local' || result.source === 'remote'))
       ? seedIncrementalState(sessionId, result, messages, statPath)
       : undefined;
+    if (inc) inc.cutsKey = rewindCutsKey(rewindCuts);
+    seeded = inc;
     // Orphan finished-agent ids: the parser already marked `messages` in the
     // WeakMap; persist the set on the entry so future INCREMENTAL reads (whose
     // tail parse can't see prefix notifications) union it back in.
@@ -3056,8 +3322,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // lost on a post-restart disk-cache hit.
   if (messages.length > 0) {
     const orphanForDisk = getOrphanFinishedAgentIds(messages);
+    const incForDisk = seeded ? incrementalStateForDisk(seeded) : undefined;
     import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-      writeHistoryCache(sessionId, messages, mtimeMs, orphanForDisk ? [...orphanForDisk] : undefined, statSize);
+      writeHistoryCache(sessionId, messages, mtimeMs, orphanForDisk ? [...orphanForDisk] : undefined, statSize, incForDisk);
     }).catch(() => {});
   }
 

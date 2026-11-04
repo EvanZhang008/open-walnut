@@ -20,6 +20,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
+import { deleteHistoryCache } from '../../src/core/history-disk-cache.js';
 import {
   encodeProjectPath,
   readSessionHistory,
@@ -441,8 +442,11 @@ describe('history degrades to a bounded tail at the byte ceiling', () => {
     const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
     _resetHistoryCacheForTesting();
     // The full read also leaves a disk snapshot stamped with this file's mtime, and a
-    // read that finds a matching snapshot never opens the file. Move the mtime so the
-    // ceiling path below really reads.
+    // read that finds a matching snapshot never opens the file; one that finds its
+    // incremental state reads only what was appended. Drop it and move the mtime so
+    // the ceiling path below really reads.
+    await new Promise((r) => setTimeout(r, 20));
+    await deleteHistoryCache(sid);
     const later = new Date(Date.now() + 60_000);
     await fsp.utimes(jsonlPath(sid), later, later);
 

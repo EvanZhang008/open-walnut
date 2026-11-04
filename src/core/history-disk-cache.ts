@@ -47,6 +47,52 @@ import type { SessionHistoryMessage } from './session-history.js';
  */
 export const HISTORY_CACHE_SCHEMA = 5;
 
+/**
+ * The incremental read state of the parse, kept beside it (`inc` in the file), so a
+ * restart or an in-memory eviction reads only what was appended since instead of the
+ * whole transcript again (2026-11-03: 247 cold reads in a day, each followed by a full
+ * read; 126 were a session's first read after one of 31 restarts). The frozen prefix
+ * is the first `prefixCount` cached messages; the tail is read back from the transcript
+ * from `tailStartByte` and checked against the last parsed line.
+ * Additive: an older Walnut ignores it, and an entry without it reads as before.
+ */
+export interface PersistedHistoryInc {
+  v: 2;
+  filePath: string;
+  tailStartByte: number;
+  parsedBytes: number;
+  lastLineStart: number;
+  lastLineCheck: { len: number; head: string; tail: string } | null;
+  seedTailBytes?: number;
+  pendingToolIds: string[];
+  prefixCount: number;
+  /** The last prefix row's identity: a restore whose messages disagree is dropped. */
+  prefixLastKey?: string;
+  /** Prefix rows a subagent wrote whose parent tool is not in the file (still children). */
+  aboutChildren?: number[];
+  /** The recorded rewinds the dead set came from: another set now means no resume. */
+  cutsKey: string;
+  deadUuids: string[] | null;
+  queueDeadKeys: string[];
+}
+
+function isPersistedInc(x: unknown): x is PersistedHistoryInc {
+  const o = x as Record<string, unknown> | null;
+  if (!o || typeof o !== 'object' || o.v !== 2) return false;
+  const num = (k: string) => typeof o[k] === 'number' && Number.isFinite(o[k] as number) && (o[k] as number) >= 0;
+  const strs = (v: unknown) => Array.isArray(v) && v.every((e) => typeof e === 'string');
+  const check = o.lastLineCheck as Record<string, unknown> | null;
+  return typeof o.filePath === 'string' && o.filePath.length > 0
+    && num('tailStartByte') && num('parsedBytes') && num('lastLineStart') && num('prefixCount')
+    && typeof o.cutsKey === 'string'
+    && (o.aboutChildren === undefined || (Array.isArray(o.aboutChildren) && o.aboutChildren.every((i) => Number.isInteger(i) && (i as number) >= 0)))
+    && ((o.prefixCount as number) === 0 || typeof o.prefixLastKey === 'string')
+    && (o.seedTailBytes === undefined || num('seedTailBytes'))
+    && (check === null || (typeof check === 'object' && typeof check.len === 'number' && typeof check.head === 'string' && typeof check.tail === 'string'))
+    && strs(o.pendingToolIds) && strs(o.queueDeadKeys) && (o.deadUuids === null || strs(o.deadUuids))
+    && (o.tailStartByte as number) <= (o.parsedBytes as number) && (o.lastLineStart as number) <= (o.parsedBytes as number);
+}
+
 let dirEnsured = false;
 
 async function ensureDir(): Promise<void> {
@@ -78,6 +124,8 @@ export function writeHistoryCache(
   finishedAgentIds?: readonly string[],
   /** The transcript's size at that mtime: a coarse file clock keeps the mtime across an append. */
   size?: number,
+  /** The incremental read state of this parse (PersistedHistoryInc), when it has one. */
+  inc?: PersistedHistoryInc,
 ): void {
   if (messages.length === 0) return;
   const queued = pendingWrites.get(sessionId);
@@ -86,11 +134,12 @@ export function writeHistoryCache(
     queued.mtimeMs = mtimeMs;
     queued.size = size;
     queued.finishedAgentIds = finishedAgentIds;
+    queued.inc = inc;
     return;
   }
   const timer = setTimeout(() => flushWrite(sessionId), WRITE_COALESCE_MS);
   timer.unref?.();
-  pendingWrites.set(sessionId, { messages, mtimeMs, size, finishedAgentIds, timer });
+  pendingWrites.set(sessionId, { messages, mtimeMs, size, finishedAgentIds, inc, timer });
 }
 
 /**
@@ -107,6 +156,7 @@ interface PendingWrite {
   mtimeMs: number | undefined;
   size: number | undefined;
   finishedAgentIds: readonly string[] | undefined;
+  inc: PersistedHistoryInc | undefined;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -127,6 +177,7 @@ function flushWrite(sessionId: string): void {
     // proof that lives OUTSIDE the messages array, so it must be persisted
     // explicitly or a post-restart disk-cache hit silently drops it.
     ...(entry.finishedAgentIds && entry.finishedAgentIds.length > 0 ? { finishedAgentIds: [...entry.finishedAgentIds] } : {}),
+    ...(entry.inc && entry.mtimeMs !== undefined ? { inc: entry.inc } : {}),
   });
   ensureDir()
     .then(() => fsp.writeFile(cachePath(sessionId), payload, 'utf-8'))
@@ -166,7 +217,7 @@ export async function deleteHistoryCache(sessionId: string): Promise<void> {
  * entry was written by a different shape of this code (see HISTORY_CACHE_SCHEMA) —
  * every caller already treats null as "no cache" and re-parses.
  */
-export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; size?: number; finishedAgentIds?: string[] } | null> {
+export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; size?: number; finishedAgentIds?: string[]; inc?: PersistedHistoryInc } | null> {
   // A write still in its coalescing window is the newest entry there is.
   const queued = pendingWrites.get(sessionId);
   if (queued) {
@@ -176,6 +227,7 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
       ...(queued.mtimeMs !== undefined ? { mtimeMs: queued.mtimeMs } : {}),
       ...(queued.size !== undefined ? { size: queued.size } : {}),
       ...(queued.finishedAgentIds && queued.finishedAgentIds.length > 0 ? { finishedAgentIds: [...queued.finishedAgentIds] } : {}),
+      ...(queued.inc && queued.mtimeMs !== undefined ? { inc: queued.inc } : {}),
     };
   }
   try {
@@ -198,6 +250,8 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
         ...(Array.isArray(parsed.finishedAgentIds) && parsed.finishedAgentIds.length > 0
           ? { finishedAgentIds: parsed.finishedAgentIds.filter((x: unknown): x is string => typeof x === 'string') }
           : {}),
+        ...(typeof parsed.mtimeMs === 'number' && isPersistedInc(parsed.inc) && parsed.inc.prefixCount <= parsed.messages.length
+          ? { inc: parsed.inc } : {}),
       };
     }
   } catch {
