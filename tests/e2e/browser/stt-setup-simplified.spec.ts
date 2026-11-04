@@ -21,10 +21,11 @@
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import fs from 'node:fs/promises'
+import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const ENGINE = process.env.PW_WEBKIT ? 'webkit' : 'chromium'
 const SHOTS = '/tmp/onboarding-walk/stt'

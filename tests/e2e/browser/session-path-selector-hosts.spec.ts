@@ -13,6 +13,7 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openDraft } from './draft-helpers'
 import { resetServerHostFixture } from './host-problems-helpers'
+import { dropFakes } from './route-teardown'
 
 // /usr as a path segment. The root's listing is the machine's own: Ubuntu 24.04 also has
 // /bin.usr-is-merged and its twins, which a plain 'usr' matched too (2026-11-01, CI).
@@ -24,7 +25,7 @@ const HOST_LABEL = 'Big dev box'
 // A server host fixture another spec left loaded would push real frames for `devbox`.
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 // A route callback still in flight when the page closes must not fail the test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 /** Retry now goes through the host's connect route; the answer seeds the status store. */
 async function routeConnect(page: Page, host = HOST, label = HOST_LABEL): Promise<string[]> {

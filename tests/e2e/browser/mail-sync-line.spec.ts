@@ -13,6 +13,7 @@ import {
   showAllMail,
 } from './mail-review-helpers'
 import { pausePageClock } from './page-clock'
+import { dropFakes } from './route-teardown'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -75,7 +76,7 @@ test.afterAll(async () => { await server.stop() })
  * throw fails a test whose every assertion has already passed.
  */
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
 })
 
 /** Rewrite every mailbox row of every account on the way to the browser. */

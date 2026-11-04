@@ -24,6 +24,7 @@ import {
   openRow, openSystemHosts, panelLocalCard, panelMount, pickRail, problemCards, problemHosts, problemRow, problemRowHosts, railButton,
   systemBadge, systemHostLine, systemHostRow, systemHosts, systemListHosts, systemRowHosts,
 } from './banner-placement-helpers'
+import { dropFakes } from './route-teardown'
 
 const SHOTS = '/tmp/walnut-nfc-system/shots'
 const SECTIONS = ['Needs you', 'Inbox', 'Errors', 'Automation', 'System', 'All']
@@ -38,7 +39,7 @@ test.beforeAll(async ({ request }) => {
 })
 test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 // A health or feed fetch still in flight when the page closes must not fail the test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 /** What a person reads on a row: its headline, its buttons, its toggles, and its form. */
 const words = (r: Locator) => r.evaluate((el) => ({

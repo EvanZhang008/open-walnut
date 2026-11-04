@@ -4,6 +4,7 @@ import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 import type { SessionSupervision } from '../../../web/src/api/sessions'
+import { dropFakes } from './route-teardown'
 
 const SID = 'pw-vscode-session'
 const TASK = 'pw-task-vscode'
@@ -237,7 +238,7 @@ test.beforeEach(async ({ page }) => {
   })
 })
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
   const observed = issues.get(page)!
   await Promise.all(observed.checks)
   expect(observed.errors).toEqual([])

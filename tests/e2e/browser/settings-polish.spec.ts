@@ -7,12 +7,13 @@
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
+import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 // The app keeps polling /api/config; an intercepted read can still be in flight
 // when a test ends, and its route.fetch would fail the finished test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const NAV = (id: string) => `settings-nav-${id}`
 

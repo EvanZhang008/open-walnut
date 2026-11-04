@@ -12,6 +12,7 @@ import {
   showAllMail,
 } from './mail-review-helpers'
 import { pausePageClock } from './page-clock'
+import { dropFakes } from './route-teardown'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -111,5 +112,5 @@ test('the 30 s tick fires in WKWebView', async ({ page }) => {
 })
 
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
 })

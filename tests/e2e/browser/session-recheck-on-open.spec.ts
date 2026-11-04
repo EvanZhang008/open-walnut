@@ -28,6 +28,7 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { dropFakes } from './route-teardown'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -129,7 +130,7 @@ test.describe.configure({ timeout: 90_000 })
 // makes that fetch fail with "Target page… has been closed" and fails a test whose
 // assertions all passed. Drop the handlers first, ignoring anything in flight.
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
+  await dropFakes(page)
 })
 
 test.beforeEach(async ({ page }) => {

@@ -12,6 +12,7 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openDraft } from './draft-helpers'
 import { resetServerHostFixture } from './host-problems-helpers'
+import { dropFakes } from './route-teardown'
 
 const HOST = 'devbox'
 const HOST_LABEL = 'Big dev box'
@@ -182,7 +183,7 @@ test.beforeEach(async ({ page }) => {
   await captureWs(page)
 })
 // A route callback still in flight when the page closes must not fail the test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 test('host tab carries a live status dot: connecting → connected → failed, each from one WS frame', async ({ page }) => {
   await injectHost(page, status('ssh'))

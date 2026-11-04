@@ -6,6 +6,7 @@ import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
 import { showAllMail } from './mail-review-helpers'
 import { serveProductionBundle } from './production-bundle'
+import { dropFakes } from './route-teardown'
 
 /**
  * The mail sidebar at production density: the smart mailbox group, the collapsed long tail, and the
@@ -231,7 +232,7 @@ const ROLE_ROWS_MARINA = ['Inbox', 'Archived', 'Bin', 'Drafts', 'Junk', 'Sent Ma
  * exactly this. One hook rather than a line per case, so a new stub cannot forget it.
  */
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
 })
 
 test.describe('the dense pane', () => {

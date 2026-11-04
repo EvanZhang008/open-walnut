@@ -13,6 +13,7 @@
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
 
@@ -84,7 +85,7 @@ test.describe('Settings → Cloud Companion: updates follow this Mac', () => {
     await page.setViewportSize({ width: 1100, height: 900 })
   })
   test.afterEach(async ({ page }) => {
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await dropFakes(page)
   })
 
   test('current: one sentence naming the build, the switch on, no Retry', async ({ page }) => {

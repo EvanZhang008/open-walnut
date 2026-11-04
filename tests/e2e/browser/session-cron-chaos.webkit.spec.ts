@@ -22,6 +22,7 @@ import {
   runSeededChaos,
   runSurfaceConsistency,
 } from './session-cron-chaos-helpers'
+import { dropFakes } from './route-teardown'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 850 }, deviceScaleFactor: 1 })
 test.setTimeout(240_000)
@@ -30,7 +31,7 @@ test.beforeAll(ensureShots)
 // A rewritten /api/sessions/status poll can still be in its route callback when
 // the test ends; without this the run reports the closed-page error instead of
 // the real result.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 test('really runs in WebKit', async ({ browserName }) => {
   expect(browserName).toBe('webkit')

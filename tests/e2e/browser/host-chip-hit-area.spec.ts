@@ -20,6 +20,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { closeDraftModelPicker, draftEngineButton, openDraft, openDraftSettings } from './draft-helpers'
 import { Hosts, connected, connecting, failed, resetServerHostFixture } from './host-problems-helpers'
+import { dropFakes } from './route-teardown'
 
 const SHOTS = '/tmp/sps-chip'
 
@@ -34,7 +35,7 @@ const HOSTS = [
 // Every chip x nine points x two clicks: minutes on a loaded machine, not 30 s.
 test.describe.configure({ timeout: 240_000 })
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const picker = (page: Page): Locator => page.locator('.session-path-selector')
 const tabs = (page: Page): Locator => picker(page).locator('.sps-host-tab')

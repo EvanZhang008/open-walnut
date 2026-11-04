@@ -29,6 +29,7 @@ import yaml from 'js-yaml'
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { fixtureHome } from './engine-settings-helpers'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
 
@@ -109,7 +110,7 @@ test.describe('Settings → Phones & Cloud: what the cloud companion keeps', () 
   })
 
   test.afterEach(async ({ page }) => {
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await dropFakes(page)
   })
 
   test('everything on by default; left out, off and quick clicks save as chosen', async ({ page }) => {

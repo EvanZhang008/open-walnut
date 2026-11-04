@@ -18,6 +18,7 @@ import {
   runSeededChaos,
   runSurfaceConsistency,
 } from './session-cron-chaos-helpers'
+import { dropFakes } from './route-teardown'
 
 test.use({ viewport: { width: 1280, height: 850 }, deviceScaleFactor: 1 })
 // 40 pushes with a full DOM oracle after each, twice, plus a 32-job card.
@@ -28,7 +29,7 @@ test.beforeAll(ensureShots)
 // poll can still be in that callback when the test ends: without this the run
 // reports "route.fetch: Target page ... has been closed" INSTEAD of the real
 // result (session-cron-supervision.spec.ts does the same).
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 for (const seed of SEEDS) {
   test(`40 seeded cron observations, oracle after every push (seed 0x${seed.toString(16)})`, async ({ page, baseURL }) => {

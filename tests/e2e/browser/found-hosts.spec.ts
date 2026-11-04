@@ -13,6 +13,7 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(180_000)
 
@@ -72,7 +73,7 @@ async function shot(page: Page, name: string, region: Locator) {
 }
 
 // A late config read (serveFound) may still be out when a test ends: drop it, never fail the next test on it.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const row = (page: Page, alias: string) => page.locator(`[data-host-alias="${alias}"]`)
 

@@ -12,6 +12,7 @@
  */
 import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -148,7 +149,7 @@ const countOf = (page: Page, account: string) => accountGroup(page, account).get
 // Settings re-reads /api/config on its own clock; WebKit tears the page down fast
 // enough that one such read can still be inside a route callback when a test ends.
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
 })
 
 test('runs in the engine it was asked for', async ({ browserName }) => {

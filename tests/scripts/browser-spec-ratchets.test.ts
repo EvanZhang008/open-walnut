@@ -1638,3 +1638,33 @@ describe('the session panel Changed chip', () => {
     expect(offendersOf("await panel.getByTestId('session-changed-chip').click()")).toEqual([])
   })
 })
+
+describe('a test ends its fakes', () => {
+  // A spec that drops its routes in afterEach leaves the page open a moment with nothing in front
+  // of the server, and a write it still sends lands on the fixture the whole shard shares: a
+  // Settings save reads before it writes, so a switch clicked as a test ends sent its PUT after
+  // `unrouteAll` (2026-11-04: a fake-backed test turned the fixture's permission prompts off, and
+  // C77 on the same server found the switch it needs disabled). dropFakes (route-teardown.ts)
+  // drops the fakes and answers every later write itself.
+  const AFTER_EACH = /test\.afterEach\(/g
+  const offendersOf = (text: string): number => {
+    let n = 0
+    for (const m of text.matchAll(AFTER_EACH)) {
+      const body = text.slice(m.index!, m.index! + 600)
+      const end = /\n\s*\}\)|\}\) \}\)/.exec(body)
+      if (/\.unrouteAll\(/.test(end ? body.slice(0, end.index + end[0].length) : body)) n++
+    }
+    return n
+  }
+
+  it('no afterEach drops the routes itself', () => {
+    expect(sources.filter(({ file, text }) => file !== 'route-teardown.ts' && offendersOf(text) > 0).map(({ file }) => file)).toEqual([])
+    expect(sources.find(({ file }) => file === 'route-teardown.ts')!.text).toContain("route.fulfill({ json: { ok: true } })")
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(offendersOf("test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })")).toBe(1)
+    expect(offendersOf("test.afterEach(async ({ page }) => {\n  await page.unrouteAll({ behavior: 'wait' })\n})")).toBe(1)
+    expect(offendersOf('test.afterEach(async ({ page }) => { await dropFakes(page) })')).toBe(0)
+  })
+})

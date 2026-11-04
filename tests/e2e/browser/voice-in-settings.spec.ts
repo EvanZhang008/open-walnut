@@ -11,10 +11,11 @@
  * Run both engines: PW_WEBKIT=1 ... --project webkit for the Mac app.
  */
 import { devices, test, expect, type Page } from '@playwright/test'
+import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const today = new Date()
 today.setHours(9, 5, 0, 0)

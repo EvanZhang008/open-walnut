@@ -28,6 +28,7 @@ import { selectSection } from './todo-panel-helpers'
 import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 import { expectPanelRunning } from './session-header-labels-helpers'
+import { dropFakes } from './route-teardown'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -86,7 +87,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'wait' })
+  await dropFakes(page, { wait: true })
 })
 
 test.afterAll(async ({ request }) => {

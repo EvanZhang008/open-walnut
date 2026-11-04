@@ -18,6 +18,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
 
@@ -99,7 +100,7 @@ test.describe('Settings → Search: semantic search on the other servers', () =>
   })
 
   test.afterEach(async ({ page }) => {
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await dropFakes(page)
     await writeSearch(page, saved)
   })
 

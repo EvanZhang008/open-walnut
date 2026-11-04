@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { draftCwdPill, openDraft } from './draft-helpers'
 import { Hosts, connected, failed, hostFixture, resetServerHostFixture } from './host-problems-helpers'
+import { dropFakes } from './route-teardown'
 
 // In order, one worker; a failure does not skip the rest (each group sets its own fixture).
 test.describe.configure({ mode: 'default' })
@@ -85,7 +86,7 @@ async function addHistory(page: Page, rows: ReturnType<typeof hist>[]): Promise<
   })
 }
 
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 test.describe('the picker against the default host fixture', () => {
   test.beforeEach(async ({ request }) => {

@@ -13,10 +13,11 @@
 import { expect, test, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
 // A settings read still in flight when a test ends is dropped, never an error.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 async function holdOrgSwitch(page: Page): Promise<{ writes: boolean[] }> {
   const state = { enabled: true, writes: [] as boolean[] }

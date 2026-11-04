@@ -18,6 +18,7 @@ import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { dropFakes } from './route-teardown'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 900 } })
@@ -118,7 +119,7 @@ async function recordSaved(page: Page) {
 const indicator = (page: Page) => page.getByTestId('settings-saved-indicator')
 
 // Drop the fakes before the page closes: the app keeps polling /api/config.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 test('runs in the engine it was asked for', async ({ browserName }) => {
   expect(browserName).toBe(process.env.PW_WEBKIT ? 'webkit' : 'chromium')

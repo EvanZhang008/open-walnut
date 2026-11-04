@@ -17,6 +17,7 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { dropFakes } from './route-teardown'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -103,7 +104,7 @@ async function paddingTop(locator: Locator): Promise<number> {
 test.describe.configure({ timeout: 90_000 })
 
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {})
+  await dropFakes(page)
 })
 
 test.beforeEach(async ({ page }) => {

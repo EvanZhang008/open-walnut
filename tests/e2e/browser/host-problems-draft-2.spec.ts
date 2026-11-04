@@ -31,6 +31,7 @@ import {
   pickFolder, picker, resetServerHostFixture, start, startOnHost, tasksBanner, wireHost,
 } from './host-problems-fixture-helpers'
 import { expandSystemAttention, hideTaskPanel } from './host-problems-helpers'
+import { dropFakes } from './route-teardown'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 const REMOTE_OFF = 'Remote hosts are off on this test server.'
@@ -366,7 +367,7 @@ test.describe('a session on a reconnecting host', () => {
     await hostFixture(request, { action: 'inject-failure', host: 'devbox', kind: 'timeout' })
   })
   // The shaped session routes fetch the real answer: drop them before the page closes.
-  test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+  test.afterEach(async ({ page }) => { await dropFakes(page) })
 
   async function openFixtureSession(page: Page) {
     await loadApp(page)

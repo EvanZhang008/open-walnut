@@ -5,6 +5,7 @@ import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
 import { showAllMail } from './mail-review-helpers'
+import { dropFakes } from './route-teardown'
 
 /**
  * The merged lists, against the dense fixture: two accounts, 70 folders, the same roles under
@@ -241,7 +242,7 @@ function smartChild(page: Page, accountId: string): Locator {
  * closes and throw from a test that has already passed every assertion.
  */
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await dropFakes(page)
 })
 
 test.describe('the merged lists at production density', () => {

@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { VIEW_MODE_DEFAULT_KEY, selectPassage, switchView } from './threads-helpers'
+import { dropFakes } from './route-teardown'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/composer-stop-keeps-process'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -36,7 +37,7 @@ test.beforeAll(async () => {
 })
 
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: 'wait' })
+  await dropFakes(page, { wait: true })
   expect(browserErrors.get(page)).toEqual([])
 })
 

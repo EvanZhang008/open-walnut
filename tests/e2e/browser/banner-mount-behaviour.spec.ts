@@ -23,6 +23,7 @@ import {
   openSystemHosts, panelMount, panelProblems, pickRail, problemCards, problemHosts, problemRow, railButton, systemBadge,
   systemHostRow, systemHosts,
 } from './banner-placement-helpers'
+import { dropFakes } from './route-teardown'
 
 test.describe.configure({ timeout: 90_000 })
 
@@ -32,7 +33,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 // A health or feed fetch still in flight when the page closes must not fail the test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const activeDescr = (page: Page): Promise<string> => page.evaluate(() => {
   const a = document.activeElement as HTMLElement | null
