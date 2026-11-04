@@ -5,12 +5,14 @@
  * buttons and its own 8s clock; the pointer over the stack pauses every clock,
  * so a toast never slides away from under the button being reached for. A
  * button runs its action and closes its toast. The queue rules are pure, in
- * kanban-toasts.ts; this file runs the one timeout they name.
+ * kanban-toasts.ts; this file runs the one timeout they name. They show in the
+ * window's bottom-left notice corner with every other notice (corner-stack.tsx).
  */
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import type { KanbanToast, KanbanToastAction, KanbanToastsProps, UseKanbanToasts } from './kanban-contract';
 import {
   KANBAN_PANE_SELECTOR, KANBAN_TOAST_EVENT, dismissToastItem, expiredToasts, foldToasts, nextDeadline, pauseClocks, pushToastItem, resumeClocks, syncClocks,
@@ -84,11 +86,15 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
     });
   };
 
+  const { compact } = useCornerState();
   if (toasts.length === 0) return <span ref={anchorRef} className="kanban-toasts-anchor" hidden />;
-  const { shown, folded, foldText } = foldToasts(toasts, expanded);
+  // Over a chat the corner keeps every kind short: the newest move, the rest on its "+N" line.
+  const { shown, folded, foldText } = foldToasts(toasts, expanded, compact ? 1 : undefined);
   return (
     <>
     <span ref={anchorRef} className="kanban-toasts-anchor" hidden />
+    {/* In the window's one notice corner (corner-stack.tsx), with every other notice. */}
+    <CornerSlot order={CORNER_ORDER.board}>
     <div
       className="kanban-toasts"
       data-testid="kanban-toasts"
@@ -126,11 +132,12 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
         </div>
       ))}
       {folded > 0 && (
-        <button type="button" className="kanban-toasts-more" data-testid="kanban-toasts-more" onClick={() => setExpanded(true)}>
+        <button type="button" className="kanban-toasts-more corner-more" data-testid="kanban-toasts-more" onClick={() => setExpanded(true)}>
           {foldText}
         </button>
       )}
     </div>
+    </CornerSlot>
     </>
   );
 }

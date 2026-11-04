@@ -1,5 +1,6 @@
 /**
- * NotificationToaster — the single top-right toast renderer.
+ * NotificationToaster — the single toast renderer, in the bottom-left corner stack
+ * (corner-stack.tsx) with every other notice.
  *
  * Replaces CronToast + PermissionToast + OperationErrorToast (and renders the
  * ephemeral sort / audio-error toasts too). Reads the unified toast stack from
@@ -43,6 +44,8 @@ import { navigateToTarget } from '@/utils/open-session';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
 import type { ImageAttachment } from '@/api/chat';
+import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
+import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
 
 /** Upward travel that dismisses a toast on the phone. */
 const SWIPE_DISMISS_PX = 40;
@@ -94,6 +97,13 @@ const SEVERITY_ICON: Record<NotificationSeverity, ReactNode> = {
   error: ICON_CLOSE,
 };
 
+/** Toasts in sight at once on a computer, newest nearest the corner; the corner never outgrows the window. */
+const DESKTOP_TOASTS_SHOWN = 2;
+/** A window shorter than this shows one toast, so the corner still fits. */
+const SHORT_WINDOW_PX = 720;
+/** Toasts in sight while an approval card is in the corner: the request a script waits on leads. */
+const WITH_APPROVAL_SHOWN = 1;
+
 /** How long an answered permission toast stays up before self-dismissing. */
 const RESOLVED_DISMISS_MS = 1500;
 
@@ -102,14 +112,35 @@ export function NotificationToaster() {
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   usePhoneOverlayDepth(); // re-render when a session overlay opens or closes
+  // Only while the approval card really shows: a Needs you line on screen lists them instead.
+  const { approvalsListed, compact } = useCornerState();
+  const approvalInCorner = pendingAt(useApprovals(), Date.now()).length > 0 && !approvalsListed;
+  // Over a chat (compact) one too, as every kind there keeps to its newest.
+  const shownCount = approvalInCorner || compact ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
+  // A permission a session waits on stays in sight whatever the count; the rest fill what is left.
+  const asking = (t: (typeof allToasts)[number]) => t.kind === 'permission' && !t.resolved;
+  const kept = new Set(allToasts.filter((t) => !asking(t)).slice(-Math.max(0, shownCount - allToasts.filter(asking).length)));
   const toasts = phone
     ? phoneVisibleToasts(allToasts, (sid) => isPhoneOverlayOpen(`session:${sid}`))
-    : allToasts;
+    : allToasts.filter((t) => asking(t) || kept.has(t));
+  // The older ones stay in the notification center; one line says how many and opens it.
+  const older = phone ? 0 : allToasts.length - toasts.length;
 
   if (toasts.length === 0) return null;
 
   return (
+    <CornerSlot order={CORNER_ORDER.toasts} className="corner-slot-toasts">
     <div className="notification-toaster" aria-live="polite">
+      {older > 0 && (
+        <button
+          type="button"
+          className="corner-more"
+          data-testid="notification-toaster-more"
+          onClick={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
+        >
+          {older === 1 ? '1 more notification ›' : `${older} more notifications ›`}
+        </button>
+      )}
       {toasts.map((toast) => {
         // A pending permission is answerable in place — its own card.
         if (toast.kind === 'permission' && !toast.resolved) {
@@ -197,6 +228,7 @@ export function NotificationToaster() {
         );
       })}
     </div>
+    </CornerSlot>
   );
 }
 

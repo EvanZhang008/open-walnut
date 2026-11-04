@@ -14,6 +14,7 @@
  */
 
 import { taskPath } from '@/utils/task-path';
+import { CORNER_ORDER, appendToCornerStack } from '@/components/common/corner-stack';
 
 /** `task` is no view of its own any more: an old `/popout?view=task` link opens the task on Home. */
 export type PopoutView = 'file' | 'global-notes' | 'note' | 'session' | 'task';
@@ -90,13 +91,13 @@ export function openTaskInApp(taskId: string): void {
   setTimeout(() => { if (answered) return; channel.close(); fallback(); }, 600);
 }
 
-/** A short line at the bottom of the pop-out: it has no toaster of its own. */
+/** A short line in the pop-out's notice corner (it has no toaster of its own). */
 function flashNotice(text: string): void {
   const el = document.createElement('div');
   el.setAttribute('role', 'status');
   el.className = 'popout-flash-notice';
   el.textContent = text;
-  el.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483000;padding:8px 14px;border-radius:8px;font-size:13px;color:var(--fg);background:var(--bg-secondary);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.18)';
-  document.body.appendChild(el);
+  el.style.cssText = 'align-self:flex-start;pointer-events:auto;padding:8px 14px;border-radius:8px;font-size:13px;color:var(--fg);background:var(--bg-secondary);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.18)';
+  appendToCornerStack(el, CORNER_ORDER.flash);
   setTimeout(() => el.remove(), 2_500);
 }

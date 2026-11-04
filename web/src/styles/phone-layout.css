@@ -27,9 +27,10 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   :root {
     /* The bar plus the status row under it when one shows (PhoneStatusRow sets
-       --phone-status-h): everything below starts under both. */
+       --phone-status-h) and the notice stack under that (corner-stack.tsx sets
+       --corner-reserve-top): everything below starts under all three. */
     --phone-bar-h: calc(44px + var(--wn-safe-top));
-    --phone-topbar-h: calc(44px + var(--wn-safe-top) + var(--phone-status-h, 0px));
+    --phone-topbar-h: calc(44px + var(--wn-safe-top) + var(--phone-status-h, 0px) + var(--corner-reserve-top, 0px));
   }
 
   /* The document never moves on a phone; only the panels inside it scroll. A
@@ -550,11 +551,18 @@
 /* Toasts (spec 4.7): inside the screen, under the bar, one at a time
    (NotificationToaster), a finger-sized close. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  html body .notification-toaster {
-    top: calc(var(--phone-topbar-h) + 8px);
+  /* The corner stack (corner-stack.css) holds every notice; on the phone it sits under the bar. */
+  /* Under the bar and its status row; the page and every layer start below it (--phone-topbar-h). */
+  html body .corner-stack {
+    top: calc(var(--phone-bar-h) + var(--phone-status-h, 0px) + 8px);
+    bottom: auto;
     left: max(8px, var(--wn-safe-left));
     right: max(8px, var(--wn-safe-right));
-    max-width: none;
+    width: auto;
+    /* Nearest the bar comes first here, so the approvals (highest order) sit right under it,
+       as they sit nearest the corner on a computer; column-reverse starts from the top. */
+    flex-direction: column-reverse;
+    justify-content: flex-end;
   }
 
   /* It drops in from the bar instead of sliding in from the right edge, which

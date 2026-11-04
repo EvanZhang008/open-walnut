@@ -35,6 +35,7 @@ import { useKanbanSeen } from './useKanbanSeen';
 import { KanbanLeaderRow } from './KanbanLeaderRow';
 import { KanbanAddLane } from './KanbanAddLane';
 import { KanbanToasts, useKanbanToasts } from './KanbanToasts';
+import { keepClearOfCorner } from '@/components/common/corner-stack';
 import '@/styles/board-kanban.css';
 import '@/styles/board-kanban-controls.css';
 
@@ -63,6 +64,8 @@ export interface BoardKanbanProps {
 
 const FLASH_MS = 1200;
 const LANE_FLASH_MS = 600;
+/** A move's toast is in the corner by then, so its card can be moved out from under it. */
+const CLEAR_AFTER_MS = 350;
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
@@ -128,7 +131,7 @@ export function BoardKanban({
   const writes = useKanbanWrites({
     ownerId, getVM: () => vmRef.current, getCards: () => cardsRef.current, getLaneOrder: (l) => layoutRef.current[l],
     fetchStartedAt, reloadKanban, toasts, storePhase,
-    onApplied: () => applyNowRef.current(), onReveal: (id) => revealRef.current(id), onOpenTask: openBeside,
+    onApplied: () => applyNowRef.current(), onReveal: (id) => revealRef.current(id), onFlash: (id) => { flashCards([id]); setTimeout(() => keepClearOfCorner(cardEl(rootEl.current, id)), CLEAR_AFTER_MS); }, onOpenTask: openBeside,
     // After the render that placed the card where the phase put it, so the baseline holds the new lane.
     onHumanPhase: (id) => { setTimeout(() => markSeenRef.current(id), 0); },
   });
@@ -220,6 +223,7 @@ export function BoardKanban({
     setTimeout(() => {
       const el = cardEl(rootEl.current, taskId);
       el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      keepClearOfCorner(el);
       el?.focus({ preventScroll: true });
     }, 60);
   };

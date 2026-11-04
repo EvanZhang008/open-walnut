@@ -1,15 +1,10 @@
-/* ApprovalPrompts: a script is blocked on these, so they sit above the page, bottom right. */
+/* ApprovalPrompts: a script is blocked on these, so they sit nearest the corner of the one
+   bottom-left stack every notice shares (corner-stack.css places it). */
 .approval-stack {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 10000;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(380px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
-  overflow-y: auto;
+  /* Tighter than the stack's gap between kinds: the "N more" line belongs to this card. */
+  gap: 6px;
   pointer-events: none;
 }
 
@@ -19,8 +14,8 @@
   color: var(--fg);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 14px 16px;
+  box-shadow: var(--corner-card-shadow);
+  padding: 12px 14px;
   font-size: 13px;
 }
 
@@ -31,20 +26,71 @@
   margin-bottom: 6px;
 }
 
+/* Approvals wear the accent, as their Needs you line does, never the error red: a request
+   waits, nothing went wrong. */
 .approval-kicker {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-secondary);
+  color: var(--accent-text, var(--accent));
 }
+
+/* In the corner it is the one card a script waits on, so it carries the strongest mark there. */
+.corner-stack .approval-card { border-left: 3px solid var(--accent); }
+/* The answer keeps the card's shape, its mark in the answer's colour. */
+.corner-stack .approval-card-settled.approval-approved { border-left-color: var(--success); }
+.corner-stack .approval-card-settled.approval-denied { border-left-color: var(--fg-muted); }
+.corner-stack .approval-card-settled.approval-expired,
+.corner-stack .approval-card-settled.approval-canceled { border-left-color: var(--border-strong); }
+
+/* A card that just took another's place: its buttons wait a moment (ApprovalPrompts ARM_MS). */
+.approval-card-arming .approval-actions { pointer-events: none; opacity: 0.55; transition: opacity 0.2s ease; }
 
 .approval-card-biometric .approval-kicker { color: var(--accent-text, var(--accent)); }
 
+.approval-head-end { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+
+/* "3 waiting": how many wait, the same count the Needs you line gives; it opens the list of them. */
+.approval-count {
+  margin-left: 8px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.approval-count:hover { text-decoration: underline; }
+
+/* Puts the card down to one line (the phone's form) until a newer request comes. */
+.approval-minimize {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px -4px 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.approval-minimize:hover { background: var(--bg-hover); color: var(--fg); }
+
 .approval-clock {
-  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
+.approval-clock.approval-clock-soon { color: var(--warning); }
 
 .approval-what {
   font-size: 15px;
@@ -63,6 +109,13 @@
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
+  /* The folder on its own line under who asks, so no separator ever starts or ends a line. */
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .approval-detail {
@@ -132,6 +185,64 @@
 
 .approval-card-settled { padding: 10px 14px; }
 
+/* The card's title opens the request with its detail (the dialog). */
+.approval-what-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.approval-what-open:hover { text-decoration: underline; }
+
+/* Several waiting: which one the dialog shows, and the way to the others. */
+.approval-dialog-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.approval-dialog-steps .approval-link:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+
+/* The corner's card, one look on every page: what kind of ask and how many with its time, what
+   waits on one line, then who asks and its two buttons. The title opens the rest (the detail, the
+   full words) in the dialog. */
+.corner-stack .approval-card:not(.approval-card-settled):not(.approval-card-line) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+.corner-stack .approval-card:not(.approval-card-line) .approval-head { flex: 1 0 100%; margin: 0; align-items: center; }
+.corner-stack .approval-what-open { flex: 1 0 100%; min-width: 0; font-size: 14px; line-height: 1.35; }
+/* One line (on the span: WebKit does not clamp a button); the dialog has the full words. */
+.corner-stack .approval-what-text { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.corner-stack .approval-card .approval-who {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The folder is in the dialog: cut to an ellipsis here it would say nothing. */
+.corner-stack .approval-who .approval-cwd { display: none; }
+.corner-stack .approval-card .approval-actions { flex: none; margin-top: 0; gap: 6px; }
+.corner-stack .approval-card .approval-actions .approval-btn { padding: 4px 12px; font-size: 12px; }
+.corner-stack .approval-card .approval-detail { display: none; }
+.corner-stack .approval-card .approval-note,
+.corner-stack .approval-card .approval-error { flex: 1 0 100%; margin: 0; font-size: 12px; }
+
 .approval-settled-line {
   display: flex;
   gap: 8px;
@@ -139,10 +250,15 @@
   font-weight: 600;
 }
 
-.approval-approved .approval-settled-line { color: var(--success); }
-.approval-denied .approval-settled-line { color: var(--error); }
+.approval-approved .approval-settled-line,
+.approval-settled-line.approval-approved { color: var(--success); }
+/* Denied is the person's own answer, not a fault: no error red. */
+.approval-denied .approval-settled-line,
+.approval-settled-line.approval-denied { color: var(--fg); }
 .approval-expired .approval-settled-line,
-.approval-canceled .approval-settled-line { color: var(--fg-muted); }
+.approval-canceled .approval-settled-line,
+.approval-settled-line.approval-expired,
+.approval-settled-line.approval-canceled { color: var(--fg-muted); }
 
 .approval-settled-what {
   font-weight: 400;
@@ -181,6 +297,10 @@
 
 .approval-dialog .approval-what { font-size: 17px; padding-right: 24px; }
 
+.approval-dialog .approval-head,
+.approval-dialog > .approval-settled-line,
+.approval-dialog > .approval-note { padding-right: 28px; }
+
 .approval-dialog-close {
   position: absolute;
   top: 10px;
@@ -204,59 +324,130 @@
 .approval-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--error) 6%, var(--card-bg));
+  background: var(--accent-subtle);
   color: var(--fg);
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 
-.approval-row:hover { background: color-mix(in srgb, var(--error) 10%, var(--card-bg)); }
+.approval-row:hover { background: color-mix(in srgb, var(--accent) 14%, var(--card-bg)); }
 .approval-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.approval-row-icon { color: var(--error); display: inline-flex; flex: none; }
-
-.approval-row-mid {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
-}
-
-.approval-row-kicker {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--error);
-}
+.approval-row-icon { color: var(--accent); display: inline-flex; flex: none; }
 
 .approval-row-what {
+  flex: 1 1 0;
+  min-width: 0;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.approval-row-who,
-.approval-row-note {
-  font-size: 12px;
-  color: var(--fg-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.approval-row-open { flex: none; font-size: 16px; line-height: 1; color: var(--accent-text, var(--accent)); }
+.approval-rows-org { margin: 0 0 2px; }
+
+/* The notification center's Needs you: the same rows, above the sessions that ask. */
+.nfc-approvals { padding: 10px 12px 0; }
+
+/* One line, no buttons; a tap opens the request: the phone's corner, and a card put down on a computer. */
+.approval-card-place { position: relative; }
+/* The answer of the card just answered, laid over the next one for a moment (ApprovalPrompts). */
+.approval-settled-over {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  box-shadow: none;
+  pointer-events: auto;
 }
+.approval-card-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  /* The second line keeps its own space above (below): the line break adds no row of its own. */
+  row-gap: 0;
+  font-size: 13px;
+}
+.corner-stack .approval-card-line { padding: var(--corner-card-pad-compact); }
+/* First line: what waits; a click opens the whole request. */
+.approval-line-open {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Second line: how many and the time, then the buttons. */
+.approval-line-meta { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.approval-line-who { flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.approval-line-meta .approval-clock { flex: none; }
+.approval-card-line .approval-actions { flex: none; margin-top: 4px; gap: 6px; }
+.approval-card-line .approval-actions .approval-btn { padding: 3px 10px; font-size: 12px; }
+.approval-card-line .approval-error { flex: 1 0 100%; margin: 4px 0 0; font-size: 12px; }
+.approval-line-open .approval-row-open { font-size: 13px; font-weight: 600; }
+/* Ends the first line: the time and the buttons are the second. */
+.approval-line-break { flex: 0 0 100%; height: 0; }
+.approval-card-line .approval-line-meta { margin-top: 4px; }
 
-.approval-actions-compact { margin-top: 0; flex: none; gap: 6px; }
-.approval-actions-compact .approval-btn { padding: 4px 10px; font-size: 12px; }
 
-/* A narrow column: the buttons wrap under the words instead of squeezing them. */
-.approval-row { flex-wrap: wrap; }
-.approval-row-mid { min-width: 150px; }
-.approval-row .approval-actions-compact { margin-left: auto; }
-.approval-row-org { margin: 0 0 2px; }
+/* The approval dialog shows the request: the corner's approval card steps aside, the rest stays. */
+.corner-stack.approval-dialog-open .corner-slot-approvals { display: none; }
+
+button.approval-row { width: 100%; font: inherit; font-size: 13px; text-align: left; }
+.approval-row .approval-row-open { margin-left: auto; }
+
+.approval-dialog-close:focus-visible { outline-offset: 3px; }
+.approval-card-line .approval-kicker { flex: none; }
+.approval-line-more { flex: none; padding: 1px 7px; border-radius: 999px; background: var(--accent-subtle); color: var(--accent-text, var(--accent)); font-size: 11px; font-weight: 600; }
+
+/* What comes next, under the answer laid over the next request. */
+.approval-settled-next { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The dialog's list of every request waiting: one line each, the one shown marked. */
+.approval-dialog-list { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.approval-dialog-list-head { font-size: 12px; font-weight: 600; color: var(--fg-muted); margin-bottom: 4px; }
+.approval-dialog-list ol { list-style: none; margin: 0; padding: 0; max-height: 176px; overflow-y: auto; }
+.approval-dialog-list li button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.approval-dialog-list li button:hover { background: var(--bg-hover); }
+.approval-dialog-list li button[aria-current='true'] { background: var(--accent-subtle); font-weight: 600; }
+.approval-dialog-list-n { flex: none; min-width: 16px; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.approval-dialog-list-what { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.approval-dialog-list .approval-clock { flex: none; font-size: 12px; }
+
+/* A click leaves no mark on the card's small buttons; a keyboard focus still shows its ring. */
+.approval-card :is(.approval-minimize, .approval-count, .approval-line-open):focus:not(:focus-visible) { outline: none; background: none; }
+.approval-card .approval-count:focus:not(:focus-visible) { background: var(--accent-subtle); }
+.approval-card-line.approval-card-tap { cursor: pointer; }

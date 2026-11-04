@@ -58,6 +58,7 @@ import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
+import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import {
   filterInboxLetters, readUnreadOnlyPref, writeUnreadOnlyPref,
 } from '@/components/inbox/inbox-filter';
@@ -213,6 +214,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // Counts read the LIVE letters, never the current view: with Archived open the
   // view holds only archived rows, which badged the Inbox 0.
   const counts = useMemo(() => sectionCounts(feed, inbox.liveLetters), [feed, inbox.liveLetters]);
+  const approvals = usePendingApprovals();
 
   // Letter mutations: patch locally (the panel must feel instant), call the
   // route, resync on failure. Read state ALSO mirrors onto the feed envelope so
@@ -531,7 +533,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               honest list of buttons does. */}
           <div className="nfc-rail" aria-label="Notification sections">
             <RailButton
-              label="Needs you" count={counts.action} warn
+              label="Needs you" count={counts.action + approvals.length} warn
               active={section === 'action'} onClick={() => pickSection('action')}
             />
             {/* Inbox shows UNREAD letters (not the list length): a letter is read
@@ -589,6 +591,11 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
           </div>
 
           <div className="nfc-detail">
+            {/* A script waiting on an approval needs the person too: the same one line as
+                Home's Needs you, a click opens the request (ApprovalRow). */}
+            {(section === 'action' || section === 'all') && approvals.length > 0 && (
+              <div className="nfc-approvals"><ApprovalRows list={approvals} variant="home" /></div>
+            )}
             {section === 'system' ? (
               /* Long-running status (hosts, backup, embedding search): its own
                  component so the search-index poll only runs while this tab is
@@ -609,7 +616,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 onToggleRead={(l) => markLetterRead(l.id, !l.read)}
               />
             ) : groups.length === 0 && !problems ? (
-              <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
+              (section === 'action' || section === 'all') && approvals.length > 0 ? null : <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
               /* Errors: one block per ROOT CAUSE, then one per CATEGORY. The
                  header is the whole point of the grouping — it names the cause or

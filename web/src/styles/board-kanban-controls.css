@@ -244,18 +244,17 @@
 .kanban-changes-row { font-variant-numeric: tabular-nums; line-height: 1.35; overflow-wrap: anywhere; }
 .kanban-changes-empty { padding: 8px; color: var(--fg-muted); }
 
-/* ── Toasts (inside the pane, bottom right) ── */
+/* ── Toasts (in the window's bottom-left notice corner, corner-stack.css places them) ── */
 .kanban-toasts {
-  position: absolute; right: 12px; bottom: 12px; z-index: 40; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
-  max-width: min(420px, calc(100% - 24px)); pointer-events: none;
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px; pointer-events: none;
 }
 /* The gap between two toasts belongs to the lower one: a pointer moving from
    one toast to the next never leaves the stack, so the clocks stay paused. */
 .kanban-toasts > * { position: relative; }
 .kanban-toasts > * + *::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 6px; }
 .kanban-toast {
-  pointer-events: auto; display: flex; align-items: flex-start; flex-wrap: nowrap; gap: 4px 8px; padding: 8px 8px 8px 12px; border-radius: 8px;
-  background: var(--bg-elevated); color: var(--fg); border: 1px solid var(--border); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+  pointer-events: auto; display: flex; align-items: flex-start; flex-wrap: nowrap; gap: 4px 8px; padding: 10px 10px 10px 14px; border-radius: var(--radius-md);
+  background: var(--card-bg); color: var(--fg); border: 1px solid var(--border-strong); box-shadow: var(--corner-card-shadow, 0 8px 24px rgba(0, 0, 0, 0.12));
   font-size: 12px; max-width: 100%;
 }
 .kanban-toast.is-error { border-color: var(--kc-red); }
@@ -267,10 +266,7 @@
 .kanban-toast-btn:hover { background: var(--bg-hover); }
 .kanban-toast-close { flex: 0 0 auto; align-self: flex-start; display: inline-flex; border: 0; background: none; color: var(--fg-muted); cursor: pointer; padding: 2px; border-radius: 4px; }
 .kanban-toast-close:hover { color: var(--fg); background: var(--bg-hover); }
-.kanban-toasts-more {
-  pointer-events: auto; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-secondary); font: inherit; font-size: 11px;
-  padding: 2px 10px; border-radius: 999px; cursor: pointer;
-}
+/* .kanban-toasts-more takes the corner's "N more" look (.corner-more, corner-stack.css). */
 
 /* ── Card widgets: prompt, editor, composer, start, leader row ── */
 .kanban-prompt { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; font-size: 12px; min-width: 0; }

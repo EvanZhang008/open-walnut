@@ -355,5 +355,5 @@ test('C91: an edit the leader raced asks Keep mine or Use theirs; a lane deleted
   await expect(laneHead(pane, 'mitigating').getByTestId('kanban-lane-rename-input')).toBeFocused()
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/lanes`, { lanes: lanes.filter((l) => l.id !== 'mitigating') })
   await expect(laneHead(pane, 'mitigating')).toHaveCount(0, { timeout: 15_000 })
-  await expect(pane.getByTestId('kanban-toast').filter({ hasText: '"Mitigating" was deleted while you were renaming it.' })).toBeVisible()
+  await expect(pane.page().getByTestId('kanban-toast').filter({ hasText: '"Mitigating" was deleted while you were renaming it.' })).toBeVisible()
 })

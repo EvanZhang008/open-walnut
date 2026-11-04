@@ -1,6 +1,6 @@
 /**
  * Approvals as Needs you on the Mac (web/src/components/approvals/): one store every surface
- * reads (the bottom-right cards, the Home and Org Needs you rows, the dialog), and the system
+ * reads (the bottom-left cards, the Home and Org Needs you rows, the dialog), and the system
  * notification a new approval raises, whose click opens that request.
  *
  *  - a new pending approval raises ONE notice (a re-read or a repeated event never another);

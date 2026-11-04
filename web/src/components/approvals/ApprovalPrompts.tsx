@@ -3,9 +3,11 @@
  * console shows them. Mounted once in App, it feeds the store (approvals-store.ts) and draws
  * the window-wide parts:
  *
- *  - the cards at the bottom right of every console window;
- *  - the dialog a Needs you row (ApprovalRow, on Home and the Org page) or a click on the
- *    system notification (approval-notify.ts) opens;
+ *  - the card at the bottom left of every console window, on every page, nearest the corner of
+ *    the one stack every notice shares (common/corner-stack.tsx); it holds the request's buttons;
+ *  - the dialog that the Needs you line (ApprovalRow: Home, the Org page, the notification
+ *    center), the card's title or its "N waiting" or a click on the system notification (approval-notify.ts)
+ *    opens, in the order the requests came;
  *  - the system notification itself, raised by the store when a new approval arrives.
  *
  *  - tap: Approve / Deny;
@@ -17,10 +19,12 @@
  * device is trusted on first use, a later one waits for an existing device's approval).
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
@@ -51,16 +55,34 @@ export function requesterText(a: Approval, hostName: string): string {
   return `${who} on ${hostName}`;
 }
 
+/** The time left, said as such; the last minute is marked (a warning colour). */
+function Clock({ a, now }: { a: Approval; now: number }) {
+  const soon = Date.parse(a.expiresAt) - now < 60_000;
+  return (
+    <span className={`approval-clock${soon ? ' approval-clock-soon' : ''}`} title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>
+      {timeLeft(a.expiresAt, now)} left
+    </span>
+  );
+}
+
+/** Who asks in a word or two, for the card's short line: the task, else the command's name. */
+function shortRequester(a: Approval): string {
+  const r = a.requester;
+  if (r.taskTitle) return r.taskTitle;
+  const cmd = r.command?.trim().split(/\s+/)[0];
+  return cmd ? cmd.split('/').pop()! : 'A script';
+}
+
 export function settledWord(a: Approval): string {
   return a.status === 'approved' ? 'Approved' : a.status === 'denied' ? 'Denied' : a.status === 'expired' ? 'Expired' : 'Withdrawn';
 }
 
 /** Deny and the Approve this window offers, with their busy words. */
-export function ApprovalButtons({ a, s, compact = false }: { a: Approval; s: ApprovalsState; compact?: boolean }) {
+export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   const working = s.busy[a.id];
   const kind = approveKind(s, a);
   return (
-    <div className={`approval-actions${compact ? ' approval-actions-compact' : ''}`}>
+    <div className="approval-actions">
       <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
         onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny', false); }}>
         {working === 'deny' ? 'Denying…' : 'Deny'}
@@ -76,17 +98,31 @@ export function ApprovalButtons({ a, s, compact = false }: { a: Approval; s: App
 }
 
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
-function ApprovalBody({ a, s, now, detailOpen = false }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean }) {
+function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   return (
     <>
       <div className="approval-head">
-        <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approval · Face ID / Touch ID' : 'Approval'}</span>
-        <span className="approval-clock" title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>{timeLeft(a.expiresAt, now)}</span>
+        <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approve with Face ID / Touch ID' : 'Approve?'}</span>
+        {onOpen && total > 1 && (
+          <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
+            {total} waiting
+          </button>
+        )}
+        <span className="approval-head-end">
+          <Clock a={a} now={now} />
+          {onMinimize && (
+            <button type="button" className="approval-minimize" aria-label="Make it smaller" title="Make it smaller: its title, the time and the buttons" data-testid="approval-minimize" onClick={onMinimize}>
+              <span aria-hidden="true">–</span>
+            </button>
+          )}
+        </span>
       </div>
-      <div className="approval-what">{a.what}</div>
-      <div className="approval-who">{requesterText(a, hostName)}{a.requester.cwd ? <span className="approval-cwd"> · {a.requester.cwd}</span> : null}</div>
+      {onOpen
+        ? <button type="button" className="approval-what approval-what-open" title="Open the request" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
+        : <div className="approval-what">{a.what}</div>}
+      <div className="approval-who">{requesterText(a, hostName)}{a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}</div>
       {a.detail ? (
         <details className="approval-detail" open={detailOpen}>
           <summary>Detail</summary>
@@ -103,6 +139,8 @@ function ApprovalBody({ a, s, now, detailOpen = false }: { a: Approval; s: Appro
 
 /** A line offering the system notification where this window cannot raise one yet. */
 function NoticeOffer() {
+  // A phone gets its pushes from the Walnut app, not from this page.
+  const phone = usePhoneLayout();
   const [access, setAccess] = useState<NoticeAccess>(() => noticeAccess());
   const [nativeOff, setNativeOff] = useState(false);
   useEffect(() => {
@@ -111,6 +149,7 @@ function NoticeOffer() {
     void nativeNoticeStatus().then((st) => { if (live) setNativeOff(st === 'off'); });
     return () => { live = false; };
   }, [access]);
+  if (phone) return null;
   if (access === 'native') {
     if (!nativeOff) return null;
     return (
@@ -132,28 +171,68 @@ function NoticeOffer() {
 
 function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
   const id = s.openId;
+  // Focus goes into the dialog (its close button, never Approve) and back where it came from.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const isOpen = !!id;
+  useEffect(() => {
+    if (!isOpen) return;
+    const from = document.activeElement as HTMLElement | null;
+    boxRef.current?.querySelector<HTMLElement>('.approval-dialog-close')?.focus();
+    return () => { if (from?.isConnected) from.focus(); };
+  }, [isOpen]);
   useEffect(() => {
     if (!id) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeApproval(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Escape closes this, the top layer, alone: caught before the layers under it (the
+    // notification center listens on document) and kept from them.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); closeApproval(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [id]);
   if (!id) return null;
   const a = s.items.get(id);
   const settled = s.done[id];
   const live = a && Date.parse(a.expiresAt) > now ? a : null;
+  // More than one waiting: list them all, this one marked, and show another without closing. In
+  // the order they came, as the corner shows them: its card is 1.
+  const list = pendingAt(s, now);
+  const at = live ? list.findIndex((x) => x.id === id) : -1;
   return createPortal(
     <div className="app-modal-overlay approval-dialog-overlay" role="dialog" aria-modal="true" aria-label="Approval" data-testid="approval-dialog" onMouseDown={closeApproval}>
-      <div className={`app-modal approval-dialog${live?.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={boxRef} className={`app-modal approval-dialog${live?.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
         <button type="button" className="approval-dialog-close" aria-label="Close" onClick={closeApproval}>×</button>
         {live ? (
           <ApprovalBody a={live} s={s} now={now} detailOpen />
         ) : settled ? (
-          <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
-            {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
-          </div>
+          <>
+            <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
+              {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
+            </div>
+            {list.length > 0 && (
+              <div className="approval-dialog-steps">
+                <span>{list.length === 1 ? '1 more waiting' : `${list.length} more waiting`}</span>
+                <button type="button" className="approval-link" data-testid="approval-dialog-next" onClick={() => openApproval(list[0]!.id)}>Next ›</button>
+              </div>
+            )}
+          </>
         ) : (
           <div className="approval-note" data-testid="approval-dialog-gone">This request is no longer waiting: it was answered, withdrawn or ran out of time.</div>
+        )}
+        {at >= 0 && list.length > 1 && (
+          // Every request waiting, by its title, in the order they came: one click shows another.
+          <div className="approval-dialog-list" data-testid="approval-dialog-list">
+            <div className="approval-dialog-list-head">{list.length} waiting</div>
+            <ol>
+              {list.map((x, i) => (
+                <li key={x.id}>
+                  <button type="button" aria-current={x.id === id ? 'true' : undefined} onClick={() => openApproval(x.id)}>
+                    <span className="approval-dialog-list-n">{i + 1}</span>
+                    <span className="approval-dialog-list-what">{x.what}</span>
+                    <Clock a={x} now={now} />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
         )}
         {live && <NoticeOffer />}
       </div>
@@ -161,6 +240,14 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
     document.body,
   );
 }
+
+/** The count the corner gives, the same as the Needs you line's. */
+const waitingWords = (n: number) => `${n} approval${n === 1 ? '' : 's'} waiting`;
+
+/** A new card's buttons wait this long before they take a click. */
+const ARM_MS = 700;
+/** The answer of the card shown stays this long in its place before the next request shows. */
+const SETTLED_HOLD_MS = 1500;
 
 export function ApprovalPrompts() {
   const s = useApprovals();
@@ -190,30 +277,120 @@ export function ApprovalPrompts() {
   useEvent('quiet:changed', () => { setTimeout(noticePending, 500); });
 
   const now = useNow(1000);
-  // The dialog shows its approval, so the card stack leaves that one out while it is open.
-  const pending = pendingAt(s, now).filter((a) => a.id !== s.openId);
-  const settled = Object.values(s.done).filter((a) => !s.items.has(a.id) && a.id !== s.openId);
+  const phone = usePhoneLayout();
+  // The corner holds one card, the request that came first (the dialog shows the one it opened):
+  // it stays until it is answered, a newer one only adds to its "N waiting".
+  const waiting = pendingAt(s, now).filter((a) => a.id !== s.openId);
+  const first = waiting[0];
+  const card = first;
+  // The answer of the card the corner was showing stays a moment over its place ("Approved …"),
+  // laid over the next request, which is already there, so nothing in the corner moves.
+  // Only the card the corner was showing when it was answered: one answered in the dialog (or
+  // elsewhere while another card showed) already said so where it was answered. Read before the
+  // frame is drawn (a layout effect), so the next card never shows uncovered for a frame.
+  const [receipt, setReceipt] = useState<Approval | null>(null);
+  const shownCard = useRef<string | null>(null);
+  const receiptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useLayoutEffect(() => {
+    const was = shownCard.current;
+    shownCard.current = card?.id ?? null;
+    if (!was || was === card?.id) return;
+    const answered = s.done[was];
+    if (!answered || s.items.has(was) || was === s.openId) return;
+    setReceipt(answered);
+    if (receiptTimer.current) clearTimeout(receiptTimer.current);
+    receiptTimer.current = setTimeout(() => setReceipt(null), SETTLED_HOLD_MS);
+  }, [card?.id, s.done, s.items, s.openId]);
+  useEffect(() => () => { if (receiptTimer.current) clearTimeout(receiptTimer.current); }, []);
+  const holding = card ? receipt : null;
+  // A card made smaller (two short lines) stays so until another request comes (it opens full again, so the
+  // new one is not missed). Lifted over a chat (no free room in the corner) it is that one line
+  // too, so it covers as little as it can.
+  const [lineFor, setLineFor] = useState<{ id: string; n: number } | null>(null);
+  const { compact } = useCornerState();
+  const cardHost = useHostDisplayLabel(card?.requester.host);
+  const asLine = !!card && (phone || compact || (lineFor?.id === card.id && waiting.length <= lineFor.n));
+  // Opened full by a newer request (or another card in the corner): the choice to make it smaller
+  // is spent, so the card stays whole until the person makes it smaller again.
+  // (Set while rendering, React's way of adjusting state to what changed: no effect, no extra frame.)
+  if (lineFor && (!card || card.id !== lineFor.id || waiting.length > lineFor.n)) setLineFor(null);
+  const lastSettled = holding ?? (card ? null : receipt);
+  // A card that takes another's place answers no click for a moment: a second click meant for the
+  // card just answered must not land on the next request's Approve.
+  // The clock starts once the answer laid over it has gone, when the card is first seen.
+  const [armedId, setArmedId] = useState<string | null>(null);
+  const covered = !!holding;
+  useEffect(() => {
+    setArmedId(null);
+    if (!card || covered) return;
+    const t = setTimeout(() => setArmedId(card.id), ARM_MS);
+    return () => clearTimeout(t);
+  }, [card?.id, covered]);
 
   return (
     <>
       <ApprovalDialog s={s} now={now} />
-      {(pending.length > 0 || settled.length > 0) && (
+      {(card || lastSettled) && (
+        <CornerSlot order={CORNER_ORDER.approvals} className="corner-slot-approvals">
         <div className="approval-stack" role="region" aria-label="Approvals">
-          {settled.map((a) => (
-            <div key={a.id} className={`approval-card approval-card-settled approval-${a.status}`} data-approval-id={a.id}>
+          {lastSettled && !card && (
+            <div key={lastSettled.id} className={`approval-card approval-card-settled approval-${lastSettled.status}`} data-approval-id={lastSettled.id} data-testid="approval-settled" role="status">
               <div className="approval-settled-line">
-                {settledWord(a)}
-                <span className="approval-settled-what">{a.what}</span>
+                {settledWord(lastSettled)}
+                <span className="approval-settled-what">{lastSettled.what}</span>
               </div>
             </div>
-          ))}
-          {pending.map((a, i) => (
-            <div key={a.id} className={`approval-card${a.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={a.id} data-testid="approval-card">
-              <ApprovalBody a={a} s={s} now={now} />
-              {i === pending.length - 1 && <NoticeOffer />}
+          )}
+          {card && (
+            <div className="approval-card-place">
+              {asLine ? (
+                // Two short lines: what waits, then how many, the time and the buttons (a phone opens
+                // the request instead, whose buttons take a finger).
+                // On a phone the whole line is one tap target (it has no buttons of its own).
+                <div key={card.id} className={`approval-card approval-card-line${phone ? ' approval-card-tap' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card"
+                  onClick={phone ? () => openApproval(card.id) : undefined}>
+                  <button type="button" className="approval-line-open" onClick={() => openApproval(card.id)}
+                    title={waiting.length > 1 ? waitingWords(waiting.length) : 'Open the request'}>
+                    <span className="approval-kicker">Approve?</span>
+                    <span className="approval-line-what">{card.what}</span>
+                    {phone && <span className="approval-row-open" aria-hidden="true">Open ›</span>}
+                  </button>
+                  {/* "+" where the whole card has its "–": the top right corner. */}
+                  {!phone && lineFor?.id === card.id && !compact && (
+                    <button type="button" className="approval-minimize" aria-label="Show the whole card" title="Show the whole card" data-testid="approval-expand" onClick={() => setLineFor(null)}>
+                      <span aria-hidden="true">+</span>
+                    </button>
+                  )}
+                  <span className="approval-line-break" aria-hidden="true" />
+                  <span className="approval-line-meta">
+                    {waiting.length > 1 && <span className="approval-line-more">{waiting.length} waiting</span>}
+                    {/* Who asks stays in sight beside the buttons: nothing is approved on a title alone. */}
+                    <span className="approval-line-who" title={requesterText(card, cardHost)}>{shortRequester(card)}</span>
+                    <Clock a={card} now={now} />
+                  </span>
+                  {!phone && <ApprovalButtons a={card} s={s} />}
+                  {s.errors[card.id] ? <div className="approval-error" role="alert">{s.errors[card.id]}</div> : null}
+                </div>
+              ) : (
+                <div key={card.id} className={`approval-card${card.mode === 'biometric' ? ' approval-card-biometric' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card">
+                  <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} total={waiting.length} />
+                </div>
+              )}
+              {/* Over the next request while it shows: it also keeps a click meant for the one
+                  just answered off the next one's buttons. */}
+              {holding && (
+                <div key={holding.id} className={`approval-card approval-card-settled approval-settled-over approval-${holding.status}`} data-approval-id={holding.id} data-testid="approval-settled" role="status">
+                  <div className="approval-settled-line">
+                    {settledWord(holding)}
+                    <span className="approval-settled-what">{holding.what}</span>
+                  </div>
+                  <div className="approval-settled-next">Next: {card.what}</div>
+                </div>
+              )}
             </div>
-          ))}
+          )}
         </div>
+        </CornerSlot>
       )}
     </>
   );

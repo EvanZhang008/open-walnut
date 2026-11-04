@@ -1,0 +1,145 @@
+/* The one corner for Walnut's notices (components/common/corner-stack.tsx): bottom left, just
+   right of the sidebar, so the sidebar's own bottom row (bell, update dock, plugin status rows)
+   stays clear. Each kind is a .corner-slot; flex `order` puts a higher one nearer the corner. */
+.corner-stack {
+  /* One look for every card in the corner (toasts, approval cards, board toasts). */
+  --corner-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  /* One padding for every card in the corner; the compact one over a chat. */
+  --corner-card-pad: 10px 12px 10px 14px;
+  --corner-card-pad-compact: 6px 10px 6px 14px;
+  position: fixed;
+  left: var(--corner-stack-left, 16px);
+  /* Above a chat's composer under it when there is no room beside it (corner-stack.tsx). */
+  bottom: calc(var(--corner-stack-bottom, 16px) + var(--wn-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  /* Over a full-screen sheet (9001), under every modal's mask (9300 and up) and menus (9999):
+     a dialog dims it, a picker opens over it. */
+  z-index: 9200;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* Between kinds; each kind keeps its own lines closer together. */
+  gap: 14px;
+  width: var(--corner-stack-width, min(380px, calc(100vw - var(--corner-stack-left, 16px) - 16px)));
+  /* No overflow here: it would clip every card's shadow and the toasts' slide-in. Each kind
+     keeps its own count small instead (one approval card, three toasts, three board toasts). */
+  pointer-events: none;
+}
+
+.corner-stack:empty { display: none; }
+
+/* No room right of a wide notification center, or the phone's drawer open: the stack waits until it closes. */
+.corner-stack.is-tucked,
+.corner-stack.under-drawer { visibility: hidden; }
+
+/* Beside the open notification center, which lists the same toasts: only the rest stays. */
+.corner-stack.beside-center .corner-slot-toasts { display: none; }
+/* The open notification center lists the approvals waiting: the corner's card steps aside. */
+.corner-stack.approvals-listed .corner-slot-approvals { display: none; }
+
+/* A toast's × takes a finger-sized click (the glyph stays small), the same on every kind. */
+.corner-stack :is(.notification-toast-close, .kanban-toast-close) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  margin: -6px -8px -6px 0;
+  border-radius: 6px;
+}
+.corner-stack :is(.notification-toast-close, .kanban-toast-close):hover { background: var(--bg-hover); }
+
+/* A board toast's actions look like every other toast's (.notification-toast-action). */
+.corner-stack .kanban-toast-btn {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+}
+.corner-stack .kanban-toast-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* A board toast takes a toast's shape: its colour mark, its words, its buttons on the next line. */
+.corner-stack .kanban-toast { border-left: 3px solid var(--fg-muted); }
+/* Colour in the corner means something: the accent is what waits on the person (an approval),
+   green, amber and red a result. Plain news keeps a neutral mark, so it never reads as an ask. */
+.corner-stack .notification-toast--info { border-left-color: var(--fg-muted); }
+.corner-stack .notification-toast--info .notification-toast-title { color: var(--fg); }
+/* "N more …" lines up with the cards' words. */
+.corner-stack .corner-more { padding-left: 14px; border-left: 3px solid var(--border-strong); }
+.corner-stack .kanban-toast.is-error { border-color: var(--border-strong); border-left-color: var(--kc-red); }
+.corner-stack .kanban-toast-main { gap: 6px 6px; }
+.corner-stack .kanban-toast-text { flex: 1 0 100%; font-size: 13px; color: var(--fg); }
+
+
+
+.corner-stack :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad); }
+.corner-stack .approval-card:not(.approval-card-line) { padding: var(--corner-card-pad); }
+
+/* Lifted over a chat (corner-stack.tsx is-compact): every notice in its shortest form, so it
+   covers as little of the chat as it can. The approval card is its two short lines
+   (ApprovalPrompts), a toast its title and its buttons; a click on it opens the notification
+   center with the whole text. A toast over an approval card elsewhere keeps one line of what
+   happened (has-approval): the card is what waits. A permission prompt keeps its words, it is
+   answered from them. */
+.corner-stack.is-compact :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad-compact); }
+.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-body { display: none; }
+.corner-stack.has-approval:not(.is-compact) .notification-toast:not(.nfc-perm-toast) .notification-toast-body {
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.corner-stack.is-compact .notification-toast-header { margin-bottom: 4px; }
+.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-header { margin-bottom: 0; }
+.corner-stack.is-compact .notification-toast:not(.nfc-perm-toast) .notification-toast-header ~ :not(.notification-toast-body) { margin-top: 6px; }
+
+/* The room the stack takes at the end of the scroller under it (corner-stack.tsx syncRoom). */
+[data-corner-room]::after {
+  content: '';
+  display: block;
+  flex: none;
+  height: var(--corner-room, 0px);
+  pointer-events: none;
+}
+
+.corner-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.corner-slot:empty { display: none; }
+
+/* "N … waiting ›": the line above a kind's cards in sight (toasts, approvals), the same shape. */
+.corner-more {
+  pointer-events: auto;
+  align-self: stretch;
+  text-align: left;
+  border: 1px solid var(--border-strong);
+  background: var(--card-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--corner-card-shadow);
+  cursor: pointer;
+}
+.corner-more:hover { background: var(--bg-hover); }
+
+/* The phone: a toast covers the page under the top bar while it shows, so it keeps to two short lines. */
+@media (max-width: 640px) {
+  .corner-stack :is(.notification-toast, .kanban-toast) { padding: var(--corner-card-pad-compact); }
+  .corner-stack .corner-slot > * { box-sizing: border-box; max-width: 100%; }
+  .corner-stack .notification-toast-body {
+    margin-bottom: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}

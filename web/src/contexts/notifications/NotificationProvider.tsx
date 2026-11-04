@@ -41,6 +41,7 @@ import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-m
 import { armChime, playChime } from '@/utils/chime';
 // The context lives in a module of its own, so a component can read it without this provider.
 import { NotificationContext } from './notification-context';
+import { pendingAt, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 
 export interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -667,7 +668,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, [markLocalRead]);
 
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
-  const attentionCount = useMemo(() => attentionBadgeCount(feed), [feed]);
+  // An approval a script waits on is something to answer too: the bell counts it, as the
+  // notification center's Needs you does (no clock: the server's expiry event takes one off).
+  const approvalItems = useApprovals().items;
+  const approvalsWaiting = useMemo(() => pendingAt({ items: approvalItems } as ApprovalsState, Date.now()).length, [approvalItems]);
+  const attentionCount = useMemo(() => attentionBadgeCount(feed) + approvalsWaiting, [feed, approvalsWaiting]);
 
   const value = useMemo<NotificationContextValue>(() => ({
     toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,

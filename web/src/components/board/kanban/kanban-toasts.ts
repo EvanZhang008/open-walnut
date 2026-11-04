@@ -26,10 +26,11 @@ export function dismissToastItem(list: readonly KanbanToastItem[], id: string): 
 }
 
 /** What the stack shows: the newest three (all when expanded) and the fold line under them. */
-export function foldToasts<T extends { id: string }>(list: readonly T[], expanded: boolean): { shown: T[]; folded: number; foldText: string } {
-  if (expanded || list.length <= TOASTS_VISIBLE) return { shown: [...list], folded: 0, foldText: '' };
-  const folded = list.length - TOASTS_VISIBLE;
-  return { shown: list.slice(0, TOASTS_VISIBLE), folded, foldText: `+${folded} more ${folded === 1 ? 'move' : 'moves'}` };
+/** `visible`: how many show before the rest fold (fewer while the corner sits over a chat). */
+export function foldToasts<T extends { id: string }>(list: readonly T[], expanded: boolean, visible = TOASTS_VISIBLE): { shown: T[]; folded: number; foldText: string } {
+  if (expanded || list.length <= visible) return { shown: [...list], folded: 0, foldText: '' };
+  const folded = list.length - visible;
+  return { shown: list.slice(0, visible), folded, foldText: `+${folded} more ${folded === 1 ? 'move' : 'moves'}` };
 }
 
 // ── Timers: one clock per toast, all paused together while hovered ──

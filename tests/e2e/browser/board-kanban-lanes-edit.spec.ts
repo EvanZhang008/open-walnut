@@ -199,9 +199,9 @@ test('C65: two moves into Resolved inside 8s keep two toasts, each completing it
   // It waits out the 8 s toast hold on purpose (9 s below), so 30 s leaves too little for the rest.
   test.setTimeout(60_000)
   const pane = await openBoard(page)
-  // The first move's toast sits at the pane's bottom right, over the lane's last card since
-  // fullscreen keeps side margins (2026-10-31, narrower lanes). Move the lower of the two
-  // cards first, so the second one's More is never under that toast.
+  // The first move's toast sits in the window's bottom-left notice corner, which can cover a
+  // lane's last card. Move the lower of the two cards first, so the second one's More is never
+  // under that toast.
   const pair = [team.all[8], team.all[12]]
   const tops = await Promise.all(pair.map(async (id) => (await card(pane, id).boundingBox())!.y))
   const [a, b] = tops[0]! > tops[1]! ? pair : [pair[1]!, pair[0]!]
@@ -213,11 +213,11 @@ test('C65: two moves into Resolved inside 8s keep two toasts, each completing it
     await page.locator('[data-testid="kanban-card-move-lane"][data-lane-id="resolved"]').click()
     await expect.poll(async () => (await boardKanban()).cards[id]?.lane).toBe('resolved')
   }
-  const toasts = pane.getByTestId('kanban-toast')
+  const toasts = pane.page().getByTestId('kanban-toast')
   await expect(toasts).toHaveCount(2)
   await expect(toasts.nth(0)).toContainText('Moved to Resolved. The task is still open.')
   // The pointer over the stack holds both past their 8s.
-  await pane.getByTestId('kanban-toasts').hover()
+  await pane.page().getByTestId('kanban-toasts').hover()
   await page.waitForTimeout(9_000)
   await expect(toasts).toHaveCount(2)
   const stillOpen = toasts.filter({ hasText: 'The task is still open.' })

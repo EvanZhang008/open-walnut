@@ -97,7 +97,7 @@ async function moveByMenu(page: Page, pane: Locator, id: string, laneName: strin
   await fly.getByRole('menuitemradio', { name: laneName }).click()
   await expect(menu).toHaveCount(0)
 }
-const toasts = (pane: Locator) => pane.getByTestId('kanban-toasts')
+const toasts = (pane: Locator) => pane.page().getByTestId('kanban-toasts')
 const phaseOf = async (id: string) => (await getTask(api, id))?.phase
 async function letGo(page: Page): Promise<void> {
   await page.mouse.move(2, 2)

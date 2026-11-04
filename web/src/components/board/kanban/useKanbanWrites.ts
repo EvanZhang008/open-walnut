@@ -46,6 +46,8 @@ export interface KanbanWritesDeps {
   onApplied: () => void;
   /** Toast `Show`: scroll the card into view, unfold its lane, flash and focus it. */
   onReveal: (taskId: string) => void;
+  /** Marks a card a moment in its new place: its move's toast shows in the window's corner, away from it. */
+  onFlash?: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
   /** R3-02: the user changed this task's phase from the board (Complete, Reopen, Undo): the move it causes is not news. */
   onHumanPhase?: (taskId: string) => void;
@@ -167,6 +169,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
         d.current.reloadKanban();
       } else {
         toastError(`Couldn't move ${quote(card.title)}: ${boardErrorMessage(r.err)}`);
+        d.current.onFlash?.(taskId);
       }
       return false;
     }
@@ -318,6 +321,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
     fromDone: boolean; fromWait: boolean; reason: string; undo: { lane: string; index: number; source: 'explicit' | 'auto' };
   }): void {
     const t = d.current.toasts;
+    d.current.onFlash?.(m.taskId);
     const clearWaiting: KanbanToastAction[] = m.fromWait
       ? [{ label: 'Clear waiting on', testId: 'kanban-toast-clear-waiting', run: () => { void setCard(m.taskId, { waiting_on: '' }); } }]
       : [];

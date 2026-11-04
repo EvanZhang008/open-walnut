@@ -16207,15 +16207,11 @@ a.task-kebab-info:hover {
 
 /* ===== Unified Notification Toaster (top-right) ===== */
 
+/* Placed by the corner stack (corner-stack.css) with every other notice. */
 .notification-toaster {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 9999;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-width: 380px;
+  gap: 10px;
   pointer-events: none;
 }
 
@@ -16244,7 +16240,7 @@ a.task-kebab-info:hover {
 }
 
 @keyframes notification-toast-in {
-  from { opacity: 0; transform: translateX(40px); }
+  from { opacity: 0; transform: translateX(-40px); }
   to { opacity: 1; transform: translateX(0); }
 }
 

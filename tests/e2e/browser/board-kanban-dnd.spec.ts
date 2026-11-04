@@ -178,7 +178,7 @@ test('C8: a move the server refuses puts the card back in its place and says so'
   const to = await pointOn(laneBody(pane, 'waiting-cr').locator('[data-testid="kanban-card"]').last(), 'bottom')
   const lane = (await pane.locator('[data-testid="kanban-lane"][data-lane-id="waiting-cr"]').boundingBox())!
   await drag(page, card(pane, src), { x: to.x, y: Math.min(to.y, lane.y + lane.height - 40) })
-  await expect(pane.getByTestId('kanban-toasts')).toContainText(`Couldn't move "${title.slice(0, 20)}`, { timeout: 15_000 })
+  await expect(pane.page().getByTestId('kanban-toasts')).toContainText(`Couldn't move "${title.slice(0, 20)}`, { timeout: 15_000 })
   await expect.poll(() => laneIds(pane, 'waiting-others')).toEqual(from)
 })
 
@@ -231,7 +231,7 @@ test('C86: anywhere in the done lane is its top: the line is drawn there, the ca
   })
   expect(lineBefore).toBe(done[0])
   await expect.poll(async () => (await laneIds(pane, 'resolved'))[0]).toBe(src)
-  await expect(pane.getByTestId('kanban-toasts')).toContainText('Moved to Resolved. The task is still open.')
+  await expect(pane.page().getByTestId('kanban-toasts')).toContainText('Moved to Resolved. The task is still open.')
   // The keyboard says position 1 in a done lane.
   const kb = (await laneIds(pane, 'waiting-cr'))[0] ?? (await laneIds(pane, 'waiting-others')).slice(-1)[0]
   await card(pane, kb).focus()

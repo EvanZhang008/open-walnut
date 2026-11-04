@@ -25,17 +25,28 @@ that host's daemon to your Mac, so the request shows which host asked.
 ## Where the ask shows up
 
 - **The web console and the Mac app**, in three places that answer together:
-  - **Needs you**: a row first in Home's Needs you section (counted there), and in the Org page's
-    Needs you, on Main for every approval and on a project's lead for one its own work asked for.
-    Deny and Approve are in the row; a click on the row opens the request.
+  - **Needs you**: one line first in Home's Needs you section (counted there), in the
+    notification center, and in the Org page's Needs you, on Main for every approval and on a
+    project's lead for one its own work asked for. It says how many wait; a click opens them,
+    in the order they came. The title and the buttons are on the card.
   - **A system notification**, `Approve? <what>`: in the Mac app a macOS notification (allow it
     once when macOS asks; System Settings, Notifications, Walnut turns it back on), in a browser a
-    web notification once you allowed those ("Notify me on this computer" under a card). It shows
+    web notification once you allowed those ("Notify me on this computer" in the opened request). It shows
     whether or not Walnut is in front, and a click brings Walnut forward with the request open.
     Quiet mode holds it back unless quiet lets permission prompts through, and an answer anywhere
     takes it back.
-  - **A card** at the bottom right of every window, with what is asked, who asked (the task, or
-    the script and its host and folder), the detail, the time left, and Approve / Deny.
+  - **A card** at the bottom left of every window, on every page (the corner every Walnut notice
+    shares, beside the sidebar), three short lines: "Approve?" with how many wait ("3 waiting", the
+    count the Needs you line gives, which opens the list of them) and the time left, what is asked, then who asked (the task,
+    or the script and its host) with Deny and Approve. It shows the request that came first and
+    stays until that one is answered; the answer shows a moment over the next one. Its title
+    opens the whole request (the folder and the detail too) in a dialog that lists every request
+    waiting by its title, the one shown marked, and shows another at a click. Its "–" puts it down to two short lines (what is
+    asked; how many, the time left and the buttons) until another request comes, and its "+"
+    shows it whole again; above a chat's composer it is those two lines by itself. On a phone it
+    is those two lines under the top bar, and a tap opens the dialog. It pops up on every page, Home and the Org page included; only
+    while the notification center is open, which lists the approvals itself, the card steps
+    aside.
   The web side is `web/src/components/approvals/` (one store, `approvals-store.ts`, for all of
   them); the Mac app's notification is `desktop/NotificationBridge.swift`.
 - **The iPhone app**: a push with Approve and Deny on the banner for a plain
