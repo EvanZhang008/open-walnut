@@ -25,6 +25,8 @@ export interface FailedStep {
   pipeStatus?: number[]
   /** The line of the user's command it is on, when its text is found there once. */
   line?: number
+  /** That line's text (at most 200 characters). */
+  text?: string
 }
 
 const STEP_RE = /^walnut strict: exit (\d+) \[([\d ]*)\]: (.*)$/gm

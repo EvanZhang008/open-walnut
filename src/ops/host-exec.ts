@@ -15,9 +15,16 @@ function blockedLine(b: Record<string, unknown>): string | null {
 
 /** A strict run's failing step (host-exec-strict.ts), in one sentence. */
 function failedLine(b: Record<string, unknown>): string {
-  const f = b.failedStep && typeof b.failedStep === 'object' ? b.failedStep as { exitCode?: unknown; line?: unknown; command?: unknown; pipeStatus?: unknown } : null
+  const f = b.failedStep && typeof b.failedStep === 'object' ? b.failedStep as { exitCode?: unknown; line?: unknown; text?: unknown; command?: unknown; pipeStatus?: unknown } : null
   if (!f) return ''
   const where = typeof f.line === 'number' ? ` on line ${f.line}` : ''
+  const codes = Array.isArray(f.pipeStatus) ? f.pipeStatus.filter((c): c is number => typeof c === 'number') : []
+  const bad = codes.reduce((at, c, i) => (c !== 0 ? i : at), -1)
+  if (codes.length > 1 && bad >= 0 && bad < codes.length - 1) {
+    // pipefail took a middle member's code; $BASH_COMMAND names the last member, which did not fail.
+    const text = typeof f.text === 'string' && f.text ? ` (\`${f.text}\`)` : ''
+    return `It stopped${where}${text}: command ${bad + 1} of its pipe of ${codes.length} exited ${codes[bad]} (the pipe's commands exited ${codes.join(', ')} in order).`
+  }
   const pipe = Array.isArray(f.pipeStatus) ? ` Its pipe's commands exited ${f.pipeStatus.join(', ')} in order.` : ''
   return `It stopped at \`${String(f.command)}\`${where}, which exited ${String(f.exitCode)}.${pipe}`
 }

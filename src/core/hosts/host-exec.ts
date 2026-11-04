@@ -456,7 +456,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined
   if (step && hasCommand) {
     const at = (await import('./host-exec-strict.js')).lineOf(step, params.command!)
-    if (at) step.line = at
+    if (at) { step.line = at; step.text = params.command!.split('\n')[at - 1].trim().slice(0, 200) }
   }
   log.session.info('host exec', {
     taskId: caller.taskId, fromHost: caller.host, host, jobId, cwd: reply.cwd, background, running: out.running, shell: out.shell, legacy: !conn.hasCapability('host-exec-v2'),

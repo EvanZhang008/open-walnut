@@ -384,13 +384,17 @@ describe('host_exec', () => {
     expect(plain.body).toMatchObject({ exitCode: 0, output: 'start\nnever\n' })
     expect(plain.body.failedStep).toBeUndefined()
     const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: line, strict: true }, SID)
-    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'cat', pipeStatus: [0, 1, 0], line: 2 } })
+    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'cat', pipeStatus: [0, 1, 0], line: 2, text: 'true | false | cat' } })
     expect(strict.body.output).not.toContain('never')
     // A function's failure names the command inside it; the op's outcome says where it stopped.
     const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'check() { grep -q zzz-not-there /dev/null; }\ncheck\necho never', strict: true },
       { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
     expect(viaOp.result).toMatchObject({ exitCode: 1, failedStep: { command: 'grep -q zzz-not-there /dev/null', line: 1 } })
     expect(String(viaOp.result.outcome)).toContain('It stopped at `grep -q zzz-not-there /dev/null` on line 1, which exited 1.')
+    // A pipe that failed in its middle is named by its line and member, not by its last command.
+    const piped = await executeOp('host_exec', { host: 'macbox', command: line, strict: true },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(String(piped.result.outcome)).toContain("It stopped on line 2 (`true | false | cat`): command 2 of its pipe of 3 exited 1 (the pipe's commands exited 0, 1, 0 in order).")
     // argv runs one program: strict changes nothing there.
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['sh', '-c', 'false; echo after'], strict: true }, SID)).body).toMatchObject({ exitCode: 0, output: 'after\n' })
   }, 60_000)
