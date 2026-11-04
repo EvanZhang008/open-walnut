@@ -154,6 +154,28 @@ describe('afterTurn on the phone send route', () => {
     }
   }, 90000)
 
+  it('also holds it during the first turn of a session (the one its launch message started)', async () => {
+    const ws = await connectWs()
+    try {
+      const firstResult = waitForWsEvent(ws, 'session:result', () => true, 60000)
+      const runningSeen = waitForWsEvent(ws, 'session:status-changed', (d) => d.taskId === 'aft-local-001' && d.process_status === 'running', 30000)
+      const started = await sendWsRpc(ws, 'session:start', { taskId: 'aft-local-001', message: 'slow:6000 the first turn' })
+      expect(started.ok).toBe(true)
+      // The session record says Running while that turn works.
+      const sid = String((await runningSeen).data!.sessionId)
+      expect(sid).not.toBe('undefined')
+      const sent = await api('POST', `/sessions/${sid}/messages`, { text: 'after the first turn', afterTurn: true, messageId: 'qm-mobile-e2eafter05' })
+      expect(sent.status).toBe(202)
+      expect(sent.json).toEqual({ messageId: 'qm-mobile-e2eafter05', afterTurn: true })
+      expect(await rowOf(sid, 'qm-mobile-e2eafter05')).toMatchObject({ status: 'pending', afterTurn: true })
+      const answered = waitForWsEvent(ws, 'session:result', (d) => d.sessionId === sid && String(d.result ?? '').includes('after the first turn'), 60000)
+      await firstResult
+      await answered
+    } finally {
+      ws.close()
+    }
+  }, 120000)
+
   it('lets a held message be withdrawn, and then nothing is sent', async () => {
     const ws = await connectWs()
     try {

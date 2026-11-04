@@ -18,7 +18,7 @@ import { bus, EventNames } from '../../../src/core/event-bus.js';
 import {
   resetCache, sendMessageToSession, getQueue, editMessage, deleteMessage, enqueueMessage,
 } from '../../../src/core/session-message-queue.js';
-import { createSessionRecord, updateSessionRecord } from '../../../src/core/session-tracker.js';
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js';
 import { getSessionQueuePayload } from '../../../src/core/sessions/session-extras.js';
 import { STOP_PARKED_REASON } from '../../../src/core/relay-fates.js';
 import {
@@ -27,6 +27,15 @@ import {
 } from '../../../src/core/sessions/queue-after-turn.js';
 
 const running = new Set<string>();
+/** The turn starts/ends for the runner and, where the session has a record, for its status too. */
+async function startTurn(sid: string): Promise<void> {
+  running.add(sid);
+  if (await getSessionByClaudeId(sid)) await updateSessionRecord(sid, { process_status: 'running' });
+}
+async function endTurn(sid: string): Promise<void> {
+  running.delete(sid);
+  if (await getSessionByClaudeId(sid)) await updateSessionRecord(sid, { process_status: 'idle' });
+}
 let sends: Array<{ sessionId: string; interrupt?: boolean; source: string }> = [];
 
 beforeEach(async () => {
@@ -76,6 +85,17 @@ describe('a send lined up for after the turn', () => {
     const row = await hold('s2', 'idle send');
     expect(row.status).toBe('pending');
     expect(sends.map((s) => s.sessionId)).toEqual(['s2']);
+  });
+
+  it('is held during a turn only the session record knows (the one a launch prompt started)', async () => {
+    await createSessionRecord('s2b', 'task-2b', 'proj', '/tmp', { initialProcessStatus: 'running' });
+    // The runner has no queued row to deliver for this turn: only the record says it runs.
+    const row = await hold('s2b', 'while the first turn runs');
+    expect(row.status).toBe('parked');
+    expect(row.parkedReason).toBe(AFTER_TURN_REASON);
+    expect(sends).toEqual([]);
+    await updateSessionRecord('s2b', { process_status: 'idle' });
+    expect(await releaseAfterTurn('s2b', { viaEvent: true })).toBe('released');
   });
 
   it('is not held while the turn waits on a permission prompt: the words are the answer', async () => {
@@ -196,7 +216,7 @@ describe('release when the turn ends', () => {
     const [row] = await getQueue('r5');
     expect(row.status).toBe('parked');
     expect(row.parkedReason).toBe(STOP_PARKED_REASON);
-    running.delete('r5');
+    await endTurn('r5');
     expect(await releaseAfterTurn('r5', { viaEvent: true })).toBe('none');
     expect(sends).toEqual([]);
   });
@@ -206,7 +226,7 @@ describe('release when the turn ends', () => {
     running.add('r6');
     await hold('r6', 'before the stop');
     await updateSessionRecord('r6', { stopRequest: { id: 'stop-1', requestedAt: new Date().toISOString(), state: 'confirmed' } });
-    running.delete('r6');
+    await endTurn('r6');
     expect(await releaseAfterTurn('r6', { viaEvent: true })).toBe('stopped');
     const [row] = await getQueue('r6');
     expect(row.parkedReason).toBe(STOP_PARKED_REASON);
@@ -218,7 +238,7 @@ describe('release when the turn ends', () => {
     running.add('r7');
     await hold('r7', 'during a stop');
     await updateSessionRecord('r7', { stopRequest: { id: 'stop-2', requestedAt: new Date().toISOString(), state: 'pending' } });
-    running.delete('r7');
+    await endTurn('r7');
     expect(await releaseAfterTurn('r7', { viaEvent: true })).toBe('stopping');
     expect(sends).toEqual([]);
   });
@@ -237,6 +257,16 @@ describe('the turn-end events and the boot sweep', () => {
     bus.emit(EventNames.SESSION_RESULT, { sessionId: 'e1', result: 'done' }, ['*'], { source: 'test' });
     await waitFor('the row to be released', async () => (await getQueue('e1'))[0]?.status === 'pending');
     expect((await getQueue('e1'))[0].id).toBe(row.id);
+  });
+
+  it('the session going idle (a status change) releases the row', async () => {
+    await startQueueAfterTurn();
+    await createSessionRecord('e3', 'task-e3', 'proj', '/tmp', { initialProcessStatus: 'running' });
+    await startTurn('e3');
+    const row = await hold('e3', 'after the status change');
+    await endTurn('e3');
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: 'e3', process_status: 'idle' }, ['*'], { source: 'test' });
+    await waitFor('the row to be released', async () => (await getQueue('e3')).find((r) => r.id === row.id)?.status === 'pending');
   });
 
   it('an event that comes a tick before the runner lets go is retried', async () => {

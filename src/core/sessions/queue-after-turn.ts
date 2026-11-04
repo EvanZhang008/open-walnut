@@ -38,9 +38,16 @@ export function presentAfterTurn<T extends Pick<QueuedMessage, 'status' | 'parke
   return { ...rest, status: 'pending', afterTurn: true } as unknown as T & { afterTurn?: true };
 }
 
+/**
+ * Whether a turn runs. The runner knows the turns it delivered a queued row for; the turn a launch
+ * prompt started, or one the CLI began by itself, is on the session record's status only (the
+ * "Running" a person sees), so both are asked.
+ */
 async function turnRunning(sessionId: string): Promise<boolean> {
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
-  return sessionRunner.isTurnRunning(sessionId);
+  if (sessionRunner.isTurnRunning(sessionId)) return true;
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  return (await getSessionByClaudeId(sessionId))?.process_status === 'running';
 }
 
 /**
@@ -91,7 +98,8 @@ export function scheduleAfterTurnRelease(sessionId: string, delayMs = GRACE_MS, 
   const timer = setTimeout(() => {
     timers.delete(sessionId);
     releaseAfterTurn(sessionId, { viaEvent }).then((outcome) => {
-      if (outcome === 'running' && viaEvent && attempt < EVENT_RETRIES) {
+      // 'busy' too: the row of the turn that just ended leaves the queue a moment after its result.
+      if ((outcome === 'running' || outcome === 'busy') && viaEvent && attempt < EVENT_RETRIES) {
         scheduleAfterTurnRelease(sessionId, EVENT_RETRY_MS, true, attempt + 1);
       }
     }).catch((err) => {
@@ -154,8 +162,11 @@ export async function setAsideAfterTurnHolds(sessionId: string): Promise<number>
 }
 
 function onTurnEnd(event: BusEvent): void {
-  const sessionId = (event.data as { sessionId?: string } | undefined)?.sessionId;
+  const data = event.data as { sessionId?: string; process_status?: string } | undefined;
+  const sessionId = data?.sessionId;
   if (!sessionId || !watching.has(sessionId)) return;
+  // The status feed also reports every tool the turn runs: only a session that is no longer running ends a hold.
+  if (event.name === EventNames.SESSION_STATUS_CHANGED && data?.process_status === 'running') return;
   scheduleAfterTurnRelease(sessionId, GRACE_MS, true);
 }
 
@@ -167,7 +178,7 @@ export async function startQueueAfterTurn(): Promise<void> {
     subscribed = true;
     bus.subscribe(SUBSCRIBER, onTurnEnd, {
       global: true,
-      interest: [EventNames.SESSION_RESULT, EventNames.SESSION_TURN_SETTLED, EventNames.SESSION_ERROR],
+      interest: [EventNames.SESSION_RESULT, EventNames.SESSION_TURN_SETTLED, EventNames.SESSION_ERROR, EventNames.SESSION_STATUS_CHANGED],
     });
   }
   const { sessionsWithHeld } = await import('../session-queue-park.js');
