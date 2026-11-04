@@ -143,7 +143,9 @@ describe('LocalDaemon upgrade', () => {
     expect(f.recheck).toHaveBeenCalledTimes(1)
     f.ping.mockResolvedValueOnce({ alive: true, version: 'old-version', capabilities: ['cron-supervision-v1'] })
       .mockResolvedValue({ alive: true, version: 'new-version', capabilities: ['cron-supervision-v1'] })
-    await expect(f.daemon.ensureRunning()).resolves.toBe(32300)
+    // No run now: the update runs beside the daemon that serves, which the start adopts at once.
+    await expect(f.daemon.ensureRunning()).resolves.toBe(32100)
+    await f.daemon.managedUpdatePending
     expect(f.managed).toHaveBeenCalledTimes(1)
   })
 
@@ -157,6 +159,7 @@ describe('LocalDaemon upgrade', () => {
     const f = fixture({ execRunning: 0, capabilities: ['cron-supervision-v1'] })
     f.managed.mockResolvedValue('busy' as never)
     await expect(f.daemon.ensureRunning()).resolves.toBe(32100)
+    await f.daemon.managedUpdatePending
     expect(f.managed).toHaveBeenCalledTimes(1)
     expect(f.recheck).toHaveBeenCalledTimes(1)
   })

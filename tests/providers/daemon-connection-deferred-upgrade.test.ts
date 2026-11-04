@@ -18,7 +18,11 @@
  *   - a source ratchet: every path that can upload or stop a daemon is reached
  *     from connect() and reconnect() only through the deferred decision.
  *
- * All SSH is stubbed at sshExec; no process, socket or tunnel is created.
+ * The unmanaged update's way back (a kept copy, a trial, the old daemon again) is in
+ * daemon-connection-unmanaged-rollback.test.ts.
+ *
+ * All SSH is stubbed at sshExec (tests/helpers/daemon-connection-update-stubs.ts); no
+ * process, socket or tunnel is created.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -34,49 +38,11 @@ import {
   daemonHandoverPending,
   getDaemonConnectState,
   getDaemonPoolStatus,
-  remoteServiceProbePaths,
   setPooledConnectionForTest,
   waitDaemonHandover,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
-
-const TARGET = { hostname: 'devbox.example.com', user: 'tester' }
-const EXPECTED = 'walnut-daemon-expected00'
-const OLD = 'walnut-daemon-old00000'
-const RUNNING = JSON.stringify({ running: true, pid: 4242, port: 32100 })
-
-type Priv = Record<string, (...args: unknown[]) => unknown>
-const priv = (c: DaemonConnection) => c as unknown as Priv
-const state = (c: DaemonConnection) => c as unknown as Record<string, unknown>
-
-function probe(present: string[] = []): string {
-  return remoteServiceProbePaths().map((p) => `${present.includes(p) ? 'present' : 'absent'} ${p}`)
-    .concat('walnut-service-probe-done').join('\n')
-}
-const MANAGED = probe(['$HOME/.config/systemd/user/open-walnut-daemon.service'])
-
-interface Routes { probe: string; version: string; status?: string }
-
-function stub(c: DaemonConnection, routes: Routes): string[] {
-  const seen: string[] = []
-  vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
-  vi.spyOn(priv(c), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
-  vi.spyOn(priv(c), 'getLocalBinaryPath').mockResolvedValue('/fixture/daemon')
-  vi.spyOn(priv(c), 'sshExec').mockImplementation(async (...args: unknown[]) => {
-    const cmd = String(args[0])
-    seen.push(cmd)
-    if (cmd.includes('walnut-service-probe-done')) return routes.probe
-    if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed\n'
-    if (cmd.includes('uname -m')) return 'x86_64'
-    if (cmd.includes('--status')) return routes.status ?? RUNNING
-    if (cmd.includes('acp-busy.json')) return ''
-    if (cmd.includes('daemon.version')) return routes.version
-    return ''
-  })
-  return seen
-}
-
-const destructive = (seen: string[]) => seen.filter((c) => c === 'DEPLOY' || c.includes('--stop') || /\bkill\b(?! -0\b)/.test(c))
+import { EXPECTED, OLD, TARGET, priv, state, probe, MANAGED, stub, destructive } from '../helpers/daemon-connection-update-stubs.js'
 
 let conns: DaemonConnection[] = []
 function make(): DaemonConnection {

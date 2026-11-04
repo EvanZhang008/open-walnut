@@ -129,6 +129,10 @@ function isolateSpawnJournal(): void {
  */
 function isolateTaskDirRoot(): void {
   delete process.env.WALNUT_TASK_DIR;
+  if (!process.env.WALNUT_DAEMON_PREVIOUS_ROOT) {
+    // The kept copies of a replaced daemon (local-daemon-replace.ts previousKeepDir) too.
+    process.env.WALNUT_DAEMON_PREVIOUS_ROOT = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'daemon-previous');
+  }
   if (process.env.WALNUT_TASK_DIR_ROOT) return;
   process.env.WALNUT_TASK_DIR_ROOT = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'task-dirs');
 }

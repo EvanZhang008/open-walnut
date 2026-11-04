@@ -4,9 +4,10 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { WebSocket } from '#ws'
 import { setTimeout as delay } from 'node:timers/promises'
-import { daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
+import { performance } from 'node:perf_hooks'
+import { DAEMON_SERVICE_LABEL, daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
 import { accountInfo } from '../lib/account.js'
-import { createDaemonServiceManager, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
+import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
 import { pruneDaemonServiceVersions, stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
 import { createSystemServiceAccess } from './daemon-service-system.js'
@@ -18,6 +19,12 @@ import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
 import { OVER_BUSY_FLAG, OVER_BUSY_PLAIN_MS, OVER_BUSY_WAIT_MS } from './daemon-over-busy.js'
+import { proveDaemonBoot } from './daemon-boot-proof.js'
+import { launchdSpawnsJobs } from './daemon-service-launchd.js'
+import { handBackStandIn } from './daemon-service-handback.js'
+import { daemonReady, daemonStays } from './daemon-service-ready.js'
+
+export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
 export interface DaemonServiceCliOptions {
   scope?: DaemonServiceScope
@@ -28,13 +35,13 @@ export interface DaemonServiceCliOptions {
   overBusy?: boolean
 }
 
-export function runDaemonServiceCommand(program: string, args: string[], input?: string): Promise<DaemonServiceCommandResult> {
+export function runDaemonServiceCommand(program: string, args: string[], input?: string, timeoutMs?: number): Promise<DaemonServiceCommandResult> {
   return new Promise((resolve) => {
     let result: DaemonServiceCommandResult | undefined
     const controlsService = ['systemctl', 'launchctl'].includes(path.basename(program))
       || (program === 'sudo' && args.includes('/usr/bin/systemctl'))
     const runsUpdate = args[0] === 'walnut' && args[1] === 'daemon' && args[2] === 'update'
-    const timeout = runsUpdate ? 600_000 : controlsService ? 75_000 : 15_000
+    const timeout = timeoutMs ?? (runsUpdate ? 600_000 : controlsService ? 75_000 : 15_000)
     const child = execFile(program, args, { encoding: 'utf8', timeout, maxBuffer: 128 * 1024 }, (error, stdout, stderr) => {
       result = { code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout, stderr: stderr || error?.message || '' }
     })
@@ -49,54 +56,14 @@ export function runDaemonServiceCommand(program: string, args: string[], input?:
   })
 }
 
-export async function daemonReady(runtimeDir: string, expectedExecutable?: string, timeoutMs = 15_000, previousInstance?: string): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  const expected = expectedExecutable ? await fs.realpath(expectedExecutable) : undefined
-  const markers = () => Promise.all(['daemon.port', 'daemon.instance', 'daemon.service']
-    .map((name) => fs.readFile(path.join(runtimeDir, name), 'utf8').then((value) => value.trim())))
-  do {
-    try {
-      const before = await markers()
-      const [portText, instanceId, serviceId] = before
-      const port = Number(portText)
-      if (instanceId && instanceId !== previousInstance && instanceId === serviceId && Number.isInteger(port) && port > 0 && port <= 65535) {
-        const reply = await new Promise<Record<string, unknown> | null>((resolve) => {
-          const socket = new WebSocket(`ws://127.0.0.1:${port}`, { maxPayload: 128 * 1024 })
-          let finished = false
-          const finish = (value: Record<string, unknown> | null) => {
-            if (finished) return
-            finished = true
-            clearTimeout(timer)
-            socket.terminate()
-            resolve(value)
-          }
-          const timer = setTimeout(() => finish(null), Math.max(1, Math.min(1500, deadline - Date.now())))
-          socket.on('error', () => finish(null))
-          socket.on('close', () => finish(null))
-          socket.on('open', () => socket.send(JSON.stringify({ id: 1, cmd: 'hello' })))
-          socket.on('message', (raw) => {
-            try {
-              const value = JSON.parse(raw.toString())
-              if (value?.id === 1) finish(value)
-            } catch { finish(null) }
-          })
-        })
-        const managed = reply?.cronSupervision as { managed?: unknown } | undefined
-        if (reply?.ok === true && reply.instanceId === instanceId && managed?.managed === true
-          && Array.isArray(reply.capabilities) && reply.capabilities.includes('cron-supervision-v1')
-          && (!expected || (typeof reply.serviceExecutable === 'string'
-            && await fs.realpath(reply.serviceExecutable) === expected))) {
-          const after = await markers()
-          if (before.every((value, index) => value === after[index])) return true
-        }
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    if (Date.now() < deadline) await delay(Math.min(250, deadline - Date.now()))
-  } while (Date.now() < deadline)
-  return false
-}
+
+/**
+ * How long a started service has to answer, in every scope. The first start of a new build
+ * reads the login shell's PATH (host-runtime-core.ts), which on a slow machine (an Intel
+ * Mac, 2026-11-04) took longer than the 15 s this was, and a readiness timeout starts the
+ * rollback, the riskiest step of an update. The cron supervisor also waits 5 s first.
+ */
+export const SERVICE_READY_WAIT_MS = 60_000
 
 /** How long an install waits for a busy daemon (its relays, a slow answer) before giving up. */
 export const HANDOVER_BUSY_WAIT_MS = 90_000
@@ -129,7 +96,7 @@ export async function requestDaemonServiceHandover(
     if (error.code === 'ENOENT') return false
     throw new DaemonServiceHandoverPendingError(`Cannot inspect pending handover: ${String(error)}`)
   })
-  const deadline = Date.now() + (wait.busyMs ?? HANDOVER_BUSY_WAIT_MS)
+  const deadline = performance.now() + (wait.busyMs ?? HANDOVER_BUSY_WAIT_MS)
   let noted = false
   for (;;) {
     const pending = await hasPending()
@@ -137,7 +104,7 @@ export async function requestDaemonServiceHandover(
       return await requestRunningDaemonHandover(runtimeDir, stateDir, pending)
     } catch (error) {
       if (pending || await hasPending()) throw new DaemonServiceHandoverPendingError(`Service handover is unresolved: ${String(error)}`)
-      if (!handoverBusy(error) || Date.now() >= deadline) throw error
+      if (!handoverBusy(error) || performance.now() >= deadline) throw error
       if (!noted) {
         noted = true
         ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error instanceof Error ? error.message : String(error)}); asking again`)
@@ -157,16 +124,16 @@ export async function requestDaemonServiceUpdate(
   runtimeDir: string, stateDir: string,
   wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void; force?: boolean; plainMs?: number } = {},
 ): Promise<'prepared' | 'unprepared'> {
-  const started = Date.now()
+  const started = performance.now()
   const deadline = started + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
   const say = wait.note ?? ((text: string) => process.stderr.write(`walnut daemon: ${text}\n`))
   let noted = false
   for (;;) {
     try {
       // An overdue update forces only after asking plainly for a while (daemon-over-busy.ts).
-      const force = wait.force === true && Date.now() - started >= (wait.plainMs ?? OVER_BUSY_PLAIN_MS)
+      const force = wait.force === true && performance.now() - started >= (wait.plainMs ?? OVER_BUSY_PLAIN_MS)
       // Overdue, an answer is waited for only until the deadline, not the plain 60 s.
-      const replyMs = wait.force === true ? Math.max(5_000, deadline - Date.now()) : undefined
+      const replyMs = wait.force === true ? Math.max(5_000, deadline - performance.now()) : undefined
       await requestRunningDaemonHandover(runtimeDir, stateDir, false, true, force, replyMs)
       return 'prepared'
     } catch (error) {
@@ -181,7 +148,7 @@ export async function requestDaemonServiceUpdate(
       const busy = error instanceof DaemonServiceUpdateRefusedError
         && (handoverBusy(error) || (wait.force === true && /Service preparation timed out|Daemon handover (connection|response) (timed out|closed)/.test(error.message)))
       if (!busy) throw error
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         if (wait.force !== true) throw error
         // Bounded: the service is restarted without the daemon's preparation (daemon-over-busy.ts step 3).
         say(`the running daemon is still busy (${error.message}); restarting it instead, and the CLI sessions keep running`)
@@ -280,9 +247,9 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
     }
     if (result.instanceId !== instanceId || (result.ok === true && result.prepared !== true)) throw new Error('Service handover was not confirmed')
     socket.close()
-    const deadline = Date.now() + 30_000
+    const deadline = performance.now() + 30_000
     while (alive()) {
-      if (Date.now() >= deadline) throw new Error('Previous daemon has not exited after preparing handover')
+      if (performance.now() >= deadline) throw new Error('Previous daemon has not exited after preparing handover')
       await delay(100)
     }
     exited = true
@@ -352,7 +319,7 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
 }
 
 export async function runDaemonServiceCli(action: string, options: DaemonServiceCliOptions): Promise<number> {
-  if (!['status', 'install', 'update', 'uninstall', 'restart'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, or restart')
+  if (!['status', 'install', 'update', 'uninstall', 'restart', 'handback'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, restart, or handback')
   if (process.platform !== 'linux' && process.platform !== 'darwin') throw new Error('Daemon services require Linux or macOS')
   if (action !== 'status' && !options.yes) throw new Error('This changes the host service. Repeat with --yes to confirm; running CLI sessions are not terminated.')
   if (options.scope && !['user', 'system', 'cron'].includes(options.scope)) throw new Error('Scope must be user, system or cron')
@@ -365,6 +332,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     || await fs.realpath(home) !== await fs.realpath(user.homedir))) {
     throw new Error('Service changes require the real host account, not a test or isolated home')
   }
+  if (action === 'handback') return handBackCli(home, user.uid)
   // No --scope: the installed backend, or for a first install the first boot start this account can have without root.
   const resolved = await resolveDaemonServiceScope(action, options.scope, {
     platform: process.platform, home, user: user.username, run: runDaemonServiceCommand,
@@ -408,8 +376,10 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       readConfig: (target: string) => files.readConfig(target),
       writeConfig: (target: string, text: string) => files.writeConfig(target, text),
       removeConfig: (target: string) => files.removeConfig(target),
-      // The cron supervisor waits 5 s before it reads an updated script, then the daemon boots.
-      ready: (_status: unknown, executable?: string) => daemonReady(runtimeDir, executable, scope === 'cron' ? 60_000 : 15_000, previousInstance),
+      ready: (_status: unknown, executable?: string) => daemonReady(runtimeDir, executable, SERVICE_READY_WAIT_MS, previousInstance),
+      ...(action === 'update' ? { stay: () => daemonStays(runtimeDir) } : {}),
+      proveBoot: (prepared: { executable: string; args: string[] }) => proveDaemonBoot({ ...prepared, path: servicePath(process.env.PATH, home) }),
+      launchdSpawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), user.uid, DAEMON_SERVICE_LABEL),
       handover: async () => {
         const handedOver = await requestDaemonServiceHandover(runtimeDir, root)
         // The unmanaged daemon is gone: its durable state goes where the service daemon reads it.
@@ -460,4 +430,34 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
 
   const where = { root, uid: user.uid, ...(system ? { configOwnerUid: system.configOwnerUid, configIo: system.configIo } : {}) }
   return action === 'status' ? act(await openDaemonServiceFiles(where)) : withDaemonServiceFiles(where, act)
+}
+
+/**
+ * `walnut daemon handback --yes`: the stand-in an update's tail started outside launchd hands
+ * its sessions to the LaunchAgent's job (daemon-service-handback.ts), under the install lock.
+ * Run by the stand-in's own loop (daemon-update-standin.ts) once launchd starts jobs again.
+ */
+async function handBackCli(home: string, uid: number): Promise<number> {
+  if (process.platform !== 'darwin') throw new Error('handback is for a macOS LaunchAgent')
+  const root = daemonInstallRoot('darwin', home)
+  const runtimeDir = localProductionDaemonDir()
+  const plist = daemonServiceConfigPath('darwin', home, 'user')
+  const job = `gui/${uid}/${DAEMON_SERVICE_LABEL}`
+  return withDaemonServiceFiles({ root, uid }, async (files) => {
+    const result = await handBackStandIn({
+      platform: process.platform, runtimeDir,
+      ours: async () => { const found = await files.inspectConfig(plist); return found.present && found.owned },
+      spawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), uid, DAEMON_SERVICE_LABEL),
+      prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root),
+      job: async () => {
+        const out = await runDaemonServiceCommand('launchctl', ['print', job])
+        return out.code === 0 ? { runs: Number(/^\s*runs = (\d+)/m.exec(out.stdout)?.[1] ?? 0) } : null
+      },
+      kickstart: async () => { await runDaemonServiceCommand('launchctl', ['kickstart', job]) },
+      ready: (previous) => daemonReady(runtimeDir, undefined, SERVICE_READY_WAIT_MS, previous),
+      alive: (pid) => { try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' } },
+    })
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n')
+    return result.ok ? 0 : 1
+  })
 }

@@ -4,7 +4,9 @@
  * else on a compiled server the host's walnut file), the target read by the probe, and the updater's
  * clock (settle, hold, the host setting's hold logged once, a request past it, the cooldown and
  * the backoff after a failure, no more automatic tries after MAX_AUTO_FAILURES, and a host whose
- * own Walnut puts its build back left alone). The io itself is daemon-net-update-io.test.ts.
+ * own Walnut puts its build back left alone), and an update whose answer never came back over
+ * the link (under way, then lost, then read back once the host returns). The io itself is
+ * daemon-net-update-io.test.ts.
  */
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -17,6 +19,11 @@ import {
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
+import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
+import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
+import { holdAndRecord, recordStoreWrites } from '../helpers/store-write-order.js'
+import { NET_UPDATE_LOST_AFTER_MS, NET_UPDATE_RUNNER_MAX_MS } from '../../src/providers/daemon-net-update-record.js'
+import type { RemoteDaemonUpdateIo } from '../../src/providers/daemon-service-update.js'
 import { permissionRisk } from '../../src/providers/host-exec-guards.js'
 import { log } from '../../src/logging/index.js'
 
@@ -195,6 +202,14 @@ function updater(over: Partial<NetUpdaterDeps> = {}, conn = link()) {
 
 describe('NetDaemonUpdater', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it('its view, read on every status frame, never hashes the build (no sync work on a request path)', () => {
+    // 2026-11-04 review: the getter asked expectedVersion() (a sync hash of the daemon file) on every getDaemonConnectState.
+    const expectedVersion = vi.fn(() => NEW)
+    const { u } = updater({ expectedVersion })
+    for (let i = 0; i < 20; i++) expect(u.view).toBeNull()
+    expect(expectedVersion).not.toHaveBeenCalled()
+  })
 
   it('a connect settles, then updates the managed service in the scope its status names', async () => {
     const { u, update, conn } = updater()
@@ -375,7 +390,7 @@ describe('NetDaemonUpdater', () => {
         u.schedule(0)
         await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
         expect(update).toHaveBeenCalledTimes(1)
-        expect((update.mock.calls[0] as unknown[])[4]).toEqual({ overBusy })
+        expect((update.mock.calls[0] as unknown[])[4]).toEqual({ overBusy, onBuildFailed: expect.any(Function) })
         expect(order).toEqual(['upload', 'fence', 'launch', 'release'])
         u.stop()
       }
@@ -459,6 +474,60 @@ describe('NetDaemonUpdater', () => {
     u.stop()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(update).toHaveBeenCalledTimes(3)
+  })
+
+  // 2026-11-04 review: a build that stopped the host's daemon and then did not start was tried
+  // again after 10, 20, 40 min up to 6 h, each try stopping the healthy daemon once more.
+  it('a build that stopped the daemon and did not stay serving is left a day, by a server started again too', async () => {
+    vi.useFakeTimers()
+    const file = path.join(os.tmpdir(), `walnut-net-backoff-${process.pid}-${Date.now()}.json`)
+    process.env.WALNUT_BUILD_BACKOFF_FILE = file
+    try {
+      const update = vi.fn(async () => { throw Object.assign(new Error('Managed daemon update failed: the daemon never answered as ready'), { buildFailed: true }) })
+      const first = updater({ update, cooldownMs: 1_000 })
+      first.u.schedule(0)
+      await vi.waitFor(() => expect(first.u.state.phase).toBe('failed'))
+      expect(update).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(6 * 3600_000)
+      expect(update).toHaveBeenCalledTimes(1)
+      first.u.stop()
+      await buildBackoffSettled()
+      // The server started again (a deploy): its updater reads the day off from the file.
+      const again = updater({ update, cooldownMs: 1_000 })
+      again.u.schedule(0)
+      await vi.waitFor(() => expect(again.u.state).toMatchObject({ phase: 'failed', message: expect.stringContaining('tried again in a day') }))
+      expect(update).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(18 * 3600_000 + 1_000)
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+      again.u.stop()
+    } finally {
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      await fs.rm(file, { force: true })
+    }
+  })
+
+  it('an update the host deferred (launchd starting no jobs, a dark wake) is a postponement: no failure, no backoff, asked again after the cooldown', async () => {
+    // 2026-11-04: a Mac in a dark wake loaded the new job and the restored one and started neither.
+    vi.useFakeTimers()
+    let calls = 0
+    const update = vi.fn(async () => {
+      calls += 1
+      if (calls <= MAX_AUTO_FAILURES + 1) throw new Error('Managed daemon update failed: update deferred: launchd is starting no jobs in this login session now (a dark wake with the lid closed, or a login not finished); nothing was changed, and the running daemon keeps serving; ')
+    })
+    const { u } = updater({ update, cooldownMs: 1_000 })
+    u.schedule(0)
+    await vi.advanceTimersByTimeAsync(5)
+    expect(u.state).toMatchObject({ phase: 'postponed', message: expect.stringMatching(/^waiting: update deferred: launchd is starting no jobs/) })
+    expect(u.view).toBeNull()
+    // Every cooldown, never later and later, and never given up on.
+    for (let n = 2; n <= MAX_AUTO_FAILURES + 1; n += 1) {
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(update).toHaveBeenCalledTimes(n)
+    }
+    expect(u.state.phase).toBe('postponed')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(u.state.phase).toBe('updated')
+    u.stop()
   })
 
   it('stops trying a build by itself after MAX_AUTO_FAILURES failures, and tries it again on request', async () => {
@@ -582,6 +651,276 @@ describe('NetDaemonUpdater', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(u.state.phase).toBe('idle')
     expect(update).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 2026-11-04: a Mac went away during its own update and the server said nothing about why.
+ * The detached runner leaves its record in the staging dir; the link drops, the server's
+ * wait ends, and the record is read when the host is back.
+ */
+describe('an update whose answer never came back over the link', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  const DIR = '/tmp/open-walnut-update.Abc123xyz9'
+
+  /**
+   * A host that runs the launcher, drops the link right after it (unless `stay`), and answers
+   * fs.read from `files` while connected; `flaky` makes the link fail reads while it is up.
+   */
+  function awayLink(files: Map<string, string>, o: { stay?: boolean; flaky?: () => boolean } = {}) {
+    const base = link()
+    const conn = link({
+      async send(cmd, params) {
+        base.sends.push(cmd)
+        if (cmd === 'exec.list') return { ok: true, jobs: [] }
+        if (cmd === 'fs.writePart') return { ok: true, done: true, sha256: params?.sha256 }
+        if (cmd === 'fs.read') {
+          if (!conn.connected || o.flaky?.()) throw new Error('DaemonConnection not connected to studio-mac')
+          const data = files.get(String(params?.path))
+          return data === undefined ? { ok: false, error: 'ENOENT' } : { ok: true, data }
+        }
+        if (cmd === 'exec.run') {
+          const line = Array.isArray(params?.argv) ? String((params.argv as string[])[2]) : String(params?.command)
+          base.lines.push(line)
+          if (line.includes('update.go')) {
+            if (!o.stay) (conn as { connected: boolean }).connected = false
+            return { ok: true, exitCode: 0, output: 'walnut-update-started pid=4242 group=4242 own=4100' }
+          }
+          if (line.includes('rm -rf')) return { ok: true, exitCode: 0, output: '' }
+        }
+        return base.send(cmd, params)
+      },
+    })
+    return { conn, base }
+  }
+
+  function setup(files: Map<string, string>, o: Parameters<typeof awayLink>[1] & { waitMs?: number } = {}) {
+    let now = 1_000_000_000
+    const { conn, base } = awayLink(files, o)
+    const update = vi.fn(async (_s: unknown, _v: unknown, io: RemoteDaemonUpdateIo) => {
+      await io.serviceUpdate!({ command: `${DIR}/daemon walnut daemon update --yes --scope user --executable ${DIR}/daemon`, directory: DIR, executable: `${DIR}/daemon`, scope: 'user' })
+      return 'applied' as const
+    })
+    const { u } = updater({
+      update: update as unknown as NetUpdaterDeps['update'], cooldownMs: 60 * 60_000, now: () => now,
+      io: { pollMs: 5, waitMs: o.waitMs ?? 60 },
+    }, conn)
+    return { u, conn, base, update, advance: (ms: number) => { now += ms } }
+  }
+
+  it('says updating while the host is away, lost after a while, and reads the failure with its reason once the host is back', async () => {
+    const error = vi.spyOn(log.session, 'error')
+    const files = new Map<string, string>()
+    const { u, conn, base, advance } = setup(files)
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+    expect(u.state.message).toContain('did not report back')
+    // 2026-11-04 review 5: this logged "the running daemon keeps serving", which nobody could know.
+    const said = error.mock.calls.map(([m]) => String(m)).filter((m) => m.startsWith('DaemonConnection: host network daemon update failed'))
+    expect(said).toEqual(['DaemonConnection: host network daemon update failed; its answer did not come back over the link (it dropped during the update), so what the host runs is read once it is back'])
+    expect(u.view).toMatchObject({ state: 'updating', at: 1_000_000_000 })
+    advance(NET_UPDATE_LOST_AFTER_MS)
+    expect(u.view).toMatchObject({ state: 'lost' })
+
+    // The runner finished there: the update answered ok, and its tail had to put the previous config back.
+    files.set(`${DIR}/update.done`, 'rc=0 tries=1 tail=restored\n')
+    files.set(`${DIR}/update.out`, 'walnut daemon: note\n{"ok":true}\n')
+    files.set(`${DIR}/update.tail`, 'outcome=restored\nno daemon answered within 90 s, so the previous service config was put back, and its daemon answers\n')
+    ;(conn as { connected: boolean }).connected = true
+    // Back on the link, its record not read yet: no word until the check reads it.
+    expect(u.view).toBeNull()
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.view).toMatchObject({ state: 'failed', at: 1_000_000_000 }))
+    expect(u.view!.message).toBe('afterwards on the host: no daemon answered within 90 s, so the previous service config was put back, and its daemon answers')
+    expect(error.mock.calls.some(([m]) => /did not go through \(read back once the host returned\)/.test(String(m)))).toBe(true)
+    expect(base.lines.some((line) => line.endsWith(`rm -rf ${DIR}`))).toBe(true)
+    // Read once: a later check does not read it again.
+    const reads = base.sends.filter((c) => c === 'fs.read').length
+    u.schedule(0)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(base.sends.filter((c) => c === 'fs.read').length).toBe(reads)
+    u.stop()
+  })
+
+  // 2026-11-04 review: a late record that said the build stopped the daemon and did not stay
+  // serving only fed the status, and the next try within the hour stopped the daemon again.
+  it('a record read back late that says the build did not stay serving holds the build a day, on disk', async () => {
+    const file = path.join(os.tmpdir(), `walnut-net-late-${process.pid}-${Date.now()}.json`)
+    process.env.WALNUT_BUILD_BACKOFF_FILE = file
+    try {
+      const files = new Map<string, string>()
+      const { u, conn } = setup(files)
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+      files.set(`${DIR}/update.done`, 'rc=1 tries=1 tail=serving\n')
+      files.set(`${DIR}/update.out`, `${JSON.stringify({ ok: false, failure: { code: 'notReady', stopped: true, message: 'the new daemon never answered as ready', rollback: 'the previous service config was put back' } })}\n`)
+      files.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+      ;(conn as { connected: boolean }).connected = true
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.view).toMatchObject({ state: 'failed' }))
+      await buildBackoffSettled()
+      const kept = Object.values(JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, { expected: string; reason: string }>)
+      expect(kept).toEqual([expect.objectContaining({ expected: NEW, reason: expect.stringContaining('never answered as ready') })])
+      u.stop()
+    } finally {
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      await fs.rm(file, { force: true })
+    }
+  })
+
+  // 2026-11-04 review 4: the launched update lived in this server's memory, so a deploy during it
+  // (the server restarted) left the next server no hold and no cooldown: it stopped the healthy
+  // daemon once more for the same build, and never read or removed the runner's dir.
+  it('a server restarted while the update ran reads its record back (kept from the launch): a build that failed is held, and no second update starts', async () => {
+    const stamp = `${process.pid}-${Date.now()}`
+    const unread = path.join(os.tmpdir(), `walnut-net-unread-${stamp}.json`)
+    const backoff = path.join(os.tmpdir(), `walnut-net-unread-backoff-${stamp}.json`)
+    process.env.WALNUT_UPDATE_UNREAD_FILE = unread
+    process.env.WALNUT_BUILD_BACKOFF_FILE = backoff
+    try {
+      const files = new Map<string, string>()
+      const first = setup(files, { waitMs: 5_000 })
+      first.u.schedule(0)
+      await vi.waitFor(() => expect(first.base.lines.some((line) => line.includes('update.go'))).toBe(true))
+      // Kept on disk from the launch on, before any wait ended; then this server is stopped (a deploy).
+      await updateStoresSettled()
+      expect(Object.values(JSON.parse(await fs.readFile(unread, 'utf8')))).toEqual([expect.objectContaining({ directory: DIR, expected: NEW })])
+      first.u.stop()
+      // The runner finished: the new daemon never answered after the old one stopped.
+      files.set(`${DIR}/update.done`, 'rc=1 tries=1 tail=serving\n')
+      files.set(`${DIR}/update.out`, `${JSON.stringify({ ok: false, failure: { code: 'notReady', stopped: true, message: 'the new daemon never answered as ready', rollback: 'the previous service config was put back' } })}\n`)
+      files.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+      // The hold is on disk before the host's record goes (2026-11-04 review 5: only asked for).
+      let lines: string[] = []
+      let removedFirst: boolean | null = null
+      const writes = recordStoreWrites({ delayMs: 150, onDisk: (w) => { if (w === 'daemon-build-backoff.json:set') removedFirst = lines.some((line) => line.endsWith(`rm -rf ${DIR}`)) } })
+      const second = setup(files)
+      lines = second.base.lines
+      ;(second.conn as { connected: boolean }).connected = true
+      second.u.schedule(0)
+      await vi.waitFor(() => expect(second.base.lines.some((line) => line.endsWith(`rm -rf ${DIR}`))).toBe(true))
+      await vi.waitFor(() => expect(removedFirst).not.toBeNull())
+      expect(removedFirst).toBe(false)
+      await vi.waitFor(() => expect(second.u.state.phase).toBe('failed'))
+      expect(second.update).not.toHaveBeenCalled()
+      expect(second.u.view).toMatchObject({ state: 'failed', message: expect.stringContaining('never answered as ready') })
+      await buildBackoffSettled()
+      expect(Object.values(JSON.parse(await fs.readFile(backoff, 'utf8')))).toEqual([expect.objectContaining({ expected: NEW })])
+      // The record goes after the hold (its own write comes once the host's dir is removed).
+      await vi.waitFor(async () => expect(JSON.parse(await fs.readFile(unread, 'utf8'))).toEqual({}))
+      // The hold before the record goes (2026-11-04 review 5: a server killed in between kept neither).
+      expect(holdAndRecord(writes)).toEqual(['daemon-build-backoff.json:set', 'daemon-update-unread.json:clear'])
+      second.u.stop()
+    } finally {
+      delete process.env.WALNUT_UPDATE_UNREAD_FILE
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      for (const f of [unread, backoff]) await fs.rm(f, { force: true })
+    }
+  })
+
+  it('a failure of the build answered in time: its hold is on disk before the update\'s record goes', async () => {
+    const files = new Map<string, string>([
+      [`${DIR}/update.done`, 'rc=1 tries=1 tail=serving\n'],
+      [`${DIR}/update.out`, `${JSON.stringify({ ok: false, failure: { code: 'notReady', stopped: true, message: 'the new daemon never answered as ready' } })}\n`],
+      [`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n'],
+    ])
+    const { u, update } = setup(files, { stay: true })
+    update.mockImplementationOnce(async (_s: unknown, _v: unknown, io: RemoteDaemonUpdateIo) => {
+      await io.serviceUpdate!({ command: `${DIR}/daemon walnut daemon update --yes --scope user --executable ${DIR}/daemon`, directory: DIR, executable: `${DIR}/daemon`, scope: 'user' })
+      throw Object.assign(new Error('Managed daemon update failed: the new daemon never answered as ready'), { buildFailed: true })
+    })
+    const writes = recordStoreWrites()
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+    expect(holdAndRecord(writes)).toEqual(['daemon-update-unread.json:set', 'daemon-build-backoff.json:set', 'daemon-update-unread.json:clear'])
+    u.stop()
+  })
+
+  it('a record that says it went through clears the failure; a host that lost the record says so unless it runs the new build', async () => {
+    const files = new Map<string, string>()
+    const first = setup(files)
+    first.u.schedule(0)
+    await vi.waitFor(() => expect(first.u.state.phase).toBe('failed'))
+    files.set(`${DIR}/update.done`, 'rc=0 tries=1 tail=serving\n')
+    files.set(`${DIR}/update.out`, '{"ok":true}\n')
+    files.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+    ;(first.conn as { connected: boolean }).connected = true
+    ;(first.conn as { daemonVersion: string }).daemonVersion = NEW
+    first.u.schedule(0)
+    await vi.waitFor(() => expect(first.base.lines.some((line) => line.endsWith(`rm -rf ${DIR}`))).toBe(true))
+    expect(first.u.view).toBeNull()
+    first.u.stop()
+
+    // A reboot cleared /tmp: no record and no script. Still on the old build, it says so.
+    const second = setup(new Map())
+    second.u.schedule(0)
+    await vi.waitFor(() => expect(second.u.state.phase).toBe('failed'))
+    ;(second.conn as { connected: boolean }).connected = true
+    second.u.schedule(0)
+    await vi.waitFor(() => expect(second.u.view?.message).toBe(`the update left no record on the host (it may have restarted), and its daemon is still ${OLD}`))
+    second.u.stop()
+  })
+  it('a reconnect while the update is still awaited leaves the record to that wait, which reads it', async () => {
+    const info = vi.spyOn(log.session, 'info')
+    const files = new Map<string, string>()
+    const { u, conn, base } = setup(files, { waitMs: 5_000 })
+    u.schedule(0)
+    await vi.waitFor(() => expect(base.lines.some((line) => line.includes('update.go'))).toBe(true))
+    // The new daemon is up: the link is back, and its connect schedules a read while the wait still runs.
+    ;(conn as { connected: boolean }).connected = true
+    u.schedule(0)
+    await new Promise((r) => setTimeout(r, 40))
+    files.set(`${DIR}/update.out`, '{"ok":true}\n')
+    files.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+    files.set(`${DIR}/update.done`, 'rc=0 tries=1 tail=serving\n')
+    await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+    expect(base.lines.some((line) => line.includes('rm -rf'))).toBe(false)
+    expect(info.mock.calls.some(([m]) => /read back once the host returned/.test(String(m)))).toBe(false)
+    expect(u.view).toBeNull()
+    u.stop()
+  })
+
+  it('waits for a runner still at work instead of starting another update, and gives up on one that died', async () => {
+    let flaky = false
+    const files = new Map<string, string>()
+    const { u, conn, base, update, advance } = setup(files, { flaky: () => flaky })
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+    files.set(`${DIR}/update.sh`, '#!/bin/sh\n')
+    ;(conn as { connected: boolean }).connected = true
+    // A read the link could not answer is no answer: nothing is concluded from it.
+    flaky = true
+    expect(await u.request()).toMatchObject({ phase: 'postponed', message: 'waiting: the previous daemon update is still running on the host' })
+    flaky = false
+    // Its script is there and its done line is not: still at work, so no second update.
+    expect(await u.request()).toMatchObject({ phase: 'postponed' })
+    expect(update).toHaveBeenCalledTimes(1)
+    // Long past what a runner takes: it died (a reboot with a /tmp that survives), so its dir goes.
+    advance(NET_UPDATE_RUNNER_MAX_MS)
+    u.schedule(0)
+    await vi.waitFor(() => expect(base.lines.some((line) => line.endsWith(`rm -rf ${DIR}`))).toBe(true))
+    expect(u.view?.message).toBe(`the update left no record on the host (it may have restarted), and its daemon is still ${OLD}`)
+    // The host runs the build after all (another way put it there): the line goes.
+    ;(conn as { daemonVersion: string }).daemonVersion = NEW
+    expect(u.view).toBeNull()
+    u.stop()
+  })
+
+  it('counts "did not come back" from when the link dropped, not from the launch', async () => {
+    const files = new Map<string, string>()
+    const { u, conn, advance } = setup(files, { stay: true })
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('failed'))
+    // Busy tries kept the old daemon up for minutes after the launch.
+    expect(u.view).toBeNull()
+    advance(9 * 60_000)
+    ;(conn as { connected: boolean }).connected = false
+    expect(u.view).toMatchObject({ state: 'updating' })
+    advance(NET_UPDATE_LOST_AFTER_MS - 60_000)
+    expect(u.view).toMatchObject({ state: 'updating' })
+    advance(60_000)
+    expect(u.view).toMatchObject({ state: 'lost' })
+    u.stop()
   })
 })
 

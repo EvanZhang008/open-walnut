@@ -32,17 +32,19 @@
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
-import fsp from 'node:fs/promises'
-import path from 'node:path'
-import { DAEMON_BINARIES_DIR } from '../constants.js'
-import { singleFile } from '../lib/single-file.js'
 import { log } from '../logging/index.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { sharedDaemonVerdict, walnutKeyOf, type DaemonServes } from './daemon-shared.js'
 import { WALNUT_HOME } from '../constants.js'
-import { createNetUpdateIo, NetUpdateHeldError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
+import { createNetUpdateIo, NetUpdateHeldError, NetUpdateUnansweredError, shq, type NetUpdateConn, type NetUpdateIoOptions } from './daemon-net-update-io.js'
+import { LaunchedNetUpdate, type DaemonUpdateView } from './daemon-net-update-record.js'
+import { afterUpdateFailure } from './daemon-update-readback.js'
+import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import type { DaemonLinkKind } from './daemon-update-paths.js'
+import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
+
+export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
 
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
@@ -56,7 +58,6 @@ export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'ser
 export const MAX_AUTO_FAILURES = 4
 
 /** This build's daemon for the host: a prebuilt binary, the host's walnut file (gzipped), or why there is none. */
-export type NetUpdateSource = { file: string } | { gz: Buffer; id: string }
 
 export interface NetUpdateFacts {
   kind: DaemonLinkKind
@@ -158,48 +159,6 @@ export function scopeFromStatus(output: string): { scope: 'user' | 'cron' } | { 
   return { scope: s.scope }
 }
 
-/** This build's prebuilt daemon binary for the target (scripts/build-daemon.sh; none for musl), checked against the build it must be. */
-export async function localDaemonBinary(t: HostFileTarget, expected: string, dir = DAEMON_BINARIES_DIR): Promise<{ file: string } | { missing: string }> {
-  if (t.endsWith('-musl')) return { missing: `no daemon binary is built for ${t}` }
-  const file = path.join(dir, `daemon-${t}`)
-  const st = await fsp.stat(file).catch(() => null)
-  if (!st?.isFile()) return { missing: `this build has no daemon binary for ${t}` }
-  const built = await fsp.readFile(`${file}.version`, 'utf8').then((v) => v.trim(), () => null)
-  if (built && built !== expected) return { missing: `this build's daemon-${t} is ${built}, not ${expected}; rebuild the daemon` }
-  return { file }
-}
-
-export interface NetSourceDeps {
-  dir?: string
-  /** This server is the compiled walnut file (singleFile()): it ships no daemon binaries. */
-  compiled?: () => boolean
-  /** This build's walnut file for the target (host-file.ts sharedHostFileSource). */
-  hostFile?: (t: HostFileTarget, say: (message: string) => void) => Promise<{ gz: Buffer; id: string }>
-}
-
-/**
- * Where the daemon for the target comes from: the prebuilt binary, else (a compiled
- * server) the host's walnut file of this build, the same one the SSH path deploys.
- * Getting that file may download or build it once per build (host-file.ts caches it).
- */
-export async function netDaemonSource(t: HostFileTarget, expected: string, say: (message: string) => void = () => {}, deps: NetSourceDeps = {}): Promise<NetUpdateSource | { missing: string }> {
-  const prebuilt = await localDaemonBinary(t, expected, deps.dir)
-  if ('file' in prebuilt) return prebuilt
-  if (!(deps.compiled ?? (() => singleFile() !== null))()) return prebuilt
-  try {
-    const f = await (deps.hostFile ?? defaultHostFile)(t, say)
-    if (!f.gz.length) return { missing: `this build's walnut file for ${t} is empty` }
-    return { gz: f.gz, id: f.id }
-  } catch (err) {
-    return { missing: `this build's walnut file for ${t} is not to be had: ${err instanceof Error ? err.message : String(err)}` }
-  }
-}
-
-async function defaultHostFile(t: HostFileTarget, say: (message: string) => void): Promise<{ gz: Buffer; id: string }> {
-  const { sharedHostFileSource } = await import('../core/host-server/index.js')
-  return sharedHostFileSource().file(t, say)
-}
-
 export interface NetUpdateLink extends NetUpdateConn {
   readonly host: string
   readonly connected: boolean
@@ -263,8 +222,10 @@ export class NetDaemonUpdater {
   private failed: { expected: string; count: number } | null = null
   /** The build this server put on the host (its update answered ok). */
   private installed: string | null = null
-  /** No automatic try before this (ms epoch): the backoff after a failed one. */
+  /** No automatic try before this (ms epoch, wall clock: it must run out across sleep): the backoff after a failed one. */
   private retryAt = 0
+  /** A build that stopped the host's daemon and did not stay serving: a day off, kept across restarts (undefined until read). */
+  private notServing: BuildBackoffEntry | null | undefined = undefined
   private heldNoted: string | null = null
   private skipNoted: string | null = null
   private overdueNoted: string | null = null
@@ -272,22 +233,54 @@ export class NetDaemonUpdater {
   private gapHeld: { expected: string; since: number } | null = null
   private stopped = false
   private waiters: Array<() => void> = []
+  /** The update this server started there, until its record is read (daemon-net-update-record.ts), and the read's timer. */
+  private readonly launched: LaunchedNetUpdate
+  private readTimer: ReturnType<typeof setTimeout> | null = null
   state: NetUpdateState
 
   constructor(private readonly d: NetUpdaterDeps) {
     this.state = { phase: 'idle', host: d.conn.host, running: null, expected: null, message: '', at: 0 }
+    this.launched = new LaunchedNetUpdate(d.conn.host, () => (d.now ?? Date.now)(), (expected, reason) => this.buildDidNotStay(expected, reason))
   }
+
+  /** Its daemon update for the host's status. Read on every status frame: fields only, never expectedVersion() (a sync hash). */
+  get view(): DaemonUpdateView | null { return this.launched.view(this.d.conn.connected, this.d.conn.daemonVersion) }
 
   /** The link came up: decide once it settled (a new link's first seconds carry its copies). */
   schedule(delayMs = this.d.settleMs ?? 20_000): void {
     if (this.stopped || this.d.kind() !== 'net') return
+    // A record left by an update whose answer never came is read at once, not after the backoff its failure set.
+    if (this.launched.unread) {
+      if (this.readTimer) clearTimeout(this.readTimer)
+      this.readTimer = setTimeout(() => { this.readTimer = null; void this.readBack(false) }, delayMs)
+      this.readTimer.unref?.()
+    }
     this.later(delayMs)
   }
 
   stop(): void {
     this.stopped = true
-    if (this.timer) clearTimeout(this.timer)
-    this.timer = null
+    for (const t of [this.timer, this.readTimer]) if (t) clearTimeout(t)
+    this.timer = this.readTimer = null
+  }
+
+  /** The reconnect's timer reads only while no check runs: a check still waiting on its update reads it itself. */
+  private async readBack(inCheck: boolean): Promise<void> {
+    const c = this.d.conn
+    if (this.stopped || !c.connected || !this.launched.unread || (!inCheck && this.inFlight)) return
+    await this.launched.readBack(c, c.daemonVersion, (dir) => createNetUpdateIo(c, this.d.io).run(`rm -rf ${shq(dir)}`, 15_000)).catch(() => {})
+  }
+
+  /**
+   * The build stopped the host's daemon and did not stay serving: a day off for it, kept across
+   * restarts, whether the update's answer said so in time or its record was read back later.
+   */
+  private buildDidNotStay(expected: string, reason: string): Promise<void> {
+    const now = (this.d.now ?? Date.now)()
+    this.notServing = { expected, at: now, reason }
+    this.retryAt = Math.max(this.retryAt, now + BUILD_BACKOFF_MS)
+    // The disk write is the promise: the host's record is removed only after it (review 5).
+    return writeBuildBackoff(`net:${this.d.conn.host}`, this.notServing)
   }
 
   /**
@@ -372,13 +365,25 @@ export class NetDaemonUpdater {
     }
     if (this.stopped || !c.connected) return this.set('skipped', 'the host is not connected')
     this.set('checking', 'checking the host\'s daemon')
+    // Back after an update whose answer never came over the link: read what it left there, also
+    // one a server before this one launched (kept on disk, daemon-net-update-record.ts).
+    await this.launched.load()
+    await this.readBack(true)
     const facts = await this.facts(trigger)
     // The bound on the whole update (daemon-update-behind.ts), read before any skip so a round that
     // skips (a cooldown, the gap) still counts as seen: behind this long, the writes in flight and
     // the host_exec runs no longer hold it, and the daemon goes over its own work.
     const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!facts.expected && !!c.daemonVersion && c.daemonVersion !== facts.expected, (this.d.now ?? Date.now)())
+    if (this.notServing === undefined) this.notServing = await readBuildBackoff(`net:${c.host}`)
+    if (trigger === 'auto' && facts.expected && buildBackedOff(this.notServing, facts.expected, (this.d.now ?? Date.now)())) {
+      this.retryAt = Math.max(this.retryAt, this.notServing!.at + BUILD_BACKOFF_MS)
+      if (!this.stopped) this.later(0)
+      return this.set('failed', `this build did not stay serving on the host, so it is tried again in a day or with a newer build: ${this.notServing!.reason}`)
+    }
     const first = decideNetUpdate(facts)
     if (first.go === false) return this.skipped(first, trigger)
+    // Its runner may still be in its check; a second update would swap the service under it.
+    if (this.launched.unread) return this.postpone('the previous daemon update is still running on the host')
     const expected = facts.expected!
     if (behind.overdue && this.overdueNoted !== expected) {
       this.overdueNoted = expected
@@ -407,6 +412,7 @@ export class NetDaemonUpdater {
         return no
       },
       cancelled: () => this.stopped,
+      onLaunched: (directory) => this.launched.started(directory, expected, c.daemonVersion),
     })
     const held = await holds()
     if (held) return this.postpone(held)
@@ -430,26 +436,38 @@ export class NetDaemonUpdater {
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
     try {
-      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, { overBusy: goesOver })
+      await (this.d.update ?? updateRemoteDaemonService)('file' in src ? { binary: src.file } : { binary: null, gz: src.gz }, expected, io, scope.scope, {
+        overBusy: goesOver,
+        // The build's hold before its record (the staging dir) is removed on the host.
+        onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),
+      })
     } catch (err) {
-      if (err instanceof NetUpdateHeldError) {
-        // The upload was paid for: the next try waits a cooldown, it is not a failure.
-        this.lastAttempt = null
-        return this.postpone(err.message, this.d.cooldownMs)
-      }
+      // The upload was paid for: the next try waits a cooldown, it is not a failure.
+      if (err instanceof NetUpdateHeldError) { this.lastAttempt = null; return this.postpone(err.message, this.d.cooldownMs) }
+      const msg = err instanceof Error ? err.message : String(err), deferredAt = msg.indexOf('update deferred: ')
+      // The build stopped the daemon and did not stay serving (daemon-service-update.ts): a day, kept
+      // across restarts, written before the record goes (a server killed in between keeps one of
+      // them). 2026-11-04 review: 10, 20, 40 min ... each try stopped the healthy daemon again.
+      const buildFailed = (err as { buildFailed?: unknown }).buildFailed === true
+      if (buildFailed) void this.buildDidNotStay(expected, msg.slice(0, 300))
+      // Unanswered: the record stays on the host, read when it is back; any other end is read already.
+      if (!(err instanceof NetUpdateUnansweredError)) this.launched.answered()
+      // 2026-11-04: deferred on the host (launchd starting no jobs in a dark wake), so nothing changed there: no failure, asked again after the cooldown.
+      if (deferredAt >= 0) { this.launched.outcome(expected, null); return this.postpone(msg.slice(deferredAt), this.d.cooldownMs) }
       // The daemon refused before it changed anything (busy, or its drain ran out): asked again,
       // not a failure that gives the build up after a few. Overdue, in a minute; otherwise after
       // the cooldown, since each try uploads the file again.
-      if (daemonBusyRefusal(err)) {
+      if (!buildFailed && daemonBusyRefusal(err)) {
         this.lastAttempt = null
-        return this.postpone(`the host's daemon is busy (${(err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200)})`,
+        this.launched.outcome(expected, null)
+        return this.postpone(`the host's daemon is busy (${msg.split('\n')[0].slice(0, 200)})`,
           goesOver ? (this.d.recheckMs ?? 60_000) : this.d.cooldownMs)
       }
-      const count = this.failed?.expected === expected ? this.failed.count + 1 : 1
-      this.failed = { expected, count }
-      const msg = err instanceof Error ? err.message : String(err)
-      const retryInMs = Math.min(this.d.cooldownMs * 2 ** (count - 1), MAX_BACKOFF_MS)
-      log.session.error('DaemonConnection: host network daemon update failed; the running daemon keeps serving', {
+      this.failed = { expected, count: this.failed?.expected === expected ? this.failed.count + 1 : 1 }
+      const count = this.failed.count
+      this.launched.outcome(expected, msg)
+      const retryInMs = buildFailed ? BUILD_BACKOFF_MS : Math.min(this.d.cooldownMs * 2 ** (count - 1), MAX_BACKOFF_MS)
+      log.session.error(`DaemonConnection: host network daemon update failed; ${afterUpdateFailure(err)}`, {
         host: c.host, from, expected, error: msg.slice(0, 600), failures: count, retryInMs,
       })
       this.retryAt = (this.d.now ?? Date.now)() + retryInMs
@@ -459,6 +477,8 @@ export class NetDaemonUpdater {
     this.failed = null
     this.retryAt = 0
     this.installed = expected
+    this.launched.answered()
+    this.launched.outcome(expected, null)
     log.session.info('DaemonConnection: host network machine\'s daemon updated', { host: c.host, from, expected })
     return this.set('updated', `its daemon was updated to ${expected}`)
   }

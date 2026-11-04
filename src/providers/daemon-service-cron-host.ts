@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { performance } from 'node:perf_hooks'
 import { DAEMON_BOOT_PID_NAME, DAEMON_BOOT_SCRIPT_NAME, DAEMON_BOOT_STOP_NAME } from './daemon-service-boot-script.js'
 import { DAEMON_ARTIFACT_VERSIONS_DIR } from './daemon-service-artifact.js'
 import type { CronServiceDeps } from './daemon-service-cron.js'
@@ -66,9 +67,10 @@ export function createCronServiceHost(opts: { home: string; stateDir: string; ru
       try { process.kill(pid, signal) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
     },
     async waitGone(pid, timeoutMs) {
-      const deadline = Date.now() + timeoutMs
+      // Monotonic, as every deadline of a service change (2026-11-04 review: a host that sleeps mid-wait).
+      const deadline = performance.now() + timeoutMs
       while (await running(pid)) {
-        if (Date.now() >= deadline) return false
+        if (performance.now() >= deadline) return false
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
       return true

@@ -104,6 +104,12 @@ if (!process.env.WALNUT_TASK_DIR_ROOT || !process.env.WALNUT_TASK_DIR_ROOT.inclu
   process.env.WALNUT_TASK_DIR_ROOT = path.join(os.tmpdir(), ours, 'task-dirs')
 }
 
+// And for the kept copies of a replaced daemon (src/providers/local-daemon-replace.ts
+// previousKeepDir): under the real ~/.local/state otherwise, one per test daemon dir.
+if (!process.env.WALNUT_DAEMON_PREVIOUS_ROOT || !process.env.WALNUT_DAEMON_PREVIOUS_ROOT.includes(ours)) {
+  process.env.WALNUT_DAEMON_PREVIOUS_ROOT = path.join(os.tmpdir(), ours, 'daemon-previous')
+}
+
 // Search v2 is default-ON (2026-08-26 cutover), and its semantic lane spawns an
 // embed worker whose first query tries to LOAD (and, on a fresh temp
 // WALNUT_HOME, download — ~600MB) the embedding model. No test needs that:

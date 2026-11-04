@@ -215,9 +215,20 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-spawn-barrier.ts',
   'src/providers/daemon-service-config.ts',
   'src/providers/daemon-service-manager.ts',
+  // launchd and systemd steps the manager takes (bootout settled, bootstrap retried, the unit kept active).
+  'src/providers/daemon-service-launchd.ts',
+  'src/providers/daemon-service-systemd.ts',
   'src/providers/daemon-service-artifact.ts',
   'src/providers/daemon-service-cli.ts',
   'src/providers/daemon-over-busy.ts',
+  // Whether the service daemon answers and stays (daemonReady, daemonStays), bundled into daemon-service-cli.cjs.
+  'src/providers/daemon-service-ready.ts',
+  // The trial run of a new daemon before any service change, bundled into daemon-service-cli.cjs.
+  'src/providers/daemon-boot-proof.ts',
+  // `walnut daemon handback`: a stand-in hands its sessions to the LaunchAgent job (bundled into daemon-service-cli.cjs).
+  'src/providers/daemon-service-handback.ts',
+  'src/providers/daemon-update-standin.ts',
+  'src/providers/daemon-update-shell.ts',
   'src/providers/daemon-service-boot-script.ts',
   'src/providers/daemon-service-cron.ts',
   'src/providers/daemon-service-cron-host.ts',

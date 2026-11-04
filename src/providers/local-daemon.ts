@@ -22,6 +22,7 @@
  */
 
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -30,7 +31,7 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
-import { daemonBusyRefusal, execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
+import { execRunsReason, execRunsWait, runningJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { fenceDaemonFileChanges } from './daemon-file-fence.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
@@ -56,6 +57,10 @@ import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
 import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { clearDaemonSwap, expectDaemonSwap } from './daemon-drain-resend.js'
+import { daemonLaunch, discardPending, keepPendingBinary, keepPreviousSource, keepRunningBinary, keptPrevious, previousDaemon, promotePending, ReplacementGate, trialDaemon } from './local-daemon-replace.js'
+import { STAY_MS, StayWatch } from './local-daemon-stay.js'
+import { provenBuilds, stayWatches } from './daemon-update-store.js'
+import { buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
 async function claudeCodeNotNeeded(): Promise<boolean> {
@@ -172,6 +177,10 @@ function serviceAccount(): { name: string | null; uid: number | null } {
 export const LOCAL_UPGRADE_RECHECK_MS = 60_000
 /** How long after a managed update of this Mac's daemon the same build is not tried again. */
 export const LOCAL_MANAGED_UPDATE_COOLDOWN_MS = 600_000
+/** The source daemon's sidecar bundles, copied next to its script (materializeSourceDaemon). */
+const SOURCE_SIDECARS = ['changes-core.cjs', 'usage-core.cjs', 'path-resolve-core.cjs', 'port-scan-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']
+/** How often at most this server loads a service that runs nothing (reviveManagedService). */
+export const REVIVE_EVERY_MS = 60_000
 
 export type ServiceProbeState = 'present' | 'absent' | 'unknown'
 export interface ServiceTakeoverProbe { path: string; state: ServiceProbeState }
@@ -258,6 +267,42 @@ export class LocalDaemon {
   private _instanceId: string | null = null
   private _ensureInFlight: Promise<number> | null = null
   private _lastManagedUpdate: { expected: string; at: number } | null = null
+  /**
+   * A build whose managed update stopped the old daemon and then did not stay serving (the
+   * CLI's own check, or the tail): not tried again for a day (daemon-build-backoff.ts, kept
+   * across restarts; undefined until read). 2026-11-04 review: it was tried every 10 minutes,
+   * each time a stop and a put-back of the daemon.
+   */
+  private _managedFail: BuildBackoffEntry | null | undefined = undefined
+  /** When this server last loaded a service that ran nothing (reviveManagedService). Wall clock, in memory: a restart may revive at once. */
+  private _lastRevive: number | null = null
+  /** Whether a new build may replace the running daemon: its trial, and its refusals (refuseReplacement). */
+  private readonly _gate = new ReplacementGate(Date.now, {
+    read: () => readBuildBackoff(`local:${this.daemonDir}`),
+    write: (entry) => writeBuildBackoff(`local:${this.daemonDir}`, entry),
+  })
+  /** stopIfIsolated ran: nothing started after it on a trial's end. */
+  private _stoppedByOwner = false
+  /**
+   * The daemon started to replace another one, until it stayed serving (its probation,
+   * local-daemon-replace.ts): looked at while it runs, and kept on disk, so a server restarted
+   * inside it (a deploy) still judges it (2026-11-04 review 5: it lived in this object only).
+   */
+  /** The daemon file the last start check found (the probation's end keeps it as the way back). */
+  private _binaryPath: string | null = null
+  private readonly _stay = new StayWatch(STAY_MS, Date.now, {
+    alive: (pid) => this.isPidAlive(pid),
+    store: { read: () => stayWatches.read(`local:${this.daemonDir}`), write: (entry) => stayWatches.write(`local:${this.daemonDir}`, entry) },
+    proven: { read: () => provenBuilds.read(`local:${this.daemonDir}`), write: (entry) => provenBuilds.write(`local:${this.daemonDir}`, entry) },
+  })
+  /**
+   * The build whose probation just failed here (settleStay refused it), until a daemon runs again:
+   * the next start with no daemon running is the kept build before it, never the build on disk
+   * (2026-11-05 review 6: a newer build deployed inside the window was started instead, untried).
+   * Undefined until this server saw a daemon run or settled a watch: then the gate's refusal on
+   * disk says it (2026-11-05 review 7: a deploy restart between the refusal and the start forgot it).
+   */
+  private _backDue: string | null | undefined = undefined
   /** claude CLI resolvable in the env handed to the daemon we spawned (owner stamp). */
   private _spawnClaudeCli: string | null = null
   /** Last ownership verdict logged, so an audit that holds for the whole process
@@ -457,10 +502,22 @@ export class LocalDaemon {
     this._sharedReplacing = false
   }
 
-  private async ensureRunningInner(): Promise<number> {
-    const binaryPath = this.findDaemonBinary()
+  private async ensureRunningInner(revived = false): Promise<number> {
+    // The probation a server before this one started, taken up (a deploy restarted it inside it),
+    // before the source daemon's files are written: those of a build on its probation wait beside
+    // the way back (materializeSourceDaemon).
+    await this._stay.resume(() => this.stayDue(true))
+    const binaryPath = await this.findDaemonBinary()
+    this._binaryPath = binaryPath
     const expectedVersion = this.readBinaryVersion(binaryPath)
     this._sharedReplacing = false
+    // A build that replaced a daemon here and was gone before it stayed serving: refused as one
+    // that did not start, so the start below is the kept build that ran before (refusedBuildFallback).
+    await this.settleStay()
+    /** The replaced daemon's own file, started again when the new one does not start. */
+    let previous: string | null = null
+    /** A running daemon of another build was stopped for this one (its trial passed). */
+    let replacing = false
 
     // 1. Check if daemon is already running
     let existingPort = this.readPortFile()
@@ -485,6 +542,8 @@ export class LocalDaemon {
         }
       }
       if (helloResult.alive) {
+        // A daemon runs: the way back a failed probation asked for is no longer due.
+        this._backDue = null
         // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
         // or each Walnut would put its own build back on every start (daemon-shared.ts).
         if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion && this.keepSharedDaemon(helloResult, expectedVersion)) {
@@ -500,28 +559,10 @@ export class LocalDaemon {
           if (expectedVersion && helloResult.version !== expectedVersion && this.deferForExecRuns(helloResult, existingPort, expectedVersion)) {
             return existingPort
           }
-          if (expectedVersion && helloResult.version !== expectedVersion) {
-            let updatedPort: Awaited<ReturnType<LocalDaemon['updateManagedDaemon']>>
-            try { updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion) } catch (error) {
-              // A failed update is asked again after its 10 minute cooldown, never left until the next start.
-              this.scheduleUpgradeRecheck()
-              throw error
-            }
-            if (updatedPort === 'busy' || updatedPort === 'later') {
-              // Work of its own started after the hello (a host_exec run), or a try within 10 minutes:
-              // the old daemon keeps serving. Overdue (this._overdueMs), the next try goes over that work.
-              this.scheduleUpgradeRecheck()
-            } else if (updatedPort !== null) {
-              existingPort = updatedPort
-              this.noteDaemonReplaced()
-              helloResult = await this.ping(updatedPort)
-              if (!helloResult.alive || helloResult.version !== expectedVersion) throw new Error('Updated managed daemon did not answer with the expected version')
-            } else {
-              log.session.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>', {
-                running: helloResult.version, expected: expectedVersion,
-              })
-            }
-          }
+          // The update runs beside the daemon that serves, never in the way of a start: at boot the
+          // server's listen waited on it (2026-11-04 review 4: the trial, two stays and a 60 s ready
+          // wait could pass a deploy's readiness window, which rolled the deploy back).
+          if (expectedVersion && helloResult.version !== expectedVersion) this.startManagedUpdate(binaryPath, expectedVersion, helloResult.version ?? null)
           this._port = existingPort
           this._wsUrl = `ws://localhost:${existingPort}`
           this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
@@ -533,6 +574,10 @@ export class LocalDaemon {
         // it cannot look up its user or resolve names, nor can anything it starts.
         const sessionEnded = !!helloResult.instanceId && this._sessionEnded.has(helloResult.instanceId)
         if ((expectedVersion && helloResult.version && helloResult.version !== expectedVersion) || sessionEnded) {
+          // The build that runs is the one watched with no pid yet (a server killed between its start
+          // and the watch's pid, the next one with a newer build on disk): its pid named now, so its
+          // death inside the window is its failure (2026-11-05 review 7: it was never judged).
+          if (helloResult.version) this._stay.claim(helloResult.version, this.readPidFile())
           // Upgrade-vs-live-work guard: restarting the daemon closes every ACP
           // worker's stdin → turn-interrupted:shutdown for whatever the user is
           // mid-flight on (each dev:prod deploy used to kill live codex turns —
@@ -561,6 +606,7 @@ export class LocalDaemon {
             return existingPort
           }
           if (this.deferForExecRuns(helloResult, existingPort, expectedVersion ?? helloResult.version ?? '')) return existingPort
+          if (expectedVersion && helloResult.version !== expectedVersion && this.deferForProbation(helloResult, existingPort, expectedVersion)) return existingPort
           // Prepare the new daemon's fold checkpoints first, while this one
           // still serves (fold-prewarm.ts): its adopt otherwise folds every
           // live stream before listening, minutes on a checkpoint format change.
@@ -576,17 +622,54 @@ export class LocalDaemon {
             this.auditOwnerOnAdopt(this._instanceId)
             return existingPort
           }
+          // A new build serves in a trial run before the old daemon is stopped, and the old one's
+          // file is kept to go back to (local-daemon-replace.ts); isolated test dirs skip both.
+          if (expectedVersion && helloResult.version !== expectedVersion && (isProductionDaemonDir(this.daemonDir) || this.persistent)) {
+            if (await this.refuseReplacement(binaryPath, expectedVersion, existingPort, helloResult)) return existingPort
+            try {
+              previous = await previousDaemon({
+                daemonDir: this.daemonDir, binaryPath, compiledSelf: isCompiledSelf(binaryPath), pid: this.readPidFile(), version: helloResult.version ?? '', durable: this.keepsDurable,
+              })
+            } catch (error) {
+              // Keeping its file failed (a full disk, a clone refused): the old daemon is not stopped
+              // without its way back, and is asked again on the upgrade clock (2026-11-04 review).
+              log.session.error('local daemon: the running daemon\'s file could not be kept to go back to, so it keeps serving', {
+                running: helloResult.version, expected: expectedVersion, error: error instanceof Error ? error.message : String(error),
+              })
+              this._port = existingPort
+              this._wsUrl = `ws://localhost:${existingPort}`
+              this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+              this.auditOwnerOnAdopt(this._instanceId)
+              this.scheduleUpgradeRecheck()
+              return existingPort
+            }
+            replacing = true
+            // Nothing to keep: a legacy daemon with no version, or the first update from a release
+            // older than these copies of a binary or the compiled file on a Mac (local-daemon-replace.ts).
+            if (!previous) log.session.warn('local daemon: no copy of the running daemon to go back to; replacing it without one', { running: helloResult.version, expected: expectedVersion, binaryPath })
+          }
           log.session.info(sessionEnded ? 'local daemon in an ended login session — restarting' : 'local daemon version mismatch — restarting', {
             running: helloResult.version,
             expected: expectedVersion,
             runningInstanceId: helloResult.instanceId,
+            previous,
           })
+          // The same build started again (an ended login session) while it is on its probation:
+          // this stop is not its failure, the start below names its new pid.
+          if (!replacing && helloResult.version) this._stay.forgetPid(helloResult.version)
+          // The new build's watch is on disk before the old daemon stops, its pid named at its start
+          // (or by the next server's adopt): a server killed in between (a crash, a forced deploy)
+          // left nothing, and the next one took the new build for one that had stayed (2026-11-05
+          // review 6: on a Mac it kept that build over the way back).
+          if (replacing && expectedVersion) await this._stay.start(expectedVersion, null, () => this.stayDue(true))
           // Requests in the gap wait for the next daemon instead of failing (daemon-drain-resend.ts).
           expectDaemonSwap('daemon:__local__')
           try {
             await this.stopDaemon()
           } catch (error) {
             clearDaemonSwap('daemon:__local__')
+            // Not stopped: nothing of the new build runs, so its watch goes.
+            if (replacing && expectedVersion) this._stay.clear()
             throw error
           }
           this.noteDaemonReplaced()
@@ -595,6 +678,10 @@ export class LocalDaemon {
           this._wsUrl = `ws://localhost:${existingPort}`
           this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
           this.checkDaemonSessionInBackground(existingPort, helloResult)
+          // The build on disk is the one that runs: its file is kept for its own replacement later,
+          // once it stayed serving (keepServing).
+          if (expectedVersion && helloResult.version === expectedVersion) this._stay.claim(expectedVersion, this.readPidFile())
+          if (expectedVersion && helloResult.version === expectedVersion && !this._stay.watching(expectedVersion)) this.keepServing(binaryPath, expectedVersion, true)
           log.session.info('local daemon already running', {
             port: existingPort,
             version: helloResult.version,
@@ -616,9 +703,232 @@ export class LocalDaemon {
     // Reached whenever the managed daemon is momentarily absent (login not yet
     // done, launchd restarting it, a crash between KeepAlive retries); spawning
     // here would squat the runtime dir and turn a 5-second gap into a permanent
-    // handover refusal loop. spawnDaemon() re-checks at its own entry.
+    // handover refusal loop. spawnDaemon() re-checks at its own entry. A service
+    // whose config is on disk and that runs nothing is started first, and the
+    // daemon it brings is taken through the checks above once more.
+    if (!revived && await this.reviveManagedService()) return this.ensureRunningInner(true)
     this.assertNoServiceTakeover('spawn')
-    const port = await this.spawnDaemon(binaryPath)
+    let port: number
+    // No daemon answers while this build is refused here: the build that ran before, not this one.
+    const held = replacing ? null : await this.refusedBuildFallback(binaryPath, expectedVersion)
+    let fallback = held?.file ?? null
+    // Not refused, and never proven here: the way back a failed probation asked for, or a start
+    // made as a replacement (watched, the kept build before it to go back to).
+    const cold = replacing || held ? null : await this.untriedStart(binaryPath, expectedVersion)
+    if (cold?.kind === 'back') fallback = cold.file
+    else if (cold) {
+      previous = cold.previous
+      replacing = true
+      // Its watch on disk before it starts, as a replacement's is before the stop: a server killed
+      // while it starts leaves the next one a watched build, never one it takes for proven and, on
+      // a Mac, keeps over the way back (2026-11-05 review 6b).
+      if (expectedVersion) await this._stay.start(expectedVersion, null, () => this.stayDue(true))
+    }
+    // A daemon starts now: the way back is taken, or not needed.
+    this._backDue = null
+    try {
+      port = await this.spawnDaemon(fallback ?? binaryPath)
+      // The kept build again after a failed probation: the build on disk replaces it next, through
+      // its trial (refuseReplacement), on the upgrade clock.
+      if (cold?.kind === 'back') this.scheduleUpgradeRecheck()
+      if (previous) this._gate.replaced()
+      // A probation that a reboot or a restart of the same build left without a pid: this is it.
+      if (expectedVersion && !fallback) this._stay.claim(expectedVersion, this.pid)
+      // Up once it stayed serving; gone before that, the next start is the one it replaced.
+      if (replacing && expectedVersion && !fallback) this.watchStart(binaryPath, expectedVersion, true)
+      // The refused build itself, started with nothing kept to start instead: watched the same way,
+      // so one gone within the window is refused anew and says so (2026-11-04 review 4: it was not
+      // watched, and crash looped unseen). Nothing else to start, so no start follows here.
+      if (held && !fallback && expectedVersion) {
+        this.watchStart(binaryPath, expectedVersion, false)
+      }
+      // The file this build serves from, kept for its own replacement later (a Mac has no /proc);
+      // a watched start's only once it stayed (its window's end, or the next adopt).
+      if (!fallback && !(expectedVersion && this._stay.watching(expectedVersion))) this.keepServing(binaryPath, expectedVersion)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      if (fallback) {
+        log.session.error('local daemon: the build that ran before did not start; starting this build', { reason, fallback, expected: expectedVersion })
+        port = await this.spawnDaemon(binaryPath)
+        // The build on disk (refused here, or untried after a failed probation), watched like any
+        // start of it (above), and kept once it stayed: the kept file just failed to start.
+        if (expectedVersion) this.watchStart(binaryPath, expectedVersion, false)
+        return this.adoptSpawned(port, expectedVersion)
+      }
+      // Passed its trial, did not start on the real dir: left alone until another build, whatever comes
+      // next. A cold start ran no trial, so its one failed start (load at login, a slow hello) is held
+      // only as a failed trial is, in memory (2026-11-05 review 6b: a day on disk), and its trial
+      // decides once the kept build serves.
+      if (expectedVersion && replacing) this._gate.refuse(expectedVersion, `it did not start on the real dir: ${reason}`, !cold)
+      // Its watch, written before the stop, ends with it: nothing of it runs.
+      if (expectedVersion && replacing && this._stay.watching(expectedVersion)) this._stay.clear()
+      if (!previous) throw error
+      log.session.error('local daemon: the new daemon did not start; starting the one it replaced again', { reason, previous, expected: expectedVersion })
+      port = await this.spawnDaemon(previous)
+    }
+    return this.adoptSpawned(port, expectedVersion)
+  }
+
+  /**
+   * The file of the build that serves, kept as the one to go back to. Never before it stayed: on
+   * a Mac the copy of the build it replaced is the one slot, and a new build kept at its start put
+   * itself there, so its own failure within the window started it again instead of the old one
+   * (2026-11-04 review 5). `unlessRefused` (an adopt): a build refused here is not kept, since
+   * a watch that ended says nothing of how (a start that raced its death serves it unwatched);
+   * its own stay callback keeps one that stayed.
+   */
+  private keepServing(binaryPath: string, version: string | null, unlessRefused = false): void {
+    void (async () => {
+      if (unlessRefused && version) {
+        await this._gate.load()
+        if (this._gate.refusedNow(version)) return
+      }
+      // It serves with no probation running (or passed one): a later start of it with no daemon
+      // running is a plain start (untriedStart).
+      if (version && this.keepsDurable) this._stay.prove(version)
+      await keepRunningBinary({ daemonDir: this.daemonDir, binaryPath, compiledSelf: isCompiledSelf(binaryPath), version, durable: this.keepsDurable })
+    })().catch(() => {})
+  }
+
+  /**
+   * The daemon just started from `binaryPath` is on its probation; a clone of its file waits in
+   * the pending slot meanwhile (a Mac: a deploy inside the window replaces the file on disk).
+   */
+  private watchStart(binaryPath: string, expected: string, restart: boolean): void {
+    void this._stay.start(expected, this.pid, () => this.stayDue(restart))
+    void keepPendingBinary({ daemonDir: this.daemonDir, binaryPath, compiledSelf: isCompiledSelf(binaryPath), version: expected, durable: this.keepsDurable }).catch(() => {})
+  }
+
+  /**
+   * The watch is due (its window is over, or its daemon is gone): one that stayed is
+   * the build to go back to now (settleStay); one gone is refused, and (`restart`) the one it
+   * replaced is started.
+   */
+  private stayDue(restart: boolean): void {
+    if (this._stoppedByOwner) return
+    void (async () => {
+      if (await this.settleStay()) {
+        if (restart) {
+          await this.ensureRunning().catch((err: unknown) => {
+            log.session.warn('local daemon: starting the daemon it replaced failed', { error: err instanceof Error ? err.message : String(err) })
+          })
+        }
+      }
+    })().catch((err: unknown) => {
+      log.session.warn('local daemon: settling the new daemon\'s probation failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /**
+   * The build that runs is on its probation: the file of the build before it is the way back
+   * until it passed, so no other build replaces it yet (it would take that one slot). Asked again
+   * on the upgrade clock.
+   */
+  private deferForProbation(hello: { version?: string; instanceId?: string }, port: number, expected: string): boolean {
+    if (!hello.version || !this._stay.watching(hello.version)) return false
+    log.session.warn('local daemon version mismatch — upgrade DEFERRED (the running build is on its probation)', {
+      running: hello.version, expected, leftMs: Math.round(this._stay.leftMs(hello.version)),
+    })
+    this._port = port
+    this._wsUrl = `ws://localhost:${port}`
+    this._instanceId = hello.instanceId ?? this.readInstanceIdFile()
+    this.auditOwnerOnAdopt(this._instanceId)
+    this.scheduleUpgradeRecheck()
+    return true
+  }
+
+  private async keepPassed(expected: string): Promise<void> {
+    const binaryPath = this._binaryPath
+    if (!(await promotePending(this.daemonDir, expected)) && binaryPath && this.readBinaryVersion(binaryPath) === expected) this.keepServing(binaryPath, expected)
+  }
+
+  /**
+   * The watched new daemon is gone within its window: refused until another build (true), else
+   * nothing to do. Another build serving the dir now replaced it (another Walnut on this daemon
+   * dir): no verdict on it (2026-11-04 review 6: that was its failure for a day). Its pending files
+   * go with any end but a pass.
+   */
+  private async settleStay(): Promise<boolean> {
+    const before = this._stay.current()
+    // Past its window the watch passes only on its own build answering here (StayWatch.settle).
+    const served = before && this._stay.leftMs(before) === 0 ? await this.servedBuild() : undefined
+    const gone = this._stay.settle((pid) => this.isPidAlive(pid), served)
+    // The watch ended now: one stayed through is the way back from here on (its pending files, else
+    // the file there while it still is that build); any other end drops its pending files.
+    if (before && !this._stay.watching(before)) {
+      if (this._stay.passed(before)) void this.keepPassed(before).catch(() => {})
+      else void discardPending(this.daemonDir, before)
+    }
+    if (!gone) return false
+    const serving = served !== undefined ? served : await this.servedBuild()
+    if (serving && serving !== gone.expected) {
+      log.session.warn('local daemon: the new daemon was replaced by another build inside its probation; no verdict on it', { expected: gone.expected, serving })
+      return false
+    }
+    log.session.error('local daemon: the new daemon did not stay serving; the one it replaced is started again', { expected: gone.expected, reason: gone.reason })
+    this._gate.refuse(gone.expected, gone.reason, true)
+    this._backDue = gone.expected
+    return true
+  }
+
+  /** The build the daemon on the port file answers as, or null when none answers. */
+  private async servedBuild(): Promise<string | null> {
+    const port = this.readPortFile()
+    const hello = port ? await this.ping(port).catch(() => null) : null
+    return hello?.alive ? hello.version ?? null : null
+  }
+
+  /**
+   * The old daemon died while `expected` is refused here (its trial failed lately, or it did not
+   * start on the real dir after a stop): the kept file of the build that ran before, if there is
+   * one. 2026-11-04 review: the gate only held while an old daemon answered, so its death let the
+   * next start launch the refused build.
+   */
+  private async refusedBuildFallback(binaryPath: string, expected: string | null): Promise<{ file: string | null; why: string } | null> {
+    if (!expected || !(isProductionDaemonDir(this.daemonDir) || this.persistent)) return null
+    await this._gate.load()
+    const why = this._gate.refusedNow(expected)
+    if (!why) return null
+    const kept = await keptPrevious(this.daemonDir, binaryPath)
+    if (!kept || kept.version === expected) {
+      log.session.warn('local daemon: no daemon runs and this build is refused here, with no build that ran before kept; starting it, watched', { expected, why })
+      return { file: null, why }
+    }
+    log.session.warn('local daemon: no daemon runs and this build is refused here; starting the build that ran before', { expected, previous: kept.version, why })
+    return { file: kept.file, why }
+  }
+
+  /**
+   * No daemon runs, `expected` is not refused here, and it never stayed through a probation here
+   * (StayWatch.proven, or the kept build before is this one). 2026-11-05 review 6: such a start was
+   * made as if the build had served here: unwatched, kept at once (on a Mac over the way back), and
+   * after a failed probation it was the newer build deployed inside the window, untried, instead of
+   * the build that ran before. Now:
+   *   back      a probation just failed (_backDue, or the gate's refusal on disk after a restart)
+   *             and a kept build other than that one is there:
+   *             it starts, and the build on disk replaces it later through its own trial.
+   *   replace   otherwise the start is a replacement: watched (its death within the window is
+   *             refused, and the kept build follows), kept only once it passed; the kept build
+   *             before it (`previous`, null: none) starts when it does not start at all.
+   * null: a plain start (a build proven here, or a daemon dir that does not last).
+   */
+  private async untriedStart(binaryPath: string, expected: string | null): Promise<{ kind: 'back'; file: string } | { kind: 'replace'; previous: string | null } | null> {
+    if (!expected || !this.keepsDurable) return null
+    const kept = await keptPrevious(this.daemonDir, binaryPath)
+    if (this._backDue === undefined) await this._gate.load()
+    const back = this._backDue === undefined ? this._gate.refusedUntilNewBuild() : this._backDue
+    // The kept build is this one (the way back itself), or it stayed serving here before.
+    if (kept?.version === expected || await this._stay.proven(expected)) return null
+    if (kept && back && kept.version !== back) {
+      log.session.warn('local daemon: no daemon runs after a probation failed; starting the build that ran before, the build on disk replaces it after its trial', { failed: back, previous: kept.version, expected })
+      return { kind: 'back', file: kept.file }
+    }
+    const previous = kept && kept.version !== back ? kept.file : null
+    log.session.warn('local daemon: no daemon runs and this build never stayed serving here; starting it on its probation', { expected, previous: previous ? kept!.version : null })
+    return { kind: 'replace', previous }
+  }
+
+  private adoptSpawned(port: number, expectedVersion: string | null): number {
     this._port = port
     this._wsUrl = `ws://localhost:${port}`
     // Pick up instance id from hello (spawnDaemon did one) or fall back to file
@@ -656,45 +966,162 @@ export class LocalDaemon {
     return true
   }
 
-  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later'> {
-    if (!isProductionDaemonDir(this.daemonDir) || binaryPath.endsWith('.cjs')) return null
+  /**
+   * The new build must serve in a trial run before the old daemon is stopped (ReplacementGate).
+   * True: the old daemon keeps serving for now, adopted here: the trial still runs beside it
+   * (its end asks again), it failed (asked again after LOCAL_REPLACE_RETRY_MS), or the build
+   * did not start on the real dir after a stop (left alone until another build comes).
+   */
+  private async refuseReplacement(binaryPath: string, expected: string, port: number, hello: { version?: string; instanceId?: string }): Promise<boolean> {
+    await this._gate.load()
+    const verdict = this._gate.check(expected, async () => trialDaemon(binaryPath, isCompiledSelf(binaryPath), await this.buildSpawnEnv()), () => {
+      const reason = this._gate.refusal(expected)
+      if (reason) log.session.error('local daemon: the new daemon did not start in a trial run; the running one keeps serving', { running: hello.version, expected, reason })
+      else log.session.info('local daemon: the new daemon served in a trial run; replacing the running one', { running: hello.version, expected })
+      // A start in flight may still hold the old answer: ask once it settled.
+      if (this._stoppedByOwner) return
+      void (this._ensureInFlight ?? Promise.resolve()).catch(() => {}).then(() => this.ensureRunning()).catch((err: unknown) => {
+        log.session.warn('local daemon: the check after a trial run failed', { error: err instanceof Error ? err.message : String(err) })
+      })
+    })
+    if (verdict === 'go') return false
+    this._port = port
+    this._wsUrl = `ws://localhost:${port}`
+    this._instanceId = hello.instanceId ?? this.readInstanceIdFile()
+    this.auditOwnerOnAdopt(this._instanceId)
+    // The trial's own end asks again; a refusal waits for the upgrade clock.
+    if (verdict !== 'wait') this.scheduleUpgradeRecheck()
+    return true
+  }
+
+  /** The service of Walnut's this daemon runs under: exactly one config (the LaunchAgent, the user unit, or the cron boot script), never a system unit. */
+  private managedScope(): 'user' | 'cron' | null {
+    if (!isProductionDaemonDir(this.daemonDir)) return null
     const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
-    // Exactly one config of Walnut's: the LaunchAgent, the user unit, or the cron boot script (never a system unit).
     const present = configs.filter((config) => takeover.present.includes(config))
-    const scope = present.length !== 1 ? null : present[0] === configs[0] ? 'user' : process.platform === 'linux' && present[0] === configs[2] ? 'cron' : null
-    if (takeover.unknown.length || !scope) return null
-    // Tried within 10 minutes: asked again on the upgrade clock, never left until the next start.
+    if (takeover.unknown.length || present.length !== 1) return null
+    return present[0] === configs[0] ? 'user' : process.platform === 'linux' && present[0] === configs[2] ? 'cron' : null
+  }
+
+  /** A daemon dir that lasts (the production one, the companion's) keeps its copies where a reboot leaves them; a throwaway one beside its files. */
+  private get keepsDurable(): boolean {
+    return isProductionDaemonDir(this.daemonDir) || this.persistent
+  }
+
+  /** The managed update running beside the daemon that serves (startManagedUpdate); tests and shutdown wait for it. */
+  private _managedUpdate: Promise<void> | null = null
+  get managedUpdatePending(): Promise<void> { return this._managedUpdate ?? Promise.resolve() }
+
+  /**
+   * Update the service in the background while the running daemon is adopted (the unmanaged path's
+   * trial runs the same way): its end adopts whatever serves then, the new daemon or the one a
+   * failed update put back. One at a time.
+   */
+  private startManagedUpdate(binaryPath: string, expected: string, running: string | null): void {
+    if (this._managedUpdate) return
+    const run = this._managedUpdate = (async () => {
+      let outcome: Awaited<ReturnType<LocalDaemon['updateManagedDaemon']>>
+      try {
+        outcome = await this.updateManagedDaemon(binaryPath, expected)
+      } catch (error) {
+        log.session.error('local daemon: managed update failed; the daemon that serves now is adopted', { running, expected, error: error instanceof Error ? error.message : String(error) })
+        // What a failed update left serving (the one put back) is adopted, and the update is asked
+        // again after its 10 minute cooldown, never left until the next start.
+        await this.adoptAfterManagedUpdate()
+        this.scheduleUpgradeRecheck()
+        return
+      }
+      if (outcome === 'busy' || outcome === 'later') {
+        // Work of its own started after the hello (a host_exec run), or a try within 10 minutes:
+        // the old daemon keeps serving. Overdue (this._overdueMs), the next try goes over that work.
+        this.scheduleUpgradeRecheck()
+      } else if (outcome !== null) {
+        this.noteDaemonReplaced()
+        await this.adoptAfterManagedUpdate()
+      } else if (this._managedSkipLogged !== `${running}>${expected}`) {
+        this._managedSkipLogged = `${running}>${expected}`
+        log.session.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>', { running, expected })
+      }
+    })()
+    void run.finally(() => { if (this._managedUpdate === run) this._managedUpdate = null })
+  }
+
+  private _managedSkipLogged: string | null = null
+
+  /** After a managed update: the daemon that serves now, through a fresh start check (its hello, its version). */
+  private async adoptAfterManagedUpdate(): Promise<void> {
+    if (this._stoppedByOwner) return
+    await (this._ensureInFlight ?? Promise.resolve()).catch(() => {})
+    await this.ensureRunning().catch((err: unknown) => {
+      log.session.warn('local daemon: the check after a managed update failed', { error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later'> {
+    if (binaryPath.endsWith('.cjs')) return null
+    const scope = this.managedScope()
+    if (!scope) return null
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < LOCAL_MANAGED_UPDATE_COOLDOWN_MS) return 'later'
+    if (this._managedFail === undefined) this._managedFail = await readBuildBackoff(`local:${this.daemonDir}`)
+    if (buildBackedOff(this._managedFail, expected)) return null
     this._lastManagedUpdate = { expected, at: Date.now() }
-    const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
+    // Detached, with the tail after it (local-daemon-service.ts): a server stopped mid-update no longer takes the update with it.
+    const { updateLocalService } = await import('./local-daemon-service.js')
+    // Its record kept from the launch: a server restarted mid-update reads it back first (local-daemon-service.ts).
+    const key = `local:${this.daemonDir}`
     // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.
     // Overdue, the old daemon may be restarted unprepared, and an older one's shutdown does not wait
     // for a file write: this server's file changes to it wait for the swap (daemon-file-fence.ts).
-    const release = this._forceable ? fenceDaemonFileChanges('__local__') : () => {}
-    let result: Awaited<ReturnType<typeof runDaemonServiceCommand>>
+    const overBusy = this._forceable
+    const release = overBusy ? fenceDaemonFileChanges('__local__') : () => {}
+    let outcome: Awaited<ReturnType<typeof updateLocalService>>
     // Requests in the gap of the swap wait for the next daemon instead of failing (daemon-drain-resend.ts).
     // The update may first wait out the daemon's own work: the mark lasts as long as the CLI may run.
     expectDaemonSwap('daemon:__local__', 5 * 60_000)
     try {
-      result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
-    } catch (error) {
-      clearDaemonSwap('daemon:__local__')
-      throw error
+      outcome = await updateLocalService(binaryPath, scope, { record: { key, expected }, overBusy }).catch((error: unknown) => {
+        clearDaemonSwap('daemon:__local__')
+        if ((error as { buildFailed?: unknown })?.buildFailed === true) {
+          this._managedFail = { expected, at: Date.now(), reason: (error instanceof Error ? error.message : String(error)).slice(0, 300) }
+          // Written to disk by updateLocalService too, before the update's record went (a double does not).
+          void writeBuildBackoff(key, this._managedFail)
+        }
+        throw new Error(`Managed daemon update failed; no unmanaged replacement was started: ${error instanceof Error ? error.message : String(error)}`)
+      })
     } finally { release() }
-    if (result.code !== 0) clearDaemonSwap('daemon:__local__')
-    if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
-      // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.
+    if (outcome !== 'applied') {
+      clearDaemonSwap('daemon:__local__')
+      // Refused before anything changed (the daemon busy, launchd starting no jobs): asked again on the upgrade clock.
       this._lastManagedUpdate = null
-      log.session.warn('local daemon: managed update refused while the daemon is busy; trying again later', { expected, said: (result.stdout || result.stderr).slice(0, 300) })
+      log.session.warn(`local daemon: managed update ${outcome === 'busy' ? 'refused while the daemon is busy, or another update or the last one\'s probation is at work' : 'deferred: launchd starts no jobs in this login session now'}; trying again later`, { expected })
       return 'busy'
     }
-    if (result.code !== 0) throw new Error(`Managed daemon update failed; no unmanaged replacement was started: ${result.stdout || result.stderr}`)
-    const reply = JSON.parse(result.stdout) as { ok?: boolean }
-    if (reply.ok !== true) throw new Error('Managed daemon update was not confirmed')
     const port = this.readPortFile()
     if (!port) throw new Error('Managed daemon update returned without a runtime port')
     return port
+  }
+
+  /**
+   * The service's config is on disk and no daemon answers: load or start it before refusing
+   * to start one here (local-daemon-service.ts). True when a daemon answers now. At most
+   * once a minute; never while an update's runner is at work.
+   */
+  private async reviveManagedService(): Promise<boolean> {
+    const scope = this.managedScope()
+    if (!scope || (this._lastRevive !== null && Date.now() - this._lastRevive < REVIVE_EVERY_MS)) return false
+    const { reviveLocalService } = await import('./local-daemon-service.js')
+    const tail = await reviveLocalService(scope).catch((error: unknown) => ({ outcome: 'down' as const, words: error instanceof Error ? error.message : String(error) }))
+    if (tail === 'updating') {
+      log.session.info('local daemon: no daemon answers while a service update runs; its own check starts the service', { scope })
+      return false
+    }
+    this._lastRevive = Date.now()
+    const up = tail.outcome === 'loaded' || tail.outcome === 'serving' || tail.outcome === 'standin'
+    // Not started (its words say why: the user's `launchctl disable` among them): logged as such.
+    if (up) log.session.warn('local daemon: the service had no daemon running; Walnut started it', { scope, outcome: tail.outcome, words: tail.words })
+    else log.session.error('local daemon: the service had no daemon running, and Walnut did not start one', { scope, outcome: tail.outcome, words: tail.words })
+    return up
   }
 
   private readPortFile(): number | null {
@@ -1053,6 +1480,9 @@ export class LocalDaemon {
     if (isProductionDaemonDir(this.daemonDir)) return
     if (this._upgradeRecheck) clearTimeout(this._upgradeRecheck)
     this._upgradeRecheck = null
+    this._stay.clear()
+    // A trial still running beside it must not start a daemon after this stop.
+    this._stoppedByOwner = true
     await this.stopDaemon()
   }
 
@@ -1209,14 +1639,9 @@ export class LocalDaemon {
 
   private async spawnDaemonWithEnv(binaryPath: string, env: NodeJS.ProcessEnv): Promise<number> {
     // Source-fallback daemons are plain .cjs scripts (no compiled binary in
-    // published npm installs) — run them under the current Node runtime.
-    const isSourceScript = binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')
-    // The compiled Walnut file is its own daemon (src/binary/main.ts).
-    const [cmd, args] = isCompiledSelf(binaryPath)
-      ? [process.execPath, ['__daemon', '--start']]
-      : isSourceScript
-        ? [process.execPath, [binaryPath, '--start']]
-        : [binaryPath, ['--start']]
+    // published npm installs), run under the current Node runtime; the compiled
+    // Walnut file is its own daemon (src/binary/main.ts).
+    const { cmd, args } = daemonLaunch(binaryPath, isCompiledSelf(binaryPath))
 
     // macOS execution identity. Without this the daemon inherits OUR responsible
     // process — the node running this server — so every file the CLI and its tools
@@ -1404,7 +1829,7 @@ export class LocalDaemon {
     }
   }
 
-  private findDaemonBinary(): string {
+  private findDaemonBinary(): string | Promise<string> {
     if (this.overrideBinaryPath) return this.overrideBinaryPath
     // The compiled Walnut file carries the full daemon (`walnut __daemon`), so it
     // never needs a separate binary or the source fallback.
@@ -1431,19 +1856,30 @@ export class LocalDaemon {
    * stamped version changes, the running daemon reports the old one, and
    * ensureRunningInner() restarts it with the new source.
    */
-  private materializeSourceDaemon(): string {
+  /** The build of the daemon that started here last (it writes daemon.version at its start), or null. */
+  private lastStartedVersion(): string | null {
+    try { return fs.readFileSync(path.join(this.daemonDir, 'daemon.version'), 'utf8').trim() || null } catch { return null }
+  }
+
+  private async materializeSourceDaemon(): Promise<string> {
     const scriptPath = path.join(this.daemonDir, 'daemon-fallback.cjs')
     const source = getDaemonSource()
     const sourceHash = createHash('sha256').update(source).digest('hex').slice(0, 12)
     const hashFile = `${scriptPath}.sha256`
 
-    fs.mkdirSync(this.daemonDir, { recursive: true })
-    let existingHash: string | null = null
-    try { existingHash = fs.readFileSync(hashFile, 'utf-8').trim() } catch { /* first run */ }
+    // Async file work: the server's event loop runs this on every start check (2026-11-04 review 5).
+    await fsp.mkdir(this.daemonDir, { recursive: true })
+    const existingHash = (await fsp.readFile(hashFile, 'utf-8').catch(() => '')).trim() || null
     if (existingHash !== sourceHash) {
-      fs.writeFileSync(scriptPath, source, 'utf-8')
-      fs.writeFileSync(`${scriptPath}.version`, resolveDaemonSourceVersion(), 'utf-8')
-      fs.writeFileSync(hashFile, sourceHash, 'utf-8')
+      // The files the running daemon was started from stay as the fallback for its replacement
+      // (local-daemon-replace.ts); while it is on its probation, beside the build before it, which
+      // stays the way back till it passed (2026-11-04 review 6: they took its place).
+      const running = this.lastStartedVersion()
+      const slot = running && this._stay.watching(running) ? 'next' : 'previous'
+      if (existingHash) await keepPreviousSource(this.daemonDir, ['daemon-fallback.cjs', 'daemon-fallback.cjs.version', ...SOURCE_SIDECARS], running, undefined, this.keepsDurable, slot)
+      await fsp.writeFile(scriptPath, source, 'utf-8')
+      await fsp.writeFile(`${scriptPath}.version`, resolveDaemonSourceVersion(), 'utf-8')
+      await fsp.writeFile(hashFile, sourceHash, 'utf-8')
       log.session.info('materialized source-fallback local daemon', { scriptPath, sourceHash })
     }
     // Sidecar bundles — the template require()s each next to itself and
@@ -1452,12 +1888,12 @@ export class LocalDaemon {
     // the server keeps its own fallback for that feature.
     // acp-daemon-core.cjs is local-only on purpose: ACP engines never run on a
     // remote host, so daemon-connection's remote deploy list leaves it out.
-    for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'path-resolve-core.cjs', 'port-scan-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']) {
+    for (const sidecarFile of SOURCE_SIDECARS) {
       try {
         const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
         const sidecarDst = path.join(this.daemonDir, sidecarFile)
-        if (fs.existsSync(sidecarSrc)) fs.copyFileSync(sidecarSrc, sidecarDst)
-      } catch { /* server-side fallback stays */ }
+        await fsp.copyFile(sidecarSrc, sidecarDst)
+      } catch { /* absent, or not copied: the server-side fallback stays */ }
     }
     return scriptPath
   }

@@ -58,6 +58,10 @@ function walnut(host: Host, key: string, build: Build): DaemonConnection {
   vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
   vi.spyOn(priv(c), 'unmanagedTakeover').mockResolvedValue({})
   vi.spyOn(priv(c), 'stageUpgrade').mockResolvedValue(undefined)
+  // The staged build serves in its trial run (daemon-trial-cmd.ts), and the running one's files were kept.
+  vi.spyOn(priv(c), 'trialStaged').mockResolvedValue(null)
+  // What runs the daemon, as a hello says it: with none known no copy can be kept, and nothing is stopped.
+  ;(c as unknown as { _runtime: unknown })._runtime = 'node'
   vi.spyOn(priv(c), 'stopUnmanagedDaemon').mockImplementation(async () => {
     // The swap: this server's build runs now, and its daemon reads back the record (served-walnuts-core).
     host.version = build.version
@@ -67,6 +71,8 @@ function walnut(host: Host, key: string, build: Build): DaemonConnection {
   vi.spyOn(priv(c), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     if (cmd.includes('walnut-service-probe-done')) return UNMANAGED
+    if (cmd.includes('walnut-previous-kept')) return 'walnut-previous-kept'
+    if (cmd.includes('walnut-previous-restored')) return 'walnut-previous-restored'
     if (cmd.includes('daemon.version')) {
       const serves = host.capabilities
         ? JSON.stringify({ v: 1, version: host.recordOf ?? host.version, twin: host.twin ?? 'binary', capabilities: host.capabilities, walnuts: host.walnuts, at: Date.now() })

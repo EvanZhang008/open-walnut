@@ -4,7 +4,7 @@
  * (differently) by the HTTP route, the WS push and the folder picker.
  */
 import { describe, it, expect } from 'vitest';
-import { buildHostStatus, listStatusHosts, type HostDef } from '../../../src/core/hosts/host-status.js';
+import { buildHostStatus, daemonUpdateSentence, listStatusHosts, type HostDef } from '../../../src/core/hosts/host-status.js';
 import { DAEMON_CONNECT_STEPS, describeConnectPhase } from '../../../src/core/sessions/host-connect-hint.js';
 import type { DaemonConnectPhase, DaemonConnectState } from '../../../src/providers/daemon-connection.js';
 import type { Config } from '../../../src/core/types.js';
@@ -277,5 +277,58 @@ describe('buildHostStatus: the wire contract the banner, picker and Settings rea
     const k = buildHostStatus('devbox', { ...devbox, port: 2222 }, state('failed', { error: 'Host key verification failed.' }), undefined, AT);
     expect(k.kind).toBe('host_key');
     expect(k.hint).toContain("'[devbox.example.test]:2222'");
+  });
+});
+
+// 2026-11-04: a host network Mac went away during its own daemon update, and its status read
+// as a plain drop; the update's state now says what happened (daemon-net-update-record.ts).
+describe('buildHostStatus: a host away during its own daemon update', () => {
+  const at = new Date(2026, 10, 4, 4, 7).getTime();
+
+  it('reads as updating while the link is down, with no failure', () => {
+    const s = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: { state: 'updating', at } }), undefined, AT);
+    expect(s.phaseLabel).toBe('Updating the daemon on Big dev box (since 04:07); it reconnects once the new one is up');
+    expect(s.lastKind).toBeUndefined();
+    expect(s.error).toBeUndefined();
+  });
+
+  // 2026-11-04 review: away after its update was read as "needs a restart or a new login", untrue
+  // for a Mac that is only asleep; only a record that says no daemon runs there says that.
+  it('once it has not come back, says it may be asleep, without calling it a daemon failure', () => {
+    const sentence = 'The daemon update on Big dev box at 04:07 has not come back yet; Big dev box may be asleep, and it reconnects when it wakes';
+    const r = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: { state: 'lost', at } }), undefined, AT);
+    expect(r).toMatchObject({ phaseLabel: sentence, lastHint: sentence, lastError: sentence });
+    expect(r.lastKind).not.toBe('daemon');
+    expect(r.phaseLabel).not.toContain('restart');
+    const f = buildHostStatus('devbox', devbox, state('failed', { error: 'connect ECONNREFUSED', daemonUpdate: { state: 'lost', at } }), undefined, AT);
+    expect(f).toMatchObject({ phaseLabel: sentence, hint: sentence, error: 'connect ECONNREFUSED' });
+    expect(f.kind).not.toBe('daemon');
+  });
+
+  it('an update whose record says no daemon runs there needs a restart or a new login, as the hint of a daemon failure', () => {
+    const update = { state: 'down' as const, at, message: 'no daemon answered within 90 s, nor after the previous service config was put back' };
+    const sentence = 'The daemon update on Big dev box at 04:07 left no daemon running there (no daemon answered within 90 s, nor after the previous service config was put back); Big dev box needs a restart or a new login to start Walnut again';
+    expect(daemonUpdateSentence('Big dev box', update)).toBe(sentence);
+    const r = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: update }), undefined, AT);
+    expect(r).toMatchObject({ phaseLabel: sentence, lastKind: 'daemon', lastHint: sentence, lastError: sentence });
+    const f = buildHostStatus('devbox', devbox, state('failed', { error: 'connect ECONNREFUSED', daemonUpdate: update }), undefined, AT);
+    expect(f).toMatchObject({ phaseLabel: sentence, kind: 'daemon', hint: sentence, error: 'connect ECONNREFUSED' });
+  });
+
+  it('back with an update that did not go through: a line with the reason, the host connected as it is', () => {
+    const update = { state: 'failed' as const, at, message: 'afterwards on the host: no daemon answered within 90 s, so the previous service config was put back' };
+    const s = buildHostStatus('devbox', devbox, state('connected', { daemonUpdate: update }), undefined, AT);
+    expect(s.connected).toBe(true);
+    expect(s.phaseLabel).toBe(describeConnectPhase('connected', 'Big dev box'));
+    expect(s.warnings).toEqual([daemonUpdateSentence('Big dev box', update)]);
+    expect(s.warnings![0]).toContain('did not go through, so the daemon it had keeps serving: afterwards on the host: no daemon answered within 90 s');
+  });
+
+  it('a failure while the host is away again is not repeated as a line, and no update adds nothing', () => {
+    const away = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: { state: 'failed', at, message: 'x' } }), undefined, AT);
+    expect(away.warnings).toBeUndefined();
+    expect(away.phaseLabel).toBe(describeConnectPhase('reconnecting', 'Big dev box'));
+    const plain = buildHostStatus('devbox', devbox, state('connected'), undefined, AT);
+    expect(plain.warnings).toBeUndefined();
   });
 });

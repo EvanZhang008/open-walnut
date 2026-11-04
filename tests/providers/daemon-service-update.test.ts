@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
@@ -25,6 +26,16 @@ beforeEach(async () => {
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
 
 type UploadFault = 'chunk' | 'version' | 'checksum' | 'path'
+
+const TAILS = {
+  serving: 'outcome=serving\na daemon answers\n',
+  loaded: 'outcome=loaded\nthe service was not running after the update, so it was started again, and a daemon answers\n',
+  restored: 'outcome=restored\nno daemon answered within 90 s, so the previous service config was put back, and its daemon answers\n',
+  down: 'outcome=down\nno daemon answered within 90 s, nor after the previous service config was put back\n',
+} as const
+type TailOutcome = keyof typeof TAILS
+/** Quick clocks for the detached runner (daemon-net-update-io.ts runDetachedUpdate). */
+const FAST = { pollMs: 1, settleSeconds: 0 }
 
 /** The remote side of the upload: confirmed chunks, the reassembly check, and the staging dir's removal. */
 function uploads(fault?: UploadFault) {
@@ -56,44 +67,118 @@ function uploads(fault?: UploadFault) {
   return { chunk, slots, answer }
 }
 
-function lab(fault?: UploadFault | 'service' | 'transport', scope: 'user' | 'cron' = 'user', extra = '') {
-  const upload = uploads(fault === 'service' || fault === 'transport' ? undefined : fault)
+/**
+ * The host side of the detached runner, as it behaves: the script the server writes with a
+ * heredoc, the launch, and the record it reads back with cat. The launch "runs" the update
+ * line the script holds (`answer` says what it printed) and leaves the tail's record.
+ * `linkDown`: every read fails, as when the link stays down after the launch.
+ */
+function runnerHost(answer: (line: string) => { stdout: string; stderr?: string; code?: number }, tail: TailOutcome = 'serving', o: { linkDown?: boolean } = {}) {
+  const files = new Map<string, string>()
+  const updates: string[] = []
+  const handle = (command: string): string | null => {
+    const write = /^umask 077; cat > '([^']+)\.tmp' <<'(WALNUT_EOF_[0-9a-f]+)'\n([\s\S]*)\n\2\nmv -f /.exec(command)
+    if (write) { files.set(write[1], write[3]); return '' }
+    const read = /^if \[ -f '([^']+)' \]; then cat /.exec(command)
+    if (read) {
+      if (o.linkDown) throw new Error('connection lost')
+      return files.get(read[1]) ?? '__walnut_no_file__'
+    }
+    if (command.includes('update.go')) {
+      const d = /^d=([^;]+);/.exec(command)![1].replace(/'/g, '')
+      const line = files.get(`${d}/update.sh`)!.split('\n').find((l) => l.includes(' walnut daemon update '))!
+        .trim().replace(/ >"\$d\/update\.out" 2>"\$d\/update\.err"( &)?$/, '')
+      updates.push(line)
+      const said = answer(line)
+      files.set(`${d}/update.out`, said.stdout)
+      files.set(`${d}/update.err`, said.stderr ?? '')
+      files.set(`${d}/update.tail`, TAILS[tail])
+      files.set(`${d}/update.done`, `rc=${said.code ?? 0} tries=1 tail=${tail}\n`)
+      return 'walnut-update-started pid=4242 group=4242 own=4100'
+    }
+    return null
+  }
+  return { handle, files, updates }
+}
+
+const isScriptWrite = (command: string) => command.startsWith('umask 077; cat > ')
+const isRead = (command: string) => command.startsWith('if [ -f ')
+const isLaunch = (command: string) => command.includes('update.go')
+
+function lab(fault?: UploadFault | 'service' | 'stopped' | 'transport', scope: 'user' | 'cron' = 'user', tail: TailOutcome = 'serving', extra = '') {
+  const upload = uploads(fault === 'service' || fault === 'stopped' || fault === 'transport' ? undefined : fault)
+  const refusal = fault === 'service' ? { message: 'busy', rollback: 'unchanged' }
+    : fault === 'stopped' ? { message: 'the new daemon did not answer', rollback: 'restored', stopped: true } : null
+  const host = runnerHost((line) => {
+    expect(line).toBe(`${staged} walnut daemon update --yes --scope ${scope} --executable ${staged}${extra}`)
+    return { stdout: refusal ? JSON.stringify({ ok: false, failure: refusal }) : '{"ok":true}' }
+  }, tail, { linkDown: fault === 'transport' })
   const calls: string[] = []
   const run = vi.fn(async (command: string, _timeoutMs?: number) => {
     calls.push(command)
-    const answered = await upload.answer(command)
-    if (answered !== null) return answered
-    expect(command).toBe(`${staged} walnut daemon update --yes --scope ${scope} --executable ${staged}${extra}`)
-    if (fault === 'transport') throw new Error('connection lost')
-    return fault === 'service' ? JSON.stringify({ ok: false, failure: { message: 'busy', rollback: 'unchanged' } }) : '{"ok":true}'
+    // The runner's own commands first: the script it writes holds a mktemp of its own (the tail's launchd spawn probe).
+    const answered = host.handle(command) ?? (await upload.answer(command))
+    if (answered === null) throw new Error(`unexpected command: ${command}`)
+    return answered
   })
-  return { run, chunk: upload.chunk, calls, slots: upload.slots }
+  return { run, chunk: upload.chunk, calls, slots: upload.slots, host, detached: { ...FAST, waitMs: 50 } }
 }
 
 describe('managed daemon upload and update', () => {
-  it('reassembles only confirmed chunks, verifies bytes and version, requests a user service update, then removes the staging dir', async () => {
+  it('reassembles only confirmed chunks, verifies bytes and version, runs the user service update detached with its tail, then removes the staging dir', async () => {
     const l = lab()
     await updateRemoteDaemonService({ binary }, version, l)
     expect(l.chunk.mock.calls.length).toBeGreaterThan(3)
     expect(new Set(l.slots).size).toBe(l.slots.length)
-    expect(l.calls).toHaveLength(4)
-    expect(l.calls[2]).toContain('--scope user')
-    expect(l.calls[3]).toBe(RM)
-    expect(l.calls.join('\n')).not.toMatch(/sudo|nohup|kill|enable/)
-    expect(l.run.mock.calls[2][1]).toBe(600_000)
+    // mktemp, the reassembly check, the runner script, the launch, the record's reads, the removal.
+    expect(l.calls.slice(0, 4).map((c, i) => [c.includes('mktemp'), c.includes('sha256sum'), isScriptWrite(c), isLaunch(c)][i])).toEqual([true, true, true, true])
+    expect(l.calls.slice(4, -1).every(isRead)).toBe(true)
+    expect(l.calls.at(-1)).toBe(RM)
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged}`])
+    // The script on the host copies the config aside, tries once (a busy daemon is asked again from the server), and runs the tail.
+    const script = l.host.files.get(`${remote}/update.sh`)!
+    expect(script).toContain('before.cfg')
+    expect(script).toContain('[ "$n" -ge 1 ] && break')
+    expect(script).toContain('update.tail')
+    expect(l.calls.filter((c) => !isScriptWrite(c) && !isLaunch(c)).join('\n')).not.toMatch(/sudo|nohup|kill|enable/)
   })
 
   it('an overdue update asks the daemon to go over its own work (daemon-update-behind.ts)', async () => {
-    const l = lab(undefined, 'user', ' --over-busy')
+    const l = lab(undefined, 'user', 'serving', ' --over-busy')
     await updateRemoteDaemonService({ binary }, version, l, 'user', { overBusy: true })
-    expect(l.calls[2]).toBe(`${staged} walnut daemon update --yes --scope user --executable ${staged} --over-busy`)
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged} --over-busy`])
   })
 
-  it('requests a cron service update for the cron scope', async () => {
+  it('requests a cron service update for the cron scope, and its tail checks the boot script', async () => {
     const l = lab(undefined, 'cron')
     await updateRemoteDaemonService({ binary }, version, l, 'cron')
-    expect(l.calls[2]).toBe(`${staged} walnut daemon update --yes --scope cron --executable ${staged}`)
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope cron --executable ${staged}`])
+    expect(l.host.files.get(`${remote}/update.sh`)).toContain('tk=cron')
     expect(l.calls.at(-1)).toBe(RM)
+  })
+
+  // 2026-11-04: an update that answered and left no daemon serving. The tail runs on the
+  // host after the answer, whatever it said, and its record decides.
+  it('reads a tail that had to start the service again as applied', async () => {
+    const l = lab(undefined, 'user', 'loaded')
+    await expect(updateRemoteDaemonService({ binary }, version, l)).resolves.toBe('applied')
+  })
+
+  it.each(['restored', 'down'] as const)('fails an update that answered ok when its tail says %s, with the tail\'s words', async (tail) => {
+    const l = lab(undefined, 'user', tail)
+    const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+    expect(String(error)).toContain('the update answered ok, but afterwards on the host: no daemon answered within 90 s')
+    expect(l.calls.at(-1)).toBe(RM)
+  })
+
+  it('a link that stays down after the launch keeps the staging dir for the runner, and says the update may still finish', async () => {
+    const l = lab('transport')
+    const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+    expect(String(error)).toContain('did not report back')
+    expect(String(error)).toContain('it may still finish there')
+    // The runner was started once, on the host, and nothing removed its dir under it.
+    expect(l.host.updates).toHaveLength(1)
+    expect(l.calls).not.toContain(RM)
   })
 
   it('refuses a system service update before any remote operation', async () => {
@@ -106,7 +191,8 @@ describe('managed daemon upload and update', () => {
   it.each(['chunk', 'version', 'checksum', 'path'] as const)('does not touch the service after a %s failure', async (fault) => {
     const l = lab(fault)
     await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow()
-    expect(l.calls.some((command) => command.includes('daemon update'))).toBe(false)
+    expect(l.host.updates).toEqual([])
+    expect(l.calls.some(isLaunch)).toBe(false)
     if (fault === 'chunk') expect(l.chunk).toHaveBeenCalledTimes(3)
     if (fault === 'path') {
       expect(l.chunk).not.toHaveBeenCalled()
@@ -116,12 +202,36 @@ describe('managed daemon upload and update', () => {
     }
   })
 
-  it.each(['service', 'transport'] as const)('does not retry or start an unmanaged replacement after a %s failure, and removes the staging dir', async (fault) => {
-    const l = lab(fault)
-    await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow()
-    expect(l.calls.filter((command) => command.includes('daemon update'))).toHaveLength(1)
+  it('does not retry or start an unmanaged replacement after a refusal, and removes the staging dir', async () => {
+    const l = lab('service')
+    await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow('Managed daemon update failed: busy; unchanged')
+    expect(l.host.updates).toHaveLength(1)
     expect(l.calls.join('\n')).not.toContain('--start')
     expect(l.calls.at(-1)).toBe(RM)
+  })
+
+  // 2026-11-04 review 5: the build's hold is written before its record (the staging dir) goes,
+  // so a server killed in between keeps one of them, never neither.
+  it('a build that stopped the daemon and did not stay is held before the staging dir is removed', async () => {
+    const l = lab('stopped')
+    const order: string[] = []
+    const run = l.run.getMockImplementation()!
+    l.run.mockImplementation(async (command: string, timeoutMs?: number) => {
+      if (command === RM) order.push('rm')
+      return run(command, timeoutMs)
+    })
+    const held = vi.fn(() => { order.push('hold') })
+    const error = await updateRemoteDaemonService({ binary }, version, l, 'user', { onBuildFailed: held }).catch((reason: unknown) => reason)
+    expect((error as { buildFailed?: unknown }).buildFailed).toBe(true)
+    expect(held).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['hold', 'rm'])
+  })
+
+  it('a refusal that never stopped the daemon holds nothing', async () => {
+    const l = lab('service')
+    const held = vi.fn()
+    await expect(updateRemoteDaemonService({ binary }, version, l, 'user', { onBuildFailed: held })).rejects.toThrow('busy')
+    expect(held).not.toHaveBeenCalled()
   })
 
   it('rejects an invalid build version before any remote operation', async () => {
@@ -129,19 +239,23 @@ describe('managed daemon upload and update', () => {
     await expect(updateRemoteDaemonService({ binary }, 'build; invalid', l)).rejects.toThrow('Invalid daemon build version')
     expect(l.run).not.toHaveBeenCalled()
   })
-  // 2026-11-03: a deploy's update met a relay in flight. The CLI's busy refusal exits 1 with
-  // its answer on stdout, and over SSH that exit throws with the answer only beside the
-  // message, so the server read "exited with code 1" as a failed update (a 10-minute
-  // cooldown) instead of a busy daemon it asks again in a minute.
-  describe('a refusal that exits 1 over ssh', () => {
+
+  // Over SSH for real (a fake ssh that runs the script it is fed with this machine's sh):
+  // the runner starts detached, its update line runs, and its record is read back through
+  // what the login shell prints. 2026-11-03: a busy refusal exits 1 with its answer on
+  // stdout, and the server took the exit for a failed update (a 10-minute cooldown)
+  // instead of a busy daemon it asks again in a minute; the record keeps the answer.
+  describe('over a real (stand-in) ssh', () => {
     const BUSY = 'Error: service.handover: active ACP workers or relay requests must finish first'
     let bin: string
     let savedPath: string | undefined
     beforeEach(async () => {
       bin = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-fake-ssh-'))
-      // This machine stands in for the host: the fake ssh runs the wrapped script it is fed.
-      // Its login shell prints a line with a brace before the script runs, as an rc file may.
-      await fs.writeFile(path.join(bin, 'ssh'), "#!/bin/sh\necho 'motd: {welcome}'\nexec sh -s\n", { mode: 0o755 })
+      await fs.mkdir(path.join(bin, 'home'))
+      // This machine stands in for the host: the fake ssh runs the wrapped script it is fed, in a
+      // home of its own (no service config there, so the tail touches nothing). Its login shell
+      // prints a line with a brace first, as an rc file may.
+      await fs.writeFile(path.join(bin, 'ssh'), `#!/bin/sh\necho 'motd: {welcome}'\nHOME='${bin}/home' exec sh -s\n`, { mode: 0o755 })
       savedPath = process.env.PATH
       process.env.PATH = guardedPath([bin])
     })
@@ -150,46 +264,53 @@ describe('managed daemon upload and update', () => {
       await fs.rm(bin, { recursive: true, force: true })
     })
 
-    /** The upload answered as in `lab`; the update line runs through the real runRemoteSh. */
-    function sshLab(update: string) {
-      const upload = uploads()
+    /** This build's daemon file on the "host": its version, and an update that does what `body` says. */
+    function sshLab(body: string) {
+      const existing = path.join(bin, 'daemon')
+      writeFileSync(existing, `#!/bin/sh\nif [ "$1 $2" = "__daemon --version" ]; then echo ${version}; exit 0; fi\necho "$*" >> '${bin}/updates'\n${body}\n`, { mode: 0o755 })
       const calls: string[] = []
-      const run = vi.fn(async (command: string) => {
+      const run = vi.fn(async (command: string, timeoutMs?: number) => {
         calls.push(command)
-        const answered = await upload.answer(command)
-        if (answered !== null) return answered
-        return runRemoteSh(['devbox'], update, 10_000)
+        return runRemoteSh(['devbox'], command, timeoutMs ?? 10_000)
       })
-      return { run, chunk: upload.chunk, calls }
+      const updates = () => readFileSync(path.join(bin, 'updates'), 'utf8').trim().split('\n')
+      return { existing, io: { run, chunk: vi.fn(async () => true), detached: { pollMs: 50, settleSeconds: 0, waitMs: 30_000, latestMarker: path.join(bin, 'latest') } }, calls, updates }
     }
     const answers = (failure: Record<string, string>) =>
       `echo 'walnut daemon: a note first' >&2\nprintf '%s\\n' '${JSON.stringify({ ok: false, failure }, null, 2)}'\nexit 1`
 
-    it('a busy refusal reads as busy, with its words, and the staging dir is removed', async () => {
+    it('runs the update detached on the host and reads an ok answer past the login noise, then removes its dir', async () => {
+      const l = sshLab(`printf '%s\\n' '{"ok":true}'`)
+      await expect(updateRemoteDaemonService({ binary: null, existing: l.existing }, version, l.io, 'user')).resolves.toBe('applied')
+      expect(l.updates()).toEqual([`walnut daemon update --yes --scope user --executable ${l.existing}`])
+      const dir = /\/tmp\/open-walnut-update\.\w+/.exec(l.calls.find((c) => c.includes('update.go'))!)![0]
+      expect(existsSync(dir)).toBe(false)
+    }, 60_000)
+
+    it('a busy refusal reads as busy, with its words, and is asked once', async () => {
       const l = sshLab(answers({ code: 'updateRefused', message: BUSY, rollback: 'the old service config was put back' }))
-      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+      const error = await updateRemoteDaemonService({ binary: null, existing: l.existing }, version, l.io, 'user').catch((reason: unknown) => reason)
       expect(error).not.toBeInstanceOf(RemoteCommandError)
       expect(String(error)).toContain('must finish first')
       expect(String(error)).toContain('the old service config was put back')
       expect(daemonBusyRefusal(error)).toBe(true)
-      expect(l.calls.filter((command) => command.includes('daemon update'))).toHaveLength(1)
-      expect(l.calls.at(-1)).toBe(RM)
-    })
+      expect(l.updates()).toHaveLength(1)
+    }, 60_000)
 
     it('any other refusal keeps its own words and is not busy', async () => {
       const l = sshLab(answers({ code: 'serviceInactive', message: 'The service was stopped or disabled during staging; nothing was changed' }))
-      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
+      const error = await updateRemoteDaemonService({ binary: null, existing: l.existing }, version, l.io, 'user').catch((reason: unknown) => reason)
       expect(String(error)).toContain('The service was stopped or disabled during staging')
       expect(daemonBusyRefusal(error)).toBe(false)
-    })
+    }, 60_000)
 
-    it('an exit with no answer stays the ssh error it was', async () => {
+    it('an exit with no answer says so, with what it printed', async () => {
       const l = sshLab("echo 'walnut: command not found' >&2\nexit 127")
-      const error = await updateRemoteDaemonService({ binary }, version, l).catch((reason: unknown) => reason)
-      expect(error).toBeInstanceOf(RemoteCommandError)
+      const error = await updateRemoteDaemonService({ binary: null, existing: l.existing }, version, l.io, 'user').catch((reason: unknown) => reason)
+      expect(String(error)).toContain('the update gave no answer Walnut could read (rc=127 tries=1 tail=no-service)')
       expect(String(error)).toContain('command not found')
       expect(daemonBusyRefusal(error)).toBe(false)
-    })
+    }, 60_000)
   })
 })
 
@@ -339,12 +460,11 @@ describe('a compiled Mac\'s source: the walnut file in the daemon slot, no daemo
 
   it('updates a service from the slot too', async () => {
     const l = installLab()
-    const update = vi.fn(async (command: string) => {
-      if (command.startsWith(`${existing} walnut daemon update`)) return '{"ok":true}'
-      return l.run(command)
-    })
-    await updateRemoteDaemonService({ binary: null, existing }, version, { run: update, chunk: l.chunk }, 'cron')
-    expect(update).toHaveBeenCalledWith(`${existing} walnut daemon update --yes --scope cron --executable ${existing}`, 600_000)
+    const host = runnerHost(() => ({ stdout: '{"ok":true}' }))
+    const update = vi.fn(async (command: string) => host.handle(command) ?? l.run(command))
+    await updateRemoteDaemonService({ binary: null, existing }, version, { run: update, chunk: l.chunk, detached: { ...FAST, waitMs: 50 } }, 'cron')
+    expect(host.updates).toEqual([`${existing} walnut daemon update --yes --scope cron --executable ${existing}`])
     expect(l.chunk).not.toHaveBeenCalled()
-  })
-})
+    // Nothing was uploaded, so the runner got a dir of its own, removed afterwards.
+    expect(l.calls.at(-1)).toBe(RM)
+  })})

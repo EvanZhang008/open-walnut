@@ -242,6 +242,7 @@ export function buildHostStatus(
     if (status.hint) status.hint = hint
     if (status.lastHint) status.lastHint = hint
   }
+  foldDaemonUpdate(status, state, label)
   if (!hostOffersTerminal(hostDef)) status.terminal = false
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
@@ -250,6 +251,50 @@ export function buildHostStatus(
     status.readiness = extra.length ? { ...readiness, problems: [...readiness.problems, ...extra] } : readiness
   }
   return status
+}
+
+/** 04:07, in this server's own time zone (the frame's reader is its user). */
+function clockTime(at: number): string {
+  const d = new Date(at)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** What a host's own daemon update makes the status say (daemon-net-update-record.ts). */
+export function daemonUpdateSentence(label: string, update: { state: 'updating' | 'lost' | 'failed' | 'down'; at: number; message?: string }): string {
+  if (update.state === 'updating') return `Updating the daemon on ${label} (since ${clockTime(update.at)}); it reconnects once the new one is up`
+  // Away is all Walnut knows: a Mac that sleeps through its update is not broken (2026-11-04 review).
+  if (update.state === 'lost') return `The daemon update on ${label} at ${clockTime(update.at)} has not come back yet; ${label} may be asleep, and it reconnects when it wakes`
+  if (update.state === 'down') return `The daemon update on ${label} at ${clockTime(update.at)} left no daemon running there (${update.message ?? 'no reason was given'}); ${label} needs a restart or a new login to start Walnut again`
+  return `The daemon update on ${label} at ${clockTime(update.at)} did not go through, so the daemon it had keeps serving: ${update.message ?? 'no reason was given'}`
+}
+
+/**
+ * A host that went away during its own daemon update reads as that, not as a plain drop:
+ * the sentence is the phase label and, once it has not come back, the failure's hint. Only
+ * a record that says no daemon runs there (down) makes it a daemon failure (kind 'daemon':
+ * "The session daemon on X did not start"); a host just away keeps its connect error's kind.
+ * Back with an update that did not go through: a line in Settings, the reason included.
+ */
+function foldDaemonUpdate(status: HostStatus, state: DaemonConnectState, label: string): void {
+  const update = state.daemonUpdate
+  if (!update) return
+  if (update.state === 'failed') {
+    if (state.connected) status.warnings = [...(status.warnings ?? []), daemonUpdateSentence(label, update)]
+    return
+  }
+  if (state.connected) return
+  const sentence = daemonUpdateSentence(label, update)
+  status.phaseLabel = sentence
+  if (update.state === 'updating') return
+  const down = update.state === 'down'
+  if (status.phase === 'failed') {
+    if (down) status.kind = 'daemon'
+    status.hint = sentence
+  } else {
+    if (down) status.lastKind = 'daemon'
+    status.lastHint = sentence
+    status.lastError ??= sentence
+  }
 }
 
 function sshTargetOf(def: HostDef): string {

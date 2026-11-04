@@ -40,11 +40,16 @@ import {
   parseRemoteServiceProbe,
   remoteServiceProbePaths,
   managedUpdateScope,
+  reviveScopeOf,
+  REVIVE_EVERY_MS,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
+import { holdAndRecord, recordStoreWrites } from '../helpers/store-write-order.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
+import { PROBING_WORD } from '../../src/providers/daemon-update-probation.js'
 
 const TARGET: SshTarget = { hostname: 'devbox.example.com', user: 'tester' }
 const EXPECTED_VERSION = 'walnut-daemon-expected00'
@@ -78,6 +83,12 @@ interface SshRoutes {
   stopPending?: boolean
   /** Awaited before the stop confirms (a slow shutdown). */
   stopGate?: Promise<void>
+  /** The service revive's record (daemon-update-tail.ts reviveScript), or a function of it. */
+  revive?: string | (() => string)
+  /** Files an update's runner left in its staging dir on the host, read with `if [ -f ... ]; then cat`. */
+  record?: Map<string, string>
+  /** What the check for a running probation prints (daemon-update-probation.ts probingCheckScript). */
+  probing?: string
 }
 
 const answer = (route: string | (() => string) | undefined) => typeof route === 'function' ? route() : route ?? ''
@@ -89,10 +100,19 @@ const answer = (route: string | (() => string) | undefined) => typeof route === 
  */
 function stubSsh(conn: DaemonConnection, routes: SshRoutes): string[] {
   const seen: string[] = []
+  // What runs the daemon, as a hello says it: with none known no copy can be kept, and nothing is stopped.
+  if ((conn as unknown as { _runtime: unknown })._runtime == null) (conn as unknown as { _runtime: unknown })._runtime = 'node'
   vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
+    // The staged daemon's trial run and the kept previous daemon (daemon-trial-cmd.ts): it serves, and the files were kept.
+    if (cmd.includes('walnut-trial-ok')) return 'walnut-trial-ok'
+    if (cmd.includes('walnut-previous-kept')) return 'walnut-previous-kept'
+    if (cmd.includes('walnut-revive=updating')) return answer(routes.revive)
+    if (cmd.includes(PROBING_WORD)) return routes.probing ?? ''
+    const read = /^if \[ -f '(\/tmp\/open-walnut-update\.[^']+)' \]/.exec(cmd)
+    if (read && routes.record) return routes.record.get(read[1]) ?? '__walnut_no_file__'
     if (cmd.includes('walnut-service-probe-done')) {
       return typeof routes.probe === 'function' ? routes.probe(Number(args[1])) : routes.probe
     }
@@ -111,8 +131,10 @@ function stubSsh(conn: DaemonConnection, routes: SshRoutes): string[] {
   return seen
 }
 
-// `kill -0` is the read-only liveness probe; any other kill, or a --stop, ends a daemon.
-const destructive = (seen: string[]) => seen.filter((c) => c.includes('--stop') || /\bkill\b(?! -0\b)/.test(c))
+// `kill -0` is the read-only liveness probe; any other kill, or a --stop, ends a daemon. The trial's kill stops only its own trial child.
+// The revive's script holds the tail's put-back, whose cron branch asks the supervisor's own child to
+// exit after its config was put back; what a revive did is the route's answer, not that text.
+const destructive = (seen: string[]) => seen.filter((c) => !c.includes('walnut-trial-ok') && !c.includes('walnut-revive=updating') && (c.includes('--stop') || /\bkill\b(?! -0\b)/.test(c)))
 
 describe('remote service probe (pure)', () => {
   it('parses real shell output with HOME expansion and literal hostile-looking path text', async () => {
@@ -265,6 +287,307 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     stubSsh(conn, { probe: probeReply() })
 
     await expect(priv(conn).checkDaemonRunning()).resolves.toBeNull()
+  })
+})
+
+// 2026-11-04 review: a service whose config is on the host while nothing of it runs (a bootout
+// with no bootstrap after it) was only ever refused over SSH; the local server revived it.
+describe('DaemonConnection: a service on the host with nothing of it running', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const userUnit = '$HOME/.config/systemd/user/open-walnut-daemon.service'
+  const agent = '$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist'
+
+  it('revives a user unit or a LaunchAgent, the cron supervisor, and never a system unit or two kinds at once', () => {
+    expect(reviveScopeOf([userUnit])).toBe('user')
+    expect(reviveScopeOf([agent])).toBe('user')
+    expect(reviveScopeOf(['$HOME/.local/share/open-walnut/daemon/daemon-boot.sh'])).toBe('cron')
+    expect(reviveScopeOf(['/etc/systemd/system/open-walnut-daemon.service'])).toBeNull()
+    expect(reviveScopeOf([userUnit, '$HOME/.local/share/open-walnut/daemon/daemon-boot.sh'])).toBeNull()
+    expect(reviveScopeOf([])).toBeNull()
+  })
+
+  it('is loaded the way an update tail does it, over SSH, then served: nothing deployed, nothing stopped', async () => {
+    const conn = new DaemonConnection('devbox', TARGET)
+    vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    const routes: SshRoutes = { probe: probeReply({ present: [userUnit] }), status: '', version: EXPECTED_VERSION }
+    routes.revive = () => { routes.status = RUNNING_STATUS; return 'outcome=loaded\nthe service was not running; it was loaded again' }
+    const seen = stubSsh(conn, routes)
+    const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(seen.filter((cmd) => cmd.includes('walnut-revive=updating'))).toHaveLength(1)
+    expect(seen).not.toContain('DEPLOY')
+    expect(start).not.toHaveBeenCalled()
+    expect(destructive(seen)).toEqual([])
+  })
+
+  it('a revive that finds an update at work refuses and says so, and is not run again within its interval', async () => {
+    const conn = new DaemonConnection('devbox', TARGET)
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    const seen = stubSsh(conn, { probe: probeReply({ present: [agent] }), status: '', revive: 'walnut-revive=updating' })
+    await expect(priv(conn).checkDaemonRunning()).rejects.toThrow(/a daemon update's runner is still at work on the host/)
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    expect(seen.filter((cmd) => cmd.includes('walnut-revive=updating'))).toHaveLength(1)
+    state(conn)._revivedAt = Date.now() - REVIVE_EVERY_MS - 1
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    expect(seen.filter((cmd) => cmd.includes('walnut-revive=updating'))).toHaveLength(2)
+  })
+
+  it('a revive that leaves no daemon refuses with its words', async () => {
+    const conn = new DaemonConnection('devbox', TARGET)
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    stubSsh(conn, { probe: probeReply({ present: [userUnit] }), status: '', revive: 'outcome=down\nno daemon answered within 30 s after the service was started' })
+    await expect(priv(conn).checkDaemonRunning()).rejects.toThrow(/\(no daemon answered within 30 s after the service was started\)/)
+  })
+})
+
+describe('DaemonConnection: a managed update over SSH that did not go through', () => {
+  afterEach(() => { vi.restoreAllMocks(); managedUpdate.mockReset() })
+
+  function managedOnOld(record?: Map<string, string>, probing?: string) {
+    const conn = new DaemonConnection('devbox', TARGET)
+    vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
+    vi.spyOn(priv(conn), 'getLocalBinaryPath').mockResolvedValue('/fixture/daemon')
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    const seen = stubSsh(conn, { probe: probeReply({ present: ['$HOME/.config/systemd/user/open-walnut-daemon.service'] }), status: RUNNING_STATUS, version: 'walnut-daemon-old00000', record, probing })
+    const postpone = vi.spyOn(priv(conn), 'postponeUpgrade').mockImplementation(() => {})
+    return { conn, seen, postpone }
+  }
+
+  it('deferred on the host (launchd starting no jobs): served as it is, put off for the cooldown, no failure', async () => {
+    const { conn, postpone, seen } = managedOnOld()
+    managedUpdate.mockRejectedValue(new Error('Managed daemon update failed: update deferred: launchd is starting no jobs in this login session now (a dark wake with the lid closed, or a login not finished); nothing was changed, and the running daemon keeps serving; '))
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(postpone).toHaveBeenCalledTimes(1)
+    expect(postpone.mock.calls[0][0]).toMatch(/^update deferred: launchd is starting no jobs/)
+    expect(postpone.mock.calls[0][3]).toEqual({ delayMs: 10 * 60_000 })
+    expect(state(conn)._lastUpgradeAttempt).toBeNull()
+    expect(state(conn)._updateFailure).toBeNull()
+    expect(destructive(seen)).toEqual([])
+  })
+
+  // 2026-11-05 review 6: an update inside the last one's probation took its copies, the only way back
+  // from a build that fails late; and each try uploaded the build first.
+  it("the last update's probation still at work on the host: nothing uploaded or run, asked again after its end", async () => {
+    const { conn, postpone, seen } = managedOnOld(undefined, `${PROBING_WORD} until=1800000600 now=1800000000\n`)
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect(postpone).toHaveBeenCalledTimes(1)
+    expect(postpone.mock.calls[0][0]).toMatch(/probation still watches the new daemon/)
+    expect(postpone.mock.calls[0][3]).toEqual({ delayMs: 605_000 })
+    expect(state(conn)._lastUpgradeAttempt ?? null).toBeNull()
+    expect(state(conn)._updateFailure ?? null).toBeNull()
+    expect(destructive(seen)).toEqual([])
+    // Its end not known (a probation in its last looks): asked again in a minute.
+    const late = managedOnOld(undefined, `${PROBING_WORD} until= now=1800000000\n`)
+    await expect(priv(late.conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(late.postpone.mock.calls[0][3]).toEqual({ steady: true })
+    expect(managedUpdate).not.toHaveBeenCalled()
+  })
+
+  it("another update's runner still at work on the host: served as it is, asked again in a minute", async () => {
+    const { conn, postpone } = managedOnOld()
+    managedUpdate.mockRejectedValue(Object.assign(new Error('another daemon update is still running on the host'), { name: 'NetUpdateHeldError' }))
+    await expect(priv(conn).checkDaemonRunning()).resolves.toBe(32100)
+    expect(postpone.mock.calls[0][3]).toEqual({ steady: true })
+    expect(state(conn)._lastUpgradeAttempt).toBeNull()
+    expect(state(conn)._updateFailure).toBeNull()
+  })
+
+  it("a failure says why on the host's status, and 'down' while it is away when the record says no daemon runs there", async () => {
+    const { conn } = managedOnOld()
+    managedUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: no daemon answered within 90 s, and no earlier service config to go back to'), { tailOutcome: 'down' }))
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    state(conn)._connected = false
+    expect(conn.daemonUpdateView).toMatchObject({ state: 'down', message: expect.stringContaining('no daemon answered within 90 s') })
+    state(conn)._connected = true
+    state(conn)._daemonVersion = 'walnut-daemon-old00000'
+    expect(conn.daemonUpdateView).toMatchObject({ state: 'failed' })
+  })
+
+  // 2026-11-04 review: 'down' outlived the daemon that came back, so every ordinary disconnect
+  // afterwards read as the update having left the host with no daemon.
+  it("a daemon that answers ends 'down'; the build the update wanted ends the failure", async () => {
+    const { conn } = managedOnOld()
+    managedUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: no daemon answered within 90 s'), { tailOutcome: 'down' }))
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    const hello = vi.spyOn(priv(conn), '_sendHandshake').mockResolvedValue({ ok: true, capabilities: [], version: 'walnut-daemon-old00000' })
+    await priv(conn).verifyCapabilities()
+    state(conn)._connected = false
+    expect(conn.daemonUpdateView).toBeNull()
+    state(conn)._connected = true
+    expect(conn.daemonUpdateView).toMatchObject({ state: 'failed' })
+    hello.mockResolvedValue({ ok: true, capabilities: [], version: EXPECTED_VERSION })
+    await priv(conn).verifyCapabilities()
+    expect(state(conn)._updateFailure).toBeNull()
+  })
+
+  // 2026-11-04 review: tried again after the 10 min cooldown, each try a stop and a put-back of the host's daemon.
+  it('a build that answered ok and did not stay serving is not tried again for a day; any other failure is, after the cooldown', async () => {
+    const { conn } = managedOnOld()
+    managedUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: the previous service config was put back'), { tailOutcome: 'restored', buildFailed: true }))
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    const later = (ms: number) => { state(conn)._lastUpgradeAttempt.at -= ms; if (state(conn)._realDirFail) state(conn)._realDirFail.at -= ms }
+    later(11 * 60_000)
+    await priv(conn).checkDaemonRunning().catch(() => null)
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    later(24 * 60 * 60_000)
+    await priv(conn).checkDaemonRunning().catch(() => null)
+    expect(managedUpdate).toHaveBeenCalledTimes(2)
+    managedUpdate.mockRejectedValue(new Error('Managed daemon update failed: the readiness check timed out'))
+    state(conn)._realDirFail = null
+    later(11 * 60_000)
+    await priv(conn).checkDaemonRunning().catch(() => null)
+    later(11 * 60_000)
+    await priv(conn).checkDaemonRunning().catch(() => null)
+    expect(managedUpdate).toHaveBeenCalledTimes(4)
+  })
+
+  // 2026-11-04 review: the day off lived in memory, so every deploy (a server restart) let the next connect try the build again.
+  it('the day off of a build that did not stay serving is kept across a server restart', async () => {
+    const file = path.join(os.tmpdir(), `walnut-ssh-backoff-${process.pid}-${Date.now()}.json`)
+    process.env.WALNUT_BUILD_BACKOFF_FILE = file
+    try {
+      const { conn } = managedOnOld()
+      managedUpdate.mockRejectedValue(Object.assign(new Error('Managed daemon update failed: the daemon never answered as ready'), { buildFailed: true }))
+      await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+      await buildBackoffSettled()
+      const { conn: restarted } = managedOnOld()
+      await priv(restarted).checkDaemonRunning().catch(() => null)
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+    } finally {
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      await fs.rm(file, { force: true })
+    }
+  })
+
+  // 2026-11-04 review: an update whose answer did not come in time left its record on the host and
+  // nobody read it back, so a build that had stopped the daemon was tried again within the hour.
+  it('the record an update left after the wait ended is read back on a later check: a build that did not stay is held a day, after a restart too', async () => {
+    const stamp = `${process.pid}-${Date.now()}`
+    const files = [path.join(os.tmpdir(), `walnut-ssh-late-backoff-${stamp}.json`), path.join(os.tmpdir(), `walnut-ssh-late-unread-${stamp}.json`)]
+    process.env.WALNUT_BUILD_BACKOFF_FILE = files[0]
+    process.env.WALNUT_UPDATE_UNREAD_FILE = files[1]
+    const DIR = '/tmp/open-walnut-update.Late1234ab'
+    const record = new Map<string, string>([[`${DIR}/update.sh`, '#!/bin/sh\n']])
+    try {
+      const { conn } = managedOnOld(record)
+      managedUpdate.mockRejectedValue(Object.assign(new Error('the update on the host did not report back within 900 s; it may still finish there'), { keepStaging: true, directory: DIR }))
+      await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+      await buildBackoffSettled()
+      // The server started again (a deploy) while the runner still works: no second update under it.
+      const { conn: restarted, seen, postpone } = managedOnOld(record)
+      await expect(priv(restarted).checkDaemonRunning()).resolves.toBe(32100)
+      expect(postpone.mock.calls.at(-1)?.[0]).toBe('the previous daemon update is still running on the host')
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      // The runner finished: the new daemon never answered after the old one stopped, and the old one is back.
+      record.set(`${DIR}/update.done`, 'rc=1 tries=1 tail=serving\n')
+      record.set(`${DIR}/update.out`, JSON.stringify({ ok: false, failure: { code: 'notReady', stopped: true, message: 'the new daemon never answered as ready', rollback: 'the previous daemon was started again' } }))
+      record.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+      await priv(restarted).checkDaemonRunning().catch(() => null)
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(seen.some((c) => c.includes(`rm -rf '${DIR}'`))).toBe(true)
+      expect(state(restarted)._realDirFail).toMatchObject({ expected: EXPECTED_VERSION, reason: expect.stringContaining('never answered as ready') })
+      state(restarted)._connected = true
+      state(restarted)._daemonVersion = 'walnut-daemon-old00000'
+      expect(restarted.daemonUpdateView).toMatchObject({ state: 'failed', message: expect.stringContaining('never answered as ready') })
+      await buildBackoffSettled()
+      // A further restart reads the day off from disk, and the record is not read again.
+      const { conn: third, seen: thirdSeen } = managedOnOld(record)
+      await priv(third).checkDaemonRunning().catch(() => null)
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(thirdSeen.some((c) => c.includes(DIR))).toBe(false)
+    } finally {
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      delete process.env.WALNUT_UPDATE_UNREAD_FILE
+      for (const f of files) await fs.rm(f, { force: true })
+    }
+  })
+
+  // 2026-11-04 review 4: the record was kept only once the server's 15 min wait gave up, so a
+  // deploy during an update (its server restarted mid-wait) left the next server no hold and no
+  // cooldown: it stopped the healthy daemon once more for a build that had just failed.
+  it('the record is kept from the launch on: a server restarted during the update reads it back before any new attempt', async () => {
+    const stamp = `${process.pid}-${Date.now()}`
+    const files = [path.join(os.tmpdir(), `walnut-ssh-launch-backoff-${stamp}.json`), path.join(os.tmpdir(), `walnut-ssh-launch-unread-${stamp}.json`)]
+    process.env.WALNUT_BUILD_BACKOFF_FILE = files[0]
+    process.env.WALNUT_UPDATE_UNREAD_FILE = files[1]
+    const DIR = '/tmp/open-walnut-update.Launch12ab'
+    const record = new Map<string, string>([[`${DIR}/update.sh`, '#!/bin/sh\n']])
+    try {
+      const { conn } = managedOnOld(record)
+      // The runner starts on the host, and this server goes away before its answer (a deploy).
+      managedUpdate.mockImplementation(async (_source: unknown, _expected: unknown, io: { detached?: { onLaunched?: (d: string) => void } }) => {
+        io.detached?.onLaunched?.(DIR)
+        return new Promise(() => {})
+      })
+      void priv(conn).checkDaemonRunning()
+      await vi.waitFor(() => expect(managedUpdate).toHaveBeenCalledTimes(1))
+      await buildBackoffSettled()
+      expect(Object.values(JSON.parse(await fs.readFile(files[1], 'utf8')))).toEqual([expect.objectContaining({ directory: DIR, expected: EXPECTED_VERSION })])
+      // The server started again while the runner works: no second update under it.
+      const { conn: restarted, seen, postpone } = managedOnOld(record)
+      await expect(priv(restarted).checkDaemonRunning()).resolves.toBe(32100)
+      expect(postpone.mock.calls.at(-1)?.[0]).toBe('the previous daemon update is still running on the host')
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      // Its runner finished: the new config would not start after the old daemon stopped, and the old one is back.
+      record.set(`${DIR}/update.done`, 'rc=1 tries=1 tail=serving\n')
+      record.set(`${DIR}/update.out`, JSON.stringify({ ok: false, failure: { code: 'commandFailed', stopped: true, message: 'Job for open-walnut-daemon.service failed', rollback: 'the previous daemon was started again' } }))
+      record.set(`${DIR}/update.tail`, 'outcome=serving\na daemon answers\n')
+      // The hold is on disk before the host's record goes (2026-11-04 review 5: only asked for).
+      let removedFirst: boolean | null = null
+      recordStoreWrites({ delayMs: 150, onDisk: (w) => { if (w === 'daemon-build-backoff.json:set') removedFirst = seen.some((c) => c.includes(`rm -rf '${DIR}'`)) } })
+      await priv(restarted).checkDaemonRunning().catch(() => null)
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(seen.some((c) => c.includes(`rm -rf '${DIR}'`))).toBe(true)
+      await vi.waitFor(() => expect(removedFirst).not.toBeNull())
+      expect(removedFirst).toBe(false)
+      expect(state(restarted)._realDirFail).toMatchObject({ expected: EXPECTED_VERSION, reason: expect.stringContaining('Job for open-walnut-daemon.service failed') })
+      await buildBackoffSettled()
+      // The record goes after the hold (its own write comes once the host's dir is removed).
+      await vi.waitFor(async () => expect(JSON.parse(await fs.readFile(files[1], 'utf8'))).toEqual({}))
+    } finally {
+      delete process.env.WALNUT_BUILD_BACKOFF_FILE
+      delete process.env.WALNUT_UPDATE_UNREAD_FILE
+      for (const f of files) await fs.rm(f, { force: true })
+    }
+  })
+
+  it('an update answered in time leaves no record behind, and its build\'s hold is on disk before the record goes', async () => {
+    const stamp = `${process.pid}-${Date.now()}`
+    const file = path.join(os.tmpdir(), `walnut-ssh-answered-unread-${stamp}.json`)
+    process.env.WALNUT_UPDATE_UNREAD_FILE = file
+    try {
+      const { conn } = managedOnOld()
+      const writes = recordStoreWrites()
+      let during = ''
+      managedUpdate.mockImplementation(async (_s: unknown, _e: unknown, io: { detached?: { onLaunched?: (d: string) => void } }) => {
+        io.detached?.onLaunched?.('/tmp/open-walnut-update.Answer12ab')
+        await buildBackoffSettled()
+        during = await fs.readFile(file, 'utf8')
+        throw Object.assign(new Error('Managed daemon update failed: the daemon never answered as ready'), { buildFailed: true })
+      })
+      await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+      expect(during).toContain('/tmp/open-walnut-update.Answer12ab')
+      await buildBackoffSettled()
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({})
+      // 2026-11-04 review 5: the record went first, so a server killed in between kept neither.
+      expect(holdAndRecord(writes)).toEqual(['daemon-update-unread.json:set', 'daemon-build-backoff.json:set', 'daemon-update-unread.json:clear'])
+    } finally {
+      delete process.env.WALNUT_UPDATE_UNREAD_FILE
+      await fs.rm(file, { force: true })
+    }
+  })
+
+  it('a failure the host recovered from reads as failed only while connected', async () => {
+    const { conn } = managedOnOld()
+    managedUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: the previous service config was put back'), { tailOutcome: 'restored' }))
+    await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
+    state(conn)._connected = false
+    expect(conn.daemonUpdateView).toBeNull()
   })
 })
 

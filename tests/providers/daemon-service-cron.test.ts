@@ -46,6 +46,8 @@ interface HarnessOptions {
   files?: Record<string, { text: string; owned: boolean }>
   ready?: boolean[]
   daemonStuck?: boolean
+  /** The supervisor gives up (its 5 failures in 60 s) at this daemon exit instead of restarting it. */
+  supervisorGivesUpAt?: number
   prepareUpdate?: () => Promise<void | 'prepared' | 'unprepared'>
   handover?: () => Promise<boolean>
 }
@@ -70,10 +72,13 @@ function harness(options: HarnessOptions = {}) {
   if (options.installed) files.set(SCRIPT, { text: bootScript(options.installed.executable, options.installed.path), owned: true })
 
   const startDaemon = () => { procs.daemon = { pid: nextPid++, executable: readDaemonBootExecutable(files.get(SCRIPT)!.text) } }
+  let exits = 0
   // The supervisor restarts an exiting daemon from the script as it is on disk, unless the stop file is set.
   const daemonExited = () => {
     procs.daemon = null
+    exits += 1
     if (procs.supervisor === null) return
+    if (options.supervisorGivesUpAt === exits) { procs.supervisor = null; return }
     if (procs.stop || !files.has(SCRIPT)) { procs.supervisor = null; return }
     startDaemon()
   }
@@ -176,6 +181,7 @@ function harness(options: HarnessOptions = {}) {
 
   return {
     manager: createCronDaemonServiceManager(deps),
+    deps,
     timeline,
     commands,
     writes,
@@ -399,6 +405,46 @@ describe('cron boot update', () => {
     expect(expectFailure(await h.manager.update()).code).toBe('serviceInactive')
     expectUntouched(h)
     expect(h.prepareCalls()).toBe(0)
+  })
+
+  it('starts a new supervisor when the one it relied on gave up during the rollback, and the previous daemon answers', async () => {
+    // The new daemon never answers; the supervisor uses up its restarts on the rollback's stop.
+    const h = harness({ installed: { executable: OLD_EXE }, running: true, ready: [false], supervisorGivesUpAt: 2 })
+    const failure = expectFailure(await h.manager.update())
+
+    expect(failure.code).toBe('notReady')
+    expect(failure.rollback).toBe('put the previous boot script back and started its supervisor again; the previous daemon is responding')
+    expect(h.files.get(SCRIPT)!.text).toBe(bootScript(OLD_EXE))
+    expect(h.procs.supervisor).not.toBeNull()
+    expect(h.procs.daemon?.executable).toBe(OLD_EXE)
+    expect(h.timeline.filter((event) => event.startsWith('spawn:'))).toEqual([`spawn:/bin/sh ${SCRIPT}`])
+  })
+
+  // 2026-11-04 review: one hello counted, and a cron failure after the old daemon exited for the
+  // new build did not say so (stopped), so the callers tried the same build again within the hour.
+  it('a new daemon that answers and does not stay is rolled back as a build that did not start (stopped)', async () => {
+    const h = harness({ installed: { executable: OLD_EXE }, running: true })
+    const manager = createCronDaemonServiceManager({ ...h.deps, stay: async () => 'the new daemon answered and then did not stay serving for 30 s (its process exited)' })
+    const failure = expectFailure(await manager.update())
+    expect(failure).toMatchObject({ code: 'verifyFailed', stopped: true, message: expect.stringContaining('did not stay serving') })
+    expect(h.files.get(SCRIPT)!.text).toBe(bootScript(OLD_EXE))
+    // Before the old daemon prepared and exited, a failure stops nothing.
+    const refused = harness({ installed: { executable: OLD_EXE }, running: true, prepareUpdate: async () => { throw new DaemonServiceUpdateRefusedError('active ACP workers') } })
+    expect(expectFailure(await refused.manager.update()).stopped).toBeUndefined()
+  })
+
+  it('refuses before anything changes when the new daemon fails its trial run', async () => {
+    const h = harness({ installed: { executable: OLD_EXE }, running: true })
+    const proved: string[] = []
+    const manager = createCronDaemonServiceManager({ ...h.deps, proveBoot: async (prepared) => { proved.push(prepared.executable); return 'it exited with 3 before it listened: boom' } })
+    const failure = expectFailure(await manager.update())
+
+    expect(failure.code).toBe('bootProof')
+    expect(failure.message).toBe('the new daemon did not start in a trial run, so nothing was changed: it exited with 3 before it listened: boom')
+    expect(proved).toEqual([NEW_EXE])
+    expectUntouched(h)
+    expect(h.timeline).not.toContain('prepareUpdate')
+    expect(h.procs.daemon?.executable).toBe(OLD_EXE)
   })
 
   it('restores the previous script without restarting when the daemon refuses to prepare', async () => {

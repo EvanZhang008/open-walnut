@@ -25,11 +25,16 @@ const probeReply = () => [...remoteServiceProbePaths().map((p) => `absent ${p}`)
 /** An unmanaged host running an older daemon; returns the commands issued. */
 function skewedHost(conn: DaemonConnection): string[] {
   const seen: string[] = []
+  // What runs the daemon, as a hello says it: with none known no copy can be kept, and nothing is stopped.
+  ;(conn as unknown as { _runtime: unknown })._runtime = 'node'
   vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
   vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
+    // The staged daemon's trial run and the kept previous daemon (daemon-trial-cmd.ts): it serves, and the files were kept.
+    if (cmd.includes('walnut-trial-ok')) return 'walnut-trial-ok'
+    if (cmd.includes('walnut-previous-kept')) return 'walnut-previous-kept'
     if (cmd.includes('walnut-service-probe-done')) return probeReply()
     if (cmd.includes('uname -m')) return 'x86_64'
     if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed\n'

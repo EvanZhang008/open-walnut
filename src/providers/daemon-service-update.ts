@@ -7,17 +7,29 @@ import { createGzip } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import type { DaemonServiceScope } from './daemon-service-manager.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
+import type { UpdateTail } from './daemon-update-tail.js'
+import { runDetachedUpdate, type NetUpdateIoOptions } from './daemon-net-update-io.js'
+import { judgeServiceUpdate, sshUpdateHost } from './daemon-update-readback.js'
+
+// Judged and read in daemon-update-readback.ts, which tests do not replace with a double.
+export { judgeServiceUpdate, sshUpdateHost }
+
+/** One service update: the line to run, its dir, the executable, the scope, and the build it installs. */
+export interface ServiceUpdateSpec { command: string; directory: string | null; executable: string; scope: 'user' | 'cron'; build?: string }
 
 export interface RemoteDaemonUpdateIo {
   run(command: string, timeoutMs?: number): Promise<string>
   chunk(data: Buffer, directory: string, index: number): Promise<boolean>
   /**
-   * Run the final `walnut daemon update` line and answer what it printed (its JSON).
-   * Absent: `run` in the foreground, as over SSH. A link that runs commands through the
-   * very daemon the update replaces (the host network, daemon-net-update-io.ts) starts it
-   * detached from that daemon, which exits during the handover.
+   * Run the final `walnut daemon update` line and answer what it printed (its JSON) and
+   * what the tail found after it (daemon-update-tail.ts). Absent (SSH): the same detached
+   * runner on the host (runDetachedUpdate), its script written and its record read with
+   * `run`. The host network's io (daemon-net-update-io.ts) writes and reads with the
+   * daemon's own file commands.
    */
-  serviceUpdate?(update: { command: string; directory: string | null; executable: string }): Promise<string>
+  serviceUpdate?(update: ServiceUpdateSpec): Promise<{ output: string; tail: UpdateTail | null }>
+  /** The detached runner's clocks for the SSH path; tests shorten them. */
+  detached?: NetUpdateIoOptions
 }
 
 const VERSION = /^walnut-daemon-[a-zA-Z0-9]+$/
@@ -143,53 +155,63 @@ export class DaemonUpdateStageError extends Error {
  * Update the host's daemon service to `expectedVersion`: the executable onto
  * the host first (an upload while the old daemon still serves), then the
  * service swap. `onStaged` is asked between the two: false keeps the old daemon
- * (work started during the upload) and answers 'held'.
+ * (work started during the upload) and answers 'held'. `onBuildFailed`: the build stopped the
+ * daemon and did not stay serving; it runs before the staging dir is removed.
  */
 export async function updateRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user',
-  opts: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean } = {},
+  opts: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean; onBuildFailed?: (error: Error) => void | Promise<void> } = {},
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
   const { executable, directory } = await serviceExecutable(source, expectedVersion, io).catch((error: unknown) => {
     throw new DaemonUpdateStageError(error instanceof Error ? error.message : String(error))
   })
+  // The host network's runner keeps its record in the staging dir until the server read it.
+  let keep = false
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
     // An overdue update goes over the daemon's own work (daemon-update-behind.ts).
     const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}`
-    const output = io.serviceUpdate
-      ? await io.serviceUpdate({ command, directory, executable })
-      : await io.run(command, 600_000).catch((error: unknown) => answerOfFailedRun(error))
-    const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }
-    if (result.ok !== true) throw new Error(`Managed daemon update failed: ${result.failure?.message ?? output}; ${result.failure?.rollback ?? ''}`)
-    return 'applied'
+    const update = io.serviceUpdate ? io.serviceUpdate.bind(io) : (u: ServiceUpdateSpec) => updateOverSsh(io, u)
+    const answer = await update({ command, directory, executable, scope, build: expectedVersion }).catch((error: unknown) => {
+      keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
+      throw error
+    })
+    return judgeServiceUpdate(answer.output, answer.tail)
+  } catch (error) {
+    // The build's hold is written before its record (the staging dir) goes: a server killed in
+    // between keeps one of them, never neither (2026-11-04 review 5).
+    if ((error as { buildFailed?: unknown } | null)?.buildFailed === true && opts.onBuildFailed) await opts.onBuildFailed(error as Error)
+    throw error
   } finally {
-    if (directory) await removeStaging(io, directory)
+    if (directory && !keep) await removeStaging(io, directory)
   }
 }
 
 /**
- * A refused update exits 1 with its answer on stdout (runDaemonServiceCli), and a run over
- * SSH throws on that exit with the stdout beside its message: the answer says what happened,
- * so it is read, never the exit alone. 2026-11-03: a deploy's update met a relay in flight;
- * the daemon refused it as busy ("must finish first"), the error named only "exited with
- * code 1", and the server took it as a failed update with a 10-minute cooldown instead of
- * asking again in a minute (daemon-connection.ts daemonBusyRefusal).
+ * Over SSH: the detached runner on the host, in the update's own dir (the staging dir, or
+ * one made for it when nothing was uploaded), its record read every few seconds. 2026-11-04:
+ * the tail ran as a second SSH command, so a dropped link or a server restart during the
+ * update meant no tail; and an SSH command that timed out left the CLI running on the host
+ * while the tail started or restored the service beside its bootout wait.
  */
-function answerOfFailedRun(error: unknown): string {
-  const stdout = (error as { stdout?: unknown } | null)?.stdout
-  if (typeof stdout !== 'string') throw error
-  // Raw stdout: the remote script's markers and whatever the login shell printed sit around
-  // the answer, which the CLI prints as indented JSON: from a line that is `{` to the last `}`.
-  const lines = stdout.split('\n').map((line) => line.replace(/\r$/, ''))
-  const from = lines.indexOf('{')
-  const to = lines.lastIndexOf('}')
-  const answer = from >= 0 && to > from ? lines.slice(from, to + 1).join('\n') : ''
+async function updateOverSsh(
+  io: RemoteDaemonUpdateIo, update: ServiceUpdateSpec,
+): Promise<{ output: string; tail: UpdateTail | null }> {
+  const own = !update.directory
+  const directory = update.directory ?? (await io.run('umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX').catch(() => '')).trim()
+  if (!STAGING.test(directory)) throw new Error('the update could not make a dir of its own on the host, so nothing was changed')
+  let keep = false
   try {
-    if ((JSON.parse(answer) as { ok?: unknown } | null)?.ok === false) return answer
-  } catch { /* not the CLI's answer */ }
-  throw error
+    // One try: a busy daemon is asked again from here, on the server's clock.
+    return await runDetachedUpdate(sshUpdateHost(io), { ...update, directory }, { tries: 1, pollMs: 5_000, ...io.detached })
+  } catch (error) {
+    keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
+    throw error
+  } finally {
+    if (own && !keep) await removeStaging(io, directory)
+  }
 }
 
 interface ServiceReply { ok?: boolean; status?: { scope?: string; startup?: string }; failure?: { code?: string; message?: string; rollback?: string } }

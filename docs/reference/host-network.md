@@ -248,10 +248,23 @@ there in chunks (`fs.writePart`, each checked by sha256), checks the whole file 
 `__daemon --version` is this build's daemon (else nothing on the machine changes), and starts
 `walnut daemon update --scope <scope>` from a script detached from the daemon, which exits
 during the handover. The script asks again while the old daemon answers "has active
-operations" (30 times, 10 s apart; after that refusal the old service config is back), and
+operations" (8 times, 10 s apart; after that refusal the old service config is back), and
 stops before its next try once a later update started there, so a server of an older build
 never puts its build back over a newer one. The Mac reads the answer once the machine is
-back on the new build. Sessions keep running, as with any service update. Only the leader
+back on the new build. After the last try the script checks that a daemon serves (its pid
+alive, its port file there) for up to 90 s, loading the LaunchAgent, starting the user unit
+or starting the boot script whenever it is not running; when none answers, it puts back the
+service config and its ownership record it copied before the first try, reloads the service
+and waits again (`src/providers/daemon-update-tail.ts`). A daemon that served is watched for
+15 minutes more, and one that dies or keeps restarting then is put back the same way
+(`src/providers/daemon-update-probation.ts`). The script touches its pid file every 15 s while
+it runs, and ends a `walnut daemon update` that runs past 15 minutes, so its check always
+comes. What it took is in `update.tail` beside `update.done`. While the machine is away during its update, its status says its
+daemon is being updated; after 10 minutes it says the update did not come back and the
+machine needs a restart or a new login. When the Mac's own wait ended first, it reads the
+record once the machine is back and logs it, and a failed update stays a line under the
+host in Settings with its reason until an update of that build goes through
+(`src/providers/daemon-net-update-record.ts`). Sessions keep running, as with any service update. Only the leader
 does it (never a follower or a test server), never while a session or file write is in
 flight (a short one met after the upload is waited out), once per build per 10 minutes, then
 later and later after a failure, and after 4 failed tries of a build only on request or with

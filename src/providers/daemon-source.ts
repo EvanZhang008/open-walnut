@@ -1989,6 +1989,26 @@ function isolatedOwnRoot() {
   const root = path.dirname(path.resolve(DAEMON_DIR));
   return root === '/tmp/open-walnut-test-' + ISOLATED_FOR || root.endsWith('/.cache/open-walnut-test/' + ISOLATED_FOR) ? root : null;
 }
+// A trial run's hard lifetime (daemon-boot-proof.ts, daemon-trial-cmd.ts): it exits by itself
+// after its proof window, so a trial whose prover died never stays for good. Unset: no limit.
+// Mirror daemon-standalone.ts.
+const TRIAL_LIFETIME_MS = (function() {
+  const seconds = parseInt(process.env.WALNUT_DAEMON_LIFETIME_SECONDS || '', 10);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+})();
+// Armed at load, not once startup is done: a trial that hangs on its way up ends too (2026-11-04
+// review). It is asked to stop the normal way; a stop that hangs, or a daemon not that far yet,
+// exits 15 s later at the latest. Mirror daemon-standalone.ts.
+if (TRIAL_LIFETIME_MS && (process.argv[2] === '--start' || process.argv[2] === '--service')) {
+  setTimeout(function () {
+    try { logMsg('warn', 'trial lifetime reached; exiting', { lifetimeMs: TRIAL_LIFETIME_MS }); } catch { /* no logger yet */ }
+    setTimeout(function () { process.exit(1); }, 15000).unref();
+    let shutdown = null;
+    try { shutdown = requestDaemonShutdown; } catch { /* not declared yet */ }
+    if (shutdown) shutdown();
+    else process.exit(1);
+  }, TRIAL_LIFETIME_MS).unref();
+}
 
 function ensureOwnerOnlyStorage() {
   function repair(entryPath) {
@@ -16093,9 +16113,35 @@ async function startDaemon() {
   // second daemon can reap or adopt this host's CLIs. The kernel releases it on
   // any death, including SIGKILL.
   if (daemonLockCore) {
-    const lock = await daemonLockCore.acquireDaemonInstanceLock({
-      runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
-    });
+    const acquire = function () {
+      return daemonLockCore.acquireDaemonInstanceLock({
+        runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
+      });
+    };
+    let lock = await acquire();
+    // A stand-in an update's tail started outside launchd (its pid in daemon.standin) holds the
+    // dir: launchd's own daemon waits for the handback instead of exiting, which made KeepAlive
+    // restart the job every 5 s and every later update refused (2026-11-04 review). Keep in
+    // sync with daemon-standalone.ts.
+    // A daemon.standin left by a stand-in that was killed may name a pid another daemon of this dir
+    // has now: a stand-in runs the service's own program, "--service" in its command line
+    // (2026-11-04 review). Where the command line cannot be read, the file decides.
+    const standInHolds = function (pid) {
+      try { if (Number(fs.readFileSync(path.join(DAEMON_DIR, 'daemon.standin'), 'utf8').trim()) !== pid) return false; } catch { return false; }
+      let args = '';
+      try {
+        args = fs.existsSync('/proc/' + pid + '/cmdline') ? fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\\0').join(' ')
+          : execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+      } catch { /* cannot tell */ }
+      return !args.trim() || args.split(/\\s+/).includes('--service');
+    };
+    if (SERVICE_MODE && lock.kind === 'existing' && standInHolds(lock.owner.pid)) {
+      logMsg('info', 'a stand-in daemon serves this dir; waiting for its handback', { pid: lock.owner.pid });
+      while (lock.kind === 'existing' && standInHolds(lock.owner.pid)) {
+        await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+        lock = await acquire();
+      }
+    }
     if (lock.kind === 'existing') {
       if (SERVICE_MODE || lock.owner.wsPort === null) {
         throw new Error('An existing daemon owns this runtime directory; service handover is required');

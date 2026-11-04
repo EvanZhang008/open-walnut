@@ -27,9 +27,15 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import zlib from 'node:zlib'
 import { spawn, spawnSync } from 'node:child_process'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createTransferCore, type TransferCoreDeps } from '../../src/providers/transfer-core.js'
-import { createNetUpdateIo, launcherScript, runnerScript, RUNNER_PAUSE_SECONDS, RUNNER_TRIES, UPDATE_WAIT_MS, type NetUpdateConn, type NetUpdateIoOptions } from '../../src/providers/daemon-net-update-io.js'
+import {
+  createNetUpdateIo, launcherScript, NetUpdateHeldError, NetUpdateUnansweredError, runnerScript, RUNNER_PAUSE_SECONDS, RUNNER_TRIES, UPDATE_WAIT_MS,
+  type NetUpdateConn, type NetUpdateIoOptions,
+} from '../../src/providers/daemon-net-update-io.js'
+import { daemonInstallRoot, renderDaemonLaunchAgent } from '../../src/providers/daemon-service-config.js'
+import { createServiceStubs, type ServiceStubs } from '../helpers/service-stubs.js'
+import { fakeUpdateRunner, type FakeRunner, type FakeRunnerState } from '../helpers/fake-update-runner.js'
 import { UPDATE_BUSY_WAIT_MS } from '../../src/providers/daemon-service-cli.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { permissionRisk } from '../../src/providers/host-exec-guards.js'
@@ -46,14 +52,17 @@ afterAll(() => {
 
 let work: string
 let state: string
+let home: string
 beforeEach(() => {
   work = fs.mkdtempSync(path.join(root, 'case-'))
   state = path.join(work, 'state')
+  home = path.join(work, 'home')
   fs.mkdirSync(state)
+  fs.mkdirSync(home)
 })
 
 /** The fake daemon file: its version, and `walnut daemon update` refusing `refusals` times first. */
-function fakeDaemon(o: { refusals?: number; refusal?: string; supersede?: string; sleep?: number; version?: string; pad?: number } = {}): string {
+function fakeDaemon(o: { refusals?: number; refusal?: string; supersede?: string; laterDir?: string; sleep?: number; version?: string; pad?: number; onUpdate?: string[] } = {}): string {
   const file = path.join(work, 'daemon-src')
   const refusal = JSON.stringify({ ok: false, failure: { code: 'updateRefused', message: o.refusal ?? 'Daemon has active operations; retry after they finish' } })
   fs.writeFileSync(file, [
@@ -64,8 +73,9 @@ function fakeDaemon(o: { refusals?: number; refusal?: string; supersede?: string
     '  n=$(cat "$s/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$s/count"',
     '  echo "update pgid=$(ps -o pgid= -p $$ | tr -d " ") args=$*" >> "$s/calls"',
     // A later launch (another server's) names itself the latest while this one is refused.
-    ...(o.supersede ? [`  [ "$n" -eq 1 ] && printf '%s\\n' /tmp/open-walnut-update.Later1 > '${o.supersede}'`] : []),
+    ...(o.supersede ? [`  [ "$n" -eq 1 ] && printf '%s\\n' '${o.laterDir ?? '/tmp/open-walnut-update.Later1'}' > '${o.supersede}'`] : []),
     ...(o.sleep ? [`  sleep ${o.sleep}`] : []),
+    ...(o.onUpdate ?? []).map((line) => `  ${line}`),
     `  if [ "$n" -le ${o.refusals ?? 0} ]; then printf '%s\\n' '${refusal}'; exit 1; fi`,
     `  printf '%s\\n' '{"ok":true,"status":{"scope":"user"}}'; exit 0`,
     'fi',
@@ -79,9 +89,12 @@ function fakeDaemon(o: { refusals?: number; refusal?: string; supersede?: string
 
 interface Host extends NetUpdateConn { lines: string[]; writes: string[]; jobGroups: number[] }
 
-/** The daemon's side of the three commands; `corrupt(path)` damages a write in transit. */
+/**
+ * The daemon's side of the three commands; `corrupt(path)` damages a write in transit.
+ * HOME is the case's own empty home, so the runner's tail finds no service config unless a case puts one there.
+ */
 function miniHost(o: { path?: string; corrupt?: (p: string) => boolean; readFails?: () => boolean; signalGroup?: 'always' | 'drain'; noise?: string } = {}): Host {
-  const env = { ...process.env, PATH: o.path ?? guardedPath() }
+  const env = { ...process.env, HOME: home, PATH: o.path ?? guardedPath() }
   const core = createTransferCore({ fs, path, crypto, spawn: spawn as unknown as TransferCoreDeps['spawn'], env, home: work })
   const host: Host = {
     lines: [], writes: [], jobGroups: [],
@@ -240,12 +253,49 @@ describe('the host network update io', () => {
     expect(calls()).toHaveLength(1)
   }, 60_000)
 
+  /** A later launch's runner dir (tests/helpers/fake-update-runner.ts). */
+  function laterRunner(runner: FakeRunnerState): string {
+    const made = fakeUpdateRunner(runner)
+    later.push(made)
+    return made.dir
+  }
+  const later: FakeRunner[] = []
+  afterEach(() => { for (const made of later.splice(0)) made.stop() })
+
   it('a script a later launch took over stops before its next try', async () => {
     const latestMarker = path.join(work, 'latest')
-    const binary = fakeDaemon({ refusals: 5, supersede: latestMarker })
+    const binary = fakeDaemon({ refusals: 5, supersede: latestMarker, laterDir: laterRunner('alive') })
     await expect(updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(miniHost(), fast({ latestMarker })), 'user'))
       .rejects.toThrow('a later update on the host took over')
     expect(calls()).toHaveLength(1)
+  }, 60_000)
+
+  // 2026-11-04 review: any other dir in the marker counted, so a later launch that never ran stood the only runner down.
+  it('a later launch whose runner is gone does not stand this one down', async () => {
+    const latestMarker = path.join(work, 'latest')
+    const binary = fakeDaemon({ refusals: 1, supersede: latestMarker, laterDir: laterRunner('dead') })
+    await expect(updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(miniHost(), fast({ latestMarker })), 'user')).resolves.toBe('applied')
+    expect(calls()).toHaveLength(2)
+  }, 60_000)
+
+  // 2026-11-04 review: a server restarted mid-update launched a second runner beside the first one.
+  it('a launch while another runner is at work on the host is refused before anything runs, and says so', async () => {
+    const latestMarker = path.join(work, 'latest')
+    fs.writeFileSync(latestMarker, `${laterRunner('alive')}\n`)
+    const host = miniHost()
+    const err = await updateRemoteDaemonService({ binary: fakeDaemon() }, VERSION, createNetUpdateIo(host, fast({ latestMarker })), 'user').then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(NetUpdateHeldError)
+    expect(String(err)).toContain('another daemon update is still running on the host')
+    expect(calls()).toEqual([])
+    // A dead one in the marker is no runner: the next launch goes ahead.
+    fs.writeFileSync(latestMarker, `${laterRunner('dead')}\n`)
+    await expect(updateRemoteDaemonService({ binary: fakeDaemon() }, VERSION, createNetUpdateIo(miniHost(), fast({ latestMarker })), 'user')).resolves.toBe('applied')
+    expect(calls()).toHaveLength(1)
+    // Nor is a live pid that is not its update.sh (a dead runner's pid reused): 2026-11-04 review,
+    // every later update would have been refused for as long as that process lived.
+    fs.writeFileSync(latestMarker, `${laterRunner('reused')}\n`)
+    await expect(updateRemoteDaemonService({ binary: fakeDaemon() }, VERSION, createNetUpdateIo(miniHost(), fast({ latestMarker })), 'user')).resolves.toBe('applied')
+    expect(calls()).toHaveLength(2)
   }, 60_000)
 
   it('a hold met right before the launch is waited out, the upload already on the host', async () => {
@@ -271,12 +321,24 @@ describe('the host network update io', () => {
     expect(calls()).toHaveLength(1)
   }, 60_000)
 
-  it('stops reading after its wait, or once nobody waits, and says the update may still finish', async () => {
-    await expect(updateRemoteDaemonService({ binary: fakeDaemon({ sleep: 3 }) }, VERSION, createNetUpdateIo(miniHost(), fast({ waitMs: 500 })), 'user'))
-      .rejects.toThrow(/did not report back within 1 s; it may still finish there/)
-    await expect(updateRemoteDaemonService({ binary: fakeDaemon({ sleep: 3 }) }, VERSION, createNetUpdateIo(miniHost(), fast({ cancelled: () => true })), 'user'))
-      .rejects.toThrow('nobody waits for the update any more')
-    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+  it('stops reading after its wait, or once nobody waits, says the update may still finish, and keeps the dir for its record', async () => {
+    const cases: Array<[NetUpdateIoOptions, RegExp]> = [
+      [{ waitMs: 500 }, /did not report back within 1 s; it may still finish there/],
+      [{ cancelled: () => true }, /nobody waits for the update any more/],
+    ]
+    for (const [over, words] of cases) {
+      const err = await updateRemoteDaemonService({ binary: fakeDaemon({ sleep: 3 }) }, VERSION, createNetUpdateIo(miniHost(), fast(over)), 'user')
+        .then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(NetUpdateUnansweredError)
+      expect(String(err)).toMatch(words)
+      // The server reads it once the host is back (daemon-net-update-record.ts): the runner still finishes and writes it there.
+      const dir = (err as NetUpdateUnansweredError).directory
+      for (let i = 0; i < 200 && !fs.existsSync(`${dir}/update.done`); i++) await new Promise((r) => setTimeout(r, 100))
+      expect(fs.readFileSync(`${dir}/update.done`, 'utf8')).toBe('rc=0 tries=1 tail=no-service\n')
+      expect(fs.readFileSync(`${dir}/update.out`, 'utf8')).toContain('"ok":true')
+      fs.rmSync(dir, { recursive: true, force: true })
+      made.delete(dir)
+    }
   }, 60_000)
 
   it('a hold that outlasts its wait starts nothing and removes the upload', async () => {
@@ -363,6 +425,65 @@ describe('the detached start', () => {
     expect(runner).toContain('L="/tmp/open-walnut-update-latest-$(id -u)"')
     expect(launcherScript(dir)).toContain('mv -f "$d/latest.tmp" "$L"')
     expect(runnerScript({ directory: dir, command: 'true', executable: '/elsewhere/daemon' })).not.toContain('rm -f /elsewhere')
+    for (const scope of ['user', 'cron'] as const) {
+      const tailed = runnerScript({ directory: dir, command: 'true', executable: `${dir}/daemon`, tail: { scope } })
+      expect(spawnSync('/bin/sh', ['-n', '-c', tailed]).status).toBe(0)
+      // The tail runs after the tries, unless a later launch took over, and the done line names its outcome.
+      expect(tailed.indexOf('before.cfg')).toBeLessThan(tailed.indexOf('n=$((n+1))'))
+      expect(tailed).toContain('if [ "$rc" != superseded ]; then')
+      // The last done line (a refused build writes its own early, before anything is touched).
+      expect(tailed.indexOf('update.tail')).toBeLessThan(tailed.lastIndexOf('update.done.tmp'))
+    }
     expect(launcherScript("/tmp/open-walnut-update.a'b")).toContain(`d='/tmp/open-walnut-update.a'\\''b'`)
   })
 })
+
+/**
+ * The runner's tail on a "Mac" (the stand-ins of tests/helpers/service-stubs.ts: uname says
+ * Darwin, launchctl keeps one job in the case's state dir, a load of a plist naming a "good"
+ * executable starts a stand-in daemon, a "bad" one starts nothing). 2026-11-04: an update
+ * stopped the old daemon and the new job never got loaded, and the runner only wrote its done line.
+ */
+describe('the runner\'s tail after the update', () => {
+  let stubs: ServiceStubs
+  beforeEach(() => { stubs = createServiceStubs(work, 'Darwin') })
+  afterEach(() => stubs.stop())
+
+  const plistFor = (exe: string) => renderDaemonLaunchAgent({
+    platform: 'darwin', home, executable: exe, args: ['--service'], runtimeDir: stubs.runtime, stateDir: daemonInstallRoot('darwin', home), path: '/usr/bin:/bin',
+  })
+  const config = () => path.join(home, 'Library', 'LaunchAgents', 'dev.openwalnut.session-daemon.plist')
+  function installed(exe: string): string {
+    fs.mkdirSync(path.dirname(config()), { recursive: true })
+    fs.mkdirSync(daemonInstallRoot('darwin', home), { recursive: true })
+    fs.writeFileSync(config(), plistFor(exe), { mode: 0o600 })
+    return config()
+  }
+  const FAST_TAIL = { tail: { waitSeconds: 2, goneSeconds: 2, staySeconds: 1, probationSeconds: 0 } }
+
+  it('loads a job the update answered ok for and left unloaded, and the update counts as applied', async () => {
+    // The old job runs when the runner copies the config aside; the update boots it out and never loads the new one.
+    stubs.setLoaded(true, installed('/opt/walnut/versions/good-new/open-walnut-daemon'))
+    const host = miniHost({ path: guardedPath([stubs.bin]) })
+    const binary = fakeDaemon({ onUpdate: [`rm -f '${stubs.state}/job'`] })
+    await expect(updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(host, fast(FAST_TAIL)), 'user')).resolves.toBe('applied')
+    expect(stubs.calls()).toContain(`launchctl bootstrap gui/${process.getuid!()} ${config()}`)
+    expect(stubs.daemonUp()).toBe(true)
+  }, 60_000)
+
+  it('puts the previous plist back when the new daemon never answers, the previous one serves, and the update fails with why', async () => {
+    const before = fs.readFileSync(installed('/opt/walnut/versions/good-previous/open-walnut-daemon'), 'utf8')
+    stubs.setLoaded(true, config())
+    // The update writes the new plist and launchd runs it; its executable never answers.
+    const next = path.join(work, 'next.plist')
+    fs.writeFileSync(next, plistFor('/opt/walnut/versions/bad-new/open-walnut-daemon'))
+    const binary = fakeDaemon({ onUpdate: [`cp '${next}' '${config()}'`, `echo '${config()}' > '${stubs.state}/job'`] })
+    const host = miniHost({ path: guardedPath([stubs.bin]) })
+    const err = await updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(host, fast(FAST_TAIL)), 'user').then(() => null, (e: unknown) => e)
+    expect(String(err)).toContain('the update answered ok, but afterwards on the host: no daemon answered within 2 s, so the previous service config was put back, and its daemon answers')
+    expect(fs.readFileSync(config(), 'utf8')).toBe(before)
+    expect(stubs.daemonUp()).toBe(true)
+    for (const dir of made) expect(fs.existsSync(dir)).toBe(false)
+  }, 60_000)
+})
+

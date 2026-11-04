@@ -9,6 +9,7 @@ import {
   type DaemonServiceResult,
   type DaemonServiceStatus,
 } from '../../src/providers/daemon-service-manager.js'
+import { BOOTSTRAP_RETRY_MS } from '../../src/providers/daemon-service-launchd.js'
 
 type Platform = 'linux' | 'darwin'
 type Reply = { code?: number; stdout?: string; stderr?: string }
@@ -89,7 +90,19 @@ interface HarnessOptions {
   removeThrows?: string
   handover?: () => Promise<boolean>
   prepareUpdate?: () => Promise<void>
+  proveBoot?: (prepared: { executable: string; args: string[] }) => Promise<string | null>
+  /** Whether the new daemon stays serving after it answered (DaemonServiceDeps.stay): null when it does. */
+  stay?: () => Promise<string | null>
   startLimitOnRestart?: boolean
+  /** A restart that fails leaves the unit failed (inactive), or waiting out a crash (activating, auto-restart). */
+  failedRestartLeaves?: 'failed' | 'crash-loop'
+  /**
+   * launchd in a dark wake (on-demand-only mode): 'probe' = the spawn probe says so (deps.launchdSpawns);
+   * 'loads' = the probe is not asked, and a bootstrap or kickstart loads the job and starts no process.
+   */
+  darkWake?: 'probe' | 'loads'
+  /** What the spawn probe answers, in turn (the last one repeats); overrides darkWake: 'probe'. */
+  probeSays?: Array<boolean | 'unknown'>
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -105,6 +118,9 @@ function harness(options: HarnessOptions = {}) {
   let writeCalls = 0
   let restarted = false
   let startLimited = false
+  let crashLoop = false
+  // The launchd and systemd waits run on this virtual clock: a pause moves it, never the test.
+  let clock = 0
 
   if (options.present) {
     for (const p of [UNIT_USER, UNIT_SYSTEM, PLIST]) {
@@ -151,6 +167,8 @@ function harness(options: HarnessOptions = {}) {
       ? '/Users/example/Library/Application Support/Open Walnut/Daemon'
       : '/home/walnut/.local/share/open-walnut/daemon',
     runtimeDir: RUNTIME_DIR,
+    now: () => clock,
+    sleep: async (ms) => { clock += ms },
     prepareUpdate: async () => {
       timeline.push('prepareUpdate')
       await options.prepareUpdate?.()
@@ -166,20 +184,27 @@ function harness(options: HarnessOptions = {}) {
           if (startLimited) return { code: 1, stdout: '', stderr: 'Start request repeated too quickly' }
         }
       }
+      if (crashLoop && line === IS_ACTIVE) return { code: 3, stdout: 'activating\n', stderr: '' }
+      if (line === `systemctl --user show -p SubState ${UNIT}`) return { code: 0, stdout: crashLoop ? 'SubState=auto-restart\n' : 'SubState=running\n', stderr: '' }
       const queue = table[line]
       const reply: Reply = queue
         ? (queue.length > 1 ? queue.shift()! : queue[0])
         : (derived[line]?.() ?? {})
       const code = reply.code ?? 0
+      if (code !== 0 && options.failedRestartLeaves && program === 'systemctl' && action === 'restart') {
+        active = false
+        crashLoop = options.failedRestartLeaves === 'crash-loop'
+      }
+      if (code === 0 && program === 'systemctl' && (action === 'start' || action === 'restart')) crashLoop = false
       if (code === 0) {
         if (program === 'launchctl') {
-          if (args[0] === 'bootstrap' || args[0] === 'kickstart') { started = true; active = true }
+          if (args[0] === 'bootstrap' || args[0] === 'kickstart') { started = true; active = options.darkWake !== 'loads' }
           if (args[0] === 'bootout') { started = false; active = false }
         } else if (program === 'systemctl') {
           const action = args[0] === '--user' ? args[1] : args[0]
           if (action === 'enable') enabled = true
           if (action === 'disable') enabled = false
-          if (action === 'restart' || (action === 'enable' && args.includes('--now'))) active = true
+          if (action === 'restart' || action === 'start' || (action === 'enable' && args.includes('--now'))) active = true
           if (action === 'stop' || (action === 'disable' && args.includes('--now'))) active = false
         }
       }
@@ -232,6 +257,20 @@ function harness(options: HarnessOptions = {}) {
         owned: options.owned ?? true,
       }
     },
+  }
+
+  if (options.darkWake === 'probe') deps.launchdSpawns = async () => { timeline.push('spawn-probe'); return false }
+  if (options.probeSays) {
+    const says = [...options.probeSays]
+    deps.launchdSpawns = async () => { timeline.push('spawn-probe'); return says.length > 1 ? says.shift()! : says[0] }
+  }
+  if (options.stay) deps.stay = async () => {
+    timeline.push('stay')
+    return options.stay!()
+  }
+  if (options.proveBoot) deps.proveBoot = async (prepared) => {
+    timeline.push(`prove:${prepared.executable}`)
+    return options.proveBoot!(prepared)
   }
 
   if (options.handover) deps.handover = async () => {
@@ -296,13 +335,16 @@ describe.each(['linux', 'darwin'] as const)('service handover transaction on %s'
     let attempts = 0
     const start = platform === 'linux' ? ENABLE : BOOTSTRAP
     const config = platform === 'linux' ? UNIT_USER : PLIST
+    // launchd's bootstrap is asked again every second for BOOTSTRAP_RETRY_MS: a start that
+    // fails for the whole first install fails that many times, and the second install's works.
+    const failures = platform === 'linux' ? 1 : BOOTSTRAP_RETRY_MS / 1000 + 1
     const h = harness({
       platform,
       handover: async () => {
         if (++attempts === 1 && fault === 'pending') throw new DaemonServiceHandoverPendingError('reply lost')
         return true
       },
-      replies: fault === 'start' ? { [start]: [{ code: 1, stderr: 'start failed' }, { code: 0 }] } : {},
+      replies: fault === 'start' ? { [start]: [...Array.from({ length: failures }, () => ({ code: 1, stderr: 'start failed' })), { code: 0 }] } : {},
       ready: fault === 'ready' ? [false, true] : true,
     })
     const failed = expectFailure(await h.manager.install())
@@ -362,6 +404,26 @@ describe.each(['linux', 'darwin'] as const)('managed executable update on %s', (
     expect(h.timeline.filter((event) => MUTATING.test(event))).toEqual([])
   })
 
+  it('refuses before anything changes when the new daemon fails its trial run', async () => {
+    const h = harness({ platform, present: true, initialText: previous, proveBoot: async () => 'it listened, then exited with 1: no boot identity' })
+    const failure = expectFailure(await h.manager.update())
+
+    expect(failure.code).toBe('bootProof')
+    expect(failure.message).toBe('the new daemon did not start in a trial run, so nothing was changed: it listened, then exited with 1: no boot identity')
+    expect(failure.rollback).toBeUndefined()
+    expect(h.writes).toEqual([])
+    expect(h.timeline).not.toContain('prepareUpdate')
+    expect(h.timeline.filter((event) => MUTATING.test(event))).toEqual([])
+  })
+
+  it('tries the staged executable before it writes the config, then updates', async () => {
+    const h = harness({ platform, present: true, initialText: previous, proveBoot: async () => null })
+    expectOk(await h.manager.update())
+    const executable = platform === 'linux' ? LINUX_EXE : DARWIN_EXE
+    expect(h.timeline.indexOf(`prove:${executable}`)).toBeGreaterThan(h.timeline.indexOf('prepare'))
+    expect(h.timeline.indexOf(`prove:${executable}`)).toBeLessThan(h.timeline.findIndex((event) => event.startsWith('write:')))
+  })
+
   it('restores config without restarting when the running daemon refuses preparation', async () => {
     const h = harness({ platform, present: true, initialText: previous,
       prepareUpdate: async () => { throw new DaemonServiceUpdateRefusedError('active ACP workers') } })
@@ -385,6 +447,45 @@ describe.each(['linux', 'darwin'] as const)('managed executable update on %s', (
     expect(h.writes[1].text).toBe(previous)
     expect(h.removed).toEqual([])
     expect(h.timeline).not.toContain(`run:${ENABLE}`)
+  })
+
+  // 2026-11-04 review: the callers could not tell this failure (the old daemon stopped, the new
+  // one never answered) from one that changed nothing, so the build was tried again every 10 min.
+  it('a failure after the running daemon was stopped for the new build says so (stopped); one before it does not', async () => {
+    const after = harness({ platform, present: true, initialText: previous, ready: [false, true] })
+    expect(expectFailure(await after.manager.update())).toMatchObject({ code: 'notReady', stopped: true })
+    const refused = harness({ platform, present: true, initialText: previous,
+      prepareUpdate: async () => { throw new DaemonServiceUpdateRefusedError('active ACP workers') } })
+    expect(expectFailure(await refused.manager.update()).stopped).toBeUndefined()
+    const pending = harness({ platform, present: true, initialText: previous,
+      prepareUpdate: async () => { throw new DaemonServiceHandoverPendingError('RPC response lost') } })
+    expect(expectFailure(await pending.manager.update()).stopped).toBeUndefined()
+    const trial = harness({ platform, present: true, initialText: previous, proveBoot: async () => 'it exited with 1' })
+    expect(expectFailure(await trial.manager.update()).stopped).toBeUndefined()
+  })
+})
+
+// 2026-11-04 review: one hello counted, so a build that answered and then exited (launchd or
+// systemd restarting it in a loop) was an update that went through.
+describe.each(['linux', 'darwin'] as const)('an update whose new daemon answers and does not stay (%s)', (platform) => {
+  const previous = platform === 'linux'
+    ? '[Service]\nExecStart="/opt/previous/daemon" "--service"\n'
+    : '<plist><dict><key>ProgramArguments</key><array><string>/opt/previous/daemon</string><string>--service</string></array></dict></plist>\n'
+  it('is rolled back as a build that did not start, after the running daemon was stopped (stopped)', async () => {
+    const h = harness({ platform, present: true, initialText: previous, stay: async () => 'the new daemon answered and then did not stay serving for 30 s (its process exited)' })
+    const failure = expectFailure(await h.manager.update())
+    expect(failure).toMatchObject({ code: 'verifyFailed', stopped: true, message: expect.stringContaining('did not stay serving') })
+    expect(h.writes.at(-1)?.text).toBe(previous)
+    expect(h.timeline).toContain('stay')
+  })
+
+  it('a daemon that stays is an update that went through, and an install is not held for it', async () => {
+    const ok = harness({ platform, present: true, initialText: previous, stay: async () => null })
+    expectOk(await ok.manager.update())
+    expect(ok.timeline).toContain('stay')
+    const install = harness({ platform, stay: async () => 'never asked' })
+    expectOk(await install.manager.install())
+    expect(install.timeline).not.toContain('stay')
   })
 })
 
@@ -499,9 +600,24 @@ describe('install on linux, user scope', () => {
     // The restart during rollback also failed, so the old version did not come up, and the report must say so.
     expect(failure.rollback).toBe(`put the previous config back, but ${RESTART} exited with 1`)
     expect(h.writes.map((write) => write.text)).toEqual([h.writes[0].text, PREVIOUS])
-    // After the read-only probe before the install, there must be no further "verify succeeded" probe.
+    // After the read-only probe before the install, no "verify succeeded" probe: the one
+    // is-active left is the last step's check that the unit still runs, after the last restart.
     const afterWrite = h.timeline.slice(h.timeline.indexOf(`write:${UNIT_USER}`))
-    expect(afterWrite.some((entry) => entry.includes('is-active'))).toBe(false)
+    expect(afterWrite.filter((entry) => entry.includes('is-active'))).toEqual([`run:${IS_ACTIVE}`])
+    expect(afterWrite.lastIndexOf(`run:${IS_ACTIVE}`)).toBeGreaterThan(afterWrite.lastIndexOf(`run:${RESTART}`))
+    expect(afterWrite).not.toContain('ready')
+  })
+
+  it.each(['failed', 'crash-loop'] as const)('a rollback whose restart failed and left the unit %s starts it again, and says so', async (left) => {
+    // 2026-11-04 review: the stand-in kept the unit active after a failed restart, so this start was never exercised.
+    const h = harness({ present: true, failedRestartLeaves: left, replies: { [RESTART]: { code: 1, stderr: 'Job failed' } } })
+    const failure = expectFailure(await h.manager.install())
+    expect(failure.command).toBe(RESTART)
+    const START = `systemctl --user start ${UNIT}`
+    const after = h.timeline.slice(h.timeline.lastIndexOf(`run:${RESTART}`))
+    expect(after).toEqual(expect.arrayContaining([`run:systemctl --user reset-failed ${UNIT}`, `run:${START}`]))
+    expect(after.indexOf(`run:${START}`)).toBeGreaterThan(after.indexOf(`run:systemctl --user reset-failed ${UNIT}`))
+    expect(failure.rollback).toContain(`${UNIT} was stopped afterwards, so it was started again`)
   })
 
   it('renders the unit from the prepared argv and the separate runtime dir', async () => {
@@ -663,6 +779,8 @@ describe('install on linux, user scope', () => {
       `run:${SHOW}`,
       `run:${LINGER}`,
       'ready',
+      // The last step: the unit still runs, so nothing more is done.
+      `run:${IS_ACTIVE}`,
     ])
     expect(h.writes.map((write) => write.text)).toEqual([h.writes[0].text, PREVIOUS])
     expect(h.removed).toEqual([])
@@ -752,8 +870,24 @@ describe('install on linux, user scope', () => {
     const failure = expectFailure(await h.manager.install())
 
     expect(failure.rollback).toBe(`put the previous config back, but ${RELOAD} exited with 1`)
-    // If even the reload failed, it must not go on to restart, much less report a successful verification.
-    expect(h.timeline.slice(h.timeline.indexOf('ready') + 1)).toEqual([`write:${UNIT_USER}`, `run:${RELOAD}`])
+    // If even the reload failed, it must not go on to restart, much less report a successful
+    // verification; the last step only checks the unit still runs (it does here).
+    expect(h.timeline.slice(h.timeline.indexOf('ready') + 1)).toEqual([`write:${UNIT_USER}`, `run:${RELOAD}`, `run:${IS_ACTIVE}`])
+  })
+
+  it('starts the unit again when the rollback left it stopped', async () => {
+    // The reload fails, and the unit is stopped by then (the new daemon used up its start limit).
+    const h = harness({
+      present: true, ready: false,
+      replies: { [RELOAD]: [{}, { code: 1 }, {}], [IS_ACTIVE]: [{ stdout: 'active\n' }, { stdout: 'active\n' }, { code: 3, stdout: 'failed\n' }, { stdout: 'active\n' }] },
+    })
+    const failure = expectFailure(await h.manager.install())
+
+    expect(failure.rollback).toBe(`put the previous config back, but ${RELOAD} exited with 1; ${UNIT} was stopped afterwards, so it was started again`)
+    const last = h.timeline.slice(h.timeline.lastIndexOf(`run:${IS_ACTIVE}`) - 4)
+    expect(last).toEqual([
+      `run:${IS_ACTIVE}`, `run:${RELOAD}`, `run:systemctl --user reset-failed ${UNIT}`, `run:systemctl --user start ${UNIT}`, `run:${IS_ACTIVE}`,
+    ])
   })
 
   it('turns a thrown baseline read into a structured failure and writes nothing', async () => {
@@ -958,6 +1092,8 @@ describe('install on darwin', () => {
       `read:${PLIST}`,
       `write:${PLIST}`,
       `run:${BOOTOUT}`,
+      // launchd has let the job go (113) before the bootstrap.
+      `run:${PRINT}`,
       `run:${BOOTSTRAP}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,
@@ -968,6 +1104,45 @@ describe('install on darwin', () => {
       `run:${PRINT_DISABLED}`,
     ])
     expect(h.timeline.indexOf(`write:${PLIST}`)).toBeLessThan(h.timeline.indexOf(`run:${BOOTOUT}`))
+  })
+
+  // 2026-11-04: a Mac updated in a ~45 s dark wake. launchd's gui domain was on-demand-only: it
+  // loaded the new job and the restored one and started neither, so the host had no daemon for 1 h 45 min.
+  it('defers an update while launchd starts no jobs (a dark wake): nothing is written, nothing booted out', async () => {
+    const h = harness({ platform: 'darwin', present: true, owned: true, darkWake: 'probe' })
+    const failure = expectFailure(await h.manager.update())
+    expect(failure.code).toBe('launchdNotSpawning')
+    expect(failure.message).toBe('update deferred: launchd is starting no jobs in this login session now (a dark wake with the lid closed, or a login not finished); nothing was changed, and the running daemon keeps serving')
+    expect(h.timeline).toContain('spawn-probe')
+    expect(h.writes).toEqual([])
+    expect(h.timeline).not.toContain(`run:${BOOTOUT}`)
+    expect(h.timeline).not.toContain(`run:${BOOTSTRAP}`)
+  })
+
+  // 2026-11-04 review: a probe with no answer deferred every update, so a Mac whose probe never
+  // answered (launchctl slow under load) was never updated again.
+  it('a probe with no answer is asked once more, and a second no answer goes ahead', async () => {
+    const h = harness({ platform: 'darwin', present: true, owned: true, probeSays: ['unknown'] })
+    expectOk(await h.manager.install())
+    expect(h.timeline.filter((step) => step === 'spawn-probe')).toHaveLength(2)
+    expect(h.timeline).toContain(`run:${BOOTSTRAP}`)
+  })
+
+  it('a probe with no answer, then "none", defers', async () => {
+    const h = harness({ platform: 'darwin', present: true, owned: true, probeSays: ['unknown', false] })
+    expect(expectFailure(await h.manager.install()).code).toBe('launchdNotSpawning')
+    expect(h.writes).toEqual([])
+  })
+
+  it('a job launchd loads and never starts is a failed start, found in seconds: kickstarted, then rolled back', async () => {
+    const h = harness({ platform: 'darwin', present: true, owned: true, darkWake: 'loads' })
+    const failure = expectFailure(await h.manager.install())
+    expect(failure.code).toBe('notReady')
+    expect(failure.message).toMatch(/^launchd loaded dev\.openwalnut\.session-daemon and started no process for it within 8 s, kickstarted too: launchd is starting no jobs/)
+    expect(h.timeline).toContain(`run:launchctl kickstart ${TARGET}`)
+    // The new job's readiness wait (a minute) never ran; the restored one did not start either, and the rollback says so.
+    expect(h.readyCalls).toEqual([])
+    expect(failure.rollback).toContain('the previous version did not come back: launchd loaded')
   })
 
   it('refuses a disabled label before preparing, writing, or booting anything out', async () => {
@@ -1067,14 +1242,17 @@ describe('install on darwin', () => {
 
     expect(failure.code).toBe('commandFailed')
     expect(failure.command).toBe(BOOTSTRAP)
+    expect(failure.message).toMatch(/kept failing for 30 s \(last exit 5\)/)
     expect(failure.rollback).toBe('removed the config this install wrote, so no service is registered')
-    expect(h.timeline).toEqual([
-      `inspect:${PLIST}`,
+    const first = h.timeline.indexOf(`run:${BOOTSTRAP}`)
+    const last = h.timeline.lastIndexOf(`run:${BOOTSTRAP}`)
+    expect(h.timeline.slice(0, first)).toEqual([`inspect:${PLIST}`, `run:${PRINT}`, `run:${PRINT_DISABLED}`, 'prepare', `write:${PLIST}`])
+    // Asked again every second for 30 s, each failure followed by a look at what is loaded.
+    expect(h.timeline.filter((entry) => entry === `run:${BOOTSTRAP}`).length).toBeGreaterThan(20)
+    expect(h.timeline.slice(first, last + 2).every((entry) => entry === `run:${BOOTSTRAP}` || entry === `run:${PRINT}`)).toBe(true)
+    expect(h.timeline.slice(last + 1)).toEqual([
+      // The last try's look, then the undo's own: nothing is loaded, so nothing to boot out.
       `run:${PRINT}`,
-      `run:${PRINT_DISABLED}`,
-      'prepare',
-      `write:${PLIST}`,
-      `run:${BOOTSTRAP}`,
       `run:${PRINT}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,
@@ -1107,29 +1285,25 @@ describe('install on darwin', () => {
     expect(h.writes).toEqual([])
   })
 
-  it('puts the previous plist back and boots the previous version when bootstrap fails', async () => {
+  it('asks again when a bootstrap right after the bootout fails, instead of rolling back with nothing loaded', async () => {
     const h = harness({
       platform: 'darwin',
       present: true,
-      replies: { [BOOTSTRAP]: [{ code: 5, stderr: 'Bootstrap failed: 5' }, {}] },
+      replies: { [BOOTSTRAP]: [{ code: 5, stderr: 'Bootstrap failed: 5: Input/output error' }, {}] },
     })
-    const failure = expectFailure(await h.manager.install())
+    expectOk(await h.manager.install())
 
-    expect(failure.code).toBe('commandFailed')
-    expect(failure.command).toBe(BOOTSTRAP)
-    expect(failure.rollback).toBe('put the previous config back and a managed daemon is responding; the previous executable identity was not verified')
-    // The install already booted out the old job, so rollback only needs to bootstrap the old plist again.
-    expect(h.timeline.slice(h.timeline.indexOf(`run:${BOOTSTRAP}`))).toEqual([
+    expect(h.timeline.slice(h.timeline.indexOf(`run:${BOOTOUT}`), h.timeline.indexOf('ready'))).toEqual([
+      `run:${BOOTOUT}`,
+      `run:${PRINT}`,
       `run:${BOOTSTRAP}`,
-      `write:${PLIST}`,
       `run:${PRINT}`,
       `run:${BOOTSTRAP}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,
       `run:${PRINT_DISABLED}`,
-      'ready',
     ])
-    expect(h.writes.map((write) => write.text)).toEqual([h.writes[0].text, PREVIOUS])
+    expect(h.writes).toHaveLength(1)
     expect(h.removed).toEqual([])
   })
 
@@ -1149,6 +1323,7 @@ describe('install on darwin', () => {
       'ready',
       `run:${PRINT}`,
       `run:${BOOTOUT}`,
+      `run:${PRINT}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,
       `run:${PRINT_DISABLED}`,
@@ -1168,7 +1343,7 @@ describe('install on darwin', () => {
     })
     const failure = expectFailure(await h.manager.install())
 
-    expect(failure.rollback).toBe(`kept the service config because the stop was not confirmed: ${LABEL} stayed loaded`)
+    expect(failure.rollback).toBe(`kept the service config because the stop was not confirmed: ${BOOTOUT} exited with 1 and ${LABEL} stayed loaded`)
     expect(h.removed).toEqual([])
   })
 
@@ -1329,7 +1504,8 @@ describe('identity of the registered job', () => {
     const h = harness({
       platform: 'darwin',
       present: true,
-      replies: { [PRINT]: [{ stdout: RUNNING }, GONE, { code: 125, stderr: 'Operation not permitted' }] },
+      // Loaded, gone right after the bootout (and at the stop probe), then no answer at all.
+      replies: { [PRINT]: [{ stdout: RUNNING }, GONE, GONE, { code: 125, stderr: 'Operation not permitted' }] },
     })
     const failure = expectFailure(await h.manager.uninstall())
 
@@ -1624,6 +1800,7 @@ describe('uninstall', () => {
       `run:${PRINT}`,
       `run:${PRINT_DISABLED}`,
       `run:${BOOTOUT}`,
+      `run:${PRINT}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,
       `run:${PRINT_DISABLED}`,
@@ -1745,6 +1922,7 @@ describe('restart', () => {
       `run:${PRINT}`,
       `run:${PRINT_DISABLED}`,
       `run:${BOOTOUT}`,
+      `run:${PRINT}`,
       `run:${BOOTSTRAP}`,
       `inspect:${PLIST}`,
       `run:${PRINT}`,

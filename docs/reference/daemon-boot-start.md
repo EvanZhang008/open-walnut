@@ -62,6 +62,27 @@ setup sets it, so no test reaches a real host this way).
 Updates follow the service: a host with a user service or the cron boot script gets each
 new daemon build as `walnut daemon update --yes --scope <user|cron>`.
 
+An install or update never stops the old daemon for one that cannot serve. Before any
+service change, `walnut daemon install|update` starts the new executable as a daemon in
+throwaway directories of its own (`src/providers/daemon-boot-proof.ts`) and refuses, with
+nothing changed, when it does not listen within 60 s or does not stay up. After the swap
+the new daemon has 60 s to answer, else the previous config is put back. On a Mac every
+bootout waits until launchd lets the job go, and a bootstrap asks again for 30 s
+(`src/providers/daemon-service-launchd.ts`); every failed install, update or restart of a
+service that ran before ends by loading the LaunchAgent or starting the unit again when
+nothing runs it, and a cron rollback whose supervisor gave up starts a new one. The server
+checks the same after every update it starts (`src/providers/daemon-update-tail.ts`). A new
+daemon that served is then watched for 15 minutes (`src/providers/daemon-update-probation.ts`):
+one that is gone, or started again twice, gets the config from before back from the copy kept
+in the install root (`update-before/`, which a reboot does not clear), and that build is not
+run there again for a day. Only an update that changed the service config is watched. A put-back
+holds the install lock until the config it put back is loaded, so a later update never finds the
+service half restored. No later update starts while the 15 minutes run, a reboot that ended
+the watch early included: it is asked again once they are over, so the copy kept for the build
+before is never taken by the next update. Copies a reboot left behind are used only while their probation still had
+time left, or, with no probation yet (a power loss in the middle of the update), for 7 days unless
+a daemon kept serving there for more than an hour after the update.
+
 ## Commands on the host
 
 ```bash

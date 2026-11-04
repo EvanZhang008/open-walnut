@@ -23,7 +23,10 @@
  *
  * Older builds: their locks (a `pid` file and no `owner`) are honoured while that pid lives,
  * and taken over when it is dead or, with no readable pid, once older than STALE_AGE_MS. A
- * holder also writes its pid to `pid`, so an older build sees it alive and waits.
+ * holder also writes its pid to `pid`, so an older build sees it alive and waits. A `pid` file
+ * written before this boot (PREBOOT_MARGIN_MS before it) holds nothing whatever lives under that
+ * pid now: 2026-11-04 review 5, a power loss left a shell's lock (daemon-update-shell.ts), and the
+ * process that got its pid after the boot held every `walnut daemon` off.
  *
  * Never deleted: anything at the lock path that is not a lock (a `Gemfile.lock` file, a symlink,
  * a folder holding any name this protocol does not make) makes the lock throw instead. An empty
@@ -35,6 +38,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const STALE_AGE_MS = 30_000;  // Age-based fallback: an unclaimed lock older than 30s is stale
@@ -50,6 +54,7 @@ const TOKEN = new RegExp(`^${TOKEN_SRC}$`);
 // claim being prepared, and Finder's metadata file.
 const LOCK_ENTRY = new RegExp(`^(${PID}|${OWNER}|${OWNER}-${TOKEN_SRC}|\\.claim-${TOKEN_SRC}|\\.DS_Store)$`);
 const NO_TOKEN = '\0none';    // `entry` reply: a file where the folder should be (never a lock)
+const PREBOOT_MARGIN_MS = 10 * 60_000; // A clock set forward soon after the boot (daemon-update-shell.ts PREBOOT_MARGIN_SECONDS)
 
 /** The lock was not had within the wait; `fn` never ran. */
 export class FileLockTimeoutError extends Error {
@@ -64,6 +69,11 @@ function lockDir(filePath: string): string {
 }
 
 /** Check if a PID is alive via kill(pid, 0). EPERM: it exists, it is just not ours. */
+/** When this boot began, on the wall clock. */
+function bootTimeMs(): number {
+  return Date.now() - os.uptime() * 1000;
+}
+
 function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -102,7 +112,8 @@ function* findHolder(lock: string): Generator<Step, Holder | 'foreign' | null, R
     if (names === null) return null;
     if (names === 'ENOTDIR' || !names.every((name) => LOCK_ENTRY.test(name))) return 'foreign';
     const pid = names.includes(PID) ? (yield { kind: 'pid', path: path.join(lock, PID) }) as number : 0;
-    if (pid > 0) return { entry: OWNER, token: null, pid, mtimeMs: 0 };
+    // Its mtime too: one written before this boot is a dead holder's, whoever has the pid now.
+    if (pid > 0) return { entry: OWNER, token: null, pid, mtimeMs: ((yield { kind: 'mtime', path: path.join(lock, PID) }) as number | null) ?? 0 };
     const mtimeMs = (yield { kind: 'mtime', path: lock }) as number | null;
     return mtimeMs === null ? null : { entry: OWNER, token: null, pid: 0, mtimeMs };
   }
@@ -116,7 +127,7 @@ function* findHolder(lock: string): Generator<Step, Holder | 'foreign' | null, R
 }
 
 function isStale(holder: Holder): boolean {
-  if (holder.pid > 0) return !isPidAlive(holder.pid);
+  if (holder.pid > 0) return !isPidAlive(holder.pid) || (holder.token === null && holder.mtimeMs > 0 && holder.mtimeMs < bootTimeMs() - PREBOOT_MARGIN_MS);
   return Date.now() - holder.mtimeMs > STALE_AGE_MS;
 }
 

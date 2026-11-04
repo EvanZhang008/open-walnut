@@ -9,7 +9,8 @@ const { run } = vi.hoisted(() => ({ run: vi.fn() }))
 // spawnSync (`id -P` on macOS under bun), so the isolated-home guard compares against the real entry.
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: run }))
 
-import { daemonReady, forgetRestartMark, runDaemonServiceArgs, runDaemonServiceCli, runDaemonServiceCommand } from '../../src/providers/daemon-service-cli.js'
+import { spawn } from 'node:child_process'
+import { daemonReady, daemonStays, forgetRestartMark, runDaemonServiceArgs, runDaemonServiceCli, runDaemonServiceCommand } from '../../src/providers/daemon-service-cli.js'
 import { RESTART_MARK_NAME } from '../../src/providers/daemon-restart-mark.js'
 import { EventEmitter } from 'node:events'
 
@@ -167,6 +168,29 @@ describe('daemon service readiness over loopback', () => {
   it('retries a stale response until the new process is ready', async () => {
     const runtime = await setup((attempt) => attempt === 1 ? { ...good(), instanceId: 'old-instance' } : good())
     expect(await daemonReady(runtime, process.execPath, 1500)).toBe(true)
+  })
+
+  // 2026-11-04 review: one hello counted, so a daemon that answered and exited read as updated.
+  it('a daemon that answered stays only when its process lives and the same instance still answers', async () => {
+    const runtime = await setup(good)
+    await fs.writeFile(path.join(runtime, 'daemon.pid'), String(process.pid))
+    expect(await daemonStays(runtime, 1200)).toBeNull()
+    // It listened, answered, and exited.
+    const short = spawn('sleep', ['0.3'], { stdio: 'ignore' })
+    await fs.writeFile(path.join(runtime, 'daemon.pid'), String(short.pid))
+    await new Promise((resolve) => short.once('exit', resolve))
+    expect(await daemonStays(runtime, 1200)).toMatch(/did not stay serving for 1 s \(its process exited\)/)
+    // A service manager started another instance in its place.
+    await fs.writeFile(path.join(runtime, 'daemon.pid'), String(process.pid))
+    const swapped = daemonStays(runtime, 1500)
+    await fs.writeFile(path.join(runtime, 'daemon.instance'), 'restarted-instance')
+    expect(await swapped).toMatch(/another instance took the runtime dir/)
+  })
+
+  it('a daemon that no longer answers at the end of the window did not stay', async () => {
+    const runtime = await setup(() => ({ ...good(), instanceId: 'other' }))
+    await fs.writeFile(path.join(runtime, 'daemon.pid'), String(process.pid))
+    expect(await daemonStays(runtime, 300)).toMatch(/it no longer answered/)
   })
 })
 

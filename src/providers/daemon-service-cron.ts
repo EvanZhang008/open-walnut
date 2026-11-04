@@ -232,6 +232,9 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     if (expectedExecutable && after.daemon.executable !== expectedExecutable) {
       return fail('verifyFailed', `the running daemon is ${after.daemon.executable}, not ${expectedExecutable}`)
     }
+    // An update's daemon must stay serving, not only answer once (DaemonServiceDeps.stay).
+    const left = phase === 'update' && deps.stay ? await deps.stay(statusOf(after)) : null
+    if (left) return fail('verifyFailed', left)
     return { ok: true, status: statusOf(after) }
   }
 
@@ -250,7 +253,9 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     } catch (err) {
       rollback = `the rollback did not finish: ${errText(err)}`
     }
-    return { ok: false, failure: { ...result.failure, rollback } }
+    // The old daemon prepared and exited for the new build: what failed after that is the build's
+    // own start (DaemonServiceFailure.stopped), as with systemd and launchd.
+    return { ok: false, failure: { ...result.failure, rollback, ...(updateOnly && undo.updateStarted ? { stopped: true } : {}) } }
   }
 
   async function roll(undo: Undo, updateOnly: boolean): Promise<string> {
@@ -260,7 +265,14 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
       const restarted = await startFromScript()
       if (restarted) return `put the previous boot script back, but ${restarted}`
       const executable = (() => { try { return readDaemonBootExecutable(undo.previous!) } catch { return undefined } })()
-      const back = await confirm('restart', executable)
+      let back = await confirm('restart', executable)
+      // The supervisor gives up after 5 failures in 60 s, and a new daemon that kept failing
+      // used them up: with no supervisor left nothing starts the previous one (2026-11-04).
+      if (!back.ok && !(await deps.supervisor())) {
+        await deps.spawnDetached('/bin/sh', [script])
+        back = await confirm('restart', executable)
+        if (back.ok) return 'put the previous boot script back and started its supervisor again; the previous daemon is responding'
+      }
       return back.ok ? 'put the previous boot script back and the previous daemon is responding'
         : `put the previous boot script back, but the previous daemon did not come back: ${back.failure.message}`
     }
@@ -309,6 +321,9 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     if (!prepared.args.includes(FOREGROUND_ARG)) {
       return fail('invalidArgv', `the service argv must run the daemon in the foreground (${FOREGROUND_ARG}), got ${JSON.stringify(prepared.args)}`)
     }
+    // Before the old daemon is asked to stop: a new one that cannot serve never replaces it.
+    const unproven = await deps.proveBoot?.(prepared)
+    if (unproven) return fail('bootProof', `the new daemon did not start in a trial run, so nothing was changed: ${unproven}`)
     const config: DaemonServiceConfig = {
       platform: 'linux', home: deps.home, executable: prepared.executable, args: prepared.args,
       runtimeDir: deps.runtimeDir, stateDir: deps.stateDir, path: deps.path,

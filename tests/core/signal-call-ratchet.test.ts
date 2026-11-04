@@ -84,6 +84,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI
   'src/providers/host-exec-matcher.ts': 1,         // the wait_for matcher ends its own process once the daemon that started it is gone
+  'src/providers/daemon-boot-proof.ts': 1,         // the trial daemon it spawned detached, its group only while that leader lives
   'src/providers/host-fix-core.ts': 3,             // its own fix-script child (a process.kill wrapper + its two calls)
   'src/providers/local-daemon.ts': 1,              // an ISOLATED daemon it manages (refuses the production dir)
   'src/providers/trigger-check-core.ts': 1,        // its own check-script child's group
@@ -121,6 +122,14 @@ const SESSION_STORE_BUDGET: Record<string, number> = {
 const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // `kill -TERM "$PID"` on the daemon in its own dir, after `ps` proved the pid's command and start time
   'src/providers/daemon-start-cmd.ts': 1,
+  // `kill "$p"` (then -9) on the trial daemon it started itself: `$!` of its own background job, in its throwaway dir, only while it has not exited
+  'src/providers/daemon-trial-cmd.ts': 1,
+  // the update runner's watch: `kill -TERM`/`-KILL "$cp"` on the try it started itself (`$!`) once it ran past
+  // its time, and `kill "$cwp"` on that watch (its own `$!`) when the try is over
+  'src/providers/daemon-net-update-io.ts': 2,
+  // `kill -TERM "$tg_c"` on the cron supervisor's daemon, the pid in its own daemon.pid, proved a child of the
+  // supervisor pid the boot script recorded (t_childof), so the supervisor starts it again from the new script
+  'src/providers/daemon-update-tail.ts': 1,
   // `kill -TERM <pid>` on one dtach terminal master: the pid its own child recorded (else the socket's lsof owner),
   // proved by start time and argv (`<dtach> -A <this socket>`), the start time re-checked in the same script
   'src/web/terminal/dtach-master.ts': 1,

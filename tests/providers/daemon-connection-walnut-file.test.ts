@@ -75,6 +75,9 @@ function setup(routes: Routes) {
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
+    // The staged daemon's trial run and the kept previous daemon (daemon-trial-cmd.ts): it serves, and the files were kept.
+    if (cmd.includes('walnut-trial-ok')) return 'walnut-trial-ok'
+    if (cmd.includes('walnut-previous-kept')) return 'walnut-previous-kept'
     if (cmd.includes('walnut-dir-probe v1')) return ''
     if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed'
     if (cmd.includes('daemon.version')) return routes.remoteVersion ?? ''

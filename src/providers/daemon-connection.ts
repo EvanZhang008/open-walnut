@@ -39,13 +39,21 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
+import { BACK_TRIES_MAX, pendingReplaces } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble } from './session-io.js'
-import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
+import { buildDaemonStartCmd, buildDaemonStopCmd, DAEMON_PID_SH } from './daemon-start-cmd.js'
+import { filesCarryBuild, keepPreviousDaemon, restorePreviousDaemon, restorePreviousOutcome, trialStagedDaemon, type DaemonTrialOpts } from './daemon-trial-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
+import { bootLines } from './daemon-update-shell.js'
+import { parseProbing, probingCheckScript } from './daemon-update-probation.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
+import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
+import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
+import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { setDaemonFileFence } from './daemon-file-fence.js'
@@ -117,6 +125,12 @@ import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
+
+/** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
+function bootOf(said: string): { boot?: number } {
+  const boot = Number(/walnut-boot=(\d+)/.exec(said)?.[1])
+  return boot > 0 ? { boot } : {}
+}
 
 /** host.slice goes gzipped (host-slice-gz-v1), compressed off the event loop. */
 const gzipAsync = promisify(gzip)
@@ -336,6 +350,8 @@ export const SERVICE_PROBE_TIMEOUTS_MS = [10_000, 20_000]
  * turn open) and the check is one small ssh round trip.
  */
 export const UPGRADE_RECHECK_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000]
+/** How long a build that passed its trial and then did not start on the real dir is left alone (a newer build ends it; wall clock, kept across restarts). */
+export const REAL_DIR_BACKOFF_MS = BUILD_BACKOFF_MS
 
 /** A liveness probe whose timer fired late (this loop was held) watches the wire that much more, at most this. */
 const PROBE_EXTRA_MS = 1_000
@@ -438,6 +454,22 @@ function bootStartOff(): boolean {
  * Walnut's, a user unit or the cron boot script (a system unit needs sudo, and
  * two configs are the user's to sort out). Null: leave it alone.
  */
+/** How often one connection revives a host's service that has no daemon running. */
+export const REVIVE_EVERY_MS = 5 * 60_000
+
+/**
+ * The scope a revive runs in: a LaunchAgent or a user unit ('user', the script picks by uname),
+ * the cron supervisor ('cron'); never a system unit, never two kinds at once.
+ */
+export function reviveScopeOf(present: string[]): 'user' | 'cron' | null {
+  const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
+  const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
+  const has = (file: string) => present.includes(file)
+  const userish = has(user) || has(agent)
+  if (has(system) || userish === has(cron)) return null
+  return userish ? 'user' : 'cron'
+}
+
 export function managedUpdateScope(present: string[]): 'user' | 'cron' | null {
   const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
   const has = (file: string) => present.includes(file)
@@ -856,6 +888,8 @@ export class DaemonConnection {
    * Last upgrade attempt (expected version + timestamp). Circuit breaker for
    * shouldUpgradeDaemon: if a just-upgraded daemon still reports a mismatch,
    * the stamping/deploy pipeline is broken and killing it again won't help.
+   * Wall clock, in memory: a restarted server may try once more; a build that did not stay
+   * serving is held a day by _realDirFail, which is kept on disk.
    */
   private _lastUpgradeAttempt: { expected: string, at: number } | null = null
   /** The fold prewarm for the version an upgrade is waiting on (remote-fold-prewarm.ts). */
@@ -922,6 +956,23 @@ export class DaemonConnection {
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
   private static UPGRADE_RETRY_COOLDOWN_MS = 10 * 60_000
+  /**
+   * How long the new daemon started after an update's stop must stay serving on the real dir
+   * before it counts as up (proveStarted), on the wall clock: its probation, with the old one's
+   * files kept to go back to till then. 2026-11-04 review: one answer counted, so a build that
+   * listened and then died left the host to the reconnect, which deployed that same build again;
+   * review 5: 30 s, so one that died at its first session spawn or on a 60 s timer was kept.
+   */
+  private static STAY_MS = 15 * 60_000
+  /** A look at the new daemon that got no answer is asked again this soon. */
+  private static STAY_RETRY_MS = 30_000
+  /**
+   * A new daemon first found gone later than this past its window (the link was down at its end)
+   * may have stayed through it: no verdict on its build (2026-11-04 review 6: it was its failure).
+   */
+  private static STAY_SLACK_MS = 2 * DaemonConnection.STAY_RETRY_MS
+  /** The host's boot time moved more than this (s): it rebooted (a clock set forward moves it too, and reads the same). */
+  private static REBOOT_SLACK_S = 120
   /** Initial reconnect delay after connection loss (doubles each attempt, caps at MAX). */
   private static RECONNECT_DELAY_MS = 2_000
   /** Maximum reconnect delay — retries forever at this interval. */
@@ -997,6 +1048,47 @@ export class DaemonConnection {
   private _staged: { runtime: RemoteRuntime; dir: string; at: number; bunPath: string | null } | null = null
   /** Failed uploads of the new daemon toward one version: their own backoff, which a decision does not reset. */
   private _stageFail: { expected: string; attempt: number } | null = null
+  /** Keeps of the running daemon's files that failed for this build (asked again less and less often). */
+  private _keepFail: { expected: string; attempt: number } | null = null
+  /** Failed trial runs of the staged daemon toward one version (daemon-trial-cmd.ts), backed off the same way. */
+  private _trialFail: { expected: string; attempt: number } | null = null
+  /**
+   * The old daemon's files kept in <dir>/previous/ for this update, and how it ran: started again
+   * when the new one does not start or does not stay serving STAY_MS. Once stopped, also kept on
+   * disk with _replacing (daemon-update-store.ts), so a server restarted in between still has the
+   * way back. No clock ends it (2026-11-04 review: it ran out 10 min after the stop): it goes once
+   * the new daemon stayed serving, or the old one runs again.
+   */
+  private _previous: { dir: string; runtime: RemoteRuntime; bunPath: string | null; at: number; stopped: boolean } | null = null
+  /**
+   * The old daemon stopped for this build (whether or not a copy of it was kept): a start that then
+   * fails is that build's. `started`: the new daemon answered on the real dir (its pid, wall clock),
+   * not yet past STAY_MS; a daemon gone before then is the build's failure too.
+   */
+  private _replacing: { expected: string; dir: string; at: number; started?: { pid: number | null; at: number; boot?: number }; back?: boolean; backTries?: number } | null = null
+  private _stayTimer: ReturnType<typeof setTimeout> | null = null
+  /** An update of this host's own daemon that did not go through, until the host runs that build (at: wall clock, shown only). */
+  /** down: the update's own record says no daemon runs on the host (shown while it is away). */
+  private _updateFailure: { at: number; expected: string; message: string; down?: boolean } | null = null
+  /** When this connection last revived the host's service (reviveRemoteService). Wall clock: a sleep counts as time passed. */
+  private _revivedAt: number | null = null
+  /**
+   * A build that did not stay serving on the host (it passed its trial and did not start on the
+   * real dir, or a managed update stopped the old daemon and its start failed): not tried again
+   * for REAL_DIR_BACKOFF_MS. Kept across restarts (daemon-build-backoff.ts); undefined until read.
+   */
+  private _realDirFail: BuildBackoffEntry | null | undefined = undefined
+  /**
+   * A managed update whose answer did not come in time left its record on the host
+   * (daemon-update-readback.ts): read back and judged on a later check. Kept across restarts;
+   * undefined until read.
+   */
+  private _unreadUpdate: UnreadUpdate | null | undefined = undefined
+  private _unreadReading: Promise<'running' | 'read' | null> | null = null
+  /** This server waits on an update's runner now: its record is this wait's to read, not a read back's. */
+  private _updateWaiting = false
+  /** The kept record of a stop (loadPendingReplace) was looked for. */
+  private _pendingRead = false
   /**
    * The live daemon this connect found was served as it is, whatever its build:
    * an older one is updated in the background once connected (startDeferredUpgrade).
@@ -1156,6 +1248,27 @@ export class DaemonConnection {
    */
   requestDaemonUpdate(gate?: () => void): Promise<NetUpdateState> | null {
     return this.netUpdater?.request(undefined, gate) ?? null
+  }
+
+  /** The build that did not stay serving here: in memory, or first after a restart the kept record. */
+  private async realDirFailure(): Promise<BuildBackoffEntry | null> {
+    if (this._realDirFail === undefined) this._realDirFail = await readBuildBackoff(`ssh:${this.hostKey}`)
+    return this._realDirFail ?? null
+  }
+
+  /** Kept in memory at once; the promise is the disk write (awaited where a record goes after it). */
+  private recordRealDirFail(entry: BuildBackoffEntry): Promise<void> {
+    this._realDirFail = entry
+    return writeBuildBackoff(`ssh:${this.hostKey}`, entry)
+  }
+
+  /** Where this host's daemon update over the link stands, for its status (daemon-net-update-record.ts). */
+  get daemonUpdateView(): DaemonUpdateView | null {
+    const f = this._updateFailure
+    const own = !f ? null
+      : this._connected ? (this._daemonVersion !== f.expected ? { state: 'failed' as const, at: f.at, message: f.message } : null)
+        : f.down ? { state: 'down' as const, at: f.at, message: f.message } : null
+    return this._netUpdaterInstance?.view ?? own
   }
 
   /** No SSH to this host at all: the cloud box, or a machine on the host network. */
@@ -3352,6 +3465,7 @@ export class DaemonConnection {
     this._handoverArmed = false
     this._handoverUntil = 0
     if (this._handoverTimer) { clearTimeout(this._handoverTimer); this._handoverTimer = null }
+    if (this._stayTimer) { clearTimeout(this._stayTimer); this._stayTimer = null }
     this.settleSwap()
     if (this.sshTarget) clearReconnectCause(this.hostKey)
 
@@ -3770,7 +3884,7 @@ export class DaemonConnection {
    * executed); the on-disk binary's `--status` is only asked when that scan
    * gave no readable answer.
    */
-  private async checkDaemonRunning(opts: { strict?: boolean; deferUpgrade?: boolean } = {}): Promise<number | null> {
+  private async checkDaemonRunning(opts: { strict?: boolean; deferUpgrade?: boolean; revived?: boolean } = {}): Promise<number | null> {
     // A connect serves a live daemon as it is and decides its update once connected:
     // the upload never holds the host dark (startDeferredUpgrade).
     const defer = opts.deferUpgrade === true && !this.isReadOnlyRemote
@@ -3821,6 +3935,7 @@ export class DaemonConnection {
           return service.managed ? this.checkDaemonRunning(opts) : null
         }
         this._runtime = status.runtime
+        await this.settleStartedOnLive(status.pid ?? null)
         log.session.info('DaemonConnection: daemon already running', {
           host: this.hostKey, port: status.port, pid: status.pid, runtime: this._runtime, dir: status.dir,
           serviceManaged: service.managed || undefined,
@@ -3892,9 +4007,14 @@ export class DaemonConnection {
       )
     }
     if (service.managed) {
+      // The service's config is there and nothing of it runs (a bootout with no bootstrap after
+      // it, a unit past its start limit): loaded or started the way an update's tail does it,
+      // then looked at once more. 2026-11-04 review: the SSH path only ever refused.
+      const why = opts.revived || binarySshErr || fileSshErr ? null : await this.reviveRemoteService(service)
+      if (why === 'serving') return this.checkDaemonRunning({ ...opts, revived: true })
       throw new DaemonServiceNotReadyError(
         this.hostKey,
-        'no daemon is answering and walnut will not start an unmanaged one alongside the service',
+        `no daemon is answering and walnut will not start an unmanaged one alongside the service${why ? ` (${why})` : ''}`,
         service,
       )
     }
@@ -3985,8 +4105,12 @@ export class DaemonConnection {
       remoteVersion = (markAt === -1 ? head : head.slice(0, markAt)).trim()
       const runningServes = markAt === -1 ? null : parseServes(head.slice(markAt + SERVES_MARK.length))
 
-      // The new build runs: a later build's busy asks start from the first again.
-      if (remoteVersion === expected) { this.clearUpgradeRecheck(); this._busyRefusals = null }
+      // The new build runs: a later build's busy asks start from the first again, and a record
+      // an update left on the host when its answer came late is read and removed.
+      if (remoteVersion === expected) {
+        this.clearUpgradeRecheck(); this._busyRefusals = null
+        if (this._unreadUpdate !== null) void this.readBackUnreadUpdate()
+      }
 
       // No answer about the service: no update now (that needs a stop or a
       // service call), no "run walnut daemon install" either. Ask again later.
@@ -4067,6 +4191,25 @@ export class DaemonConnection {
       // daemon advertises open ACP turns in acp-busy.json; killing it mid-turn
       // writes turn-interrupted:shutdown into live user work. Defer while busy
       // (stale >2min = not busy, so this can never wedge upgrades).
+      // The build that runs is on its probation (it replaced another lately): the kept files of
+      // the one before it are the way back till it passed, and the keep below would put this one
+      // over them. Asked again once the probation is over.
+      await this.loadPendingReplace()
+      const probation = this._replacing
+      if (probation?.started && !probation.back && probation.dir === this._remoteDir && probation.expected === remoteVersion) {
+        const left = DaemonConnection.STAY_MS - (Date.now() - probation.started.at)
+        if (left > 0) {
+          this.postponeUpgrade('the build that runs is on its probation after it replaced another one', expected, remoteVersion, { delayMs: left + 5_000 })
+          return false
+        }
+      }
+      const failedHere = await this.realDirFailure()
+      if (failedHere && buildBackedOff(failedHere, expected)) {
+        log.session.warn('DaemonConnection: this build did not start on the host after its trial; the running daemon keeps serving until a newer build comes', {
+          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', reason: failedHere.reason,
+        })
+        return false
+      }
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
       // A host_exec run ends with the daemon: asked before the upload too, so a 2 h run is not paid an upload a minute.
       if (await this.execRunsOpen(expected, remoteVersion)) return false
@@ -4080,10 +4223,31 @@ export class DaemonConnection {
       // for the walnut file on a slow link), and with none at all when it failed.
       // Only into a dir no OS service owns: the verdict the stop needs comes first.
       const verdict = await this.unmanagedTakeover(takeover)
+      // The files the running daemon was started from, kept before the new ones go over them (daemon-trial-cmd.ts).
+      const was = liveRuntime && liveRuntime !== 'unknown' ? liveRuntime : this._runtime !== 'unknown' ? this._runtime : null
+      // Stamped with the build that runs, and only when the files on disk carry it: an upload
+      // that stopped short leaves the new build there (2026-11-04 review).
+      const kept = !remoteVersion ? 'not-running' as const
+        : was ? await keepPreviousDaemon((c, t) => this.sshExec(c, t), this._remoteDir, remoteVersion, was === 'binary' ? 'binary' : 'script', this.keepsDurable(this._remoteDir))
+          : 'failed' as const
+      this._previous = kept === 'kept' && was ? { dir: this._remoteDir, runtime: was, bunPath: this._bunPath, at: Date.now(), stopped: false } : null
+      // No copy, and no word that there is nothing to copy (an SSH error, the keep's timeout, a
+      // runtime not known): the old daemon is not stopped without its way back (2026-11-04
+      // review). Asked again less and less often. A legacy daemon with no version, or files that
+      // no longer carry the build that runs, have nothing to keep: those go on as before.
+      if (kept === 'failed') {
+        const attempt = this._keepFail?.expected === expected ? this._keepFail.attempt : 0
+        this._keepFail = { expected, attempt: attempt + 1 }
+        this.postponeUpgrade(`the running daemon's files could not be kept to go back to, so it keeps serving${was ? '' : ' (its runtime is not known)'}`, expected, remoteVersion, { attempt })
+        return false
+      }
+      this._keepFail = null
       try {
         await this.stageUpgrade(liveRuntime)
         this._stageFail = null
       } catch (err) {
+        // Part of the new build may be on the disk now: what runs goes back there.
+        await this.restoreUnstopped()
         if (!(err instanceof DaemonStageError)) throw err
         // Every decision above clears the recheck count, so a failed upload keeps its own:
         // a link that kills large transfers is asked again less and less often.
@@ -4095,8 +4259,22 @@ export class DaemonConnection {
       // The upload may have taken minutes: work that started meanwhile still holds the stop.
       if (await this.acpTurnsOpen(expected, remoteVersion) || await this.execRunsOpen(expected, remoteVersion) || await this.holdUpgrade(gate, expected, remoteVersion)) {
         this._staged = null
+        await this.restoreUnstopped()
         return false
       }
+      // The staged build must serve in a trial run before the old daemon stops; one that does
+      // not is taken off the disk again (the kept files back), and the old daemon keeps serving.
+      const unproven = await this.trialStaged()
+      if (unproven) {
+        this._staged = null
+        await this.restoreUnstopped()
+        const attempt = this._trialFail?.expected === expected ? this._trialFail.attempt : 0
+        this._trialFail = { expected, attempt: attempt + 1 }
+        this._updateFailure = { at: Date.now(), expected, message: `the new daemon did not start in a trial run on the host, so the running one keeps serving: ${unproven}` }
+        this.postponeUpgrade(`the new daemon did not start in a trial run, so the running one keeps serving (${unproven.slice(0, 200)})`, expected, remoteVersion, { attempt })
+        return false
+      }
+      this._trialFail = null
       // Mismatch (or legacy daemon that predates daemon.version) → upgrade.
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
@@ -4107,6 +4285,17 @@ export class DaemonConnection {
       // `--start` daemon, never an OS service's.
       this.countForcedTry(expected)
       this.beginHandover()
+      // From the stop on, the staged build is the one to start and the kept files the way
+      // back (deployAndStart), also when the stop is not confirmed: the old daemon may be
+      // on its way out, so nothing is put back under it.
+      // Dated at the stop, not at the keep (wall clock); no clock ends the way back, what runs settles it.
+      if (this._previous) { this._previous.stopped = true; this._previous.at = Date.now() }
+      this._replacing = { expected, dir: this._remoteDir, at: Date.now() }
+      // On disk before the stop: a server restarted before the new daemon starts reads it there.
+      await pendingReplaces.write(`ssh:${this.hostKey}`, {
+        at: this._replacing.at, dir: this._remoteDir, expected,
+        previous: this._previous ? { runtime: this._previous.runtime, bunPath: this._previous.bunPath } : null,
+      })
       try {
         await this.stopUnmanagedDaemon(verdict)
       } catch (err) {
@@ -4117,6 +4306,8 @@ export class DaemonConnection {
       this.noteDaemonReplaced()
       return true
     } catch (error) {
+      // An attempt that ended before the stop: the build that keeps serving goes back on the disk.
+      await this.restoreUnstopped()
       if (isServiceDecisionError(error)) throw error
       // The version read failed: don't block, reuse the existing daemon, and
       // check again later.
@@ -4587,6 +4778,12 @@ export class DaemonConnection {
     if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length) return false
     const scope = managedUpdateScope(takeover.present)
     if (!scope) return false
+    // An earlier update whose answer did not come in time left its record on the host: judged
+    // first, so a build it says did not stay serving is held the day before it is tried again.
+    if ((await this.readBackUnreadUpdate()) === 'running') {
+      this.postponeUpgrade('the previous daemon update is still running on the host', expected, remoteVersion, { steady: true })
+      return 'held'
+    }
     const sinceTry = this._lastUpgradeAttempt?.expected === expected ? Date.now() - this._lastUpgradeAttempt.at : Infinity
     if (sinceTry < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) {
       // A try of this build that did not finish (its daemon never answered as the new build) is
@@ -4595,7 +4792,20 @@ export class DaemonConnection {
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - sinceTry + 5_000 })
       return 'held'
     }
+    // A build that answered ok and then did not stay serving there: a day, not the 10 min cooldown
+    // (2026-11-04 review: each try stopped the daemon and put the previous one back).
+    if (buildBackedOff(await this.realDirFailure(), expected)) return false
     if (!(await this.hasDaemonBinary())) return false
+    // The last update's probation still watches the new daemon there (daemon-update-probation.ts):
+    // its copies are the way back from a build that fails late, and this update's snapshot would
+    // take them. Nothing is uploaded; asked again after its end (2026-11-05 review 6: an update
+    // inside it ended the watch, and the build before it crash looped with no way back).
+    const probing = parseProbing(await this.sshExec(probingCheckScript(scope), 15_000).catch(() => ''))
+    if (probing !== null) {
+      this.postponeUpgrade('the last daemon update\'s probation still watches the new daemon on the host', expected, remoteVersion,
+        probing > 0 ? { delayMs: probing * 1000 + 5_000 } : { steady: true })
+      return 'held'
+    }
     const stageFailed = (error: unknown): 'held' => {
       const attempt = this._stageFail?.expected === expected ? this._stageFail.attempt : 0
       this._stageFail = { expected, attempt: attempt + 1 }
@@ -4610,13 +4820,27 @@ export class DaemonConnection {
       return stageFailed(error)
     }
     let swapping = false
+    // The update's record, on disk from its launch: a server restarted during the update (a deploy)
+    // reads it back before any new attempt (2026-11-04 review 4: it was kept only once a 15 min wait
+    // gave up, so the next server stopped the healthy daemon once more for a build that had failed).
+    const key = `ssh:${this.hostKey}`
+    const ran: { launched: UnreadUpdate | null } = { launched: null }
     try {
       const done = await updateRemoteDaemonService(source, expected, {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
+        detached: {
+          onLaunched: (directory) => {
+            ran.launched = { at: Date.now(), directory, expected }
+            this._updateWaiting = true
+            void unreadUpdates.write(key, ran.launched)
+          },
+        },
       }, scope, {
         // Overdue (daemon-update-behind.ts): the CLI goes over the daemon's own work, in at most a minute.
         overBusy: this.forceable(),
+        // A build that failed holds its day before the staging dir (its record) is removed.
+        onBuildFailed: (error) => this.recordRealDirFail({ expected, at: Date.now(), reason: error.message.slice(0, 300) }),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
@@ -4630,10 +4854,35 @@ export class DaemonConnection {
         },
       })
       if (done === 'held') return 'held'
+      // Answered: the record was read here, and its dir removed.
+      if (ran.launched) void unreadUpdates.write(key, null)
     } catch (error) {
+      this._updateWaiting = false
+      const said = error instanceof Error ? error.message : String(error)
+      // The build's day off is on disk before the record goes: a server killed in between (a
+      // deploy) keeps one of them, never neither (2026-11-04 review 5).
+      if ((error as { buildFailed?: unknown }).buildFailed === true) void this.recordRealDirFail({ expected, at: Date.now(), reason: said.slice(0, 300) })
+      // Answered all the same (a failure it read): nothing is left to read back.
+      const unanswered = (error as { keepStaging?: unknown })?.keepStaging === true
+      if (ran.launched && !unanswered) void unreadUpdates.write(key, null)
       // By name: the class lives in daemon-service-update.ts, which tests replace with a double.
       if (error instanceof Error && error.name === 'DaemonUpdateStageError') return stageFailed(error)
       if (swapping) this.endHandover('the service update failed')
+      // Another update's runner still works on the host (daemon-net-update-io.ts), or a hold:
+      // nothing was changed, asked again in a minute.
+      if (error instanceof Error && error.name === 'NetUpdateHeldError') {
+        this._lastUpgradeAttempt = null
+        this.postponeUpgrade(said, expected, remoteVersion, { steady: true })
+        return 'held'
+      }
+      // Deferred on the host (launchd starting no jobs, a dark wake): nothing changed there,
+      // so no failure; asked again after the cooldown, as the host network's update does.
+      const deferredAt = said.indexOf('update deferred: ')
+      if (deferredAt >= 0) {
+        this._lastUpgradeAttempt = null
+        this.postponeUpgrade(said.slice(deferredAt, deferredAt + 400), expected, remoteVersion, { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
+        return 'held'
+      }
       // The daemon refused before it changed anything (a host_exec run or a relay of its own
       // started after the check): asked again in a minute, not a failure with a cooldown.
       if (daemonBusyRefusal(error)) {
@@ -4650,12 +4899,68 @@ export class DaemonConnection {
             : { attempt: this.forceable() ? Math.min(n - DaemonConnection.BUSY_STEADY_TRIES, 2) : n - DaemonConnection.BUSY_STEADY_TRIES })
         return 'held'
       }
+      // The server stopped waiting (NetUpdateUnansweredError): the record stays on the host, and
+      // what it says is judged on a later check (2026-11-04 review: nobody read it back).
+      const left = error as { keepStaging?: unknown; directory?: unknown }
+      if (left.keepStaging === true && typeof left.directory === 'string') {
+        // Dated at its launch: the runner's time runs from there (readBackUpdate).
+        const kept = ran.launched
+        this._unreadUpdate = kept?.directory === left.directory ? kept : { at: Date.now(), directory: left.directory, expected }
+        void unreadUpdates.write(key, this._unreadUpdate)
+      }
       // A double without the hook never asked: the attempt still counts against the cooldown.
       if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
+      // Shown on the host's status, as the host network's failures are.
+      this._updateFailure = { at: Date.now(), expected, message: said.slice(0, 600), down: (error as { tailOutcome?: unknown }).tailOutcome === 'down' }
       throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)
     }
+    this._updateWaiting = false
     if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
+    this._updateFailure = null
     return true
+  }
+
+  /**
+   * Read back the record a managed update left on the host when its answer did not come in time
+   * (readBackUpdate): 'running' while its runner may still work, 'read' once judged, null when
+   * there is none. A build it says did not stay serving gets the day's hold, as an answer in time
+   * would; an SSH command that failed leaves it for a later check.
+   */
+  private readBackUnreadUpdate(): Promise<'running' | 'read' | null> {
+    this._unreadReading ??= this.readBackUnreadOnce().finally(() => { this._unreadReading = null })
+    return this._unreadReading
+  }
+
+  private async readBackUnreadOnce(): Promise<'running' | 'read' | null> {
+    // This server's own update in flight reads its record itself (a read back would remove its dir).
+    if (this._updateWaiting) return 'running'
+    if (this._unreadUpdate === undefined) this._unreadUpdate = await unreadUpdates.read(`ssh:${this.hostKey}`)
+    const u = this._unreadUpdate
+    if (!u) return null
+    let back: ReadBack
+    try {
+      // A build that failed holds its day before its record is removed from the host.
+      back = await readBackUpdate(sshUpdateHost({ run: (c, t) => this.sshExec(c, t) }, { strict: true }), u, Date.now(), async (read) => {
+        if (!read.applied && read.buildFailed) await this.recordRealDirFail({ expected: u.expected, at: Date.now(), reason: read.message.slice(0, 300) })
+      })
+    } catch { return 'running' }
+    if (back.state === 'running') return 'running'
+    this._unreadUpdate = null
+    const read = (): 'read' => { void unreadUpdates.write(`ssh:${this.hostKey}`, null); return 'read' }
+    const fields = { host: this.hostKey, expected: u.expected, startedAt: u.at }
+    if (back.state === 'none') {
+      log.session.warn('DaemonConnection: managed daemon update left no record on the host (it may have restarted)', { ...fields, scriptLeft: back.scriptLeft })
+      return read()
+    }
+    if (back.applied) {
+      log.session.info('DaemonConnection: managed daemon update read back after the wait ended: it went through', fields)
+      if (this._updateFailure?.expected === u.expected) this._updateFailure = null
+      return read()
+    }
+    log.session.error('DaemonConnection: managed daemon update did not go through (read back after the wait ended)', { ...fields, error: back.message.slice(0, 600), buildFailed: back.buildFailed })
+    this._updateFailure = { at: u.at, expected: u.expected, message: back.message.slice(0, 600), down: back.record.tail?.outcome === 'down' }
+    // Its hold was written before the host's record went (readBackUpdate's `decided`), and so before this one goes.
+    return read()
   }
 
   /**
@@ -4805,6 +5110,11 @@ export class DaemonConnection {
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
       this._taskDirRoot = typeof res.taskDirRoot === 'string' && res.taskDirRoot.startsWith('/') ? res.taskDirRoot : null
       this._daemonVersion = typeof res.version === 'string' && res.version.length <= 64 ? res.version : null
+      // A daemon answers: a failed update's "no daemon runs there" is over (2026-11-04 review: it
+      // read 'down' again at the next ordinary disconnect, days after a revive), and the build it
+      // wanted serving ends the failure.
+      const failed = this._updateFailure
+      if (failed) this._updateFailure = this._daemonVersion === failed.expected ? null : { ...failed, down: false }
       const served = res.served as { twin?: unknown; walnuts?: unknown } | undefined
       this._daemonServes = served && typeof served === 'object'
         ? parseServes({ version: this._daemonVersion ?? '', twin: served.twin, capabilities: caps, walnuts: served.walnuts })
@@ -5108,12 +5418,460 @@ export class DaemonConnection {
   }
 
   /**
+   * Deploy and start the new daemon (deployAndStartNew); after an update's stop, a new daemon
+   * that does not start, or that answered and is gone before it stayed serving STAY_MS, is
+   * followed by the one it replaced (its kept files), and the build waits a day.
+   */
+  private async deployAndStart(): Promise<number> {
+    await this.loadPendingReplace()
+    let previous = this._previous?.stopped && this._previous.dir === this._remoteDir ? this._previous : null
+    let replacing = this._replacing?.dir === this._remoteDir ? this._replacing : null
+    // The new build failed after the stop and the old one has not run again yet (its restore or its
+    // start failed): that again, never the new build (2026-11-04 review 4: the record was dropped
+    // first, so one failed restore made the next connect deploy the build that had just failed).
+    if (replacing?.back) {
+      try {
+        return await this.startPreviousAfterFail(previous, replacing, new Error(`the new daemon (${replacing.expected}) did not come to serve after the old one stopped`))
+      } catch (err) {
+        const expected = this.getExpectedDaemonVersion()
+        // Every failed try of the way back is counted where it failed, the first one too (2026-11-04
+        // review 6: that one was not, so the host waited for a third).
+        const tries = replacing.backTries ?? 0
+        const noCopy = (err as { noCopy?: unknown } | null)?.noCopy === true
+        if (expected && buildBackedOff(await this.realDirFailure(), expected) && !noCopy && tries < BACK_TRIES_MAX) throw err
+        // That build is not held any more (a newer one came, or its day passed), or the way back has
+        // no copy to put back or failed BACK_TRIES_MAX times: the host needs a daemon, so the build
+        // there is started, watched. 2026-11-04 review 5: a way back that kept failing left the host
+        // with none for the build's whole day off.
+        if (expected && (noCopy || tries >= BACK_TRIES_MAX)) {
+          log.session.error('DaemonConnection: the daemon an update replaced cannot be started again; starting the build there, watched', {
+            host: this.hostKey, expected, tries, noCopy, reason: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+          })
+        }
+        this.forgetReplace()
+        previous = replacing = null
+      }
+    }
+    // The new build answered on the real dir and no daemon runs now. Found only well past its window,
+    // or after a reboot of the host: when it went, or why, is not known, so it is neither the build's
+    // failure nor its pass (2026-11-04 review 6). It starts again and is watched anew, the old one's
+    // files still the way back (review 7: dropping the record started a build that kept dying
+    // unwatched, every connect, and the old one never again).
+    if (replacing?.started) {
+      const since = Date.now() - replacing.started.at
+      const late = since > DaemonConnection.STAY_MS + DaemonConnection.STAY_SLACK_MS
+      if (late || await this.rebootedSince(replacing.started.boot)) {
+        log.session.warn(late
+          ? 'DaemonConnection: the new daemon was found gone only past its probation; it starts again, watched anew'
+          : 'DaemonConnection: the host rebooted inside the new daemon\'s probation; it starts again, watched anew', { host: this.hostKey, expected: replacing.expected, sinceMs: since })
+        delete replacing.started
+        await this.keepReplace()
+      }
+    }
+    if (!replacing) {
+      const port = await this.startHeldBack()
+      if (port !== null) return port
+    }
+    // The new build answered on the real dir after the stop, and no daemon runs before it stayed
+    // serving: the build's failure, not a reason to deploy it once more.
+    if (replacing?.started) {
+      const lived = Math.max(0, Math.round((Date.now() - replacing.started.at) / 1000))
+      return this.startPreviousAfterFail(previous, replacing, new Error(`the new daemon stopped within ${lived} s after it started on the real dir`))
+    }
+    // The build deployed now is this server's: a deploy since the stop's record (a late or a rebooted
+    // one, or one never started) brought a newer one, whose start and failure are its own, never held
+    // as the build the record was made for (2026-11-05 review 6).
+    const deployed = this.getExpectedDaemonVersion()
+    if (replacing && deployed && replacing.expected !== deployed) {
+      log.session.info('DaemonConnection: the build an update stopped the old daemon for is not this server\'s; the build deployed now is watched under its own name', { host: this.hostKey, recorded: replacing.expected, deployed })
+      replacing.expected = deployed
+      await this.keepReplace()
+    }
+    let port: number
+    try {
+      port = await this.deployAndStartNew()
+    } catch (err) {
+      return this.startPreviousAfterFail(previous, replacing, err)
+    }
+    if (replacing) await this.startedAfterStop(replacing)
+    else {
+      this._previous = null
+      await this.watchHeldBuildStart()
+    }
+    return port
+  }
+
+  /**
+   * The build held here started all the same (no daemon ran, and the one that ran before did not
+   * start or was not kept): its stay is watched like a replacement's, so one gone within STAY_MS
+   * renews its day off and says so on the host's status (2026-11-04 review 4: it was not watched).
+   * Nothing to go back to: the one that ran before just did not start.
+   */
+  private async watchHeldBuildStart(): Promise<void> {
+    const expected = this.getExpectedDaemonVersion()
+    if (!expected || !buildBackedOff(await this.realDirFailure(), expected)) return
+    log.session.warn('DaemonConnection: no daemon ran and the one that ran before did not start; started the build held here, watched', { host: this.hostKey, expected })
+    this._replacing = { expected, dir: this._remoteDir, at: Date.now() }
+    await this.startedAfterStop(this._replacing)
+  }
+
+  /**
+   * After an update's stop, the new daemon did not start or did not stay: the old one again from
+   * its kept files, and the build is not tried again until a newer one comes or a day passed
+   * (2026-11-04 review: every recheck stopped the old daemon for it once more). The stop's record
+   * goes with this: the old one runs again, or there is nothing to go back to.
+   */
+  private async startPreviousAfterFail(
+    previous: { dir: string; runtime: RemoteRuntime; bunPath: string | null } | null,
+    replacing: { expected: string; back?: boolean; backTries?: number } | null, err: unknown,
+  ): Promise<number> {
+    const reason = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300)
+    // A try of the way back that failed, counted on the record (deployAndStart gives up at BACK_TRIES_MAX).
+    const failedBack = async () => {
+      if (!this._replacing || this._replacing !== replacing) return
+      this._replacing.backTries = (this._replacing.backTries ?? 0) + 1
+      await this.keepReplace()
+    }
+    if (!previous) {
+      // No copy of the old one was kept (its files did not carry the build that ran): the host
+      // has no daemon, and says so; that build waits a day like any that did not start there
+      // (2026-11-04 review: this failure was recorded only when a copy had been kept).
+      if (replacing) {
+        const failed = await this.realDirFailure()
+        // Only a hold that still holds: one past its day says nothing of how the host runs now.
+        const same = failed && buildBackedOff(failed, replacing.expected) ? failed : null
+        // A retry of the way back keeps the build's first failure (its day off runs from there).
+        const first = replacing.back ? same : null
+        // How the build that ran before was started stays with the hold (2026-11-04 review 5: a
+        // start of the held build that died, watchHeldBuildStart, dropped it, and every connect
+        // after deployed the held build again instead of starting the one that ran before).
+        void this.recordRealDirFail({ expected: replacing.expected, at: first?.at ?? Date.now(), reason: first?.reason ?? reason, ...(same?.previous ? { previous: same.previous } : {}) })
+        this.forgetReplace()
+        if (same?.previous) {
+          const port = await this.startHeldBack()
+          if (port !== null) {
+            this._updateFailure = { at: Date.now(), expected: replacing.expected, message: `the build held here was started when the one that ran before did not start, and it did not stay serving, so the one that ran before was started again: ${reason}` }
+            return port
+          }
+          this._updateFailure = { at: Date.now(), expected: replacing.expected, message: `the build held here was started when the one that ran before did not start, and it did not stay serving; the one that ran before did not start again either: ${reason}`, down: true }
+          throw err
+        }
+        this._updateFailure = { at: Date.now(), expected: replacing.expected, message: `the new daemon did not start after the old one stopped, and no copy of the old one was kept to start again: ${reason}`, down: true }
+      }
+      throw err
+    }
+    const expected = replacing?.expected ?? this.getExpectedDaemonVersion()
+    const record = (message: string) => { if (expected) this._updateFailure = { at: Date.now(), expected, message } }
+    // The build's day off, from its first failure (a retry of the way back neither moves it nor
+    // takes its words); then the stop's record is marked: until the old one runs, every connect
+    // goes straight back to it (deployAndStart), never the new build again.
+    const failed = expected ? await this.realDirFailure() : null
+    const first = failed?.expected === expected && replacing?.back ? failed : null
+    if (expected) void this.recordRealDirFail({ expected, at: first?.at ?? Date.now(), reason: first?.reason ?? reason })
+    const why = first?.reason ?? reason
+    if (this._replacing && this._replacing === replacing && !this._replacing.back) {
+      this._replacing.back = true
+      // Its stay is no question any more: it did not come to serve.
+      if (this._stayTimer) { clearTimeout(this._stayTimer); this._stayTimer = null }
+      await this.keepReplace()
+    }
+    log.session.error('DaemonConnection: the new daemon did not start or did not stay serving; starting the one it replaced again', { host: this.hostKey, runtime: previous.runtime, reason: why, retry: !!first })
+    const restored = await restorePreviousOutcome((c, t) => this.sshExec(c, t), previous.dir, expected ?? undefined, this.keepsDurable(previous.dir))
+    if (restored !== 'restored') {
+      record(restored === 'none'
+        ? `the new daemon did not start after the old one stopped, and no copy of the old one's files is there to put back: ${why}`
+        : `the new daemon did not start after the old one stopped, and the old one's files could not be put back: ${why}`)
+      await failedBack()
+      // No copy: no later connect finds one either (deployAndStart starts the build there instead).
+      throw err instanceof Error ? Object.assign(err, { noCopy: restored === 'none' }) : Object.assign(new Error(String(err)), { noCopy: restored === 'none' })
+    }
+    this._bunPath = previous.runtime === 'bun' ? previous.bunPath : null
+    this._deployedViaSource = previous.runtime !== 'binary'
+    let port: number
+    try {
+      port = await this.startDaemon(previous.runtime)
+    } catch (again) {
+      record(`the new daemon did not start after the old one stopped, and the old one did not start again either: ${why}; then ${(again instanceof Error ? again.message : String(again)).split('\n')[0].slice(0, 200)}`)
+      await failedBack()
+      throw again
+    }
+    // The old one runs: the stop's record is settled.
+    this.forgetReplace()
+    this._runtime = previous.runtime
+    record(`the new daemon did not start after the old one stopped, so the old one was started again: ${why}`)
+    // How it runs, kept with the build's day off: a daemon that dies within it is started again as it is.
+    if (expected) void this.recordRealDirFail({ expected, at: this._realDirFail?.at ?? Date.now(), reason: why, previous: { runtime: previous.runtime, bunPath: previous.bunPath } })
+    return port
+  }
+
+  /** The stop's record is settled (the new daemon stayed, or the old one runs again): in memory and on disk. */
+  private forgetReplace(): void {
+    this._previous = null
+    this._replacing = null
+    if (this._stayTimer) { clearTimeout(this._stayTimer); this._stayTimer = null }
+    void pendingReplaces.write(`ssh:${this.hostKey}`, null)
+  }
+
+  /** Keep the stop's record on disk as it stands now (a server restarted meanwhile reads it). */
+  private keepReplace(): Promise<void> {
+    const r = this._replacing
+    if (!r) return Promise.resolve()
+    const p = this._previous?.stopped ? this._previous : null
+    return pendingReplaces.write(`ssh:${this.hostKey}`, {
+      at: r.at, dir: r.dir, expected: r.expected,
+      previous: p ? { runtime: p.runtime, bunPath: p.bunPath } : null,
+      ...(r.started ? { started: r.started } : {}),
+      ...(r.back ? { back: true } : {}),
+      ...(r.backTries ? { backTries: r.backTries } : {}),
+    })
+  }
+
+  /** The new daemon answers on the real dir after the stop: started, proven once it stays STAY_MS (proveStarted). */
+  private async startedAfterStop(replacing: NonNullable<DaemonConnection['_replacing']>): Promise<void> {
+    // Its pid, and the host's boot time: a reboot inside the window is no failure (rebootedSince).
+    const said = await this.sshExec([`cat ${shq(`${replacing.dir}/daemon.pid`)} 2>/dev/null || true`, ...bootLines(), 'printf \'\\nwalnut-boot=%s\\n\' "$(t_boot)"'].join('\n'), 5_000).catch(() => '')
+    const first = said.split('\n')[0].trim()
+    const pid = /^\d+$/.test(first) ? Number(first) : null
+    replacing.started = { pid, at: Date.now(), ...bootOf(said) }
+    await this.keepReplace()
+    this.scheduleStayCheck(DaemonConnection.STAY_MS)
+  }
+
+  /** The host's boot time (epoch s), as `{ boot }` to spread into a `started` record; {} when not read. */
+  private async hostBoot(): Promise<{ boot?: number }> {
+    return bootOf(await this.sshExec([...bootLines(), 'echo "walnut-boot=$(t_boot)"'].join('\n'), 5_000).catch(() => ''))
+  }
+
+  /** The host booted again since `boot` (its boot time then; unknown: no). */
+  private async rebootedSince(boot: number | undefined): Promise<boolean> {
+    if (!boot) return false
+    const now = (await this.hostBoot()).boot
+    return now !== undefined && now > boot + DaemonConnection.REBOOT_SLACK_S
+  }
+
+  private scheduleStayCheck(ms: number, tries = 0): void {
+    if (this._destroyed) return
+    if (this._stayTimer) clearTimeout(this._stayTimer)
+    this._stayTimer = setTimeout(() => { this._stayTimer = null; void this.proveStarted(tries) }, Math.max(0, ms))
+    this._stayTimer.unref?.()
+  }
+
+  /**
+   * STAY_MS after the new daemon answered: is it still the daemon of the real dir? Yes: it is up,
+   * and the way back is no longer needed. Gone: the record stays, and the reconnect that follows
+   * (its link dropped with it) starts the old one again (deployAndStart). Another daemon in its
+   * place: the build's did not stay either. No answer: asked again a few times.
+   */
+  private async proveStarted(tries: number): Promise<void> {
+    const r = this._replacing
+    // Not connected: the link dropped (with the daemon, or not); the reconnect settles the record
+    // (deployAndStart when no daemon runs, settleStartedOnLive when one does).
+    if (!r?.started || r.back || r.dir !== this._remoteDir || this._destroyed || !this._connected) return
+    const left = DaemonConnection.STAY_MS - (Date.now() - r.started.at)
+    if (left > 0) return this.scheduleStayCheck(left, tries)
+    const pidFile = shq(`${r.dir}/daemon.pid`)
+    let said: string
+    try {
+      said = await this.sshExec([
+        ...DAEMON_PID_SH,
+        `p=$(cat ${pidFile} 2>/dev/null)`,
+        'case "$p" in ""|*[!0-9]*) p=;; esac',
+        `if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && w_daemon "$p" ${shq(r.dir)}; then echo "walnut-live=$p"; else echo walnut-live=none; fi`,
+      ].join('\n'), 10_000)
+    } catch {
+      if (tries < 5) this.scheduleStayCheck(DaemonConnection.STAY_RETRY_MS, tries + 1)
+      return
+    }
+    const m = /walnut-live=(\d+|none)/.exec(said)
+    if (!m) { if (tries < 5) this.scheduleStayCheck(DaemonConnection.STAY_RETRY_MS, tries + 1); return }
+    if (this._replacing !== r) return
+    if (m[1] === 'none') {
+      log.session.warn('DaemonConnection: the new daemon did not stay serving after the update; the reconnect starts the one it replaced', { host: this.hostKey, expected: r.expected, pid: r.started.pid })
+      return
+    }
+    await this.settleLive(r, Number(m[1]))
+  }
+
+  /** A live daemon `pid` in the dir past the stay window: the one started for the build (up), or another in its place. */
+  private async settleLive(r: NonNullable<DaemonConnection['_replacing']>, pid: number | null): Promise<void> {
+    const other = pid !== null && r.started?.pid != null && pid !== r.started.pid
+    if (other) {
+      // Ours is gone and another daemon serves: the build did not stay, the one serving is left as it is.
+      const reason = `the new daemon (pid ${r.started!.pid}) was gone within ${Math.round(DaemonConnection.STAY_MS / 1000)} s, and another daemon (pid ${pid}) serves there`
+      // How the build that ran before was started stays with the hold while that hold holds (review
+      // 5); read from disk, as a server started since knows it from there only.
+      const failed = await this.realDirFailure()
+      const held = failed && buildBackedOff(failed, r.expected) ? failed.previous : undefined
+      void this.recordRealDirFail({ expected: r.expected, at: Date.now(), reason, ...(held ? { previous: held } : {}) })
+      log.session.warn('DaemonConnection: the new daemon did not stay serving after the update; another one serves there', { host: this.hostKey, expected: r.expected, reason })
+    } else {
+      log.session.info('DaemonConnection: the new daemon stayed serving after the update', { host: this.hostKey, expected: r.expected, pid })
+    }
+    this.forgetReplace()
+  }
+
+  /**
+   * The live scan found a daemon in the dir while a stop's record waits: past the stay window it
+   * settles it; a daemon nobody saw start (a server that started it did not live to prove it)
+   * starts its window now.
+   */
+  private async settleStartedOnLive(pid: number | null): Promise<void> {
+    await this.loadPendingReplace()
+    const r = this._replacing
+    if (!r || r.dir !== this._remoteDir) return
+    if (r.back) {
+      // The held build itself came up after all (it answered after the wait for it gave up): no way
+      // back yet, its stay is watched like any start of it (2026-11-04 review 5: it was taken for
+      // the old one, and its runtime kept as the way back).
+      // Its version file only once written after its pid file: a daemon writes it last, and one that
+      // crashed leaves its own behind for the next to start under it.
+      const pidFile = shq(`${r.dir}/daemon.pid`), versionFile = shq(`${r.dir}/daemon.version`)
+      const running = (await this.sshExec(`if [ -f ${versionFile} ] && ! [ ${pidFile} -nt ${versionFile} ]; then cat ${versionFile}; fi 2>/dev/null || true`, 5_000).catch(() => '')).trim()
+      if (running === r.expected) {
+        log.session.warn('DaemonConnection: the new daemon an update gave up on came to serve after all; watching it stay', { host: this.hostKey, expected: r.expected, pid })
+        delete r.back
+        r.started = { pid, at: Date.now(), ...await this.hostBoot() }
+        await this.keepReplace()
+        this.scheduleStayCheck(DaemonConnection.STAY_MS)
+        return
+      }
+      // Marked to go back, and a daemon runs there: the old one came back (its start's answer was
+      // lost, or someone started it). How it runs goes with the build's day off, as a start here does.
+      log.session.info('DaemonConnection: the daemon an update replaced runs again', { host: this.hostKey, expected: r.expected, pid })
+      const failed = await this.realDirFailure()
+      const p = this._previous
+      if (p && failed?.expected === r.expected && !failed.previous) void this.recordRealDirFail({ ...failed, previous: { runtime: p.runtime, bunPath: p.bunPath } })
+      this.forgetReplace()
+      return
+    }
+    const other = pid !== null && r.started?.pid != null && pid !== r.started.pid
+    if (!r.started) {
+      r.started = { pid, at: Date.now(), ...await this.hostBoot() }
+      await this.keepReplace()
+    } else if (other && await this.rebootedSince(r.started.boot)) {
+      // Another daemon there after a reboot of the host: the one the reboot ended was no failure
+      // (2026-11-04 review 7); this one is watched for a window of its own.
+      log.session.warn('DaemonConnection: the host rebooted inside the new daemon\'s probation; watching the daemon there now', { host: this.hostKey, expected: r.expected, pid })
+      r.started = { pid, at: Date.now(), ...await this.hostBoot() }
+      await this.keepReplace()
+    } else if (Date.now() - r.started.at >= DaemonConnection.STAY_MS || other) {
+      return await this.settleLive(r, pid)
+    }
+    this.scheduleStayCheck(DaemonConnection.STAY_MS - (Date.now() - r.started.at))
+  }
+
+  /**
+   * The service's revive over SSH (local-daemon-service.ts reviveServiceOn), at most once per
+   * REVIVE_EVERY_MS: 'serving' when a daemon answers now, else what it found (null: not tried).
+   */
+  private async reviveRemoteService(service: RemoteServiceTakeover): Promise<string | null> {
+    if (this.isReadOnlyRemote || IS_EPHEMERAL || this.noSsh || service.unknown.length) return null
+    const scope = reviveScopeOf(service.present)
+    if (!scope) return null
+    if (this._revivedAt !== null && Date.now() - this._revivedAt < REVIVE_EVERY_MS) return null
+    this._revivedAt = Date.now()
+    const answer = await reviveServiceOn((command, timeoutMs) => this.sshExec(command, timeoutMs), scope)
+    log.session.warn('DaemonConnection: the service on the host had no daemon running; revived it the way an update tail does', {
+      host: this.hostKey, scope, outcome: answer === 'updating' ? 'updating' : answer.outcome, words: answer === 'updating' ? undefined : answer.words,
+    })
+    if (reviveServes(answer)) return 'serving'
+    return answer === 'updating' ? "a daemon update's runner is still at work on the host" : answer.words
+  }
+
+  /**
+   * No daemon runs while this build has its day off here after it did not start and the old
+   * one was started again: that old one, from the files the rollback put back, not this build
+   * again. 2026-11-04 review (this machine's twin, local-daemon.ts refusedBuildFallback): the
+   * hold kept only a live daemon from being replaced, so once it died the next connect
+   * deployed the build that had just failed, and the host was left with none. null: not
+   * held, or the old one did not start (the build is deployed as before).
+   */
+  private async startHeldBack(): Promise<number | null> {
+    const expected = this.getExpectedDaemonVersion()
+    const failed = await this.realDirFailure()
+    const runtime = failed?.previous?.runtime
+    if (!expected || !failed || !buildBackedOff(failed, expected) || (runtime !== 'bun' && runtime !== 'binary' && runtime !== 'node')) return null
+    if (runtime === 'bun' && !failed.previous?.bunPath) return null
+    // Its files back from the kept copy first (never one of the held build): a reboot empties a
+    // daemon dir in /tmp (2026-11-04 review 4: the start then failed, and the held build was deployed).
+    const exec = (c: string, t?: number) => this.sshExec(c, t)
+    const restored = await restorePreviousDaemon(exec, this._remoteDir, expected, this.keepsDurable(this._remoteDir)).catch(() => false)
+    // Nothing put back, and the files there are the held build's (a start of it deployed them):
+    // starting them would start the held build unwatched, as if it were the one before (review 5).
+    if (!restored && await filesCarryBuild(exec, this._remoteDir, expected, runtime === 'binary' ? 'binary' : 'script')) {
+      log.session.warn('DaemonConnection: no copy of the daemon that ran before to start, and the files there are the build held here', { host: this.hostKey, expected, runtime })
+      return null
+    }
+    const before = { bunPath: this._bunPath, viaSource: this._deployedViaSource }
+    this._bunPath = runtime === 'bun' ? failed.previous!.bunPath : null
+    this._deployedViaSource = runtime !== 'binary'
+    try {
+      const port = await this.startDaemon(runtime)
+      this._runtime = runtime
+      log.session.warn('DaemonConnection: no daemon ran and this build is held here; started the one that ran before', { host: this.hostKey, expected, runtime, why: failed.reason })
+      return port
+    } catch (err) {
+      this._bunPath = before.bunPath
+      this._deployedViaSource = before.viaSource
+      log.session.warn('DaemonConnection: the daemon that ran before did not start; deploying this build', { host: this.hostKey, expected, runtime, error: (err instanceof Error ? err.message : String(err)).slice(0, 300) })
+      return null
+    }
+  }
+
+  /**
+   * A stop this connection does not know of (a server restarted after it) read back from disk,
+   * once per connection object and only when it knows of none itself (daemon-update-store.ts).
+   */
+  private async loadPendingReplace(): Promise<void> {
+    if (this._pendingRead) return
+    this._pendingRead = true
+    if (this._replacing || this._previous?.stopped) return
+    const kept = await pendingReplaces.read(`ssh:${this.hostKey}`)
+    // One past its time (a host away for longer) is gone: the host is started as a new one.
+    if (!kept || !pendingReplaces.fresh(kept)) return
+    const runtime = kept.previous?.runtime
+    this._replacing = {
+      expected: kept.expected, dir: kept.dir, at: kept.at, ...(kept.started ? { started: kept.started } : {}), ...(kept.back ? { back: true } : {}),
+      ...(kept.backTries ? { backTries: kept.backTries } : {}),
+    }
+    this._previous = kept.previous && (runtime === 'bun' || runtime === 'binary' || runtime === 'node')
+      ? { dir: kept.dir, runtime, bunPath: kept.previous.bunPath, at: kept.at, stopped: true } : null
+  }
+
+  /** The kept files back on the disk, while the daemon they belong to was never stopped; then forget them. */
+  private async restoreUnstopped(): Promise<void> {
+    const kept = this._previous
+    if (!kept || kept.stopped) return
+    this._previous = null
+    await restorePreviousDaemon((c, t) => this.sshExec(c, t), kept.dir, undefined, this.keepsDurable(kept.dir)).catch(() => false)
+  }
+
+  /**
+   * A production daemon dir keeps the copy of its old daemon where a reboot leaves it; an
+   * isolated one (a replica check's) beside its files, gone with it (2026-11-04 review 5: never
+   * one copy per throwaway dir left in the host's home).
+   */
+  private keepsDurable(dir: string): boolean {
+    return dir === PROD_REMOTE_DAEMON_DIR || productionDaemonDirs(dir, this._remoteHome).length > 1
+  }
+
+  /** The staged build in a trial run on the host (daemon-trial-cmd.ts): null when it served, else why not. */
+  private async trialStaged(): Promise<string | null> {
+    const staged = this._staged
+    if (!staged) return 'nothing was staged'
+    const opts: DaemonTrialOpts = staged.runtime === 'bun' && staged.bunPath ? { runtime: 'bun', execPath: staged.bunPath, dir: staged.dir }
+      : staged.runtime === 'binary' ? { runtime: 'binary', execPath: await this.getRemoteDaemonPath(), dir: staged.dir }
+        : { runtime: 'node', dir: staged.dir, preamble: userShellPathScript(buildRemotePreamble(this.ssh.shell_setup)) }
+    return trialStagedDaemon((c, t) => this.sshExec(c, t), opts)
+  }
+
+  /**
    * Deploy, then start; when the start fails in a runtime-shaped way (exec
    * format, illegal instruction, GLIBC, a runtime killed by a signal), move
    * along bun → binary → node inside THIS connect. Each runtime is tried at most
    * once, so there is exactly one fallback chain per connect and no loop.
    */
-  private async deployAndStart(): Promise<number> {
+  private async deployAndStartNew(): Promise<number> {
     let runtime = this.takeStaged() ?? await this.deployDaemon()
     // A runtime that already died at start here is never tried again (node,
     // the cheap last resort, always stays eligible).
@@ -8668,6 +9426,8 @@ export interface DaemonConnectState {
   handover?: true
   /** When the link dropped by itself in the last hour (epoch ms, oldest first; daemon-link-drops.ts). */
   drops?: number[]
+  /** A host network machine's daemon update: under way with the link down, not back, or failed. */
+  daemonUpdate?: DaemonUpdateView
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -8697,6 +9457,8 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   foldReconnectCause(state, conn, failure)
   const drops = recentLinkDrops(hostKey, now)
   if (drops) state.drops = drops
+  const update = conn?.daemonUpdateView
+  if (update) state.daemonUpdate = update
   if (conn?.handoverPending) return handoverState(state)
   return state
 }

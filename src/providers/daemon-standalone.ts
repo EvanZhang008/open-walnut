@@ -548,6 +548,27 @@ function isolatedOwnRoot(): string | null {
   const root = path.dirname(path.resolve(DAEMON_DIR))
   return root === '/tmp/open-walnut-test-' + ISOLATED_FOR || root.endsWith('/.cache/open-walnut-test/' + ISOLATED_FOR) ? root : null
 }
+// A trial run's hard lifetime (daemon-boot-proof.ts, daemon-trial-cmd.ts): it exits by itself
+// after its proof window, so a trial whose prover died (the CLI, the server, the SSH session)
+// never stays for good; a --service trial has no parent watchdog (2026-11-04 review). Unset:
+// no limit, as for every real daemon. Mirror daemon-source.ts.
+const TRIAL_LIFETIME_MS = (() => {
+  const seconds = parseInt(process.env.WALNUT_DAEMON_LIFETIME_SECONDS || '', 10)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0
+})()
+// Armed at load, not once startup is done: a trial that hangs on its way up ends too (2026-11-04
+// review). It is asked to stop the normal way; a stop that hangs, or a daemon not that far yet,
+// exits 15 s later at the latest.
+if (TRIAL_LIFETIME_MS && (process.argv[2] === '--start' || process.argv[2] === '--service')) {
+  setTimeout(() => {
+    try { logMsg('warn', 'trial lifetime reached; exiting', { lifetimeMs: TRIAL_LIFETIME_MS }) } catch { /* no logger yet */ }
+    setTimeout(() => process.exit(1), 15_000).unref()
+    let shutdown: (() => void) | null = null
+    try { shutdown = requestDaemonShutdown } catch { /* not declared yet */ }
+    if (shutdown) shutdown()
+    else process.exit(1)
+  }, TRIAL_LIFETIME_MS).unref()
+}
 
 function ensureOwnerOnlyStorage(): void {
   const repair = (entryPath: string): void => {
@@ -13748,9 +13769,35 @@ if (action === '--start' || SERVICE_MODE) {
   delete process.env.WALNUT_TERMINAL_SESSION_ID
   // Build directories are retired while detached daemons are still running.
   process.chdir(DAEMON_DIR)
-  const lock = await acquireDaemonInstanceLock({
+  const acquire = () => acquireDaemonInstanceLock({
     runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
   })
+  let lock = await acquire()
+  // A stand-in an update's tail started outside launchd (daemon-update-standin.ts, its pid in
+  // daemon.standin) holds the dir: launchd's own daemon waits for the handback instead of
+  // exiting. Exiting made KeepAlive start the job again every 5 s, and a job that never stays
+  // up reads as inactive, so every later update was refused (2026-11-04 review). The handback
+  // ends the stand-in; this daemon then takes the dir and adopts its sessions. Keep in sync
+  // with daemon-source.ts.
+  // A daemon.standin left by a stand-in that was killed (a SIGKILL, a power loss) may name a pid
+  // another daemon of this dir has now: a stand-in runs the service's own program, `--service`
+  // in its command line (2026-11-04 review). Where the command line cannot be read, the file decides.
+  const standInHolds = (pid: number): boolean => {
+    try { if (Number(fs.readFileSync(path.join(DAEMON_DIR, 'daemon.standin'), 'utf8').trim()) !== pid) return false } catch { return false }
+    let args = ''
+    try {
+      args = fs.existsSync(`/proc/${pid}/cmdline`) ? fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ')
+        : execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch { /* cannot tell */ }
+    return !args.trim() || args.split(/\s+/).includes('--service')
+  }
+  if (SERVICE_MODE && lock.kind === 'existing' && standInHolds(lock.owner.pid)) {
+    logMsg('info', 'a stand-in daemon serves this dir; waiting for its handback', { pid: lock.owner.pid })
+    while (lock.kind === 'existing' && standInHolds(lock.owner.pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      lock = await acquire()
+    }
+  }
   if (lock.kind === 'existing') {
     if (SERVICE_MODE || lock.owner.wsPort === null) throw new Error('An existing daemon owns this runtime directory; service handover is required')
     console.log(lock.owner.wsPort)

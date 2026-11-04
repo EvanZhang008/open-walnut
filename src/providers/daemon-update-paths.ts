@@ -45,19 +45,28 @@ export type DaemonUpdatePath =
 
 export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
   local: {
-    path: 'LocalDaemon.ensureRunning compares the running daemon with this build and replaces it (a managed one through walnut daemon update)',
-    code: [{ file: 'src/providers/local-daemon.ts', symbol: 'updateManagedDaemon' }],
+    path: 'LocalDaemon.ensureRunning compares the running daemon with this build and replaces it: a managed one through walnut daemon update, '
+      + 'run detached with the tail after it; an unmanaged one only after the new build served in a trial run, the old one kept to go back to',
+    code: [
+      { file: 'src/providers/local-daemon.ts', symbol: 'updateManagedDaemon' },
+      { file: 'src/providers/local-daemon-service.ts', symbol: 'updateLocalService' },
+      { file: 'src/providers/local-daemon.ts', symbol: 'refuseReplacement' },
+    ],
   },
   ssh: {
-    path: 'every connect reads daemon.version over SSH and stops, redeploys or service-updates a daemon of another build (rechecked while postponed)',
+    path: 'every connect reads daemon.version over SSH and service-updates a daemon of another build (detached on the host), '
+      + 'or stages the new build, tries it in a throwaway dir, and only then stops the old one, whose files are kept to go back to (rechecked while postponed)',
     code: [
       { file: 'src/providers/daemon-connection.ts', symbol: 'shouldUpgradeDaemon' },
       { file: 'src/providers/daemon-connection.ts', symbol: 'updateManagedDaemon' },
+      { file: 'src/providers/daemon-connection.ts', symbol: 'trialStaged' },
     ],
   },
   net: {
-    path: 'a connect to a daemon of another build uploads this build over the daemon link itself (fs.writePart, exec.run) and runs walnut daemon update there, detached',
+    path: 'a connect to a daemon of another build uploads this build over the daemon link itself (fs.writePart, exec.run) and runs walnut daemon update there, detached; '
+      + 'on a Mac whose launchd starts no jobs now (a dark wake) the update is deferred before anything stops, and asked again after the cooldown',
     code: [
+      { file: 'src/providers/daemon-service-launchd.ts', symbol: 'launchdSpawnsJobs' },
       { file: 'src/providers/daemon-net-update.ts', symbol: 'NetDaemonUpdater' },
       { file: 'src/providers/daemon-net-update-io.ts', symbol: 'createNetUpdateIo' },
       { file: 'src/providers/daemon-connection.ts', symbol: 'NetDaemonUpdater' },
