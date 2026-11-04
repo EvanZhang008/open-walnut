@@ -57,7 +57,7 @@ defineOp({
     + 'with background:true at most 2 hours), its whole process group stopped. The call waits for the run to end, but from a session on '
     + 'another host at most about 12 seconds: a run still going comes back running:true with its job_id, and host_exec_read with '
     + 'wait_ms waits for it (never run it again: it is still running). The walnut CLI picks the job_id before it calls; when no '
-    + 'answer came back it prints that id, and host_exec_list lists this task\'s jobs on the host. Up to 2 runs at once per task, 4 per host. '
+    + 'answer came back it prints that id, and host_exec_list lists this task\'s jobs on the host. Up to 4 runs at once per task and 8 per host; a call at a cap waits for a slot (up to 20 s, less from another host), then answers 429 busy. '
     + 'Only the last 256 KB of output comes back; the full log stays in your task\'s directory on that host. Lines that look like a credential are hidden.',
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the Mac) or a selector like "@ios"'),
