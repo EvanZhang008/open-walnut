@@ -17,7 +17,6 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { getConfig } from '../../core/config-manager.js';
-import os from 'node:os';
 import { WALNUT_HOME } from '../../constants.js';
 import {
   enableBucketVersioning,
@@ -96,8 +95,13 @@ backupRouter.post('/run', async (_req: Request, res: Response, next: NextFunctio
       return;
     }
     const job = currentBackupJob();
+    // A second "Back up now" while one runs is the same wish: it joins, never an error.
+    if (job === 'backup') {
+      res.status(202).json({ started: false, running: true });
+      return;
+    }
     if (job) {
-      res.status(409).json({ error: job === 'restore' ? 'A restore is running' : 'A backup is already running' });
+      res.status(409).json({ error: 'A restore is running. Back up again when it finishes.' });
       return;
     }
     const config = await getConfig();
@@ -125,7 +129,13 @@ backupRouter.get('/status', async (_req: Request, res: Response) => {
   // Another destination was saved since the health was last read: show its backups, not the old one's.
   scheduler.syncDestination((await getConfig()).backup);
   // dataDir: the restore result names the real data folder to swap it with.
-  res.json({ ...scheduler.health, primary: true, dataDir: WALNUT_HOME, machineName: os.hostname().replace(/\.(local|lan|home)$/i, '') });
+  const { computerName } = await import('../../core/backup/local-state.js');
+  const { readPendingSwitch, lastSwitchError } = await import('../../core/backup/restore-switch.js');
+  res.json({
+    ...scheduler.health, primary: true, dataDir: WALNUT_HOME, machineName: await computerName(),
+    // "Use this restored data" asked, not done yet (it is done at the next start), or how the last one failed.
+    pendingSwitch: await readPendingSwitch(WALNUT_HOME), switchError: await lastSwitchError(WALNUT_HOME),
+  });
 });
 
 // POST /api/backup/enable-versioning — one-click deletion protection.

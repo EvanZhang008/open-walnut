@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { pidAlive, processStart } from '../self-update/install-lock.js';
 
 export interface WriterIdentity {
@@ -33,9 +34,25 @@ export const MACHINE_ONLY_FILES = ['local/backup/machine-id', 'local/backup/run.
 
 const ID_RE = /^[0-9a-f]{32}$/;
 
+let computerNameOnce: Promise<string> | null = null;
+
+/**
+ * The name a person knows this computer by: on a Mac its Computer Name
+ * ("Evan's MacBook Pro", System Settings, General, About), elsewhere the
+ * hostname without a ".local".
+ */
+export function computerName(): Promise<string> {
+  computerNameOnce ??= new Promise<string>((resolve) => {
+    const host = os.hostname().replace(/\.(local|lan|home)$/i, '');
+    if (process.platform !== 'darwin') return resolve(host);
+    execFile('scutil', ['--get', 'ComputerName'], { timeout: 2000 }, (err, out) => resolve(!err && out.trim() ? out.trim() : host));
+  });
+  return computerNameOnce;
+}
+
 export async function localWriter(dataDir: string): Promise<WriterIdentity> {
   const file = machineIdPath(dataDir);
-  const name = os.hostname().replace(/\.(local|lan|home)$/i, '');
+  const name = await computerName();
   try {
     const id = (await fs.readFile(file, 'utf8')).trim();
     if (ID_RE.test(id)) return { id, name };

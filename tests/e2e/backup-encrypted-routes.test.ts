@@ -134,6 +134,28 @@ describe('encrypted backups through the routes', () => {
     const again = await call('POST', '/restore', { snapshotId: 'latest', targetDir: target });
     expect(again.status).toBe(400);
     expect(String(again.body.error)).toMatch(/not empty/);
+    // A folder Walnut cannot make is said at once, in words.
+    const nowhere = await call('POST', '/restore', { snapshotId: 'latest', targetDir: '/proc/walnut-cannot-make-this' });
+    expect(nowhere.status).toBe(400);
+    expect(String(nowhere.body.error)).toMatch(/can't make a folder|may not make a folder/);
+    expect(String(nowhere.body.error)).not.toMatch(/ENOENT|EACCES/);
+    // A second "Back up now" while one runs joins it: never an error.
+    const [r1, r2run] = await Promise.all([call('POST', '/run'), call('POST', '/run')]);
+    expect([r1.status, r2run.status]).toEqual([202, 202]);
+    await until(() => !scheduler.health.running);
+
+    // "Use this restored data": only the folder of the restore just finished, asked now, done at the next start.
+    expect((await call('POST', '/restore/use', { targetDir: `${WALNUT_HOME}-elsewhere` })).status).toBe(400);
+    expect((await call('POST', '/restore/use', { targetDir: target }, { 'x-walnut-caller-sid': 'session-under-test' })).status).toBe(403);
+    const use = await call<{ ok: boolean; restarting: boolean; aside: string }>('POST', '/restore/use', { targetDir: target });
+    expect(use.body).toMatchObject({ ok: true, restarting: false });
+    expect(use.body.aside.startsWith(`${WALNUT_HOME}-before-restore-`)).toBe(true);
+    const st = await call<{ pendingSwitch: { restored: string } | null }>('GET', '/status');
+    expect(st.body.pendingSwitch?.restored).toBe(path.resolve(target));
+    // Nothing moved while this Walnut runs.
+    expect(await sameFile(target, 'notes/trips/kyoto.md')).toBe(true);
+    expect((await call('POST', '/restore/use/cancel', {})).status).toBe(200);
+    expect((await call<{ pendingSwitch: unknown }>('GET', '/status')).body.pendingSwitch).toBeNull();
   }, 60_000);
 
   it('masked secrets stand only for the saved target', async () => {
@@ -210,7 +232,8 @@ describe('encrypted backups through the routes', () => {
     const wrong = await call('PUT', '/recovery-key', { key: generateRecoveryKey() });
     expect(wrong.status).toBe(400);
     const right = await call<{ ok: boolean; snapshotCount: number }>('PUT', '/recovery-key', { key: realKey.toLowerCase() });
-    expect(right.body).toMatchObject({ ok: true, snapshotCount: 1 });
+    expect(right.body).toMatchObject({ ok: true });
+    expect(right.body.snapshotCount).toBeGreaterThanOrEqual(1);
     expect((await call('GET', '/recovery-key')).body).toMatchObject({ key: realKey });
   }, 60_000);
 

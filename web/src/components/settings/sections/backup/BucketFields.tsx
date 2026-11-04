@@ -147,7 +147,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
 function advancedSummary(dest: BackupDestinationConfig): string | undefined {
   const parts: string[] = []
   const endpoint = dest.endpoint?.trim()
-  if (endpoint) parts.push(`Endpoint ${endpoint.replace(/^https?:\/\//, '')}`)
+  if (endpoint) parts.push(/^https?:\/\/[^\s/]+/.test(endpoint) ? `Endpoint ${endpoint.replace(/^https?:\/\//, '')}` : 'Endpoint set (check it)')
   const prefix = dest.prefix?.trim()
   if (prefix && prefix !== 'walnut-backup') parts.push(`Folder ${prefix}`)
   return parts.length ? parts.join(', ') : undefined

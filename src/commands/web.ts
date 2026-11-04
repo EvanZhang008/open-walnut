@@ -79,6 +79,16 @@ export async function runWeb(options: {
   }
 
   // Normal server
+  // "Use this restored data" (Settings, Backup): the restored folder becomes the data
+  // folder now, before anything below reads it (core/backup/restore-switch.ts).
+  {
+    const { WALNUT_HOME } = await import('../constants.js')
+    const { applyPendingSwitch } = await import('../core/backup/restore-switch.js')
+    const sw = await applyPendingSwitch(WALNUT_HOME)
+    if (sw.kind === 'switched') console.log(`Switched to the restored data; the previous data folder is kept at ${sw.aside}`)
+    if (sw.kind === 'failed') console.error(`Restored data not switched in: ${sw.error}`)
+  }
+
   // Note: ephemeral WALNUT_HOME guard is in constants.ts (must run at import time,
   // before any derived paths are computed). See resolveWalnutHome() there.
 

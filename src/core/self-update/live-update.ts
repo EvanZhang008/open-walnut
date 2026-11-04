@@ -95,6 +95,18 @@ export function setRestartHandler(fn: RestartHandler | null): void {
 }
 export function hasRestartHandler(): boolean { return restartHandler !== null }
 
+/**
+ * Restart this server for a reason other than an update (a restored data folder
+ * switched in at start, core/backup/restore-switch.ts), shortly, so the answer
+ * that asked for it reaches the page first. False: this server cannot restart.
+ */
+export function restartSoon(delayMs = 1500): boolean {
+  const handler = restartHandler
+  if (!handler) return false
+  setTimeout(() => { void Promise.resolve().then(handler).catch(() => {}) }, delayMs).unref?.()
+  return true
+}
+
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export class LiveUpdater {

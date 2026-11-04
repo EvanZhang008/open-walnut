@@ -52,6 +52,8 @@ interface BackupStatus {
   destination?: string
   dataDir?: string
   machineName?: string
+  pendingSwitch?: { restored: string; aside: string } | null
+  switchError?: string | null
   notice?: string
   lastBackupAt?: string
   lastFileCount?: number
@@ -68,10 +70,29 @@ interface BackupStatus {
 
 type Drafts = Record<BackupDestinationType, BackupDestinationConfig>
 
+// What was typed for a service not saved yet, kept in this tab across a reload.
+// Never a secret: those are typed again.
+const TYPED_KEY = 'walnut.backup.typed'
+const withoutSecrets = (d: BackupDestinationConfig): BackupDestinationConfig => {
+  const { secret_access_key: _s, client_secret: _c, ...rest } = d
+  if (rest.auth) {
+    const { aws_secret_access_key: _a, ...auth } = rest.auth
+    return { ...rest, auth }
+  }
+  return rest
+}
+const readTyped = (): Partial<Drafts> => {
+  try { return JSON.parse(sessionStorage.getItem(TYPED_KEY) ?? '{}') as Partial<Drafts> } catch { return {} }
+}
+const writeTyped = (t: Partial<Drafts>): void => {
+  try { sessionStorage.setItem(TYPED_KEY, JSON.stringify(t)) } catch { /* private mode: nothing kept */ }
+}
+
 const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationConfig[] = []): Drafts => ({
   r2: { type: 'r2' },
   gdrive: { type: 'gdrive' },
   s3: { type: 's3', auth: { method: 'aws_chain' } },
+  ...readTyped(),
   ...Object.fromEntries(others.map((o) => [o.type, o])),
   ...(saved ? { [saved.type]: saved } : {}),
 })
@@ -139,7 +160,10 @@ export function BackupSection({ config, onSave }: Props) {
   // An event carries the whole health: a field the server cleared is absent, so
   // replace, keeping only what the status route alone adds.
   useEvent('backup:status', useCallback((data: unknown) => {
-    setStatus((prev) => ({ primary: prev?.primary, dataDir: prev?.dataDir, machineName: prev?.machineName, ...(data as BackupStatus) }))
+    setStatus((prev) => ({
+      primary: prev?.primary, dataDir: prev?.dataDir, machineName: prev?.machineName,
+      pendingSwitch: prev?.pendingSwitch, switchError: prev?.switchError, ...(data as BackupStatus),
+    }))
   }, []))
 
   const draft = drafts[type]
@@ -197,6 +221,9 @@ export function BackupSection({ config, onSave }: Props) {
   const saveDestination = async (d: BackupDestinationConfig) => {
     const base = baseRef.current
     await writeBackup({ ...compose(base, { destination: d }), other_destinations: othersAfterSwitch(base, d) })
+    const typed = readTyped()
+    delete typed[d.type]
+    writeTyped(typed)
     setLegacyMode(false)
     setKeyRefresh((n) => n + 1)
     loadStatus()
@@ -204,6 +231,9 @@ export function BackupSection({ config, onSave }: Props) {
 
   const setDest = (next: BackupDestinationConfig) => {
     setDrafts((cur) => ({ ...cur, [next.type]: next }))
+    // Kept only for a service not saved yet; a saved one comes back from config.
+    const isSaved = baseRef.current.destination?.type === next.type || (baseRef.current.other_destinations ?? []).some((o) => o.type === next.type)
+    if (!isSaved) writeTyped({ ...readTyped(), [next.type]: withoutSecrets(next) })
     setTestResult(null)
   }
   const pickType = (t: BackupDestinationType) => {
@@ -233,16 +263,25 @@ export function BackupSection({ config, onSave }: Props) {
     }
   }
 
+  const [runStarting, setRunStarting] = useState(false)
   const handleRunNow = async () => {
+    if (runStarting || status?.running) return
     setRunError(null)
+    setRunStarting(true)
     try {
-      // The server answers 202; progress and the result arrive as backup:status events.
+      // The server answers 202 (a run already going is joined); progress and the result arrive as backup:status events.
       await apiPost('/api/backup/run', {})
       setStatus((prev) => (prev ? { ...prev, running: true } : prev))
     } catch (err) {
       setRunError(saveErrorMessage(err))
+    } finally {
+      setRunStarting(false)
     }
   }
+  // A refusal belongs to the click that got it: the next run, or a finished one, clears it.
+  useEffect(() => {
+    if (status?.running || status?.lastBackupAt) setRunError(null)
+  }, [status?.running, status?.lastBackupAt])
 
   const handleAdopt = async () => {
     setAdopting(true)
@@ -309,7 +348,11 @@ export function BackupSection({ config, onSave }: Props) {
     needsKey: keyState.needsKey || keyMismatch,
     hasKey: keyState.hasKey,
   })
-  const runBlocked = blocked ?? (otherWriter ? 'Another computer writes these backups. Move them here above first.' : null)
+  // Nothing leaves this computer before the user has the key that opens it.
+  const keyUnsaved = !legacyMode && keyState.hasKey && !saved.recovery_key_saved_at
+  const runBlocked = blocked
+    ?? (otherWriter ? 'Another computer writes these backups. Move them here above first.' : null)
+    ?? (keyUnsaved ? 'Save the recovery key above first.' : null)
 
   const progressPct = status?.progress && status.progress.totalBytes > 0
     ? Math.floor((status.progress.uploadedBytes / status.progress.totalBytes) * 100)
@@ -322,9 +365,13 @@ export function BackupSection({ config, onSave }: Props) {
           `${(status.lastFileCount ?? 0).toLocaleString()} files`,
           fmtBytes(status.lastTotalBytes),
           ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} backup${status.snapshotCount === 1 ? '' : 's'} kept`] : []),
-        ].join(', ')
+        ].join(', ') + (enabled && !runBlocked
+          // When the next one runs, so a switch of service never leaves the user guessing.
+          ? `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + (saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`
+          : '')
       : otherWriter ? 'Another computer writes these backups. Move them here above first.'
-        : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
+        : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.'
+          : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null
@@ -341,7 +388,7 @@ export function BackupSection({ config, onSave }: Props) {
     if (testResult) return testHelp(testResult, false)
     if (draftIsSaved) return 'Backups go here. Test again any time.'
     return savedDest && savedDest.type !== type
-      ? `Not used yet. "Use ${labelOf(type)}" checks it first, then backups go here instead of ${labelOf(savedDest.type)}.`
+      ? `Not in use now. "Use ${labelOf(type)}" checks it first, then backups go here instead of ${labelOf(savedDest.type)}.`
       : '"Test and save" writes, reads back and deletes a small test file, then backups go here.'
   }
 
@@ -441,11 +488,10 @@ export function BackupSection({ config, onSave }: Props) {
         footer={
           <>
             Everything in your data folder is backed up (notes, tasks, passwords, sign-ins); caches and search indexes are skipped.
-            {' '}Also from a terminal: <code>open-walnut backup restore</code>, or the{' '}
-            <a href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md" target="_blank" rel="noreferrer">
-              restore-backup skill
-            </a>{' '}
-            in a Claude Code session on a new computer.
+            {' '}On a new computer: install Walnut, choose the same service here, and type your recovery key.{' '}
+            <a href="https://github.com/EvanZhang008/open-walnut/blob/main/docs/reference/backups.md#restore" target="_blank" rel="noreferrer">
+              More ways to restore
+            </a>
           </>
         }
       >
@@ -455,7 +501,8 @@ export function BackupSection({ config, onSave }: Props) {
           htmlFor="backup-enabled"
           help={blocked
             ? (enabled ? `Paused: ${blocked}` : blocked)
-            : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
+            : !enabled ? 'Off: backups run only when you choose Back up now.'
+              : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
           state={blocked && enabled ? 'warning' : undefined}
           data-testid="backup-enabled-row"
           control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} />}
@@ -485,7 +532,7 @@ export function BackupSection({ config, onSave }: Props) {
           error={lastError ?? undefined}
           data-testid="backup-last-row"
           control={
-            <SettingsButton onClick={handleRunNow} disabled={!!runBlocked} busy={status?.running === true} busyLabel="Backing up..."
+            <SettingsButton onClick={handleRunNow} disabled={!!runBlocked} busy={status?.running === true || runStarting} busyLabel="Backing up..."
               data-testid="backup-run-now">
               Back up now
             </SettingsButton>
@@ -500,6 +547,9 @@ export function BackupSection({ config, onSave }: Props) {
           restore={status?.restore}
           dataDir={status?.dataDir}
           blocked={!!blocked}
+          pendingSwitch={status?.pendingSwitch}
+          switchError={status?.switchError}
+          onSwitchChanged={loadStatus}
         />
       </SettingsGroup>
     </SectionCard>

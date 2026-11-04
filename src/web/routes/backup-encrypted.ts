@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Router, type Request, type Response, type NextFunction } from 'express';
+import { cancelSwitch, requestSwitch } from '../../core/backup/restore-switch.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { getConfig } from '../../core/config-manager.js';
 import { DEFAULT_DRIVE_FOLDER, engineOf } from '../../core/backup/destination.js';
@@ -182,6 +183,17 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   // Said at once, beside the folder field, not later as a failed restore.
   const inTarget = await fs.readdir(targetDir).catch(() => null);
   if (inTarget && inTarget.length > 0) return void res.status(400).json({ error: `${targetDir} is not empty. Pick a new, empty folder (or leave the field empty).` });
+  // A folder Walnut cannot make is said now, beside the field, in words.
+  try {
+    await fs.mkdir(targetDir, { recursive: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return void res.status(400).json({
+      error: code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+        ? `Walnut may not make a folder at ${targetDir}. Pick a folder in your home folder.`
+        : `Walnut can't make a folder at ${targetDir}. Check the path, or pick a folder in your home folder.`,
+    });
+  }
   const recoveryKey = typeof req.body?.recoveryKey === 'string' && req.body.recoveryKey.trim() ? req.body.recoveryKey : undefined;
   const mirror = engineOf(cfg) === 'mirror' && !dest;
   if (!mirror && !dest) return void res.status(400).json({ error: 'Choose where backups go first.' });
@@ -228,6 +240,34 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   const refused = await Promise.race([job.then(() => null, (e) => e), new Promise((r) => setTimeout(() => r(null), 20))]);
   if (refused instanceof BackupBusyError) return void res.status(409).json({ error: refused.message });
   res.status(202).json({ started: true, targetDir });
+});
+
+// POST /api/backup/restore/use — "Use this restored data": the folder of the restore
+// just finished becomes the data folder at the next start (restore-switch.ts), and
+// Walnut restarts now when it can.
+encryptedBackupRouter.post('/restore/use', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'Walnut switches to restored data')) return;
+  const last = getBackupScheduler()?.health.restore;
+  const targetDir = typeof req.body?.targetDir === 'string' ? req.body.targetDir : '';
+  if (!last || last.running || last.error || !last.finishedAt || !last.targetDir || path.resolve(targetDir) !== path.resolve(last.targetDir)) {
+    return void res.status(400).json({ error: 'Only the folder of the restore that just finished can be switched in. Restore again.' });
+  }
+  try {
+    const pending = await requestSwitch(WALNUT_HOME, last.targetDir);
+    const { restartSoon } = await import('../../core/self-update/live-update.js');
+    const restarting = restartSoon();
+    log.web.info('backup: restored data switch asked', { restored: pending.restored, aside: pending.aside, restarting });
+    res.json({ ok: true, restarting, aside: pending.aside });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// POST /api/backup/restore/use/cancel — keep the current data after all.
+encryptedBackupRouter.post('/restore/use/cancel', async (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'Walnut switches to restored data')) return;
+  await cancelSwitch(WALNUT_HOME);
+  res.json({ ok: true });
 });
 
 // POST /api/backup/restore/dismiss — the user read the last restore's result: stop showing it.

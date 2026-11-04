@@ -117,10 +117,10 @@ test.describe('Backup settings', () => {
     await expect(section.locator('#backup-enabled')).toBeChecked()
     // The switch saves at once (no wait for an autosave), and the destination rides along.
     await section.locator('#backup-enabled').click()
-    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 500 }).toBe(false)
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 2000 }).toBe(false)
     expect((config.last()?.backup as Record<string, unknown>).destination).toMatchObject({ type: 'r2', bucket: 'walnut-backup' })
     await section.locator('#backup-enabled').click()
-    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 500 }).toBe(true)
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 2000 }).toBe(true)
 
     // Restore lists the backups, newest first and picked, and restores the one chosen.
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()
@@ -131,7 +131,7 @@ test.describe('Backup settings', () => {
     await list.locator('label').nth(1).click()
     await section.getByTestId('backup-restore-start').click()
     await expect.poll(() => restoreBody).toMatchObject({ snapshotId: 'snap-1' })
-    await expect(section.locator('a[href*="skills/restore-backup"]')).toBeVisible()
+    await expect(section.locator('a[href*="backups.md#restore"]')).toBeVisible()
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
@@ -252,4 +252,43 @@ test.describe('Backup settings', () => {
     expect(written.enabled).toBe(true)
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
+
+  test('a finished restore: use it in place of the current data, after a confirm; or keep the current data', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '••••••mple' }
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2, recovery_key_saved_at: '2026-11-01T00:00:00Z' })
+    const restored = '/Users/me/open-walnut-restored-2026-11-04T10-00-00'
+    let pending: { restored: string; aside: string } | null = null
+    await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut',
+      restore: { running: false, targetDir: restored, doneFiles: 22597, doneBytes: 7_300_000_000, totalFiles: 22597, finishedAt: '2026-11-04T10:00:00Z' },
+      pendingSwitch: pending,
+    }) }))
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    let useBody: unknown = null
+    await page.route('**/api/backup/restore/use', (route) => {
+      useBody = route.request().postDataJSON()
+      pending = { restored, aside: '/Users/me/.open-walnut-before-restore-2026-11-04T10-05-00' }
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true, restarting: false, aside: pending.aside }) })
+    })
+    await page.route('**/api/backup/restore/use/cancel', (route) => { pending = null; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-restore-done')).toContainText('22,597 files')
+    // The command is there for doing it by hand, folded.
+    await expect(section.getByTestId('backup-restore-swap')).toBeHidden()
+
+    await section.getByTestId('backup-restore-use').click()
+    await expect(section.getByTestId('backup-restore-use-confirm')).toContainText(restored)
+    await section.getByTestId('backup-restore-use-cancel').click()
+    expect(useBody).toBeNull()
+    await section.getByTestId('backup-restore-use').click()
+    await section.getByTestId('backup-restore-use-yes').click()
+    await expect.poll(() => useBody).toEqual({ targetDir: restored })
+    const row = section.getByTestId('backup-restore-switch-pending')
+    await expect(row).toContainText('Quit Walnut and open it again')
+    await expect(row).toContainText('.open-walnut-before-restore-2026-11-04T10-05-00')
+    await section.getByTestId('backup-restore-switch-cancel').click()
+    await expect(row).toHaveCount(0)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
 })
+

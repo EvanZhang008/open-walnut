@@ -95,10 +95,19 @@ then stops backing up there. A restored home is a new writer until its user move
 Settings, Backup, "Choose a backup": pick one, optionally a folder, Restore. It goes into a
 new, empty folder (by default `open-walnut-restored-<date>` next to the data folder), never
 over the data Walnut runs on. Every chunk is checked on the way back (the AES-GCM tag, then
-its id) and every file's size; mtimes and executable bits come back. When it finishes, the
-pane shows one command, with the real paths, that makes it the live data: quit Walnut, run
-it (the current data is kept aside as `.open-walnut-before-restore-<time>`, nothing is
-deleted; its steps are chained with `&&`, so a failed step stops the rest), start Walnut.
+its id) and every file's size; mtimes and executable bits come back.
+
+"Use this data" makes the restored folder the data folder, after a confirm. A running
+Walnut cannot swap its own folder, so it writes a small request beside the data folder
+(`~/.open-walnut.restore-switch.json`) and restarts when it can (the Mac app and installed
+builds can; a source checkout says to quit and open it again). At the next start, before
+anything reads the data folder (`src/commands/web.ts`, `core/backup/restore-switch.ts`),
+the current folder is renamed to `.open-walnut-before-restore-<time>` (kept, never
+deleted) and the restored folder into its place. A start that died between the two
+renames finishes the switch; a rename that fails puts the old folder back and says why in
+`~/.open-walnut.restore-switch-error.txt`. This machine's writer id moves with the switch,
+so it stays the writer of its backups. "Do it by hand" shows the same as one shell command,
+chained with `&&` so a failed step stops the rest.
 A service set up before and kept (`other_destinations`) can be restored from too: "From"
 appears above the list.
 

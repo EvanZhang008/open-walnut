@@ -31,6 +31,7 @@ export function friendlyStoreError(err: unknown, dest: BackupDestinationConfig):
   const bucket = dest.bucket ? `"${dest.bucket}"` : 'this bucket';
   const tag = code ? ` (${code})` : '';
   if (dest.type === 'gdrive') return raw;
+  if (/invalid url/i.test(raw)) return 'The endpoint is not a web address. Type it in full, like https://<account>.r2.cloudflarestorage.com.';
   const cloudflare = dest.type === 'r2' && !dest.endpoint?.trim();
   if ((code && NETWORK_CODES.has(code)) || /fetch failed|getaddrinfo|socket hang up/i.test(raw)) {
     const where = dest.endpoint?.trim() ? `the custom endpoint ${dest.endpoint.trim()}` : dest.type === 'r2' ? 'Cloudflare with this Account ID' : 'AWS';
