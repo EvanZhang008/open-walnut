@@ -15,12 +15,14 @@
  * A mkdir lock keyed by the fixture port, as layout-record-restart.spec.ts does: the holder's pid
  * is written inside, a dead holder's lock is broken, and the same worker taking it again (a file
  * whose release never ran) is no wait. Time spent waiting is added to the hook's or test's own
- * timeout, so a queue never eats a test's budget.
+ * timeout, and kept there across a later test.setTimeout of the test (wait-budget.ts), so a queue
+ * never eats a test's budget.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from '@playwright/test'
+import { waitOutsideBudget } from './wait-budget'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const LOCK = path.join(os.tmpdir(), `walnut-panel-count-spec-${TEST_PORT}.lock`)
@@ -32,29 +34,27 @@ function holder(): number | null {
 }
 
 async function acquire(): Promise<void> {
-  const info = test.info()
-  const budget = info.timeout
   const t0 = Date.now()
-  // Room to wait, then back to the caller's own budget plus what the wait took.
-  if (budget > 0) info.setTimeout(budget + MAX_WAIT_MS)
-  for (;;) {
-    try {
-      fs.mkdirSync(LOCK)
-      fs.writeFileSync(path.join(LOCK, 'pid'), String(process.pid))
-      break
-    } catch { /* held */ }
-    const pid = holder()
-    if (pid === process.pid) break
-    try {
-      let alive = pid !== null && pid > 1
-      // Signal 0 only asks whether the holder still runs; it sends nothing.
-      if (alive) { try { process.kill(pid!, 0) } catch { alive = false } }
-      if (!alive || Date.now() - fs.statSync(LOCK).mtimeMs > STALE_MS) fs.rmSync(LOCK, { recursive: true, force: true })
-    } catch { /* racing the holder's release */ }
-    if (Date.now() - t0 > MAX_WAIT_MS) throw new Error(`panel count lock still held by pid ${pid}: ${LOCK}`)
-    await new Promise((r) => setTimeout(r, 500))
-  }
-  if (budget > 0) info.setTimeout(budget + (Date.now() - t0))
+  // The wait is kept out of the test's time limit, a later test.setTimeout of its own included.
+  await waitOutsideBudget(test.info(), MAX_WAIT_MS, async () => {
+    for (;;) {
+      try {
+        fs.mkdirSync(LOCK)
+        fs.writeFileSync(path.join(LOCK, 'pid'), String(process.pid))
+        return
+      } catch { /* held */ }
+      const pid = holder()
+      if (pid === process.pid) return
+      try {
+        let alive = pid !== null && pid > 1
+        // Signal 0 only asks whether the holder still runs; it sends nothing.
+        if (alive) { try { process.kill(pid!, 0) } catch { alive = false } }
+        if (!alive || Date.now() - fs.statSync(LOCK).mtimeMs > STALE_MS) fs.rmSync(LOCK, { recursive: true, force: true })
+      } catch { /* racing the holder's release */ }
+      if (Date.now() - t0 > MAX_WAIT_MS) throw new Error(`panel count lock still held by pid ${pid}: ${LOCK}`)
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  })
 }
 
 function release(): void {

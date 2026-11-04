@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test as base } from '@playwright/test'
+import { waitOutsideBudget } from './wait-budget'
 
 const DIR = path.join(os.tmpdir(), 'walnut-pw-fixture-leases')
 /** Longer than any test may run (the longest set timeout is 300 s, plus retries of hooks). */
@@ -54,19 +55,17 @@ async function take(key: string): Promise<Held> {
   const info = base.info()
   const owner = JSON.stringify({ pid: process.pid, at: Date.now(), test: info.titlePath.join(' > ') })
   const start = Date.now()
-  // Room to wait first, the budget plus the wait after: extended only once the lease came, a
-  // queue longer than the time the test had left timed it out inside the wait (2026-11-03, CI:
-  // session-threads-views "Test timeout of 240000ms exceeded while running beforeEach").
-  const budget = info.timeout
-  if (budget > 0) info.setTimeout(budget + WAIT_LIMIT_MS)
-  while (!tryTake(file, owner)) {
-    if (Date.now() - start > WAIT_LIMIT_MS) {
-      const holder = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return 'gone' } })()
-      throw new Error(`waited ${WAIT_LIMIT_MS / 1000} s for the fixture lease on ${key}, held by ${holder}`)
+  // Room to wait first, the budget plus the wait after, kept across a later test.setTimeout of the
+  // test (wait-budget.ts).
+  await waitOutsideBudget(info, WAIT_LIMIT_MS, async () => {
+    while (!tryTake(file, owner)) {
+      if (Date.now() - start > WAIT_LIMIT_MS) {
+        const holder = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return 'gone' } })()
+        throw new Error(`waited ${WAIT_LIMIT_MS / 1000} s for the fixture lease on ${key}, held by ${holder}`)
+      }
+      await new Promise((r) => setTimeout(r, 150))
     }
-    await new Promise((r) => setTimeout(r, 150))
-  }
-  if (budget > 0) info.setTimeout(budget + (Date.now() - start))
+  })
   return { file, key }
 }
 

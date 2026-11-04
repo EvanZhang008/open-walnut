@@ -27,6 +27,7 @@ import {
   requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
+import { hasMediaRecorder } from './webkit-recorder'
 
 // The panel count is one value the whole fixture shares: hold it while this test runs.
 holdPanelCountLock('test')
@@ -96,8 +97,9 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill).toHaveCount(0)
     if (painted) expect(await heldPainted(page)).toBe(false)
     await expect(card.locator('.thread-card-input')).toHaveValue('')
-    // The card has its own mic, as the composer does.
-    await expect(card.locator('.mic-btn-wrapper .mic-btn')).toBeVisible()
+    // The card has its own mic, as the composer does, wherever the engine can record:
+    // Playwright's Linux WebKit has no MediaRecorder, and the app draws no mic there.
+    await expect(card.locator('.mic-btn-wrapper .mic-btn')).toHaveCount(await hasMediaRecorder(page) ? 1 : 0)
     await shot(page, 'wk-02-ask-opened-the-question')
     await page.keyboard.press('Escape')
     await expect(card).toHaveCount(0)
@@ -137,15 +139,21 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill).toBeVisible()
     // On the mic: acting on the passage. Without a microphone the recording never
     // starts, and whatever the mic does about that must not take the held pill.
+    // Playwright's Linux WebKit has no MediaRecorder, so the app draws no mic there
+    // and there is nothing to press (macOS WebKit, the Mac app's engine, has one).
     const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
-    const micBox = (await mic.boundingBox())!
-    await page.mouse.move(micBox.x + micBox.width / 2, micBox.y + micBox.height / 2)
-    await page.mouse.down()
-    await page.waitForTimeout(150)
-    await expect(pill).toBeVisible()
-    await page.mouse.up()
-    await page.waitForTimeout(600)
-    await expect(pill).toBeVisible()
+    if (await hasMediaRecorder(page)) {
+      const micBox = (await mic.boundingBox())!
+      await page.mouse.move(micBox.x + micBox.width / 2, micBox.y + micBox.height / 2)
+      await page.mouse.down()
+      await page.waitForTimeout(150)
+      await expect(pill).toBeVisible()
+      await page.mouse.up()
+      await page.waitForTimeout(600)
+      await expect(pill).toBeVisible()
+    } else {
+      await expect(mic).toHaveCount(0)
+    }
     await shot(page, 'wk-03-held-through-composer-and-mic-presses')
 
     // Elsewhere in the timeline: moving on. A press on prose the passage is not part

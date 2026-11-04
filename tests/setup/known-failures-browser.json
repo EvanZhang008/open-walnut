@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 240,
+  "count": 238,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -174,8 +174,6 @@
     "session-threads-views.spec.ts :: Question stack views › Archive pops to the passage and persists; Undo after leaving keeps the page, Undo in place returns",
     "session-unread-marker.spec.ts :: an unread session window shows a dot and a red composer until the user clicks or types in it",
     "session-usage-budget.spec.ts :: session budget keeps dirty edits, conflicts, pauses and recovery honest",
-    "session-voice-selection.webkit.spec.ts :: the held pill in the Mac app engine › a held passage survives the focus move, and Ask opens the question",
-    "session-voice-selection.webkit.spec.ts :: the held pill in the Mac app engine › a press elsewhere in the timeline lets go; a press into the composer or on the mic does not",
     "session-vscode.spec.ts :: Code and Inbox are menu actions, never persistent header chips",
     "session-vscode.spec.ts :: menu views toggle and switch without losing the editor or draft at 1280px",
     "session-vscode.spec.ts :: menu views toggle and switch without losing the editor or draft at 820px",
@@ -416,8 +414,6 @@
     "session-threads-views.spec.ts :: Question stack views › Archive pops to the passage and persists; Undo after leaving keeps the page, Undo in place returns": "Test timeout of 240000ms exceeded.",
     "session-unread-marker.spec.ts :: an unread session window shows a dot and a red composer until the user clicks or types in it": "Error: expect(locator).toBeVisible() failed",
     "session-usage-budget.spec.ts :: session budget keeps dirty edits, conflicts, pauses and recovery honest": "Error: expect(locator).toHaveText(expected) failed",
-    "session-voice-selection.webkit.spec.ts :: the held pill in the Mac app engine › a held passage survives the focus move, and Ask opens the question": "Error: expect(locator).toBeVisible() failed",
-    "session-voice-selection.webkit.spec.ts :: the held pill in the Mac app engine › a press elsewhere in the timeline lets go; a press into the composer or on the mic does not": "Test timeout of 120000ms exceeded.",
     "session-vscode.spec.ts :: Code and Inbox are menu actions, never persistent header chips": "Error: expect(locator).toBeVisible() failed",
     "session-vscode.spec.ts :: menu views toggle and switch without losing the editor or draft at 1280px": "Error: expect(locator).not.toHaveClass(expected) failed",
     "session-vscode.spec.ts :: menu views toggle and switch without losing the editor or draft at 820px": "Error: expect(locator).not.toHaveClass(expected) failed",
