@@ -119,13 +119,34 @@ async function openSessionTaskDetail(page: Page): Promise<void> {
 
 test('N25: opening an unread row and typing in its session marks it read once', async ({ page }) => {
   // The fixture task reads as unread (agent output not seen yet); its writes are recorded, not applied.
+  const writes = await stubTaskWrites(page)
+  const isRead = (r: Request) => (JSON.parse(r.postData() || '{}') as { unread?: boolean }).unread === false
+  // Once the read went out, the list answers what the server holds, as it would had the
+  // write been applied. The shared fixture's reconciler hands this task back (NEED_ACTION,
+  // so unread again) about ten minutes after the server starts; when that lands between the
+  // open and the tap, the tap's read is a read of new output, not a repeat (2026-11-04: CI
+  // shard 8, both attempts). Every way the page can learn it is counted: the list and a
+  // `task:updated` frame carrying the task.
+  let unreadAgain = 0
   await page.route('**/api/tasks?**', async (route) => {
     const res = await route.fetch()
     const body = await res.json().catch(() => ({})) as { tasks?: Array<Record<string, unknown>> }
-    for (const t of body.tasks ?? []) if (t.id === SESSION_TASK_ID) t.unread = true
+    for (const t of body.tasks ?? []) {
+      if (t.id !== SESSION_TASK_ID) continue
+      if (!writes.some(isRead)) t.unread = true
+      else if (t.unread === true) unreadAgain++
+    }
     await route.fulfill({ response: res, json: body })
   })
-  const writes = await stubTaskWrites(page)
+  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+    if (!writes.some(isRead)) return
+    const text = String(payload)
+    if (!text.includes(SESSION_TASK_ID) || !text.includes('"unread":true')) return
+    try {
+      const frame = JSON.parse(text) as { data?: { task?: { id?: string; unread?: boolean } } }
+      if (frame.data?.task?.id === SESSION_TASK_ID && frame.data.task.unread === true) unreadAgain++
+    } catch { /* not a JSON event */ }
+  }))
   const errors = await boot(page)
   await expandProject(page, 'Walnut')
   const row = page.locator(`.todo-panel .todo-panel-item[data-task-id="${SESSION_TASK_ID}"]`)
@@ -142,8 +163,11 @@ test('N25: opening an unread row and typing in its session marks it read once', 
   // The first tap into the session (the composer) is the panel's own read event.
   await layer.locator('.chat-input-textarea').tap()
   await page.waitForTimeout(1_500)
-  const reads = writes.filter((r) => (JSON.parse(r.postData() || '{}') as { unread?: boolean }).unread === false)
-  expect(reads.map((r) => `${r.method()} ${new URL(r.url()).pathname}`)).toEqual([`PATCH /api/tasks/${SESSION_TASK_ID}`])
+  const reads = writes.filter(isRead).map((r) => `${r.method()} ${new URL(r.url()).pathname}`)
+  const read = `PATCH /api/tasks/${SESSION_TASK_ID}`
+  // One read for what the open found; a second only when the server marked it unread again since.
+  if (unreadAgain === 0) expect(reads).toEqual([read])
+  else expect([[read], [read, read]]).toContainEqual(reads)
   await expect(page.locator('.toast, .notification-toast').filter({ hasText: 'Action failed' })).toHaveCount(0)
   expect(errors).toEqual([])
 })

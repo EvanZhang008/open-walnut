@@ -25,6 +25,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 test.setTimeout(120_000)
 
@@ -130,6 +131,11 @@ const dialog = (page: Page) => page.locator('.devices-qr-dialog')
 const tabs = (page: Page) => page.getByTestId('pc-tabs').locator('.pc-tab')
 
 test.beforeEach(async ({ page }) => {
+  // The shared fixture's ui-prefs hold whatever another spec left there: one that opened
+  // the chat spot left it open, and a phone opens on that chat (a layer, Back where Menu
+  // was), so the phone tests below found no Menu for 60 s (2026-11-04: CI shard 2, both
+  // attempts of both). Each test boots on the fixture's own prefs and keeps its writes.
+  await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height: 800 })
 })
 

@@ -15,6 +15,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { findSmallTargets, findSmallText } from './phone-helpers'
+import { isolateUiPrefsContext } from './status-section-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 test.setTimeout(240_000)
 
@@ -64,6 +66,11 @@ async function shot(page: Page, name: string) {
 }
 
 const topbar = (page: Page) => page.locator('.phone-topbar')
+
+// Every phone here starts from Home's drawer (Menu). The shared fixture's ui-prefs hold what
+// other specs left: an open chat spot puts a layer over Home on a phone, with Back where
+// Menu was. Each page boots on the fixture's own prefs and keeps its writes to itself.
+test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
 /** Home > Menu > Settings, by taps. */
 async function openSettings(page: Page) {
@@ -330,6 +337,7 @@ test.describe('a phone signed in through a tunnel', () => {
   /** A fresh iPhone that signs in through the tunnel with a real code. */
   async function signedInPhone(browser: Browser, page: Page): Promise<{ phone: Page; context: BrowserContext; name: string }> {
     const context = await browser.newContext({ ...IPHONE })
+    await isolateUiPrefsContext(context)
     const phone = await context.newPage()
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 60_000 })

@@ -1482,3 +1482,30 @@ describe('a spec that waits for animations to finish', () => {
     expect(offendersOf('x.ts', '    await (await response).finished()')).toEqual([])
   })
 })
+
+describe('the phone drawer on the shared fixture', () => {
+  // A phone opens Home on the chat spot when the synced prefs say it is open: a layer with
+  // Back where Menu was. The shared fixture's ui-prefs hold what the last spec wrote, so a
+  // spec that opened the chat left every later phone spec with no Menu to tap (2026-11-04:
+  // devices-ways-and-qr's two phone tests on CI, both attempts). A spec that taps Menu on the
+  // shared fixture keeps its prefs to itself (isolateUiPrefs, isolateUiPrefsContext) or sets
+  // the chat spot itself. Specs with their own config run on their own fixture.
+  const own = new Set(fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts'))
+    .flatMap((f) => testMatchNames(fs.readFileSync(path.join(DIR, f), 'utf8'))))
+  const tapsMenu = /name: ['"]Menu['"]/
+  const keepsPrefs = /isolateUiPrefs(Context)?\(|open-walnut-home-chat-visible/
+
+  it('every spec that taps Menu keeps its prefs to itself', () => {
+    const offenders = sources
+      .filter(({ file }) => file.endsWith('.spec.ts') && !own.has(file))
+      .filter(({ text }) => tapsMenu.test(text) && !keepsPrefs.test(text))
+      .map(({ file }) => file)
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(tapsMenu.test("await page.getByRole('button', { name: 'Menu', exact: true }).click()")).toBe(true)
+    expect(keepsPrefs.test('await isolateUiPrefs(page)')).toBe(true)
+    expect(own.size).toBeGreaterThan(0)
+  })
+})

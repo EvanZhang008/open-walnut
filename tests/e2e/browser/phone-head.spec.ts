@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs/promises'
 import { devices, expect, request, test, type Page } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
@@ -170,6 +171,9 @@ test('C43: a light phone sees white before the bundle runs', async ({ page }) =>
 })
 
 test('C44: an explicit dark theme on a light system: one theme-color, and Settings switches it', async ({ page }) => {
+  // It opens the drawer from Home: a chat spot another spec left open on the shared fixture
+  // would put a layer there instead (Back, no Menu).
+  await isolateUiPrefs(page)
   await page.emulateMedia({ colorScheme: 'light' })
   await page.addInitScript(() => {
     if (sessionStorage.getItem('head-seeded')) return

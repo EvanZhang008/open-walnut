@@ -14,7 +14,7 @@
  */
 import { test, expect } from '@playwright/test'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 // Helper: create a cron job via REST API with unique suffix for parallel safety
 async function createCronJobViaApi(

@@ -4,6 +4,7 @@ import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 import { revealInTasksTable } from './tasks-table-helpers'
 import { expectPanelRunning } from './session-header-labels-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-status-store'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -399,6 +400,9 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
 test('keeps the same provider identity and running state on mobile surfaces', async ({ page }) => {
   test.setTimeout(90_000)
   await page.setViewportSize({ width: 390, height: 844 })
+  // It opens the drawer (Menu) on a phone: a chat spot another spec left open on the shared
+  // fixture would be a layer over it.
+  await isolateUiPrefs(page)
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-focus-dock-visible', 'true')
   })

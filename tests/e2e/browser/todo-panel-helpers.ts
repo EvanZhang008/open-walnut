@@ -106,7 +106,16 @@ export async function selectSection(
   if (name !== 'Tasks') {
     const tab = sectionTab(page, name)
     if (await tab.isVisible()) {
-      if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click()
+      if ((await tab.getAttribute('aria-selected')) !== 'true') {
+        await tab.click()
+        // The switch renders in a transition (TodoPanel handleSectionChange), so the old
+        // section stays on screen, and clickable, until the new one is drawn: a full tier
+        // takes a second or more. A spec that went on at once used the old section's
+        // controls; tier inline add put its task in the tier it had left, which then
+        // switched away under it (2026-11-04: Focus on CI shard 15, Satellite in a run
+        // of its file alone). Wait until the picked tab is the one drawn.
+        await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
+      }
       return
     }
   }

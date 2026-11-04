@@ -1,12 +1,15 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-gap-final'
 
 test('mobile sidebar toggle does not overlap task search at 390px', async ({ page }) => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   await page.setViewportSize({ width: 390, height: 844 })
+  // A chat spot another spec left open on the shared fixture puts a layer over Home (no Menu).
+  await isolateUiPrefs(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
