@@ -97,6 +97,10 @@ describe('when an idle session compacts', () => {
     expect(idleCompactThreshold({ compactsAt: 500_000 })).toBe(425_000);
     expect(idleCompactThreshold({ compactsAt: 500_000 }, 90)).toBe(450_000);
     expect(idleCompactThreshold({})).toBeNull();
+    // 2026-11-04 review: on a 200K window 85% (170K) comes after Claude Code's own compaction (about
+    // 167K), so the threshold stays 45K under the window there, and a 99% share never passes it.
+    expect(idleCompactThreshold({ compactsAt: 200_000 })).toBe(155_000);
+    expect(idleCompactThreshold({ compactsAt: 500_000 }, 99)).toBe(455_000);
     expect([resolveIdleCompactLimitPercent(undefined), resolveIdleCompactLimitPercent(null), resolveIdleCompactLimitPercent(40),
       resolveIdleCompactLimitPercent(100), resolveIdleCompactLimitPercent(90)]).toEqual([85, 85, 85, 85, 90]);
   });
@@ -108,9 +112,11 @@ describe('when an idle session compacts', () => {
 
   it('says why it ran: the tokens, the threshold, and where the threshold came from', () => {
     expect(idleCompactReasonText({ tokens: 430_000, threshold: 425_000, limitPercent: 85, compactsAt: 500_000, source: 'auto-compact' }))
-      .toBe('430K tokens, past 85% (425K) of the 500K auto-compaction window set for this session');
+      .toBe('430K tokens, past 85% (425K) of the 500K auto-compaction window this session uses');
     expect(idleCompactReasonText({ tokens: 900_000, threshold: 850_000, limitPercent: 85, compactsAt: 1_000_000, source: 'model' }))
       .toBe("900K tokens, past 85% (850K) of the model's 1M context window (no auto-compaction window is set)");
+    expect(idleCompactReasonText({ tokens: 160_000, threshold: 155_000, limitPercent: 85, compactsAt: 200_000, source: 'model' }))
+      .toBe("160K tokens, past 155K: 45K under the model's 200K context window (no auto-compaction window is set), since Claude Code compacts by itself before 85% (170K)");
   });
 
   it('never: a 5-minute cache, an unknown lifetime, compacted already, or expired', () => {

@@ -27,6 +27,12 @@ export const DEFAULT_IDLE_COMPACT_MIN_TOKENS = 200_000;
  * on its own near 93% of a 500K window, and a busy session could get there first.
  */
 export const DEFAULT_IDLE_COMPACT_LIMIT_PERCENT = 85;
+/**
+ * The threshold stays at least this far under the limit: Claude Code compacts by itself about 33K
+ * under its window (room for its answer), and one more turn can add the rest. On a 200K window
+ * 85% (170K) would come after the CLI's own compaction (about 167K), so there it is 155K.
+ */
+export const IDLE_COMPACT_HEADROOM_TOKENS = 45_000;
 /** The share a setting may name; outside it (or unset) the default holds. */
 export const IDLE_COMPACT_LIMIT_PERCENT_RANGE = { min: 50, max: 99 } as const;
 export function resolveIdleCompactLimitPercent(value: unknown): number {
@@ -67,8 +73,8 @@ export type CompactsAtSource = 'auto-compact' | 'model';
 
 /** The size an idle session must reach to be compacted, or null when where it compacts is unknown (then it is never compacted). */
 export function idleCompactThreshold(facts: Pick<PromptCacheFacts, 'compactsAt'> | undefined, limitPercent: number = DEFAULT_IDLE_COMPACT_LIMIT_PERCENT): number | null {
-  if (!facts?.compactsAt || facts.compactsAt <= 0) return null;
-  return Math.round(facts.compactsAt * limitPercent / 100);
+  if (!facts?.compactsAt || facts.compactsAt <= IDLE_COMPACT_HEADROOM_TOKENS) return null;
+  return Math.min(Math.round(facts.compactsAt * limitPercent / 100), facts.compactsAt - IDLE_COMPACT_HEADROOM_TOKENS);
 }
 
 /** The usage counters a Claude request reports (message_start, message_delta, assistant). */
@@ -190,7 +196,7 @@ export function idleCompactLineUuid(random: string): string {
 export interface IdleCompactReason {
   /** Context tokens when it was sent. */
   tokens: number;
-  /** The size it had to reach: limitPercent of compactsAt. */
+  /** The size it had to reach: limitPercent of compactsAt, or IDLE_COMPACT_HEADROOM_TOKENS under it when that is lower. */
   threshold: number;
   limitPercent: number;
   compactsAt: number;
@@ -201,11 +207,15 @@ function shortTokens(n: number): string {
   return n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : `${Math.round(n / 1000)}K`;
 }
 
-/** "400K tokens, past 85% (383K) of the 450K auto-compaction window set for this session". */
+/** "400K tokens, past 85% (383K) of the 450K auto-compaction window this session uses". */
 export function idleCompactReasonText(r: IdleCompactReason): string {
   const base = r.source === 'auto-compact'
-    ? `the ${shortTokens(r.compactsAt)} auto-compaction window set for this session`
+    ? `the ${shortTokens(r.compactsAt)} auto-compaction window this session uses`
     : `the model's ${shortTokens(r.compactsAt)} context window (no auto-compaction window is set)`;
+  const share = Math.round(r.compactsAt * r.limitPercent / 100);
+  if (r.threshold < share) {
+    return `${shortTokens(r.tokens)} tokens, past ${shortTokens(r.threshold)}: ${shortTokens(r.compactsAt - r.threshold)} under ${base}, since Claude Code compacts by itself before ${r.limitPercent}% (${shortTokens(share)})`;
+  }
   return `${shortTokens(r.tokens)} tokens, past ${r.limitPercent}% (${shortTokens(r.threshold)}) of ${base}`;
 }
 

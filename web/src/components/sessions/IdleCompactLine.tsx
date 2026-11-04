@@ -6,7 +6,7 @@
  */
 import { useCallback, useContext, useEffect, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchConfig, updateConfig } from '@/api/config';
+import { fetchConfig, fetchFreshConfig, updateConfig } from '@/api/config';
 import { fetchSession } from '@/api/sessions';
 import { useEvent } from '@/hooks/useWebSocket';
 import type { Config } from '@open-walnut/core';
@@ -68,7 +68,7 @@ export function IdleCompactSetting() {
     setBusy(true);
     setError(null);
     try {
-      const c = await fetchConfig();
+      const c = await fetchFreshConfig();
       await updateConfig({
         session: { ...(c.session ?? {}), idle_compaction: { ...(c.session?.idle_compaction ?? {}), ...patch } },
       } as Partial<Config>);
@@ -120,7 +120,7 @@ export function IdleCompactSetting() {
       </div>
       <div className="idle-compact-setting-help">
         For every session; the default is {DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%. The limit is the session's auto-compaction
-        window, else its model's context window; when neither is known Walnut does not compact.{' '}
+        window, else its model's context window, and never closer than 45K to it; when neither is known Walnut does not compact.{' '}
         <Link to="/settings#sessions">All session settings</Link>
       </div>
       {error && <div className="idle-compact-error" role="alert">{error}</div>}
@@ -155,7 +155,7 @@ export function IdleCompactLine({ message, time, noticeId }: { message: string; 
                 ? 'Reading why it ran…'
                 : reason
                   ? <>Why: {idleCompactReasonText(reason)}.</>
-                  : 'Why: not recorded for this compaction (an earlier version of Walnut ran it).'}
+                  : 'Why: not recorded for this compaction.'}
             </div>
           )}
           <IdleCompactSetting />

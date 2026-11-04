@@ -125,7 +125,7 @@ describe('when it fires', () => {
     await h.runDue();
     expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
     expect(isQuietTurn(SID)).toBe(true);
-    expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 85% (383K) of the 450K auto-compaction window set for this session.');
+    expect(h.notes[0]).toBe('Compacting this idle session before its prompt cache expires in about 3 min: 400K tokens, past 85% (383K) of the 450K auto-compaction window this session uses.');
     expect(h.state.rec?.idleCompaction).toMatchObject({ priorTurnEnd: new Date(T0 + 30_000).toISOString(), tokens: 400_000 });
     // Its history row says why: kept by the command line's uuid.
     expect(h.state.rec?.idleCompactionLog).toEqual([{

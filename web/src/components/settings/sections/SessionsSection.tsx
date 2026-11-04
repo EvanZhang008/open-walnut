@@ -175,7 +175,7 @@ export function SessionsSection({ config, onSave }: Props) {
           indent
           anchor="idle-compaction-percent-row"
           label="When the context reaches"
-          help={`Of the session's auto-compaction limit: its auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW on its host), else its model's context window. When neither is known Walnut does not compact. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
+          help={`Of the session's auto-compaction limit: its auto-compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW on its host), else its model's context window. Never closer than 45K to it, where Claude Code compacts by itself. When neither is known Walnut does not compact. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
           htmlFor="idle-compaction-percent"
           error={compactPercent.error}
           control={(
