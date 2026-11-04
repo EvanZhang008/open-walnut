@@ -13,6 +13,8 @@
  *   POST  /sessions/:id/restart            → { status:'restarted', sessionId, pendingMessages }
  *   POST  /sessions/:id/retry              → { status:'reconnected'|'resumable'|'resuming'|'pending', … }
  *   POST  /sessions/:id/recheck            → { checked, reachable, alive?, processStatus, … }
+ *   POST  /sessions/:id/interrupt          → { status:'interrupted', sessionId, wasRunning } (stops the
+ *                                            running turn only: the process, the queue and the session stay)
  *   POST  /sessions/:id/permission { requestId, allow, message? } → { status:'resolved', requestId, allow }
  *   POST  /sessions/:id/execute-continue   → { status:'started', sessionId }
  *   GET   /sessions/:id/changes?base&scope&light&refresh → { groups, … }
@@ -443,6 +445,24 @@ sessionLifecycleV1Router.post('/sessions/:id/recheck', async (req: Request, res:
     }
     const { recheckSession } = await import('../../core/sessions/session-lifecycle.js')
     await runLocal(res, next, 200, () => recheckSession(sessionId))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/sessions/:id/interrupt — stop the running turn, nothing else (the phone's
+// Stop). The process stays alive; messages queued before it are not sent by it.
+sessionLifecycleV1Router.post('/sessions/:id/interrupt', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    if (await refuseSessionControl(req, res, sessionId, 'stop')) return
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'interrupt', sessionId, undefined, 200)
+      return
+    }
+    const { interruptSession } = await import('../../core/sessions/session-lifecycle.js')
+    await runLocal(res, next, 200, () => interruptSession(sessionId, 'mobile'))
   } catch (err) {
     next(err)
   }

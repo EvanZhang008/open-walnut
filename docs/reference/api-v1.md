@@ -179,6 +179,7 @@ path on the companion".
 | POST | `/api/v1/sessions/:id/restart` | Respawn a fresh CLI — wakes a dead session (cloud relays) |
 | POST | `/api/v1/sessions/:id/retry` | Reconnect a failed/stopped session — never sends message text (cloud relays) |
 | POST | `/api/v1/sessions/:id/recheck` | Re-probe the host and reconcile the record; no message, no spawn (cloud relays) |
+| POST | `/api/v1/sessions/:id/interrupt` | Stop the running turn only: the process, the queue and the session stay (cloud relays) |
 | POST | `/api/v1/sessions/:id/permission` | Answer a CLI tool-permission prompt (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
 | GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
@@ -2547,7 +2548,7 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"? }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"?, "interrupt"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
@@ -2557,6 +2558,12 @@ primary box the same endpoints serve directly — no bridge involved.
     spoken answer first and any detail below a line holding only `---`. Every
     display surface leaves the hint out of the message text. Not a boolean:
     `400 bad_request`. Absent or `false`: unchanged.
+  - `interrupt` (additive, 2026-11) — `true` stops the session's running turn and
+    delivers this message in a fresh one (the console's "Interrupt & send"). Absent
+    or `false`: unchanged (the message joins the turn or waits behind it). Not a
+    boolean: `400 bad_request`. On the cloud companion the stop is relayed to the
+    primary first and the message follows; when the stop cannot be delivered
+    (`503 bridge_offline`) nothing is sent.
   - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
     `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
     reuses the original id and collapses onto the already-queued/delivered
@@ -2908,7 +2915,9 @@ ledger. Both end up in the same persistent message queue.
   (or the request predates `messageId`), `409 parked` (with `parkedReason`) when
   it was set aside, for example by the user's Stop: a session caller never puts
   that back in line, only the user's Retry does. `404 not_found` for an unknown
-  request, `501` on the cloud companion.
+  request, `501` on the cloud companion. Body `{ "interrupt": true }` (additive,
+  2026-11, a person's call only: `400` from a session caller) stops the session's
+  running turn first, so the row goes out in a fresh one.
 - A send with no caller session that carries `x-walnut-caller-kind: automation`
   and `x-walnut-sender: <label>` (additive, 2026-10-29) is a script or scheduled
   job, never the user: it is delivered as an anonymous peer note from
@@ -3143,7 +3152,7 @@ BOTH boxes:
   refused or did not answer; the message carries its reason). A REPLICA relays
   it to the primary as the `background-task.stop` control action.
 
-### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / recheck / permission / execute-continue / changes / history
+### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / recheck / interrupt / permission / execute-continue / changes / history
 
 Same shared core as the web console (`src/core/sessions/session-lifecycle.ts`).
 All Class B on a cloud REPLICA: each endpoint relays over the `/bridge` WS as a
@@ -3223,6 +3232,15 @@ an id outside `[A-Za-z0-9_-]`.
   `archived` | `no_pooled_connection` | `timeout` | `rpc_failed` | `no_snapshot`.
   Bounded to one 5s RPC over an ALREADY-POOLED connection — it never dials, so
   opening a panel cannot pay SSH connect costs. Cloud relays (Class B).
+- `POST /api/v1/sessions/:id/interrupt` (additive 2026-11) →
+  `200 { "status": "interrupted", "sessionId", "wasRunning" }` — the phone's
+  Stop. Stops the session's running turn and nothing else: the process stays
+  alive, no message is sent, and messages queued before it are not delivered by
+  it. `wasRunning` is whether the record said a turn was running (`false` = the
+  stop was a no-op). Works for Claude Code, SDK and ACP sessions alike. `404`
+  for an unknown session; `409 own_session` when a session asks to stop itself.
+  Cloud relays (Class B); an older primary answers
+  `400 session_control_needs_upgrade`.
 - `POST /api/v1/sessions/:id/permission` body `{ "requestId", "allow",
   "message"?, "optionId"?, "answers"? }` → `200 { "status": "resolved",
   "requestId", "allow" }` — answers a live CLI tool prompt (`message` =

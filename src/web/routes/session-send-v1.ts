@@ -2,7 +2,7 @@
  * /api/v1 session send endpoints, on sessionStreamV1Router (session-stream-v1.ts
  * registers them, so the API is unchanged):
  *
- *   POST /sessions/:id/messages             { text, images?, messageId?, voice? } → 202
+ *   POST /sessions/:id/messages             { text, images?, messageId?, voice?, interrupt? } → 202
  *   GET  /sessions/:id/messages/:messageId  what became of a held message
  *
  * Primary box: the durable message queue (sendMessageToSession). Cloud box: a
@@ -27,6 +27,8 @@ const SID_RE = /^[A-Za-z0-9_-]+$/
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
 const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
+// How long the companion waits for the primary to take a stop that comes before a send.
+const INTERRUPT_RELAY_TIMEOUT_MS = 15_000
 
 /** Extract valid image payloads from a request body (silently drops junk). */
 export function extractValidImages(raw: unknown): SessionImage[] {
@@ -70,6 +72,15 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       return
     }
     const voice = rawVoice === true
+    // Additive: `interrupt: true` = stop the running turn and deliver this message in a
+    // fresh one (the console's "Interrupt & send"); without it a message sent mid-turn
+    // joins the turn or waits behind it.
+    const rawInterrupt = req.body?.interrupt
+    if (rawInterrupt !== undefined && typeof rawInterrupt !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'interrupt must be a boolean')
+      return
+    }
+    const interrupt = rawInterrupt === true
 
     // Cloud-owned session (cloud.exec): the CLI is on THIS box, so it takes the
     // primary-box path below: same durable queue, same session-runner delivery,
@@ -92,6 +103,20 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       const rawMid = req.body?.messageId
       const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
         ? rawMid : undefined
+      // The relay carries text only, so the stop goes first and the message after it: the
+      // runner's send waits out a stop still settling (claude-code-session.ts handleSend).
+      // A stop that did not reach the primary sends nothing, so the words stay in the composer.
+      if (interrupt) {
+        const { callPrimaryControl } = await import('./v1-control-relay.js')
+        const stopped = await callPrimaryControl('interrupt', sessionId, undefined, INTERRUPT_RELAY_TIMEOUT_MS)
+        if (!stopped.ok) {
+          const f = stopped.failure
+          if (f.kind === 'error') sendError(res, f.status, f.code, f.message)
+          else if (f.kind === 'needs_upgrade') sendError(res, 400, 'session_control_needs_upgrade', f.message)
+          else sendError(res, 503, 'bridge_offline', f.message)
+          return
+        }
+      }
       // The voice hint rides IN the relayed text: the primary keeps the block
       // where it is when it adds its own hints (hint-format.ts splitHinted).
       await cloudSend(res, sessionId, voice ? applyVoiceReply(text) : text, images, clientMessageId)
@@ -149,10 +174,11 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       taskId: record.taskId,
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
+      ...(interrupt ? { interrupt: true } : {}),
       hinted: true,
     })
     await outputMode.commit()
-    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice })
+    log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice, interrupt })
     res.status(202).json({ messageId: msg.id })
   } catch (err) {
     next(err)

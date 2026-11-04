@@ -794,6 +794,27 @@ export async function terminateSession(
 
 export interface RestartResult { status: 'restarted'; sessionId: string; pendingMessages: number }
 
+export interface InterruptResult {
+  status: 'interrupted';
+  sessionId: string;
+  /** The record said a turn was running when the stop went out; false = nothing was running (the stop is then a no-op). */
+  wasRunning: boolean;
+}
+
+/**
+ * Stop the session's running turn and nothing else: no message, no queue drain, and the
+ * process stays alive (terminateSession kills it). The runner's SESSION_INTERRUPT handler
+ * routes CLI / SDK / ACP. Shared by the phone's /api/v1 route and the cloud control relay.
+ */
+export async function interruptSession(sessionId: string, source: string): Promise<InterruptResult> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new SessionControlError('Session not found', 404);
+  log.session.info('session interrupt requested', { sessionId, source });
+  bus.emit(EventNames.SESSION_INTERRUPT, { sessionId }, ['session-runner'], { source });
+  return { status: 'interrupted', sessionId, wasRunning: record.process_status === 'running' };
+}
+
 /**
  * Respawn a fresh `claude -p --resume` process so the session RE-INITIALIZES
  * (init event + SessionStart hook + spawn-time settings reload). This is the

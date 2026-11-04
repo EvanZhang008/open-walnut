@@ -56,6 +56,8 @@ export type SendNowResult = { sent: true; sessionId: string } | { sent: false; w
  */
 export async function sendQueuedNow(input: {
   messageId: string; sessionId?: string; taskId?: string; message?: string; source: string; unpark?: boolean;
+  /** Stop the running turn first, so the row goes out in a fresh one (a person's "Send now" while the session works). */
+  interrupt?: boolean;
 }): Promise<SendNowResult> {
   const row = await findQueuedMessage(input.messageId);
   if (!row || (input.sessionId && row.sessionId !== input.sessionId)) return { sent: false, why: 'gone' };
@@ -68,6 +70,7 @@ export async function sendQueuedNow(input: {
   // pending. No SESSION_MESSAGE_QUEUED: the row already exists under this id.
   bus.emit(EventNames.SESSION_SEND, {
     sessionId: row.sessionId, taskId: input.taskId, message: input.message || row.message,
+    ...(input.interrupt ? { interrupt: true } : {}),
   }, ['session-runner'], { source: input.source });
   return { sent: true, sessionId: row.sessionId };
 }

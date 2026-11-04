@@ -920,7 +920,7 @@ export type SessionControlAction =
   // One background task of a session (core/sessions/background-task-stop.ts).
   | 'background-task.stop'
   // Wave 1 lifecycle family (2026-08):
-  | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'permission'
+  | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'interrupt' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
   // One transcript page (cursors and all) for a phone on the replica, built here
   // because only the primary can page a session (web/routes/session-transcript-relay.ts).
@@ -1229,6 +1229,11 @@ export async function handleSessionControlRelay(
       case 'recheck': {
         const { recheckSession } = await import('./session-lifecycle.js');
         result = await recheckSession(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'interrupt': {
+        const { interruptSession } = await import('./session-lifecycle.js');
+        result = await interruptSession(sessionId, 'mobile-control-bridge') as unknown as Record<string, unknown>;
         break;
       }
       case 'permission': {
