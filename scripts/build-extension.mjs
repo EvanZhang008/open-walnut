@@ -30,8 +30,8 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 // A browser takes 1 to 4 dot-separated numbers only.
 const version = String(pkg.version).split(/[-+]/)[0].split('.').slice(0, 4).map((n) => String(Number(n) || 0)).join('.')
 
-const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar']
-const PAGES = { popup: 'popup', menu: 'menu frame', savebar: 'bar frame' }
+const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel']
+const PAGES = { popup: 'popup', menu: 'menu frame', savebar: 'bar frame', sidepanel: 'sidepanel panel' }
 const SITES = ['http://*/*', 'https://*/*']
 
 export function manifestFor(browser) {
@@ -40,13 +40,14 @@ export function manifestFor(browser) {
     name: 'Walnut',
     short_name: 'Walnut',
     version,
-    description: 'Fill and save passwords from your own Walnut.',
+    description: 'Your own Walnut in the browser: fill and save passwords, and ask Walnut about the page you are on.',
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
     action: { default_title: 'Walnut', default_popup: 'popup.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
     // alarms: agents in this browser (agent.ts) come back after the background was stopped.
-    permissions: ['storage', 'alarms'],
+    // contextMenus: "Ask Walnut about ..." on a selection or a page, which opens the side panel.
+    permissions: ['storage', 'alarms', 'contextMenus', ...(browser === 'chrome' ? ['sidePanel'] : [])],
     // Every web page (the same warning as http and https alone): a screenshot of an agent's
     // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.
     host_permissions: ['<all_urls>'],
@@ -56,6 +57,9 @@ export function manifestFor(browser) {
       'fill-login': { suggested_key: { default: 'Ctrl+Shift+L', mac: 'Command+Shift+L' }, description: 'Fill the login for this page' },
     },
   }
+  // Walnut beside the page (sidepanel.ts): Chrome's side panel, Firefox's sidebar.
+  if (browser === 'chrome') m.side_panel = { default_path: 'sidepanel.html' }
+  else m.sidebar_action = { default_panel: 'sidepanel.html', default_title: 'Walnut', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' }, open_at_install: false }
   if (browser === 'firefox') {
     // It collects nothing: everything stays between the browser and the person's own Walnut.
     m.browser_specific_settings = { gecko: { id: 'extension@openwalnut.dev', strict_min_version: '128.0', data_collection_permissions: { required: ['none'] } } }

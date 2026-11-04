@@ -1,6 +1,7 @@
 import { useLayoutEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { PopoutExtPanel } from './PopoutExtPanel';
 import { PopoutFileView } from './PopoutFileView';
 import { PopoutGlobalNotes } from './PopoutGlobalNotes';
 import { PopoutNote } from './PopoutNote';
@@ -50,6 +51,9 @@ export function PopoutRoot() {
 
   let content: ReactNode;
   switch (view) {
+    case 'ext-panel':
+      content = <PopoutExtPanel />;
+      break;
     case 'file':
       content = <PopoutFileView />;
       break;

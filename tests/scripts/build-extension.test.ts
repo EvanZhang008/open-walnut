@@ -26,14 +26,27 @@ describe('extension manifests', () => {
     expect(c.version).toMatch(/^\d+(\.\d+){0,3}$/)
   })
 
-  it('asks for storage, alarms and web pages, and exposes only the two framed pages', () => {
+  it('asks for storage, alarms, the context menu and web pages, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage', 'alarms'])
+      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', ...(b === 'chrome' ? ['sidePanel'] : [])])
       expect(m.host_permissions).toEqual(['<all_urls>'])
       expect(m.web_accessible_resources).toEqual([{ resources: ['menu.html', 'savebar.html'], matches: ['http://*/*', 'https://*/*'] }])
       expect(m.content_scripts[0].all_frames).toBe(true)
     }
+  })
+})
+
+describe('the side panel', () => {
+  it('is Chrome\'s side panel and Firefox\'s sidebar, the same page, never framed into a site', () => {
+    const c = manifestFor('chrome')
+    const f = manifestFor('firefox')
+    expect(c.side_panel).toEqual({ default_path: 'sidepanel.html' })
+    expect(c.sidebar_action).toBeUndefined()
+    expect(f.sidebar_action.default_panel).toBe('sidepanel.html')
+    expect(f.sidebar_action.open_at_install).toBe(false)
+    expect(f.side_panel).toBeUndefined()
+    for (const m of [c, f]) expect(m.web_accessible_resources[0].resources).not.toContain('sidepanel.html')
   })
 })
 

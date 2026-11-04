@@ -38,11 +38,13 @@ export interface ExtApi {
     goBack(tabId: number): Promise<void>
     captureVisibleTab(windowId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string>
     onRemoved: Event<(tabId: number) => void>
-    onUpdated: Event<(tabId: number, change: { status?: string; url?: string }, tab: Tab) => void>
+    onUpdated: Event<(tabId: number, change: { status?: string; url?: string; title?: string }, tab: Tab) => void>
+    onActivated: Event<(info: { tabId: number; windowId: number }) => void>
   }
   windows: {
     create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean }): Promise<Win>
     get(id: number, o?: { populate?: boolean }): Promise<Win>
+    getCurrent(): Promise<Win>
     onRemoved: Event<(windowId: number) => void>
   }
   permissions: {
@@ -52,6 +54,15 @@ export interface ExtApi {
   alarms: { create(name: string, o: { periodInMinutes: number }): Promise<void> | void; onAlarm: Event<(a: { name: string }) => void> }
   action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; setBadgeBackgroundColor(o: { color: string }): Promise<void> }
   commands?: { onCommand: Event<(name: string, tab?: Tab) => void> }
+  contextMenus?: {
+    create(o: { id: string; title: string; contexts: string[] }, cb?: () => void): void
+    removeAll(): Promise<void> | void
+    onClicked: Event<(info: { menuItemId: string | number; selectionText?: string; pageUrl?: string }, tab?: Tab) => void>
+  }
+  /** Chrome's side panel. */
+  sidePanel?: { open(o: { windowId?: number; tabId?: number }): Promise<void> }
+  /** Firefox's sidebar. */
+  sidebarAction?: { open(): Promise<void> }
 }
 
 interface StorageArea {

@@ -256,6 +256,50 @@ describe('agents in the person\'s browser', () => {
     await expect.poll(async () => (await http('GET', '/browser/status')).body.browsers.some((b: { device: string }) => b.device === dev.name), { timeout: 5000 }).toBe(false)
   })
 
+  it('the side panel keeps a page\'s text for the ask in a file only the owner reads', async () => {
+    const text = 'Release notes. The sync engine retries a failed upload three times.'
+    const r = await http('POST', '/browser/page', { url: 'https://docs.example.test/notes', title: 'Release  notes', text })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    const file = String(r.body.file)
+    expect(file.startsWith(`${WALNUT_HOME}/cache/browser-pages/`)).toBe(true)
+    const body = await fsp.readFile(file, 'utf8')
+    expect(body).toContain('# Release notes')
+    expect(body).toContain('https://docs.example.test/notes')
+    expect(body).toContain(text)
+    expect((await fsp.stat(file)).mode & 0o777).toBe(0o600)
+    // An agent may keep a page the same way (every person's step is an agent's too).
+    expect((await http('POST', '/browser/page', { url: 'https://docs.example.test/notes', text }, AGENT)).status).toBe(200)
+    expect((await http('POST', '/browser/page', { url: 'file:///etc/passwd', text })).status).toBe(400)
+    expect((await http('POST', '/browser/page', { url: 'https://docs.example.test/notes', text: '  ' })).status).toBe(400)
+  })
+
+  it('the person lets an ask act in their tab from the side panel: its task owns the tab, no site is allowed for others', async () => {
+    const created = await http('POST', '/tasks', { title: 'Ask about the release notes' })
+    const taskId = String(created.body.task?.id ?? created.body.id ?? '')
+    expect(taskId, JSON.stringify(created.body)).not.toBe('')
+    const url = 'https://docs.panel.test/notes'
+    // Only the extension hands a tab over, with its own token.
+    expect((await http('POST', '/browser/adopt', { tab: 900, task: taskId, url })).body.code).toBe('not_extension')
+    expect((await http('POST', '/browser/adopt', { tab: 900, task: 'no-such-task', url }, ext.auth)).status).toBe(404)
+    expect((await http('POST', '/browser/adopt', { tab: 900, task: taskId, url: 'chrome://settings' }, ext.auth)).body.code).toBe('not_a_web_page')
+    const port = Number(new URL(base).port)
+    const lan = (await getPairingTargets(`http://localhost:${port}`, port)).find((t) => t.kind !== 'cloud')
+    if (lan) expect((await http('POST', '/browser/adopt', { tab: 900, task: taskId, url: `${lan.origin}/` }, ext.auth)).body.code).toBe('walnut_page')
+    const ok = await http('POST', '/browser/adopt', { tab: 900, task: taskId, url }, ext.auth)
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200)
+    expect(ok.body).toMatchObject({ ok: true, tab: 900, site: 'panel.test' })
+    expect(hub.tabOwner(device, 900)).toBe(`task:${taskId}`)
+    // Handing one tab over lets no agent open that site anywhere else.
+    expect((await http('GET', '/browser/status')).body.sites.map((x: { site: string }) => x.site)).not.toContain('panel.test')
+    const elsewhere = await http('POST', '/browser/act', { action: 'open', url: 'https://docs.panel.test/other' }, AGENT)
+    expect(elsewhere.status).toBe(202)
+    expect(elsewhere.body.code).toBe('site_needs_ok')
+    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1 })
+    // Anyone else is refused the tab.
+    ext.tabs.set(900, { url, owner: `task:${taskId}` })
+    expect((await http('POST', '/browser/act', { action: 'snapshot', tab: 900 }, AGENT)).body.code).toBe('not_your_tab')
+  })
+
   it('the extension turning agents off disconnects it', async () => {
     await ext.stop()
     expect((await http('POST', '/browser/off', {}, ext.auth)).status).toBe(200)

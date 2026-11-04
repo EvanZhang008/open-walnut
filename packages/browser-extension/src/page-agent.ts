@@ -99,12 +99,24 @@ function nameOf(el: Element): string {
   return el.getAttribute('title') || el.getAttribute('alt') || el.querySelector('img')?.getAttribute('alt') || el.getAttribute('name') || ''
 }
 
+/** Every field seen as a password: one the page's "show" button turned to text stays a secret. */
+const wasPassword = new WeakSet<HTMLInputElement>()
+
+/** Notes the password fields on the page now (the content script calls it at load, on changes and on focus). */
+export function notePasswords(root: Document | Element = document): void {
+  for (const el of all(root as Document, 'input[type=password]')) wasPassword.add(el as HTMLInputElement)
+}
+
+export function notePassword(el: EventTarget | null): void {
+  if (el instanceof HTMLInputElement && el.type === 'password') wasPassword.add(el)
+}
+
 /**
  * A value no agent reads: a password (also one the page's "show" button turned to text), a
  * one-time code, and anything Walnut filled from the vault.
  */
 function secret(el: HTMLInputElement): boolean {
-  if (el.type === 'password' || walnutFilled.has(el)) return true
+  if (el.type === 'password' || walnutFilled.has(el) || wasPassword.has(el)) return true
   const ac = (el.getAttribute('autocomplete') ?? '').toLowerCase()
   if (/\b(current-password|new-password|one-time-code|cc-number|cc-csc)\b/.test(ac)) return true
   return /pass(word|wd)|(^|[\W_])(otp|totp|2fa|mfa|cvc|cvv|csc)($|[\W_])/i.test(` ${el.name} ${el.id} `)
@@ -179,6 +191,30 @@ export function snapshot(max = 300): { snapshot: string; url: string; title: str
 export function text(max = 20_000): { text: string; url: string; title: string } {
   const t = (document.body?.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim()
   return { text: t.length > max ? `${t.slice(0, max)}\n… (cut at ${max} characters)` : t, url: location.href, title: document.title }
+}
+
+/**
+ * What the side panel is told about the page: its address, title, the person's selection (in a
+ * text box too, never in a secret field) and, when a question is asked with it, its visible text
+ * (no field values).
+ */
+export function pageContext(withText: boolean, maxText = 200_000): { url: string; title: string; selection: string; text?: string } {
+  const el = document.activeElement
+  const inField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+  let selection = ''
+  if (inField) {
+    // A box's own selection (Chrome also reports it through getSelection()): never a secret one.
+    if (!(el instanceof HTMLInputElement && (secret(el) || !['text', 'search', 'url', 'email', ''].includes(el.type)))) {
+      const a = el.selectionStart ?? 0
+      const b = el.selectionEnd ?? 0
+      if (b > a) selection = el.value.slice(a, b)
+    }
+  } else {
+    selection = getSelection()?.toString() ?? ''
+  }
+  const out: { url: string; title: string; selection: string; text?: string } = { url: location.href, title: document.title, selection: selection.trim().slice(0, 4000) }
+  if (withText) out.text = (document.body?.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim().slice(0, maxText)
+  return out
 }
 
 // ── acting ──

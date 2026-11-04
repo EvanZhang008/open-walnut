@@ -4,7 +4,7 @@
  * the background; a copied secret comes back only to be put on the clipboard by this page,
  * which has the person's click.
  */
-import { ask } from './ext'
+import { ask, ext } from './ext'
 import { avatar, h, icon } from './dom'
 
 interface Item { id: string; title: string; username?: string; site?: string; hasTotp: boolean; exact?: boolean; type?: string }
@@ -14,6 +14,23 @@ const root = document.getElementById('root')!
 /** Walnut no longer knows this extension (removed in Settings): it forgot the connection, so connect again. */
 const DISCONNECTED = new Set(['not_connected', 'not_paired', 'token_refused'])
 const inWindow = new URLSearchParams(location.search).has('window')
+
+/** This popup's window, known before any click: opening the side panel must not wait on anything. */
+let windowId: number | undefined
+void ext.windows.getCurrent().then((w) => { windowId = w.id }).catch(() => undefined)
+
+/** Walnut in the side panel, about the page this window shows. */
+function askButton(): HTMLElement {
+  const b = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-ask', title: 'Ask Walnut about this page in the side panel' }, 'Ask Walnut')
+  b.onclick = () => {
+    if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)
+    else if (ext.sidebarAction) void ext.sidebarAction.open().catch(() => undefined)
+    // No side panel in this browser: the same page in a window of its own, beside this one.
+    else if (windowId !== undefined) void ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${windowId}`), type: 'popup', width: 420, height: 760 })
+    if (!inWindow) window.close()
+  }
+  return b
+}
 
 function toast(text: string): void {
   let t = document.querySelector<HTMLElement>('.toast')
@@ -78,7 +95,8 @@ async function unlockView(st: State): Promise<HTMLElement> {
       h('p', {}, 'Your Walnut has no password vault yet. Make one in Walnut, then come back.'),
       h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut Passwords'),
       // Agents in this browser need no vault: their switch is in Settings.
-      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'))
+      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'),
+      h('div', { style: 'margin-top:10px' }, askButton()))
   }
   const pw = h('input', { class: 'input', type: 'password', id: 'pw', autocomplete: 'current-password', 'aria-label': 'Master password', placeholder: 'Master password' })
   const sk = h('input', { class: 'input mono', id: 'sk', 'aria-label': 'Secret Key', placeholder: 'W1-XXXXXX-…', spellcheck: 'false', style: 'margin-top:8px' })
@@ -109,7 +127,8 @@ async function unlockView(st: State): Promise<HTMLElement> {
       h('h2', {}, 'Walnut is locked'),
       h('p', {}, `Unlock to fill passwords${st.serverUrl ? ` from ${new URL(st.serverUrl).host}` : ''}.`)),
     h('div', { class: 'pane', style: 'padding-top:0' }, form,
-      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings')))
+      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'),
+      h('div', { style: 'margin-top:6px;text-align:center' }, askButton())))
 }
 
 // ── unlocked ──
@@ -194,6 +213,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
     h('div', { class: 'pane', style: 'padding-bottom:0' }, h('div', { class: 'search' }, icon('search'), q)),
     list,
     h('div', { class: 'foot' },
+      askButton(),
       h('button', { class: 'btn', type: 'button', onclick: () => void showGenerator(st) }, 'Generator'),
       h('button', { class: 'btn', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut'),
       h('button', { class: 'btn', type: 'button', onclick: () => void showSettings(st) }, 'Settings')))

@@ -20,8 +20,12 @@ class AgentError extends Error {
   constructor(message: string, readonly code: string, readonly extra: Record<string, unknown> = {}) { super(message) }
 }
 
-/** The agent tabs and who opened each (a task's owner key) and its name for the frame. */
-const agentTabs = tabStore<{ owner: string; who?: string; history?: string[] }>('agentTabs')
+/**
+ * The agent tabs and who opened each (a task's owner key) and its name for the frame. `handed`:
+ * the person handed this tab over from the side panel, and its site (allowed in this tab alone).
+ */
+interface AgentTab { owner: string; who?: string; history?: string[]; handed?: string }
+const agentTabs = tabStore<AgentTab>('agentTabs')
 const HISTORY_MAX = 30
 const PAGE_OPS = new Set(['snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait'])
 /** After these the page may load something new: wait for it before answering. */
@@ -43,6 +47,11 @@ function allowed(allow: WireCommand['allow'], url: string): boolean {
   const site = siteKey(url)?.domain
   if (!site) return false
   return allow.any || allow.sites.includes(site)
+}
+
+/** What a tab may use: the allowed sites, and the site of a tab the person handed over. */
+function allowFor(allow: WireCommand['allow'], rec: AgentTab | undefined): WireCommand['allow'] {
+  return rec?.handed && !allow.sites.includes(rec.handed) ? { ...allow, sites: [...allow.sites, rec.handed] } : allow
 }
 
 /** The page may be an agent's: a web page, not Walnut, on an allowed site. */
@@ -100,18 +109,21 @@ async function mark(tabId: number, on: boolean, who?: string): Promise<void> {
   await ext.tabs.sendMessage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}) }, { frameId: 0 }).catch(() => undefined)
 }
 
-async function ownTab(args: Record<string, unknown>): Promise<{ tabId: number; tab: Tab }> {
+async function ownTab(args: Record<string, unknown>): Promise<{ tabId: number; tab: Tab; rec: AgentTab }> {
   const tabId = typeof args.tab === 'number' ? args.tab : NaN
-  if (!(await agentTabs.get(tabId))) throw new AgentError('That tab is not one an agent opened (or the person took it back with Stop).', 'not_your_tab')
+  const rec = await agentTabs.get(tabId)
+  if (!rec) throw new AgentError('That tab is not one an agent opened (or the person took it back with Stop).', 'not_your_tab')
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!tab) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed.', 'not_your_tab') }
-  return { tabId, tab }
+  return { tabId, tab, rec }
 }
 
 const where = async (tabId: number) => { const t = await ext.tabs.get(tabId).catch(() => ({} as Tab)); return { tab: tabId, url: t.url, title: t.title } }
 
-async function act(c: WireCommand): Promise<unknown> {
-  const a = c.args
+async function act(cmd: WireCommand): Promise<unknown> {
+  const a = cmd.args
+  // A tab the person handed over may use its own site as well.
+  const c = typeof a.tab === 'number' ? { ...cmd, allow: allowFor(cmd.allow, await agentTabs.get(a.tab)) } : cmd
   switch (c.action) {
     case 'tabs': {
       const out: Array<{ id: number; url?: string; title?: string; owner: string }> = []
@@ -171,13 +183,17 @@ async function act(c: WireCommand): Promise<unknown> {
       return where(tabId)
     }
     case 'close': {
-      const { tabId } = await ownTab(a)
+      const { tabId, rec } = await ownTab(a)
       await agentTabs.delete(tabId)
+      // The person's own tab is given back, never closed.
+      if (rec.handed) { await mark(tabId, false); return { tab: tabId, closed: false, released: true } }
       await ext.tabs.remove(tabId).catch(() => undefined)
       return { tab: tabId, closed: true }
     }
     case 'screenshot': {
-      const { tabId, tab } = await ownTab(a)
+      const { tabId, tab, rec } = await ownTab(a)
+      // Only the agent window is brought forward for a capture: the person's window stays as they left it.
+      if (rec.handed && !tab.active) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
       await checkPage(c.allow, tab.url ?? '')
       const before = await pageCheck(tabId)
       if (!before) throw new AgentError('The page is not ready (still loading, or a page the extension cannot reach): wait and try again.', 'page_not_ready')
@@ -271,6 +287,54 @@ export async function agentLoop(): Promise<void> {
 export async function agentOff(): Promise<void> {
   await call('POST', '/browser/off', {}, { noSession: true, timeoutMs: 8000 }).catch(() => undefined)
   for (const id of await agentTabs.keys()) { await mark(id, false); await agentTabs.delete(id) }
+}
+
+/** Hand-overs still waiting on Walnut; a take-back meanwhile cancels one. */
+const handing = new Map<number, { cancelled: boolean }>()
+
+/**
+ * The person let an ask in the side panel act in their tab (their click in the panel): the tab
+ * becomes that task's agent tab, with the frame and Stop, its site allowed in this tab alone,
+ * and agents turn on in this browser.
+ */
+export async function adoptTab(tabId: number, task: string, who?: string): Promise<{ ok: boolean; error?: string }> {
+  const tab = await ext.tabs.get(tabId).catch(() => null)
+  const url = tab?.url ?? ''
+  const site = siteKey(url)?.domain
+  if (!tab || !/^https?:\/\//i.test(url) || !site) return { ok: false, error: 'Walnut acts in web pages only.' }
+  if (await isWalnutPage(url) || (await pageCheck(tabId))?.walnut) return { ok: false, error: 'Agents never use Walnut\'s own pages.' }
+  const owner = `task:${task}`
+  const had = await agentTabs.get(tabId)
+  if (had && had.owner !== owner) return { ok: false, error: 'Another Walnut task is acting in this tab. Take it back first.' }
+  const flight = { cancelled: false }
+  handing.set(tabId, flight)
+  try {
+    await call('POST', '/browser/adopt', { tab: tabId, task, url }, { noSession: true, timeoutMs: 15_000 })
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    if (handing.get(tabId) === flight) handing.delete(tabId)
+  }
+  if (flight.cancelled) return { ok: false, error: 'Taken back.' }
+  await agentTabs.set(tabId, { owner, ...(who ? { who } : {}), history: [url], handed: site })
+  if (!(await agentOn())) await ext.storage.local.set({ agentControl: true })
+  void agentLoop()
+  await mark(tabId, true, who)
+  return { ok: true }
+}
+
+/** The person took the tab back from the side panel (as Stop on the page does). */
+export async function releaseTab(tabId: number): Promise<void> {
+  const flight = handing.get(tabId)
+  if (flight) flight.cancelled = true
+  if (!(await agentTabs.get(tabId))) return
+  await agentTabs.delete(tabId)
+  await mark(tabId, false)
+}
+
+/** Who acts in a tab now (its owner key), for the side panel. */
+export async function tabOwnerOf(tabId: number | undefined): Promise<string | undefined> {
+  return tabId === undefined ? undefined : (await agentTabs.get(tabId))?.owner
 }
 
 /** Messages about agents: the popup's switch and a tab's Stop. */

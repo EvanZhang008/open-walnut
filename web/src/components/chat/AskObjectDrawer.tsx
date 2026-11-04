@@ -79,6 +79,11 @@ export interface AskObjectDrawerProps {
    * come back to; a selector (rather than an element) survives the list re-rendering in between.
    */
   restoreFocusTo?: string;
+  /** Called just before the first question goes out: the context as it is then (the browser side
+   *  panel saves the page's text only when a question is really asked). Replaces `contextBlock`. */
+  prepareContext?: (draft: { walnut?: boolean; host?: string | null }) => Promise<string>;
+  /** The task (and session, once known) this object's conversation runs in. */
+  onRecord?: (record: { taskId: string; sessionId?: string }) => void;
 }
 
 type View =
@@ -160,8 +165,22 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     if (scopeRef.current === scope) setView({ kind: 'session', sessionId: record.sessionId });
   }, [scope]);
 
+  const prepareRef = useRef(props.prepareContext);
+  prepareRef.current = props.prepareContext;
   const launch = useCallback(async (question: string, fromPreset?: string, images?: ImageAttachment[]): Promise<boolean> => {
-    const { contextBlock: block, contextName: name } = contextRef.current;
+    const { contextName: name } = contextRef.current;
+    let block = contextRef.current.contextBlock;
+    if (prepareRef.current) {
+      setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}) });
+      try {
+        block = await prepareRef.current(askDraft.draftRef.current);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        if (scopeRef.current === scope) setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}), error: text });
+        return false;
+      }
+      if (scopeRef.current !== scope) return false;
+    }
     const body = askLaunchBody({
       draft: askDraft.draftRef.current,
       agentId,
@@ -233,6 +252,14 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // An engine that mints its own session id reports it after the task: the task event first, a poll
   // behind it, and a deadline so the drawer never spins forever.
   const linkingTaskId = view.kind === 'linking' && !view.error ? view.taskId : '';
+  const onRecordRef = useRef(props.onRecord);
+  onRecordRef.current = props.onRecord;
+  const shownSession = view.kind === 'session' ? view.sessionId : '';
+  useEffect(() => {
+    if (!shownSession && !linkingTaskId) return;
+    const record = readAskSession(scope);
+    if (record?.taskId) onRecordRef.current?.({ taskId: record.taskId, ...(record.sessionId ? { sessionId: record.sessionId } : {}) });
+  }, [scope, shownSession, linkingTaskId]);
   const adopt = useCallback((sessionId: string) => {
     const record = readAskSession(scope);
     if (!record || record.sessionId) return;

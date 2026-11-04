@@ -10,13 +10,13 @@
  * (titles, usernames, sites) are cached for 5 s while unlocked, so a Lock elsewhere shows soon.
  */
 import { ext, type Sender, type Tab } from './ext'
-import { ApiError, DEFAULT_SERVER, api, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
+import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
 import { displayHost, matchItem, siteKey } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
 import type { VaultItem, VaultItemSummary } from '../../../src/core/vault/types'
 import type { FormKind } from './form-detect'
 import { tabStore } from './tab-store'
-import { agentMessage, initAgent, isAgentTab } from './agent'
+import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
 
 type Reply = Record<string, unknown> & { ok: boolean }
 const fail = (err: unknown): Reply => err instanceof ApiError
@@ -229,14 +229,14 @@ async function startConnect(serverUrl: string): Promise<Reply> {
 
 // ── who may send what ──
 
-type SenderKind = 'popup' | 'menu' | 'savebar' | 'content'
+type SenderKind = 'popup' | 'menu' | 'savebar' | 'content' | 'sidepanel'
 
 function senderKind(sender: Sender): SenderKind | null {
   const url = String(sender.url ?? '')
   const own = ext.runtime.getURL('')
   if (url.startsWith(own)) {
     const page = url.slice(own.length).split(/[?#]/)[0]
-    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : null
+    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : page === 'sidepanel.html' ? 'sidepanel' : null
   }
   return sender.tab?.id !== undefined && /^https?:/.test(url) ? 'content' : null
 }
@@ -250,6 +250,8 @@ const ALLOWED: Record<string, SenderKind> = {
   'menu-data': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
   'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
+  'page-selection': 'content',
+  'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel',
 }
 
 /** The open menu of the sender's tab, when the message carries its nonce. */
@@ -273,6 +275,50 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   switch (msg.type) {
     // popup
     case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': return agentMessage(msg.type, sender)
+    // the side panel
+    case 'page-selection': {
+      // Told to an open panel (an extension page); none open, nobody hears it.
+      if (tabId !== undefined) void ext.runtime.sendMessage({ type: 'panel-selection', tabId }).catch(() => undefined)
+      return { ok: true }
+    }
+    case 'panel-state': {
+      const conn = await connection()
+      if (!conn) return { ok: true, connected: false }
+      // An older Walnut has no side panel: the panel says to update it rather than show an error page.
+      const has = await call('GET', '/browser/panel', undefined, { noSession: true, quiet: true, timeoutMs: 8000 }).then(() => true, (err) => !(err instanceof ApiError && err.status === 404))
+      return { ok: true, connected: true, serverUrl: conn.serverUrl, panel: has }
+    }
+    case 'panel-page': {
+      // The page the person is on: its address, title and selection; its text only when a question
+      // is asked with it (`withText`), so the pages they only look at stay in the browser.
+      const id = typeof msg.tabId === 'number' ? msg.tabId : undefined
+      const tab = id !== undefined ? await ext.tabs.get(id).catch(() => null) : null
+      const agents = await agentOn()
+      const owner = await tabOwnerOf(id)
+      const base = { ok: true, agents, ...(owner ? { owner } : {}) }
+      if (!tab || !tab.url || !/^https?:/.test(tab.url) || await isWalnutPage(tab.url)) return { ...base, page: null }
+      const r = await ext.tabs.sendMessage(id!, { type: 'page-context', withText: msg.withText === true }, { frameId: 0 }).catch(() => null) as { ok?: boolean; walnut?: boolean; url?: string; title?: string; selection?: string; text?: string } | null
+      // A page still loading (no content script yet) is named by its tab alone.
+      if (!r?.ok) return { ...base, page: { url: tab.url, title: tab.title ?? '' } }
+      if (r.walnut) return { ...base, page: null }
+      return { ...base, page: { url: r.url ?? tab.url, title: r.title ?? tab.title ?? '', selection: r.selection ?? '', ...(msg.withText === true ? { text: r.text ?? '' } : {}) } }
+    }
+    case 'panel-adopt': {
+      if (typeof msg.tabId !== 'number' || typeof msg.task !== 'string' || !msg.task) return { ok: false, error: 'No tab or task.' }
+      return adoptTab(msg.tabId, msg.task, typeof msg.who === 'string' ? msg.who.slice(0, 80) : undefined)
+    }
+    case 'panel-release': {
+      if (typeof msg.tabId === 'number') await releaseTab(msg.tabId)
+      return { ok: true }
+    }
+    case 'panel-pending': {
+      // A selection the context menu asked about, for the panel of that window (taken once).
+      const { panelAsk } = await ext.storage.session.get('panelAsk')
+      const a = panelAsk as { windowId?: number; text?: string; at?: number } | undefined
+      if (!a || a.windowId !== msg.windowId || Date.now() - (a.at ?? 0) > 60_000) return { ok: true }
+      await ext.storage.session.remove('panelAsk')
+      return { ok: true, text: a.text ?? '' }
+    }
     case 'state': {
       // The popup opening is when to find out the person removed this extension in Settings
       // (a refusal forgets the connection, so the popup asks to connect again).
@@ -547,6 +593,30 @@ ext.commands?.onCommand.addListener((name, tab) => {
 })
 
 initAgent({ isWalnutPage })
+
+// ── the side panel: the context menu and the toolbar open it ──
+
+/** Opens the panel; called straight from the person's click, before anything is awaited. */
+function openPanel(windowId: number | undefined): void {
+  if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)
+  else void ext.sidebarAction?.open().catch(() => undefined)
+}
+
+function makeMenus(): void {
+  if (!ext.contextMenus) return
+  void Promise.resolve(ext.contextMenus.removeAll()).then(() => {
+    ext.contextMenus!.create({ id: 'walnut-ask-selection', title: 'Ask Walnut about "%s"', contexts: ['selection'] }, () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError)
+    ext.contextMenus!.create({ id: 'walnut-ask-page', title: 'Ask Walnut about this page', contexts: ['page'] }, () => void (globalThis as { chrome?: { runtime?: { lastError?: unknown } } }).chrome?.runtime?.lastError)
+  }).catch(() => undefined)
+}
+makeMenus()
+
+ext.contextMenus?.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== 'walnut-ask-selection' && info.menuItemId !== 'walnut-ask-page') return
+  openPanel(tab?.windowId)
+  const text = info.menuItemId === 'walnut-ask-selection' ? (info.selectionText ?? '').slice(0, 4000) : ''
+  if (text && tab?.windowId !== undefined) void ext.storage.session.set({ panelAsk: { windowId: tab.windowId, text, at: Date.now() } })
+})
 
 ext.runtime.onInstalled.addListener(() => {
   // Content scripts never read the vault session (Chrome's default; Firefox keeps session storage from them too).

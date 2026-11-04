@@ -1,0 +1,93 @@
+.ext-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.ext-panel-empty {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+  gap: 4px;
+}
+
+.ext-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 6px;
+  flex: 0 0 auto;
+}
+
+.ext-panel-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.ext-panel-title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-panel-host {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-panel-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.ext-panel-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ext-panel-note {
+  margin: 6px 12px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.ext-panel-error {
+  color: var(--danger, #c0392b);
+}
+
+.ext-panel-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-panel-chat > .ask-object-drawer {
+  flex: 1;
+}
+
+.ext-panel-link {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent, #8a5a2b);
+  text-decoration: underline;
+}

@@ -172,6 +172,51 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
   })
 })
 
+// ── the side panel ──
+
+/** The side panel asks whether this Walnut has it (an older one answers 404). */
+browserV1Router.get('/browser/panel', (_req, res) => { res.json({ panel: 1 }) })
+
+/** A page the person asks about in the side panel: its text goes into a file the ask names. */
+browserV1Router.post('/browser/page', (req, res, next) => {
+  void run(res, next, async () => {
+    const { cleanPageText, savePageText } = await import('../../core/browser-control/page-context.js')
+    const page = cleanPageText(req.body)
+    if (!page) { res.status(400).json({ error: 'A web page address and its text are needed.', code: 'bad_request' }); return undefined }
+    const { WALNUT_HOME } = await import('../../constants.js')
+    return { file: await savePageText(page, WALNUT_HOME) }
+  })
+})
+
+/**
+ * The person let the ask in their side panel act in the tab they are on (their click in the
+ * extension's own panel): the tab becomes that task's agent tab. Its site is allowed for that
+ * tab alone (the extension holds that), never added to the sites every agent may open.
+ */
+browserV1Router.post('/browser/adopt', (req, res, next) => {
+  const device = extensionOf(req, res)
+  if (!device) return
+  void run(res, next, async () => {
+    const h = await hub()
+    const b = (req.body ?? {}) as { tab?: unknown; task?: unknown; url?: unknown }
+    const tab = typeof b.tab === 'number' && Number.isInteger(b.tab) && b.tab >= 0 ? b.tab : undefined
+    const taskId = typeof b.task === 'string' ? b.task.slice(0, 100) : ''
+    const url = typeof b.url === 'string' ? b.url.slice(0, 4000) : ''
+    if (tab === undefined || !taskId) throw new h.BrowserError('A tab and a task are needed.', 400, 'bad_request')
+    const { getTask } = await import('../../core/task-manager.js')
+    if (!(await getTask(taskId).catch(() => null))) throw new h.BrowserError('No such task.', 404, 'task_not_found')
+    const s = await sites()
+    const site = s.siteOf(url)
+    if (!site) throw new h.BrowserError('Agents use web pages only (http or https).', 400, 'not_a_web_page')
+    if (isWalnutAddress(await walnutAddresses(req), url)) throw new h.BrowserError('Agents never use Walnut\'s own pages in the browser.', 403, 'walnut_page')
+    const owner = `task:${taskId}`
+    h.ownTab(device, tab, owner)
+    lastTab.set(owner, { device, tab })
+    log.web.info('browser tab adopted', { device, tab, owner, site })
+    return { ok: true, tab, site }
+  })
+})
+
 // ── an agent's command ──
 
 const ACTIONS = ['tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait', 'screenshot'] as const

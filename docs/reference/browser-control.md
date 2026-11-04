@@ -34,6 +34,37 @@ on in the extension's popup (Settings, "Let Walnut agents use this browser").
 Turning the switch off in the popup ends it at once: Walnut hears that the browser stopped,
 every command waiting on it fails, and every agent tab is yours again.
 
+## Walnut beside the page: the side panel
+
+The extension also puts Walnut in the browser's side panel (Chrome's side panel, Firefox's
+sidebar; in a browser with neither, the popup's **Ask Walnut** opens the same page in a small
+window beside yours). Open it from the popup's **Ask Walnut**, or right-click a page or a
+selection, **Ask Walnut about ...**.
+
+- **It knows the page you are on.** The panel shows the page's title and address and what you
+  selected, and follows you to another tab or page. Each page has a conversation of its own,
+  an ordinary Ask Walnut session, and it is there again when you come back to the page; **New
+  chat** starts over. A selection you ask about later leads your next message as a quote.
+- **The page's text goes to Walnut only when you ask.** The panel is told a page's address,
+  title and selection (never a selection in a password or code field); its text is read from the
+  tab only when you send a question. With **Include this page** on, your
+  first question saves the page's visible text (never a field's value) into a file in Walnut's
+  cache on your machine (`WALNUT_HOME/cache/browser-pages`, readable by you alone, removed after
+  7 days), and the question names that file, so the chat shows your question and the agent
+  reads the page when it needs it. Off, Walnut gets the title and address only.
+- **"Let Walnut act in this tab"** is your click: that tab becomes the conversation's agent tab,
+  with the brown frame and Stop, like a tab an agent opens itself. Its site is allowed in that tab
+  alone: no agent may open that site elsewhere on that click. Only that conversation's task may
+  use it; it never closes it (closing gives it back) and never brings it forward for a screenshot.
+  Untick the box, press Stop, or **Take it back** (shown when another conversation holds the tab)
+  and it is yours again. Turning it on also turns on Walnut agents in this browser.
+- An ask that runs on another machine gets the page's text in its first message (cut at 30,000
+  characters), since it cannot read this machine's file. A Walnut too old for the panel is named
+  in the panel ("Update Walnut").
+- The panel is Walnut's own page (`/popout?view=ext-panel`) framed by the extension's panel page,
+  which hears only that frame, on your Walnut's address. It reaches a Walnut on this machine
+  directly; a Walnut on another machine needs that browser signed in to it.
+
 ## For agents
 
 The `browser` op (one tool with an `action`) and `walnut browser <action>` in a shell do the
@@ -87,18 +118,23 @@ tab owners (restored from the extension's own report after a server restart), th
 tab against its own agent-tab list and the page's real address against the allowed sites the
 command carries, so a server mistake cannot reach your tabs either. Code:
 `src/core/browser-control/` (hub, sites, the CLI), `src/web/routes/browser-v1.ts`,
-`src/ops/browser.ts`, `packages/browser-extension/src/agent.ts` and `page-agent.ts`.
+`src/ops/browser.ts`, `packages/browser-extension/src/agent.ts` and `page-agent.ts`; the side
+panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/PopoutExtPanel.tsx`.
 
 | Method | Path | Who | What |
 |---|---|---|---|
 | POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, clear?, submit?, value?, key?, direction?, amount?, ms?, wait_ms? }` |
 | GET | `/api/v1/browser/status` | anyone | `{ browsers, mode, sites }` |
+| GET | `/api/v1/browser/panel` | anyone | `{ panel: 1 }`: this Walnut has the side panel |
 | PUT | `/api/v1/browser/settings` | the person only | `{ mode?: "ask" \| "any", removeSite? }` |
 | POST | `/api/v1/browser/poll` | the extension | `{ browser, version, caps, tabs, waitMs }` → `{ commands }` |
 | POST | `/api/v1/browser/result` | the extension | `{ id, ok, result?, error? }` |
 | POST | `/api/v1/browser/off` | the extension | agents turned off |
+| POST | `/api/v1/browser/page` | anyone | `{ url, title?, text }` → `{ file }` (the side panel) |
+| POST | `/api/v1/browser/adopt` | the extension | `{ tab, task, url }`: the person let that task act in the tab |
 
 Screenshots need the extension's site access (`<all_urls>`, asked at install in Chrome; in
 Firefox the person grants it from the extension's page), and capture only the visible part of
 the tab. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
-`tests/e2e/browser/extension-agent.spec.ts`.
+`tests/e2e/browser/extension-agent.spec.ts`, `tests/e2e/browser/extension-sidepanel.spec.ts`,
+`tests/web/ext-panel-model.test.ts`.

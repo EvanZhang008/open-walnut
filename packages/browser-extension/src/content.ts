@@ -45,6 +45,7 @@ let active: { group: LoginGroup; role: string; field: HTMLInputElement } | null 
 
 let reported: boolean | null = null
 function rescan(): void {
+  pageAgent.notePasswords()
   groups = findLoginGroups(document)
   const hasLogin = groups.length > 0
   if (!off && MAY_FILL && hasLogin !== reported) {
@@ -442,6 +443,10 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
     case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined); sendResponse({ ok: true }); return
     case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href }); return
+    case 'page-context':
+      // The side panel asks about the page the person is on: the top frame answers.
+      if (SELF !== 'top') { sendResponse({ ok: false }); return }
+      sendResponse({ ok: true, walnut: isWalnutApp(), ...pageAgent.pageContext(msg.withText === true) }); return
     case 'agent-mask':
       if (SELF !== 'top') { sendResponse({ ok: false }); return }
       if (msg.on === true) sendResponse({ ok: true, masked: pageAgent.maskSecrets() })
@@ -514,6 +519,22 @@ function start(): void {
     if (document.activeElement instanceof HTMLInputElement) void onFocus({ target: document.activeElement })
   })
 }
+// A selection the person makes on the page: an open side panel shows it at once (top frame only;
+// what was selected is read by the panel when it asks, never sent here).
+if (SELF === 'top') {
+  let selTimer = 0
+  document.addEventListener('selectionchange', () => {
+    clearTimeout(selTimer)
+    selTimer = window.setTimeout(() => {
+      if (isWalnutApp() || !(getSelection()?.toString() ?? '').trim()) return
+      void ask({ type: 'page-selection' })
+    }, 400)
+  })
+}
+
+// Password fields as the page first draws them, and any focused later: one shown as text stays a secret.
+pageAgent.notePasswords()
+addEventListener('focusin', (e) => pageAgent.notePassword(e.target), true)
 start()
 // Back from the back/forward cache: no script runs again, so this page registers its frame anew.
 addEventListener('pageshow', (e) => { if (e.persisted) start() })
