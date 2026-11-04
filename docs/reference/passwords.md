@@ -170,6 +170,23 @@ build) into `dist/extension/{chrome,firefox}` and the downloads this Walnut serv
 `/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Browser extension shows
 how to load it and lists the connected ones with Remove.
 
+**Setting it up from Walnut, and keeping it current.** A browser loads an extension that is not
+from its store only on the person's own two clicks (Chrome: Developer mode, then Load unpacked),
+so in Chrome on the machine Walnut runs on, Settings offers **Set up in Chrome**
+(`POST /api/v1/browser/extension/setup`, `core/browser-control/extension-install.ts`): Walnut
+unpacks the extension it ships into a folder of its own (macOS
+`~/Library/Application Support/Walnut/Browser Extension/chrome`, Windows `%LOCALAPPDATA%`,
+else `$XDG_DATA_HOME/walnut/browser-extension`; per machine, never synced, not a cache), and on a
+Mac copies the folder's path and opens `chrome://extensions`, and the page shows the two steps
+left. Each build is named: the build script hashes what the extension runs into the manifest's
+`version_name` (`0.6.25 build <hash>`) and `downloads/walnut-extension.json`. At every server
+start, and whenever the extension asks which build there is (`GET /api/v1/browser/panel`
+answers `extension: {version, build}`), a folder set up this way that holds another build gets
+this one; the extension (`self-update.ts`, an unpacked copy only, every 10 minutes and at browser
+start) reloads itself when Walnut names a build it is not, once per build, so a copy loaded from
+some other folder never reloads in a loop. Pages already open get the new copy when reloaded. A
+throwaway server (ephemeral, a test) keeps the folder in its own data home and opens nothing.
+
 **Connecting.** The popup's Connect opens `<walnut>/connect-extension` in a tab it remembers
 (storage.session, per tab). That page finds the extension through its content script
 (`window.postMessage`, its own origin only); on the person's click it mints a browser sign-in

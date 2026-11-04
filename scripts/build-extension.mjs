@@ -6,6 +6,8 @@
  *   dist/extension/firefox/    load its manifest.json in about:debugging
  *   dist/web/static/downloads/walnut-extension-{chrome,firefox}.zip
  *                              what Settings → Passwords and /connect-extension offer
+ *   dist/web/static/downloads/walnut-extension.json
+ *                              { version, build }: the build those zips hold
  *
  * One source, two manifests: Chrome runs the background as a service worker, Firefox as an
  * event page (background.scripts) and needs a gecko id. Every script is one classic file
@@ -17,6 +19,7 @@ import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, 
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
+import { createHash } from 'node:crypto'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = join(ROOT, 'packages/browser-extension/src')
@@ -34,12 +37,20 @@ const ENTRIES = ['background', 'content', 'popup', 'menu', 'savebar', 'sidepanel
 const PAGES = { popup: 'popup', menu: 'menu frame', savebar: 'bar frame', sidepanel: 'sidepanel panel' }
 const SITES = ['http://*/*', 'https://*/*']
 
-export function manifestFor(browser) {
+/**
+ * `build`: the hash of what the extension runs (its scripts, pages and styles). The manifest
+ * carries it in `version_name`, and walnut-extension.json beside the zips names it, so a copy
+ * Walnut set up in a folder (Settings, Set up in Chrome) knows when Walnut holds a newer one
+ * and reloads itself (background.ts selfUpdate): the version number alone stays the same
+ * across many deploys.
+ */
+export function manifestFor(browser, build) {
   const m = {
     manifest_version: 3,
     name: 'Walnut',
     short_name: 'Walnut',
     version,
+    ...(build ? { version_name: `${version} build ${build}` } : {}),
     description: 'Your own Walnut in the browser: fill and save passwords, and ask Walnut about the page you are on.',
     icons: { 16: 'icons/16.png', 32: 'icons/32.png', 48: 'icons/48.png', 128: 'icons/128.png' },
     action: { default_title: 'Walnut', default_popup: 'popup.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
@@ -171,16 +182,22 @@ async function main() {
       throw new Error(`build-extension: ${entry} failed`)
     }
   }
+  const h = createHash('sha256')
+  for (const entry of ENTRIES) h.update(readFileSync(join(tmp, `${entry}.js`)))
+  h.update(readFileSync(join(SRC, 'ui.css')))
+  for (const name of Object.keys(PAGES)) h.update(page(name))
+  const build = h.digest('hex').slice(0, 12)
   for (const browser of ['chrome', 'firefox']) {
     const dir = join(OUT, browser)
     mkdirSync(dir, { recursive: true })
     for (const entry of ENTRIES) copyFileSync(join(tmp, `${entry}.js`), join(dir, `${entry}.js`))
     copyFileSync(join(SRC, 'ui.css'), join(dir, 'ui.css'))
     for (const name of Object.keys(PAGES)) writeFileSync(join(dir, `${name}.html`), page(name))
-    writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifestFor(browser), null, 2)}\n`)
+    writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifestFor(browser, build), null, 2)}\n`)
     await icons(dir)
     if (zip) writeZip(dir, join(ZIP_DIR, `walnut-extension-${browser}.zip`))
   }
+  if (zip) writeFileSync(join(ZIP_DIR, 'walnut-extension.json'), `${JSON.stringify({ version, build }, null, 2)}\n`)
   rmSync(tmp, { recursive: true, force: true })
   console.log(`build-extension: ${version} → ${relative(ROOT, OUT)}/{chrome,firefox}${zip ? ` and ${relative(ROOT, ZIP_DIR)}` : ''}`)
 }

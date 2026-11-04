@@ -17,6 +17,7 @@ import type { VaultItem, VaultItemSummary } from '../../../src/core/vault/types'
 import type { FormKind } from './form-detect'
 import { tabStore } from './tab-store'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseTab, tabOwnerOf } from './agent'
+import { initSelfUpdate } from './self-update'
 
 type Reply = Record<string, unknown> & { ok: boolean }
 const fail = (err: unknown): Reply => err instanceof ApiError
@@ -593,6 +594,7 @@ ext.commands?.onCommand.addListener((name, tab) => {
 })
 
 initAgent({ isWalnutPage })
+initSelfUpdate()
 
 // ── the side panel: the context menu and the toolbar open it ──
 

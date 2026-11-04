@@ -8,7 +8,10 @@
  * tests/e2e/browser/extension-agent.spec.ts.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -294,7 +297,7 @@ describe('agents in the person\'s browser', () => {
     const elsewhere = await http('POST', '/browser/act', { action: 'open', url: 'https://docs.panel.test/other' }, AGENT)
     expect(elsewhere.status).toBe(202)
     expect(elsewhere.body.code).toBe('site_needs_ok')
-    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1 })
+    expect((await http('GET', '/browser/panel')).body.panel).toBe(1)
     // Anyone else is refused the tab.
     ext.tabs.set(900, { url, owner: `task:${taskId}` })
     expect((await http('POST', '/browser/act', { action: 'snapshot', tab: 900 }, AGENT)).body.code).toBe('not_your_tab')
@@ -306,3 +309,53 @@ describe('agents in the person\'s browser', () => {
     expect((await http('GET', '/browser/status')).body.browsers).toEqual([])
   })
 })
+
+describe('setting the extension up from Walnut, and keeping it current', () => {
+  // A built web app of the test's own: the two zips and walnut-extension.json, for a build.
+  const statics: string[] = []
+  async function staticFor(build: string): Promise<string> {
+    const { manifestFor, writeZip } = await import('../../scripts/build-extension.mjs' as string) as { manifestFor: (b: string, build?: string) => object; writeZip: (d: string, to: string) => void }
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-ext-static-'))
+    statics.push(root)
+    for (const b of ['chrome', 'firefox']) {
+      const src = path.join(root, `src-${b}`)
+      await fsp.mkdir(src, { recursive: true })
+      await fsp.writeFile(path.join(src, 'manifest.json'), JSON.stringify(manifestFor(b, build)))
+      await fsp.writeFile(path.join(src, 'background.js'), `// ${build}`)
+      writeZip(src, path.join(root, 'downloads', `walnut-extension-${b}.zip`))
+    }
+    await fsp.writeFile(path.join(root, 'downloads', 'walnut-extension.json'), JSON.stringify({ version: '0.6.25', build }))
+    return root
+  }
+  afterAll(async () => {
+    delete process.env.WALNUT_WEB_STATIC_DIR
+    for (const d of statics) await fsp.rm(d, { recursive: true, force: true })
+  })
+
+  it('names the build Walnut ships, sets the folder up (never in a test run), and brings it up to a newer build', async () => {
+    process.env.WALNUT_WEB_STATIC_DIR = await staticFor('aaaaaa111111')
+    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1, extension: { version: '0.6.25', build: 'aaaaaa111111' } })
+    const refused = await http('POST', '/browser/extension/setup', { browser: 'chrome' }, { 'x-walnut-test-run': 'probe' })
+    expect(refused.status).toBe(409)
+    expect(refused.body.code).toBe('test_run')
+    expect((await http('POST', '/browser/extension/setup', { browser: 'safari' })).status).toBe(400)
+    const ok = await http('POST', '/browser/extension/setup', { browser: 'chrome' })
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200)
+    // A throwaway server keeps the folder in its own data home and opens nothing on the machine.
+    const dir = path.join(WALNUT_HOME, 'browser-extension', 'chrome')
+    expect(ok.body).toEqual({ dir, build: 'aaaaaa111111', copied: false, opened: false })
+    const manifest = () => JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { version_name?: string }
+    expect(manifest().version_name).toMatch(/build aaaaaa111111$/)
+    // A newer Walnut: the extension asking which build there is finds the folder already on it.
+    process.env.WALNUT_WEB_STATIC_DIR = await staticFor('bbbbbb222222')
+    expect((await http('GET', '/browser/panel')).body.extension.build).toBe('bbbbbb222222')
+    expect(manifest().version_name).toMatch(/build bbbbbb222222$/)
+    // Firefox was never set up: it stays so.
+    expect(fs.existsSync(path.join(WALNUT_HOME, 'browser-extension', 'firefox'))).toBe(false)
+    // A Walnut built without the extension says so.
+    process.env.WALNUT_WEB_STATIC_DIR = path.join(os.tmpdir(), 'walnut-no-such-static')
+    expect((await http('GET', '/browser/panel')).body).toEqual({ panel: 1 })
+    expect((await http('POST', '/browser/extension/setup', { browser: 'chrome' })).body.code).toBe('no_extension_build')
+  })
+})
+

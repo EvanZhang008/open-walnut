@@ -7,6 +7,8 @@
  *   POST /api/v1/browser/act      an agent's command: { action, tab?, device?, ...args }
  *   GET  /api/v1/browser/status   connected browsers, the site setting, the allowed sites
  *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite? }
+ *   GET  /api/v1/browser/panel    { panel, extension: { version, build } }: the build Walnut ships
+ *   POST /api/v1/browser/extension/setup { browser } → { dir, build, copied, opened }
  *
  * A site an agent has not used before asks the person first (a Walnut approval), unless they
  * let agents use any site; the act answers 202 `needs_ok` with the approval, and the same act
@@ -174,8 +176,43 @@ browserV1Router.put('/browser/settings', (req, res, next) => {
 
 // ── the side panel ──
 
-/** The side panel asks whether this Walnut has it (an older one answers 404). */
-browserV1Router.get('/browser/panel', (_req, res) => { res.json({ panel: 1 }) })
+/**
+ * The side panel asks whether this Walnut has it (an older one answers 404), and the extension
+ * which build of it Walnut ships: a folder Walnut set up (extension-install.ts) is brought up to
+ * that build first, so the extension can reload itself from it.
+ */
+browserV1Router.get('/browser/panel', (_req, res, next) => {
+  void run(res, next, async () => {
+    const x = await import('../../core/browser-control/extension-install.js')
+    const bundled = x.bundledExtension()
+    if (bundled && !ambientTestRun()) {
+      const done = await x.refreshInstalled().catch((err: unknown) => { log.web.warn('browser extension folder refresh failed', { error: err instanceof Error ? err.message : String(err) }); return [] })
+      if (done.length) log.web.info('browser extension folder brought up to this build', { browsers: done, build: bundled.build })
+    }
+    return { panel: 1, ...(bundled ? { extension: bundled } : {}) }
+  })
+})
+
+/**
+ * Settings, Browser extension, Set up in Chrome: the extension into its folder on this machine,
+ * the folder's path copied and the browser's extensions page opened (on a Mac), so the person
+ * only turns on Developer mode and picks the folder. Never in a test run: it is the person's
+ * own machine and browser.
+ */
+browserV1Router.post('/browser/extension/setup', (req, res, next) => {
+  void run(res, next, async () => {
+    const h = await hub()
+    if (ambientTestRun()) throw new h.BrowserError('A test run does not set up the person\'s browser.', 409, 'test_run')
+    const browser = (req.body as { browser?: unknown } | undefined)?.browser
+    const x = await import('../../core/browser-control/extension-install.js')
+    if (browser !== 'chrome' && browser !== 'firefox') throw new h.BrowserError('browser must be chrome or firefox', 400, 'bad_request')
+    if (!x.bundledExtension()) throw new h.BrowserError('This Walnut was built without the browser extension.', 404, 'no_extension_build')
+    const { dir, build } = await x.installExtension(browser)
+    const { copied, opened } = await x.openForSetup(browser, dir)
+    log.web.info('browser extension set up', { browser, dir, build, copied, opened })
+    return { dir, build, copied, opened }
+  })
+})
 
 /** A page the person asks about in the side panel: its text goes into a file the ask names. */
 browserV1Router.post('/browser/page', (req, res, next) => {

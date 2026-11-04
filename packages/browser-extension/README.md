@@ -8,7 +8,8 @@ Fills and saves passwords from your own Walnut vault in Chrome (and Edge, Brave,
 - `src/popup.ts`: the toolbar popup (connect, unlock, logins for this site, search, copy, generator, Ask Walnut).
 - `src/agent.ts` + `src/page-agent.ts`: Walnut agents in this browser ([docs/reference/browser-control.md](../../docs/reference/browser-control.md)).
 - `src/sidepanel.ts`: the side panel, which frames Walnut's own `/popout?view=ext-panel` page and tells it about the page you are on.
+- `src/self-update.ts`: a copy Walnut set up in a folder (Settings, Set up in Chrome) reloads itself when Walnut ships a newer build.
 
-Build: `bun run extension:build` (also part of `bun run web:build`) writes `dist/extension/{chrome,firefox}` and the downloads Walnut serves at `/downloads/walnut-extension-{chrome,firefox}.zip`.
+Build: `bun run extension:build` (also part of `bun run web:build`) writes `dist/extension/{chrome,firefox}` and the downloads Walnut serves at `/downloads/walnut-extension-{chrome,firefox}.zip`, with `walnut-extension.json` naming their build.
 
 How it connects, unlocks and what it may fill: [docs/reference/passwords.md](../../docs/reference/passwords.md#browser-extension).

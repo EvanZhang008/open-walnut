@@ -21,7 +21,8 @@ export interface ExtApi {
     onStartup?: Event<() => void>
     getPlatformInfo(): Promise<unknown>
     openOptionsPage?(): Promise<void>
-    getManifest(): { version: string; name: string }
+    getManifest(): { version: string; name: string; version_name?: string }
+    reload?(): void
   }
   storage: {
     local: StorageArea
@@ -51,6 +52,8 @@ export interface ExtApi {
     request(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
     contains(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
   }
+  /** getSelf needs no permission. */
+  management?: { getSelf?(): Promise<{ installType?: string }> }
   alarms: { create(name: string, o: { periodInMinutes: number }): Promise<void> | void; onAlarm: Event<(a: { name: string }) => void> }
   action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; setBadgeBackgroundColor(o: { color: string }): Promise<void> }
   commands?: { onCommand: Event<(name: string, tab?: Tab) => void> }

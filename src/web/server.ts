@@ -21,6 +21,7 @@ import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { isStaticAssetPath, staticCacheControl } from './static-asset-path.js'
 import { refreshStaticMirror, bundleIdInHtml, mirrorHoldsBuild } from './static-mirror.js'
 import { createStaticRootWatch } from './static-root-watch.js'
+import { resolveStaticDir } from './static-dir.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
 import { requestLogger, setRouteRecoveryPublisher, seedFailingRoutes } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
@@ -2623,23 +2624,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Resolve static dir by walking up from the current file.
     // tsup inlines this into both dist/web/server.js and dist/cli.js,
     // so import.meta.url varies per bundle — walk up to find dist/web/static/.
-    const staticDir = (() => {
-      // Explicit override wins, and is accepted even when it does NOT exist: that
-      // is the only way to exercise the "assets vanished" path (below) in a test
-      // without deleting the repo's own build.
-      if (process.env.WALNUT_WEB_STATIC_DIR) return process.env.WALNUT_WEB_STATIC_DIR
-      let dir = path.dirname(fileURLToPath(import.meta.url))
-      for (let i = 0; i < 5; i++) {
-        const candidate = path.join(dir, 'web', 'static', 'index.html')
-        try { if (fs.statSync(candidate).isFile()) return path.join(dir, 'web', 'static') } catch {}
-        // Also check if we're already in dist/web/
-        const direct = path.join(dir, 'static', 'index.html')
-        try { if (fs.statSync(direct).isFile()) return path.join(dir, 'static') } catch {}
-        dir = path.dirname(dir)
-      }
-      // Fallback: assume dist/web/static relative to cwd
-      return path.join(process.cwd(), 'dist', 'web', 'static')
-    })()
+    const staticDir = resolveStaticDir(import.meta.url)
     // The static root can DISAPPEAR under a running server, and it has now done
     // so TWICE in one evening (2026-09-02). Deploys boot from a staged copy under
     // TMPDIR; anything that cleans that temp space — another deploy's reap, an OS
@@ -3302,6 +3287,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       error: err instanceof Error ? err.message : String(err),
     })
   }
+
+  // -- A browser extension Walnut set up in a folder gets this build (extension-install.ts) --
+  // In the background: the browser loads the folder again when it starts, and the extension
+  // reloads itself from it when it sees the new build.
+  void import('../core/browser-control/extension-install.js').then(async (x) => {
+    if (!x.realInstall()) return
+    const done = await x.refreshInstalled()
+    if (done.length) log.web.info('browser extension folder brought up to this build', { browsers: done })
+  }).catch((err) => log.web.warn('browser extension folder refresh failed', { error: err instanceof Error ? err.message : String(err) }))
 
   // -- Prune old usage records --
   try { usageTracker.prune() } catch (e) { log.usage.warn('usage prune failed', { error: String(e) }) }
