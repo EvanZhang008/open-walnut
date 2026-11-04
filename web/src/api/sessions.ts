@@ -564,6 +564,38 @@ export function _clearRequestAskers(): void {
  * The old blanket `catch { return null }` turned a browser-cache 304 race into
  * "Untitled session" panels (inc-1784686852150 / inc-1784752220440).
  */
+/**
+ * The last record fetched for each session this page asked about, newest last. A panel that opens
+ * a session again draws its header and kebab from it in its first frame, and its own fetch brings it
+ * current (2026-11-04, the user: "the data is cache not sure why there is delay").
+ */
+const lastRecords = new Map<string, SessionRecord>();
+const LAST_RECORDS_MAX = 200;
+
+function rememberRecord(id: string, record: SessionRecord): void {
+  for (const key of new Set([id, record.claudeSessionId])) {
+    if (!key) continue;
+    lastRecords.delete(key);
+    lastRecords.set(key, record);
+  }
+  while (lastRecords.size > LAST_RECORDS_MAX) lastRecords.delete(lastRecords.keys().next().value as string);
+}
+
+/**
+ * A panel's own newer copy of a record (a live event patched it): kept for the next open, but only
+ * over the entry a fetch made for this id, so a record never lands under another session's id.
+ */
+export function keepSessionRecord(sessionId: string, record: { claudeSessionId: string }): void {
+  const known = lastRecords.get(sessionId);
+  // The panel holds the web's view of the same record fetchSession returned.
+  if (known && known !== record && known.claudeSessionId === record.claudeSessionId) rememberRecord(sessionId, record as unknown as SessionRecord);
+}
+
+/** The record `fetchSession` last returned for this id on this page, or null. Never a request. */
+export function peekSessionRecord(sessionId: string): SessionRecord | null {
+  return lastRecords.get(sessionId) ?? null;
+}
+
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
   const cronGeneration = sessionStatusStore.getCronRequestGeneration();
   try {
@@ -571,9 +603,10 @@ export async function fetchSession(sessionId: string): Promise<SessionRecord | n
     if (res.cron && cronGeneration === sessionStatusStore.getCronRequestGeneration()) sessionStatusStore.applyCron(res.cron, 'rest:session');
     seedSessionStatus(res.session, 'rest:session');
     seedSessionTitle(res.session);
+    rememberRecord(sessionId, res.session);
     return res.session;
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) return null;
+    if (err instanceof ApiError && err.status === 404) { lastRecords.delete(sessionId); return null; }
     log.warn('session', 'fetchSession failed (transient — NOT treating as missing)', {
       sessionId,
       error: String(err),
@@ -907,6 +940,17 @@ export function revalidateWorkingDirs(): Promise<WorkingDirsResult> { return wor
 /** A new request even when one is in flight: the host list just changed. */
 export function refreshWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.refresh(); }
 
+/**
+ * After a launch: read the list again now and once more a few seconds later, keeping the cached one
+ * on screen meanwhile. The server records the folder when the CLI spawns (recordDirectory, after the
+ * quick-start answer), so the first read may still lack it.
+ */
+const LAUNCH_DIRS_REREAD_MS = 3000;
+function refreshWorkingDirsAfterLaunch(): void {
+  void refreshWorkingDirs().catch(() => { /* the cached list stays */ });
+  setTimeout(() => { void refreshWorkingDirs().catch(() => { /* the cached list stays */ }); }, LAUNCH_DIRS_REREAD_MS);
+}
+
 /** Invalidate cache (e.g. after starting a new session) */
 export function invalidateWorkingDirsCache(): void { workingDirsCache.invalidate(); }
 
@@ -1188,7 +1232,10 @@ export async function quickStartSession(opts: {
   try {
     const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }>('/api/sessions/quick-start', payload, { timeoutMs });
     seedTaskSessionStatuses(result.task, 'rest:task');
-    invalidateWorkingDirsCache(); // new session → new path entry
+    // New session → new path entry: read the list again, keeping the cached one on screen meanwhile.
+    // Dropping it (invalidate) left the next New task draft with no folder chips and no launch memory
+    // until the picker opened, after a launch from anywhere but Home (2026-11-04).
+    refreshWorkingDirsAfterLaunch();
     if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
     return result;
   } catch (err) {
@@ -1254,7 +1301,7 @@ async function reconcileQuickStart(sessionId: string): Promise<{ taskId: string;
         log.info('sessions', 'quick-start response lost but session exists — reconciled by client id', { sessionId, taskId });
         const task = await apiGet<unknown>(`/api/tasks/${taskId}`, undefined, { timeoutMs: 10_000 }).catch(() => null);
         if (task) seedTaskSessionStatuses(task, 'rest:task');
-        invalidateWorkingDirsCache();
+        refreshWorkingDirsAfterLaunch();
         return { taskId, task, sessionId };
       }
     } catch { /* not there (yet) — retry */ }

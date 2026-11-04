@@ -62,6 +62,34 @@ describe('focusWhenShown', () => {
     expect(placed).toHaveBeenCalledTimes(1)
   })
 
+  it('focuses a box already on screen at once, with no frame in between', () => {
+    const { el, show } = box()
+    show()
+    const placed = vi.fn()
+    focusWhenShown(() => el, placed)
+    expect(doc.activeElement).toBe(el)
+    expect(placed).toHaveBeenCalledTimes(1)
+    // One look on the next frame, in case a later effect of the same commit took focus away.
+    expect(frames).toHaveLength(1)
+    tick(16)
+    expect(doc.activeElement).toBe(el)
+    expect(placed).toHaveBeenCalledTimes(1)
+    expect(frames).toHaveLength(0)
+  })
+
+  it('takes focus back when a later effect of the same commit took it', () => {
+    const { el, show } = box()
+    const other = box()
+    show()
+    other.show()
+    const placed = vi.fn()
+    focusWhenShown(() => el, placed)
+    other.el.focus()
+    tick(16)
+    expect(doc.activeElement).toBe(el)
+    expect(placed).toHaveBeenCalledTimes(2)
+  })
+
   it('tries one last time at the deadline, and a cancel stops it', () => {
     const a = box()
     const atEnd = vi.fn()

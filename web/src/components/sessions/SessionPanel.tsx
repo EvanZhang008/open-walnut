@@ -72,7 +72,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
+import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
@@ -393,7 +393,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   const { notify } = useNotifications();
   const confirmDialog = useConfirm();
   const enabledModes = useEnabledModes();
-  const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
+  // A session this page fetched before draws from that copy in the first frame (peekSessionRecord);
+  // the fetch below brings it current.
+  const [sessionRecord, setSession] = useState<SessionRecord | null>(() => peekSessionRecord(sessionId));
   const session = useResolvedSessionRecord(sessionRecord);
   // A host replica with the Mac away: a session that runs on the Mac (or another host) cannot be written to.
   const macSessionAway = useMacSessionAway(session);
@@ -428,7 +430,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
     sessionId,
     session?.engine,
   );
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !peekSessionRecord(sessionId));
+  // Live patches (thread meta, title) go into that copy too, so the next open is not a step behind.
+  useEffect(() => { if (sessionRecord) keepSessionRecord(sessionId, sessionRecord); }, [sessionId, sessionRecord]);
   // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
   const [missing, setMissing] = useState(false);
   const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
@@ -659,8 +663,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    setSession(null);
-    setLoading(true);
+    const known = peekSessionRecord(sessionId);
+    setSession(known);
+    setLoading(!known);
     setMissing(false);
     setFetchedTask(null);
     const load = (attempt: number) => {

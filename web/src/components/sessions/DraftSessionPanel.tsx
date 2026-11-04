@@ -202,6 +202,15 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
     ? options.find((o) => o.value === meta.model)?.label ?? formatModelName(meta.model)
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
   const acpPillLabel = meta.model ? shortAcpModelName(meta.model) : entry.displayName;
+  // A pick or Escape hands the caret back to the draft's composer, so the next key types the prompt
+  // (it stayed on the pill). A close that put focus somewhere else (a click on another field) keeps it.
+  // It runs in the event that closes the menu, never a frame later: on a busy main thread a frame
+  // can be long in coming, and the caret sat on the pill meanwhile.
+  const backToComposer = () => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== pillRef.current && !active.closest('.model-picker')) return;
+    pillRef.current?.closest('.draft-session-panel')?.querySelector<HTMLTextAreaElement>('textarea.chat-input-textarea')?.focus({ preventScroll: true });
+  };
   return (
     <>
       <button
@@ -223,13 +232,14 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
           engine={engine}
           onSwitch={(model) => {
             setOpen(false);
+            backToComposer();
             // Auto ('' from the picker) is `undefined` on a folder draft. In
             // walnut mode it is the sentinel 'default': the launch memory is
             // applied server-side to a launch that names NO model, so a
             // hand-picked Auto must be spelled out or it could never win.
             onMetaChange((m) => ({ ...m, model: model || (walnut ? 'default' : undefined) }));
           }}
-          onClose={() => setOpen(false)}
+          onClose={() => { setOpen(false); backToComposer(); }}
           // A draft can still change provider — flipping clears the model: the
           // catalogs don't overlap, and an ACP engine has no pre-start rows.
           onProviderSwitch={(provider) => {
@@ -667,6 +677,11 @@ export function DraftSessionPanel({
       onKeyDownCapture={showDraftMenu && onTaskFieldChange ? onComposerKeyDown : undefined}
     >
       {!plainChat && <div className="session-panel-header">
+        {/* Beside session columns on Home the draft's header is as tall as theirs: an empty tool
+            row of the same make stands where theirs is, so the header lines meet across the strip. */}
+        <div className="session-meta-row-2 draft-header-tool-row" aria-hidden="true">
+          <span className="session-panel-window-controls"><span className="task-action-btn draft-header-tool-spacer" /></span>
+        </div>
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
@@ -705,7 +720,7 @@ export function DraftSessionPanel({
             title="Discard this draft"
             aria-label="Discard draft session"
           >
-            &times;
+            {ICONS.ICON_CLOSE}
           </button>
         </div>
       </div>}
@@ -836,7 +851,14 @@ export function DraftSessionPanel({
           draft={draft}
           pickerOpen={pickerOpen}
           onOpenPicker={() => setPickerOpen(true)}
-          onClosePicker={() => setPickerOpen(false)}
+          onClosePicker={() => {
+            setPickerOpen(false);
+            // Escape (or a pick) hands the caret back to the composer, as the model menu does, in
+            // the same event (a frame later lost it to the page when the picker's input went); a
+            // close that put focus somewhere else (a click on another field) keeps it there.
+            const active = document.activeElement;
+            if (!active || active === document.body || active.closest('.session-path-selector, .draft-launch-bar, .draft-composer-bar')) focusComposer();
+          }}
           onPathChange={onPathChange}
           onProjectChange={onProjectChange}
           isKnownProject={isKnownProject}

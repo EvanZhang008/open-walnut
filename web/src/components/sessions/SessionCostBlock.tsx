@@ -215,8 +215,15 @@ function ModelRow({ m }: { m: SessionCostModel }) {
   );
 }
 
+/**
+ * Each session's cost as this page last read it: the picker draws that in its first frame and the
+ * read behind it brings it current, so its rows never grow under the pointer on a second open.
+ */
+const lastCost = new Map<string, SessionCost>();
+const LAST_COST_MAX = 100;
+
 export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRow = true }: Props) {
-  const [cost, setCost] = React.useState<SessionCost | null>(null);
+  const [cost, setCost] = React.useState<SessionCost | null>(() => lastCost.get(sessionId) ?? null);
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
@@ -224,13 +231,16 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
     let timer: ReturnType<typeof setTimeout> | undefined;
     // A closed picker gives its slot back at once: the low-priority lane holds two requests.
     const abort = new AbortController();
-    setCost(null);
+    setCost(lastCost.get(sessionId) ?? null);
     setError(null);
     // A long first read answers `pending`; ask again until it lands (the host keeps reading).
     const load = (attempt: number) => {
       fetchSessionCost(sessionId, abort.signal)
         .then((c) => {
           if (cancelled) return;
+          lastCost.delete(sessionId);
+          lastCost.set(sessionId, c);
+          if (lastCost.size > LAST_COST_MAX) lastCost.delete(lastCost.keys().next().value as string);
           setCost(c);
           if (c.status === 'pending' && attempt < PENDING_RETRIES) timer = setTimeout(() => load(attempt + 1), PENDING_RETRY_MS);
         })
@@ -261,6 +271,11 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
           <strong data-testid="session-cost-total">
             {cost ? costHeadline(cost) : error ?? 'calculating…'}
           </strong>
+          {/* Why there is no price, on the same line (a row of its own grew the picker under the
+              pointer when it landed); the whole sentence is the tooltip. */}
+          {cost?.status === 'unavailable' && cost.reason && (
+            <span className="session-cost-muted session-cost-reason" data-testid="session-cost-reason" title={cost.reason}>{cost.reason}</span>
+          )}
         </span>
         {times && (
           <span className="session-cost-times" data-testid="session-cost-times"
@@ -269,9 +284,6 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
           </span>
         )}
       </button>
-      {cost?.status === 'unavailable' && cost.reason && (
-        <div className="session-cost-muted" data-testid="session-cost-reason">{cost.reason}</div>
-      )}
       {budgetRow && <BudgetRow sessionId={sessionId} />}
       {open && cost && (
         <div className="session-cost-body">

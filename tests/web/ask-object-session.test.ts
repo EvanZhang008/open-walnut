@@ -12,6 +12,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   askSessionAsked,
+  firstAskView,
   forgetAskSession,
   launchAskSession,
   objectContextHints,
@@ -176,5 +177,28 @@ describe('pruning', () => {
     writeAskSession(MAIL, { taskId: 't1', sessionId: 's1', asked: [], at: Date.now() }, storage)
     pruneAskObjectStore(storage, Date.now())
     expect(readAskSession(MAIL, storage)?.sessionId).toBe('s1')
+  })
+})
+
+describe('firstAskView: the drawer draws from the remembered record, never a request first', () => {
+  // 2026-11-04, the user: "the data is cache not sure why there is delay". The drawer used to show
+  // "Opening..." until a fetch of the remembered session came back.
+  const record = (over: Partial<{ sessionId: string; asked: string[] }> = {}) => ({ taskId: 't-1', at: 1, asked: [], ...over })
+
+  it('composes at once when nothing is remembered', () => {
+    expect(firstAskView(null, '')).toEqual({ kind: 'compose' })
+  })
+
+  it('opens a remembered session at once', () => {
+    expect(firstAskView(record({ sessionId: 's-1' }), '')).toEqual({ kind: 'session', sessionId: 's-1' })
+  })
+
+  it('links a task still waiting for its session', () => {
+    expect(firstAskView(record(), '')).toEqual({ kind: 'linking', taskId: 't-1' })
+  })
+
+  it('waits only for a canned question still to send', () => {
+    expect(firstAskView(record({ sessionId: 's-1' }), 'Summarize this').kind).toBe('resolving')
+    expect(firstAskView(null, 'Summarize this').kind).toBe('resolving')
   })
 })

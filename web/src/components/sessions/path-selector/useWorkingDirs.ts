@@ -30,9 +30,10 @@ export interface WorkingDirsState {
 }
 
 export function useWorkingDirs(open: boolean): WorkingDirsState {
-  const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
-  const [hosts, setHosts] = useState<ConfiguredHost[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The page's cached list in the first frame (peekWorkingDirs); the effect below refreshes it.
+  const [dirs, setDirs] = useState<WorkingDirEntry[]>(() => peekWorkingDirs()?.dirs ?? []);
+  const [hosts, setHosts] = useState<ConfiguredHost[]>(() => peekWorkingDirs()?.hosts ?? []);
+  const [loading, setLoading] = useState(() => !peekWorkingDirs());
   const [error, setError] = useState<string | null>(null);
   const hostsRef = useRef<ConfiguredHost[] | null>(null);
 

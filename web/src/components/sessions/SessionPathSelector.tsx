@@ -207,11 +207,13 @@ export function SessionPathSelector({
     void hydrateHostStatus();
   }, [open]);
 
-  // Focus search on open
+  // Focus search on open: at once when the box is there (it is, in the commit that opened the
+  // picker), else a moment later. preventScroll: the popover is placed in the same frame.
   useEffect(() => {
-    if (open && !loading) {
-      setTimeout(() => searchRef.current?.focus(), 50);
-    }
+    if (!open || loading) return;
+    if (searchRef.current) { searchRef.current.focus({ preventScroll: true }); return; }
+    const t = setTimeout(() => searchRef.current?.focus({ preventScroll: true }), 50);
+    return () => clearTimeout(t);
   }, [open, loading]);
 
   // New-user / new-host fallback: when the active tab has NO history at all,
@@ -661,7 +663,7 @@ export function SessionPathSelector({
     if (editMode) {
       // --- EDIT MODE ---
       if (e.key === 'Enter' && (e.shiftKey || e.metaKey)) {
-        // Shift+Enter or Cmd+Enter: confirm and start session
+        // Shift+Enter or Cmd+Enter: confirm this path (the draft's own Start launches)
         e.preventDefault();
         confirmCurrent();
       } else if (e.key === 'Enter') {
@@ -816,9 +818,9 @@ export function SessionPathSelector({
           A session is the live Claude Code run; the task is the tracking record
           Walnut auto-creates for it. Say it at the exact moment both get created. */}
       <div className="sps-header">
-        <span className="sps-header-title">Start a coding session</span>
+        <span className="sps-header-title">Choose folder and host</span>
         <span className="sps-header-hint">
-          Runs Claude Code in the folder you pick. A task is created automatically to track it.
+          The session runs in this folder once you start it.
         </span>
       </div>
       <div className="sps-search" style={{ '--sps-status-w': statusBtnWidth ? `${statusBtnWidth + 20}px` : '0px' } as React.CSSProperties}>
@@ -827,7 +829,7 @@ export function SessionPathSelector({
           value={editMode ? editingPath : query}
           ghost={ghost}
           editing={editMode}
-          placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter start session, Esc back)' : 'Type a path to start a Claude Code session there directly'}
+          placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter use it, Esc back)' : 'Type a folder path, or pick one below'}
           onChange={v => {
             if (editMode) { setEditingPath(v); return; }
             // Path-like input flips straight into edit mode (shell mental model) —
@@ -843,9 +845,9 @@ export function SessionPathSelector({
           onKeyDown={handleKeyDown}
         />
         {/* Compact status/confirm button — color answers "is this a real folder?":
-            green ✓ = exists (start), amber "+ folder" = missing (create folder & start),
+            green ✓ = exists (use it), amber "+ folder" = missing (create the folder),
             neutral ↵ = no verdict yet (loading / host down — never blocks).
-            Kept small on purpose: the header + keys-hint already say "start session".
+            Kept small on purpose: the header + keys-hint already say what Enter does.
             Label says "folder" explicitly — "+ new" read as "new session" to users. */}
         {editMode && editingPath && (
           <button
@@ -854,10 +856,10 @@ export function SessionPathSelector({
             disabled={validity === 'missing' && !createOption}
             onClick={confirmCurrent}
             title={
-              validity === 'valid' ? 'Folder exists: start session here (Enter)'
+              validity === 'valid' ? 'Folder exists: use it (Enter)'
               : validity === 'missing'
-                ? (createOption ? "Folder doesn't exist: create the folder, then start a session in it (Enter)" : 'Folder not found on any host: pick a host tab to create it')
-              : 'Start session (⇧Enter)'
+                ? (createOption ? "Folder doesn't exist: create it, then use it (Enter)" : 'Folder not found on any host: pick a host tab to create it')
+              : 'Use this folder (⇧Enter)'
             }
           >
             {validity === 'valid' ? '✓' : validity === 'missing' ? '+ folder' : '↵'}
@@ -918,7 +920,7 @@ export function SessionPathSelector({
       {/* Key hints live here (not in the placeholder) so the placeholder can say
           what the popover is FOR — new users scan purpose first, keys later. */}
       <div className="sps-keys-hint">
-        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select or use path · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> start session · <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select or use path · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> use it · <kbd>Esc</kbd> close
       </div>
 
     </div>

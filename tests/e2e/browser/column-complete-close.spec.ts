@@ -1,7 +1,7 @@
 /**
- * Completing a task from its session column's header closes that column, the ordinary way (the
- * sessions area's own removal fades it and the neighbours take the width), and an Undo puts the
- * task's phase and the column back where they were.
+ * Completing a task from its session column's header closes that column, the ordinary way (gone
+ * in one frame like every column close, session-columns-motion.ts, and the neighbours take the
+ * width), and an Undo puts the task's phase and the column back where they were.
  *
  * The person used to complete the task and then click × on the same column. They also sometimes
  * want to look at a column after they shut it, so the close is not silent: the toast says how to
@@ -96,24 +96,19 @@ async function openViaFinder(page: Page, query: string, sid: string): Promise<vo
 }
 
 /** Record every animation that is a clip-path on a column (there must be none: the close is the
- *  ordinary fade), and with `hold` pause the removal's own fade so the test can look at it. */
-async function watchAnimations(page: Page, hold = false) {
-  await page.addInitScript((holdFade: boolean) => {
-    const w = window as unknown as { __clipAnimations: number; __fadeHeld?: Animation }
+ *  ordinary one-frame close). */
+async function watchAnimations(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __clipAnimations: number }
     w.__clipAnimations = 0
     const original = Element.prototype.animate
     Element.prototype.animate = function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
       const anim = original.call(this, keyframes, options)
       const onColumn = this instanceof HTMLElement && this.classList.contains('main-page-session-column')
       if (onColumn && Array.isArray(keyframes) && keyframes.some((f) => 'clipPath' in f)) w.__clipAnimations++
-      // auto-animate's removal of a column: the node is re-inserted and faded (scale .98, opacity 0).
-      if (holdFade && onColumn && Array.isArray(keyframes) && keyframes.length === 2 && keyframes.every((f) => 'transform' in f && 'opacity' in f)) {
-        anim.pause()
-        w.__fadeHeld = anim
-      }
       return anim
     }
-  }, hold)
+  })
 }
 
 async function openThree(page: Page) {
@@ -143,8 +138,8 @@ test.afterEach(async ({ page }) => {
   await resetTasks(page)
 })
 
-test('completing from the header closes the column with the ordinary fade, and names an Undo', async ({ page }, info) => {
-  await watchAnimations(page, true)
+test('completing from the header closes the column at once, and names an Undo', async ({ page }, info) => {
+  await watchAnimations(page)
   await openThree(page)
   expect(await order(page)).toEqual(KEYS.map(SID))
   const before = await widths(page)
@@ -156,20 +151,12 @@ test('completing from the header closes the column with the ordinary fade, and n
   await expect(undoToast(page)).toBeVisible({ timeout: 15_000 })
   await expect(undoToast(page)).toContainText('Close fixture B')      // named by its task, never by a session id
 
-  // The removal's own fade, held halfway: the whole column (not a strip of it) fades, lifted out
-  // of the flow, while the neighbours are already taking its width.
-  await page.waitForFunction(() => !!(window as unknown as { __fadeHeld?: Animation }).__fadeHeld, undefined, { timeout: 30_000 })
-  await page.evaluate(() => {
-    const a = (window as unknown as { __fadeHeld: Animation }).__fadeHeld
-    a.pause()
-    a.currentTime = 160
-  })
-  const fading = await col(page, 'b').evaluate((node) => ({ position: getComputedStyle(node).position, clip: getComputedStyle(node).clipPath }))
-  expect(fading.position).toBe('absolute')
-  expect(fading.clip).toBe('none')
-  await page.screenshot({ path: `${SHOTS}/${engine}-1-fading.png` })
-  await page.evaluate(() => { (window as unknown as { __fadeHeld: Animation }).__fadeHeld.play() })
-
+  // The close has no fade: once the column leaves, the very next frame holds no trace of it.
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
+  const left = await page.evaluate(() => new Promise<number>((resolve) => requestAnimationFrame(() =>
+    resolve(document.querySelectorAll('.main-page-session-column[data-column-id="pw-close-b-session"]').length))))
+  expect(left, 'nothing of the closed column is left on screen').toBe(0)
+  await page.screenshot({ path: `${SHOTS}/${engine}-1-closed-at-once.png` })
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
   await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c')].join())
   await expect.poll(async () => (await widths(page))[SID('a')], { timeout: 10_000 }).toBeGreaterThan(before[SID('a')] + 100)

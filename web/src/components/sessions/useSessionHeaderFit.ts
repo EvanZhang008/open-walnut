@@ -9,6 +9,7 @@
  * state: the composer controls row's rule against flicker.
  */
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
 import { fitToolRow, type ToolItemKind, type ToolRowItem } from './session-header-fit';
 
 /** Mirrors `.session-meta-row-2-chips { gap }`, `.session-panel-window-controls { gap }`, `.session-meta-row-2 { gap }`. */
@@ -129,8 +130,8 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
  * Re-measures when the container, the elements `alsoWatch` names, or any item
  * changes size, and when the DOM under the outermost watched element changes
  * (a Trigger pill appearing, a chip the host stops offering, a title renamed).
- * The measurement's state update renders on React's schedule, and that render
- * is measured again by the observers, so the decision converges in a frame or two.
+ * The measurement's state update renders before the frame paints (flushSync), and
+ * that render is measured again by the observers, so the decision converges at once.
  */
 function useObserved(
   ref: RefObject<HTMLElement | null>,
@@ -143,7 +144,11 @@ function useObserved(
     if (!el) return;
     measure();
     if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => measure());
+    // The observers run after layout and before paint; flushSync renders the new fit in that same
+    // frame, so a column that narrows or widens (a draft opening or closing beside it) never paints
+    // one frame with the old fit (2026-11-04: a neighbour's tools showed compact, then expanded).
+    const fit = () => flushSync(measure);
+    const ro = new ResizeObserver(fit);
     const watched = alsoWatch?.(el) ?? [];
     const observeItems = () => {
       for (const item of el.querySelectorAll<HTMLElement>(itemSelector)) ro.observe(item);
@@ -154,7 +159,7 @@ function useObserved(
     // Mutations are watched from the outermost element (the row when one is
     // named), so a new sibling or a changed title re-measures too.
     const root = watched.find((w) => w.contains(el)) ?? el;
-    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeItems(); measure(); });
+    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => { observeItems(); fit(); });
     mo?.observe(root, { childList: true, subtree: true, characterData: true });
     return () => { ro.disconnect(); mo?.disconnect(); };
   }, [ref, measure, itemSelector, alsoWatch]);

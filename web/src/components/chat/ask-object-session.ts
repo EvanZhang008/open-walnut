@@ -112,6 +112,24 @@ export function askSessionAsked(record: AskSessionRecord | null, preset: string)
   return Boolean(record && preset && record.asked.includes(presetLatchName(preset)));
 }
 
+/**
+ * What the drawer draws in its first frame, read from the remembered record alone: never a request
+ * first (2026-11-04, the user: "the data is cache not sure why there is delay"). A remembered session
+ * opens at once and is checked behind it (gone: the drawer starts over); a task still waiting for its
+ * session links; nothing remembered composes. Only a canned question still to send waits a moment.
+ */
+export type FirstAskView =
+  | { kind: 'resolving' }
+  | { kind: 'compose' }
+  | { kind: 'linking'; taskId: string }
+  | { kind: 'session'; sessionId: string };
+
+export function firstAskView(record: AskSessionRecord | null, ask: string): FirstAskView {
+  if (record?.sessionId) return ask && !askSessionAsked(record, ask) ? { kind: 'resolving' } : { kind: 'session', sessionId: record.sessionId };
+  if (record?.taskId) return { kind: 'linking', taskId: record.taskId };
+  return ask ? { kind: 'resolving' } : { kind: 'compose' };
+}
+
 /** The record with `preset` noted as asked and its clock re-stamped. */
 export function withAsked(record: AskSessionRecord, preset: string | undefined, now: number): AskSessionRecord {
   const name = preset ? presetLatchName(preset) : '';

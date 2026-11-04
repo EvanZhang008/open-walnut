@@ -25,6 +25,15 @@
 
 .session-cost-title {
   color: var(--fg, inherit);
+  /* One line whatever lands in it (the picker's rows below must not move). */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.session-cost-reason::before {
+  content: ' · ';
 }
 
 .session-cost-title strong {

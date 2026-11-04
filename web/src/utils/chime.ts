@@ -45,16 +45,28 @@ function note(c: Ctx, freq: number, start: number, length: number, peak: number)
  * starts suspended in most browsers; creating and resuming it on the first
  * pointer/key press means the later chime can actually sound. It is suspended
  * again right away: a running context keeps the audio device awake for nothing.
+ *
+ * Never on the gesture's own frame: `new AudioContext()` wakes the audio device, and
+ * it took 30 to 124 ms of the first click of every page load (2026-11-04: the New
+ * task draft, and the side panel's, which is a fresh page each time it opens, drew
+ * that much later). A timer of under a second still carries the gesture (WebKit
+ * forwards it to such timers, Chromium keeps the activation for seconds).
  * Returns a cleanup.
  */
+export const UNLOCK_AFTER_MS = 150;
+
 export function armChime(): () => void {
   if (typeof window === 'undefined') return () => {};
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const unlock = () => {
     disarm();
-    try {
-      const c = audioContext();
-      if (c && c.state === 'suspended') void c.resume().then(() => c.suspend()).catch(() => {});
-    } catch { /* no audio on this device */ }
+    timer = setTimeout(() => {
+      timer = null;
+      try {
+        const c = audioContext();
+        if (c && c.state === 'suspended') void c.resume().then(() => c.suspend()).catch(() => {});
+      } catch { /* no audio on this device */ }
+    }, UNLOCK_AFTER_MS);
   };
   const disarm = () => {
     window.removeEventListener('pointerdown', unlock, true);
@@ -62,7 +74,10 @@ export function armChime(): () => void {
   };
   window.addEventListener('pointerdown', unlock, true);
   window.addEventListener('keydown', unlock, true);
-  return disarm;
+  return () => {
+    disarm();
+    if (timer) clearTimeout(timer);
+  };
 }
 
 export function playChime(kind: 'reminder'): void {

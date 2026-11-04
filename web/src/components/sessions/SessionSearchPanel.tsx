@@ -9,7 +9,7 @@
  * Keyboard: the input autofocuses on open; ArrowUp/Down move the selection,
  * Enter opens it, Escape clears the query first and closes when already empty.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { searchSessions } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
 import { ICON_SEARCH } from '@/components/common/Icons';
@@ -25,9 +25,24 @@ interface SessionSearchPanelProps {
 
 const DEBOUNCE_MS = 250;
 
+/** The recent list this page last fetched: an open draws it in its first frame while it refreshes. */
+let lastRecent: SessionRecord[] | null = null;
+const RECENT_LIMIT = 30;
+
+/**
+ * Read the recent list once, before the finder is first opened (Home calls it at load), so even
+ * the first open draws its list in its first frame instead of an empty box that grows when it lands.
+ */
+export function warmSessionSearch(): void {
+  if (lastRecent) return;
+  searchSessions('', RECENT_LIMIT)
+    .then((sessions) => { if (!lastRecent) lastRecent = sessions; })
+    .catch(() => { /* the finder reads it itself when it opens */ });
+}
+
 export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSearchPanelProps) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SessionRecord[]>([]);
+  const [results, setResults] = useState<SessionRecord[]>(() => lastRecent ?? []);
   const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const hostName = useHostDisplayLabels();
@@ -42,9 +57,10 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
     setLoading(true);
     const seq = ++requestSeq.current;
     const t = setTimeout(() => {
-      searchSessions(query, 30)
+      searchSessions(query, RECENT_LIMIT)
         .then((sessions) => {
           if (seq !== requestSeq.current) return;
+          if (!query) lastRecent = sessions;
           setResults(sessions);
           setSelectedIdx(0);
           setLoading(false);
@@ -59,13 +75,15 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
     return () => clearTimeout(t);
   }, [open, query]);
 
-  // Autofocus + reset on open
-  useEffect(() => {
+  // Autofocus + reset on open, before the frame paints: the caret is in the box in the first frame.
+  useLayoutEffect(() => {
     if (open) {
       setQuery('');
       setSelectedIdx(0);
-      // rAF: the input may not be mounted yet on the same tick.
-      requestAnimationFrame(() => inputRef.current?.focus());
+      if (lastRecent) setResults(lastRecent);
+      // The input is mounted by the commit this effect follows; the rAF covers one that is not yet.
+      if (inputRef.current) inputRef.current.focus();
+      else requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
@@ -124,7 +142,11 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
           onKeyDown={handleKeyDown}
           aria-label="Search sessions"
         />
-        {loading && <span className="todo-search-spinner" />}
+        {/* A refresh behind a list already on screen is silent; the spinner says "wait" only when
+            there is nothing to read yet or the list is for an older query. */}
+        <span className="session-search-spinner-slot" aria-hidden="true">
+          {loading && (results.length === 0 || query !== '') && <span className="todo-search-spinner" />}
+        </span>
       </div>
       <div className="session-search-results" role="listbox">
         {!loading && results.length === 0 && (
@@ -145,10 +167,13 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
             <span className="session-search-title">
               {s.title || s.cwd?.split('/').pop() || s.claudeSessionId.slice(0, 8)}
             </span>
-            <span className="session-search-meta">
-              {s.host ? `${hostName(s.host)} · ` : ''}
-              {s.cwd ? `${s.cwd.split('/').slice(-2).join('/')} · ` : ''}
-              {timeAgo(s.lastActiveAt)}
+            {/* The folder's own name (the full path is the tooltip), then when: the time never
+                ellipsizes away behind a long path. */}
+            <span className="session-search-meta" title={s.cwd || undefined}>
+              {s.host && <span className="session-search-host">{hostName(s.host)} · </span>}
+              {s.cwd && <span className="session-search-folder">{s.cwd.split('/').filter(Boolean).pop()}</span>}
+              {s.cwd && <span className="session-search-sep"> · </span>}
+              <span className="session-search-time">{timeAgo(s.lastActiveAt)}</span>
             </span>
           </button>
         ))}

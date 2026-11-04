@@ -659,6 +659,71 @@ const OPEN_PATH_FORBIDDEN = /\/api\/sessions\/quick-start|\/api\/tasks$|working-
  * observation window is exactly the interaction under test. Arm it BEFORE the
  * click and assert `toEqual([])` right after the resulting UI appears.
  */
+/**
+ * What the first frame after a click on New task drew (2026-11-04, the user: "it should instantly
+ * show, no delay"). Armed before the click; the reader waits for the page to settle and returns that
+ * first frame: frames drawn before the draft was in the page, whether its cards and composer were
+ * there, the caret in its composer, its opacity through every ancestor, its width and the other
+ * columns' widths beside the settled ones, and every running animation that moves or fades anything
+ * (colour changes are left out). A fade-in, a width transition, a fetch or a lazy chunk on the open
+ * path all show here. Judge it on the production bundle (serveProductionBundle): React's development
+ * build re-attaches the column animator under StrictMode, which hid the fade it ran in production.
+ */
+export interface FirstDraftFrame {
+  framesBefore: number; cards: boolean; composer: boolean; focused: boolean; opacity: number
+  width: number; settledWidth: number; columns: number[]; settledColumns: number[]; motion: string[]
+  /** Composers on the strip that can show a scrollbar with text shorter than their max height. */
+  scrollable: number
+}
+export async function watchFirstDraftFrame(page: Page): Promise<() => Promise<FirstDraftFrame>> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __firstDraftFrame?: unknown }
+    w.__firstDraftFrame = undefined
+    const PAINT_ONLY = /^(color|background(-color)?|border(-[a-z]+)?-color|box-shadow|outline(-color)?|fill|stroke)$/
+    const widths = () => [...document.querySelectorAll<HTMLElement>('.main-page-session-column')].map((c) => Math.round(c.getBoundingClientRect().width))
+    const motion = () => document.getAnimations().filter((a) => a.playState === 'running').flatMap((a) => {
+      const props = 'transitionProperty' in a ? [(a as CSSTransition).transitionProperty]
+        : ((a.effect as KeyframeEffect | null)?.getKeyframes() ?? []).flatMap((k) => Object.keys(k).filter((p) => !['offset', 'easing', 'composite', 'computedOffset'].includes(p)))
+      const moving = [...new Set(props)].filter((p) => !PAINT_ONLY.test(p))
+      const t = (a.effect as KeyframeEffect | null)?.target as Element | null
+      return moving.length ? [`${moving.join('+')} on .${String(t?.className ?? '').split(' ')[0]}`] : []
+    })
+    const onClick = (e: Event) => {
+      if (!(e.target as Element | null)?.closest?.('.new-launcher-btn')) return
+      document.removeEventListener('click', onClick, true)
+      let framesBefore = 0
+      const look = () => {
+        const col = document.querySelector<HTMLElement>('.main-page-session-column .draft-session-panel')
+        if (!col) { framesBefore++; if (framesBefore < 120) requestAnimationFrame(look); return }
+        let opacity = 1
+        for (let el: Element | null = col; el; el = el.parentElement) opacity *= Number(getComputedStyle(el).opacity)
+        const active = document.activeElement
+        const first = {
+          framesBefore,
+          cards: !!col.querySelector('.draft-intent-cards'),
+          composer: !!col.querySelector('.chat-input-textarea'),
+          focused: !!active?.classList.contains('chat-input-textarea') && !!active.closest('.main-page-session-column .draft-session-panel'),
+          opacity: Math.round(opacity * 1000) / 1000,
+          width: Math.round(col.getBoundingClientRect().width),
+          columns: widths(),
+          motion: motion(),
+          scrollable: [...document.querySelectorAll<HTMLTextAreaElement>('.main-page-session-column .chat-input-textarea')]
+            .filter((t) => getComputedStyle(t).overflowY !== 'hidden' && t.scrollHeight <= (parseFloat(getComputedStyle(t).maxHeight) || 200)).length,
+        }
+        setTimeout(() => {
+          w.__firstDraftFrame = { ...first, settledWidth: Math.round(col.getBoundingClientRect().width), settledColumns: widths() }
+        }, 800)
+      }
+      requestAnimationFrame(look)
+    }
+    document.addEventListener('click', onClick, true)
+  })
+  return async () => {
+    await page.waitForFunction(() => (window as unknown as { __firstDraftFrame?: unknown }).__firstDraftFrame !== undefined, null, { timeout: 15_000 })
+    return page.evaluate(() => (window as unknown as { __firstDraftFrame: never }).__firstDraftFrame)
+  }
+}
+
 export function watchForbiddenRequests(page: Page): string[] {
   const seen: string[] = []
   page.on('request', (req) => { if (OPEN_PATH_FORBIDDEN.test(req.url())) seen.push(req.url()) })

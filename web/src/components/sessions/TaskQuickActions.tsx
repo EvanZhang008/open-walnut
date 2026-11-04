@@ -18,7 +18,7 @@ import { NEEDS_CATEGORY_LABELS, needsLineOf } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
-import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
@@ -96,7 +96,10 @@ interface TaskQuickActionsProps {
 }
 
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
-  const [task, setTask] = useState<Task | null>(externalTask ?? null);
+  // The board's copy first: a caller that passes no task (a bound draft's header) draws its kebab
+  // from the store in the first frame instead of after a GET (2026-11-04, "the data is cache").
+  const storeTask = useStoreTask(externalTask === undefined ? taskId : undefined);
+  const [task, setTask] = useState<Task | null>(externalTask ?? storeTask ?? null);
   // Writes go through the shared task store when it carries this row: the
   // optimistic change then reaches the board, the detail pane and the parent
   // session header in the same frame, and the store owns the REST call, the
@@ -159,15 +162,23 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     return () => scope.removeEventListener('contextmenu', handleContextMenu);
   }, [contextMenuScope, slot]);
 
-  // Fetch task if not provided externally
+  // Fetch the task only when neither the caller nor the board has it (a task the store does not
+  // hold, a store still loading); the store follows the task's events, so its copy is current.
+  const haveStoreTask = !!storeTask;
   useEffect(() => {
     if (externalTask !== undefined) { setTask(externalTask ?? null); return; }
     if (!taskId) { setTask(null); return; }
+    if (storeTask) { setTask(storeTask); return; }
     setTask(null);
     fetchTask(taskId).then(setTask).catch((err) => {
       console.error('[TaskQuickActions] Failed to fetch task:', err);
     });
-  }, [taskId, externalTask]);
+    // storeTask rides in for its value; a refetch only when the store gains or loses it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, externalTask, haveStoreTask]);
+  useEffect(() => {
+    if (externalTask === undefined && storeTask) setTask(storeTask);
+  }, [externalTask, storeTask]);
 
   // Keep in sync via WS events
   useEvent('task:updated', (data) => {

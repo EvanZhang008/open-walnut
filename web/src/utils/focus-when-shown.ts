@@ -5,7 +5,8 @@
  * mail opened its draft while Home was still hidden, and the caret was not in the prompt). Tries
  * every frame until the box is shown and focused, for at most `maxMs` of wall time (frames are slow
  * on a loaded machine, so a frame count is no budget); at the end it focuses the box anyway, as
- * before this waited. Returns the cancel.
+ * before this waited. The first try is at once, so a box already on screen has the caret in the
+ * frame it first paints. Returns the cancel.
  */
 export function focusWhenShown(
   get: () => HTMLTextAreaElement | HTMLInputElement | null,
@@ -14,15 +15,22 @@ export function focusWhenShown(
 ): () => void {
   const until = Date.now() + maxMs;
   let raf = 0;
-  const attempt = () => {
+  const attempt = (first = false) => {
     const el = get();
     const last = Date.now() >= until;
     if (el && (el.offsetParent !== null || last)) {
       el.focus();
-      if (document.activeElement === el || last) { onFocused?.(el); return; }
+      if (document.activeElement === el || last) {
+        onFocused?.(el);
+        // The first try runs inside the commit, before the rest of its effects: one of them may
+        // still take focus (the old first try ran a frame later, after all of them), so look once
+        // more on the next frame and keep trying if the box lost it.
+        if (first && !last) raf = requestAnimationFrame(() => { if (document.activeElement !== get()) attempt(); });
+        return;
+      }
     }
-    if (!last) raf = requestAnimationFrame(attempt);
+    if (!last) raf = requestAnimationFrame(() => attempt());
   };
-  raf = requestAnimationFrame(attempt);
+  attempt(true);
   return () => cancelAnimationFrame(raf);
 }

@@ -179,7 +179,8 @@ export function AskWalnutSlot({
   // first and always present: before the list resolves (or if it never does) the
   // slot is the plain Ask Walnut slot.
   const agentsSnapshot = useSyncExternalStore(subscribeAgents, getAgentsSnapshot, getAgentsSnapshot);
-  useEffect(() => { void loadAgents(); }, []);
+  // Home warms the list at load; a warm that failed (server restarting) is tried again here.
+  useEffect(() => { void loadAgents(Boolean(getAgentsSnapshot().error)); }, []);
   useEvent('agents:changed', () => { void loadAgents(true); });
   const agents = useMemo<AskAgent[]>(() => slotAgents(agentsSnapshot.agents), [agentsSnapshot.agents]);
   // Until the registry has answered once (a failed load counts: the list is

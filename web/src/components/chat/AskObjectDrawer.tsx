@@ -35,7 +35,7 @@ import { visibleInterval } from '@/utils/page-visibility';
 import { askLaunchBody, askTaskForLater } from './ask-object-draft';
 import { useAskObjectDraft } from './useAskObjectDraft';
 import {
-  askSessionAsked, objectContextHints, storeObjectContext, forgetAskSession, launchAskSession, readAskSession,
+  askSessionAsked, objectContextHints, storeObjectContext, firstAskView, forgetAskSession, launchAskSession, readAskSession,
   withAsked, writeAskSession, type AskSessionRecord, type AskSessionScope,
 } from './ask-object-session';
 import '@/styles/ask-object-drawer.css';
@@ -144,7 +144,8 @@ async function sendIntoSession(sessionId: string, message: string): Promise<void
 export function AskObjectDrawer(props: AskObjectDrawerProps) {
   const { objectKey, agentId, quote, contextBlock, contextName, preset, autoSend } = props;
   const scope = useMemo<AskSessionScope>(() => ({ agentId, key: objectKey }), [agentId, objectKey]);
-  const [view, setView] = useState<View>({ kind: 'resolving' });
+  // Drawn from the remembered record in the first frame (firstAskView); the effect below checks it.
+  const [view, setView] = useState<View>(() => firstAskView(readAskSession(scope), autoSend && preset ? preset : ''));
   // The draft row: Ask Walnut by default, Start Task (a folder and host) one tab away, More for the
   // task fields. What it launches is askLaunchBody's rule.
   const askDraft = useAskObjectDraft(`ask-object:${agentId}:${objectKey}`);

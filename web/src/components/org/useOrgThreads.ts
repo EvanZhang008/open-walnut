@@ -45,8 +45,14 @@ function nextSnoozeEnd(list: readonly OrgThread[] | null, now: number): number |
   return soonest;
 }
 
+/**
+ * Each node's threads as this page last read them: a node opened again draws them in its first frame
+ * while the read behind it brings them current (2026-11-04: every node switch showed "Loading…").
+ */
+const lastRead = new Map<string, OrgThread[]>();
+
 export function useOrgThreads(taskId: string | undefined, enabled: boolean): OrgThreadsState {
-  const [threads, setThreads] = useState<OrgThread[] | null>(null);
+  const [threads, setThreads] = useState<OrgThread[] | null>(() => (taskId && enabled ? lastRead.get(taskId) ?? null : null));
   const [error, setError] = useState<string | null>(null);
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */
   const [writeError, setWriteError] = useState<string | null>(null);
@@ -62,7 +68,7 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     try {
       const next = await fetchOrgThreads(taskId);
       // A later read (or a node change) wins: an answer that comes back late is dropped.
-      if (mine === seq.current) { setThreads(withPending(next)); setError(null); }
+      if (mine === seq.current) { lastRead.set(taskId, next); setThreads(withPending(next)); setError(null); }
       return true;
     } catch (err) {
       if (mine !== seq.current) return true;
@@ -72,7 +78,7 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     }
   }, [taskId]);
   useEffect(() => {
-    setThreads(null);
+    setThreads(taskId && enabled ? lastRead.get(taskId) ?? null : null);
     setError(null);
     setWriteError(null);
     pending.current.clear();

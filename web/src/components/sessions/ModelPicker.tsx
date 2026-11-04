@@ -326,6 +326,9 @@ interface ModelPickerProps {
   acpContext?: { used: number; size?: number };
 }
 
+/** Each session's live strip as this page last pulled it (see the state below). */
+const lastLiveSettings = new Map<string, SessionLiveSettings>();
+
 export function ModelPicker({
   currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
@@ -339,7 +342,9 @@ export function ModelPicker({
   const engineCatalog = useEngineCatalog();
   const engineUi = engineCaps(engine, engineCatalog);
   const isAcpPane = engineUi.providerModelCatalog;
-  const [liveSettings, setLiveSettings] = React.useState<SessionLiveSettings | null>(null);
+  // The last strip this page pulled for the session draws in the first frame; the pull refreshes it.
+  const [liveSettings, setLiveSettings] = React.useState<SessionLiveSettings | null>(() => (sessionId ? lastLiveSettings.get(sessionId) ?? null : null));
+  React.useEffect(() => { if (sessionId && liveSettings) lastLiveSettings.set(sessionId, liveSettings); }, [sessionId, liveSettings]);
   const [pulling, setPulling] = React.useState(false);
   React.useEffect(() => {
     if (!sessionId || isAcpPane) return; // get_settings is a Claude-CLI protocol call

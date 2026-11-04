@@ -45,7 +45,7 @@ import {
   makeTierKnown, rederiveDraftParse, returnFieldToWalnut, revertAiTaskFields,
 } from '@/components/sessions/draft-ownership';
 import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
-import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
+import { SessionSearchPanel, warmSessionSearch } from '@/components/sessions/SessionSearchPanel';
 import {
   DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
   tierLabelOf,
@@ -61,7 +61,7 @@ import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWalnutSlot';
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
-import { getAgentsSnapshot } from '@/stores/agents-store';
+import { getAgentsSnapshot, loadAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
@@ -104,6 +104,7 @@ import {
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
+import { columnMotion } from './session-columns-motion';
 import { WorkspacePreparingPanel } from '@/components/workspaces/WorkspacePreparingPanel';
 import { draftWorkspaceRequest, setDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
 import { rememberWorkspaceLaunch, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
@@ -585,17 +586,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     opener?: HTMLElement;
     taskId?: string;
   } | null>(null);
-  // auto-animate attaches to the sessions container and animates child reorder/add/remove
+  // auto-animate attaches to the sessions container and slides a reordered column
   // with the FLIP technique — same feel as a drag-drop settle, without the jank of
-  // View Transitions snapshotting live chat content at the wrong scale.
-  const [sessionsAreaAutoAnimateRef] = useAutoAnimate<HTMLDivElement>({
-    // 320ms — long enough to read as a physical slide, short enough that rapid
-    // lock/unlock still feels responsive. auto-animate's default (250ms) felt
-    // slightly snappy against the panel width; 320 lands closer to macOS window
-    // shuffle tempo. Easing is iOS "standard" (soft-start, settle).
-    duration: 320,
-    easing: 'cubic-bezier(0.32, 0.72, 0, 1)',
-  });
+  // View Transitions snapshotting live chat content at the wrong scale. A column that
+  // opens or closes does not move at all (columnMotion: the New task draft is whole in
+  // its first frame).
+  const [sessionsAreaAutoAnimateRef] = useAutoAnimate<HTMLDivElement>(columnMotion);
 
   // Active project tab — mirrors TodoPanel's tab for URL sync (may be a tab
   // sentinel: INBOX_TAB). Initialized from the SAME localStorage key
@@ -751,6 +747,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // per-host SSH fan-out that `prewarmWorkingDirs` still keeps behind a real open.
   // Fire-and-forget; the API layer dedupes and caches for the page lifetime.
   useEffect(() => { void fetchWorkingDirs().catch(() => { /* offline → chips stay hidden */ }); }, []);
+  // The agent list the Ask Walnut slot draws its asks from, warmed the same way: a chat opened
+  // later shows its asks in its first frame instead of "Loading your asks…" (2026-11-04).
+  useEffect(() => { void loadAgents(); }, []);
+  // The session finder's recent list, the same way: its first open is whole in its first frame.
+  useEffect(() => { warmSessionSearch(); }, []);
 
   // Set of session IDs currently open in columns — for active pill indicators
   const openSessionIdSet = useMemo(() => new Set(sessionColumns.map(c => c.id)), [sessionColumns]);
@@ -1203,8 +1204,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // keyed on `autoFocus`, and re-setting the same id is a no-op React
         // (batched null→id collapses, and an unchanged value can't flip a bool
         // prop). Scoped by data-draft-id so it lands in THIS column even with
-        // several drafts open.
-        requestAnimationFrame(() => {
+        // several drafts open. At once when the textarea is on the page (it is, beside a draft on
+        // screen): a frame later the caret showed one frame after the click.
+        if (textarea) textarea.focus();
+        else requestAnimationFrame(() => {
           document.querySelector<HTMLTextAreaElement>(
             `[data-draft-id="${CSS.escape(leftmostDraft.id)}"] .chat-input-textarea`,
           )?.focus();

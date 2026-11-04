@@ -18,7 +18,7 @@ import {
 import {
   NOT_QUIET, effectiveQuiet, normalizeQuiet, quietAllowsToast, quietLabel,
 } from '../../web/src/contexts/notifications/quiet-model';
-import { playChime } from '../../web/src/utils/chime';
+import { armChime, playChime, UNLOCK_AFTER_MS } from '../../web/src/utils/chime';
 import type { Notification } from '../../web/src/contexts/notifications/types';
 
 const opButton = { kind: 'op', label: 'Done', pluginId: 'walnut-rhythm', op: 'walnut_rhythm_break_done', args: { minutes: 2 } };
@@ -138,6 +138,26 @@ describe('quiet model', () => {
 });
 
 describe('chime', () => {
+  it('never builds the audio context inside the first click (2026-11-04: 30 to 124 ms of it)', () => {
+    vi.useFakeTimers();
+    let built = 0;
+    vi.stubGlobal('AudioContext', class { state = 'running'; constructor() { built++; } });
+    const listeners: Record<string, (() => void)[]> = {};
+    vi.stubGlobal('window', {
+      addEventListener: (t: string, f: () => void) => { (listeners[t] ??= []).push(f); },
+      removeEventListener: (t: string, f: () => void) => { listeners[t] = (listeners[t] ?? []).filter((g) => g !== f); },
+    });
+    const disarm = armChime();
+    for (const f of [...(listeners.pointerdown ?? [])]) f();
+    expect(built).toBe(0);
+    vi.advanceTimersByTime(UNLOCK_AFTER_MS);
+    expect(built).toBe(1);
+    expect(listeners.pointerdown).toEqual([]);
+    disarm();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
   it('never throws, with no AudioContext or with one that refuses to start', () => {
     expect(() => playChime('reminder')).not.toThrow();
     vi.stubGlobal('AudioContext', class { constructor() { throw new Error('autoplay'); } });

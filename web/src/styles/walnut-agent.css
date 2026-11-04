@@ -97,6 +97,22 @@
 .draft-intent-card-walnut:focus-visible {
   outline-color: color-mix(in srgb, var(--walnut-accent) 60%, transparent);
 }
+/* A narrow column (a draft beside open chats): the two cards stack, each one row, icon on
+   the left, so neither wraps its description to five lines and the fork stays short. */
+.draft-intent-stack { container: draft-intent / inline-size; }
+@container draft-intent (max-width: 440px) {
+  .draft-intent-cards { grid-template-columns: 1fr; gap: 8px; }
+  .draft-intent-card {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    column-gap: 12px;
+    row-gap: 2px;
+    align-items: start;
+    padding: 12px 14px;
+  }
+  .draft-intent-ic { grid-row: 1 / span 2; margin-bottom: 0; }
+  .draft-intent-t { margin-bottom: 0; }
+}
 
 /* ── Walnut-mode panel cue: ONE warm hairline at the top. ── */
 .draft-session-panel-walnut {
@@ -288,7 +304,6 @@
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.28);
-  animation: ask-walnut-fade-in 0.15s ease-out;
 }
 .ask-walnut-drawer {
   position: absolute;
@@ -300,19 +315,8 @@
   border-right: 1px solid var(--border-strong);
   box-shadow: 8px 0 28px rgba(0, 0, 0, 0.18);
   outline: none;
-  animation: ask-walnut-slide-in 0.16s ease-out;
 }
-@keyframes ask-walnut-slide-in {
-  from { transform: translateX(-24px); opacity: 0; }
-  to { transform: none; opacity: 1; }
-}
-@keyframes ask-walnut-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ask-walnut-drawer, .ask-walnut-scrim { animation: none; }
-}
+/* The drawer and its scrim are whole in their first frame, like every popover (see globals.css). */
 .ask-walnut-drawer-head {
   display: flex;
   align-items: center;
@@ -665,4 +669,18 @@
   .ask-walnut-slot > *:not(.ask-walnut-slot-body):not(.ask-walnut-drawer-layer) {
     margin: 6px 8px 0;
   }
+}
+
+/* The draft's empty tool row (DraftSessionPanel) only where it sits beside session columns. */
+.draft-header-tool-row { display: none; }
+.main-page-session-column .draft-session-panel .draft-header-tool-row { display: flex; }
+/* A session's title row is as tall as its meta chips (.session-panel-title-meta, 22px). */
+.main-page-session-column .draft-session-panel .session-panel-header-top { min-height: 22px; }
+.draft-header-tool-spacer { visibility: hidden; pointer-events: none; }
+/* There the draft's discard x stands where every column's close is: on the tool row, over the
+   spacer (the header's padding: 12px top, 14px right), not small in the title row. */
+.main-page-session-column .draft-session-panel .session-panel-header-top > .session-panel-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
 }

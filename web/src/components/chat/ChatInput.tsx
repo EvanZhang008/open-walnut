@@ -56,6 +56,16 @@ function getMaxHeight(el: HTMLTextAreaElement): number {
   return parseFloat(getComputedStyle(el).maxHeight) || 200;
 }
 
+/** Fit the textarea to its text, up to its max height. It scrolls only past that height: a
+ *  scrollbar between a width change and the re-fit (a column narrowing as a draft opens beside it
+ *  re-wraps the placeholder) showed for a frame. */
+function fitTextarea(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto';
+  const max = getMaxHeight(el);
+  el.style.height = Math.min(el.scrollHeight, max) + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
+
 /**
  * Read the persisted draft and turn its tags into inline tokens. The draft is
  * stored in its composed form (one key, tags in place), so a draft written by
@@ -381,8 +391,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el && saved) {
-          el.style.height = 'auto';
-          el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+          fitTextarea(el);
         }
       });
     } catch { /* localStorage unavailable */ }
@@ -440,8 +449,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         ? split.body.length
         : Math.min(inlineRefs(prefillText, split.table).body.length, split.body.length);
       el.setSelectionRange(caret, caret);
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el as HTMLTextAreaElement)) + 'px';
+      fitTextarea(el as HTMLTextAreaElement);
     };
     // A competing focus handler that wins a frame is retried too (focusWhenShown checks activeElement).
     return focusWhenShown(() => textareaRef.current, placeCaret);
@@ -522,8 +530,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+    fitTextarea(el);
   }, [value]);
 
   // Report the composed text upward (read-only mirror — see onValueChange). ONE
@@ -546,8 +553,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const ro = new ResizeObserver(() => {
       if (el.clientWidth === lastWidth) return;
       lastWidth = el.clientWidth;
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+      fitTextarea(el);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -751,8 +757,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+        fitTextarea(el);
         el.focus();
         el.setSelectionRange(split.body.length, split.body.length);
       }
@@ -988,8 +993,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       saveComposed(cut.text);
       const el = textareaRef.current;
       if (!el) return;
-      el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+      fitTextarea(el);
       el.setSelectionRange(cut.caret, cut.caret);
     },
   });
@@ -1129,8 +1133,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const handleInput = () => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+    fitTextarea(el);
   };
 
   const handleChange = (newValue: string) => {
