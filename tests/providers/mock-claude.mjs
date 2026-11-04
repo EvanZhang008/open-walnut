@@ -513,18 +513,6 @@ if (inputFormat === 'stream-json' && process.env.MOCK_CLAUDE_DIE_COUNT_FILE && l
   dieOnTakenLine(message);
 }
 
-// Simulate error — exit non-zero with stderr
-if (message === 'error') {
-  process.stderr.write('Mock error output\n');
-  process.exit(1);
-}
-
-// Simulate parse error — output garbage to stdout
-if (message === 'parse-error') {
-  process.stdout.write('not valid json at all\n');
-  process.exit(0);
-}
-
 // Parse "slow:<ms>" prefix — emits init immediately, then delays before result.
 // Example: "slow:500 my message" → 500ms delay between init and result events.
 // Recomputable: an init-only spawn (see the stream-json branch) adopts its first
@@ -685,6 +673,23 @@ function askAnswerOf(ask, words) {
   return `<walnut-ask-answer thread="${ask.thread}"${name ? ` name="${name}"` : ''}>\n${clean}\n</walnut-ask-answer>`;
 }
 computeMessageParts();
+
+// The command words are the message without what Walnut puts around it (its hints, banners and
+// notes): a resumed session's first message carries hints, and an exact match on the raw text
+// let `error` run as a normal turn, so its test passed only on CI's retry (2026-11-04).
+const commandWords = stripInputDecorations(stripBanners(message), questionSeq !== null || strictAsk !== null);
+
+// Simulate error — exit non-zero with stderr
+if (commandWords === 'error') {
+  process.stderr.write('Mock error output\n');
+  process.exit(1);
+}
+
+// Simulate parse error — output garbage to stdout
+if (commandWords === 'parse-error') {
+  process.stdout.write('not valid json at all\n');
+  process.exit(0);
+}
 
 /** A slow turn's words before its result: a tag switch's first two texts (the
  *  turn's own question now, question n after ms), or MOCK_SPEAK_AT's first words. */
@@ -2444,8 +2449,8 @@ if (outputFormat === 'stream-json') {
       const isError = effectiveMessage === 'backgrounded-error-test';
       let backgroundCost = 0.002;
       if (isError) {
-        onUserLine = (message) => {
-          const stillRunning = message.startsWith('check background status');
+        onUserLine = (line) => {
+          const stillRunning = stripInputDecorations(stripBanners(line), false).startsWith('check background status');
           const reply = stillRunning ? 'Status checked; background command is still running.' : 'Background check finished; followup received.';
           if (!stillRunning) emitBg({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'bg-detached', status: 'completed' });
           emitBg({ type: 'assistant', session_id: sid, message: {
