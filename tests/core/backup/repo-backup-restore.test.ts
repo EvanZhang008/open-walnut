@@ -130,6 +130,9 @@ describe.each(stores)('encrypted backup on %s', (_name, make) => {
       const target = path.join(root, 'restored');
       const r = await restoreRepoSnapshot(store, raw, target, { snapshotId: 'latest' });
       expect(r.restoredFiles).toBe(third.fileCount);
+      // The data comes back in the clear: no other user on the machine may list it.
+      expect((await fsp.stat(target)).mode & 0o777).toBe(0o700);
+      expect((await fsp.stat(path.join(target, 'notes'))).mode & 0o777).toBe(0o700);
       const restored = await listFiles(target);
       expect(restored).toContain('tasks/tasks.sqlite');
       expect(restored).toContain('notes/日记/2026-11-04 晨跑.md');

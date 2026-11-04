@@ -219,18 +219,19 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             label="Into folder"
             htmlFor="backup-restore-target"
             help="A new, empty folder. Leave it empty to use the one shown, next to your data."
-            error={startError ?? undefined}
             data-testid="backup-restore-target-row"
           />
           <div ref={entryRef} className="settings-row settings-row-indent backup-wide-entry">
             <input id="backup-restore-target" type="text" data-no-draft="autosave" spellCheck={false}
               className="settings-input settings-input--mono" aria-label="Restore into folder"
               value={target} onChange={(e) => { setTarget(e.target.value); setStartError(null) }}
-              placeholder={dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-<date>` : 'Optional'} />
+              placeholder={dataDir ? `${dataDir.replace(/\/[^/]*\/?$/, '')}/open-walnut-restored-${new Date().toISOString().slice(0, 10)}` : 'Optional'} />
             <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
               Restore
             </SettingsButton>
           </div>
+          {/* Under the field it is about, not above it. */}
+          {startError && <p className="settings-row-error settings-row-error-indent" role="alert" data-testid="backup-restore-target-error">{startError}</p>}
           {target.trim().length > 40 && !startError && (
             // A long path's end (the folder's own name) never hides inside the field.
             <p className="settings-row settings-row-indent backup-restore-target-full" data-testid="backup-restore-target-full">

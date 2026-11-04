@@ -238,6 +238,9 @@ export function BackupSection({ config, onSave }: Props) {
 
   /** Where backups go from now on: saved on purpose, never by looking at a tab. */
   const saveDestination = async (d: BackupDestinationConfig) => {
+    // Never a destination that cannot run: the summary would say "in use" while nothing backs up.
+    const lacks = missingFields(d)
+    if (lacks.length > 0) throw new Error(`Fill in: ${lacks.join(', ')}.`)
     const base = baseRef.current
     await writeBackup({ ...compose(base, { destination: d }), other_destinations: othersAfterSwitch(base, d) })
     const typed = readTyped()
@@ -470,10 +473,10 @@ export function BackupSection({ config, onSave }: Props) {
                 control={<SettingsButton onClick={() => { setLegacyMode(true); setTestResult(null) }} data-testid="backup-legacy-back">Back to it</SettingsButton>}
               />
             )}
-            {type !== 'gdrive' && kept && draftIsKept && !editing ? (
+            {type !== 'gdrive' && kept && draftIsKept && missing.length === 0 && !editing ? (
               // Connected before: one line, so the key and the backups stay in view.
               <SettingsRow
-                label="Bucket"
+                label="Saved settings"
                 help={destinationSummary(kept, savedDest?.type === type)}
                 data-testid="backup-dest-summary"
                 control={<SettingsButton onClick={() => setEditing(true)} data-testid="backup-dest-edit">Edit</SettingsButton>}

@@ -288,7 +288,10 @@ function page(title: string, text: string, closeTab = false): string {
     + '<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#222}</style>'
     + `</head><body><h1 style="font-size:1.25rem">${esc(title)}</h1><p>${esc(text)}</p>`
     // Walnut opened this tab, so the browser lets it close it; when it cannot, the text stays.
-    + (closeTab ? '<script>setTimeout(function(){window.close()},1200)</script>' : '')
+    + (closeTab
+      ? '<p><button type="button" onclick="window.close()" style="font:inherit;padding:.4rem 1rem">Close this tab</button></p>'
+        + '<script>setTimeout(function(){window.close()},1200)</script>'
+      : '')
     + '</body></html>';
 }
 

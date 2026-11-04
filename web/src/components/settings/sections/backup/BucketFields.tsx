@@ -81,6 +81,17 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
   const auth = dest.auth ?? { method: 'aws_chain' as const }
   const setAuth = (patch: Partial<NonNullable<BackupDestinationConfig['auth']>>) => set({ auth: { ...auth, ...patch } })
   const custom = Boolean(dest.endpoint?.trim())
+  /** Keys typed before the endpoint (or after removing it) move with it, never left behind unseen. */
+  const setEndpoint = (v: string) => {
+    const nowCustom = Boolean(v.trim())
+    if (nowCustom && !custom && !dest.access_key_id && !dest.secret_access_key && auth.method === 'access_keys') {
+      return set({ endpoint: v, access_key_id: auth.aws_access_key_id, secret_access_key: auth.aws_secret_access_key })
+    }
+    if (!nowCustom && custom && (dest.access_key_id || dest.secret_access_key) && !auth.aws_access_key_id && !auth.aws_secret_access_key) {
+      return set({ endpoint: v, auth: { ...auth, method: 'access_keys', aws_access_key_id: dest.access_key_id, aws_secret_access_key: dest.secret_access_key } })
+    }
+    set({ endpoint: v })
+  }
   return (
     <>
       <TextRow id="backup-s3-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. my-walnut-backup" />
@@ -114,30 +125,25 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
             value={auth.profile ?? ''} onChange={(e) => setAuth({ profile: e.target.value })} placeholder="default" />
         )} />
       )}
-      {!custom && auth.method === 'access_keys' && (
+      {(custom || auth.method === 'access_keys') && (
+        // One pair of key fields: with an endpoint they are that service's keys, without one AWS keys.
         <>
-          <SettingsRow label="Access key ID" htmlFor="backup-s3-access-key" indent control={
+          <SettingsRow label="Access key ID" htmlFor="backup-s3-access-key" indent={!custom} control={
             <input id="backup-s3-access-key" type="text" data-no-draft="autosave" autoComplete="off"
               className="settings-input settings-input--short"
-              value={auth.aws_access_key_id ?? ''} onChange={(e) => setAuth({ aws_access_key_id: e.target.value })} />
+              value={(custom ? dest.access_key_id : auth.aws_access_key_id) ?? ''}
+              onChange={(e) => custom ? set({ access_key_id: e.target.value }) : setAuth({ aws_access_key_id: e.target.value })} />
           } />
-          <SettingsRow label="Secret access key" htmlFor="backup-s3-secret" indent control={
-            <KeyInput id="backup-s3-secret" value={auth.aws_secret_access_key ?? ''} onChange={(v) => setAuth({ aws_secret_access_key: v })} />
+          <SettingsRow label="Secret access key" htmlFor="backup-s3-secret" indent={!custom} control={
+            <KeyInput id="backup-s3-secret" value={(custom ? dest.secret_access_key : auth.aws_secret_access_key) ?? ''}
+              onChange={(v) => custom ? set({ secret_access_key: v }) : setAuth({ aws_secret_access_key: v })} />
           } />
         </>
       )}
       <SettingsDisclosure id="backup-s3-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-s3-advanced">
         <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Optional" help="Empty: a folder named walnut-backup." />
-        <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
-          placeholder="https://s3.example.com" help="For MinIO, Backblaze B2 and other S3-compatible services." />
-        {custom && (
-          <>
-            <TextRow id="backup-s3-ep-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
-            <SettingsRow label="Secret access key" htmlFor="backup-s3-ep-secret" control={
-              <KeyInput id="backup-s3-ep-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />
-            } />
-          </>
-        )}
+        <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={setEndpoint}
+          placeholder="https://s3.example.com" help="For MinIO, Backblaze B2 and other S3-compatible services. Its keys go in the key rows above." />
       </SettingsDisclosure>
     </>
   )

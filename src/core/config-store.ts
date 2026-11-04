@@ -308,7 +308,7 @@ function remergeLateWrite(
 async function keepLateWrite(content: string): Promise<void> {
   if (isHostReplicaProgram()) return;
   const file = `${CONFIG_FILE}.late-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  await writeFileAtomic(file, content);
+  await writeFileAtomic(file, content, CONFIG_FILE_MODE);
   log.session.error('config-manager: a save of config.yaml that could not be merged was kept beside it', { file });
 }
 
@@ -354,10 +354,13 @@ export async function _configRepairIdleForTest(): Promise<void> {
  * Temp lives in the SAME directory so the rename is a same-filesystem atomic
  * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
  */
-export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+/** config.yaml and its copies hold keys (a bucket's secret, provider keys): owner only. */
+export const CONFIG_FILE_MODE = 0o600;
+
+export async function writeFileAtomic(filePath: string, content: string, mode?: number): Promise<void> {
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
   try {
-    await fs.writeFile(tmp, content, 'utf-8');
+    await fs.writeFile(tmp, content, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) });
     await fs.rename(tmp, filePath);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
@@ -403,7 +406,7 @@ export async function writeConfigWithBackup(
   const prevHash = ownWriteHash;
   ownWriteHash = configContentHash(content);
   let replaced: FileHandle | undefined;
-  if (expected === undefined) await writeFileAtomic(CONFIG_FILE, content);
+  if (expected === undefined) await writeFileAtomic(CONFIG_FILE, content, CONFIG_FILE_MODE);
   else {
     const commit = await commitConfigFile(CONFIG_FILE, content, expected, opts);
     if (commit.outcome === 'conflict') {
@@ -414,7 +417,7 @@ export async function writeConfigWithBackup(
   }
   announceConfigWritten();
   try {
-    await writeFileAtomic(CONFIG_BACKUP_FILE, content);
+    await writeFileAtomic(CONFIG_BACKUP_FILE, content, CONFIG_FILE_MODE);
   } catch (err) {
     log.session.warn('config-manager: failed to update config backup', {
       error: err instanceof Error ? err.message : String(err),
@@ -449,7 +452,7 @@ export async function refreshConfigBackup(expectedHash?: string): Promise<boolea
       log.session.info('config.yaml changed outside Walnut without some sections the backup has: the backup keeps them', { dropped });
       return false;
     }
-    await writeFileAtomic(CONFIG_BACKUP_FILE, snap.content!);
+    await writeFileAtomic(CONFIG_BACKUP_FILE, snap.content!, CONFIG_FILE_MODE);
     return true;
   });
 }

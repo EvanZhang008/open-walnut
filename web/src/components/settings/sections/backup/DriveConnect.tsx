@@ -146,8 +146,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           label="Disconnect Google Drive?"
           state="warning"
           help={inUse
-            ? 'Backups pause until you connect again. The backups already in your Drive stay there.'
-            : 'The backups already in your Drive stay there.'}
+            ? 'Backups pause until you connect again. The backups already in your Drive stay there; connect again to restore them.'
+            : 'The backups already in your Drive stay there; connect again to restore them.'}
           error={error ?? undefined}
           data-testid="backup-gdrive-disconnect-warning"
           control={
@@ -224,7 +224,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         error={error ?? undefined}
         data-testid="backup-gdrive-row"
         control={
-          <SettingsButton variant="primary" onClick={connect} busy={busy || waiting} busyLabel={waiting ? 'Waiting for Google...' : 'Opening...'}
+          <SettingsButton variant={waiting ? undefined : 'primary'} onClick={connect} busy={busy || waiting} busyLabel={waiting ? 'Waiting for Google...' : 'Opening...'}
             disabled={needsOwnClient && !hasOwnClient}
             data-testid="backup-gdrive-connect">
             Connect Google Drive

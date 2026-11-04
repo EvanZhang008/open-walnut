@@ -225,6 +225,29 @@ test.describe('Backup settings', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
+  test('S3 with an endpoint: keys typed first stay in view and are saved with it', async ({ page }) => {
+    const config = await holdConfigWrites(page, { enabled: false, interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true, engine: null })
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: null })
+    await answer(page, '**/api/backup/destination/test', { ok: true, hasBackups: false })
+    const section = await openBackup(page)
+    await section.getByTestId('backup-service-s3').click()
+    await section.locator('#backup-s3-bucket').fill('walnut')
+    await section.getByTestId('backup-auth-access_keys').click()
+    await section.locator('#backup-s3-access-key').fill('MINIOKEY')
+    await section.locator('#backup-s3-secret').fill('MINIOSECRET')
+    await section.getByTestId('backup-s3-advanced').click()
+    await section.locator('#backup-s3-endpoint').fill('https://minio.example')
+    // One pair of key fields, still holding what was typed; no Credentials choice with an endpoint.
+    await expect(section.getByTestId('backup-auth-access_keys')).toHaveCount(0)
+    await expect(section.locator('#backup-s3-access-key')).toHaveValue('MINIOKEY')
+    await section.getByTestId('backup-test-connection').click()
+    await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({
+      type: 's3', endpoint: 'https://minio.example', access_key_id: 'MINIOKEY', secret_access_key: 'MINIOSECRET',
+    })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
   test('Drive connected while R2 is in use: chosen on purpose, R2 kept; disconnect asks first', async ({ page }) => {
     const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '••••••mple' }
     const config = await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2 })

@@ -75,13 +75,14 @@ export async function restoreRepoSnapshot(
   };
   const ordered = [...tree].sort((a, b) => firstLocation(a).localeCompare(firstLocation(b)));
 
-  await fs.mkdir(target, { recursive: true });
+  // Owner only: the restored folder holds the user's data in the clear.
+  await fs.mkdir(target, { recursive: true, mode: 0o700 });
   const totalBytes = tree.reduce((n, e) => n + e.s, 0);
   let doneBytes = 0;
   let doneFiles = 0;
   for (const e of ordered) {
     const dest = path.resolve(target, restorePathOf(e.p));
-    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
     const fh = await fs.open(dest, 'w', e.x ? 0o700 : 0o600);
     let written = 0;
     try {

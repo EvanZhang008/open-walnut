@@ -35,6 +35,9 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Up to ~60 backups are kept: the list scrolls inside, so opening it moves the page little. */
+  max-height: 252px;
+  overflow-y: auto;
   padding-top: 6px;
   padding-bottom: 6px;
 }

@@ -33,6 +33,14 @@ afterEach(async () => {
 });
 
 describe('updateConfig', () => {
+  it('writes config.yaml and its copy owner-only: it holds keys', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1 }), { encoding: 'utf-8', mode: 0o644 });
+    await updateConfig({ backup: { destination: { type: 'r2', bucket: 'b', secret_access_key: 's' } } } as any);
+    expect((await fs.stat(CONFIG_FILE)).mode & 0o777).toBe(0o600);
+    const copy = await fs.stat(`${CONFIG_FILE}.bak`).catch(() => null);
+    if (copy) expect(copy.mode & 0o777).toBe(0o600);
+  });
+
   it('preserves unmentioned top-level keys', async () => {
     // Write initial config with ms_todo section
     const initial = {

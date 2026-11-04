@@ -19,7 +19,7 @@ export const DESTINATIONS: Array<{ value: BackupDestinationType; label: string }
 export const DESTINATION_NOTE: Record<BackupDestinationType, string> = {
   r2: 'Free up to 10 GB a month, no download fees. Cloudflare asks for a card when you turn R2 on.',
   gdrive: 'Uses your Google Drive space (15 GB free, shared with Gmail). Walnut can see only the files it makes.',
-  s3: 'Your own AWS bucket, billed by AWS.',
+  s3: 'Your own AWS bucket (billed by AWS), or any S3-compatible service such as MinIO or Backblaze B2.',
 }
 
 /** Under the interval: what history is kept (the server's retention). */
@@ -56,7 +56,13 @@ export function cleanDestination(d: BackupDestinationConfig): BackupDestinationC
   if (d.type === 'r2') (['bucket', 'prefix', 'account_id', 'endpoint', 'access_key_id', 'secret_access_key'] as const).forEach(put)
   if (d.type === 's3') {
     ;(['bucket', 'prefix', 'region', 'endpoint'] as const).forEach(put)
-    if (trimmed(d.endpoint)) (['access_key_id', 'secret_access_key'] as const).forEach(put)
+    if (trimmed(d.endpoint)) {
+      // The endpoint's keys are the top-level pair; keys typed as AWS keys first count as them.
+      const useAuth = !trimmed(d.access_key_id) && !trimmed(d.secret_access_key) && d.auth?.method === 'access_keys'
+      const src = useAuth ? { access_key_id: d.auth?.aws_access_key_id, secret_access_key: d.auth?.aws_secret_access_key } : d
+      if (trimmed(src.access_key_id)) out.access_key_id = trimmed(src.access_key_id)
+      if (trimmed(src.secret_access_key)) out.secret_access_key = trimmed(src.secret_access_key)
+    }
     else if (d.auth?.method) {
       out.auth = {
         method: d.auth.method,
@@ -121,7 +127,9 @@ const isMasked = (v?: string): boolean => typeof v === 'string' && v.includes('\
  * another bucket, account or endpoint: the server will not send that key
  * anywhere else, so it has to be typed again.
  */
-export function secretNeedsRetyping(d: BackupDestinationConfig, owners: BackupDestinationConfig[]): boolean {
+export function secretNeedsRetyping(form: BackupDestinationConfig, owners: BackupDestinationConfig[]): boolean {
+  // Only the keys this destination would send count (an S3 endpoint's pair, not a hidden AWS one).
+  const d = cleanDestination(form)
   const hasMask = isMasked(d.secret_access_key) || isMasked(d.access_key_id) || isMasked(d.client_secret)
     || isMasked(d.auth?.aws_secret_access_key) || isMasked(d.auth?.aws_access_key_id)
   return hasMask && !owners.some((o) => sameTarget(o, d))

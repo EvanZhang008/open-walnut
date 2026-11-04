@@ -159,7 +159,8 @@ export async function commitConfigFile(
   const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
   let held: fs.FileHandle | undefined
   try {
-    await fs.writeFile(tmp, content, 'utf-8')
+    // Owner only: config.yaml holds keys (a bucket's secret, provider keys).
+    await fs.writeFile(tmp, content, { encoding: 'utf-8', mode: 0o600 })
     if (expected === null) {
       try {
         await fs.link(tmp, file)
@@ -170,7 +171,7 @@ export async function commitConfigFile(
         // A filesystem without hard links: an exclusive create still never
         // replaces a file someone else made.
         if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EOPNOTSUPP' && code !== 'ENOSYS') throw err
-        try { await fs.writeFile(file, content, { encoding: 'utf-8', flag: 'wx' }) } catch (e) {
+        try { await fs.writeFile(file, content, { encoding: 'utf-8', flag: 'wx', mode: 0o600 }) } catch (e) {
           if ((e as NodeJS.ErrnoException).code === 'EEXIST') return { outcome: 'conflict' }
           throw e
         }

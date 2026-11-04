@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, destinationSummary, fieldProblem, missingFields, othersAfterSwitch,
+  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, cleanDestination, destinationSummary, fieldProblem, missingFields, othersAfterSwitch,
   sameDestination, secretNeedsRetyping, testHelp,
 } from '../../web/src/components/settings/sections/backup/backup-model';
 import { swapCommands } from '../../web/src/components/settings/sections/backup/RestorePanel';
@@ -139,5 +139,25 @@ describe('destinationSummary', () => {
   it('says whether the saved bucket is the one in use', () => {
     expect(destinationSummary({ ...r2, account_id: '0123456789abcdef0123456789abcdef' })).toMatch(/account \.\.\.cdef, key ID k\. Tested and in use\.$/);
     expect(destinationSummary(r2, false)).toMatch(/Tested before\.$/);
+  });
+});
+
+describe('S3 with an endpoint keeps its keys', () => {
+  it('keys typed as AWS keys before the endpoint are saved as the endpoint keys', () => {
+    const form = {
+      type: 's3' as const, bucket: 'b', endpoint: 'https://minio.example',
+      auth: { method: 'access_keys' as const, aws_access_key_id: 'AK', aws_secret_access_key: 'SK' },
+    };
+    const saved = cleanDestination(form);
+    expect(saved).toEqual({ type: 's3', bucket: 'b', endpoint: 'https://minio.example', access_key_id: 'AK', secret_access_key: 'SK' });
+    expect(missingFields(saved)).toEqual([]);
+    // The endpoint's own pair wins when both are there.
+    expect(cleanDestination({ ...form, access_key_id: 'EK', secret_access_key: 'ES' })).toMatchObject({ access_key_id: 'EK', secret_access_key: 'ES' });
+  });
+  it('a hidden AWS key left masked never asks for the endpoint secret again', () => {
+    const mask = '\u2022\u2022\u2022\u2022abcd';
+    const saved = { type: 's3' as const, bucket: 'b', endpoint: 'https://minio.example', access_key_id: 'AK', secret_access_key: mask };
+    const form = { ...saved, secret_access_key: 'typed-new', auth: { method: 'access_keys' as const, aws_secret_access_key: mask } };
+    expect(secretNeedsRetyping({ ...form, bucket: 'other' }, [saved])).toBe(false);
   });
 });
