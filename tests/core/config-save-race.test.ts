@@ -23,6 +23,10 @@ import { startConfigFileWatch } from '../../src/core/config-file-watch.js'
 const BACKUP = `${CONFIG_FILE}.bak`
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const TIMINGS = { readRetryMs: 30, settleMs: 150, quietMs: 400, deadlineMs: 5_000, lateWriteWatchMs: 700 }
+/** For a check that a write does NOT wait: long waits, so the wait it must skip costs seconds and
+ *  the write's own work, however slow the machine, stays far below the bound (2026-11-04: ten
+ *  writes took 562 ms on a loaded CI runner, over a bound of three 150 ms settles). */
+const LONG = { ...TIMINGS, settleMs: 2_000, quietMs: 4_000, deadlineMs: 20_000 }
 
 /** A config the size and shape of a real one: ~300 lines, comments, Unicode. */
 function realisticConfig(marker: string): string {
@@ -278,17 +282,19 @@ describe('a config.yaml that really is lost or broken', () => {
   it('a second refused write for the same broken file answers at once', async () => {
     await seedWalnutWrite()
     await fs.writeFile(CONFIG_FILE, 'agent: [oops\n', 'utf-8')
+    cm._setConfigTimingsForTest(LONG)
     await expect(cm.updateConfig({ user: { name: 'x' } } as any)).rejects.toBeInstanceOf(cm.ConfigUnreadableError)
     const t0 = Date.now()
     await expect(cm.updateConfig({ user: { name: 'y' } } as any)).rejects.toBeInstanceOf(cm.ConfigUnreadableError)
-    expect(Date.now() - t0).toBeLessThan(TIMINGS.quietMs / 2)
+    expect(Date.now() - t0).toBeLessThan(LONG.quietMs / 2)
   })
 
   it('a backup that does not parse is no backup: a missing file is a first run', async () => {
     await fs.writeFile(BACKUP, '{ not: [yaml', 'utf-8')
+    cm._setConfigTimingsForTest(LONG)
     const t0 = Date.now()
     await cm.updateConfig({ user: { name: 'x' } } as any)
-    expect(Date.now() - t0).toBeLessThan(TIMINGS.quietMs)
+    expect(Date.now() - t0).toBeLessThan(LONG.quietMs)
     expect((await load()).user.name).toBe('x')
   })
 
@@ -312,19 +318,22 @@ describe('a config.yaml that really is lost or broken', () => {
 
 describe('ordinary operation stays fast and exact', () => {
   it('a first run writes at once, file and backup', async () => {
+    cm._setConfigTimingsForTest(LONG)
     const t0 = Date.now()
     await cm.updateConfig({ user: { name: 'x' } } as any)
-    expect(Date.now() - t0).toBeLessThan(TIMINGS.quietMs)
+    expect(Date.now() - t0).toBeLessThan(LONG.quietMs)
     expect((await load()).user.name).toBe('x')
     expect(await fs.readFile(BACKUP, 'utf-8')).toBe(await fs.readFile(CONFIG_FILE, 'utf-8'))
   })
 
   it('back-to-back writes do not wait on their own last write', async () => {
     await seedWalnutWrite()
+    cm._setConfigTimingsForTest(LONG)
     await cm.updateConfig({ user: { name: 'w0' } } as any)
     const t0 = Date.now()
     for (let i = 1; i <= 10; i++) await cm.updateConfig({ user: { name: `w${i}` } } as any)
-    expect(Date.now() - t0).toBeLessThan(TIMINGS.settleMs * 3)
+    // Waiting on its own last write would cost a settle per write: ten of them.
+    expect(Date.now() - t0).toBeLessThan(LONG.settleMs)
     expect((await load()).user.name).toBe('w10')
   })
 
