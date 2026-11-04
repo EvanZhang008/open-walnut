@@ -43,6 +43,8 @@ interface Props {
   dataDir?: string
   /** A restore cannot start yet (the Backups group's first row says why). */
   blocked: boolean
+  /** Why, in words, for this row too. */
+  blockedWhy?: string
   /** The service in use, named when there is a choice of where to restore from. */
   destLabel?: string
   /** Other services set up before: their backups can be restored too, without switching to them. */
@@ -61,7 +63,7 @@ const whenOf = (iso: string, seconds = false): string =>
     weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
   })
 
-export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, others = [], pendingSwitch, switchError, onSwitchChanged }: Props) {
+export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, onSwitchChanged }: Props) {
   const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
   const [from, setFrom] = useState(0)
   const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
@@ -154,7 +156,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, other
     <>
       <SettingsRow
         label="Restore"
-        help="Bring a backup back into a new folder. The data Walnut runs on now is not touched."
+        help={blocked && !items && blockedWhy ? `Bring a backup back into a new folder. ${blockedWhy}` : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
@@ -216,6 +218,12 @@ export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, other
               Restore
             </SettingsButton>
           </div>
+          {target.trim().length > 40 && (
+            // A long path's end (the folder's own name) never hides inside the field.
+            <p className="settings-row settings-row-indent backup-restore-target-full" data-testid="backup-restore-target-full">
+              Restores into <code>{target.trim()}</code>
+            </p>
+          )}
         </>
       )}
       {pendingSwitch ? (
@@ -263,7 +271,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, destLabel, other
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>
-                <SettingsButton variant="primary" onClick={() => setConfirmUse(true)} data-testid="backup-restore-use">Use this data</SettingsButton>
+                <SettingsButton onClick={() => setConfirmUse(true)} data-testid="backup-restore-use">Use this data</SettingsButton>
               </span>
             }
           />

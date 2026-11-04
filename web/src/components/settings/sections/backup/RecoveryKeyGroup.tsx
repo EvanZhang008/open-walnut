@@ -38,14 +38,34 @@ interface Props {
   onState: (s: KeyState) => void
   /** Bumped by the pane when something changed that may make a key appear (Drive connected, a save). */
   refreshToken: number
+  /** Lost the key: start new backups in a new folder of the same bucket (the old ones stay). Absent for Google Drive. */
+  onStartOver?: () => Promise<void>
+  /** Where the new backups would go, for the confirm. */
+  startOverWhere?: string
 }
 
-export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, savedAt, firstSetup, machineName, onMarkSaved, onState, refreshToken }: Props) {
+export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, savedAt, firstSetup, machineName, onMarkSaved, onState, refreshToken, onStartOver, startOverWhere }: Props) {
+  const [confirmStartOver, setConfirmStartOver] = useState(false)
+  const [startingOver, setStartingOver] = useState(false)
+  const startOver = async () => {
+    if (!onStartOver) return
+    setStartingOver(true)
+    try {
+      await onStartOver()
+      setConfirmStartOver(false)
+    } catch (err) {
+      setError(saveErrorMessage(err))
+    } finally {
+      setStartingOver(false)
+    }
+  }
   const [accepted, setAccepted] = useState<string | null>(null)
   const [key, setKey] = useState<string | null>(null)
   const [askedForKey, setNeedsKey] = useState(false)
   const needsKey = askedForKey || mismatch
   const [shown, setShown] = useState(false)
+  // "Downloaded" for a moment after the kit is saved, so a second click is never needed to be sure.
+  const [downloaded, setDownloaded] = useState(false)
   const [typed, setTyped] = useState('')
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -100,6 +120,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
     a.download = 'walnut-recovery-key.txt'
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    setDownloaded(true)
+    setTimeout(() => setDownloaded(false), 2500)
   }
 
   if (!loaded || (!key && !needsKey && !error)) return null
@@ -138,6 +160,31 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               Use this key
             </SettingsButton>
           </div>
+          {confirmStartOver ? (
+            <SettingsRow
+              indent
+              state="warning"
+              label="Start over with a new key?"
+              help={`New backups go to ${startOverWhere ?? 'a new folder'}, with a new key. The old backups stay where they are, but nobody can open them without the old key.`}
+              data-testid="backup-key-start-over-confirm"
+              control={
+                <span className="settings-inline-pair">
+                  <SettingsButton onClick={() => setConfirmStartOver(false)} data-testid="backup-key-start-over-cancel">Cancel</SettingsButton>
+                  <SettingsButton variant="danger" onClick={() => void startOver()} busy={startingOver} busyLabel="Starting over..." data-testid="backup-key-start-over-yes">Start over</SettingsButton>
+                </span>
+              }
+            />
+          ) : (
+            <SettingsRow
+              indent
+              label="Lost the key?"
+              help={onStartOver
+                ? 'Without it these backups cannot be opened. You can start new ones with a new key.'
+                : `Without it these backups cannot be opened. To start new ones: in ${destinationLabel} rename the "Walnut Backup" folder, then Disconnect and Connect again above. Walnut makes a new folder and a new key.`}
+              data-testid="backup-key-lost"
+              control={onStartOver ? <SettingsButton onClick={() => setConfirmStartOver(true)} data-testid="backup-key-start-over">Start over</SettingsButton> : undefined}
+            />
+          )}
         </>
       ) : key ? (
         <>
@@ -150,7 +197,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               <span className="settings-inline-pair">
                 <SettingsButton onClick={() => setShown(!shown)} reserve={['Show', 'Hide']} data-testid="backup-key-show">{shown ? 'Hide' : 'Show'}</SettingsButton>
                 <CopyButton text={key} bordered data-testid="backup-key-copy" />
-                <SettingsButton onClick={download} data-testid="backup-key-download">Download</SettingsButton>
+                <SettingsButton onClick={download} reserve={['Download', 'Downloaded']} data-testid="backup-key-download">{downloaded ? 'Downloaded' : 'Download'}</SettingsButton>
               </span>
             }
           />
@@ -166,7 +213,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               help="Put it in your password manager or print it. You need it to restore on a new computer."
               data-testid="backup-key-unsaved"
               control={
-                <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => onMarkSaved(firstSetup)} data-testid="backup-key-saved">
+                <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">
                   {firstSetup ? 'I saved it, turn on backups' : 'I saved it'}
                 </SettingsButton>
               }

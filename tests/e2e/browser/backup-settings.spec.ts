@@ -131,7 +131,7 @@ test.describe('Backup settings', () => {
     await list.locator('label').nth(1).click()
     await section.getByTestId('backup-restore-start').click()
     await expect.poll(() => restoreBody).toMatchObject({ snapshotId: 'snap-1' })
-    await expect(section.locator('a[href*="backups.md#restore"]')).toBeVisible()
+    await expect(section.getByTestId('backup-backups-group')).toContainText('On a new computer')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
@@ -216,6 +216,9 @@ test.describe('Backup settings', () => {
     await page.waitForTimeout(1500)
     expect(config.last()).toBeNull()
     await section.getByTestId('backup-service-r2').click()
+    // The saved bucket is one line; Edit opens its fields, as saved.
+    await expect(section.getByTestId('backup-dest-summary')).toContainText('my-bucket')
+    await section.getByTestId('backup-dest-edit').click()
     await expect(section.locator('#backup-r2-bucket')).toHaveValue('my-bucket')
     await expect(section.getByTestId('backup-test-connection')).toHaveText('Test connection')
     await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)

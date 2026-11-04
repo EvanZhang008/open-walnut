@@ -321,7 +321,7 @@ function handleRequest(p: PendingConnect, req: http.IncomingMessage, res: http.S
   }
   exchangeOnce(p, code).then(
     (tokens) => {
-      reply(200, 'Connected', 'Walnut is connected to Google Drive. This tab closes by itself; if it stays open, close it and go back to Walnut.', true);
+      reply(200, 'Connected', 'Walnut is connected to Google Drive. You can close this tab and go back to Walnut.', true);
       finish(p, { ok: true, tokens });
     },
     (err: unknown) => {

@@ -142,6 +142,9 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
   }
   // This server's own tunnel provider's options.
   if (isRecord(config.expose)) out.expose = at(config.expose, 'options', shapes)
+  // Backup keys (a bucket's secret access key, a Google client secret): Settings, Backup
+  // shows them as saved and sends the mask back; the server pairs it with the stored one.
+  if (isRecord(config.backup)) out.backup = maskBackupKeys(config.backup)
   // A hook action's arguments: `{ type, [key]: unknown }`.
   if (isRecord(config.hooks) && Array.isArray(config.hooks.defs)) {
     out.hooks = { ...config.hooks, defs: config.hooks.defs.map((d) => (isRecord(d) ? at(d, 'action', shapes) : d)) }
@@ -153,13 +156,31 @@ function maskFreeFormMaps(config: Record<string, unknown>): Record<string, unkno
  * The Mac's client view: push device tokens masked (`maskPushTokens`), and every
  * secret-shaped value and URL password inside the free-form maps
  * (`maskFreeFormMaps`: plugin settings, provider headers, engine environments,
- * a host server's build env, tunnel options, hook actions). Settings on
+ * a host server's build env, tunnel options, hook actions), and the backup
+ * keys (Settings, Backup sends their masks back). Settings on
  * the Mac edits the typed fields, so they stay as they are; no screen reads a
  * plugin's secret, and any paired device can read this view.
  */
 export function maskForMacClients<T>(config: T): T {
   const pushMasked = maskPushTokens(config)
   return isRecord(pushMasked) ? maskFreeFormMaps(pushMasked) as T : pushMasked
+}
+
+/** The secrets of each backup destination; ids, buckets and endpoints stay readable (the pane shows them). */
+function maskBackupKeys(backup: Record<string, unknown>): Record<string, unknown> {
+  const mask = (v: unknown) => (typeof v === 'string' && v ? maskSecretTailInPlace(v) : v)
+  const dest = (d: unknown): unknown => {
+    if (!isRecord(d)) return d
+    const out: Record<string, unknown> = { ...d }
+    for (const k of ['secret_access_key', 'client_secret']) if (k in out) out[k] = mask(out[k])
+    if (isRecord(out.auth) && 'aws_secret_access_key' in out.auth) out.auth = { ...out.auth, aws_secret_access_key: mask(out.auth.aws_secret_access_key) }
+    return out
+  }
+  const out: Record<string, unknown> = { ...backup }
+  if ('destination' in out) out.destination = dest(out.destination)
+  if (Array.isArray(out.other_destinations)) out.other_destinations = out.other_destinations.map(dest)
+  // The older S3 copy's keys stay as they were: its pane and test route take them as typed.
+  return out
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

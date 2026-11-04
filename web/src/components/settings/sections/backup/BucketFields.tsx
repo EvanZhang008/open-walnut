@@ -5,7 +5,7 @@
  * endpoint) sit behind one Advanced row.
  */
 import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
-import { SecretInput } from '../../inputs/SecretInput'
+import { KeyInput } from './KeyInput'
 import { SegmentedControl } from '../../inputs/SegmentedControl'
 import type { BackupDestinationConfig } from './backup-model'
 
@@ -49,7 +49,7 @@ export function R2Fields({ dest, onChange }: Props) {
       <SettingsRow
         label="Secret access key"
         htmlFor="backup-r2-secret"
-        control={<SecretInput id="backup-r2-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />}
+        control={<KeyInput id="backup-r2-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />}
       />
       <SettingsDisclosure id="backup-r2-help" label="Where to find these in Cloudflare" data-testid="backup-r2-help">
         <ol className="settings-steps" data-testid="backup-r2-steps">
@@ -122,7 +122,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
               value={auth.aws_access_key_id ?? ''} onChange={(e) => setAuth({ aws_access_key_id: e.target.value })} />
           } />
           <SettingsRow label="Secret access key" htmlFor="backup-s3-secret" indent control={
-            <SecretInput id="backup-s3-secret" value={auth.aws_secret_access_key ?? ''} onChange={(v) => setAuth({ aws_secret_access_key: v })} />
+            <KeyInput id="backup-s3-secret" value={auth.aws_secret_access_key ?? ''} onChange={(v) => setAuth({ aws_secret_access_key: v })} />
           } />
         </>
       )}
@@ -134,7 +134,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
           <>
             <TextRow id="backup-s3-ep-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
             <SettingsRow label="Secret access key" htmlFor="backup-s3-ep-secret" control={
-              <SecretInput id="backup-s3-ep-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />
+              <KeyInput id="backup-s3-ep-secret" value={dest.secret_access_key ?? ''} onChange={(v) => set({ secret_access_key: v })} />
             } />
           </>
         )}

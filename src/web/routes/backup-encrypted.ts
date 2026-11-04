@@ -57,18 +57,21 @@ async function requestDestination(body: unknown): Promise<{ dest?: BackupDestina
   if (!sent?.type) return { dest: saved, cfg };
   const dest: BackupDestinationConfig = { ...sent, ...(sent.auth ? { auth: { ...sent.auth } } : {}) };
   const same = Boolean(saved && sameTarget(saved, dest));
+  // A masked key stands for the one saved for this very target: the destination in
+  // use, or a service kept for later (other_destinations). Never another target's.
+  const owner = same ? saved : (cfg.other_destinations ?? []).find((o) => sameTarget(o, dest));
   const refuse = { cfg, error: 'The saved keys belong to another destination. Type the keys for this one.' };
   for (const k of SECRET_KEYS) {
     if (!masked(dest[k])) continue;
-    if (!same) return refuse;
-    dest[k] = saved![k];
+    if (!owner) return refuse;
+    dest[k] = owner[k];
   }
   if (dest.auth) {
     const auth = dest.auth as Record<string, unknown>;
-    const savedAuth = (saved?.auth ?? {}) as Record<string, unknown>;
+    const savedAuth = (owner?.auth ?? {}) as Record<string, unknown>;
     for (const k of AUTH_SECRET_KEYS) {
       if (!masked(auth[k])) continue;
-      if (!same) return refuse;
+      if (!owner) return refuse;
       auth[k] = savedAuth[k];
     }
   }

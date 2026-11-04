@@ -239,3 +239,17 @@ export function recoveryKitText(key: string, destination: string, machine: strin
     '',
   ].join('\n')
 }
+
+/** The saved bucket in one line ("walnut-backup, folder walnut-backup, account ...cdef"). */
+export function destinationSummary(d: BackupDestinationConfig): string {
+  const parts = [`${d.bucket ?? ''}`]
+  if (d.prefix && d.prefix !== 'walnut-backup') parts.push(`folder ${d.prefix}`)
+  if (d.type === 'r2' && d.account_id && !d.endpoint) parts.push(`account ...${d.account_id.slice(-4)}`)
+  if (d.type === 's3' && d.region && !d.endpoint) parts.push(d.region)
+  if (d.endpoint) parts.push(`at ${d.endpoint.replace(/^https?:\/\//, '')}`)
+  const keyId = d.access_key_id ?? d.auth?.aws_access_key_id
+  if (keyId) parts.push(`key ID ${keyId.slice(0, 6)}`)
+  else if (d.auth?.method === 'profile') parts.push(`profile ${d.auth.profile ?? 'default'}`)
+  return `${parts.filter(Boolean).join(', ')}. Tested and in use.`
+}
+

@@ -27,7 +27,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
 import {
-  DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
+  DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, destinationSummary, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
   engineOf, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, stableJson, testHelp,
   type BackupConfig, type BackupDestinationConfig, type BackupDestinationType, type DestinationTest,
 } from './backup/backup-model'
@@ -98,6 +98,9 @@ const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationC
 })
 
 const legacyOf = (b: BackupConfig): LegacyFields => ({ bucket: b.bucket, region: b.region, prefix: b.prefix, auth: b.auth })
+/** A new, empty folder in the same bucket for backups that start over with a new key. */
+const startOverPrefix = (d: BackupDestinationConfig): string =>
+  `${(d.prefix || 'walnut-backup').replace(/-new-\d{4}-\d{2}-\d{2}$/, '')}-new-${new Date().toISOString().slice(0, 10)}`
 const labelOf = (t: BackupDestinationType): string => DESTINATIONS.find((d) => d.value === t)?.label ?? t
 
 export function BackupSection({ config, onSave }: Props) {
@@ -225,6 +228,7 @@ export function BackupSection({ config, onSave }: Props) {
     delete typed[d.type]
     writeTyped(typed)
     setLegacyMode(false)
+    setEditing(false)
     setKeyRefresh((n) => n + 1)
     loadStatus()
   }
@@ -238,6 +242,7 @@ export function BackupSection({ config, onSave }: Props) {
   }
   const pickType = (t: BackupDestinationType) => {
     setType(t)
+    setEditing(false)
     setTestResult(null)
   }
 
@@ -264,6 +269,8 @@ export function BackupSection({ config, onSave }: Props) {
   }
 
   const [runStarting, setRunStarting] = useState(false)
+  // The saved bucket's fields, folded to one line until "Edit".
+  const [editing, setEditing] = useState(false)
   const handleRunNow = async () => {
     if (runStarting || status?.running) return
     setRunError(null)
@@ -374,7 +381,9 @@ export function BackupSection({ config, onSave }: Props) {
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null
-  const lastHelp = status?.notice ?? (inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
+  const lastHelp = status?.notice
+    ?? (runBlocked && !status?.running && !status?.lastBackupAt ? `No backup yet. ${runBlocked}`
+      : inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
   const serviceHelp = !inUse
     ? 'Pick one, then connect it.'
     : savedDest!.type === type
@@ -384,6 +393,9 @@ export function BackupSection({ config, onSave }: Props) {
   const connectionHelp = (): string => {
     if (legacyMode) return testHelp(testResult, true)
     if (missing.length > 0) return `Fill in: ${missing.join(', ')}.`
+    if (testResult && !testResult.ok && savedDest?.type === type && !draftIsSaved) {
+      return `${testHelp(testResult, false)} Nothing was saved: backups still use the settings that worked.`
+    }
     if (testResult) return testHelp(testResult, false)
     if (draftIsSaved) return 'Backups go here. Test again any time.'
     return savedDest && savedDest.type !== type
@@ -425,8 +437,20 @@ export function BackupSection({ config, onSave }: Props) {
                 control={<SettingsButton onClick={() => { setLegacyMode(true); setTestResult(null) }} data-testid="backup-legacy-back">Back to it</SettingsButton>}
               />
             )}
-            {type === 'r2' && <R2Fields dest={draft} onChange={setDest} profiles={profiles} />}
-            {type === 's3' && <S3Fields dest={draft} onChange={setDest} profiles={profiles} />}
+            {type !== 'gdrive' && savedDest?.type === type && draftIsSaved && !editing ? (
+              // Connected and in use: one line, so the key and the backups stay in view.
+              <SettingsRow
+                label="Bucket"
+                help={destinationSummary(savedDest)}
+                data-testid="backup-dest-summary"
+                control={<SettingsButton onClick={() => setEditing(true)} data-testid="backup-dest-edit">Edit</SettingsButton>}
+              />
+            ) : (
+              <>
+                {type === 'r2' && <R2Fields dest={draft} onChange={setDest} profiles={profiles} />}
+                {type === 's3' && <S3Fields dest={draft} onChange={setDest} profiles={profiles} />}
+              </>
+            )}
             {type === 'gdrive' && (
               <DriveConnect
                 dest={draft}
@@ -478,6 +502,8 @@ export function BackupSection({ config, onSave }: Props) {
           onMarkSaved={markKeySaved}
           onState={setKeyState}
           refreshToken={keyRefresh}
+          onStartOver={savedDest.type === 'gdrive' ? undefined : () => saveDestination({ ...savedDest, prefix: startOverPrefix(savedDest) })}
+          startOverWhere={savedDest.type === 'gdrive' ? undefined : `the folder "${startOverPrefix(savedDest)}" in ${savedDest.bucket}`}
         />
       )}
 
@@ -487,10 +513,7 @@ export function BackupSection({ config, onSave }: Props) {
         footer={
           <>
             Everything in your data folder is backed up (notes, tasks, passwords, sign-ins); caches and search indexes are skipped.
-            {' '}On a new computer: install Walnut, choose the same service here, and type your recovery key.{' '}
-            <a href="https://github.com/EvanZhang008/open-walnut/blob/main/docs/reference/backups.md#restore" target="_blank" rel="noreferrer">
-              More ways to restore
-            </a>
+            {' '}On a new computer: install Walnut, choose the same service here, and type your recovery key when Walnut asks.
           </>
         }
       >
@@ -546,6 +569,7 @@ export function BackupSection({ config, onSave }: Props) {
           restore={status?.restore}
           dataDir={status?.dataDir}
           blocked={!!blocked}
+          blockedWhy={blocked ?? undefined}
           pendingSwitch={status?.pendingSwitch}
           switchError={status?.switchError}
           onSwitchChanged={loadStatus}

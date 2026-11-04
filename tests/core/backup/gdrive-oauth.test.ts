@@ -75,7 +75,7 @@ describe('startDriveConnect', () => {
     const page = await fetch(landing);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain('Walnut is connected to Google Drive. This tab closes by itself');
+    expect(html).toContain('Walnut is connected to Google Drive. You can close this tab and go back to Walnut.');
     expect(html).toContain('window.close()');
 
     const r = await c.done;

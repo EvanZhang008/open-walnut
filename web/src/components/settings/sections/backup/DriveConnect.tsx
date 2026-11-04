@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
-import { SecretInput } from '../../inputs/SecretInput'
+import { KeyInput } from './KeyInput'
 import { saveErrorMessage } from '../../settings-pane-context'
 import { apiGet, apiPost } from '@/api/client'
 import { useEvent } from '@/hooks/useWebSocket'
@@ -163,7 +163,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
       <SettingsRow
         label="Google account"
         help={inUse
-          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
+          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.${status.client === 'custom' ? ' Uses your own Google client: a new computer needs the same ID and secret.' : ''}`
           : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
         error={error ?? undefined}
         data-testid="backup-gdrive-connected"
@@ -187,7 +187,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           value={dest.client_id ?? ''} onChange={(e) => onChange({ ...dest, client_id: e.target.value })} />
       } />
       <SettingsRow label="Client secret" htmlFor="backup-gdrive-client-secret" control={
-        <SecretInput id="backup-gdrive-client-secret" value={dest.client_secret ?? ''} onChange={(v) => onChange({ ...dest, client_secret: v })} />
+        <KeyInput id="backup-gdrive-client-secret" value={dest.client_secret ?? ''} onChange={(v) => onChange({ ...dest, client_secret: v })} />
       } />
     </>
   )
@@ -205,12 +205,21 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   )
   return (
     <>
+      {needsOwnClient && (
+        <>
+          <SettingsDisclosure id="backup-gdrive-client-help" label="Set up a Google client for Walnut (once, about 5 minutes)"
+            defaultOpen={!hasOwnClient} data-testid="backup-gdrive-client-help">
+            {steps}
+          </SettingsDisclosure>
+          {clientRows}
+        </>
+      )}
       <SettingsRow
         label="Google account"
         help={waiting
           ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl && <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>}</>
           : needsOwnClient && !hasOwnClient
-            ? 'First add a Google client below (once, about 5 minutes).'
+            ? 'First add a Google client above (once, about 5 minutes).'
             : 'Sign in with Google and allow Walnut to make its own backup folder.'}
         error={error ?? undefined}
         data-testid="backup-gdrive-row"
@@ -240,19 +249,12 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           }
         />
       )}
-      {needsOwnClient ? (
-        <>
-          <SettingsDisclosure id="backup-gdrive-client-help" label="Set up a Google client for Walnut (once, about 5 minutes)"
-            defaultOpen={!hasOwnClient} data-testid="backup-gdrive-client-help">
-            {steps}
-          </SettingsDisclosure>
-          {clientRows}
-        </>
-      ) : (
+      {!needsOwnClient && (
         <SettingsDisclosure id="backup-gdrive-own-client" label="Use your own Google client (optional)" defaultOpen={hasOwnClient}
           data-testid="backup-gdrive-own-client">
           {steps}
           {clientRows}
+          <p className="settings-steps-note">Then choose Connect Google Drive above.</p>
         </SettingsDisclosure>
       )}
     </>
