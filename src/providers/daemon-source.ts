@@ -15652,8 +15652,9 @@ async function startDaemon() {
     // The lock banner is what a second starter reads, so it must carry the live
     // ws port before any client can be told about it.
     if (daemonInstanceLock) daemonInstanceLock.publish(port);
-    fs.writeFileSync(PORT_FILE, String(port));
+    // daemon.pid before daemon.port: a starter that sees the port file reads the pid next.
     fs.writeFileSync(PID_FILE, String(process.pid));
+    fs.writeFileSync(PORT_FILE, String(port));
     // The host network runs once this daemon answers on its port (net-v1).
     if (netSupervisor) netSupervisor.start();
     // daemon.pid names us now: the journal writes are ours (journal v2 migration).

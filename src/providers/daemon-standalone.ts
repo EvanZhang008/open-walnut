@@ -13346,10 +13346,12 @@ if (action === '--start' || SERVICE_MODE) {
 
   const port = server.port
   daemonInstanceLock?.publish(port)
+  // daemon.pid before daemon.port: a starter that sees the port file reads the pid next
+  // (2026-11-04: a test read daemon.pid in that gap, ENOENT; tests/providers/daemon-pid-before-port.test.ts).
+  fs.writeFileSync(PID_FILE, String(process.pid))
   fs.writeFileSync(PORT_FILE, String(port))
   // The host network runs once this daemon answers on its port (net-v1).
   netSupervisor.start()
-  fs.writeFileSync(PID_FILE, String(process.pid))
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).
   migrateJournals()
   // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
