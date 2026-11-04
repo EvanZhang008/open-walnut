@@ -14,9 +14,16 @@ import type { NetMember } from './net-mac.js'
  * interfaces), replaced each time, never merged: the found ~/.ssh/config row for the same
  * machine is matched by them (core/hosts/joined-twins.ts), and a network it has left must not.
  */
-export interface Where { addrs?: string[]; relay?: string; self?: string[] }
+export interface Where { addrs?: string[]; relay?: string; self?: string[]; relayAt?: number }
 
 const MAX_ADDRS = 8
+/**
+ * How long a relay outside this Mac's choice is still dialled after a machine was last seen on
+ * it (`relayAt`): a machine that never comes back must not keep this Mac talking to n0's relay
+ * for good while the user picked their own (2026-11-04 review). A sighting refreshes it daily.
+ */
+export const AWAY_RELAY_KEEP_MS = 14 * 24 * 60 * 60_000
+const RELAY_AT_REFRESH_MS = 24 * 60 * 60_000
 
 function relayOk(r: unknown): r is string {
   if (typeof r !== 'string' || !/^https?:\/\/\S{1,500}$/.test(r)) return false
@@ -34,18 +41,24 @@ export function whereOf(net: unknown): Record<string, Where> {
     const addrs = Array.isArray(o.addrs) ? (o.addrs.filter(socketAddr) as string[]).slice(0, MAX_ADDRS) : []
     const relay = relayOk(o.relay) ? o.relay : undefined
     const self = Array.isArray(o.self) ? (o.self.filter(socketAddr) as string[]).slice(0, MAX_ADDRS) : []
-    if (addrs.length || relay || self.length) out[id] = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(self.length ? { self } : {}) }
+    const relayAt = relay && typeof o.relayAt === 'number' && Number.isFinite(o.relayAt) && o.relayAt > 0 ? o.relayAt : undefined
+    if (addrs.length || relay || self.length) out[id] = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(relayAt ? { relayAt } : {}), ...(self.length ? { self } : {}) }
   }
   return out
 }
 
-/** Each machine with where it was last seen: its addresses and relay ride its dial. */
-export function withWhere(members: NetMember[], net: unknown): NetMember[] {
+/**
+ * Each machine with where it was last seen: its addresses and relay ride its dial. A relay
+ * outside `ours` (the relays of this Mac's choice) rides it only for AWAY_RELAY_KEEP_MS after the
+ * machine was last seen there; one kept before that was stamped is dialled as before.
+ */
+export function withWhere(members: NetMember[], net: unknown, ours: string[] = [], now = Date.now()): NetMember[] {
   const w = whereOf(net)
   return members.map((m) => {
     const x = w[m.id]
     if (m.role !== 'host' || !x) return m
-    return { ...m, ...(x.addrs ? { addrs: x.addrs } : {}), ...(x.relay ? { relays: [x.relay] } : {}) }
+    const relay = x.relay && (ours.some((r) => sameRelay(r, x.relay!)) || x.relayAt === undefined || now - x.relayAt < AWAY_RELAY_KEEP_MS) ? x.relay : undefined
+    return { ...m, ...(x.addrs ? { addrs: x.addrs } : {}), ...(relay ? { relays: [relay] } : {}) }
   })
 }
 
@@ -54,19 +67,25 @@ export function mergeAddrs(fresh: string[], kept: string[] = []): string[] {
   return [...new Set([...fresh.filter(socketAddr), ...kept])].slice(0, MAX_ADDRS)
 }
 
+/** The same relay: a hostname with or without its final dot (iroh writes n0's with it). */
 export function sameRelay(a: string, b: string): boolean {
-  try { return new URL(a).href === new URL(b).href } catch { return false }
+  const key = (r: string) => { const u = new URL(r); u.hostname = u.hostname.replace(/\.$/, ''); return u.href }
+  try { return key(a) === key(b) } catch { return false }
 }
 
 /**
- * The relay to keep for a machine on `home`: one of this Mac's own (`ours`, the companion's)
- * is kept; one the machine merely names never is, so it cannot send this Mac anywhere. A
+ * The relay to keep for a machine on `home`: one of this Mac's own (`ours`: the companion's,
+ * n0's while this Mac is on public relays, the one it is homed on) is kept; one the machine
+ * merely names never is, so it cannot send this Mac anywhere. A
  * machine still on the relay already kept (one that could not move yet) keeps it, and one
  * that says none (restarting) changes nothing.
  */
 export function relayToKeep(home: string | null | undefined, ours: string[], was: string | undefined): string | undefined {
   if (!home) return was
-  if (ours.some((r) => sameRelay(r, home))) return home
+  // This Mac's own spelling, never the machine's: walnut-net parses what is kept, and a spelling
+  // only one of the two parsers takes must not reach it (2026-11-04 review).
+  const mine = ours.find((r) => sameRelay(r, home))
+  if (mine) return mine
   return was && sameRelay(was, home) ? was : undefined
 }
 
@@ -89,7 +108,13 @@ export async function noteWhere(endpoint: string, seen: { addrs: string[]; home?
     const keep = 'home' in seen ? relayToKeep(seen.home, seen.ours ?? [], was.relay) : was.relay
     const relay = relayOk(keep) ? keep : undefined
     const self = seen.self ? [...new Set(seen.self.filter(socketAddr))].slice(0, MAX_ADDRS) : was.self ?? []
-    const next: Where = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(self.length ? { self } : {}) }
+    // Seen on the relay kept: stamped, at most once a day so a sighting rarely writes config.yaml.
+    const onIt = !!relay && !!seen.home && sameRelay(relay, seen.home)
+    const now = Date.now()
+    const relayAt = !relay ? undefined
+      : onIt ? (was.relay === relay && was.relayAt && now - was.relayAt < RELAY_AT_REFRESH_MS ? was.relayAt : now)
+      : was.relay === relay ? was.relayAt : now
+    const next: Where = { ...(addrs.length ? { addrs } : {}), ...(relay ? { relay } : {}), ...(relayAt ? { relayAt } : {}), ...(self.length ? { self } : {}) }
     if (JSON.stringify(next) === JSON.stringify(was)) return { write: false, result: false }
     net.where = { ...all, [endpoint]: next }
     doc.net = net

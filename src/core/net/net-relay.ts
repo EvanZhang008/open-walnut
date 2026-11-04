@@ -5,7 +5,28 @@
  */
 import { socketAddr } from '../../providers/net-config-core.js'
 
-export type RelayChoice = 'own' | 'public' | 'none'
+export const RELAY_CHOICES = ['own', 'public', 'none'] as const
+export type RelayChoice = (typeof RELAY_CHOICES)[number]
+
+/**
+ * n0's public relays, as `iroh::defaults::prod` names them in the iroh that walnut-net
+ * builds with (PUBLIC_RELAYS_IROH, native/walnut-net/Cargo.toml): the relays a walnut-net
+ * on `public` is homed on. A newer iroh may add one; tests/core/net/relay-choice.test.ts
+ * fails when the iroh version moves, so the list is read again from that version.
+ */
+export const PUBLIC_RELAYS: readonly string[] = [
+  'https://use1-1.relay.n0.iroh.link./',
+  'https://usw1-1.relay.n0.iroh.link./',
+  'https://euc1-1.relay.n0.iroh.link./',
+  'https://aps1-1.relay.n0.iroh.link./',
+]
+export const PUBLIC_RELAYS_IROH = '1.4.1'
+
+/** The relays this Mac is on with `choice`: the companion's for own, n0's for public, none for none. */
+export function relaysOfChoice(choice: RelayChoice, companionRelays: readonly string[]): string[] {
+  if (choice === 'own') return [...companionRelays]
+  return choice === 'public' ? [...PUBLIC_RELAYS] : []
+}
 
 /**
  * The relay in use. A paired companion always means its relay: the machines that join

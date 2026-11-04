@@ -6,22 +6,32 @@
 import { log } from '../../logging/index.js'
 import { socketAddr } from '../../providers/net-config-core.js'
 import type { Daemon } from './net-local.js'
-import { choiceOfMode, directAddr, type MachineLink, type RelayChoice } from './net-relay.js'
+import { choiceOfMode, directAddr, PUBLIC_RELAYS, type MachineLink, type RelayChoice } from './net-relay.js'
 import { netRows, type HostRows } from './net-rows.js'
 import { mergeAddrs, noteWhere } from './net-where.js'
 
-/** Note where a machine is now (net-where.ts): the address this Mac reaches it at first. */
+/**
+ * Note where a machine is now (net-where.ts): the address this Mac reaches it at first, and
+ * its relay when it is one of `ours` (the relays of this Mac's choice, relaysOfChoice) or one
+ * this Mac's walnut-net runs on now (its home relay, n0's while it runs public relays).
+ * 2026-11-04: a PC seen on n0's relay while this Mac ran public relays was not kept, so once
+ * a companion was paired and this Mac moved to its relay, the PC (away then) was never found.
+ */
 export async function noteSeen(local: Daemon, conn: Daemon, name: string, endpoint: string, ours: string[]): Promise<void> {
   try {
     const [st, mine] = await Promise.all([
       conn.send('net.status', {}, 10_000) as Promise<{ node?: { addrs?: unknown; homeRelay?: unknown } | null }>,
-      local.send('net.status', {}, 10_000) as Promise<{ node?: { peers?: Array<{ id: string; link?: unknown }> } | null }>,
+      local.send('net.status', {}, 10_000) as Promise<{ node?: { peers?: Array<{ id: string; link?: unknown }>; relayMode?: unknown; homeRelay?: unknown } | null }>,
     ])
     const own = Array.isArray(st.node?.addrs) ? st.node.addrs.filter(socketAddr) as string[] : []
     const at = directAddr(mine.node?.peers?.find((p) => p.id === endpoint)?.link)
+    const running = [
+      ...(typeof mine.node?.homeRelay === 'string' ? [mine.node.homeRelay] : []),
+      ...(choiceOfMode(mine.node?.relayMode) === 'public' ? PUBLIC_RELAYS : []),
+    ]
     // Its relay is kept only when it is one of this Mac's own (net-where.ts relayToKeep).
     const home = typeof st.node?.homeRelay === 'string' ? st.node.homeRelay : null
-    if (await noteWhere(endpoint, { addrs: mergeAddrs(at ? [at] : [], own), home, ours, self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
+    if (await noteWhere(endpoint, { addrs: mergeAddrs(at ? [at] : [], own), home, ours: [...ours, ...running], self: own })) log.session.info('net: noted where a machine is', { host: name, at, home })
   } catch (err) { log.session.debug('net: could not read where a machine is', { host: name, error: (err as Error).message }) }
 }
 

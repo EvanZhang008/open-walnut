@@ -21,8 +21,8 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { choiceOfMode, cutOffByNoRelay, directAddr, relayChoice } from '../../../src/core/net/net-relay.js'
-import { mergeAddrs, relayToKeep, whereOf, withWhere } from '../../../src/core/net/net-where.js'
+import { choiceOfMode, cutOffByNoRelay, directAddr, PUBLIC_RELAYS, PUBLIC_RELAYS_IROH, RELAY_CHOICES, relayChoice, relaysOfChoice } from '../../../src/core/net/net-relay.js'
+import { mergeAddrs, relayToKeep, sameRelay, whereOf, withWhere } from '../../../src/core/net/net-where.js'
 import { runsModes, waitForModes } from '../../../src/core/net/net-seen.js'
 import { decodeTicket, encodeTicket, JOIN_SCRIPT_URL, ticketCommand } from '../../../src/core/net/join-ticket.js'
 import { joinedOf, localMembers } from '../../../src/core/net/net-rows.js'
@@ -107,6 +107,44 @@ describe('where each machine was last seen', () => {
     // It moved off the relay kept to one not ours: the old one is dropped.
     expect(relayToKeep(N0, [OURS], OLD_OWN)).toBeUndefined()
     expect(relayToKeep(OURS, [OURS], OLD_OWN)).toBe(OURS)
+  })
+
+  // 2026-11-04: a PC seen on n0's relay while this Mac ran public relays was not kept; a
+  // companion was paired while the PC was away, this Mac moved to its relay and never found it.
+  it("a machine on a relay of this Mac's choice is kept, whatever the choice: so it is found after the next change", () => {
+    const COMPANION = ['https://wn.example.invalid/']
+    for (const choice of RELAY_CHOICES) {
+      for (const home of relaysOfChoice(choice, COMPANION)) {
+        const kept = relayToKeep(home, relaysOfChoice(choice, COMPANION), undefined)
+        expect(kept, `${choice}: ${home}`).toBe(home)
+        // Then this Mac moves to any other choice while the machine is away: the kept relay rides its dial.
+        const members = withWhere([{ id: A, name: 'a', role: 'host' as const }], { where: { [A]: { relay: kept } } })
+        expect(members[0].relays, `${choice} then away`).toEqual([home])
+      }
+    }
+    expect(relaysOfChoice('own', COMPANION)).toEqual(COMPANION)
+    expect(relaysOfChoice('public', COMPANION)).toEqual([...PUBLIC_RELAYS])
+    expect(relaysOfChoice('none', COMPANION)).toEqual([])
+  })
+
+  it("n0's relays count only by their exact names, with or without the final dot", () => {
+    const usw = 'https://usw1-1.relay.n0.iroh.link./'
+    expect(relayToKeep('https://usw1-1.relay.n0.iroh.link/', [...PUBLIC_RELAYS], undefined)).toBe(usw) // this Mac's own spelling is what is kept
+    expect(sameRelay(usw, 'https://usw1-1.relay.n0.iroh.link/')).toBe(true)
+    // A name that only looks like one, or n0's relay on another scheme or port, is a relay the machine names.
+    for (const fake of ['https://usw1-1.relay.n0.iroh.link.evil.example/', 'https://evil.example/usw1-1.relay.n0.iroh.link./', 'http://usw1-1.relay.n0.iroh.link./', 'https://usw1-1.relay.n0.iroh.link.:8443/']) {
+      expect(relayToKeep(fake, [...PUBLIC_RELAYS], undefined), fake).toBeUndefined()
+    }
+    // Not with own or none: there this Mac never contacts n0's relays for a machine seen first.
+    expect(relayToKeep(usw, relaysOfChoice('own', ['https://wn.example.invalid/']), undefined)).toBeUndefined()
+    expect(relayToKeep(usw, relaysOfChoice('none', []), undefined)).toBeUndefined()
+  })
+
+  it("the public relay list is iroh's own for the iroh walnut-net builds with: a new iroh means reading it again", () => {
+    const cargo = fs.readFileSync(path.join(ROOT, 'native/walnut-net/Cargo.toml'), 'utf8')
+    // When this fails: copy `defaults::prod` relay hostnames from the new iroh into PUBLIC_RELAYS, then bump PUBLIC_RELAYS_IROH.
+    expect(/^iroh\s*=\s*"=?([0-9.]+)"/m.exec(cargo)?.[1]).toBe(PUBLIC_RELAYS_IROH)
+    for (const r of PUBLIC_RELAYS) expect(new URL(r).hostname).toMatch(/^[a-z0-9-]+\.relay\.n0\.iroh\.link\.$/)
   })
 
   it('puts the new addresses first and keeps at most eight', () => {

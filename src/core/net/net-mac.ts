@@ -21,7 +21,7 @@ import { log } from '../../logging/index.js'
 import { NetError } from './net-error.js'
 import { joinedOf, localMembers, markRemoving, netRows, reconcileHosts, removalsPending, setJoined, type HostRows } from './net-rows.js'
 import { clearLeftovers, leftoverJoins, type Daemon } from './net-local.js'
-import { cutOffByNoRelay, relayChoice, type RelayChoice } from './net-relay.js'
+import { cutOffByNoRelay, relayChoice, relaysOfChoice, type RelayChoice } from './net-relay.js'
 import { machineLinks, noteSeen, runningChoice, waitForModes } from './net-seen.js'
 import { keepWhere, noteWhere, withWhere } from './net-where.js'
 
@@ -190,7 +190,7 @@ async function pushToHost(name: string, endpoint: string, s: NetState): Promise<
     try { await conn.send('net.configure', hostConfig(s), 20_000) } catch (err) { log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message }) }
   }
   const local = await localDaemon().catch(() => null)
-  if (local) await noteSeen(local, conn, name, endpoint, s.relays)
+  if (local) await noteSeen(local, conn, name, endpoint, relaysOfChoice(s.relay, s.relays))
 }
 
 /** The machines to hand the list to: every net host row but those a Remove is taking out. */
@@ -256,7 +256,7 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
         state.relayRoots = []
       }
       // Each machine is dialled where it was last seen too.
-      state.members = withWhere(state.members, ((await getConfig()) as { net?: unknown }).net)
+      state.members = withWhere(state.members, ((await getConfig()) as { net?: unknown }).net, relaysOfChoice(state.relay, state.relays))
       // A new relay: the machines first, while this Mac still reaches them the old way.
       const relayMoved = appliedRelay !== null && appliedRelay !== state.relay
       // The machines go first, so this Mac must be able to follow: an older walnut-net here

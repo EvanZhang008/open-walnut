@@ -131,18 +131,26 @@ first, while the Mac still reaches it the old way, then to the Mac; a machine th
 keeps the old way until the Mac reaches it again, and the Mac still finds it there:
 
 - The Mac keeps where it last reached each machine (`net.where`: its addresses, the address
-  the Mac reached it at first, and the relay it was on when that is one of the Mac's own,
-  the companion's) and dials it there too; with No relay only the addresses. The relay
+  the Mac reached it at first, and the relay it was on when that is one of the Mac's own:
+  the companion's, n0's while the Mac is on public relays, or the one the Mac's walnut-net
+  is homed on) and dials it there too; with No relay only the addresses. The relay
   kept stays while the machine is still on it (one that could not move yet, also after
   unpairing) and goes only when it reports another one. A relay a
   machine names is never taken from it, so a machine cannot send the Mac anywhere, and
-  with Your relay no relay but a companion's is contacted (a machine still on an earlier
-  companion's relay is dialled there until it moves). That is an address book, never the list: it
+  with Your relay no relay but a companion's is contacted, except for a machine still on a
+  relay the Mac was on before (an earlier companion's, or n0's from before a companion was
+  paired), which is dialled there until it moves. That is an address book, never the list: it
   decides no machine's membership, and an entry a Remove dropped is never written back.
+  2026-11-04: a PC away while a companion was paired stayed on n0's relay, and the Mac,
+  which had dropped that relay as one the PC merely named, never found it again.
 - Pairing a companion voids an earlier pick (`net.relay` is cleared), so unpairing later
   goes back to public relays, never to an old No relay that would cut off the machines that
   joined through the companion. A machine on public relays that is away when a companion is
-  paired, behind a router, is not found on the companion's relay: it needs a new invite.
+  paired is dialled on the n0 relay it was last seen on, and moved once it answers. Only a
+  machine seen there by a Walnut from 2026-11-04 on is kept that way, and only for 14 days after
+  it was last seen (`relayAt`), so a machine that never comes back does not keep the Mac talking
+  to n0's relay while the user picked their own; one last seen earlier, or away longer, needs a
+  new invite.
 - No relay is refused while a machine the Mac reaches now would be cut off: one linked
   through a relay, or directly at an address the machine does not have (a router in
   between, crossed with the relay's help). Told to drop its relay, it could never be told
