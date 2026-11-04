@@ -40,7 +40,19 @@ describe('keychain secret reader', () => {
     expect(calls).toEqual([])
   })
 
-  it('a failed or timed-out read is not tried again in this process (one dialog at most)', async () => {
+  it('a probe that fails (not "no such item") also pauses reads, and a pause ends after 6 hours', async () => {
+    let t = 1_000_000
+    const now = () => t
+    use(() => fail(51))
+    expect(await readKeychainSecret('BW_SESSION', 'darwin', now)).toBeNull()
+    expect(await readKeychainSecret('BW_SESSION', 'darwin', now)).toBeNull()
+    expect(calls).toHaveLength(1)
+    use((args) => (args.includes('-w') ? ok('back\n') : ok()))
+    t += 6 * 3600_000
+    expect(await readKeychainSecret('BW_SESSION', 'darwin', now)).toBe('back')
+  })
+
+  it('a failed or timed-out read is not tried again during the pause (one dialog at most)', async () => {
     for (const bad of [fail(51), fail(null, true)]) {
       calls = []
       resetKeychainSecretForTest()
