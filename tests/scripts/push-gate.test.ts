@@ -274,6 +274,23 @@ esac
     expect(gateBranches(g.bare)).toBe('')
   })
 
+  it('decides from the tiers when the verdict job has not run: one failed tier refuses, every tier passed lets it through', () => {
+    const tiers = ['quick 1/3', 'quick 2/3', 'quick 3/3', 'frontend', 'browser specs']
+    const ok = ghRepo({ statuses: tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed')) })
+    const tip = commit(ok.r, { 'a.txt': '1\n' }, 'one')
+    const pass = gateRun(ok, tip)
+    expect(pass.status, pass.stdout + pass.stderr).toBe(0)
+    expect(pass.stdout).toMatch(/Test gate passed\./)
+    const some = ghRepo({ statuses: tiers.slice(0, 4).map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed')) })
+    const waiting = gateRun(some, commit(some.r, { 'a.txt': '1\n' }, 'one'))
+    expect(waiting.status).toBe(1)
+    expect(waiting.stdout).toMatch(/did not answer within 0 minutes/)
+    const bad = ghRepo({ statuses: [st('walnut/push-gate (quick 1/3)', 'failure', '1 NEW failure(s)')], jobs: { jobs: [{ id: 9, name: 'Gate (quick 1/3)' }] }, log: 'x ✗ 1 NEW failure(s)\n    tests/y.test.ts :: it breaks\n' })
+    const refused = gateRun(bad, commit(bad.r, { 'a.txt': '1\n' }, 'one'))
+    expect(refused.status).toBe(1)
+    expect(refused.stdout).toMatch(/tests\/y\.test\.ts :: it breaks/)
+  })
+
   it('reads only its own run: another run\'s verdict of the same commit is no answer, and no answer in time refuses', () => {
     const g = ghRepo({ statuses: [st('walnut/push-gate', 'failure', 'from a cancelled run', 'https://github.com/acme/demo/actions/runs/76')] })
     const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')

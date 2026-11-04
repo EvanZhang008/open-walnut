@@ -180,6 +180,9 @@ if [ -z "$runner" ]; then
     || refuse "could not push $branch to $plain for the test gate."
   echo "Test gate on $short: quick tier, frontend tier and the browser specs it touches, on GitHub's runners ($branch)…"
   mins=${WALNUT_PUSH_GATE_TIMEOUT:-75}
+  # How many tiers the run writes (push-gate-status.sh, as the pushed commit has it).
+  tiers=$(git show "$target:scripts/push-gate-status.sh" 2>/dev/null | sed -n 's/^TIERS=\([0-9][0-9]*\).*/\1/p')
+  tiers=${tiers:-5}
   deadline=$(( $(date +%s) + mins * 60 )) run= state=pending statuses='[]' fails=0
   ghq() { gh api "$@" 2>"$errf" && { fails=0; return 0; }; fails=$((fails + 1)); return 1; }
   while :; do
@@ -192,6 +195,12 @@ if [ -z "$runner" ]; then
       statuses=$(printf '%s' "$r" | jq -c --arg u "https://github.com/$repo/actions/runs/$run" '[.[] | select(.context | startswith("walnut/push-gate")) | select(.target_url == $u)] | group_by(.context) | map(max_by(.created_at))')
       state=$(printf '%s' "$statuses" | jq -r '[.[] | select(.context == "walnut/push-gate")][0].state // "pending"')
       [ "$state" = pending ] || break
+      # The tiers decide without the verdict job, which may queue behind a busy CI for minutes:
+      # one failed tier refuses at once, every tier passed lets the push through.
+      bad=$(printf '%s' "$statuses" | jq '[.[] | select(.context != "walnut/push-gate" and (.state == "failure" or .state == "error"))] | length')
+      good=$(printf '%s' "$statuses" | jq '[.[] | select(.context != "walnut/push-gate" and .state == "success")] | length')
+      if [ "$bad" -gt 0 ]; then state=failure; break; fi
+      if [ "$good" -ge "$tiers" ]; then state=success; break; fi
     fi
     [ $fails -lt 10 ] || blocked "GitHub did not answer the test gate 10 times in a row ($(tail -1 "$errf")), so nothing was judged."
     [ "$(date +%s)" -lt "$deadline" ] || break
