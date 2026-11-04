@@ -13,14 +13,21 @@ interface State { connected: boolean; unlocked: boolean; serverUrl?: string; dev
 const root = document.getElementById('root')!
 /** Walnut no longer knows this extension (removed in Settings): it forgot the connection, so connect again. */
 const DISCONNECTED = new Set(['not_connected', 'not_paired', 'token_refused'])
-const inWindow = new URLSearchParams(location.search).has('window')
+const params = new URLSearchParams(location.search)
+/** This view inside the side panel's Passwords tab (sidepanel.ts), for the page of one window. */
+const embedded = params.get('embed') === 'panel'
+/** A window of its own (the unlock window), which closes when its work is done. */
+const inWindow = params.has('window') && !embedded
+const panelWindow = embedded ? Number(params.get('window')) || undefined : undefined
 
 /** This popup's window, known before any click: opening the side panel must not wait on anything. */
 let windowId: number | undefined
 void ext.windows.getCurrent().then((w) => { windowId = w.id }).catch(() => undefined)
 
 /** Walnut in the side panel, about the page this window shows. */
-function askButton(): HTMLElement {
+function askButton(): HTMLElement | null {
+  // Already in the side panel: its Ask tab is right there.
+  if (embedded) return null
   const b = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-ask', title: 'Ask Walnut about this page in the side panel' }, 'Ask Walnut')
   b.onclick = () => {
     if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)
@@ -29,7 +36,7 @@ function askButton(): HTMLElement {
     else if (windowId !== undefined) void ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${windowId}`), type: 'popup', width: 420, height: 760 })
     if (!inWindow) window.close()
   }
-  return b
+  return b as HTMLElement
 }
 
 function toast(text: string): void {
@@ -141,8 +148,8 @@ async function copy(id: string, field: 'username' | 'password' | 'totp', what: s
 }
 
 async function fillTab(it: Item): Promise<void> {
-  const r = await ask({ type: 'fill-tab', id: it.id })
-  if (r.ok) { if (!inWindow) window.close(); return }
+  const r = await ask({ type: 'fill-tab', id: it.id, ...(panelWindow ? { windowId: panelWindow } : {}) })
+  if (r.ok) { if (embedded) toast('Filled'); else if (!inWindow) window.close(); return }
   toast(r.error ?? 'Could not fill.')
 }
 
@@ -151,9 +158,26 @@ function itemRow(it: Item, fillable: boolean): HTMLElement {
     it.username ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy username', 'aria-label': 'Copy username', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'username', 'Username') } }, icon('user')) : null,
     (!it.type || it.type === 'login') ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy password', 'aria-label': 'Copy password', 'data-testid': 'copy-password', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'password', 'Password') } }, icon('copy')) : null,
     it.hasTotp ? h('button', { class: 'icon-btn', type: 'button', title: 'Copy one-time code', 'aria-label': 'Copy one-time code', onclick: (e: Event) => { e.stopPropagation(); void copy(it.id, 'totp', 'Code') } }, icon('clock')) : null)
+  const sub = h('span', { class: 'row-sub' }, it.username || it.site || '')
+  // In the side panel there is room to show a password; it hides again on the next click.
+  if (embedded && (!it.type || it.type === 'login')) {
+    let shown = false
+    const eye = h('button', { class: 'icon-btn', type: 'button', title: 'Show password', 'aria-label': 'Show password', 'data-testid': 'reveal-password' }, icon('eye')) as HTMLButtonElement
+    eye.onclick = async (e: Event) => {
+      e.stopPropagation()
+      if (shown) { shown = false; sub.textContent = it.username || it.site || ''; sub.classList.remove('mono'); eye.title = 'Show password'; return }
+      const r = await ask<{ value: string }>({ type: 'copy-secret', id: it.id, field: 'password' })
+      if (!r.ok) { toast(r.error ?? 'Could not show it.'); return }
+      shown = true
+      sub.textContent = r.value
+      sub.classList.add('mono')
+      eye.title = 'Hide password'
+    }
+    actions.prepend(eye)
+  }
   const row = h('div', { class: 'row item', tabindex: '0', role: 'button', 'data-testid': 'popup-item', title: fillable ? 'Fill on this page' : '' },
     avatar(it.site ?? it.title),
-    h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), h('span', { class: 'row-sub' }, it.username || it.site || '')),
+    h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, it.title), sub),
     actions,
     fillable ? h('span', { class: 'icon-btn', 'aria-hidden': 'true', style: 'color:var(--accent)' }, icon('fill')) : null)
   const act = () => { if (fillable) void fillTab(it); else void copy(it.id, 'password', 'Password') }
@@ -163,7 +187,7 @@ function itemRow(it: Item, fillable: boolean): HTMLElement {
 }
 
 async function vaultView(st: State): Promise<HTMLElement> {
-  const site = await ask<{ site: string; items: Item[] }>({ type: 'site-items' })
+  const site = await ask<{ site: string; items: Item[] }>({ type: 'site-items', ...(panelWindow ? { windowId: panelWindow } : {}) })
   if (!site.ok && (site.code === 'vault_session_needed' || site.code === 'vault_locked')) return unlockView({ ...st, unlocked: false })
   if (!site.ok && site.code && DISCONNECTED.has(site.code)) return connectView({ connected: false, unlocked: false, serverUrl: st.serverUrl })
   const q = h('input', { class: 'input', type: 'search', id: 'q', placeholder: 'Search Walnut', 'aria-label': 'Search Walnut', autocomplete: 'off' })

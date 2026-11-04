@@ -43,7 +43,14 @@ const PAGES: Record<string, { title: string; body: string }> = {
       <label>Code <input id="otp" name="otp" value="913524"></label>`,
   },
   '/other': { title: 'Another page', body: '<h1>Another page</h1><p>Nothing to see.</p>' },
+  '/login': {
+    title: 'Sign in',
+    body: `<form id="f" onsubmit="return false"><label>Email <input id="user" name="email" type="email" autocomplete="username"></label>
+      <label>Password <input id="pass" name="password" type="password" autocomplete="current-password"></label><button>Sign in</button></form>`,
+  },
 }
+/** The fixture vault's fake master password (shared with extension-passwords.spec.ts). */
+const MASTER = 'Correct Horse Battery Staple 42'
 
 function startSites(): Promise<void> {
   sites = http.createServer((req, res) => {
@@ -368,4 +375,99 @@ test('the page script put in again (page-reach.ts, after an update) runs once an
   expect(r.ok).toBe(true)
   // The page itself cannot see it (another world).
   expect(await doc.evaluate(() => typeof (globalThis as { __walnutContentLive?: unknown }).__walnutContentLive)).toBe('undefined')
+})
+
+// ── the panel's tabs: Ask · Tasks · Passwords ──
+
+const tasksView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-tasks')
+const pwView = (): FrameLocator => panel.frameLocator('iframe.panel-frame-passwords')
+
+async function vaultSession(): Promise<string> {
+  const st = await (await doc.request.get(`${base}/api/v1/vault/status`)).json()
+  const r = st.setUp
+    ? await doc.request.post(`${base}/api/v1/vault/unlock`, { data: { password: MASTER, kdfSalt: st.kdf?.salt } })
+    : await doc.request.post(`${base}/api/v1/vault/setup`, { data: { password: MASTER } })
+  expect(r.ok(), await r.text()).toBe(true)
+  return (await r.json()).session.token
+}
+
+test('Tasks tab: what needs the person with its status, a reply into its session, the page saved as a task', async () => {
+  test.setTimeout(120_000)
+  // The ask's own task, handed back to the person: it needs them, and it has a conversation.
+  const rec = await (await doc.request.get(`${base}/api/v1/sessions/${askSession}`)).json() as Record<string, any>
+  const taskId = String(rec.taskId ?? rec.session?.taskId ?? '')
+  expect(taskId).not.toBe('')
+  const patched = await doc.request.patch(`${base}/api/v1/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
+  expect(patched.ok(), await patched.text()).toBe(true)
+
+  await panel.getByTestId('panel-tab-tasks').click()
+  await expect(panel.getByTestId('panel-tab-tasks')).toHaveAttribute('aria-selected', 'true')
+  await expect(panel.locator('iframe.panel-frame')).toBeHidden()
+  const row = tasksView().locator(`[data-testid="ext-task"][data-task-id="${taskId}"]`)
+  await expect(row).toBeVisible({ timeout: 30_000 })
+  await expect(tasksView().getByTestId('ext-tasks-needs').locator(`[data-task-id="${taskId}"]`)).toHaveCount(1)
+  await expect(row).toHaveAttribute('data-state', /needs|read/)
+  await expect(row.locator('.ext-task-line')).toContainText(/Needs you|To read/)
+
+  await row.locator('.ext-task-head').click()
+  await row.getByTestId('ext-task-input').fill('Thanks, that answers it')
+  await row.getByTestId('ext-task-send').click()
+  await expect(row.getByTestId('ext-task-sent')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(async () => {
+    const h = await (await doc.request.get(`${base}/api/v1/sessions/${askSession}/history?tail=50`)).text()
+    return h.includes('Thanks, that answers it')
+  }, { timeout: 30_000 }).toBe(true)
+
+  // The page the person is on, saved for later: a task named after it, with its address.
+  await tasksView().getByTestId('ext-tasks-save-page').click()
+  await expect(tasksView().getByTestId('ext-tasks-saved')).toContainText('Release notes 4.2', { timeout: 30_000 })
+  const savedId = await tasksView().getByTestId('ext-tasks-saved').getAttribute('data-task-id')
+  const got = await (await doc.request.get(`${base}/api/v1/tasks/${savedId}`)).json() as Record<string, any>
+  const saved = (got.task ?? got) as { title?: string; description?: string }
+  expect(saved.title).toBe('Release notes 4.2')
+  expect(saved.description).toContain(site('docs.example.test', '/notes'))
+})
+
+test('Passwords tab: unlock in place, the page\'s logins, show a password, fill the page; the tab is kept', async () => {
+  test.setTimeout(120_000)
+  const s = await vaultSession()
+  const stamp = Date.now().toString(36)
+  const made = await doc.request.post(`${base}/api/v1/vault/items`, {
+    headers: { 'x-walnut-vault-session': s },
+    data: { item: { type: 'login', title: `Docs ${stamp}`, username: 'reader@example.test', password: `Panel-Fill-${stamp}`, urls: [site('docs.example.test', '')] } },
+  })
+  expect(made.ok(), await made.text()).toBe(true)
+  // Lock the extension's own vault session, so the panel asks for the master password in place.
+  await sw().evaluate(async () => { await chrome.storage.session.remove('vaultSession').catch(() => undefined) })
+  await doc.goto(site('docs.example.test', '/login'))
+
+  await panel.getByTestId('panel-tab-passwords').click()
+  await expect(panel.getByTestId('panel-tab-passwords')).toHaveAttribute('aria-selected', 'true')
+  const pw = pwView()
+  // No "Ask Walnut" button in the panel's own Passwords tab: Ask is a tab beside it.
+  await expect(pw.getByTestId('popup-ask')).toHaveCount(0)
+  // Locked: the master password is asked for right there, in the tab.
+  const unlock = pw.getByTestId('popup-unlock')
+  await expect(unlock).toBeVisible({ timeout: 30_000 })
+  await pw.locator('#pw').fill(MASTER)
+  await unlock.click()
+  const item = pw.getByTestId('popup-item').filter({ hasText: `Docs ${stamp}` })
+  await expect(item).toBeVisible({ timeout: 30_000 })
+  // Its actions show on hover, as in the toolbar popup.
+  await item.hover()
+  await item.getByTestId('reveal-password').click()
+  await expect(item.locator('.row-sub')).toHaveText(`Panel-Fill-${stamp}`, { timeout: 10_000 })
+  await item.getByTestId('reveal-password').click()
+  await expect(item.locator('.row-sub')).toHaveText('reader@example.test')
+  // Filling goes to the page in the panel's window, not to the panel.
+  await item.click()
+  await expect.poll(() => doc.locator('#pass').inputValue(), { timeout: 15_000 }).toBe(`Panel-Fill-${stamp}`)
+  expect(await doc.locator('#user').inputValue()).toBe('reader@example.test')
+
+  // Opened again, the panel shows the tab it was left on.
+  await panel.reload()
+  await expect(panel.getByTestId('panel-tab-passwords')).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
+  await expect(panel.locator('iframe.panel-frame-passwords')).toBeVisible()
+  await panel.getByTestId('panel-tab-ask').click()
+  await expect(view().getByTestId('ext-panel')).toBeVisible({ timeout: 60_000 })
 })

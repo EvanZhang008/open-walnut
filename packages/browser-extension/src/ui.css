@@ -59,6 +59,14 @@ body.popup { width: 360px; min-height: 420px; }
 /* The side panel frames Walnut's own page (PopoutExtPanel) edge to edge. */
 html.panel, body.sidepanel, body.sidepanel #root { height: 100%; margin: 0; }
 body.sidepanel { overflow: hidden; }
+.panel-shell { display: flex; flex-direction: column; height: 100%; }
+.panel-tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); flex: none; }
+.panel-tab { height: 30px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font-weight: 500; }
+.panel-tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.panel-tab:hover { color: var(--fg); }
+.panel-body { flex: 1; min-height: 0; position: relative; }
+.panel-body > iframe { display: block; width: 100%; height: 100%; border: 0; }
+.panel-body > iframe[hidden] { display: none; }
 .panel-frame { display: block; width: 100%; height: 100%; border: 0; }
 .top { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .top h1 { font-size: 15px; margin: 0; flex: 1; }

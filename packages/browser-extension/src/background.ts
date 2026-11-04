@@ -217,9 +217,11 @@ function credsOf(item: VaultItem): { username?: string; password?: string } {
   return { ...(item.username ? { username: item.username } : {}), ...(item.password ? { password: item.password } : {}) }
 }
 
-async function activeTab(): Promise<Tab | undefined> {
-  return (await ext.tabs.query({ active: true, lastFocusedWindow: true }))[0]
+/** The page the person is on: in the window named (the side panel's), else the last one they used. */
+async function activeTab(windowId?: number): Promise<Tab | undefined> {
+  return (await ext.tabs.query(typeof windowId === 'number' ? { active: true, windowId } : { active: true, lastFocusedWindow: true }))[0]
 }
+const windowOf = (msg: Record<string, unknown>) => (typeof msg.windowId === 'number' && Number.isInteger(msg.windowId) ? msg.windowId : undefined)
 
 /** Open the popup to unlock; where the browser refuses (no user gesture left), a small window. */
 async function openUnlock(): Promise<void> {
@@ -353,7 +355,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     }
     case 'lock': await api.lock(); forget(); return { ok: true }
     case 'site-items': {
-      const tab = await activeTab()
+      const tab = await activeTab(windowOf(msg))
       const page = tab?.url ?? ''
       const site = /^https?:/.test(page) && !(await isWalnutPage(page)) ? page : ''
       return { ok: true, site: site ? displayHost(site) : '', items: site ? await matchesFor(site) : [] }
@@ -376,7 +378,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
       return { ok: true, value }
     }
     case 'fill-tab': {
-      const tab = await activeTab()
+      const tab = await activeTab(windowOf(msg))
       if (tab?.id === undefined || !tab.url) return { ok: false, error: 'No page to fill.' }
       const item = await api.item(String(msg.id))
       if (!matchItem(item.urls, tab.url)) return { ok: false, code: 'other_site', error: `"${item.title}" is saved for another site; Walnut fills a login only on its own site.` }

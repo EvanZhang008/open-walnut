@@ -8,12 +8,21 @@
  * read from the tab by the background), follows the person to another tab or page, hands on a
  * selection the context menu asked about, and lets an ask act in the tab when the person turns
  * that on in the panel.
+ *
+ * Three tabs, the one picked kept for the next time (storage.local `panelTab`): Ask (that view),
+ * Tasks (`/popout?view=ext-tasks`: what needs the person, their Focus tasks, the page saved as a
+ * task; it hears the same page messages) and Passwords (this extension's own vault view,
+ * popup.html in its panel form, for the logins of the page in this window). Each tab's frame is
+ * made the first time it is shown and then kept, so a tab keeps its state.
  */
 import { ask, ext } from './ext'
 import { h } from './dom'
 
 const root = document.getElementById('root')!
 const MSG = 'ext-panel'
+
+type PanelTab = 'ask' | 'tasks' | 'passwords'
+const PANEL_TABS: ReadonlyArray<[PanelTab, string]> = [['ask', 'Ask'], ['tasks', 'Tasks'], ['passwords', 'Passwords']]
 
 function message(title: string, body: string, action?: { label: string; run: () => void }): void {
   root.replaceChildren(h('div', { class: 'center' },
@@ -42,10 +51,36 @@ async function start(): Promise<void> {
     title: 'Walnut',
     allow: 'clipboard-write; microphone',
   }) as HTMLIFrameElement
-  root.replaceChildren(frame)
+  const frames: Record<PanelTab, () => HTMLIFrameElement> = {
+    ask: () => frame,
+    tasks: () => h('iframe', { class: 'panel-frame-tasks', src: `${server}/popout?view=ext-tasks`, title: 'Walnut tasks' }) as HTMLIFrameElement,
+    passwords: () => h('iframe', { class: 'panel-frame-passwords', src: ext.runtime.getURL(`popup.html?embed=panel&window=${win.id ?? ''}`), title: 'Walnut passwords', allow: 'clipboard-write' }) as HTMLIFrameElement,
+  }
+  const made = new Map<PanelTab, HTMLIFrameElement>()
+  const body = h('div', { class: 'panel-body' })
+  const buttons = new Map<PanelTab, HTMLButtonElement>()
+  const show = (tab: PanelTab) => {
+    if (!made.has(tab)) { const f = frames[tab](); made.set(tab, f); body.append(f) }
+    for (const [t, f] of made) f.hidden = t !== tab
+    for (const [t, b] of buttons) { b.setAttribute('aria-selected', String(t === tab)); b.tabIndex = t === tab ? 0 : -1 }
+    void ext.storage.local.set({ panelTab: tab })
+  }
+  const bar = h('div', { class: 'panel-tabs', role: 'tablist', 'aria-label': 'Walnut' },
+    ...PANEL_TABS.map(([id, label]) => {
+      const b = h('button', { class: 'panel-tab', type: 'button', role: 'tab', 'data-testid': `panel-tab-${id}`, onclick: () => show(id) }, label) as HTMLButtonElement
+      buttons.set(id, b)
+      return b
+    }))
+  root.replaceChildren(h('div', { class: 'panel-shell' }, bar, body))
+  const kept = (await ext.storage.local.get('panelTab')).panelTab
+  show(PANEL_TABS.some(([id]) => id === kept) ? kept as PanelTab : 'ask')
 
-  let ready = false
-  const post = (m: Record<string, unknown>) => { if (ready) frame.contentWindow?.postMessage({ walnut: MSG, ...m }, server) }
+  /** The Walnut views (Ask, Tasks) that said they are ready: each is told about the page. */
+  const ready = new Set<Window>()
+  const walnutFrame = (w: MessageEventSource | null): w is Window => !!w && [made.get('ask'), made.get('tasks')].some((f) => f?.contentWindow === w)
+  const post = (m: Record<string, unknown>) => { for (const w of ready) w.postMessage({ walnut: MSG, ...m }, server) }
+  /** What only the Ask view hears: a selection to ask about, a hand-over's answer, the page's text. */
+  const postAsk = (m: Record<string, unknown>) => { if (frame.contentWindow && ready.has(frame.contentWindow)) frame.contentWindow.postMessage({ walnut: MSG, ...m }, server) }
 
   let tabId: number | undefined
   let seq = 0
@@ -60,27 +95,37 @@ async function start(): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const soon = () => { clearTimeout(timer); timer = setTimeout(() => void push(), 250) }
 
+  /** A selection the context menu asked about while the Ask view was not up yet: it goes once that view is. */
+  let heldSelection = ''
   const pending = async () => {
     const r = await ask<{ text?: string }>({ type: 'panel-pending', windowId: win.id })
-    if (r.ok && r.text) { post({ type: 'ask-selection', text: r.text }); soon() }
+    if (!r.ok || !r.text) return
+    show('ask')
+    if (frame.contentWindow && ready.has(frame.contentWindow)) postAsk({ type: 'ask-selection', text: r.text })
+    else heldSelection = r.text
+    soon()
   }
 
   window.addEventListener('message', (e) => {
-    if (e.source !== frame.contentWindow || e.origin !== server) return
+    if (!walnutFrame(e.source) || e.origin !== server) return
     const d = e.data as { walnut?: string; type?: string; tab?: unknown; task?: unknown; who?: unknown; id?: unknown } | null
     if (!d || d.walnut !== MSG) return
+    if (d.type === 'ready') {
+      ready.add(e.source)
+      if (e.source === frame.contentWindow && heldSelection) { postAsk({ type: 'ask-selection', text: heldSelection }); heldSelection = '' }
+      void push().then(pending)
+      return
+    }
+    if (d.type === 'refresh') { soon(); return }
+    // Acting in the tab, the page's text and closing are the Ask view's alone.
+    if (e.source !== frame.contentWindow) return
     switch (d.type) {
-      case 'ready':
-        ready = true
-        void push().then(pending)
-        return
-      case 'refresh': soon(); return
       case 'close': window.close(); return
       case 'adopt':
         // Only the tab this panel named, for the ask the panel shows.
         if (typeof d.tab !== 'number' || d.tab !== tabId || typeof d.task !== 'string') return
         void ask({ type: 'panel-adopt', tabId: d.tab, task: d.task, who: typeof d.who === 'string' ? d.who : undefined }).then((r) => {
-          post({ type: 'adopted', ok: r.ok, ...(r.ok ? {} : { error: r.error ?? 'Walnut could not take this tab.' }) })
+          postAsk({ type: 'adopted', ok: r.ok, ...(r.ok ? {} : { error: r.error ?? 'Walnut could not take this tab.' }) })
           void push()
         })
         return
@@ -93,7 +138,7 @@ async function start(): Promise<void> {
         if (typeof d.id !== 'string') return
         const id = d.id
         void ask<{ page: { url?: string; text?: string } | null }>({ type: 'panel-page', tabId, withText: true }).then((r) => {
-          post({ type: 'page-text', id, url: r.ok ? r.page?.url ?? '' : '', text: r.ok ? r.page?.text ?? '' : '' })
+          postAsk({ type: 'page-text', id, url: r.ok ? r.page?.url ?? '' : '', text: r.ok ? r.page?.text ?? '' : '' })
         })
       }
     }

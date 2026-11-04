@@ -23,9 +23,10 @@ import { FocusBarProvider } from '@/contexts/FocusBarContext';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import {
-  ACT_CONTEXT_NAME, CONTEXT_NAME, EXT_PANEL, actLine, conversationKey, handedOf, hostOf, otherOwnerOf, pageContextBlock, readInbound, rememberHanded, selectionQuote,
+  ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, conversationKey, handedOf, hostOf, otherOwnerOf, pageContextBlock, rememberHanded, selectionQuote,
   type PanelContext,
 } from './ext-panel-model';
+import { fromParent, toParent } from './ext-frame';
 import './ext-panel.css';
 
 export function PopoutExtPanel() {
@@ -37,14 +38,6 @@ export function PopoutExtPanel() {
   </FocusBarProvider></NotificationProvider></TasksProvider>;
 }
 
-/** The extension page that framed this view, once it spoke: everything after goes to it alone. */
-let parentOrigin = '';
-
-function toParent(msg: Record<string, unknown>): void {
-  // Before the extension's first word only `ready` goes out, and it carries nothing.
-  if (!parentOrigin && msg.type !== 'ready') return;
-  window.parent?.postMessage({ walnut: EXT_PANEL, ...msg }, parentOrigin || '*');
-}
 
 /** Long enough for the extension's first word; past it, this view was opened some other way. */
 const HELLO_MS = 2500;
@@ -92,11 +85,8 @@ function ExtPanel() {
 
   useEffect(() => {
     const on = (e: MessageEvent) => {
-      const fromParent = e.source === window.parent && window.parent !== window;
-      if (parentOrigin && e.origin !== parentOrigin) return;
-      const m = readInbound(e.data, e.origin, fromParent);
+      const m = fromParent(e);
       if (!m) return;
-      parentOrigin = e.origin;
       if (m.type === 'context') {
         setCtx({ page: m.page, ...(m.tab !== undefined ? { tab: m.tab } : {}), agents: m.agents, ...(m.owner ? { owner: m.owner } : {}) });
         setOrphan(false);

@@ -91,3 +91,25 @@
   color: var(--accent, #8a5a2b);
   text-decoration: underline;
 }
+
+/* ── the Tasks tab (PopoutExtTasks) ── */
+.ext-tasks-save { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.ext-tasks-note { font-size: 12px; color: var(--fg-muted); }
+.ext-tasks-lists { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 12px; }
+.ext-tasks-section { padding: 6px 0; }
+.ext-tasks-heading { display: flex; align-items: baseline; gap: 6px; margin: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ext-tasks-count { font-weight: 400; }
+.ext-tasks-empty { margin: 2px 12px 6px; font-size: 12px; color: var(--fg-muted); }
+.ext-task { border-radius: 8px; margin: 0 6px; }
+.ext-task.is-open { background: var(--bg-secondary); }
+.ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+.ext-task-head:hover { background: var(--bg-secondary); }
+.ext-task-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
+.ext-task-dot.state-needs { background: var(--danger, #d64545); }
+.ext-task-dot.state-working { background: var(--accent, #3b82f6); }
+.ext-task-text { display: flex; flex-direction: column; min-width: 0; }
+.ext-task-title { font-size: 13px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ext-task-line { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-task-reply { padding: 0 8px 8px 24px; display: flex; flex-direction: column; gap: 6px; }
+.ext-task-input { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.ext-task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
