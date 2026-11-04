@@ -8,7 +8,10 @@
  * version), the CLI would answer `--version` and then fail at its first
  * database open, so an install check on Node would pass. Refused here instead,
  * in one line that names what to run. bin/open-walnut.js has the same check for
- * the checkout's bin entry.
+ * the checkout's bin entry. Built, dist/cli-fast.js never gets here on Node: it
+ * is bun's CommonJS bundle (scripts/build-cli-fast.mjs), a function wrapper only
+ * bun calls, so `node dist/cli-fast.js` does nothing; the bin entry refuses
+ * Node before it loads it.
  *
  * It also drops BUN_BE_BUN from this process's env (dropBunBeBun below).
  *

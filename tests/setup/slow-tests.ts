@@ -105,6 +105,7 @@ export const SLOW_TEST_FILES = [
   'tests/scripts/companion-launch.test.ts', // ~13s: the companion launcher as a real process, with trial deadlines and signal waits
   'tests/scripts/release-promote-steps.test.ts', // ~10-40s: the release job's steps against a bare origin, real git pushes
   'tests/scripts/install-sh.test.ts', // ~40s: 20 cases of real install.sh runs against a local release server, under sh and dash
+  'tests/scripts/cli-fast-bytecode.test.ts', // ~5-15s: bun builds the real dist/cli-fast.js (20 MB), then a dozen CLI runs of it
   'tests/scripts/file-distribution.e2e.test.ts', // builds the real compiled file at two versions (minutes; cached by content), then install.sh, npm and self-update end to end
   'tests/scripts/test-baseline-shard-cut.test.ts', // ~5-15s: three real nested vitest runs, checking the gate's --shard cut
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx

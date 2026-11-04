@@ -89,4 +89,10 @@ describe('build bakes the version in (ratchet)', () => {
     expect(binding, `define must be JSON.stringify(<variable>), got: ${defineBlock}`).toBeTruthy();
     expect(config).toMatch(new RegExp(`const\\s+${binding}\\b[^\\n]*readFileSync\\([^\\n]*package\\.json`));
   });
+
+  it('dist/cli-fast.js, which bun builds (scripts/build-cli-fast.mjs), takes it from package.json too', () => {
+    const script = fs.readFileSync(path.join(repoRoot, 'scripts/build-cli-fast.mjs'), 'utf-8');
+    expect(script).toMatch(/__WALNUT_VERSION__: JSON\.stringify\(pkg\.version\)/);
+    expect(script).toMatch(/const pkg = JSON\.parse\(fs\.readFileSync\(path\.join\(repo, 'package\.json'\)/);
+  });
 });

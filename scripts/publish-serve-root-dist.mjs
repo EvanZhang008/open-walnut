@@ -17,13 +17,19 @@
 // a build empties first: web/static (vite's emptyOutDir; it would otherwise grow
 // by one bundle per deploy) and data (`rm -rf dist/data` in the build script). Every file lands by rename, never half-written, and the two CLI
 // entries land last, so a CLI started meanwhile runs either the old entry or
-// the new one with its files already in place. Copies are clonefile where the
+// the new one with its files already in place. An entry's bytecode
+// (cli-fast.js.jsc, scripts/build-cli-fast.mjs) goes with it: the old one is
+// removed before the entries land and the new one placed after them. bun would
+// refuse a .jsc made from other source anyway; this keeps a reader from ever
+// meeting one. Copies are clonefile where the
 // filesystem has it (metadata only, nothing for an on-access scanner to read).
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const ENTRIES = ['cli.js', 'cli-fast.js']
+/** Bytecode bun loads beside an entry; never left beside an entry it was not built with. */
+export const ENTRY_BYTECODE = ['cli-fast.js.jsc']
 export const MIRRORED = ['web/static', 'data']
 /** Top-level dirs of a build that are not part of what the CLI runs: build-binary.mjs's staging (tens of MB). */
 export const NOT_PUBLISHED = ['binary-stage']
@@ -76,6 +82,7 @@ export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp` } 
 
   const items = walk(src)
   const isEntry = (rel) => ENTRIES.includes(rel)
+  const isBytecode = (rel) => ENTRY_BYTECODE.includes(rel)
   const order = []
   fs.mkdirSync(dst, { recursive: true })
   for (const it of items.filter((i) => i.kind === 'dir')) {
@@ -85,10 +92,16 @@ export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp` } 
     fs.mkdirSync(d, { recursive: true })
   }
   const leaves = items.filter((i) => i.kind !== 'dir')
-  for (const it of [...leaves.filter((i) => !isEntry(i.rel)), ...leaves.filter((i) => isEntry(i.rel))]) {
+  const put = (it) => {
     place(path.join(src, it.rel), path.join(dst, it.rel), it.kind, tmpTag)
     order.push(it.rel)
   }
+  for (const it of leaves.filter((i) => !isEntry(i.rel) && !isBytecode(i.rel))) put(it)
+  // Also when the build has none (an older build going back): the entries it
+  // belonged to are about to be replaced.
+  for (const rel of ENTRY_BYTECODE) fs.rmSync(path.join(dst, rel), { recursive: true, force: true })
+  for (const it of leaves.filter((i) => isEntry(i.rel))) put(it)
+  for (const it of leaves.filter((i) => isBytecode(i.rel))) put(it)
 
   // The directories a build empties first mirror the new build exactly.
   const pruned = []

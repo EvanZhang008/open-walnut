@@ -4,7 +4,7 @@
  * CLI runs the op registry from that bundle (2026-10-05: sessions read op text
  * two deploys old). Pinned here on throwaway trees; nothing real is touched.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,7 +14,10 @@ import { publishDist } from '../../scripts/publish-serve-root-dist.mjs'
 const SCRIPT = path.join(import.meta.dirname, '..', '..', 'scripts', 'publish-serve-root-dist.mjs')
 const DEV_PROD = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'scripts', 'dev-prod.sh'), 'utf-8')
 const roots: string[] = []
-afterEach(() => { for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true })
+})
 
 function write(p: string, body: string, mode?: number) {
   fs.mkdirSync(path.dirname(p), { recursive: true })
@@ -67,6 +70,32 @@ describe('publishDist', () => {
     expect(order.slice(-2).sort()).toEqual(['cli-fast.js', 'cli.js'])
     expect(order.slice(0, -2)).not.toContain('cli.js')
     expect(pruned.length).toBeGreaterThan(0)
+  })
+
+  it('moves the bytecode with its entry: the old one gone before the entries land, the new one after them', () => {
+    const { from, to } = fixture()
+    write(path.join(from, 'cli-fast.js.jsc'), 'new bytecode')
+    write(path.join(to, 'cli-fast.js.jsc'), 'old bytecode')
+    const oldBytecode: Record<string, boolean> = {}
+    const rename = fs.renameSync
+    vi.spyOn(fs, 'renameSync').mockImplementation((src, dst) => {
+      const rel = path.relative(to, String(dst))
+      if (rel === 'cli-fast.js' || rel === 'cli.js') oldBytecode[rel] = fs.existsSync(path.join(to, 'cli-fast.js.jsc'))
+      return rename(src, dst)
+    })
+    const { order } = publishDist(from, to)
+    expect(oldBytecode).toEqual({ 'cli.js': false, 'cli-fast.js': false })
+    expect(order.at(-1)).toBe('cli-fast.js.jsc')
+    expect(order.slice(-3, -1).sort()).toEqual(['cli-fast.js', 'cli.js'])
+    expect(read(path.join(to, 'cli-fast.js.jsc'))).toBe('new bytecode')
+  })
+
+  it('drops the bytecode of the entry it replaces when the build has none (an older build going back)', () => {
+    const { from, to } = fixture()
+    write(path.join(to, 'cli-fast.js.jsc'), 'bytecode of a newer build')
+    publishDist(from, to)
+    expect(fs.existsSync(path.join(to, 'cli-fast.js.jsc'))).toBe(false)
+    expect(read(path.join(to, 'cli-fast.js'))).toBe('new fast\n')
   })
 
   it('mirrors web/static and data exactly, as a build empties both first', () => {

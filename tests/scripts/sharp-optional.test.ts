@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BUNDLE_EXTERNAL, CLI_FAST_FROM_DISK } from '../../scripts/build-cli-fast.mjs';
 
 // sharp (image resizing) is optional: Walnut starts, and images pass through
 // unresized, on a machine where it does not install or load.
@@ -17,9 +18,14 @@ describe('sharp is optional', () => {
     expect(pkg.optionalDependencies.sharp).toBeDefined();
   });
 
-  it('stays external in the server bundle (optionalDependencies are not auto-external)', () => {
+  it('stays external in the server bundle and in cli-fast (optionalDependencies are not auto-external)', () => {
     const tsup = readFileSync(path.join(root, 'tsup.config.ts'), 'utf8');
-    expect(tsup).toMatch(/external:\s*\[[^\]]*'sharp'/);
+    expect(tsup).toMatch(/^\s*external: BUNDLE_EXTERNAL,$/m);
+    expect(BUNDLE_EXTERNAL).toContain('sharp');
+    // dist/cli-fast.js is bun's build (scripts/build-cli-fast.mjs): it takes the same list.
+    const cliFast = readFileSync(path.join(root, 'scripts/build-cli-fast.mjs'), 'utf8');
+    expect(cliFast).toContain('external: [...BUNDLE_EXTERNAL, ...CLI_FAST_FROM_DISK],');
+    expect(CLI_FAST_FROM_DISK).not.toContain('sharp');
   });
 });
 

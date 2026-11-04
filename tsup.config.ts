@@ -1,7 +1,9 @@
 import { defineConfig } from 'tsup';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { writeBuildInfo } from './scripts/build-info.mjs';
+import { BUNDLE_EXTERNAL, WS_ON_BUN } from './scripts/build-cli-fast.mjs';
 
 // Bake the version in. Walking up for package.json at runtime returns '0.0.0'
 // whenever the bundle lands somewhere that walk can't reach, and a host that
@@ -9,23 +11,6 @@ import { writeBuildInfo } from './scripts/build-info.mjs';
 const pkgVersion = (JSON.parse(fs.readFileSync('package.json', 'utf-8')) as { version: string }).version;
 
 const outDir = 'dist';
-
-// What `#ws` is in a bundle: the ws package found from the bundle's own place
-// (dist/ beside node_modules, or a host build's linked node_modules) and loaded
-// by its file path, which bun does not swap for its built-in WebSocket. Its
-// package.json is the one subpath the package exports.
-const WS_ON_BUN = `
-import { createRequire as __wsRequire } from 'node:module';
-import __wsPath from 'node:path';
-const __wsReq = __wsRequire(import.meta.url);
-const ws = __wsReq(__wsPath.join(__wsPath.dirname(__wsReq.resolve('ws/package.json')), 'index.js'));
-export default ws;
-export const WebSocket = ws.WebSocket;
-export const WebSocketServer = ws.WebSocketServer;
-export const createWebSocketStream = ws.createWebSocketStream;
-export const Receiver = ws.Receiver;
-export const Sender = ws.Sender;
-`;
 
 // dist/build-info.json: which commit this dist was built from (src/lib/build-info.ts
 // reads it). Stamped from onSuccess, never at config load: a FAILED build must leave
@@ -38,6 +23,33 @@ async function stampBuildInfo(): Promise<void> {
   } catch (err) {
     console.warn(`build-info: not written (${err instanceof Error ? err.message : String(err)})`);
   }
+}
+
+// dist/cli-fast.js is bun's build, not tsup's (scripts/build-cli-fast.mjs says
+// why): run here so every tsup build writes it, and before the stamp, so a
+// failure fails the build. tsup itself may be running on node.
+function buildCliFast(): void {
+  const bun = process.versions.bun ? process.execPath : 'bun';
+  try {
+    execFileSync(bun, ['scripts/build-cli-fast.mjs', path.resolve(outDir)], { stdio: 'inherit' });
+  } catch (err) {
+    const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
+    throw new Error(missing
+      ? 'dist/cli-fast.js is built with bun, and there is no bun on PATH (curl -fsSL https://bun.sh/install | bash)'
+      : 'dist/cli-fast.js: scripts/build-cli-fast.mjs failed (its output is above)');
+  }
+}
+
+async function afterBuild(): Promise<void> {
+  try {
+    buildCliFast();
+  } catch (err) {
+    // tsup has written its bundles already: the old stamp would credit them to
+    // the old commit. Without one, the build reads as the version alone.
+    fs.rmSync(path.resolve(outDir, 'build-info.json'), { force: true });
+    throw err;
+  }
+  await stampBuildInfo();
 }
 
 // Discover all integration plugin entry points (each dir with index.ts)
@@ -53,7 +65,7 @@ const pluginEntries = fs.readdirSync(integrationsDir, { withFileTypes: true })
 export default defineConfig({
   entry: [
     'src/cli.ts',
-    'src/cli-fast.ts',
+    // src/cli-fast.ts is not here: afterBuild() builds it with bun.
     'src/hooks/on-stop.ts',
     'src/hooks/on-compact.ts',
     'src/web/server.ts',
@@ -68,13 +80,13 @@ export default defineConfig({
   format: ['esm'],
   target: 'node22',
   outDir,
-  onSuccess: stampBuildInfo,
+  onSuccess: afterBuild,
   define: { __WALNUT_VERSION__: JSON.stringify(pkgVersion) },
   clean: false,
   // splitting stays OFF: tried `splitting: true` (2026-08-20) hoping to make
   // the CLI boot lazily — it produced 205 chunks and made `tools call` SLOWER
   // (0.62s → 1.3s, ESM loader overhead dominates). The CLI fast path is the
-  // dedicated cli-fast.ts entry below instead.
+  // dedicated cli-fast.ts entry instead (built by bun, see afterBuild).
   splitting: false,
   sourcemap: true,
   dts: false,
@@ -91,7 +103,6 @@ export default defineConfig({
       build.onLoad({ filter: /.*/, namespace: 'walnut-ws' }, () => ({ contents: WS_ON_BUN, loader: 'js', resolveDir: process.cwd() }));
     },
   }],
-  // 'bun:sqlite' exists only at runtime (src/lib/sqlite.ts loads it); the rest
-  // are optional or downloaded components, loaded where they are installed.
-  external: ['bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'screencapturekit-audio-capture', '@huggingface/transformers'],
+  // Shared with dist/cli-fast.js's build (scripts/build-cli-fast.mjs says why each is external).
+  external: BUNDLE_EXTERNAL,
 });

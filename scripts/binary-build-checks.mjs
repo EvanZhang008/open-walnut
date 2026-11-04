@@ -106,8 +106,8 @@ export function packageCopies(repo, name) {
  */
 const PATH_CHAR = /[A-Za-z0-9_$.~-]/
 
-export function assertNoBuildPaths(outfile, roots) {
-  const bytes = fs.readFileSync(outfile)
+/** The paths under any of `roots` that `bytes` carries, each with how often (at most 20 paths). */
+export function buildPathsIn(bytes, roots) {
   const needles = [...new Set(roots.filter((p) => p.length > 1).map((p) => p + path.sep))]
   const hits = new Map()
   for (const needle of needles) {
@@ -120,6 +120,11 @@ export function assertNoBuildPaths(outfile, roots) {
       hits.set(tail, (hits.get(tail) ?? 0) + 1)
     }
   }
+  return hits
+}
+
+export function assertNoBuildPaths(outfile, roots) {
+  const hits = buildPathsIn(fs.readFileSync(outfile), roots)
   if (hits.size > 0) {
     const list = [...hits].map(([p, count]) => `  ${p}${count > 1 ? ` (x${count})` : ''}`).join('\n')
     throw new Error(`${path.basename(outfile)} carries paths of the build machine; give the module that names them its runtime-tree path (DIRNAME_PACKAGES):\n${list}`)

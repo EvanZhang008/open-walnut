@@ -80,95 +80,108 @@ function usageError(message: string): never {
   process.exit(1);
 }
 
-switch (sub) {
-  case 'tools': {
-    const { runTools } = await import('./commands/tools.js');
-    await runTools(args, globals);
-    break;
-  }
-  case 'guide': {
-    const { runGuide } = await import('./commands/guide.js');
-    await runGuide(globals);
-    break;
-  }
-  case 'peers': {
-    // Peer messaging always rides the agent gateway (attribution, throttling,
-    // refusal semantics live daemon-side) — same code the remote shim runs.
-    // --json must sit between the subcommand and the target (send treats
-    // anything after the target as message text).
-    const { runWalnutCli } = await import('./providers/wn-cli.js');
-    const argv = args.length > 0 && json
-      ? ['peers', args[0], '--json', ...args.slice(1)]
-      : ['peers', ...args];
-    process.exit(await runWalnutCli(argv));
-    break;
-  }
-  case 'add': {
-    const [title] = positional(args);
-    if (!title) usageError("missing required argument 'title'");
-    const { runAdd } = await import('./commands/add.js');
-    await runAdd(title, {
-      priority: flagValue(args, '--priority', '-p') ?? 'none',
-      list: flagValue(args, '--list', '-l'),
-      project: flagValue(args, '--project'),
-      due: flagValue(args, '--due', '-d'),
-    }, globals);
-    break;
-  }
-  case 'tasks': {
-    const { runTasks } = await import('./commands/tasks.js');
-    await runTasks({
-      status: flagValue(args, '--status', '-s'),
-      project: flagValue(args, '--project'),
-    }, globals);
-    break;
-  }
-  case 'done': {
-    const [id] = positional(args);
-    if (!id) usageError("missing required argument 'id'");
-    const { runDone } = await import('./commands/done.js');
-    await runDone(id, globals);
-    break;
-  }
-  case 'recall': {
-    const [query] = positional(args);
-    if (!query) usageError("missing required argument 'query'");
-    const { runRecall } = await import('./commands/recall.js');
-    await runRecall(query, globals);
-    break;
-  }
-  case 'trigger-check': {
-    const [template, params] = args;
-    if (!template) usageError("missing required argument 'template'");
-    const { runTriggerCheck } = await import('./commands/trigger-check.js');
-    await runTriggerCheck(template, params);
-    break;
-  }
-  case 'projects': {
-    const { runProjects } = await import('./commands/projects.js');
-    await runProjects(globals);
-    break;
-  }
-  case 'sessions': {
-    const { runSessions } = await import('./commands/sessions.js');
-    await runSessions(globals);
-    break;
-  }
-  case 'start': {
-    const [taskId] = positional(args);
-    if (!taskId) usageError("missing required argument 'task_id'");
-    const { runStart } = await import('./commands/start.js');
-    await runStart(taskId, {
-      message: flagValue(args, '--message'),
-    }, globals);
-    break;
-  }
-  default: {
-    // Shouldn't happen (the bin shim routes only LITE_COMMANDS here), but a
-    // graceful fallback to the full CLI beats a dead end. The import path goes
-    // through a variable ON PURPOSE: a literal './cli.js' gets inlined by the
-    // bundler and balloons this bundle right back to 6.3MB.
-    const fullEntry = './cli.js';
-    await import(/* @vite-ignore */ fullEntry);
+// The program is one async function, not top-level await: dist/cli-fast.js is
+// CommonJS so bun can load it from bytecode (scripts/build-cli-fast.mjs), and a
+// CommonJS module cannot await at its top level. tests/scripts/cli-fast-build-ratchet.test.ts
+// keeps it that way.
+async function main(): Promise<void> {
+  switch (sub) {
+    case 'tools': {
+      const { runTools } = await import('./commands/tools.js');
+      await runTools(args, globals);
+      break;
+    }
+    case 'guide': {
+      const { runGuide } = await import('./commands/guide.js');
+      await runGuide(globals);
+      break;
+    }
+    case 'peers': {
+      // Peer messaging always rides the agent gateway (attribution, throttling,
+      // refusal semantics live daemon-side) — same code the remote shim runs.
+      // --json must sit between the subcommand and the target (send treats
+      // anything after the target as message text).
+      const { runWalnutCli } = await import('./providers/wn-cli.js');
+      const argv = args.length > 0 && json
+        ? ['peers', args[0], '--json', ...args.slice(1)]
+        : ['peers', ...args];
+      process.exit(await runWalnutCli(argv));
+      break;
+    }
+    case 'add': {
+      const [title] = positional(args);
+      if (!title) usageError("missing required argument 'title'");
+      const { runAdd } = await import('./commands/add.js');
+      await runAdd(title, {
+        priority: flagValue(args, '--priority', '-p') ?? 'none',
+        list: flagValue(args, '--list', '-l'),
+        project: flagValue(args, '--project'),
+        due: flagValue(args, '--due', '-d'),
+      }, globals);
+      break;
+    }
+    case 'tasks': {
+      const { runTasks } = await import('./commands/tasks.js');
+      await runTasks({
+        status: flagValue(args, '--status', '-s'),
+        project: flagValue(args, '--project'),
+      }, globals);
+      break;
+    }
+    case 'done': {
+      const [id] = positional(args);
+      if (!id) usageError("missing required argument 'id'");
+      const { runDone } = await import('./commands/done.js');
+      await runDone(id, globals);
+      break;
+    }
+    case 'recall': {
+      const [query] = positional(args);
+      if (!query) usageError("missing required argument 'query'");
+      const { runRecall } = await import('./commands/recall.js');
+      await runRecall(query, globals);
+      break;
+    }
+    case 'trigger-check': {
+      const [template, params] = args;
+      if (!template) usageError("missing required argument 'template'");
+      const { runTriggerCheck } = await import('./commands/trigger-check.js');
+      await runTriggerCheck(template, params);
+      break;
+    }
+    case 'projects': {
+      const { runProjects } = await import('./commands/projects.js');
+      await runProjects(globals);
+      break;
+    }
+    case 'sessions': {
+      const { runSessions } = await import('./commands/sessions.js');
+      await runSessions(globals);
+      break;
+    }
+    case 'start': {
+      const [taskId] = positional(args);
+      if (!taskId) usageError("missing required argument 'task_id'");
+      const { runStart } = await import('./commands/start.js');
+      await runStart(taskId, {
+        message: flagValue(args, '--message'),
+      }, globals);
+      break;
+    }
+    default: {
+      // Shouldn't happen (the bin shim routes only LITE_COMMANDS here), but a
+      // graceful fallback to the full CLI beats a dead end. The import path goes
+      // through a variable ON PURPOSE: a literal './cli.js' gets inlined by the
+      // bundler and balloons this bundle right back to 6.3MB.
+      const fullEntry = './cli.js';
+      await import(/* @vite-ignore */ fullEntry);
+    }
   }
 }
+
+// The import no longer waits for the program, so its failure is answered here
+// the way bin/open-walnut.js answered a failed import: loud, exit 70, never 0.
+main().catch((err: unknown) => {
+  process.stderr.write(`walnut: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(70);
+});

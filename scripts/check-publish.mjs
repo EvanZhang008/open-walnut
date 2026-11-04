@@ -12,12 +12,15 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLI_FAST_PRAGMA } from './build-cli-fast.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const required = [
   'bin/open-walnut.js',
   'dist/cli.js',                    // bin entry target
+  'dist/cli-fast.js',               // bin entry target of the data commands
+  'dist/cli-fast.js.jsc',           // its bytecode (scripts/build-cli-fast.mjs): without it each call parses the bundle
   'dist/web/server.js',             // web server bundle
   'dist/web/static/index.html',     // built SPA
   'dist/data',                      // shipped skills/templates
@@ -87,6 +90,15 @@ if (dtachFiles.length) {
   }
 }
 
+// dist/cli-fast.js must be bun's CommonJS build (scripts/build-cli-fast.mjs), which
+// loads from the .jsc beside it; an ES bundle left by an older build parses ~20 MB
+// on every data command.
+const cliFastHead = readFileSync(join(root, 'dist/cli-fast.js'), 'utf8').split('\n', 1)[0];
+if (cliFastHead !== CLI_FAST_PRAGMA) {
+  console.error(`check-publish: dist/cli-fast.js starts with "${cliFastHead.slice(0, 60)}", not "${CLI_FAST_PRAGMA}": rebuild (bun run build).`);
+  process.exit(1);
+}
+
 // Build info: tsup rewrites it after every successful build but never fails the build over it,
 // so a leftover file from an older build would ship a wrong commit. The version
 // must match the package being published.
@@ -115,7 +127,7 @@ const [pack] = Array.isArray(packed) ? packed : Object.values(packed);
 const files = pack.files.map((f) => f.path);
 
 const mustInclude = [
-  'dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs', 'dist/build-info.json',
+  'dist/cli.js', 'dist/cli-fast.js', 'dist/cli-fast.js.jsc', 'dist/web/static/index.html', 'scripts/postinstall.mjs', 'dist/build-info.json',
   'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE',
   'dist/daemon-binaries/acp-worker.js', 'dist/daemon-binaries/acp-daemon-core.cjs',
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
@@ -132,6 +144,8 @@ if (notPacked.length) {
   process.exit(1);
 }
 const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin)-/.test(f) || f.endsWith('.map') || f.endsWith('.gz')
+  // A build or a publish killed half way leaves `<file>.<pid>.tmp` (cli-fast's map is ~45 MB).
+  || /^dist\/.*\.tmp$/.test(f)
   // CDK build state: cdk.context.json holds the account id, node_modules and cdk.out are local builds.
   || /^infra\/(node_modules|cdk\.out|test)\//.test(f) || f === 'infra/cdk.context.json');
 if (leaked.length) {
