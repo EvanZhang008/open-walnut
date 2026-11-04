@@ -378,6 +378,23 @@ describe('host_exec', () => {
     expect(most).toBeGreaterThan(1)
   }, 90_000)
 
+  it('strict stops at the first failing command, a pipe included, and names it; without it the line runs on', async () => {
+    const line = 'echo start\ntrue | false | cat\necho never'
+    const plain = await api('POST', '/api/v1/hosts/macbox/exec', { command: line }, SID)
+    expect(plain.body).toMatchObject({ exitCode: 0, output: 'start\nnever\n' })
+    expect(plain.body.failedStep).toBeUndefined()
+    const strict = await api('POST', '/api/v1/hosts/macbox/exec', { command: line, strict: true }, SID)
+    expect(strict.body).toMatchObject({ exitCode: 1, failedStep: { exitCode: 1, command: 'cat', pipeStatus: [0, 1, 0], line: 2 } })
+    expect(strict.body.output).not.toContain('never')
+    // A function's failure names the command inside it; the op's outcome says where it stopped.
+    const viaOp = await executeOp('host_exec', { host: 'macbox', command: 'check() { grep -q zzz-not-there /dev/null; }\ncheck\necho never', strict: true },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
+    expect(viaOp.result).toMatchObject({ exitCode: 1, failedStep: { command: 'grep -q zzz-not-there /dev/null', line: 1 } })
+    expect(String(viaOp.result.outcome)).toContain('It stopped at `grep -q zzz-not-there /dev/null` on line 1, which exited 1.')
+    // argv runs one program: strict changes nothing there.
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { argv: ['sh', '-c', 'false; echo after'], strict: true }, SID)).body).toMatchObject({ exitCode: 0, output: 'after\n' })
+  }, 60_000)
+
   it('a revoked grant stops the task and the next call asks the user again; Deny is kept', async () => {
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
     expect(await api('DELETE', `/api/v1/host-exec/grants/${g.id}`, undefined, SID)).toMatchObject({ status: 403, body: { code: 'human_only' } })

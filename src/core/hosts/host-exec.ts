@@ -87,6 +87,8 @@ export interface ExecParams {
    * (host-exec-prompts.ts) or a macOS permission one (host-exec-guards.ts permissionRisk).
    */
   allow_prompts?: boolean
+  /** Stop at the first failing command, pipes included, and name it in the answer (host-exec-strict.ts). */
+  strict?: boolean
   /**
    * The run's id, chosen by the caller before the call leaves (the walnut CLI does): an answer
    * lost on the way back (2026-11-03: `hub_timeout` from a loaded Mac, the run started there)
@@ -322,6 +324,8 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
   const { shapeOf } = await import('./host-exec-legacy.js')
   if (reply.running !== true) release(jobId)
   const { text, redacted } = await redact(typeof reply.output === 'string' ? reply.output : '')
+  const { failedStepOf } = await import('./host-exec-strict.js')
+  const failedStep = reply.running !== true ? failedStepOf(text) : null
   const offset = typeof reply.offset === 'number' ? reply.offset : undefined
   const more = opts.fromOffset === true && typeof reply.nextOffset === 'number' && typeof reply.outputBytes === 'number' && reply.nextOffset < reply.outputBytes
   const blocked = reply.blocked && typeof reply.blocked === 'object' ? reply.blocked : null
@@ -332,6 +336,7 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
     ...(more ? { more: true } : {}),
     offset: reply.offset, nextOffset: reply.nextOffset,
     outputBytes: reply.outputBytes, logFile: reply.logFile, ...(blocked ? { blocked } : {}), ...(redacted ? { redactedLines: redacted } : {}),
+    ...(failedStep ? { failedStep } : {}),
   }
 }
 
@@ -389,7 +394,11 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     conn = await dial(host, budgetLeft(caller, t0) - START_MIN_LEFT_MS)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
-    ;({ send, known: shape } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, params, line))
+    // Strict shapes the line here, after the dialog guards read the user's own text.
+    const strict = params.strict === true && hasCommand
+    const { strictLine } = await import('./host-exec-strict.js')
+    const runParams = strict ? { ...params, command: strictLine(params.command!) } : params
+    ;({ send, known: shape } = await (await import('./host-exec-legacy.js')).runRequest(conn, host, caller, runParams, strict ? strictLine(line) : line))
   } catch (err) {
     release(jobId) // nothing was sent: the slot is free
     throw err
@@ -444,6 +453,11 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     }
   }
   const out = await jobAnswer(host, jobId, last, { known: shape })
+  const step = out.failedStep as import('./host-exec-strict.js').FailedStep | undefined
+  if (step && hasCommand) {
+    const at = (await import('./host-exec-strict.js')).lineOf(step, params.command!)
+    if (at) step.line = at
+  }
   log.session.info('host exec', {
     taskId: caller.taskId, fromHost: caller.host, host, jobId, cwd: reply.cwd, background, running: out.running, shell: out.shell, legacy: !conn.hasCapability('host-exec-v2'),
     exitCode: out.exitCode, timedOut: out.timedOut, ms: Date.now() - t0, bytes: out.outputBytes, redacted: out.redactedLines ?? 0,

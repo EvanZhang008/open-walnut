@@ -13,6 +13,15 @@ function blockedLine(b: Record<string, unknown>): string | null {
     + 'path or step out, or ask the user and, if they agree, pass allow_prompts:true.'
 }
 
+/** A strict run's failing step (host-exec-strict.ts), in one sentence. */
+function failedLine(b: Record<string, unknown>): string {
+  const f = b.failedStep && typeof b.failedStep === 'object' ? b.failedStep as { exitCode?: unknown; line?: unknown; command?: unknown; pipeStatus?: unknown } : null
+  if (!f) return ''
+  const where = typeof f.line === 'number' ? ` on line ${f.line}` : ''
+  const pipe = Array.isArray(f.pipeStatus) ? ` Its pipe's commands exited ${f.pipeStatus.join(', ')} in order.` : ''
+  return `It stopped at \`${String(f.command)}\`${where}, which exited ${String(f.exitCode)}.${pipe}`
+}
+
 /** The run in two lines: how it ended, then the output, so an agent reads it like its own Bash tool. */
 function runOutcome(body: unknown) {
   const b = (body ?? {}) as Record<string, unknown>
@@ -28,6 +37,7 @@ function runOutcome(body: unknown) {
     blockedLine(b) ?? '',
     b.truncated ? `Only the last part of the output is here; the whole log is ${String(b.logFile)} on that host (host_exec_read with offset 0).` : '',
     b.more ? `More output follows: host_exec_read with offset ${String(b.nextOffset)}.` : '',
+    failedLine(b),
     b.redactedLines ? `${String(b.redactedLines)} line(s) that looked like a credential were hidden.` : '',
   ].filter(Boolean).join(' ')
   return withOutcome(b, notes ? `${head} ${notes}` : head,
@@ -57,7 +67,7 @@ defineOp({
     + 'with background:true at most 2 hours), its whole process group stopped. The call waits for the run to end, but from a session on '
     + 'another host at most about 12 seconds: a run still going comes back running:true with its job_id, and host_exec_read with '
     + 'wait_ms waits for it (never run it again: it is still running). The walnut CLI picks the job_id before it calls; when no '
-    + 'answer came back it prints that id, and host_exec_list lists this task\'s jobs on the host. Up to 4 runs at once per task and 8 per host; a call at a cap waits for a slot (up to 20 s, less from another host), then answers 429 busy. '
+    + 'answer came back it prints that id, and host_exec_list lists this task\'s jobs on the host. With strict:true the line stops at the first command that fails, a pipe included, and failedStep names it. Up to 4 runs at once per task and 8 per host; a call at a cap waits for a slot (up to 20 s, less from another host), then answers 429 busy. '
     + 'Only the last 256 KB of output comes back; the full log stays in your task\'s directory on that host. Lines that look like a credential are hidden.',
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the Mac) or a selector like "@ios"'),
@@ -67,6 +77,7 @@ defineOp({
     timeout_ms: z.number().int().min(1).max(7_200_000).optional().describe('Deadline in ms (default 120000; at most 600000, or 7200000 with background)'),
     background: z.boolean().optional().describe('Start it and return a job_id at once; read it with host_exec_read'),
     allow_prompts: z.boolean().optional().describe('The user agreed this command may show a dialog on that host\'s screen (a 409 may_prompt asked for it)'),
+    strict: z.boolean().optional().describe('Stop at the first command that fails (set -e, pipefail) and name it in failedStep: {exitCode, command, line, pipeStatus}'),
     job_id: z.string().regex(/^hx-[A-Za-z0-9_-]{4,64}$/).optional().describe('The id this run gets (hx-...; the walnut CLI picks one). The same id again from this task answers that run, never a second one'),
   },
   bind: { method: 'POST', path: '/hosts/:host/exec' },

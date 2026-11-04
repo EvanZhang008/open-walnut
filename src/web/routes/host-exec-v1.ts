@@ -2,7 +2,7 @@
  * Commands on another host for a task's session (core/hosts/host-exec.ts), and
  * the user's grants for them (core/hosts/exec-grants.ts). Additive to v1.
  *
- *   POST   /api/v1/hosts/:host/exec                  { command | argv, cwd?, timeout_ms?, background?, allow_prompts?, job_id? } → the run
+ *   POST   /api/v1/hosts/:host/exec                  { command | argv, cwd?, timeout_ms?, background?, allow_prompts?, strict?, job_id? } → the run
  *   GET    /api/v1/hosts/:host/exec                  → { jobs } this task's runs there, running and recent
  *   GET    /api/v1/hosts/:host/exec/:jobId?offset=&wait_ms= → the job's output
  *   POST   /api/v1/hosts/:host/exec/:jobId/stop      → stops it
@@ -90,6 +90,7 @@ hostExecV1Router.post('/hosts/:host/exec', (req: Request, res: Response, next: N
     ...(num(b.timeout_ms) !== undefined ? { timeout_ms: num(b.timeout_ms) } : {}),
     background: b.background === true,
     allow_prompts: b.allow_prompts === true,
+    strict: b.strict === true,
     ...(typeof b.job_id === 'string' ? { job_id: b.job_id } : {}),
   }, callerSid(req)))
 })
