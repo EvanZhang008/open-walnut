@@ -1257,7 +1257,7 @@ export async function handleSessionControlRelay(
       case 'changes': {
         const { getSessionChanges } = await import('./session-lifecycle.js');
         result = await boundSessionHostRead(sessionId, () => getSessionChanges(sessionId, {
-          base: p.base, scope: p.scope,
+          base: p.base, scope: p.scope, ref: p.ref, commit: p.commit,
           light: p.light === true, refresh: p.refresh === true,
         }));
         break;

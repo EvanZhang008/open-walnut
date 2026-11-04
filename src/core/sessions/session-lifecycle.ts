@@ -1574,6 +1574,10 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
 export interface SessionChangesInput {
   base?: unknown;
   scope?: unknown;
+  /** base=branch: the ref to compare against (default: the repo's default branch). */
+  ref?: unknown;
+  /** base=commit: the commit to show. */
+  commit?: unknown;
   light?: boolean;
   refresh?: boolean;
   /** Stale-while-revalidate: serve the last cached/disk result instantly
@@ -1582,7 +1586,22 @@ export interface SessionChangesInput {
   swr?: boolean;
 }
 
-const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote']);
+const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote', 'branch', 'commit']);
+
+/** The ref/commit a whole-repo base needs, checked before anything reaches git (400 on bad input). */
+async function compareInput(base: string, input: { ref?: unknown; commit?: unknown }): Promise<{ ref?: string; commit?: string }> {
+  const { isValidGitRef, isValidGitCommit } = await import('../../providers/git-diff-core.js');
+  if (base === 'branch') {
+    if (input.ref === undefined || input.ref === '') return {};
+    if (!isValidGitRef(input.ref)) throw new SessionControlError('ref must be a branch name', 400);
+    return { ref: input.ref };
+  }
+  if (base === 'commit') {
+    if (!isValidGitCommit(input.commit)) throw new SessionControlError('commit must be a commit id (7 to 64 hex characters)', 400);
+    return { commit: input.commit };
+  }
+  return {};
+}
 
 /**
  * The files a session changed, with reconstructed before/after content.
@@ -1600,6 +1619,7 @@ export async function getSessionChanges(
   const base = typeof input.base === 'string' && input.base ? input.base : 'session';
   const scope = input.scope === 'all' ? 'all' : 'session';
   const noCache = input.refresh === true;
+  const compare = await compareInput(base, input);
 
   let result: Record<string, unknown>;
   try {
@@ -1608,7 +1628,10 @@ export async function getSessionChanges(
       result = await computeSessionGitDiff(
         sessionId,
         base as import('../session-git-diff.js').GitDiffBase,
-        record.cwd, record.host, scope, record.outputFile, { noCache },
+        record.cwd, record.host, scope, record.outputFile,
+        // A branch or commit can span hundreds of files: their light list is
+        // names only (computed without reading a blob), each diff loads on selection.
+        { noCache, ...compare, namesOnly: input.light === true },
       ) as unknown as Record<string, unknown>;
     } else if (input.swr === true && !noCache) {
       const { computeSessionChangesSwr } = await import('../session-changes.js');
@@ -1651,10 +1674,30 @@ export async function getSessionChanges(
 export async function getSessionFileChange(
   sessionId: string,
   filePath: string,
+  /** A whole-repo git comparison ('branch' / 'commit'): that file's diff, from git. */
+  gitCompare?: { base?: unknown; ref?: unknown; commit?: unknown; repoRoot?: unknown },
 ): Promise<Record<string, unknown>> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
+
+  const gitBase = gitCompare?.base;
+  if (gitBase === 'branch' || gitBase === 'commit') {
+    const compare = await compareInput(gitBase, gitCompare!);
+    const { computeSessionGitFile } = await import('../session-git-diff.js');
+    let found: Awaited<ReturnType<typeof computeSessionGitFile>>;
+    try {
+      found = await computeSessionGitFile(sessionId, gitBase, record.cwd, record.host, record.outputFile, filePath, {
+        ...compare, ...(typeof gitCompare!.repoRoot === 'string' && gitCompare!.repoRoot ? { repoRoot: gitCompare!.repoRoot } : {}),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.session.warn('session git file change read failed', { sessionId, host: record.host, filePath, base: gitBase, error: msg });
+      throw new SessionControlError(msg, 502);
+    }
+    if (!found) throw new SessionControlError('File not in this comparison', 404);
+    return { sessionId, ...found };
+  }
 
   const { computeSessionChanges, peekSessionFileChange, fetchSessionFileChangeViaDaemon } =
     await import('../session-changes.js');
@@ -1690,6 +1733,25 @@ export async function getSessionFileChange(
     }
   }
   throw new SessionControlError('File not in session changes', 404);
+}
+
+/**
+ * Branches and recent commits of the session's main repo, for the Changed
+ * tab's compare picker. `repoRoot: null` when the session works in no git repo.
+ */
+export async function getSessionGitRefs(sessionId: string): Promise<Record<string, unknown>> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new SessionControlError('Session not found', 404);
+  const { listSessionGitRefs } = await import('../session-git-diff.js');
+  try {
+    const refs = await listSessionGitRefs(sessionId, record.cwd, record.host, record.outputFile);
+    return refs ? { sessionId, ...refs } : { sessionId, repoRoot: null, current: '', head: '', defaultRef: '', refs: [], commits: [] };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.session.warn('session git refs read failed', { sessionId, host: record.host, error: msg });
+    throw new SessionControlError(msg, 502);
+  }
 }
 
 // ── Rich history ─────────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useDraft } from '@/hooks/useDraft';
+import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
@@ -16,9 +17,12 @@ import DOMPurify from 'dompurify';
 import { useSessionGitGlance, sessionGitStore } from '@/stores/session-git-store';
 import { useChangedLiveRefresh, CHANGED_REFRESH_MIN_MS } from '@/hooks/useChangedLiveRefresh';
 import { GitGlanceLineView, GitCheckedAgo } from './GitGlance';
-import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, fetchChangesTriage, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope, type FileChangeSummary } from '@/api/session-changes';
+import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, fetchChangesTriage, isWholeRepoBase, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffCompare, type SessionDiffScope, type FileChangeSummary, type GitCompareInfo } from '@/api/session-changes';
 import { ApiError } from '@/api/client';
-import { buildFileData } from '@/components/sessions/diffPatch';
+import { buildFileData, differsOnlyInWhitespace, unmarkWhitespaceEdits } from '@/components/sessions/diffPatch';
+import { DiffComparePicker, forgetGitRefs, shortSha } from '@/components/sessions/DiffComparePicker';
+import { changeSignature, compareKey, loadViewedMarks, saveViewedMarks, viewedState, type ViewedMarks, type ViewedState } from '@/components/sessions/diffViewed';
+import { timeAgo } from '@/utils/time';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -164,9 +168,9 @@ const EMPTY_HUNKS: HunkData[] = [];
 /** Build a parsed FileData from a change. The crash-prone createPatch→parseDiff
  *  pipeline lives in diffPatch.ts (React-free, unit-tested); returns null on any
  *  failure so a single bad diff can never throw out of a useMemo and blank the panel. */
-function buildFile(change: SessionFileChange): FileData | null {
-  const file = buildFileData(change);
-  if (!file && change.before !== change.after) {
+function buildFile(change: SessionFileChange, ignoreWhitespace: boolean): FileData | null {
+  const file = buildFileData(change, { ignoreWhitespace });
+  if (!file && change.before !== change.after && !(ignoreWhitespace && differsOnlyInWhitespace(change.before, change.after))) {
     log.warn('session-changes', 'buildFile produced no diff', { relPath: change.relPath });
   }
   return file;
@@ -177,8 +181,40 @@ function buildFile(change: SessionFileChange): FileData | null {
  *  markEdits (intra-line add/del coloring). Highlighting is best-effort: any
  *  failure (or unknown language) falls back to plain markEdits-only tokens so a
  *  bad grammar can never throw out of the useMemo and blank the panel. */
-function computeTokens(hunks: HunkData[], language: string | undefined): ReturnType<typeof tokenize> | undefined {
-  const enhancers = [markEdits(hunks, { type: 'block' })];
+/** Ignore whitespace, kept in THIS browser only (outside the ui-prefs mirror,
+ *  which syncs open-walnut-*): a hidden-whitespace view left on elsewhere,
+ *  days ago, must not silently hide changes in another review. */
+const IGNORE_WS_KEY = 'walnut-diff-ignore-ws';
+
+/** The server's answer when the asked branch or commit is in no repo of the session. */
+const MISSING_REF_RE = /No repository this session works in has (branch|commit) /;
+
+/** How often a shown git comparison re-reads the working tree (see the quiet
+ *  refresh): often on this machine, sparingly over a remote host's link. */
+const QUIET_REFRESH_LOCAL_MS = 3_000;
+const QUIET_REFRESH_REMOTE_MS = 15_000;
+
+/** Below this pane width Auto shows unified: two columns of code under ~360px each wrap every line. */
+const AUTO_SPLIT_MIN_W = 720;
+
+/** The two texts a diff compares, for a side-by-side view to show each side's own line. */
+type DiffSides = { before: string; after: string };
+
+function computeTokens(hunks: HunkData[], language: string | undefined, ignoreWhitespace = false, sides?: DiffSides): ReturnType<typeof tokenize> | undefined {
+  // Hide whitespace turns lines that differ only in spaces into unchanged ones, which carry ONE
+  // text (the new one). Side by side, each column must still show its own file's line: the old
+  // column is tokenized from the old lines and the new column from the new ones.
+  if (ignoreWhitespace && sides) {
+    const oldLines = sides.before.split('\n');
+    const newLines = sides.after.split('\n');
+    const withNormals = (pick: (c: ChangeData & { oldLineNumber: number; newLineNumber: number }) => string | undefined): HunkData[] =>
+      hunks.map((h) => ({ ...h, changes: h.changes.map((c) => (c.type === 'normal' ? { ...c, content: pick(c) ?? c.content } : c)) }));
+    const oldSide = computeTokens(withNormals((c) => oldLines[c.oldLineNumber - 1]), language, true);
+    const newSide = computeTokens(withNormals((c) => newLines[c.newLineNumber - 1]), language, true);
+    if (oldSide && newSide) return { old: oldSide.old, new: newSide.new };
+    return oldSide ?? newSide;
+  }
+  const enhancers = [markEdits(hunks, { type: 'block' }), ...(ignoreWhitespace ? [unmarkWhitespaceEdits] : [])];
   if (language) {
     try {
       return tokenize(hunks, { highlight: true, refractor: diffRefractor, language, enhancers });
@@ -194,7 +230,7 @@ function computeTokens(hunks: HunkData[], language: string | undefined): ReturnT
   }
 }
 
-function useTokens(hunks: HunkData[] | undefined, relPath: string): ReturnType<typeof tokenize> | undefined {
+function useTokens(hunks: HunkData[] | undefined, relPath: string, ignoreWhitespace = false, sides?: DiffSides): ReturnType<typeof tokenize> | undefined {
   const language = useMemo(() => languageForPath(relPath), [relPath]);
   // Deferred OFF the first paint on purpose: tokenizing a whale diff takes
   // hundreds of ms, and doing it in a render-time useMemo blocked the first
@@ -206,10 +242,10 @@ function useTokens(hunks: HunkData[] | undefined, relPath: string): ReturnType<t
     if (!hunks) return;
     let cancelled = false;
     const id = window.setTimeout(() => {
-      if (!cancelled) setTokState({ for: hunks, tokens: computeTokens(hunks, language) });
+      if (!cancelled) setTokState({ for: hunks, tokens: computeTokens(hunks, language, ignoreWhitespace, sides) });
     }, 0);
     return () => { cancelled = true; window.clearTimeout(id); };
-  }, [hunks, language]);
+  }, [hunks, language, ignoreWhitespace, sides]);
   // Tokens are positional per row — pairing stale tokens with NEW hunks (file
   // switch, expansion) would color the wrong lines. Render plain until the
   // recompute for THESE hunks lands.
@@ -218,7 +254,12 @@ function useTokens(hunks: HunkData[] | undefined, relPath: string): ReturnType<t
 
 // ── File tree (left rail) ────────────────────────────────────────────────────
 
-function statusGlyph(status: SessionFileChange['status']): { ch: string; cls: string; title: string } {
+function isBinaryText(text: string): boolean {
+  return text.indexOf('\0') !== -1;
+}
+
+function statusGlyph(status: SessionFileChange['status'], untracked?: boolean): { ch: string; cls: string; title: string } {
+  if (untracked) return { ch: 'U', cls: 'untracked', title: 'Untracked: new, not added to git yet' };
   if (status === 'added') return { ch: 'A', cls: 'added', title: 'Added' };
   if (status === 'deleted') return { ch: 'D', cls: 'deleted', title: 'Deleted' };
   if (status === 'renamed') return { ch: 'R', cls: 'renamed', title: 'Renamed / moved' };
@@ -226,7 +267,7 @@ function statusGlyph(status: SessionFileChange['status']): { ch: string; cls: st
 }
 
 function TreeRow({
-  node, depth, expanded, onToggle, selectedId, onSelectFile, critical,
+  node, depth, expanded, onToggle, selectedId, onSelectFile, critical, viewed, wsOnly,
 }: {
   node: DiffTreeNode;
   depth: number;
@@ -236,21 +277,34 @@ function TreeRow({
   onSelectFile: (change: SessionFileChange) => void;
   /** filePath → reason for the changeset's AI-triaged critical files (✦). */
   critical?: Map<string, string>;
+  /** filePath → its Viewed state (absent = not viewed). */
+  viewed?: Map<string, ViewedState>;
+  /** Files whose every change is whitespace, while whitespace is hidden. */
+  wsOnly?: Set<string>;
 }) {
   const pad = { paddingLeft: 6 + depth * 14 };
 
   if (node.kind === 'file') {
-    const g = statusGlyph(node.change.status);
+    const g = statusGlyph(node.change.status, node.change.untracked);
     const isSel = selectedId === node.id;
+    const vs = viewed?.get(node.change.filePath) ?? 'unviewed';
+    const isWsOnly = wsOnly?.has(node.change.filePath) ?? false;
+    const untracked = node.change.untracked ? ' (untracked: not added to git yet)' : '';
+    const baseTitle = (node.change.status === 'renamed' && node.change.oldRelPath ? `${node.change.oldRelPath} → ${node.change.relPath}` : node.change.relPath)
+      + untracked + (isWsOnly ? ' (only whitespace changed: hidden)' : '');
     return (
       <button
-        className={`session-diff-tree-file${isSel ? ' is-selected' : ''}`}
+        className={`session-diff-tree-file${isSel ? ' is-selected' : ''}${vs === 'viewed' ? ' is-viewed' : ''}${isWsOnly ? ' is-ws-only' : ''}`}
+        data-ws-only={isWsOnly ? 'true' : undefined}
         style={pad}
-        title={node.change.status === 'renamed' && node.change.oldRelPath ? `${node.change.oldRelPath} → ${node.change.relPath}` : node.change.relPath}
+        title={vs === 'viewed' ? `${baseTitle} (viewed)` : vs === 'changed' ? `${baseTitle} (changed since you viewed it)` : baseTitle}
         onClick={() => onSelectFile(node.change)}
+        data-viewed={vs}
       >
         <span className={`session-diff-tree-status status-${g.cls}`} title={g.title}>{g.ch}</span>
         <span className="session-diff-tree-name">{node.name}</span>
+        {vs === 'viewed' && <span className="session-diff-tree-viewed" aria-label="viewed">{ICON_VIEWED_CHECK}</span>}
+        {vs === 'changed' && <span className="session-diff-tree-changed" role="img" aria-label="changed since viewed" title="Changed since you viewed it" />}
         {critical?.has(node.change.filePath) && (
           <span className="session-diff-tree-critical" title={`AI: ${critical.get(node.change.filePath)}`}>✦</span>
         )}
@@ -292,11 +346,21 @@ function TreeRow({
           selectedId={selectedId}
           onSelectFile={onSelectFile}
           critical={critical}
+          viewed={viewed}
+          wsOnly={wsOnly}
         />
       ))}
     </>
   );
 }
+
+const ICON_WHITESPACE = (
+  <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden><path d="M2 8.5v2.5h10V8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+);
+
+const ICON_VIEWED_CHECK = (
+  <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden><path d="M2.5 6.4 4.9 8.7 9.6 3.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+);
 
 // ── Inline comment box (rendered under a line via react-diff-view `widgets`) ───
 
@@ -490,8 +554,9 @@ function ExpandRow({ lines, split, funcOld, funcNew, onAll, onUp, onDown, onJump
  *  diffAutoSegment.ts). Tokens are computed per segment; change objects are
  *  shared with the source hunks, so widgets/gutter events/selection keys all
  *  keep working, just spread across tables. */
-function SegmentDiff({ seg, diffType, relPath, widgets, gutterEvents, selectedChanges, dragging }: {
+function SegmentDiff({ seg, diffType, relPath, widgets, gutterEvents, selectedChanges, dragging, ignoreWhitespace }: {
   seg: DiffSegment;
+  ignoreWhitespace: boolean;
   diffType: FileData['type'];
   relPath: string;
   widgets: Record<string, ReactNode> | undefined;
@@ -500,7 +565,7 @@ function SegmentDiff({ seg, diffType, relPath, widgets, gutterEvents, selectedCh
   dragging: boolean;
 }) {
   const segHunks = useMemo(() => [seg.hunk], [seg.hunk]);
-  const tokens = useTokens(segHunks, relPath);
+  const tokens = useTokens(segHunks, relPath, ignoreWhitespace);
   return (
     <Diff
       viewType={seg.viewType}
@@ -733,10 +798,24 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
 export const FileDiffPane = memo(function FileDiffPane({
   change, viewType, rendered, sessionCwd, sessionHost, pending, sessionId, aiSummaryOn,
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
+  ignoreWhitespace = false, onShowWhitespace, onShowUncommitted, viewedState, onToggleViewed, onNextUnviewed, onToggleRendered,
 }: {
   change: SessionFileChange;
   viewType: DiffViewMode;
   rendered: boolean;
+  /** Lines that differ only in whitespace read as unchanged (toolbar toggle). */
+  ignoreWhitespace?: boolean;
+  /** Turn ignoreWhitespace off (offered when a file changed ONLY in whitespace). */
+  onShowWhitespace?: () => void;
+  /** A Markdown file: switch between its diff and its rendered view (the header's Rendered toggle). */
+  onToggleRendered?: () => void;
+  /** Switch to the Uncommitted comparison (offered when a file's session edit could not be rebuilt). */
+  onShowUncommitted?: () => void;
+  /** The file's Viewed mark; absent = no Viewed control (the Turns view). */
+  viewedState?: ViewedState;
+  onToggleViewed?: (filePath: string) => void;
+  /** Open the next file not yet viewed (offered once this one is). */
+  onNextUnviewed?: (() => void) | null;
   sessionCwd?: string;
   sessionHost?: string;
   sessionId: string;
@@ -753,7 +832,9 @@ export const FileDiffPane = memo(function FileDiffPane({
   /** Remove a recorded comment from the batch. */
   onRemoveComment: (id: number) => void;
 }) {
-  const file = useMemo(() => buildFile(change), [change]);
+  // A NUL byte means binary (an untracked image, an archive): never parsed into lines of garbage.
+  const binary = useMemo(() => isBinaryText(change.before) || isBinaryText(change.after), [change.before, change.after]);
+  const file = useMemo(() => (binary ? null : buildFile(change, ignoreWhitespace)), [binary, change, ignoreWhitespace]);
   // Expand collapsed context on demand: we already hold the full OLD source as
   // `change.before` (git HEAD/upstream content, or the reconstructed pre-session
   // file), so react-diff-view can splice the hidden surrounding lines back in.
@@ -761,7 +842,8 @@ export const FileDiffPane = memo(function FileDiffPane({
   // end)` reveals old-side lines [start,end). The hook auto-clears expansions when
   // `file.hunks` identity or the source changes — i.e. on every file switch.
   const [hunks, expandRange] = useSourceExpansion(file?.hunks ?? EMPTY_HUNKS, change.before ?? null);
-  const tokens = useTokens(hunks, change.relPath);
+  const sides = useMemo<DiffSides>(() => ({ before: change.before, after: change.after }), [change.before, change.after]);
+  const tokens = useTokens(hunks, change.relPath, ignoreWhitespace, sides);
 
   // Auto-reveal tiny BETWEEN-hunk gaps: two hunks separated by ≤ UNFOLD_CHUNK
   // unchanged lines read better as one continuous block than as two sections
@@ -798,10 +880,25 @@ export const FileDiffPane = memo(function FileDiffPane({
   // deletes and inserts) get side-by-side, everything else — context, pure
   // insertions/deletions — stays full-width unified. One in-place edit must
   // not flip a 700-line-insertion file into a blank left column.
-  const autoHybrid = viewType === 'auto' && !isWholeFile;
+  // A pane too narrow for two readable code columns (the chat beside it, a
+  // small window) reads Auto as plain unified; Split stays the user's call.
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [narrowPane, setNarrowPane] = useState(false);
+  useLayoutEffect(() => {
+    const el = paneRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => setNarrowPane(el.clientWidth > 0 && el.clientWidth < AUTO_SPLIT_MIN_W);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const autoHybrid = viewType === 'auto' && !isWholeFile && !narrowPane;
   // The single-<Diff> layout used when a fixed mode is forced (or the file is
   // whole-file). In auto the hybrid path below renders instead.
-  const effectiveViewType: DiffViewType = isWholeFile || viewType === 'auto' ? 'unified' : viewType;
+  // Split in a pane too narrow for two code columns reads as unified (the header says so); a wider pane splits again.
+  const splitTooNarrow = viewType === 'split' && narrowPane && !isWholeFile;
+  const effectiveViewType: DiffViewType = isWholeFile || viewType === 'auto' || splitTooNarrow ? 'unified' : viewType;
 
   // The line the user clicked the gutter on → an open comment draft anchored there.
   const [draft, setDraft] = useState<CommentDraft | null>(null);
@@ -1215,6 +1312,7 @@ export const FileDiffPane = memo(function FileDiffPane({
             gutterEvents={gutterEvents}
             selectedChanges={selectedChanges}
             dragging={!!dragSel}
+            ignoreWhitespace={ignoreWhitespace}
           />,
         );
       }
@@ -1222,28 +1320,74 @@ export const FileDiffPane = memo(function FileDiffPane({
     const tail = gapByIndex.get(hunks.length);
     if (tail) out.push(<div key="exp-tail" className="session-diff-expand-standalone">{gapRow(tail, hunks, false)}</div>);
     return out;
-  }, [autoHybrid, file, hunks, oldLineCount, gapRow, change.relPath, widgets, gutterEvents, selectedChanges, dragSel]);
+  }, [autoHybrid, file, hunks, oldLineCount, gapRow, change.relPath, widgets, gutterEvents, selectedChanges, dragSel, ignoreWhitespace]);
 
   return (
-    <div className="session-diff-filepane" data-file-path={change.filePath}>
+    <div className="session-diff-filepane" data-file-path={change.filePath} ref={paneRef}>
       {/* Sticky wrapper keeps the header AND the ✦ strip pinned while the diff
           scrolls (a fixed pixel `top` on the strip breaks at other zoom/font
           sizes; the head's own sticky is inert inside this wrapper). */}
       <div className="session-diff-filepane-sticky">
       <div className="session-diff-filepane-head">
-        <span className="session-diff-filepane-path" title={change.filePath}>{change.relPath}</span>
+        {/* Cut from the left when it does not fit: the file name is what must stay. */}
+        <span className="session-diff-filepane-path" dir="rtl" title={change.status === 'renamed' && change.oldRelPath ? `${change.filePath}\nMoved from ${change.oldRelPath}` : change.filePath}><bdi>{change.relPath}</bdi></span>
         {change.status === 'renamed' && change.oldRelPath && (
-          <span className="session-diff-filepane-renamed" title={`moved from ${change.oldRelPath}`}>renamed from <code>{change.oldRelPath}</code></span>
+          <span className="session-diff-filepane-renamed" title={`Moved from ${change.oldRelPath}`}>{'← '}<code>{change.oldRelPath}</code></span>
+        )}
+        {change.untracked && (
+          <span className="session-diff-ws-tag" title="A new file git does not track yet (not added)">untracked</span>
+        )}
+        {ignoreWhitespace && (
+          <span className="session-diff-ws-tag" title="Whitespace changes are hidden (the toolbar's Hide whitespace)">whitespace hidden</span>
+        )}
+        {splitTooNarrow && (
+          <span className="session-diff-ws-tag" title="Split needs a wider pane (hide the chat or widen the window): shown unified until then">unified: too narrow to split</span>
         )}
         <span className="session-diff-filepane-stat">
           {adds > 0 && <span className="session-diff-stat-add">+{adds}</span>}
           {dels > 0 && <span className="session-diff-stat-del">{'−'}{dels}</span>}
         </span>
-        <span className="session-diff-filepane-hint">
+        {/* Takes the free room, so the +/- numbers stay beside the name whatever follows. */}
+        <span className="session-diff-filepane-spacer" aria-hidden />
+        {(file || rendered) && <span className="session-diff-filepane-hint">
           {rendered
             ? 'Click a line number — or drag down the numbers to select a range — to comment'
             : 'Click a line — or drag the gutter to select a range — to comment'}
-        </span>
+        </span>}
+        {/* Per file, so the toolbar above never shifts between a Markdown file and another. */}
+        {onToggleRendered && (
+          <button
+            type="button"
+            className={`session-diff-rendered-toggle${rendered ? ' is-active' : ''}`}
+            onClick={onToggleRendered}
+            aria-pressed={rendered}
+            title={rendered ? 'Showing the rendered markdown: click for the diff' : 'Show the markdown rendered'}
+          >
+            Rendered
+          </button>
+        )}
+        {viewedState && (onToggleViewed || onNextUnviewed) && (
+          <span className="session-diff-viewed-group">
+            {viewedState === 'changed' && (
+              <span className="session-diff-viewed-changed" title="You marked this file viewed, then it changed">Changed since viewed</span>
+            )}
+            {onNextUnviewed && (
+              <button type="button" className="session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed">
+                Next<span className="session-diff-next-unviewed-text"> unviewed</span> <span aria-hidden>{'↓'}</span>
+              </button>
+            )}
+            {onToggleViewed && (
+              <label className={`session-diff-viewed-toggle${viewedState === 'viewed' ? ' is-checked' : ''}`} title={viewedState === 'viewed' ? 'Viewed: the tree marks it until the file changes again (V)' : 'Mark this file as viewed (V)'}>
+                <input
+                  type="checkbox"
+                  checked={viewedState === 'viewed'}
+                  onChange={() => onToggleViewed(change.filePath)}
+                />
+                Viewed
+              </label>
+            )}
+          </span>
+        )}
       </div>
       {aiSummaryOn && <AiFileSummary sessionId={sessionId} change={change} />}
       </div>
@@ -1264,8 +1408,22 @@ export const FileDiffPane = memo(function FileDiffPane({
         >
           {renderHunks}
         </Diff>
+      ) : binary ? (
+        <div className="session-diff-file-empty session-diff-binary">Binary file: no line diff to show.</div>
       ) : change.status === 'renamed' ? (
         <div className="session-diff-file-empty">File moved{change.oldRelPath ? ` from ${change.oldRelPath}` : ''} — content unchanged.</div>
+      ) : ignoreWhitespace && differsOnlyInWhitespace(change.before, change.after) ? (
+        <div className="session-diff-file-empty session-diff-ws-only">
+          Only whitespace changed in this file.
+          {onShowWhitespace && <button type="button" className="btn btn-sm" onClick={onShowWhitespace} title="Turns off the toolbar's Hide whitespace, for every file">Show whitespace (all files)</button>}
+        </div>
+      ) : change.partial && change.before === change.after ? (
+        // The file changed on disk after the session's edit, so the edit could not be rebuilt from
+        // the session's history: say so and offer git's view, never a bare "no diff".
+        <div className="session-diff-file-empty session-diff-not-rebuilt">
+          This file changed after the session edited it, so the session&apos;s edit could not be rebuilt here.
+          {onShowUncommitted && <button type="button" className="btn btn-sm" onClick={onShowUncommitted}>Show it vs your last commit</button>}
+        </div>
       ) : (
         <div className="session-diff-file-empty">No textual diff (binary, identical, or unreadable content).</div>
       )}
@@ -1306,14 +1464,20 @@ function savePendingReview(sessionId: string, pending: PendingComment[]): void {
 // had open, keyed per session.
 const DIFF_STATE_PREFIX = 'open-walnut-diff-state:';
 
-interface DiffViewMemory { base?: SessionDiffBase; scope?: SessionDiffScope; selectedId?: string }
+interface DiffViewMemory { base?: SessionDiffBase; ref?: string; commit?: string; scope?: SessionDiffScope; selectedId?: string }
 
 function loadDiffMemory(sessionId: string): DiffViewMemory {
   try {
     const parsed = JSON.parse(localStorage.getItem(DIFF_STATE_PREFIX + sessionId) ?? '{}');
     if (!parsed || typeof parsed !== 'object') return {};
     const out: DiffViewMemory = {};
-    if (BASE_OPTIONS.some((o) => o.value === parsed.base)) out.base = parsed.base;
+    if (BASE_OPTIONS.some((o) => o.value === parsed.base) || parsed.base === 'branch') out.base = parsed.base;
+    if (parsed.base === 'branch' && typeof parsed.ref === 'string' && parsed.ref) out.ref = parsed.ref;
+    // A commit comparison needs its commit; without one the memory is the default view.
+    if (parsed.base === 'commit' && typeof parsed.commit === 'string' && /^[0-9a-f]{7,64}$/i.test(parsed.commit)) {
+      out.base = 'commit';
+      out.commit = parsed.commit;
+    }
     // scope is no longer read: the 'all' scope was removed, and ignoring old
     // stored values also heals any memory that had the repo-wide trap saved.
     if (typeof parsed.selectedId === 'string') out.selectedId = parsed.selectedId;
@@ -1323,6 +1487,70 @@ function loadDiffMemory(sessionId: string): DiffViewMemory {
 
 function saveDiffMemory(sessionId: string, mem: DiffViewMemory): void {
   try { localStorage.setItem(DIFF_STATE_PREFIX + sessionId, JSON.stringify(mem)); } catch { /* non-fatal */ }
+}
+
+/** A note the view still owes (a remembered branch that was gone), kept for
+ *  this page until dismissed or another comparison is picked, so closing and
+ *  reopening the panel still says why the comparison changed. sessionId → text. */
+const pageNotices = new Map<string, string>();
+
+function memoryCompare(mem: DiffViewMemory): SessionDiffCompare {
+  const base = mem.base ?? 'session';
+  if (base === 'branch') return mem.ref ? { base, ref: mem.ref } : { base };
+  if (base === 'commit') return { base, commit: mem.commit };
+  return { base };
+}
+
+/** The cache / identity key of a comparison (base + its ref or commit). */
+function compareCacheKey(c: SessionDiffCompare): string {
+  return compareKey(c);
+}
+
+/** One line naming what a branch or commit comparison resolved to. */
+function CompareStrip({ info, compare }: { info: GitCompareInfo | undefined; compare: SessionDiffCompare }) {
+  // The working-tree spans list only the session's files: said where the list is, not only in the picker.
+  if (compare.base === 'uncommitted' || compare.base === 'remote') {
+    return (
+      <div className="session-diff-compare-strip" data-compare={compare.base}>
+        <span className="sdc-strip-kind">Session files</span>
+        <span>
+          Only the files this session edited, as they differ from {compare.base === 'uncommitted' ? 'your last commit' : 'what is pushed (with no upstream, from where the branch left the default branch)'}.
+          {' '}For every file on the branch, pick Branch vs the default branch in Compare.
+        </span>
+      </div>
+    );
+  }
+  if (compare.base === 'branch') {
+    const ref = info?.ref ?? compare.ref;
+    return (
+      <div className="session-diff-compare-strip" data-compare="branch">
+        <span className="sdc-strip-kind">Branch</span>
+        <span>
+          Everything since this branch left <b>{ref ?? 'the default branch'}</b>
+          {info?.baseSha && <> at <code title={info.baseSha}>{shortSha(info.baseSha)}</code></>}
+          , uncommitted work included. Every file, not only this session's.
+        </span>
+      </div>
+    );
+  }
+  const c = info?.commit;
+  return (
+    <div className="session-diff-compare-strip" data-compare="commit">
+      <span className="sdc-strip-kind">Commit</span>
+      {c ? (
+        <span className="sdc-strip-commit">
+          <code title={c.sha}>{shortSha(c.sha)}</code>
+          <b className="sdc-strip-subject" title={c.subject}>{c.subject || '(no message)'}</b>
+          <span className="sdc-strip-meta">
+            {c.author}{c.time ? ` · ${timeAgo(new Date(c.time * 1000).toISOString())}` : ''}
+            {' · '}{c.parent ? <>vs parent <code title={c.parent}>{shortSha(c.parent)}</code>{c.parents > 1 ? ' (first of a merge)' : ''}</> : 'first commit'}
+          </span>
+        </span>
+      ) : (
+        <span><code>{shortSha(compare.commit ?? '')}</code></span>
+      )}
+    </div>
+  );
 }
 
 // ── Compare schematic ─────────────────────────────────────────────────────────
@@ -1351,8 +1579,8 @@ const COMPARE_TRUNK: ReadonlyArray<{ node: 'now' | 'session' | 'commit' | 'ellip
 // to the RIGHT of the labels, so they can never overlap the text.
 const COMPARE_SPANS: ReadonlyArray<{ id: SessionDiffBase; anchorRow: number; label: string; meaning: string }> = [
   { id: 'session', anchorRow: 1, label: 'What this session changed', meaning: 'This session’s own edits, across any commits it made (rebuilt from history)' },
-  { id: 'uncommitted', anchorRow: 2, label: 'Uncommitted changes', meaning: 'Working tree vs your last commit' },
-  { id: 'remote', anchorRow: 4, label: 'Not yet pushed', meaning: 'Working tree vs the remote — may span many local commits' },
+  { id: 'uncommitted', anchorRow: 2, label: 'Uncommitted changes', meaning: 'Those files, working tree vs your last commit' },
+  { id: 'remote', anchorRow: 4, label: 'Not yet pushed', meaning: 'Those files vs what is pushed: may span many local commits (never pushed: since the branch left the default branch)' },
 ];
 
 const CMP_ROW_H = 26;   // px height of one trunk row
@@ -1370,7 +1598,7 @@ function CompareGraph({ base }: { base: SessionDiffBase }) {
   const railStripW = COMPARE_SPANS.length * CMP_RAIL_W + (COMPARE_SPANS.length - 1) * CMP_RAIL_GAP;
   return (
     <div className="compare-graph" role="img" aria-label="How the three compare modes overlap">
-      <div className="compare-graph-title">All three, compared</div>
+      <div className="compare-graph-title">This session’s files, three ways</div>
       <div className="compare-graph-body" style={{ height: stackH }}>
         {/* LEFT: trunk line + node glyph + label, one flow row each (no overlap). */}
         <div className="compare-graph-trunk">
@@ -1415,8 +1643,15 @@ function CompareGraph({ base }: { base: SessionDiffBase }) {
         {base === 'session'
           ? <>You’re viewing <b>What this session changed</b>. <span className="compare-graph-warn">⚠ If another process changed the same lines after an edit, that file is rebuilt best-effort and flagged.</span></>
           : base === 'uncommitted'
-            ? <>You’re viewing <b>Uncommitted changes</b> — everything in your working tree you haven’t committed yet.</>
-            : <>You’re viewing <b>Not yet pushed</b> — may span many local commits (e.g. auto-saves).</>}
+            ? <>You’re viewing <b>Uncommitted changes</b> of the files this session edited.</>
+            : base === 'remote'
+              ? <>You’re viewing <b>Not yet pushed</b> for the files this session edited: may span many local commits (e.g. auto-saves).</>
+              : base === 'previous'
+                ? <>You’re viewing <b>Last commit and uncommitted</b> for the files this session edited.</>
+                : <>You’re viewing a <b>{base === 'branch' ? 'branch' : 'single commit'}</b>: every file it changes, not only this session’s. The strip under the toolbar names what it is compared with.</>}
+      </div>
+      <div className="compare-graph-note">
+        <b>Branch vs …</b> shows every file the branch changes since it left that branch (as a pull request would). <b>Commit …</b> shows one commit against its parent. Both are in the Compare list.
       </div>
     </div>
   );
@@ -1452,6 +1687,8 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
       onMouseLeave={hide}
       onFocus={show}
       onBlur={hide}
+      // Esc closes the explanation only (the panel's own Esc must not see it).
+      onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.preventDefault(); e.stopPropagation(); hide(); } }}
     >?
       {open && pos && (
         <span
@@ -1488,9 +1725,9 @@ const DIFF_SEARCH_SKIP = '.diff-gutter, .diff-widget, .session-diff-expander, .s
 function listShape(r: SessionChangesResult): string {
   return JSON.stringify([r.fileCount, r.anyPartial, r.groups]);
 }
-/** One file's light row: a new op, status or rename means its content changed. */
+/** One file's light row: a new op, status, rename or content signature (a git list's `sig`) means its content changed. */
 function fileShape(f: SessionFileChange): string {
-  return `${f.status}|${f.ops}|${f.partial}|${f.oldRelPath ?? ''}|${f.before.length}|${f.after.length}`;
+  return `${f.status}|${f.ops}|${f.partial}|${f.oldRelPath ?? ''}|${f.before.length}|${f.after.length}|${f.sig ?? ''}`;
 }
 
 /** How often an open Changed tab re-reads its session's repos. */
@@ -1510,7 +1747,7 @@ function rememberChanges(key: string, res: SessionChangesResult): void {
 export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot, onOpenFile, toolbarLeadingSlot }: SessionDiffViewProps) {
   const [data, setData] = useState<SessionChangesResult | null>(() => {
     const mem = loadDiffMemory(sessionId);
-    return lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null;
+    return lastChangesCache.get(`${sessionId}|${compareCacheKey(memoryCompare(mem))}|session`) ?? null;
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1541,9 +1778,36 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     });
   }, []);
   const [rendered, setRendered] = useState(false);
-  // Base/selected file are remembered per session — coming back to the
-  // Changed tab restores the exact view you left (loadDiffMemory above).
-  const [base, setBase] = useState<SessionDiffBase>(() => loadDiffMemory(sessionId).base ?? 'session');
+  // Ignore whitespace: lines that differ only in spaces, tabs or line endings
+  // read as unchanged. Off by default; the 'open-walnut-' prefix rides
+  // ui-prefs-sync, so the choice follows the user across devices.
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState<boolean>(() => {
+    try { return localStorage.getItem(IGNORE_WS_KEY) === '1'; } catch { return false; }
+  });
+  const toggleIgnoreWhitespace = useCallback(() => {
+    setIgnoreWhitespace((prev) => {
+      try { localStorage.setItem(IGNORE_WS_KEY, prev ? '0' : '1'); } catch { /* ignore */ }
+      return !prev;
+    });
+  }, []);
+  const showWhitespace = useCallback(() => {
+    try { localStorage.setItem(IGNORE_WS_KEY, '0'); } catch { /* ignore */ }
+    setIgnoreWhitespace(false);
+  }, []);
+  // The comparison + selected file are remembered per session — coming back to
+  // the Changed tab restores the exact view you left (loadDiffMemory above).
+  const [compare, setCompare] = useState<SessionDiffCompare>(() => memoryCompare(loadDiffMemory(sessionId)));
+  // A one-line note above the diff (a remembered branch that is gone).
+  const [notice, setNoticeState] = useState<string | null>(() => pageNotices.get(sessionId) ?? null);
+  const setNotice = useCallback((text: string | null) => {
+    if (text) pageNotices.set(sessionId, text);
+    else pageNotices.delete(sessionId);
+    setNoticeState(text);
+  }, [sessionId]);
+  const pickCompare = useCallback((c: SessionDiffCompare) => { setNotice(null); setCompare(c); }, [setNotice]);
+  const showUncommitted = useCallback(() => pickCompare({ base: 'uncommitted' }), [pickCompare]);
+  const base = compare.base;
+  const setBase = useCallback((b: SessionDiffBase) => setCompare({ base: b }), []);
   // Always the files THIS session changed. The old 'all' scope ("All in repo":
   // every change in the repos the session touched, other sessions' included)
   // confused more than it helped and its repo-wide git diff timed out on huge
@@ -1566,9 +1830,13 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const [selection, setSelection] = useState<{ x: number; y: number; text: string; filePath: string; line?: number } | null>(null);
 
   // Session-base lists ship LIGHT (no before/after) + SWR (cached list paints
-  // instantly, recompute runs behind) — per-file diffs load lazily below. Git
-  // bases keep the original full blocking fetch (their diff comes from git).
+  // instantly, recompute runs behind) — per-file diffs load lazily below. The
+  // branch and commit bases ship light too (names only, a branch can hold
+  // hundreds of files), without SWR; the other git bases keep the original
+  // full blocking fetch (their diff comes from git).
   const isSessionBase = base === 'session';
+  const wholeRepo = isWholeRepoBase(base);
+  const isLazy = isSessionBase || wholeRepo;
   // Per-file diff cache (session base). Ref-backed so ensureFileContent stays
   // referentially stable; version bump triggers re-render on arrival.
   const fileContentRef = useRef(new Map<string, SessionFileChange>());
@@ -1581,15 +1849,29 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // rendered a light session-base row under a git base — empty content, bogus
   // "No textual diff", stale file count. Reseed from the new base's cached
   // result when we have one (instant), else clear to the spinner.
-  const baseKey = `${base}|${scope}`;
+  const baseKey = `${compareCacheKey(compare)}|${scope}`;
   const cacheKey = `${sessionId}|${baseKey}`;
+  // The comparison the shown `data` belongs to: set together with every
+  // setData, so one render never pairs a new comparison with the old list.
+  const [dataKey, setDataKey] = useState(cacheKey);
+  const dataKeyRef = useCommittedRef(dataKey);
+  // The shown list belongs to the comparison just left (the new one is loading).
+  const switching = !!data && dataKey !== cacheKey;
   const prevBaseKey = useRef(baseKey);
   useEffect(() => {
     if (prevBaseKey.current === baseKey) return;
     prevBaseKey.current = baseKey;
-    setData(lastChangesCache.get(cacheKey) ?? null);
+    const cached = lastChangesCache.get(cacheKey);
+    // No answer for the new comparison yet: the old list stays on screen,
+    // dimmed and inert (dataKey still names it, so nothing loads for it), and
+    // the toolbar and tree do not jump. Its file pane shows a spinner.
+    if (cached) {
+      setData(cached);
+      setDataKey(cacheKey);
+    }
     fileContentRef.current.clear();
     staleContentRef.current.clear();
+    setContentVersion((v) => v + 1);
   }, [baseKey, cacheKey]);
 
   // The list on screen, for a soft (automatic) re-read to compare against.
@@ -1605,17 +1887,23 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   /** A Re-scan (a full re-read) is running: a live re-read waits for it rather than cancelling it. */
   const rescanRunningRef = useRef(false);
   // `all` (a Re-scan): every file's content is read again, the old one shown until it lands.
-  const applyList = useCallback((res: SessionChangesResult, soft: boolean, all = false): boolean => {
+  // `key`: the comparison `res` answers. A list for another comparison keeps nothing.
+  const applyList = useCallback((res: SessionChangesResult, key: string, soft: boolean, all = false): boolean => {
     const prev = dataRef.current;
-    if (soft && !all && prev && listShape(prev) === listShape(res)) return false;
+    const sameView = !!prev && dataKeyRef.current === key;
+    if (soft && !all && sameView && listShape(prev) === listShape(res)) return false;
     // Any new list for the list on screen keeps what still holds, soft or not: the tab's
     // own first read can land after the user opened a file and started a comment there
     // (clearing every file's content unmounted the pane, and the comment with it).
-    if (prev && prev.sessionId === res.sessionId) {
+    if (sameView && prev.sessionId === res.sessionId) {
+      // A branch whose merge-base moved (the default branch was fetched, the branch rebased):
+      // every file's `before` is read from another commit, so every file is read again.
+      const basesOf = (r: SessionChangesResult) => r.groups.map((g) => g.compare?.baseSha ?? '').join(',');
+      const every = all || basesOf(prev) !== basesOf(res);
       const before = new Map<string, string>();
       for (const g of prev.groups) for (const f of g.files) before.set(f.filePath, fileShape(f));
       for (const g of res.groups) for (const f of g.files) {
-        if (!all && before.get(f.filePath) === fileShape(f)) continue;
+        if (!every && before.get(f.filePath) === fileShape(f)) continue;
         const had = fileContentRef.current.get(f.filePath);
         if (had) staleContentRef.current.set(f.filePath, had);
         fileContentRef.current.delete(f.filePath);
@@ -1625,9 +1913,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       staleContentRef.current.clear();
     }
     setData(res);
+    setDataKey(key);
     setContentVersion((v) => v + 1);
     return true;
-  }, []);
+  }, [dataKeyRef]);
 
   const load = useCallback((refresh = false, soft = false, all = false) => {
     // Running until its list (or the last poll for it) lands, fails or is cancelled.
@@ -1646,7 +1935,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     // A soft re-read keeps an error on screen until it has something better (no "no changes" flash).
     if (!soft) setError(null);
     const ctrl = new AbortController();
-    const light = isSessionBase;
+    const light = isLazy;
+    const swrOk = isSessionBase;
     // Converge by POLLING the SWR endpoint (cheap: cache/stat only) until the
     // background recompute lands (stale flag clears). The previous approach — a
     // blocking light fetch queued behind the recompute — sat on one HTTP
@@ -1663,7 +1953,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       if (ctrl.signal.aborted) { settle(); return; }
       if (showsSpinner) { spinning = true; setRefreshingBg(true); }
       pollTimer = setTimeout(() => {
-        fetchSessionChanges(sessionId, { base, scope, light: true, swr: true, signal: ctrl.signal })
+        fetchSessionChanges(sessionId, { base, ref: compare.ref, commit: compare.commit, scope, light: true, swr: true, signal: ctrl.signal })
           .then((res) => {
             if (ctrl.signal.aborted) return;
             if (res.stale) {
@@ -1674,30 +1964,33 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               return;
             }
             rememberChanges(cacheKey, res);
-            applyList(res, soft, all);
+            applyList(res, cacheKey, soft, all);
             if (spinning) setRefreshingBg(false);
             settle();
           })
           .catch(() => { if (!ctrl.signal.aborted && spinning) setRefreshingBg(false); settle(); });
       }, pollDelay(attempt));
     };
-    fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
+    fetchSessionChanges(sessionId, { refresh, base, ref: compare.ref, commit: compare.commit, scope, light, swr: swrOk && !refresh, signal: ctrl.signal })
       .then((res) => {
+        if (ctrl.signal.aborted) return;
         // Cache stale results too — a stale list is exactly what a re-entry
         // wants to paint first; the background poll upgrades it in place.
         rememberChanges(cacheKey, res);
         setError(null);
-        if (all && !(res.stale && light)) setRefreshingBg(false);
-        if (soft) applyList(res, true, all);
+        if (all && !(res.stale && swrOk)) setRefreshingBg(false);
+        // A quiet re-read that found a change moves the git strip with it (its own pace is slower).
+        if (soft) { if (applyList(res, cacheKey, true, all)) void sessionGitStore.refresh(sessionId); }
         else {
           setData(res);
+          setDataKey(cacheKey);
           if (refresh) {
             fileContentRef.current.clear();
             staleContentRef.current.clear();
             setContentVersion((v) => v + 1);
           }
         }
-        if (res.stale && light) pollUntilFresh(0);
+        if (res.stale && swrOk) pollUntilFresh(0);
         else settle();
       })
       .catch((err) => {
@@ -1705,6 +1998,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         if (ctrl.signal.aborted) return;
         if (all) setRefreshingBg(false);
         const msg = err instanceof Error ? err.message : String(err);
+        // A remembered branch or commit that no longer exists: back to the
+        // default comparison, saying why, instead of an error page every visit.
+        if (((base === 'branch' && compare.ref) || base === 'commit') && MISSING_REF_RE.test(msg)) {
+          const what = base === 'branch' ? `Branch ${compare.ref}` : `Commit ${(compare.commit ?? '').slice(0, 7)}`;
+          setNotice(`${what} is no longer in this repository, so the view went back to ${base === 'branch' ? 'Branch vs the default branch' : 'What this session changed'}.`);
+          setCompare(base === 'branch' ? { base: 'branch' } : { base: 'session' });
+          return;
+        }
         setError(msg);
         log.warn('session-changes', 'fetch failed', { sessionId, base, scope, error: msg });
       })
@@ -1717,7 +2018,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       // A read cut short takes its ↻ with it (its own then/poll never runs to clear it).
       if (running && spinning) setRefreshingBg(false);
     };
-  }, [sessionId, base, scope, isSessionBase, cacheKey, applyList]);
+  }, [sessionId, base, compare.ref, compare.commit, scope, isSessionBase, isLazy, cacheKey, applyList, setNotice]);
 
   useEffect(() => {
     const cancel = load(false);
@@ -1764,10 +2065,31 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     liveCancelRef.current = load(false, true);
     void sessionGitStore.refresh(sessionId);
   }, { minIntervalMs: isSessionBase ? CHANGED_REFRESH_MIN_MS : 30_000 });
+  // The git comparisons follow the working tree on their own: a quiet re-read
+  // (soft, so nothing on screen moves unless the answer differs; then only the
+  // files whose row differs reload) when the window comes back and every
+  // QUIET_REFRESH_*_MS while it is shown. A commit never changes; the session
+  // base keeps the pace above.
+  useEffect(() => {
+    if (base === 'session' || base === 'commit') return;
+    const quiet = () => {
+      if (document.visibilityState !== 'visible' || loadsRunningRef.current > 0) return;
+      liveCancelRef.current = loadRef.current(true, true);
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') quiet(); };
+    window.addEventListener('focus', quiet);
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = window.setInterval(quiet, sessionHost ? QUIET_REFRESH_REMOTE_MS : QUIET_REFRESH_LOCAL_MS);
+    return () => {
+      window.removeEventListener('focus', quiet);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(timer);
+    };
+  }, [sessionHost, base, load]);
 
   useEffect(() => {
-    try { localStorage.setItem('open-walnut-diff-view-mode', viewType); } catch { /* ignore */ }
-  }, [viewType]);
+  try { localStorage.setItem('open-walnut-diff-view-mode', viewType); } catch { /* ignore */ }
+}, [viewType]);
 
   // If this component instance is reused for ANOTHER session (no remount),
   // reload that session's remembered view instead of leaking this one's.
@@ -1775,11 +2097,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   useEffect(() => {
     if (memSessionRef.current === sessionId) return;
     memSessionRef.current = sessionId;
+    setNoticeState(pageNotices.get(sessionId) ?? null);
     const mem = loadDiffMemory(sessionId);
-    setBase(mem.base ?? 'session');
+    const memCompare = memoryCompare(mem);
+    setCompare(memCompare);
     // Seed the NEW session's cached list (or clear) — without this the old
     // session's files linger under the new session while its fetch runs.
-    setData(lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null);
+    setData(lastChangesCache.get(`${sessionId}|${compareCacheKey(memCompare)}|session`) ?? null);
+    setDataKey(`${sessionId}|${compareCacheKey(memCompare)}|session`);
     fileContentRef.current.clear();
     staleContentRef.current.clear();
     setSelectedId(null);
@@ -1791,11 +2116,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // slow fetch wipes it before the restore effect can validate it against the
   // arriving file list.
   useEffect(() => {
+    const stored = loadDiffMemory(sessionId);
+    // A branch or commit is kept like any comparison; one that is gone later falls back with a note.
     saveDiffMemory(sessionId, {
-      base,
-      selectedId: selectedId ?? loadDiffMemory(sessionId).selectedId,
+      base: compare.base,
+      ...(compare.ref ? { ref: compare.ref } : {}),
+      ...(compare.base === 'commit' && compare.commit ? { commit: compare.commit } : {}),
+      selectedId: selectedId ?? stored.selectedId,
     });
-  }, [sessionId, base, selectedId]);
+  }, [sessionId, base, compare, selectedId]);
 
   // Every folder id the tree has shown for this session and comparison.
   const knownContainersRef = useRef(new Set<string>());
@@ -1803,10 +2132,63 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const tree2 = useMemo<DiffTreeRepoNode[]>(() => buildDiffTree(data?.groups ?? []), [data]);
   const files = useMemo(() => flattenFiles(tree2), [tree2]);
 
+  // ── Viewed marks (diffViewed.ts): per session and comparison, per file ──
+  // A branch comparison is keyed by the commit it resolved to: "Branch vs main"
+  // and "Branch vs origin/main" from the same fork point share their marks.
+  const resolvedBaseSha = dataKey === cacheKey && compare.base === 'branch' ? data?.groups.find((g) => g.compare)?.compare?.baseSha : undefined;
+  const viewKey = resolvedBaseSha ? `branch@${resolvedBaseSha}` : compareKey(compare);
+  const viewStoreKey = `${sessionId}\n${viewKey}`;
+  const [viewedStore, setViewedStore] = useState<{ key: string; marks: ViewedMarks }>(() => ({ key: viewStoreKey, marks: loadViewedMarks(sessionId, viewKey) }));
+  // Another comparison or session: its stored marks, read once per key.
+  const viewedMarks = useMemo(
+    () => (viewedStore.key === viewStoreKey ? viewedStore.marks : loadViewedMarks(sessionId, viewKey)),
+    [viewedStore, viewStoreKey, sessionId, viewKey],
+  );
+  const viewedMap = useMemo(() => {
+    const m = new Map<string, ViewedState>();
+    for (const f of files) m.set(f.change.filePath, viewedState(viewedMarks, f.change.filePath, changeSignature(f.change, isLazy)));
+    return m;
+  }, [files, viewedMarks, isLazy]);
+  // Hide whitespace: the files whose every change is whitespace (the git
+  // list says so for names-only rows; otherwise from the loaded content).
+  const wsOnlySet = useMemo(() => {
+    const set = new Set<string>();
+    if (!ignoreWhitespace) return set;
+    void contentVersion;
+    for (const f of files) {
+      const c = f.change;
+      if (c.status !== 'modified') continue;
+      if (c.wsOnly) { set.add(c.filePath); continue; }
+      const full = isLazy ? fileContentRef.current.get(c.filePath) : c;
+      if (full && full.before !== full.after && differsOnlyInWhitespace(full.before, full.after)) set.add(c.filePath);
+    }
+    return set;
+  }, [ignoreWhitespace, files, isLazy, contentVersion]);
+  // One count everywhere: every listed file, whitespace-only ones included (Hide whitespace
+  // changes how a diff reads, not what is listed); the title only notes how many those are.
+  const { viewedCount, changedCount } = useMemo(() => {
+    let viewed = 0;
+    let changed = 0;
+    for (const v of viewedMap.values()) { if (v === 'viewed') viewed++; else if (v === 'changed') changed++; }
+    return { viewedCount: viewed, changedCount: changed };
+  }, [viewedMap]);
+  const reviewable = files.length;
+  const shownCount = data?.fileCount ?? 0;
+  const toggleViewed = useCallback((filePath: string) => {
+    const change = files.find((f) => f.change.filePath === filePath)?.change;
+    if (!change) return;
+    const next: ViewedMarks = { ...viewedMarks };
+    if (viewedMap.get(filePath) === 'viewed') delete next[filePath];
+    else next[filePath] = changeSignature(change, isLazy) ?? '';
+    saveViewedMarks(sessionId, viewKey, next);
+    setViewedStore({ key: viewStoreKey, marks: next });
+  }, [files, viewedMarks, viewedMap, isLazy, sessionId, viewKey, viewStoreKey]);
+
   // On data change: expand all containers + select the remembered file if it's
   // still in the list, else the first file.
   useEffect(() => {
-    if (!tree2.length) { setSelectedId(null); return; }
+    // An empty tree while the first answer loads must not drop the selection.
+    if (!tree2.length) { if (data) setSelectedId(null); return; }
     // Folders open as they appear; one the user folded stays folded on a re-read.
     const all = allContainerIds(tree2);
     const fresh = all.filter((id) => !knownContainersRef.current.has(id));
@@ -1817,7 +2199,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       pendingRestoreRef.current = null;
       return (want && files.some((f) => f.id === want)) ? want : (files[0]?.id ?? null);
     });
-  }, [tree2, files]);
+  }, [tree2, files, data]);
 
   // AI triage: one hidden side question marks the changeset's critical files
   // (✦ in the tree) and pre-seeds their summaries server-side. Keyed by the
@@ -1863,11 +2245,19 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // Lazy per-file content (session base): a light list row has before===after===''.
   // Fetch the full record on demand; renames/deletes with empty content are
   // legitimate, so "needs fetch" = light list + not yet cached, not "empty".
+  // The comparison a per-file fetch belongs to: an answer for a comparison the
+  // user already left must not land in the new one's cache.
+  const contentGenRef = useRef(cacheKey);
+  contentGenRef.current = cacheKey;
+  const groupRootOf = useCallback((filePath: string) => data?.groups.find((g) => g.files.some((f) => f.filePath === filePath))?.repoRoot, [data]);
   const ensureFileContent = useCallback((filePath: string) => {
-    if (fileContentRef.current.has(filePath) || fileFetchesRef.current.has(filePath)) return;
-    fileFetchesRef.current.add(filePath);
-    fetchSessionFileChange(sessionId, filePath)
+    const gen = cacheKey;
+    const fetchKey = `${gen}\n${filePath}`;
+    if (fileContentRef.current.has(filePath) || fileFetchesRef.current.has(fetchKey)) return;
+    fileFetchesRef.current.add(fetchKey);
+    fetchSessionFileChange(sessionId, filePath, wholeRepo ? { compare, repoRoot: groupRootOf(filePath) } : undefined)
       .then((res) => {
+        if (contentGenRef.current !== gen) return;
         fileContentRef.current.set(filePath, res.file);
         staleContentRef.current.delete(filePath);
         setContentVersion((v) => v + 1);
@@ -1877,34 +2267,43 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           sessionId, filePath, error: err instanceof Error ? err.message : String(err),
         });
       })
-      .finally(() => { fileFetchesRef.current.delete(filePath); });
-  }, [sessionId]);
+      .finally(() => { fileFetchesRef.current.delete(fetchKey); });
+  }, [sessionId, cacheKey, wholeRepo, compare, groupRootOf]);
 
   useEffect(() => {
-    if (!isSessionBase || !selectedChangeRaw) return;
+    if (!isLazy || !selectedChangeRaw) return;
+    // The render right after a comparison switch still holds the old list:
+    // its files are not part of the new comparison (a git base answers 404).
+    if (data && dataKey !== cacheKey) return;
     ensureFileContent(selectedChangeRaw.filePath);
-    // Prefetch neighbours (±2 in tree order) so ↑/↓ stepping feels instant.
+    // Prefetch neighbours (±2 in tree order) so ↑/↓ stepping feels instant,
+    // once the open file is in: they must not queue ahead of it on the host.
+    void contentVersion;
+    if (!fileContentRef.current.has(selectedChangeRaw.filePath)) return;
     const idx = files.findIndex((f) => f.id === selectedId);
     for (const off of [1, -1, 2, -2]) {
       const n = files[idx + off];
       if (n) ensureFileContent(n.change.filePath);
     }
-  }, [isSessionBase, selectedChangeRaw, files, selectedId, ensureFileContent]);
+  }, [isLazy, selectedChangeRaw, files, selectedId, ensureFileContent, data, dataKey, cacheKey, contentVersion]);
 
   // The change record FileDiffPane renders: light row hydrated with fetched
   // content. contentVersion re-runs this when a lazy fetch lands.
   const selectedChange = useMemo(() => {
     void contentVersion;
     if (!selectedChangeRaw) return null;
-    if (!isSessionBase) return selectedChangeRaw;
+    if (!isLazy) return selectedChangeRaw;
     const full = fileContentRef.current.get(selectedChangeRaw.filePath) ?? staleContentRef.current.get(selectedChangeRaw.filePath);
     return full ? { ...selectedChangeRaw, before: full.before, after: full.after, partial: full.partial } : null;
-  }, [selectedChangeRaw, isSessionBase, contentVersion]);
-  const selectedContentLoading = isSessionBase && !!selectedChangeRaw && !selectedChange;
+  }, [selectedChangeRaw, isLazy, contentVersion]);
+  const selectedContentLoading = isLazy && !!selectedChangeRaw && !selectedChange;
 
   // Reset Rendered when the selected file isn't markdown.
-  const selectedIsMd = selectedChange ? isMarkdownPath(selectedChange.relPath) : false;
+  // Only when there is Markdown to render: not a deleted file, not a move with nothing changed.
+  const selectedIsMd = selectedChange ? isMarkdownPath(selectedChange.relPath) && selectedChange.status !== 'deleted'
+    && !(selectedChange.status === 'renamed' && selectedChange.before === selectedChange.after) : false;
   useEffect(() => { if (!selectedIsMd && rendered) setRendered(false); }, [selectedIsMd, rendered]);
+  const toggleRendered = useCallback(() => setRendered((r) => !r), []);
 
   // Added/deleted files render whole-page (unified) regardless of the toggle —
   // disable the Split/Unified buttons so it's clear why Split has no effect.
@@ -1937,6 +2336,50 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     setGhost(null);
     setSelectedId(files[nextIdx]!.id);
   }, [files, selectedId]);
+
+  // The next file (in tree order, wrapping) not marked viewed; null when all are.
+  const nextUnviewedId = useMemo(() => {
+    if (!files.length) return null;
+    const idx = files.findIndex((f) => f.id === selectedId);
+    for (let k = 1; k <= files.length; k++) {
+      const f = files[(Math.max(idx, 0) + k) % files.length]!;
+      if (f.id !== selectedId && viewedMap.get(f.change.filePath) !== 'viewed') return f.id;
+    }
+    return null;
+  }, [files, selectedId, viewedMap]);
+  const openNextUnviewed = useCallback(() => {
+    if (!nextUnviewedId) return;
+    setGhost(null);
+    setSelectedId(nextUnviewedId);
+  }, [nextUnviewedId]);
+
+  // V marks the open file viewed (or not), N opens the next unviewed one: only while
+  // the keys go to this view or to nothing in particular, never into a text box.
+  const selectedPathRef = useCommittedRef(selectedChangeRaw?.filePath ?? null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'v' && k !== 'n') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      const el = containerRef.current;
+      if (!el || el.offsetParent === null) return;
+      if (t && t !== document.body && !el.contains(t)) return;
+      if (window.getSelection()?.toString()) return;
+      if (k === 'v') {
+        const path = selectedPathRef.current;
+        if (!path) return;
+        e.preventDefault();
+        toggleViewed(path);
+      } else {
+        e.preventDefault();
+        openNextUnviewed();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleViewed, openNextUnviewed, selectedPathRef]);
 
   // ── In-tab reference jumps + browser-style back/forward (⌘[ / ⌘]) ─────────
   // A reference row NEVER leaves the Changed tab: a file that's part of this
@@ -2235,6 +2678,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   useEffect(() => {
     if (!refState) return;
     const onKey = (e: KeyboardEvent) => {
+      // The compare picker's own Esc closes only the picker.
+      if ((e.target as Element | null)?.closest?.('.session-diff-compare-pop')) return;
       if (e.key === 'Escape') { e.stopPropagation(); closeReferences(); }
     };
     window.addEventListener('keydown', onKey, true);
@@ -2437,49 +2882,61 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           >›</button>
         </div>
         <span className="session-diff-toolbar-title">
-          {data ? (empty ? 'No file changes' : `${data.fileCount} file${data.fileCount === 1 ? '' : 's'} changed`) : (loading ? 'Loading…' : 'Changes')}
+          {data && !switching
+            ? (empty ? 'No file changes' : <>{shownCount} file{shownCount === 1 ? '' : 's'}<span className="session-diff-title-long"> changed</span></>)
+            : error ? "Couldn't load changes" : (loading || switching ? 'Loading…' : 'Changes')}
+          {!switching && wsOnlySet.size > 0 && (
+            <span className="session-diff-ws-count" title="Files whose every change is whitespace (Hide whitespace shows them as unchanged)">{wsOnlySet.size} whitespace only</span>
+          )}
+          {!empty && !switching && reviewable > 0 && (
+            <span
+              className={`session-diff-viewed-count${viewedCount === reviewable ? ' is-done' : ''}`}
+              title="Files you marked viewed that have not changed since (tick Viewed in a file's header). Kept in this browser, per comparison."
+            >
+              {viewedCount === reviewable ? `✓ ${viewedCount} of ${reviewable} viewed` : `${viewedCount} of ${reviewable} viewed`}
+            </span>
+          )}
+          {!empty && !switching && changedCount > 0 && (
+            <span className="session-diff-changed-count" title="Files you marked viewed that changed since: their marks wait for another look">{changedCount} changed since viewed</span>
+          )}
           {/* Its room is kept while idle, so the controls after it never shift when it shows. */}
           {(() => {
-            const on = refreshingBg || (loading && !!data);
+            const on = refreshingBg || (loading && !!data && !switching);
             return <span className={`session-diff-refreshing${on ? '' : ' is-idle'}`} aria-hidden={on ? undefined : true} title={on ? 'List served from cache — re-scanning in the background' : undefined}>↻</span>;
           })()}
         </span>
         <div className="session-diff-base-wrap">
-          <label className="session-diff-base-select" title="Choose what the diff compares against">
-            <span className="session-diff-base-label">Compare:</span>
-            <select
-              value={base}
-              onChange={(e) => setBase(e.target.value as SessionDiffBase)}
-            >
-              {BASE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value} title={o.hint}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-          {/* Hover affordance → the vertical schematic explaining all three spans. */}
+          <DiffComparePicker
+            sessionId={sessionId}
+            compare={compare}
+            resolved={data?.groups.find((g) => g.compare)?.compare}
+            onChange={pickCompare}
+          />
+          {/* Hover affordance → the vertical schematic explaining the three
+              working-tree spans, and what a branch or commit comparison shows. */}
           <CompareHelp base={base} />
         </div>
         <div className="session-diff-toolbar-actions">
-          {selectedIsMd && (
-            <button
-              className={`session-diff-rendered-toggle${rendered ? ' is-active' : ''}`}
-              onClick={() => setRendered((r) => !r)}
-              title="Toggle rendered markdown / diff"
-            >
-              {rendered ? 'Diff' : 'Rendered'}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`session-diff-ws-toggle${ignoreWhitespace ? ' is-active' : ''}`}
+            onClick={toggleIgnoreWhitespace}
+            aria-pressed={ignoreWhitespace}
+            aria-label="Hide whitespace changes"
+            disabled={rendered}
+            title={ignoreWhitespace ? 'Whitespace changes hidden: lines that differ only in spaces, tabs or line endings read as unchanged. Click to show them.' : 'Hide whitespace changes (lines that differ only in spaces, tabs or line endings)'}
+          >{ignoreWhitespace ? ICON_VIEWED_CHECK : ICON_WHITESPACE}<span>Hide whitespace</span></button>
           <div
             className="session-diff-viewtoggle"
             role="group"
             aria-label="Diff layout"
-            title={selectedWholeFile ? 'New/deleted files always show the whole file' : undefined}
+            title={rendered ? 'The rendered Markdown view has no diff layout' : selectedWholeFile ? 'New and deleted files always show the whole file' : undefined}
           >
             <button
               className={`session-diff-viewtoggle-btn${viewType === 'auto' && !selectedWholeFile ? ' is-active' : ''}`}
               onClick={() => setViewType('auto')}
               disabled={rendered || selectedWholeFile}
-              title="Unified normally; split only where lines changed in place"
+              title="Unified normally; split only where lines changed in place, when the pane is wide enough"
             >Auto</button>
             <button
               className={`session-diff-viewtoggle-btn${viewType === 'split' && !selectedWholeFile ? ' is-active' : ''}`}
@@ -2508,12 +2965,16 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             title={aiSummaryOn ? 'AI summaries on — click to hide' : 'AI summaries off — click to show a short AI blurb per file'}
             aria-pressed={aiSummaryOn}
           >✦ AI</button>
-          <SessionCommitButton sessionId={sessionId} disabled={!data || empty} onCommitted={() => load(true)} />
-          <button className="session-diff-refresh" onClick={() => { liveCancelRef.current?.(); liveCancelRef.current = load(true, true, true); }} title="Re-scan changes">
+          {/* Commits the session's working-tree edits: not offered while a past commit is shown. */}
+          {/* Kept in place on a one-commit view (disabled there), so the toolbar never shifts. */}
+          <SessionCommitButton sessionId={sessionId} disabled={base === 'commit' || !data || empty} onCommitted={() => load(true)} />
+          <button className="session-diff-refresh" onClick={() => { forgetGitRefs(sessionId); liveCancelRef.current?.(); liveCancelRef.current = load(true, true, true); }} title="Re-scan changes">
             {ICON_REFRESH}
           </button>
         </div>
-        {barRightSlot}
+        {barRightSlot && <span className="session-diff-toolbar-right">{barRightSlot}</span>}
+        {/* Below one row of everything: ends the title row, so the comparison and the actions share the second. */}
+        <span className="session-diff-toolbar-break" aria-hidden />
       </div>
   );
 
@@ -2538,7 +2999,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
 
   // A failed refresh must not blank a list we already have (cached view stays
   // useful); the full error pane is for having NOTHING to show.
-  if (error && !data) {
+  if (error && (!data || switching)) {
     return (
       <div className="session-diff-view session-diff-error" ref={containerRef}>
         {toolbar}
@@ -2569,6 +3030,15 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
 
       {gitStrip}
 
+      {(wholeRepo || base === 'uncommitted' || base === 'remote') && <CompareStrip info={switching ? undefined : data?.groups.find((g) => g.compare)?.compare} compare={compare} />}
+
+      {notice && (
+        <div className="session-diff-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" className="btn btn-sm" onClick={() => setNotice(null)}>Dismiss</button>
+        </div>
+      )}
+
       {/* Refresh failed but the cached list is still on screen — say so in a
           slim strip instead of blanking the view. */}
       {error && (
@@ -2592,12 +3062,29 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         />
       )}
 
-      {empty ? (
+      {switching ? (
+        <div className="session-diff-loading"><LoadingSpinner /></div>
+      ) : empty ? (
         <div className="session-diff-empty">
           {base === 'session' ? (
             <>
               <p>This session hasn't edited any files yet.</p>
               <p className="text-muted">Edits, writes, and subagent changes will appear here as a diff.</p>
+            </>
+          ) : wholeRepo && !data?.groups.some((g) => g.compare) ? (
+            <>
+              <p>No git repository here.</p>
+              <p className="text-muted">This session's folder is not in a git repository, so there is no branch or commit to compare with.</p>
+            </>
+          ) : base === 'branch' ? (
+            <>
+              <p>This branch has no changes.</p>
+              <p className="text-muted">Nothing differs from where it left {data?.groups.find((g) => g.compare)?.compare?.ref ?? compare.ref ?? 'the default branch'}, uncommitted work included.</p>
+            </>
+          ) : base === 'commit' ? (
+            <>
+              <p>This commit changed no files.</p>
+              <p className="text-muted">It matches its parent (an empty commit, or a merge that took its first parent's files).</p>
             </>
           ) : (
             <>
@@ -2626,6 +3113,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     selectedId={selectedId}
                     onSelectFile={selectFile}
                     critical={aiSummaryOn ? criticalMap : undefined}
+                    viewed={viewedMap}
+                    wsOnly={wsOnlySet}
                   />
                 ))}
                 {ghost && (
@@ -2686,6 +3175,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 // A phone has no room for two columns: always one (C78).
                 viewType={phoneDiff ? 'unified' : viewType}
                 rendered={rendered}
+                onToggleRendered={selectedIsMd ? toggleRendered : undefined}
                 sessionCwd={sessionCwd}
                 sessionHost={sessionHost}
                 sessionId={sessionId}
@@ -2698,6 +3188,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 onSendNow={sendMessage}
                 onCopyComment={copyComment}
                 onRemoveComment={removeComment}
+                ignoreWhitespace={ignoreWhitespace}
+                onShowWhitespace={showWhitespace}
+                onShowUncommitted={base === 'session' ? showUncommitted : undefined}
+                viewedState={viewedMap.get(selectedChange.filePath) ?? 'unviewed'}
+                onToggleViewed={toggleViewed}
+                onNextUnviewed={nextUnviewedId ? openNextUnviewed : null}
               />
             ) : (
               <div className="session-diff-file-empty">Select a file from the tree.</div>

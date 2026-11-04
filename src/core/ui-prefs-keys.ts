@@ -19,6 +19,9 @@ export const MACHINE_LOCAL_PREFIXES: readonly string[] = [
   // across its reloads and restarts, never carried to another device's window.
   'open-walnut-view:panel.',
   'open-walnut-view:tab.',
+  // The Changed tab's remembered view per session (web/src/components/sessions/SessionDiffView.tsx):
+  // the comparison and the open file, an absolute path. Kept with the Viewed marks, in this browser.
+  'open-walnut-diff-state:',
 ]
 
 export const MAX_KEY_LEN = 200

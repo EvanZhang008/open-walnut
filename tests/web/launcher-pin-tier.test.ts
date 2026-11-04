@@ -96,6 +96,8 @@ describe('session launcher pin tier', () => {
     // is git-synced now, so a key carrying THIS box's paths must stay local.
     // Mirrors MACHINE_LOCAL_PREFIXES in src/web/routes/ui-prefs.ts.
     expect(syncable('open-walnut-file-explorer-selected:local:/Users/me/repo')).toBe(false);
+    // The Changed tab's per-session view (comparison + open file path) stays with its Viewed marks.
+    expect(syncable('open-walnut-diff-state:some-session')).toBe(false);
   });
 
   it('survives a storage that throws (private mode / quota)', () => {

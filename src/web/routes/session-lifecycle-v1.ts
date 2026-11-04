@@ -534,6 +534,8 @@ sessionLifecycleV1Router.get('/sessions/:id/changes', async (req: Request, res: 
     const input = {
       base: typeof req.query.base === 'string' ? req.query.base : undefined,
       scope: typeof req.query.scope === 'string' ? req.query.scope : undefined,
+      ref: typeof req.query.ref === 'string' ? req.query.ref : undefined,
+      commit: typeof req.query.commit === 'string' ? req.query.commit : undefined,
       light: req.query.light === '1' || req.query.light === 'true',
       refresh: req.query.refresh === '1' || req.query.refresh === 'true',
     }

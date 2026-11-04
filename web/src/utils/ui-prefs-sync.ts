@@ -40,9 +40,11 @@ const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
  *  - `open-walnut-view:panel.` / `open-walnut-view:tab.` — what a session panel
  *    shows (a file path, a localhost service) and which panel is full screen:
  *    this window's own, kept across its reloads and restarts on this device.
+ *  - `open-walnut-diff-state:` — the Changed tab's comparison and open file per
+ *    session (an absolute path): this browser's, like its Viewed marks.
  *    The server's twin is MACHINE_LOCAL_PREFIXES in src/core/ui-prefs-keys.ts.
  */
-const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:', 'open-walnut-view:panel.', 'open-walnut-view:tab.'];
+const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:', 'open-walnut-view:panel.', 'open-walnut-view:tab.', 'open-walnut-diff-state:'];
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 

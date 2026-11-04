@@ -800,6 +800,7 @@ import {
   executeContinueSession,
   getSessionChanges,
   getSessionFileChange,
+  getSessionGitRefs,
   getSessionPendingPermissions,
   isHistoryStartupWindow,
   CLAUDE_SESSION_MODES,
@@ -1959,6 +1960,9 @@ sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, n
 //   'uncommitted'         → `git diff HEAD` (working tree vs last commit)
 //   'previous'            → `git diff HEAD~1` (incl. last commit, vs the one before)
 //   'remote'              → `git diff @{upstream}` (unpushed vs remote)
+//   'branch'              → vs the merge-base of HEAD and ?ref= (default: the
+//                           repo's default branch): the whole branch, every file
+//   'commit'              → ONE commit (?commit=<sha>) vs its first parent, every file
 //
 // ?base= chooses the comparison baseline; ?scope= selects WHICH of the session's
 // touched repos' files to show. Both git and session modes are scoped to what
@@ -1981,6 +1985,8 @@ sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, ne
       res.json(await boundHostRead(host, () => getSessionChanges(sessionId, {
         base: req.query.base,
         scope: req.query.scope,
+        ref: req.query.ref,
+        commit: req.query.commit,
         light: req.query.light === '1',
         refresh: req.query.refresh === '1' || req.query.refresh === 'true',
         swr: req.query.swr === '1',
@@ -2005,6 +2011,8 @@ sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, ne
 // GET /api/sessions/:sessionId/changes/file?path=<abs> — ONE file's change
 // record with full before/after. Pairs with ?light=1/&swr=1 list fetches: the
 // list paints instantly without content, each diff loads on selection.
+// &base=branch|commit (with &ref= / &commit= / &repo=<group root>) reads that
+// file of a whole-repo git comparison instead of the session's own edits.
 sessionsRouter.get('/:sessionId/changes/file', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const filePath = String(req.query.path ?? '')
@@ -2012,7 +2020,31 @@ sessionsRouter.get('/:sessionId/changes/file', async (req: Request, res: Respons
     try {
       const sessionId = String(req.params.sessionId)
       const host = (await getSessionByClaudeId(sessionId))?.host
-      res.json(await boundHostRead(host, () => getSessionFileChange(sessionId, filePath)))
+      const gitCompare = req.query.base === 'branch' || req.query.base === 'commit'
+        ? { base: req.query.base, ref: req.query.ref, commit: req.query.commit, repoRoot: req.query.repo }
+        : undefined
+      res.json(await boundHostRead(host, () => getSessionFileChange(sessionId, filePath, gitCompare)))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        sendControlError(res, err)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/changes/refs — the branches (local and remote)
+// and the newest 100 commits of the session's main repo, for the Changed tab's
+// compare picker. repoRoot null = the session works in no git repo.
+sessionsRouter.get('/:sessionId/changes/refs', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = String(req.params.sessionId)
+    const host = (await getSessionByClaudeId(sessionId))?.host
+    try {
+      res.json(await boundHostRead(host, () => getSessionGitRefs(sessionId)))
     } catch (err) {
       if (err instanceof SessionControlError) {
         sendControlError(res, err)

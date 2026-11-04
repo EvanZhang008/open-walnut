@@ -185,6 +185,9 @@ const SPLIT_MIN_WIDTH = 900;
  * goes full screen (96vw, `.open-walnut-fullscreen.is-changed-open`) and the chat
  * column takes `chatPct`% of it, at least 280px, plus the 1px divider.
  */
+/** The Changed view (a file tree beside a diff) opens without the chat when the chat would leave it
+ *  narrower than this: the width two code columns need (SessionDiffView's AUTO_SPLIT_MIN_W). */
+const CHANGED_COLLAPSE_CHAT_BELOW = 720;
 function boardPaneWidthWithChat(windowWidth: number, chatPct: number): number {
   const panel = windowWidth * 0.96;
   return panel - Math.max(280, (panel * chatPct) / 100) - 1;
@@ -1383,7 +1386,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // (the kanban's floor): the same automatic collapse, undone by the board's own
   // `Show chat` button, after which this panel never collapses the chat for the
   // Board again (the user's choice wins).
+  // The Changed view follows the same rule below CHANGED_COLLAPSE_CHAT_BELOW (a
+  // tree and a diff squeezed beside the chat wrap every code line), with its own
+  // "the user showed the chat" memory.
   const boardChatRevealed = useRef(false);
+  const changedChatRevealed = useRef(false);
+  /** The Changed view's width beside the chat: measured from the split when it shows, else estimated from the window. */
+  const changedPaneWidthWithChat = useCallback((): number => {
+    const split = panelRef.current?.querySelector<HTMLElement>('.session-panel-split');
+    const chat = chatColRef.current;
+    if (split && split.clientWidth > 0) {
+      const chatW = chat && chat.clientWidth > 0 ? chat.clientWidth : Math.max(280, (split.clientWidth * chatPanel.pct) / 100);
+      return split.clientWidth - chatW;
+    }
+    return boardPaneWidthWithChat(window.innerWidth, chatPanel.pct);
+  }, [chatPanel.pct]);
   const applyOpenCollapse = useCallback((view: SessionSplitView) => {
     // A phone shows the view OR the chat (the view's `Chat` toggle), never both.
     if (isPhoneLayout() || (view === 'inbox' && window.innerWidth < SPLIT_MIN_WIDTH)) {
@@ -1397,8 +1414,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       log.info('session-panel', 'board opened with the chat collapsed', { sessionId, windowWidth: window.innerWidth });
       return;
     }
+    if (view === 'changed' && !changedChatRevealed.current && changedPaneWidthWithChat() < CHANGED_COLLAPSE_CHAT_BELOW) {
+      autoCollapsed.current = true;
+      setChatCollapsed(true);
+      log.info('session-panel', 'changed opened with the chat collapsed', { sessionId, windowWidth: window.innerWidth });
+      return;
+    }
     if (autoCollapsed.current) { autoCollapsed.current = false; setChatCollapsed(false); }
-  }, [chatPanel.pct, sessionId]);
+  }, [chatPanel.pct, sessionId, changedPaneWidthWithChat]);
   const revealChatForBoard = useCallback(() => {
     boardChatRevealed.current = true;
     collapseChat(false);
@@ -1663,6 +1686,25 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     if (!first) { autoCollapsed.current = false; setChatCollapsed(chatHiddenRef.current); }
     if (activeView && !chatHiddenRef.current) applyOpenCollapse(activeView);
   }, [sheetAt, activeView, applyOpenCollapse]);
+  // The Changed view's panel can settle at its size after the view opened (full screen
+  // lands a frame later, the window is resized): it gets the same rule as it opens.
+  // Read as state, so a window crossing into or out of the phone layout runs it again.
+  const changedOnPhone = usePhoneLayout();
+  useEffect(() => {
+    if (activeView !== 'changed' || chatCollapsed || changedOnPhone) return;
+    const split = panelRef.current?.querySelector<HTMLElement>('.session-panel-split');
+    if (!split || typeof ResizeObserver === 'undefined') return;
+    const check = () => {
+      if (changedChatRevealed.current || chatHiddenRef.current) return;
+      if (changedPaneWidthWithChat() >= CHANGED_COLLAPSE_CHAT_BELOW) return;
+      autoCollapsed.current = true;
+      setChatCollapsed(true);
+      log.info('session-panel', 'changed collapsed the chat (too narrow)', { sessionId, width: split.clientWidth });
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(split);
+    return () => ro.disconnect();
+  }, [activeView, chatCollapsed, changedOnPhone, changedPaneWidthWithChat, sessionId]);
   // The chat the user hid is kept with the view; one the window hid is not.
   // Written only when it moved while the same place showed: a move to another
   // place restores that place's, it never writes this one's onto it.
@@ -3190,6 +3232,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 title="Show the chat beside the board"
                 aria-expanded={false}
               >{phoneBar.phone ? 'Chat' : 'Show chat'}</button>
+            ) : chatCollapsed && activeView === 'changed' && autoCollapsed.current && !phoneBar.phone ? (
+              <button
+                type="button"
+                className="sfe-btn session-chat-collapse-btn session-diff-show-chat"
+                onClick={() => { changedChatRevealed.current = true; collapseChat(false); }}
+                title="Show the chat beside the changes"
+                aria-expanded={false}
+              >Show chat</button>
             ) : chatCollapsed ? (
               <button
                 type="button"

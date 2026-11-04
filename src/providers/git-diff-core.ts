@@ -1,8 +1,9 @@
 /**
  * git-diff-core — the host-side git comparison algorithm, shared verbatim by:
  *   - the LOCAL path (run in-process by the Walnut server for `__local__` sessions)
- *   - the REMOTE daemon (`git.diff` RPC handler in daemon-standalone.ts /
- *     daemon-source.ts), which runs ON the remote host where the repo lives.
+ *   - the REMOTE daemon (`git.diff` / `git.refs` RPC handlers in
+ *     daemon-standalone.ts / daemon-source.ts), which runs ON the remote host
+ *     where the repo lives.
  *
  * The whole point of running this on the host (in-process or in the daemon) is
  * that git and the files are local to it — so there are NO per-file network
@@ -14,13 +15,24 @@
  *   - exec(argv, cwd)   → run a command, capture {stdout,stderr,code}
  *   - readText(absPath) → read a working-tree file as UTF-8 ('' if unreadable)
  *
- * Output is the GitDiffResult contract below — the server maps it 1:1 onto the
- * SessionChangesResult shape the frontend already renders. Keep this file
- * dependency-free (only the injected primitives) so daemon-source.ts can inline
- * an equivalent without imports.
+ * How each twin gets it: the server and daemon-standalone.ts import
+ * computeGitDiff / listGitRefs (thin typed wrappers below); daemon-source.ts
+ * inlines `createGitDiffCore.toString()` through `__CREATE_GIT_DIFF__`. So the
+ * factory body references NOTHING at module scope: every helper lives inside
+ * it, and it carries no backticks.
+ *
+ * Bases (what `before` is read from):
+ *   - 'uncommitted' → HEAD                         (working tree vs last commit)
+ *   - 'previous'    → HEAD~1                       (latest commit + uncommitted)
+ *   - 'remote'      → @{upstream} (or origin/<branch>)
+ *   - 'branch'      → merge-base of HEAD and a ref (opts.ref, or the repo's
+ *                     default branch when absent): everything this branch
+ *                     changes, uncommitted work included, as a pull request shows it
+ *   - 'commit'      → ONE commit (opts.commit) against its first parent; `after`
+ *                     is the commit's own content, never the working tree
  */
 
-export type GitDiffBase = 'uncommitted' | 'previous' | 'remote';
+export type GitDiffBase = 'uncommitted' | 'previous' | 'remote' | 'branch' | 'commit';
 
 export interface GitDiffFile {
   /** Path relative to the repo root. */
@@ -32,12 +44,84 @@ export interface GitDiffFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed';
   /** For a rename/copy, the repo-relative ORIGINAL path (git R/C entries). */
   oldRelPath?: string;
+  /** namesOnly lists: the working-tree blob id of the file ('' when unknown), so
+   *  a reader can tell the file changed since it last looked without content. */
+  sig?: string;
+  /** namesOnly lists: a modified file whose every change is whitespace ('git diff -w' finds nothing). */
+  wsOnly?: boolean;
+  /** An added file git does not track yet (it is in the working tree only). */
+  untracked?: boolean;
+}
+
+/** What a 'branch' or 'commit' comparison resolved to, for the UI to name it. */
+export interface GitCompareInfo {
+  base: 'branch' | 'commit';
+  /** branch: the ref compared against (e.g. 'origin/main'). */
+  ref?: string;
+  /** branch: true when `ref` was the repo's default branch, picked automatically. */
+  isDefault?: boolean;
+  /** The commit `before` is read from (branch: the merge-base; commit: its parent, '' for a root commit). */
+  baseSha: string;
+  /** commit: the commit itself. */
+  commit?: GitCommitSummary;
+}
+
+export interface GitCommitSummary {
+  sha: string;
+  /** First parent ('' for a root commit). */
+  parent: string;
+  parents: number;
+  author: string;
+  /** Committer time, unix seconds. */
+  time: number;
+  subject: string;
 }
 
 export interface GitDiffResult {
   /** Absolute repo root (the diff is whole-repo, scoped to the cwd's repo). */
   repoRoot: string;
   files: GitDiffFile[];
+  /** Set for the 'branch' and 'commit' bases. */
+  compare?: GitCompareInfo;
+  /** The requested ref or commit does not exist in this repo (files is empty). */
+  missing?: 'ref' | 'commit';
+}
+
+export interface GitRefEntry {
+  /** Short name: 'main', 'origin/main'. */
+  name: string;
+  kind: 'local' | 'remote';
+  sha: string;
+  /** Committer time of the tip, unix seconds. */
+  time: number;
+}
+
+export interface GitRefsResult {
+  repoRoot: string;
+  /** Current branch, or '' when HEAD is detached. */
+  current: string;
+  head: string;
+  /** The default branch 'branch' compares against without a ref ('' when none was found). */
+  defaultRef: string;
+  /** Local and remote branches, most recently committed first (capped). */
+  refs: GitRefEntry[];
+  /** The newest commits reachable from HEAD (capped at 100). */
+  commits: Array<GitCommitSummary & { onBranch: boolean }>;
+}
+
+export interface GitDiffOptions {
+  /** Only materialize before/after for these repo-relative paths (a rename
+   *  matches on either side). The scope=session caller knows exactly which
+   *  files it will show — without this it paid a `git show` for EVERY changed
+   *  file in the repo and then threw most away (observed: 683 serial spawns
+   *  ≈ 10.7s to display 16 files). */
+  paths?: string[];
+  /** 'branch': the ref to compare against (default: the repo's default branch). */
+  ref?: string;
+  /** 'commit': the commit to show. */
+  commit?: string;
+  /** List the files only (before/after left ''), each with a `sig`. */
+  namesOnly?: boolean;
 }
 
 /** Injected command runner. Returns the captured streams + exit code; must NOT
@@ -46,71 +130,386 @@ export type ExecFn = (argv: string[], cwd: string) => Promise<{ stdout: string; 
 /** Injected working-tree reader. Returns '' when the file is missing/unreadable. */
 export type ReadTextFn = (absPath: string) => Promise<string>;
 
-/** Thrown when git can't satisfy the requested base (e.g. HEAD~1 on a single
- *  commit, or no upstream). The caller maps this to a user-facing 502. */
-export class GitDiffError extends Error {}
-
-interface NameStatus {
+/** One `git diff --name-status` entry. */
+export interface NameStatus {
   status: GitDiffFile['status'];
   relPath: string;
+  /** Not in git at all yet (ls-files --others): shown as added. */
+  untracked?: boolean;
   /** For renames/copies, the original path (so `before` reads the right blob). */
   oldRelPath?: string;
 }
 
-/** posix join (repoRoot + relPath); both sides use forward slashes on the hosts
- *  we target. Avoids a node:path dependency so daemon-source can inline this. */
-function joinPosix(a: string, b: string): string {
-  if (!a) return b;
-  return a.endsWith('/') ? a + b : a + '/' + b;
-}
+/** The revisions a base compares: `from` → `to` (absent `to` = working tree). */
+interface ResolvedRevs { from: string; to?: string; compare?: GitCompareInfo; missing?: 'ref' | 'commit' }
 
-/** Resolve the git revision the diff compares against, for a base mode. */
-async function resolveBaseRev(base: GitDiffBase, exec: ExecFn, repoRoot: string): Promise<string> {
-  switch (base) {
-    case 'uncommitted':
-      return 'HEAD';
-    case 'previous':
-      // HEAD~1 → working tree: the latest commit + uncommitted, vs the one before.
-      return 'HEAD~1';
-    case 'remote': {
+/** Thrown when git can't satisfy the requested base (e.g. HEAD~1 on a single
+ *  commit, or no upstream). The caller maps this to a user-facing 502. */
+export class GitDiffError extends Error {}
+
+/**
+ * The algorithm, as one self-contained factory (see the header for why: the
+ * source twin inlines its text). Errors it means for the user are thrown as
+ * Error with 'gitDiff: true'; the wrappers below turn them into GitDiffError.
+ */
+export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
+  const SHA_RE = /^[0-9a-f]{7,64}$/i;
+  const MAX_REFS = 500;
+  const MAX_COMMITS = 100;
+  const HASH_BATCH = 100;
+
+  function fail(msg: string): never {
+    const e = new Error(msg) as Error & { gitDiff?: boolean };
+    e.gitDiff = true;
+    throw e;
+  }
+
+  /** A ref name a caller may pass. It lands in git argv (never a shell), so the
+   *  guard is against option injection ('-x'), revision syntax that is not a
+   *  ref ('a..b', 'x@{1}', 'x^', 'x:path') and control characters. */
+  function validRef(ref: unknown): ref is string {
+    if (typeof ref !== 'string' || ref.length === 0 || ref.length > 250) return false;
+    if (ref[0] === '-' || ref.indexOf('..') >= 0 || ref.indexOf('@{') >= 0) return false;
+    return !/[\s~^:?*[\\\x00-\x1f\x7f]/.test(ref);
+  }
+
+  /** posix join (repoRoot + relPath); both sides use forward slashes on the hosts
+   *  we target. Avoids a node:path dependency so the factory stays self-contained. */
+  function joinPosix(a: string, b: string): string {
+    if (!a) return b;
+    return a.endsWith('/') ? a + b : a + '/' + b;
+  }
+
+  async function verifyCommit(rev: string, root: string): Promise<string> {
+    const r = await exec(['git', 'rev-parse', '--verify', '--quiet', rev + '^{commit}'], root);
+    return r.code === 0 ? r.stdout.trim() : '';
+  }
+
+  /** The default branch: origin/HEAD, else the usual names, remote first. */
+  async function defaultBranch(root: string): Promise<string> {
+    const sym = await exec(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], root);
+    if (sym.code === 0 && sym.stdout.trim()) return sym.stdout.trim();
+    const names = ['origin/main', 'origin/master', 'main', 'master'];
+    for (const name of names) {
+      const full = (name.indexOf('/') >= 0 ? 'refs/remotes/' : 'refs/heads/') + name;
+      if (await verifyCommit(full, root)) return name;
+    }
+    return '';
+  }
+
+  function parseCommitLine(line: string): GitCommitSummary | null {
+    const f = line.split('\x1f');
+    if (f.length < 5 || !f[0]) return null;
+    const parents = f[1] ? f[1].split(' ').filter(Boolean) : [];
+    return {
+      sha: f[0], parent: parents[0] || '', parents: parents.length,
+      author: f[2] || '', time: Number(f[3]) || 0, subject: f.slice(4).join('\x1f'),
+    };
+  }
+  const COMMIT_FORMAT = '--format=%H%x1f%P%x1f%an%x1f%ct%x1f%s';
+
+  /** The revisions a base compares: 'from' → 'to' (absent 'to' = working tree). */
+  async function resolveRevs(base: GitDiffBase, root: string, opts: GitDiffOptions): Promise<ResolvedRevs> {
+    if (base === 'uncommitted') return { from: 'HEAD' };
+    // HEAD~1 → working tree: the latest commit + uncommitted, vs the one before.
+    if (base === 'previous') return { from: 'HEAD~1' };
+    if (base === 'remote') {
       // Prefer the configured upstream; fall back to origin/<branch>.
-      const up = await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], repoRoot);
-      if (up.code === 0 && up.stdout.trim()) return up.stdout.trim();
-      const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+      const up = await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], root);
+      if (up.code === 0 && up.stdout.trim()) return { from: up.stdout.trim() };
+      const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], root);
       const branch = br.stdout.trim();
-      if (branch && branch !== 'HEAD') return `origin/${branch}`;
-      return 'origin/HEAD';
+      if (branch && branch !== 'HEAD' && await verifyCommit('refs/remotes/origin/' + branch, root)) return { from: 'origin/' + branch };
+      // Never pushed (or detached): everything since it left the default branch is unpushed.
+      const def = await defaultBranch(root);
+      const tip = def ? await verifyCommit((def.indexOf('/') >= 0 ? 'refs/remotes/' : 'refs/heads/') + def, root) : '';
+      const mb = tip ? await exec(['git', 'merge-base', 'HEAD', tip], root) : null;
+      const from = mb && mb.code === 0 ? mb.stdout.trim() : '';
+      if (!from) fail('This branch has no upstream and no default branch to measure it against, so there is nothing to call "not yet pushed".');
+      return { from };
     }
+    if (base === 'branch') {
+      let ref = opts.ref;
+      const isDefault = ref === undefined || ref === '';
+      if (isDefault) {
+        ref = await defaultBranch(root);
+        if (!ref) fail('No default branch found (no origin/HEAD, main or master). Pick a branch to compare with.');
+      } else if (!validRef(ref)) {
+        fail('Not a branch name: ' + String(ref));
+      }
+      // A branch, never a same-named tag: git's own lookup order puts tags first.
+      let tip = '';
+      for (const full of isDefault ? [ref as string] : ['refs/heads/' + ref, 'refs/remotes/' + ref, ref as string]) {
+        tip = await verifyCommit(full, root);
+        if (tip) break;
+      }
+      if (!tip) return { from: '', missing: 'ref' };
+      const mb = await exec(['git', 'merge-base', 'HEAD', tip], root);
+      const baseSha = mb.code === 0 ? mb.stdout.trim() : '';
+      if (!baseSha) fail('HEAD and ' + ref + ' share no history.');
+      return { from: baseSha, compare: { base: 'branch', ref: ref as string, isDefault, baseSha } };
+    }
+    // 'commit'
+    const want = opts.commit;
+    if (typeof want !== 'string' || !SHA_RE.test(want)) fail('Not a commit id: ' + String(want));
+    const sha = await verifyCommit(want as string, root);
+    if (!sha) return { from: '', missing: 'commit' };
+    const info = await exec(['git', 'log', '-1', COMMIT_FORMAT, sha], root);
+    const commit = info.code === 0 ? parseCommitLine(info.stdout.replace(/\n+$/, '')) : null;
+    if (!commit) fail('Could not read commit ' + sha);
+    let from = (commit as GitCommitSummary).parent;
+    if (!from) {
+      // A root commit: compare against the empty tree (its id depends on the hash algorithm).
+      const empty = await exec(['git', 'hash-object', '-t', 'tree', '/dev/null'], root);
+      from = empty.stdout.trim();
+      if (empty.code !== 0 || !from) fail('Could not compute the empty tree');
+    }
+    return { from, to: sha, compare: { base: 'commit', baseSha: (commit as GitCommitSummary).parent, commit: commit as GitCommitSummary } };
   }
+
+  /** Parse 'git diff --name-status -z <rev>' output into typed entries. */
+  function parseNameStatusZ(out: string): NameStatus[] {
+    const entries: NameStatus[] = [];
+    const parts = out.split('\0');
+    let i = 0;
+    while (i < parts.length) {
+      const code = parts[i];
+      if (!code) { i++; continue; }
+      const letter = code[0];
+      if (letter === 'R' || letter === 'C') {
+        // Rename/copy: code, oldPath, newPath. Surface as 'renamed' so the UI shows
+        // the move (a pure rename has identical before/after content otherwise).
+        const oldRel = parts[i + 1];
+        const newRel = parts[i + 2];
+        i += 3;
+        if (!newRel) continue;
+        entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
+      } else {
+        const rel = parts[i + 1];
+        i += 2;
+        if (!rel) continue;
+        const status: GitDiffFile['status'] =
+          letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified';
+        entries.push({ status, relPath: rel });
+      }
+    }
+    return entries;
+  }
+
+  /** Working-tree blob ids for 'rels', one git run per batch ('' when unknown). */
+  async function worktreeSigs(root: string, rels: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (let s = 0; s < rels.length; s += HASH_BATCH) {
+      const batch = rels.slice(s, s + HASH_BATCH);
+      // --no-filters: the raw file (an LFS or other clean filter would run per file otherwise).
+      const r = await exec(['git', 'hash-object', '--no-filters', '--'].concat(batch), root);
+      const ids = r.code === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+      if (ids.length === batch.length) {
+        for (let k = 0; k < batch.length; k++) out.set(batch[k]!, ids[k]!);
+        continue;
+      }
+      // One unreadable path (a directory, a vanished file) fails the batch: one by one.
+      for (const rel of batch) {
+        const one = await exec(['git', 'hash-object', '--no-filters', '--', rel], root);
+        out.set(rel, one.code === 0 ? one.stdout.trim() : '');
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Compute a whole-repo git diff for 'cwd''s repository against 'base'.
+   * Returns null when cwd isn't a git repo; throws (gitDiff) when the base
+   * can't be resolved, and answers 'missing' when the asked ref or commit is
+   * not in this repo.
+   */
+  async function diff(base: GitDiffBase, cwd: string, opts?: GitDiffOptions): Promise<GitDiffResult | null> {
+    const o = opts || {};
+    // Repo root anchors all relPaths + blob reads.
+    const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
+    if (rootRes.code !== 0 || !rootRes.stdout.trim()) return null; // not a git repo
+    const repoRoot = rootRes.stdout.trim();
+
+    const revs = await resolveRevs(base, repoRoot, o);
+    if (revs.missing) return { repoRoot, files: [], missing: revs.missing };
+
+    // Whole-repo changed-file list vs the base.
+    const nsArgs = ['git', 'diff', '--name-status', '-z', revs.from];
+    if (revs.to) nsArgs.push(revs.to);
+    const ns = await exec(nsArgs, repoRoot);
+    if (ns.code !== 0) {
+      // e.g. HEAD~1 missing (shallow/single commit), or unknown upstream rev.
+      fail(ns.stderr.trim() || 'git diff against ' + revs.from + ' failed');
+    }
+    let entries = parseNameStatusZ(ns.stdout);
+
+    // Untracked files are "not committed" too, but 'git diff' never reports them.
+    // Include them read-only ('ls-files --others', NO index mutation) so the
+    // "local has random files" case actually shows them. They render as 'added'.
+    // A commit is a fixed snapshot: the working tree has no part in it.
+    if (!revs.to) {
+      const tracked = new Set(entries.map((e) => e.relPath));
+      // Narrowed to the asked paths when there are few (one file of a lazy list).
+      const lsArgs = ['git', 'ls-files', '--others', '--exclude-standard', '-z'];
+      if (o.paths && o.paths.length > 0 && o.paths.length <= 50) lsArgs.push('--', ...o.paths.map((p) => ':(literal)' + p));
+      const others = await exec(lsArgs, repoRoot);
+      if (others.code === 0) {
+        for (const rel of others.stdout.split('\0')) {
+          if (rel && !tracked.has(rel)) {
+            entries.push({ status: 'added', relPath: rel, untracked: true });
+            tracked.add(rel);
+          }
+        }
+      }
+    }
+    if (o.paths) {
+      const want = new Set(o.paths);
+      entries = entries.filter((e) => want.has(e.relPath) || (e.oldRelPath !== undefined && want.has(e.oldRelPath)));
+    }
+    const done = (files: GitDiffFile[]): GitDiffResult => {
+      files.sort((a, b) => a.relPath.localeCompare(b.relPath));
+      const res: GitDiffResult = { repoRoot, files };
+      if (revs.compare) res.compare = revs.compare;
+      return res;
+    };
+    if (entries.length === 0) return done([]);
+
+    if (o.namesOnly) {
+      // The working tree changes under a reader; a commit never does.
+      const sigs = revs.to ? null : await worktreeSigs(repoRoot, entries.filter((e) => e.status !== 'deleted').map((e) => e.relPath));
+      // Which modified files keep a change once whitespace is ignored: one more
+      // run, no content. --numstat honours -w (--name-only does not): a file
+      // whose every change is whitespace is left out of it.
+      const wsArgs = ['git', 'diff', '-w', '--numstat', '-z', revs.from];
+      if (revs.to) wsArgs.push(revs.to);
+      const ws = entries.some((e) => e.status === 'modified') ? await exec(wsArgs, repoRoot) : null;
+      let realChange: Set<string> | null = null;
+      if (ws && ws.code === 0) {
+        realChange = new Set();
+        const parts = ws.stdout.split('\0');
+        for (let k = 0; k < parts.length; k++) {
+          const m = /^[0-9-]+\t[0-9-]+\t([\s\S]*)$/.exec(parts[k]!.replace(/^\n/, ''));
+          if (!m) continue;
+          // A rename prints an empty path, then the old and the new one.
+          if (m[1]) realChange.add(m[1]);
+          else { realChange.add(parts[k + 2] || ''); k += 2; }
+        }
+      }
+      return done(entries.map((e) => {
+        const f: GitDiffFile = { relPath: e.relPath, before: '', after: '', status: e.status, sig: sigs ? (sigs.get(e.relPath) || '') : '' };
+        if (e.oldRelPath !== undefined) f.oldRelPath = e.oldRelPath;
+        if (e.untracked) f.untracked = true;
+        if (realChange && e.status === 'modified' && !realChange.has(e.relPath)) f.wsOnly = true;
+        return f;
+      }));
+    }
+
+    // before = blob at the base rev ('git show <rev>:<path>'); after = working
+    // tree content (or the commit's blob). Host-local but each 'git show' is a
+    // process spawn — a serial loop over a big repo took ~15ms × N. Small
+    // parallel pool instead.
+    const files: GitDiffFile[] = new Array(entries.length);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < entries.length) {
+        const i = next++;
+        const e = entries[i]!;
+        const beforePath = e.oldRelPath ?? e.relPath;
+        let before = '';
+        if (e.status !== 'added') {
+          const show = await exec(['git', 'show', revs.from + ':' + beforePath], repoRoot);
+          before = show.code === 0 ? show.stdout : ''; // non-zero = absent at base
+        }
+        let after = '';
+        if (e.status !== 'deleted') {
+          if (revs.to) {
+            const show = await exec(['git', 'show', revs.to + ':' + e.relPath], repoRoot);
+            after = show.code === 0 ? show.stdout : '';
+          } else {
+            after = await readText(joinPosix(repoRoot, e.relPath));
+          }
+        }
+        files[i] = { relPath: e.relPath, before, after, status: e.status, oldRelPath: e.oldRelPath };
+        if (e.untracked) files[i]!.untracked = true;
+      }
+    };
+    const pool = Math.min(8, entries.length);
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < pool; w++) workers.push(worker());
+    await Promise.all(workers);
+    return done(files);
+  }
+
+  /** Branches and recent commits of 'cwd''s repository, for a compare picker. */
+  async function refs(cwd: string): Promise<GitRefsResult | null> {
+    const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
+    if (rootRes.code !== 0 || !rootRes.stdout.trim()) return null;
+    const repoRoot = rootRes.stdout.trim();
+    const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+    const current = br.code === 0 && br.stdout.trim() !== 'HEAD' ? br.stdout.trim() : '';
+    const head = await verifyCommit('HEAD', repoRoot);
+    const defaultRef = await defaultBranch(repoRoot);
+
+    const list: GitRefEntry[] = [];
+    const fer = await exec(['git', 'for-each-ref', '--sort=-committerdate', '--count=' + (MAX_REFS + 20),
+      '--format=%(refname)%1f%(objectname)%1f%(committerdate:unix)', 'refs/heads', 'refs/remotes'], repoRoot);
+    if (fer.code === 0) {
+      for (const line of fer.stdout.split('\n')) {
+        const f = line.split('\x1f');
+        const refname = f[0] || '';
+        let kind: GitRefEntry['kind'];
+        let name: string;
+        if (refname.indexOf('refs/heads/') === 0) { kind = 'local'; name = refname.slice(11); }
+        else if (refname.indexOf('refs/remotes/') === 0) { kind = 'remote'; name = refname.slice(13); }
+        else continue;
+        // origin/HEAD is an alias of a branch already listed.
+        if (kind === 'remote' && /\/HEAD$/.test(name)) continue;
+        if (!validRef(name)) continue;
+        list.push({ name, kind, sha: f[1] || '', time: Number(f[2]) || 0 });
+        if (list.length >= MAX_REFS) break;
+      }
+    }
+
+    const commits: GitRefsResult['commits'] = [];
+    if (head) {
+      const lg = await exec(['git', 'log', '-n', String(MAX_COMMITS), COMMIT_FORMAT, 'HEAD'], repoRoot);
+      // Commits this branch adds over the default branch (marked in the list).
+      const ahead = new Set<string>();
+      if (defaultRef) {
+        const tip = await verifyCommit(defaultRef, repoRoot);
+        if (tip) {
+          const rl = await exec(['git', 'rev-list', '-n', String(MAX_COMMITS), tip + '..HEAD'], repoRoot);
+          if (rl.code === 0) for (const s of rl.stdout.split('\n')) if (s) ahead.add(s.trim());
+        }
+      }
+      if (lg.code === 0) {
+        for (const line of lg.stdout.split('\n')) {
+          const c = parseCommitLine(line);
+          if (c) commits.push(Object.assign(c, { onBranch: ahead.has(c.sha) }));
+        }
+      }
+    }
+    return { repoRoot, current, head, defaultRef, refs: list, commits };
+  }
+
+  return { diff, refs, validRef, parseNameStatusZ };
 }
 
-/** Parse `git diff --name-status -z <rev>` output into typed entries. */
-function parseNameStatusZ(out: string): NameStatus[] {
-  const entries: NameStatus[] = [];
-  const parts = out.split('\0');
-  let i = 0;
-  while (i < parts.length) {
-    const code = parts[i];
-    if (!code) { i++; continue; }
-    const letter = code[0];
-    if (letter === 'R' || letter === 'C') {
-      // Rename/copy: code, oldPath, newPath. Surface as 'renamed' so the UI shows
-      // the move (a pure rename has identical before/after content otherwise).
-      const oldRel = parts[i + 1];
-      const newRel = parts[i + 2];
-      i += 3;
-      if (!newRel) continue;
-      entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
-    } else {
-      const rel = parts[i + 1];
-      i += 2;
-      if (!rel) continue;
-      const status: GitDiffFile['status'] =
-        letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified';
-      entries.push({ status, relPath: rel });
-    }
+/** A caller-supplied ref name that is safe to hand to git (see createGitDiffCore). */
+export function isValidGitRef(ref: unknown): ref is string {
+  return createGitDiffCore(async () => ({ stdout: '', stderr: '', code: 1 }), async () => '').validRef(ref);
+}
+
+/** A caller-supplied commit id (abbreviated or full). */
+export function isValidGitCommit(sha: unknown): sha is string {
+  return typeof sha === 'string' && /^[0-9a-f]{7,64}$/i.test(sha);
+}
+
+function rethrow(err: unknown): never {
+  if (err && typeof err === 'object' && (err as { gitDiff?: boolean }).gitDiff) {
+    throw new GitDiffError((err as Error).message);
   }
-  return entries;
+  throw err;
 }
 
 /**
@@ -124,75 +523,22 @@ export async function computeGitDiff(
   cwd: string,
   exec: ExecFn,
   readText: ReadTextFn,
-  opts?: {
-    /** Only materialize before/after for these repo-relative paths (a rename
-     *  matches on either side). The scope=session caller knows exactly which
-     *  files it will show — without this it paid a `git show` for EVERY changed
-     *  file in the repo and then threw most away (observed: 683 serial spawns
-     *  ≈ 10.7s to display 16 files). */
-    paths?: string[];
-  },
+  opts?: GitDiffOptions,
 ): Promise<GitDiffResult | null> {
-  // Repo root anchors all relPaths + blob reads.
-  const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
-  if (rootRes.code !== 0 || !rootRes.stdout.trim()) return null; // not a git repo
-  const repoRoot = rootRes.stdout.trim();
-
-  const baseRev = await resolveBaseRev(base, exec, repoRoot);
-
-  // Whole-repo changed-file list vs the base.
-  const ns = await exec(['git', 'diff', '--name-status', '-z', baseRev], repoRoot);
-  if (ns.code !== 0) {
-    // e.g. HEAD~1 missing (shallow/single commit), or unknown upstream rev.
-    throw new GitDiffError(ns.stderr.trim() || `git diff against ${baseRev} failed`);
+  try {
+    return await createGitDiffCore(exec, readText).diff(base, cwd, opts);
+  } catch (err) {
+    return rethrow(err);
   }
-  let entries = parseNameStatusZ(ns.stdout);
+}
 
-  // Untracked files are "not committed" too, but `git diff` never reports them.
-  // Include them read-only (`ls-files --others`, NO index mutation) so the
-  // "local has random files" case actually shows them. They render as 'added'.
-  const tracked = new Set(entries.map((e) => e.relPath));
-  const others = await exec(['git', 'ls-files', '--others', '--exclude-standard', '-z'], repoRoot);
-  if (others.code === 0) {
-    for (const rel of others.stdout.split('\0')) {
-      if (rel && !tracked.has(rel)) {
-        entries.push({ status: 'added', relPath: rel });
-        tracked.add(rel);
-      }
-    }
+/** Branches and recent commits of `cwd`'s repository (null: not a git repo). */
+export async function listGitRefs(cwd: string, exec: ExecFn): Promise<GitRefsResult | null> {
+  try {
+    return await createGitDiffCore(exec, async () => '').refs(cwd);
+  } catch (err) {
+    return rethrow(err);
   }
-  if (opts?.paths) {
-    const want = new Set(opts.paths);
-    entries = entries.filter((e) => want.has(e.relPath) || (e.oldRelPath !== undefined && want.has(e.oldRelPath)));
-  }
-  if (entries.length === 0) return { repoRoot, files: [] };
-
-  // before = blob at the base rev (`git show <rev>:<path>`); after = working
-  // tree content. Host-local but each `git show` is a process spawn — a serial
-  // loop over a big repo took ~15ms × N. Small parallel pool instead.
-  const files: GitDiffFile[] = new Array(entries.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < entries.length) {
-      const i = next++;
-      const e = entries[i]!;
-      const beforePath = e.oldRelPath ?? e.relPath;
-      let before = '';
-      if (e.status !== 'added') {
-        const show = await exec(['git', 'show', `${baseRev}:${beforePath}`], repoRoot);
-        before = show.code === 0 ? show.stdout : ''; // non-zero = absent at base
-      }
-      const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-      files[i] = { relPath: e.relPath, before, after, status: e.status, oldRelPath: e.oldRelPath };
-    }
-  };
-  const pool = Math.min(8, entries.length);
-  const workers: Promise<void>[] = [];
-  for (let w = 0; w < pool; w++) workers.push(worker());
-  await Promise.all(workers);
-
-  files.sort((a, b) => a.relPath.localeCompare(b.relPath));
-  return { repoRoot, files };
 }
 
 // ── Glanceable git state (capability 'git-status-v1') ──

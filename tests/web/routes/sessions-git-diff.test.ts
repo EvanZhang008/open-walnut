@@ -321,3 +321,172 @@ describe('GET /api/sessions/:id/changes?scope= (within the touched repos)', () =
     expect(allPaths).toEqual(['app.ts']);
   });
 });
+
+/**
+ * The whole-repo bases: base=branch (vs the merge-base with a ref, the default
+ * branch when none) and base=commit (one commit vs its first parent). Unlike the
+ * bases above they show EVERY file of the branch or commit (that is what a
+ * branch review is), still only in the repos the session works in.
+ */
+describe('GET /api/sessions/:id/changes?base=branch|commit (whole-repo comparisons)', () => {
+  /** main (pushed) ← feature: c1 edits app.ts and adds lib.ts; the session then edits app.ts again. */
+  async function branchRepo() {
+    await createSessionRecord(SID, 'task-1', 'proj', REPO);
+    await fs.writeFile(path.join(REPO, 'app.ts'), 'const v = 1;\n');
+    await fs.writeFile(path.join(REPO, 'other.ts'), 'other\n');
+    await git(REPO, 'add', '-A');
+    await git(REPO, 'commit', '-q', '-m', 'baseline');
+    await execFileAsync('git', ['init', '-q', '--bare', REMOTE]);
+    await git(REPO, 'remote', 'add', 'origin', REMOTE);
+    await git(REPO, 'push', '-q', '-u', 'origin', 'main');
+    await git(REPO, 'remote', 'set-head', 'origin', 'main');
+    await git(REPO, 'checkout', '-q', '-b', 'feature');
+    await fs.writeFile(path.join(REPO, 'app.ts'), 'const v = 2;\n');
+    await fs.writeFile(path.join(REPO, 'lib.ts'), 'export const lib = 1;\n');
+    await git(REPO, 'add', '-A');
+    await git(REPO, 'commit', '-q', '-m', 'feature: bump v, add lib');
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf-8' });
+    await fs.writeFile(path.join(REPO, 'app.ts'), 'const v = 3;\n');
+    await writeSessionJsonl(REPO, [{ file: path.join(REPO, 'app.ts'), oldStr: 'const v = 2;', newStr: 'const v = 3;' }]);
+    return { c1: stdout.trim() };
+  }
+
+  it('base=branch → every file the branch changes vs the default branch, with the resolved base named', async () => {
+    await branchRepo();
+    const res = await request(createApp()).get(`/api/sessions/${SID}/changes`).query({ base: 'branch' });
+    expect(res.status).toBe(200);
+    expect(res.body.groups).toHaveLength(1);
+    expect(res.body.groups[0].compare).toMatchObject({ base: 'branch', ref: 'origin/main', isDefault: true });
+    const by = Object.fromEntries(res.body.groups[0].files.map((f: { relPath: string }) => [f.relPath, f]));
+    // lib.ts was never edited by the session: a branch review shows it anyway.
+    expect(Object.keys(by).sort()).toEqual(['app.ts', 'lib.ts']);
+    expect(by['app.ts']).toMatchObject({ before: 'const v = 1;\n', after: 'const v = 3;\n' });
+  });
+
+  it('base=branch&light=1 → names only with a sig; /changes/file serves one file of that comparison', async () => {
+    await branchRepo();
+    const app = createApp();
+    const list = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', light: '1' });
+    expect(list.status).toBe(200);
+    expect(list.body.light).toBe(true);
+    const app_ts = list.body.groups[0].files.find((f: { relPath: string }) => f.relPath === 'app.ts');
+    expect(app_ts).toMatchObject({ before: '', after: '' });
+    expect(app_ts.sig).toMatch(/^[0-9a-f]{40,64}$/);
+    const one = await request(app).get(`/api/sessions/${SID}/changes/file`)
+      .query({ path: path.join(REPO, 'lib.ts'), base: 'branch', repo: list.body.groups[0].repoRoot });
+    expect(one.status).toBe(200);
+    expect(one.body.file).toMatchObject({ relPath: 'lib.ts', status: 'added', before: '', after: 'export const lib = 1;\n' });
+    // A file outside the comparison is a 404, never a read of arbitrary paths.
+    const outside = await request(app).get(`/api/sessions/${SID}/changes/file`).query({ path: '/etc/hosts', base: 'branch' });
+    expect(outside.status).toBe(404);
+  });
+
+  it('base=branch&ref=<local branch> compares with that branch; an unknown ref is a 502 that names it; a malformed ref is a 400', async () => {
+    await branchRepo();
+    const app = createApp();
+    const res = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', ref: 'main' });
+    expect(res.status).toBe(200);
+    expect(res.body.groups[0].compare).toMatchObject({ ref: 'main', isDefault: false });
+    const missing = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', ref: 'nope' });
+    expect(missing.status).toBe(502);
+    expect(missing.body.error).toMatch(/nope/);
+    const bad = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', ref: '--output=x' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('base=commit → that commit alone (its content, not the working tree); the per-file read agrees', async () => {
+    const { c1 } = await branchRepo();
+    const app = createApp();
+    const res = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'commit', commit: c1.slice(0, 10) });
+    expect(res.status).toBe(200);
+    expect(res.body.groups[0].compare).toMatchObject({ base: 'commit', commit: { sha: c1, subject: 'feature: bump v, add lib' } });
+    const by = Object.fromEntries(res.body.groups[0].files.map((f: { relPath: string }) => [f.relPath, f]));
+    expect(by['app.ts']).toMatchObject({ before: 'const v = 1;\n', after: 'const v = 2;\n' });
+    const one = await request(app).get(`/api/sessions/${SID}/changes/file`).query({ path: path.join(REPO, 'app.ts'), base: 'commit', commit: c1 });
+    expect(one.body.file).toMatchObject({ before: 'const v = 1;\n', after: 'const v = 2;\n' });
+    expect((await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'commit', commit: 'HEAD' })).status).toBe(400);
+    expect((await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'commit', commit: 'abcdef0123' })).status).toBe(502);
+  });
+
+  it('a session that edited nothing still compares its cwd repo for the whole-repo bases (the session bases stay empty)', async () => {
+    await branchRepo();
+    await writeSessionJsonl(REPO, []);
+    const app = createApp();
+    const branch = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch' });
+    expect(branch.body.groups[0].files.map((f: { relPath: string }) => f.relPath).sort()).toEqual(['app.ts', 'lib.ts']);
+    const uncommitted = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'uncommitted' });
+    expect(uncommitted.body.groups).toEqual([]);
+  });
+
+  it('a branch beats a same-named tag (git alone would pick the tag)', async () => {
+    const { c1 } = await branchRepo();
+    await git(REPO, 'tag', 'main', c1);
+    const res = await request(createApp()).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', ref: 'main' });
+    expect(res.status).toBe(200);
+    // vs the BRANCH main (baseline): both files; the tag (the feature commit) would leave only app.ts.
+    expect(res.body.groups[0].files.map((f: { relPath: string }) => f.relPath).sort()).toEqual(['app.ts', 'lib.ts']);
+  });
+
+  it('per-file reads use git\'s own top level: a symlinked path and a session in a subfolder both resolve', async () => {
+    await branchRepo();
+    await fs.mkdir(path.join(REPO, 'sub'), { recursive: true });
+    await fs.writeFile(path.join(REPO, 'sub', 'deep.ts'), 'deep\n');
+    const link = `${REPO}-link`;
+    await fs.symlink(REPO, link);
+    try {
+      for (const cwd of [link, path.join(link, 'sub'), path.join(REPO, 'sub')]) {
+        await createSessionRecord(SID, 'task-1', 'proj', cwd);
+        await writeSessionJsonl(cwd, []);
+        const app = createApp();
+        const list = await request(app).get(`/api/sessions/${SID}/changes`).query({ base: 'branch', light: '1' });
+        expect(list.status).toBe(200);
+        const group = list.body.groups[0];
+        for (const rel of ['lib.ts', 'sub/deep.ts']) {
+          const f = group.files.find((x: { relPath: string }) => x.relPath === rel);
+          expect(f, `${cwd}: ${rel} listed`).toBeTruthy();
+          const one = await request(app).get(`/api/sessions/${SID}/changes/file`).query({ path: f.filePath, base: 'branch', repo: group.repoRoot });
+          expect(one.status, `${cwd}: ${rel}`).toBe(200);
+          expect(one.body.file.relPath).toBe(rel);
+        }
+      }
+    } finally {
+      await fs.rm(link, { force: true });
+    }
+  });
+
+  it('the repo hint is trusted only as the top level of a repo the session works in, never an enclosing repo', async () => {
+    // An outer repo (a dotfiles home, say) holding the session's repo and an untracked secret.
+    const outer = `${REPO}-outer`;
+    await initRepo(outer);
+    await fs.writeFile(path.join(outer, 'README'), 'outer\n');
+    await git(outer, 'add', '-A');
+    await git(outer, 'commit', '-q', '-m', 'outer');
+    await fs.writeFile(path.join(outer, 'secret.txt'), 'do not read\n');
+    const inner = path.join(outer, 'inner');
+    await initRepo(inner);
+    await fs.writeFile(path.join(inner, 'a.ts'), 'a\n');
+    await git(inner, 'add', '-A');
+    await git(inner, 'commit', '-q', '-m', 'inner');
+    await git(inner, 'checkout', '-q', '-b', 'feature');
+    try {
+      await createSessionRecord(SID, 'task-1', 'proj', inner);
+      await writeSessionJsonl(inner, []);
+      const res = await request(createApp()).get(`/api/sessions/${SID}/changes/file`)
+        .query({ path: path.join(outer, 'secret.txt'), base: 'branch', ref: 'main', repo: outer });
+      expect(res.status).toBe(404);
+      expect(JSON.stringify(res.body)).not.toContain('do not read');
+    } finally {
+      await fs.rm(outer, { recursive: true, force: true });
+    }
+  });
+
+  it('GET /changes/refs → branches, the default, and the newest commits marked when they are on this branch', async () => {
+    const { c1 } = await branchRepo();
+    const res = await request(createApp()).get(`/api/sessions/${SID}/changes/refs`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ current: 'feature', defaultRef: 'origin/main' });
+    expect(res.body.refs.map((r: { name: string; kind: string }) => `${r.kind}:${r.name}`).sort()).toEqual(['local:feature', 'local:main', 'remote:origin/main']);
+    expect(res.body.commits[0]).toMatchObject({ sha: c1, onBranch: true });
+    expect(res.body.commits[1]).toMatchObject({ subject: 'baseline', onBranch: false });
+  });
+});

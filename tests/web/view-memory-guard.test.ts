@@ -47,6 +47,7 @@ const PASSING: Record<string, string> = {
   'components/chat/ComposerControlsBar.tsx#showDetail': 'the controls bar expanded for one compose',
   'components/chat/MentionPalette.tsx#pickedTab': 'the mention palette, a popover',
   'components/sessions/BackgroundTasksPanel.tsx#chosenTab': 'a session\'s background jobs panel, a popover; it opens on the kind asked for',
+  'components/sessions/SessionDiffView.tsx#narrowPane': 'a measurement of the pane width, not a choice',
   'components/sessions/EngineSettingsPopover.tsx#filter': 'a typed filter in a popover',
   'components/sessions/SessionChatHistory.tsx#activeTeamTab': 'which team of one conversation is read; it follows the conversation',
   'components/sessions/SessionPanel.tsx#prefillMode': 'how one prefill lands in the composer',

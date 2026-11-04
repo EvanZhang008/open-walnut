@@ -222,13 +222,16 @@ test('strip and ✦ star persist under git bases (Uncommitted)', async ({ page }
   const panel = await openChangedTab(page)
   await expect(panel.locator('.session-diff-ai-summary')).toBeVisible({ timeout: 10_000 })
 
-  await panel.locator('.session-diff-base-select select').selectOption('uncommitted')
+  // The compare picker's popover is portalled to <body>: options are page-level.
+  await panel.locator('.session-diff-compare-trigger').click()
+  await page.getByRole('option', { name: /Uncommitted changes/ }).click()
   // The summary still describes the session's own change to this file.
   await expect(panel.locator('.session-diff-ai-summary')).toContainText('Session-authored change.', { timeout: 10_000 })
   await expect(panel.locator('.session-diff-tree-critical')).toHaveCount(1, { timeout: 10_000 })
 
   // Base choice is remembered per session (ui-prefs) — reset for other specs.
-  await panel.locator('.session-diff-base-select select').selectOption('session')
+  await panel.locator('.session-diff-compare-trigger').click()
+  await page.getByRole('option', { name: /What this session changed/ }).click()
   await expect(panel.locator('.session-diff-ai-summary')).toBeVisible({ timeout: 10_000 })
 })
 

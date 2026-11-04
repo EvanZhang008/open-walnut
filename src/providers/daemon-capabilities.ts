@@ -733,6 +733,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // host paths. Optional: without it session rows show no git state for that
   // host until the next auto-deploy.
   'git-status-v1',
+  // 'git-compare-v1': `git.diff` takes the 'branch' base (vs the merge-base
+  // with a ref, the default branch when none) and the 'commit' base (one
+  // commit vs its first parent), and a names-only list (`namesOnly`, each file
+  // with its working-tree blob id); `git.refs` lists branches and the newest
+  // commits for the Changed tab's compare picker. Both twins run
+  // git-diff-core.ts (text-injected into the source twin), so it is NOT
+  // sidecar-gated. Not bridge-reachable, like git.diff. Optional: without it
+  // those comparisons say the host's daemon needs an update.
+  'git-compare-v1',
   // 'workspace-v1': a task's isolated working copy (workspace-core.ts).
   // `workspace.detect` / `.create` / `.job` / `.status` / `.repos` / `.remove`
   // run the built-in git-worktree provider natively and plugin providers from an

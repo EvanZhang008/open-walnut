@@ -12,6 +12,35 @@ export interface SessionFileChange {
   oldRelPath?: string;
   ops: number;
   partial: boolean;
+  /** Names-only git lists (branch / commit bases): the working-tree blob id,
+   *  so a Viewed mark can tell the file changed without its content. */
+  sig?: string;
+  /** Names-only git lists: every change in this (modified) file is whitespace. */
+  wsOnly?: boolean;
+  /** Git bases: an added file git does not track yet. */
+  untracked?: boolean;
+}
+
+/** One commit, as git-diff-core.ts reports it. */
+export interface GitCommitSummary {
+  sha: string;
+  /** First parent ('' for a root commit). */
+  parent: string;
+  parents: number;
+  author: string;
+  /** Committer time, unix seconds. */
+  time: number;
+  subject: string;
+}
+
+/** What a 'branch' or 'commit' comparison resolved to (mirrors GitCompareInfo). */
+export interface GitCompareInfo {
+  base: 'branch' | 'commit';
+  ref?: string;
+  isDefault?: boolean;
+  /** The commit `before` is read from (branch: the merge-base; commit: its parent). */
+  baseSha: string;
+  commit?: GitCommitSummary;
 }
 
 /** A group of changed files sharing a repo root. */
@@ -20,6 +49,8 @@ export interface SessionRepoGroup {
   label: string;
   kind: 'cwd' | 'other' | 'submodule';
   files: SessionFileChange[];
+  /** Branch / commit bases: what this repo's comparison resolved to. */
+  compare?: GitCompareInfo;
 }
 
 export interface SessionChangesResult {
@@ -42,9 +73,36 @@ export interface SessionChangesResult {
  *  - 'uncommitted' → whole-repo `git diff HEAD` (working tree vs last commit).
  *  - 'previous'    → whole-repo `git diff HEAD~1` (incl. latest commit, vs the one before).
  *  - 'remote'      → whole-repo `git diff @{upstream}` (unpushed vs the remote).
+ *  - 'branch'      → the working tree vs the merge-base with a ref (the repo's
+ *                    default branch when none): everything the branch changes.
+ *  - 'commit'      → one commit vs its first parent.
  * The git modes show the real working tree (random uncommitted files included).
  */
-export type SessionDiffBase = 'session' | 'uncommitted' | 'previous' | 'remote';
+export type SessionDiffBase = 'session' | 'uncommitted' | 'previous' | 'remote' | 'branch' | 'commit';
+
+/** A full comparison: the base plus the ref or commit it needs. */
+export interface SessionDiffCompare {
+  base: SessionDiffBase;
+  /** base 'branch': the ref (absent = the repo's default branch). */
+  ref?: string;
+  /** base 'commit': the commit id. */
+  commit?: string;
+}
+
+/** Branch and commit bases list every file of the branch or commit, names only;
+ *  each file's diff loads on selection. */
+export function isWholeRepoBase(base: SessionDiffBase): boolean {
+  return base === 'branch' || base === 'commit';
+}
+
+/** The query keys a comparison adds (base 'session' adds none). */
+function compareParams(c: SessionDiffCompare): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (c.base !== 'session') params.base = c.base;
+  if (c.base === 'branch' && c.ref) params.ref = c.ref;
+  if (c.base === 'commit' && c.commit) params.commit = c.commit;
+  return params;
+}
 
 /**
  * Which files to show in a git base mode:
@@ -67,13 +125,16 @@ export type SessionDiffScope = 'all' | 'session';
 export async function fetchSessionChanges(
   sessionId: string,
   opts?: { refresh?: boolean; base?: SessionDiffBase; scope?: SessionDiffScope; signal?: AbortSignal;
+    /** base 'branch' / 'commit': the ref or commit (see SessionDiffCompare). */
+    ref?: string; commit?: string;
     /** light: strip before/after (per-file diffs load lazily). swr: serve the
      *  last cached result instantly (stale:true) while recomputing. */
     light?: boolean; swr?: boolean },
 ): Promise<SessionChangesResult> {
-  const params: Record<string, string> = {};
+  const params: Record<string, string> = opts?.base
+    ? compareParams({ base: opts.base, ref: opts.ref, commit: opts.commit })
+    : {};
   if (opts?.refresh) params.refresh = '1';
-  if (opts?.base && opts.base !== 'session') params.base = opts.base;
   if (opts?.scope === 'all') params.scope = 'all';
   if (opts?.light) params.light = '1';
   if (opts?.swr) params.swr = '1';
@@ -90,12 +151,53 @@ export async function fetchSessionChanges(
 export async function fetchSessionFileChange(
   sessionId: string,
   filePath: string,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal;
+    /** A branch / commit comparison: that file's diff from git, in the group
+     *  rooted at `repoRoot` (the list answer's root for the file). */
+    compare?: SessionDiffCompare; repoRoot?: string },
 ): Promise<{ sessionId: string; repoRoot: string; file: SessionFileChange }> {
+  const params: Record<string, string> = { path: filePath };
+  if (opts?.compare && isWholeRepoBase(opts.compare.base)) {
+    Object.assign(params, compareParams(opts.compare));
+    if (opts.repoRoot) params.repo = opts.repoRoot;
+  }
   return apiGet<{ sessionId: string; repoRoot: string; file: SessionFileChange }>(
     `/api/sessions/${sessionId}/changes/file`,
-    { path: filePath },
+    params,
     { signal: opts?.signal, timeoutMs: 60_000 },
+  );
+}
+
+/** One branch of the session's repo, for the compare picker. */
+export interface GitRefEntry {
+  name: string;
+  kind: 'local' | 'remote';
+  sha: string;
+  time: number;
+}
+
+/** Branches and recent commits of the session's main repo (repoRoot null: no git repo). */
+export interface SessionGitRefs {
+  repoRoot: string | null;
+  /** Current branch ('' when HEAD is detached). */
+  current: string;
+  head: string;
+  /** The default branch 'branch' compares with when no ref is picked ('' when none). */
+  defaultRef: string;
+  refs: GitRefEntry[];
+  /** Newest 100 commits from HEAD; onBranch = not on the default branch. */
+  commits: Array<GitCommitSummary & { onBranch: boolean }>;
+}
+
+/** The compare picker's lists. A remote host answers through its daemon. */
+export async function fetchSessionGitRefs(
+  sessionId: string,
+  opts?: { signal?: AbortSignal },
+): Promise<SessionGitRefs> {
+  return apiGet<SessionGitRefs>(
+    `/api/sessions/${sessionId}/changes/refs`,
+    undefined,
+    { signal: opts?.signal, timeoutMs: 45_000 },
   );
 }
 

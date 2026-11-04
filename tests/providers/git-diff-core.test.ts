@@ -82,12 +82,38 @@ describe('computeGitDiff', () => {
       'git rev-parse --show-toplevel': { stdout: REPO },
       'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}': { code: 128, stderr: 'no upstream' },
       'git rev-parse --abbrev-ref HEAD': { stdout: 'feature\n' },
+      'git rev-parse --verify --quiet refs/remotes/origin/feature^{commit}': { stdout: 'f'.repeat(40) + '\n' },
       'git diff --name-status -z origin/feature': { stdout: '' },
       'git ls-files --others --exclude-standard -z': { stdout: '' },
     });
     const res = await computeGitDiff('remote', REPO, exec, mockRead({}));
     expect(res!.files).toEqual([]);
     expect(calls).toContain('git diff --name-status -z origin/feature');
+  });
+
+  it('remote: a branch never pushed counts everything since it left the default branch', async () => {
+    const mb = 'b'.repeat(40);
+    const { exec, calls } = mockExec({
+      'git rev-parse --show-toplevel': { stdout: REPO },
+      'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}': { code: 128, stderr: 'no upstream' },
+      'git rev-parse --abbrev-ref HEAD': { stdout: 'feature\n' },
+      'git symbolic-ref --quiet --short refs/remotes/origin/HEAD': { stdout: 'origin/main\n' },
+      'git rev-parse --verify --quiet refs/remotes/origin/main^{commit}': { stdout: 'c'.repeat(40) + '\n' },
+      [`git merge-base HEAD ${'c'.repeat(40)}`]: { stdout: mb + '\n' },
+      [`git diff --name-status -z ${mb}`]: { stdout: '' },
+      'git ls-files --others --exclude-standard -z': { stdout: '' },
+    });
+    const res = await computeGitDiff('remote', REPO, exec, mockRead({}));
+    expect(res!.files).toEqual([]);
+    expect(calls).toContain(`git diff --name-status -z ${mb}`);
+  });
+
+  it('remote: no upstream and no default branch is a plain-words error, not a raw git one', async () => {
+    const { exec } = mockExec({
+      'git rev-parse --show-toplevel': { stdout: REPO },
+      'git rev-parse --abbrev-ref HEAD': { stdout: 'feature\n' },
+    });
+    await expect(computeGitDiff('remote', REPO, exec, mockRead({}))).rejects.toThrow(/no upstream and no default branch/);
   });
 
   it('throws GitDiffError when the base rev cannot be diffed (e.g. HEAD~1 missing)', async () => {

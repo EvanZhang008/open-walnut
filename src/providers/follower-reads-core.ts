@@ -95,7 +95,7 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
   /** The follower reads WP6 adds to the allowlist (both twins add exactly these). */
   const COMMANDS = [
     'fs.ls', 'fs.read', 'fs.stat', 'fs.readRange', 'fs.resolvePath', 'fs.grep',
-    'git.diff', 'git.fileShow', 'git.fileLog', 'changes.compute', 'changes.file',
+    'git.diff', 'git.refs', 'git.fileShow', 'git.fileLog', 'changes.compute', 'changes.file',
     'replica.list', 'replica.read', 'replica.readMany', 'fs.find',
     'attachments.list', 'attachments.read',
   ]
@@ -393,6 +393,12 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
       if (!inScope(home, cmd.cwd)) { refuse(home, c); return { answer: { repoRoot: null, files: [] } } }
       // The diff is the whole repository's: files under another Walnut's cwd go.
       return { pass: true, scope: (a) => diffInScope(home, a) }
+    }
+    if (c === 'git.refs') {
+      // Branch names and commit subjects of one repository: out of scope looks
+      // like no repository, as git.diff answers.
+      if (!inScope(home, cmd.cwd)) { refuse(home, c); return { answer: { repoRoot: null } } }
+      return { pass: true }
     }
     if (c === 'git.fileShow' || c === 'git.fileLog') {
       if (!inScope(home, cmd.cwd)) return refuse(home, c)

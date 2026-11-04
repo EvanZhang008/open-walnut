@@ -447,11 +447,11 @@ describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () 
   const WRITES = ['fs.write', 'fs.mkdir', 'fs.rename', 'fs.rm', 'fs.copy', 'git.commitStart', 'git.commitPlan', 'git.ensureExcluded', 'replica.sync', 'replica.put', 'replica.drop',
     'attachments.sync', 'attachments.put', 'attachments.drop', 'attachments.status', 'start', 'send', 'stop']
 
-  it('adds exactly the reads WP6 names (and the pictures copy reads, attachment-copy-v1), and no write', () => {
+  it('adds exactly the reads WP6 names (and the pictures copy reads, attachment-copy-v1, and the compare picker\'s git.refs), and no write', () => {
     expect([...reads.COMMANDS].sort()).toEqual([
       'attachments.list', 'attachments.read',
       'changes.compute', 'changes.file', 'fs.find', 'fs.grep', 'fs.ls', 'fs.read', 'fs.readRange', 'fs.resolvePath', 'fs.stat',
-      'git.diff', 'git.fileLog', 'git.fileShow', 'replica.list', 'replica.read', 'replica.readMany',
+      'git.diff', 'git.fileLog', 'git.fileShow', 'git.refs', 'replica.list', 'replica.read', 'replica.readMany',
     ])
     for (const w of WRITES) expect(reads.COMMANDS).not.toContain(w)
   })

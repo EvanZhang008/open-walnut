@@ -86,6 +86,7 @@ import { createFsLs } from './fs-ls-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
 import { createGitStatus } from './git-diff-core.js'
+import { createGitDiffCore } from './git-diff-core.js'
 import { createOneShotCore } from './oneshot-core.js'
 import { createTransferCore } from './transfer-core.js'
 import { createTransferPack } from './transfer-pack-core.js'
@@ -309,6 +310,7 @@ export function getDaemonSource(): string {
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
     ['__CREATE_GIT_STATUS__', createGitStatus.toString()],
+    ['__CREATE_GIT_DIFF__', createGitDiffCore.toString()],
     ['__CREATE_ONESHOT__', createOneShotCore.toString()],
     ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
     ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
@@ -774,6 +776,15 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         const gc = createCommit({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, tmpdir: () => '/tmp', env: {}, attribution: at })
         if (gc.job('none') !== null || gc.cleanMessage('  x  \n\n\n\ny\n') !== '  x\n\ny\n') throw new Error('git commit core did not build')
       }
+    }
+    // Git diff smoke: the compare core must build from its text, parse a
+    // name-status listing and refuse a ref that would read as an option.
+    const createDiff = reconstructed['__CREATE_GIT_DIFF__'] as typeof createGitDiffCore | undefined
+    if (createDiff) {
+      const gd = createDiff(async () => ({ stdout: '', stderr: '', code: 1 }), async () => '')
+      const ns = gd.parseNameStatusZ('M\0a.ts\0R100\0b.ts\0c.ts\0')
+      if (ns.length !== 2 || ns[1].status !== 'renamed' || ns[1].oldRelPath !== 'b.ts') throw new Error('git diff core misparsed name-status')
+      if (gd.validRef('--output=x') || !gd.validRef('origin/main')) throw new Error('git diff core ref guard did not build')
     }
     // One-shot smoke: the factory must build from its text and refuse a run
     // without a command. Behaviour is pinned by tests/providers/oneshot-twins-e2e.test.ts.
@@ -4114,6 +4125,9 @@ function dispatchCommand(ws, id, cmd) {
     // 'git-status-v1': glanceable repo state; NOT bridge-reachable (reads host
     // paths). Keep in sync with daemon-standalone.ts.
     case 'git.status': return cmdGitStatus(ws, id, cmd);
+    // 'git-compare-v1': branches + recent commits for the Changed tab's compare
+    // picker (git-diff-core.ts). Same bridge rule as git.diff.
+    case 'git.refs': return cmdGitRefs(ws, id, cmd);
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
     // it reads arbitrary host paths, which the cloud bridge must never reach.
     case 'git.fileLog': return cmdGitFileLog(ws, id, cmd);
@@ -12518,111 +12532,54 @@ async function cmdFsReadRange(ws, id, cmd) {
 }
 
 // -- Git diff (whole-repo, host-local) --
-// Inlined equivalent of git-diff-core.ts (this daemon code is an embedded string
-// template, so it can NOT import and must NOT contain backticks). Runs git HERE
-// on the host, so no per-file network round trips. Keep in sync with git-diff-core.ts.
-async function cmdGitDiff(ws, id, cmd) {
-  let cwd = cmd.cwd;
-  const base = cmd.base;
-  if (!cwd) return sendError(ws, id, 'git.diff: missing cwd');
-  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
-    return sendError(ws, id, 'git.diff: invalid base');
-  }
-  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1);
+// The algorithm is git-diff-core.ts, text-injected (createGitDiffCore), the
+// same code daemon-standalone.ts imports. Runs git HERE on the host, so no
+// per-file network round trips. PARITY: keep the handlers in sync with
+// cmdGitDiff / cmdGitRefs in daemon-standalone.ts.
+const gitDiffCore = (__CREATE_GIT_DIFF__)(gitDiffExec, async function (absPath) {
+  try { return await fs.promises.readFile(absPath, 'utf-8'); } catch (e) { return ''; }
+});
 
+// Vars that make git ignore the cwd it is given (an inherited GIT_DIR outranks it).
+const GIT_DIFF_REDIRECT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX'];
+
+// One git run for git.diff / git.refs: the repo the cwd names, no optional
+// index lock (these are reads), never a prompt. Never throws: exit codes are answers.
+function gitDiffExec(argv, runCwd) {
   const cp = require('child_process');
-  const exec = (argv, runCwd) => new Promise((resolve) => {
-    cp.execFile(argv[0], argv.slice(1), { cwd: runCwd, timeout: 25000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
+  const env = Object.assign({}, process.env, { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' });
+  for (const k of GIT_DIFF_REDIRECT_VARS) delete env[k];
+  return new Promise((resolve) => {
+    cp.execFile(argv[0], argv.slice(1), { cwd: runCwd, env: env, timeout: 25000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
       (err, stdout, stderr) => {
         if (!err) return resolve({ stdout: stdout, stderr: stderr, code: 0 });
         resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 });
       });
   });
-  const readText = async (absPath) => {
-    try { return await fs.promises.readFile(absPath, 'utf-8'); } catch (e) { return ''; }
-  };
-  const joinPosix = (a, b) => !a ? b : (a.endsWith('/') ? a + b : a + '/' + b);
+}
 
+async function cmdGitDiff(ws, id, cmd) {
+  let cwd = cmd.cwd;
+  const base = cmd.base;
+  if (!cwd) return sendError(ws, id, 'git.diff: missing cwd');
+  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote' && base !== 'branch' && base !== 'commit') {
+    return sendError(ws, id, 'git.diff: invalid base');
+  }
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1);
+  const opts = {};
+  // Narrow blob materialization to the caller's file set (scope=session).
+  if (Array.isArray(cmd.paths) && cmd.paths.every((p) => typeof p === 'string')) opts.paths = cmd.paths;
+  // ref / commit are validated by the core before they reach git.
+  if (typeof cmd.ref === 'string') opts.ref = cmd.ref;
+  if (typeof cmd.commit === 'string') opts.commit = cmd.commit;
+  if (cmd.namesOnly === true) opts.namesOnly = true;
   try {
-    const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
-    if (rootRes.code !== 0 || !rootRes.stdout.trim()) return sendOk(ws, id, { repoRoot: null, files: [] });
-    const repoRoot = rootRes.stdout.trim();
-
-    // Resolve base rev.
-    let baseRev;
-    if (base === 'uncommitted') baseRev = 'HEAD';
-    else if (base === 'previous') baseRev = 'HEAD~1';
-    else {
-      const up = await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], repoRoot);
-      if (up.code === 0 && up.stdout.trim()) baseRev = up.stdout.trim();
-      else {
-        const br = await exec(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
-        const branch = br.stdout.trim();
-        baseRev = (branch && branch !== 'HEAD') ? ('origin/' + branch) : 'origin/HEAD';
-      }
-    }
-
-    const ns = await exec(['git', 'diff', '--name-status', '-z', baseRev], repoRoot);
-    if (ns.code !== 0) return sendError(ws, id, ns.stderr.trim() || ('git diff against ' + baseRev + ' failed'));
-
-    // Parse name-status -z.
-    const entries = [];
-    const parts = ns.stdout.split('\0');
-    for (let i = 0; i < parts.length;) {
-      const code = parts[i];
-      if (!code) { i++; continue; }
-      const letter = code[0];
-      if (letter === 'R' || letter === 'C') {
-        const oldRel = parts[i + 1], newRel = parts[i + 2]; i += 3;
-        if (newRel) entries.push({ status: 'renamed', relPath: newRel, oldRelPath: oldRel });
-      } else {
-        const rel = parts[i + 1]; i += 2;
-        if (rel) entries.push({ status: letter === 'A' ? 'added' : letter === 'D' ? 'deleted' : 'modified', relPath: rel });
-      }
-    }
-
-    // Untracked (read-only) → 'added'.
-    const tracked = new Set(entries.map((e) => e.relPath));
-    const others = await exec(['git', 'ls-files', '--others', '--exclude-standard', '-z'], repoRoot);
-    if (others.code === 0) {
-      for (const rel of others.stdout.split('\0')) {
-        if (rel && !tracked.has(rel)) { entries.push({ status: 'added', relPath: rel }); tracked.add(rel); }
-      }
-    }
-    // PARITY (git-diff-core.ts opts.paths): narrow blob materialization to the
-    // caller's file set — scope=session sends the session's own files so we
-    // don't git-show every changed file in the repo.
-    let wanted = entries;
-    if (Array.isArray(cmd.paths) && cmd.paths.every((p) => typeof p === 'string')) {
-      const want = new Set(cmd.paths);
-      wanted = entries.filter((e) => want.has(e.relPath) || (e.oldRelPath !== undefined && want.has(e.oldRelPath)));
-    }
-    if (wanted.length === 0) return sendOk(ws, id, { repoRoot: repoRoot, files: [] });
-
-    // Parallel pool (PARITY with git-diff-core.ts): serial git-show spawns
-    // were ~15ms x N — 683 files took ~10.7s.
-    const files = new Array(wanted.length);
-    let nextIdx = 0;
-    const worker = async () => {
-      while (nextIdx < wanted.length) {
-        const i = nextIdx++;
-        const e = wanted[i];
-        const beforePath = e.oldRelPath || e.relPath;
-        let before = '';
-        if (e.status !== 'added') {
-          const show = await exec(['git', 'show', baseRev + ':' + beforePath], repoRoot);
-          before = show.code === 0 ? show.stdout : '';
-        }
-        const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-        files[i] = { relPath: e.relPath, before: before, after: after, status: e.status, oldRelPath: e.oldRelPath };
-      }
-    };
-    const workers = [];
-    for (let w = 0; w < Math.min(8, wanted.length); w++) workers.push(worker());
-    await Promise.all(workers);
-    files.sort((a, b) => a.relPath.localeCompare(b.relPath));
-    sendOk(ws, id, { repoRoot: repoRoot, files: files });
+    const result = await gitDiffCore.diff(base, cwd, opts);
+    if (!result) return sendOk(ws, id, { repoRoot: null, files: [] });
+    sendOk(ws, id, result);
   } catch (err) {
+    if (err && err.gitDiff) return sendError(ws, id, err.message);
     sendError(ws, id, 'git.diff failed: ' + err.message);
   }
 }
@@ -12660,6 +12617,19 @@ async function cmdGitStatus(ws, id, cmd) {
     sendOk(ws, id, { repos: await gitStatus.status(dirs) });
   } catch (err) {
     sendError(ws, id, 'git.status failed: ' + err.message);
+  }
+}
+
+async function cmdGitRefs(ws, id, cmd) {
+  let cwd = cmd.cwd;
+  if (!cwd || typeof cwd !== 'string') return sendError(ws, id, 'git.refs: missing cwd');
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1);
+  try {
+    const result = await gitDiffCore.refs(cwd);
+    if (!result) return sendOk(ws, id, { repoRoot: null });
+    sendOk(ws, id, result);
+  } catch (err) {
+    sendError(ws, id, 'git.refs failed: ' + err.message);
   }
 }
 

@@ -126,7 +126,7 @@ import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { ACP_HOST_FILES, ACP_HOST_WORKER } from './acp-host-artifacts.js'
 import { singleFile } from '../lib/single-file.js'
 import { resolveAgentCommand } from './agent-command-map.js'
-import { computeGitDiff, createGitStatus, GitDiffError, type GitDiffBase } from './git-diff-core.js'
+import { computeGitDiff, createGitStatus, listGitRefs, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
@@ -2651,6 +2651,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // unpushed commits) of the repos some directories sit in. Read-only, but
     // NOT in BRIDGE_ALLOWED_COMMANDS: it reads arbitrary host paths.
     case 'git.status': return cmdGitStatus(ws, id as number, cmd)
+    // 'git-compare-v1': branches + recent commits for the Changed tab's compare
+    // picker (git-diff-core.ts). Same bridge rule as git.diff.
+    case 'git.refs': return cmdGitRefs(ws, id as number, cmd)
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
     // it reads arbitrary host paths, which the cloud bridge must never reach.
     case 'git.fileLog': return cmdGitFileLog(ws, id as number, cmd)
@@ -10854,18 +10857,11 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   let cwd = cmd.cwd as string
   const base = cmd.base as GitDiffBase
   if (!cwd) return sendError(ws, id, 'git.diff: missing cwd')
-  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote') {
+  if (base !== 'uncommitted' && base !== 'previous' && base !== 'remote' && base !== 'branch' && base !== 'commit') {
     return sendError(ws, id, 'git.diff: invalid base')
   }
   if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1)
 
-  const exec = (argv: string[], runCwd: string) => new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-    execFileCb(argv[0], argv.slice(1), { cwd: runCwd, timeout: 25_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
-      (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
-        if (!err) return resolve({ stdout, stderr, code: 0 })
-        resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 })
-      })
-  })
   const readText = async (absPath: string) => {
     try { return await fs.promises.readFile(absPath, 'utf-8') } catch { return '' }
   }
@@ -10876,9 +10872,15 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     : undefined
 
   try {
-    const result = await computeGitDiff(base, cwd, exec, readText, paths ? { paths } : undefined)
+    // ref / commit are validated by the core before they reach git.
+    const result = await computeGitDiff(base, cwd, gitDiffExec, readText, {
+      ...(paths ? { paths } : {}),
+      ...(typeof cmd.ref === 'string' ? { ref: cmd.ref } : {}),
+      ...(typeof cmd.commit === 'string' ? { commit: cmd.commit } : {}),
+      ...(cmd.namesOnly === true ? { namesOnly: true } : {}),
+    })
     if (!result) return sendOk(ws, id, { repoRoot: null, files: [] }) // not a git repo
-    sendOk(ws, id, { repoRoot: result.repoRoot, files: result.files })
+    sendOk(ws, id, result as unknown as Record<string, unknown>)
   } catch (err: unknown) {
     if (err instanceof GitDiffError) return sendError(ws, id, err.message)
     sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
@@ -10916,6 +10918,38 @@ async function cmdGitStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record
     sendOk(ws, id, { repos: await gitStatus.status(dirs) })
   } catch (err: unknown) {
     sendError(ws, id, 'git.status failed: ' + (err as Error).message)
+  }
+}
+
+/** Vars that make git ignore the cwd it is given (an inherited GIT_DIR outranks it). */
+const GIT_DIFF_REDIRECT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX']
+
+/** One git run for git.diff / git.refs: the repo the cwd names, no optional
+ *  index lock (these are reads), never a prompt. Never throws: exit codes are answers. */
+function gitDiffExec(argv: string[], runCwd: string) {
+  const env: Record<string, string | undefined> = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
+  for (const k of GIT_DIFF_REDIRECT_VARS) delete env[k]
+  return new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
+    execFileCb(argv[0], argv.slice(1), { cwd: runCwd, env, timeout: 25_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' },
+      (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+        if (!err) return resolve({ stdout, stderr, code: 0 })
+        resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 })
+      })
+  })
+}
+
+// PARITY: keep in sync with cmdGitRefs in daemon-source.ts.
+async function cmdGitRefs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  let cwd = cmd.cwd as string
+  if (!cwd || typeof cwd !== 'string') return sendError(ws, id, 'git.refs: missing cwd')
+  if (cwd === '~' || cwd.startsWith('~/')) cwd = HOME_DIR + cwd.slice(1)
+  try {
+    const result = await listGitRefs(cwd, gitDiffExec)
+    if (!result) return sendOk(ws, id, { repoRoot: null })
+    sendOk(ws, id, result as unknown as Record<string, unknown>)
+  } catch (err: unknown) {
+    sendError(ws, id, 'git.refs failed: ' + (err as Error).message)
   }
 }
 

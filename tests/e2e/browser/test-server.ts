@@ -25,6 +25,7 @@ import { GIT_GLANCE_SESSION, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, wri
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
+import { buildCompareFixture, compareFixtureTask } from './compare-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -1681,6 +1682,8 @@ await fs.writeFile(
         subtasks: [],
       },
       ...kanbanSeedTasks(agoIso),
+      // diff-compare.spec.ts (PW_COMPARE_FIXTURE=1): off by default, other specs count tasks.
+      ...(process.env.PW_COMPARE_FIXTURE === '1' ? [compareFixtureTask()] : []),
     ],
   })),
 )
@@ -3535,6 +3538,8 @@ const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   cwd: process.cwd(),
   title: `Scale session ${String(index).padStart(3, '0')}`,
 }))
+// The Changed tab's compare fixture (compare-fixture.ts): a real git repo on a feature branch.
+const compareFixture = process.env.PW_COMPARE_FIXTURE === '1' ? await buildCompareFixture(tmpBase) : null
 await fs.writeFile(
   path.join(tmpBase, 'sessions.json'),
   JSON.stringify({
@@ -4337,6 +4342,7 @@ await fs.writeFile(
       },
       ...scaleSessions,
       ...chatEarlierSessionRecords(sessionFixtureNow, chatEarlierRoot),
+      ...(compareFixture ? [compareFixture.session] : []),
     ],
   }),
 )
