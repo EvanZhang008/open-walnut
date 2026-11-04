@@ -7,6 +7,7 @@ import { startTask, TASK_START_INPUT } from './task-execution.js';
 import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
+import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 
 defineOp({
   name: 'task_start',
@@ -118,6 +119,9 @@ defineOp({
   deprecated: 'Use task_send with the task id.',
 });
 
+/** The route's own ceiling on the text rows one page reaches back for (TRANSCRIPT_VISIBLE_MAX). */
+const TRANSCRIPT_LIMIT_MAX = 200;
+
 /**
  * Where the page before a cut conversation starts. 2026-11-03: a lead asked to find what the user had
  * said the night before read only the newest 193 rows, with no way back, though the route pages
@@ -137,15 +141,25 @@ defineOp({
     + 'A placeholder returns not_started and no messages. No separate session lookup is needed. '
     + 'A task that switched engines holds earlier sessions too (listed in `sessions`); all:true reads every one of them in order. '
     + 'A long conversation comes back as its newest part (`truncated: true`); `older.before` is the time to pass as before '
-    + 'for the page before it, so what the user said hours or days ago, compacted away in the session, is still readable.',
+    + 'for the page before it, so what the user said hours or days ago, compacted away in the session, is still readable. '
+    + 'To skim a long task without a huge answer: compact:true keeps the messages and folds each tool call, thinking block and '
+    + 'status notice to one line (the person\'s words stay whole, a long reply is clipped; `left_out` says how much it dropped); '
+    + 'limit:N keeps the newest N messages; since:<ISO> only what came after a time (the last row you read; on a busy task add limit). '
+    + 'Read without compact when you need a tool\'s result or a long reply in full.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     fresh: z.boolean().optional().describe('Force a live transcript read on the primary box'),
     all: z.boolean().optional().describe('Every session of the task, oldest first, not only the active one'),
     before: z.string().datetime({ offset: true }).optional()
       .describe('ISO time: the page of messages older than it (from a previous answer\'s older.before, or a time you know)'),
+    limit: z.number().int().min(1).max(TRANSCRIPT_LIMIT_MAX).optional()
+      .describe('The newest N messages (the human\'s, other sessions\' and the assistant\'s text), with the tool calls between them'),
+    since: z.string().datetime({ offset: true }).optional()
+      .describe('ISO time: only rows after it (the timestamp of the last row you read)'),
+    compact: z.boolean().optional()
+      .describe('Short form: message text kept, each tool call and thinking block folded to one line, a total of what was left out'),
   },
-  handler: async ({ id, fresh, all, before }, call) => {
+  handler: async ({ id, fresh, all, before, limit, since, compact }, call) => {
     const body = await call('GET', `/tasks/${encodeURIComponent(String(id))}`) as { task?: Record<string, unknown> };
     if (!body?.task?.id) throw new Error('Task response has no id; cannot resolve its conversation.');
     const task = body.task;
@@ -156,9 +170,22 @@ defineOp({
       if (!Array.isArray(ids) || ids.length) throw new Error('Task conversation state is unavailable; retry task_history.');
       return { taskId: task.id, execution: { state: 'not_started' }, messages: [] };
     }
-    const query = new URLSearchParams({ ...(fresh ? { fresh: '1' } : {}), ...(before ? { before: String(before) } : {}) }).toString();
-    const read = async (sessionId: string) => {
-      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${query ? `?${query}` : ''}`) as Record<string, unknown> | undefined;
+    const shape: HistoryShape = {
+      ...(typeof limit === 'number' ? { limit } : {}),
+      ...(since ? { since: String(since) } : {}),
+      ...(compact ? { compact: true } : {}),
+    };
+    const shaped = Object.keys(shape).length > 0;
+    // The route widens its page to hold `visible` text rows and to reach back to `since`, but only on
+    // a page it builds (fresh or before); the exported tail it serves otherwise ignores both.
+    const query = new URLSearchParams({
+      ...(fresh || shape.limit || shape.since ? { fresh: '1' } : {}),
+      ...(before ? { before: String(before) } : {}),
+      ...(shape.limit ? { visible: String(shape.limit) } : {}),
+      ...(shape.since ? { since: shape.since } : {}),
+    }).toString();
+    const read = async (sessionId: string, q = query) => {
+      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${q ? `?${q}` : ''}`) as Record<string, unknown> | undefined;
       if (!h || !Array.isArray(h.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
       return h;
     };
@@ -167,16 +194,58 @@ defineOp({
       { sessions?: Array<{ session_id: string; engine: string; model?: string | null; active?: boolean; started_at?: string | null }> } | null;
     const sessions = (list?.sessions ?? []).map((r) => ({ session_id: r.session_id, engine: r.engine, model: r.model ?? null, active: r.active === true, started_at: r.started_at ?? null }));
     if (all && sessions.length > 1) {
-      const messages: unknown[] = [];
+      let messages: Record<string, unknown>[] = [];
+      const total = { cutOlder: 0, cutSince: 0, folded: { tool: 0, thinking: 0 }, clipped: 0, chars: 0 };
+      const add = (r: ShapeResult) => {
+        total.cutOlder += r.cutOlder; total.cutSince += r.cutSince; total.clipped += r.clipped; total.chars += r.chars;
+        total.folded.tool += r.folded.tool; total.folded.thinking += r.folded.thinking;
+      };
       for (const r of sessions) {
         const h = await read(r.session_id).catch(() => ({ messages: [] as unknown[] }));
+        let rows = h.messages as Record<string, unknown>[];
+        if (shaped) {
+          const one = shapeHistory(rows, { since: shape.since, compact: shape.compact });
+          add(one);
+          rows = one.messages;
+          if (shape.since && rows.length === 0) continue;
+        }
         messages.push({ role: 'system', kind: 'notification', text: `Session on ${r.engine}${r.model ? ` (${r.model})` : ''}${r.active ? ', the active one' : ''}: ${r.session_id}` });
-        messages.push(...(h.messages as unknown[]));
+        messages.push(...rows);
       }
-      return { taskId: task.id, sessions, messages };
+      if (shaped && shape.limit) {
+        const cut = shapeHistory(messages, { limit: shape.limit });
+        add(cut);
+        // The cut can land inside a session: its header still says whose rows these are.
+        const header = messages.slice(0, cut.cutOlder).reverse().find((m) => m.role === 'system' && m.kind === 'notification' && !m.timestamp);
+        messages = header && cut.messages[0] !== header ? [header, ...cut.messages] : cut.messages;
+      }
+      return { taskId: task.id, sessions, messages, ...(shaped ? { left_out: { ...total, note: leftOutLine(total, false) } } : {}) };
     }
     const history = await read(String(sid));
-    return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
+    if (!shaped) return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
+    const out = shapeHistory(history.messages as Record<string, unknown>[], shape);
+    const first = out.messages.find((r) => typeof r.timestamp === 'string')?.timestamp as string | undefined;
+    let older = out.cutOlder > 0;
+    if (!older && history.truncated === true && first) {
+      // The route's page reaches back to the first row at or after `since`, so a cut page that
+      // holds nothing at or before it may have stopped there (since reached) or at its own ceiling.
+      // The page before it says which: anything in it after `since` is still unread.
+      const after = shape.since ? Date.parse(shape.since) : -Infinity;
+      older = out.cutSince > 0 ? false : !shape.since || await read(String(sid), new URLSearchParams({ before: first }).toString())
+        .then((h) => (h.messages as Array<{ timestamp?: unknown }>).some((r) => typeof r.timestamp === 'string' && Date.parse(r.timestamp) > after))
+        .catch(() => true);
+    }
+    const { cutOlder, cutSince, folded, clipped, chars } = out;
+    const paged = older && first !== undefined;
+    return {
+      ...history,
+      messages: out.messages,
+      truncated: paged,
+      taskId: task.id,
+      ...(sessions.length > 1 ? { sessions } : {}),
+      ...(paged ? { older: { before: first, how: `walnut tools call task_history '${JSON.stringify({ id: task.id, ...shape, before: first })}'` } } : {}),
+      left_out: { cutOlder, cutSince, folded, clipped, chars, note: leftOutLine(out, paged) },
+    };
   },
   tags: { readonly: true, remote: 'allow' },
 });
