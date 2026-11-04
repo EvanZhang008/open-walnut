@@ -4,7 +4,9 @@
  *    button runs the same Clear as the filter row (undoable through the toast);
  *  - the focus-override line on a row the filters would hide (5.12), in the
  *    chips' own words with one Show per reason, or the `Outside filters` pill
- *    on a task created moments ago (5.11).
+ *    on a task created moments ago (5.11);
+ *  - the note on a task opened from outside that the tab the user is on does not
+ *    draw: the panel never changes the tab by itself, the note's button does.
  */
 import { memo, type PointerEvent, type MouseEvent } from 'react';
 import type { FilterDim } from './filter-bar-types';
@@ -67,6 +69,32 @@ export const FilterOverrideReasons = memo(function FilterOverrideReasons({ reaso
           </button>
         </span>
       ))}
+    </div>
+  );
+});
+
+export interface OffViewNoteProps {
+  title: string;
+  /** The tab the user is on, and the one that draws the task. */
+  here: string;
+  there: string;
+  onShow(): void;
+  onDismiss(): void;
+}
+
+/** A task opened from outside (a chat reference, Locate, a new task) that this tab does not draw. */
+export const OffViewNote = memo(function OffViewNote({ title, here, there, onShow, onDismiss }: OffViewNoteProps) {
+  return (
+    <div className="todo-offview-note" data-testid="todo-offview-note" role="status">
+      <span className="todo-offview-text">
+        <span className="todo-offview-title">{title}</span> is not in {here}.
+      </span>
+      <button type="button" className="todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
+        Show in {there}
+      </button>
+      <button type="button" className="todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
+        ×
+      </button>
     </div>
   );
 });

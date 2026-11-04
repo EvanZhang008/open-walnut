@@ -443,6 +443,25 @@
   background: transparent; color: var(--accent-text, var(--accent)); cursor: pointer; text-decoration: underline;
 }
 .task-filter-override-show:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A task opened from outside that this tab does not draw: one line, its button switches. */
+.todo-offview-note {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-width: 0;
+  margin: 2px 8px 4px; padding: 5px 6px 5px 10px; border-radius: 6px;
+  background: var(--bg-secondary); color: var(--fg-muted); font-size: 12px;
+}
+.todo-offview-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-offview-title { color: var(--fg); }
+.todo-offview-show {
+  font: inherit; flex-shrink: 0; padding: 2px 8px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--accent-text, var(--accent));
+}
+.todo-offview-show:hover { border-color: var(--accent); }
+.todo-offview-dismiss {
+  font: inherit; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--fg-muted); cursor: pointer; line-height: 1;
+}
+.todo-offview-dismiss:hover { background: var(--bg-hover); color: var(--fg); }
+.todo-offview-show:focus-visible, .todo-offview-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .task-filter-outside-pill {
   display: inline-flex; align-items: center; font-size: 10px; padding: 1px 6px; border-radius: 8px;
   background: var(--bg-hover); color: var(--fg-muted); white-space: nowrap;

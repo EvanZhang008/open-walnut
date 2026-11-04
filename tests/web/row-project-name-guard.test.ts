@@ -99,11 +99,15 @@ describe('a task row\'s project name filters to the project', () => {
 });
 
 describe('project-jump model', () => {
-  it('starts on the All view with every section open', () => {
+  it('stays on the tab the click came from, with every section open', () => {
     const j = startProjectJump('Garden', null);
     expect(j).toEqual({ project: 'Garden', open: allSectionsOpen(), section: null });
     expect(Object.values(j.open).every(Boolean)).toBe(true);
-    expect(projectJumpSection(j)).toBe('all');
+    // A pin group's project click filters that group; it never goes to All by itself.
+    expect(projectJumpSection(j, 'focus')).toBe('focus');
+    expect(projectJumpSection(j, 'ct_reading')).toBe('ct_reading');
+    expect(projectJumpSection(j, 'all')).toBe('all');
+    expect(projectJumpSection({ ...j, section: 'all' }, 'focus')).toBe('all');
   });
 
   it('keeps a tab picked inside the jump when another project name is clicked', () => {

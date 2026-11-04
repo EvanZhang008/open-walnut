@@ -979,7 +979,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await expect.poll(names).toEqual(kept);
 });
 
-test('Locate from a session panel opens the task tier tab when the tab bar shows it, and All otherwise', async ({ page, baseURL }) => {
+test('Locate from a session panel never changes the tab: a tab without the task says where it is, and its button opens the tier tab or All', async ({ page, baseURL }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   // The fixture session belongs to pw-task-store-sync; where that task sits is routed, so each case
@@ -1039,23 +1039,47 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
     await page.reload();
     await expect(navigation(page).locator('[data-task-id="locate-focus"]')).toBeVisible({ timeout: 30_000 });
   };
+  // The panel never changes the tab by itself (2026-11-04, the user: "we don't auto go to all"):
+  // a tab that does not draw the task stays, and a note says where it is; its button goes there.
+  const note = navigation(page).getByTestId('todo-offview-note');
+  const askedThenShown = async (here: string, there: string) => {
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(`is not in ${here}.`);
+    await expect(tab(here)).toHaveAttribute('aria-selected', 'true');
+    await note.getByTestId('todo-offview-show').click();
+    await expect(note).toHaveCount(0);
+  };
 
-  // With the bar showing the task's tier, Locate goes straight to that tab, from another tier or from All.
+  // With the bar showing the task's tier, the note's button opens that tab; All shows it already.
   await tab('Focus').click();
   await locate.click();
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-locate-off-view-note.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } });
+  await expect(note.getByTestId('todo-offview-show')).toHaveText('Show in Parked');
+  await askedThenShown('Focus', 'Parked');
   await landedOn('Parked');
   await tab('All').click();
   await locate.click();
-  await landedOn('Parked');
+  await landedOn('All');
+  await expect(note).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-locate-tier-tab.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } });
 
-  // A tier the user took off the bar has no tab to open, so the task is found in All.
+  // A tier the user took off the bar has no tab to open, so the note offers All.
   await tab('Focus').click();
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
   await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Parked', exact: true }).click();
   await page.keyboard.press('Escape');
   await locate.click();
+  await expect(note.getByTestId('todo-offview-show')).toHaveText('Show in All');
+  await askedThenShown('Focus', 'All');
   await landedOn('All');
+
+  // Dismissed, the note goes and the tab stays.
+  await tab('Focus').click();
+  await locate.click();
+  await expect(note).toBeVisible();
+  await note.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(note).toHaveCount(0);
+  await expect(tab('Focus')).toHaveAttribute('aria-selected', 'true');
 
   // The Pinned view shows every tier, so a locate from there stays on it.
   await tab('Pinned').click();
@@ -1069,6 +1093,9 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await chooseViewOption(page, 'focus');
   await expect(card).toHaveCount(0);
   await locate.click();
+  await expect(note).toBeVisible();
+  expect(await activeView(page)).toBe('focus');
+  await note.getByTestId('todo-offview-show').click();
   await expect(card).toBeVisible();
   await expect(card).toHaveClass(/todo-pinned-card-active/);
   expect(await activeView(page)).toBe('all');
@@ -1081,22 +1108,24 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await expect(navigation(page)).not.toHaveClass(/\bcollapsed\b/);
   await expect(card).toBeVisible();
 
-  // A task in no tier is found in All, selected in the list, whichever tier tab was open.
+  // A task in no tier is in the list: from a tier tab, the note's button opens All, where it is selected.
   where = '';
   await reload();
   await showTabBar();
   await tab('Focus').click();
   await locate.click();
+  await askedThenShown('Focus', 'All');
   await expect(tab('All')).toHaveAttribute('aria-selected', 'true');
   const row = navigation(page).locator(`.todo-panel-list [data-task-id="${located}"]`);
   await expect(row).toBeVisible();
   await expect(row).toHaveClass(/task-focused/);
 
-  // A custom tier's task opens that tier's tab.
+  // A custom tier's task: the note offers that tier's tab.
   where = 'ct_locate_later';
   await reload();
   await tab('Focus').click();
   await locate.click();
+  await askedThenShown('Focus', 'Later');
   await landedOn('Later');
 
   // A click inside the panel is not a locate: the view the user is reading stays.

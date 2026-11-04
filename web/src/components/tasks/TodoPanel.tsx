@@ -135,7 +135,7 @@ import {
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
 import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
-import { TodoFilterEmpty, FilterOverrideReasons, isJustCreated } from './TodoFilterEmpty';
+import { TodoFilterEmpty, FilterOverrideReasons, OffViewNote, isJustCreated } from './TodoFilterEmpty';
 import { staleDonePinIds } from './pin-search-fold';
 import { orderPinnedTier } from '@/utils/pinned-tier-order';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
@@ -158,7 +158,7 @@ import {
 } from './tier-group-sentinels';
 import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
-import { DEFAULT_HIDDEN_TABS, allViews } from './tab-bar-model';
+import { DEFAULT_HIDDEN_TABS, allViews, tabBarTabs } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
@@ -2508,8 +2508,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // query drops back to wherever the user was before searching.
   const [searchSection, setSearchSection] = useState<TodoSection | null>(null);
   // A click on a row's project name (project-jump.ts): the Project filter takes that project and
-  // the view shows all of it, every status section open, without writing the saved tab or folds,
-  // so clearing the Project chip puts the view back as it was. Kept like a view, with the filter.
+  // the tab it came from shows all of it there, every status section open, without writing the
+  // saved tab or folds, so clearing the Project chip puts the view back as it was. Kept like a view.
   const [projectJump, setProjectJump] = usePageView<ProjectJump | null>('home', 'projectJump', null, isProjectJump);
   const jumpLive = projectJumpHolds(projectJump, filterState.projects);
   const jumpLiveRef = useRef(jumpLive);
@@ -2666,7 +2666,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // `searchSection` override; the persisted tab is untouched, so clearing the query
   // restores the pre-search view.
   isSearchModeRef.current = isSearchMode;
-  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : jumpLive ? projectJumpSection(projectJump) : activeSection;
+  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : jumpLive ? projectJumpSection(projectJump, activeSection) : activeSection;
   // The home Filter has no Pinned dimension (spec 3.2), so the view is the section.
   const effectiveSection: TodoSection = rawSection;
 
@@ -2859,7 +2859,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     scrollToTask(taskId);
   }, [tasks, scrollToTask]);
 
-  // Auto-switch tab, expand groups, and scroll to task when focusedTaskId changes
+  // A task opened from outside that the tab the user is on does not draw: the note that says so.
+  // Set only once the row is still not drawn after the folds the locate opened have rendered.
+  const [offView, setOffView] = useState<{ taskId: string; from: TodoSection; target: TodoSection } | null>(null);
+  const noteOffView = useCallback((taskId: string, from: TodoSection, target: TodoSection) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!rowShownInPanel(taskId)) setOffView({ taskId, from, target });
+    }));
+  }, []);
+
+  // Expand groups and scroll to the task when focusedTaskId changes (never the tab: noteOffView)
   useEffect(() => {
     if (!focusedTaskId) {
       prevFocusedRef.current = focusedTaskId;
@@ -2994,30 +3003,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           return next;
         });
       }
-      // Section tabs make "unmounted" a second way the target can be missing:
-      // a locate into Parked while the Focus tab is showing would scroll to nothing.
-      // STAY PUT whenever the current view already shows the task — the stacked
-      // view, the Tasks list (pinned tasks are ordinary rows there), and the
-      // task's own tier tab all do. Clicking a card must never yank the user to
-      // a different tab (the old "click in Tasks → teleport to its Pin tier"
-      // complaint). Only an off-view locate (chat/session ref while some OTHER
-      // tier/Recent/Notes tab is showing) switches — to the stacked All view,
-      // which shows the task in its tier AND the list at once.
+      // Section tabs make "unmounted" a second way the target can be missing: a locate into
+      // Parked while the Focus tab is showing would scroll to nothing. The panel never changes
+      // the tab by itself (2026-11-04, the user: "keep in the same pin group, people can go to
+      // all if they need, we don't auto go to all"): the stacked view, Pinned, the Tasks list
+      // and the task's own tier tab show it; any other tab keeps the user where they are and
+      // says where the task is, with a button to go there (its tier's tab when the bar has
+      // it, else All, which shows every tier and the list).
       const cur = activeSectionRef.current;
-      if (focusScope !== 'locate' && rowShownInPanel(focusedTaskId)) {
-        // The tap came from a row this tab already draws (Recent, a custom tab): stay (N2-01).
-      } else if (focusScope === 'locate') {
-        // Asked from outside the panel (a session panel's Locate): with the tab bar showing
-        // the task's tier, go straight to that tab; without it, All, which shows every tier.
+      const shows = cur === 'all' || cur === 'pinned' || cur === 'tasks' || cur === tierKey;
+      if (!shows && !(focusScope !== 'locate' && rowShownInPanel(focusedTaskId))) {
         const bar = tabBarRef.current;
-        const target = bar.shown && !bar.hidden.includes(tierKey) ? tierKey : cur === 'pinned' ? 'pinned' : 'all';
-        if (cur !== target) handleSectionChange(target);
-      } else if (cur !== 'all' && cur !== 'pinned' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
-    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && (focusScope === 'locate' || activeSectionRef.current !== 'tasks')
+        noteOffView(focusedTaskId, cur, bar.shown && !bar.hidden.includes(tierKey) ? tierKey : 'all');
+      }
+    } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && activeSectionRef.current !== 'tasks'
       && !(focusScope !== 'locate' && rowShownInPanel(focusedTaskId))) {
-      // A task in no tier only shows in the list, and All is the view with the list in it
-      // (Projects is a filter menu view, not a tab the user can see they are on).
-      handleSectionChange('all');
+      // A task in no tier only shows in the list, and All is the view with the list in it.
+      noteOffView(focusedTaskId, activeSectionRef.current, 'all');
     }
 
     // Scroll to the focused task after state changes (expand/filter) have flushed to DOM.
@@ -7477,6 +7479,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const viewItemLabel = (!quickViews || effectiveSection === 'tasks') && effectiveSection !== 'all'
     ? (allViews(customTiers ?? []).find((v) => v.id === effectiveSection)?.label ?? effectiveSection)
     : null;
+  // The note on a task opened from outside that this tab does not draw (noteOffView): it lasts
+  // while that task stays open on this tab; its button is the one way it changes the tab.
+  const offViewTask = offView && offView.taskId === focusedTaskId && offView.from === effectiveSection && !isSearchMode
+    ? tasks.find((t) => t.id === offView.taskId) : undefined;
+  const tabName = (id: string) => tabBarTabs(customTiers).find((t) => t.id === id)?.label ?? tierDisplayLabel(id, customTiers);
+  const offViewNote = offView && offViewTask ? (
+    <OffViewNote
+      title={offViewTask.title}
+      here={tabName(offView.from)}
+      there={tabName(offView.target)}
+      onShow={() => {
+        const { taskId, target } = offView;
+        log.info('todo-panel', 'off-view show', { taskId, target });
+        setOffView(null);
+        handleSectionChange(target);
+        requestAnimationFrame(() => { scrollToTask(taskId); scrollToPinnedTask(taskId); });
+      }}
+      onDismiss={() => setOffView(null)}
+    />
+  ) : null;
   const filterBar = useMemo<FilterBarController>(() => ({
     state: homeFilters.state, lists: homeFilters.lists, chips: homeFilters.chips, facets: homeFilters.facets,
     recent: homeFilters.recent, apply: homeFilters.apply, clearAll: homeFilters.clearAll,
@@ -7844,6 +7866,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <div className="fb-row-scope">
         <FilterBar controller={filterBar} />
       </div>
+      {offViewNote}
 
       {/* Projects view only: Running and Collapse/Expand (spec 5.6). */}
       {quickViews && !isSearchMode && effectiveSection === 'tasks' && (
