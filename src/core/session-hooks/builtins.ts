@@ -2406,6 +2406,12 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         log.session.info('turn-end notices held: restart recovery continues this session', { sessionId: record.claudeSessionId, taskId: task?.id });
         return;
       }
+      // The usage limit stopped it: Walnut continues it at the reset (sessions/usage-limit-wait.ts).
+      const { recordInUsageLimit } = await import('../sessions/usage-limit-wait.js');
+      if (recordInUsageLimit(record)) {
+        log.session.info('turn-end notices held: the usage-limit wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
+        return;
+      }
     }
 
     // A turn that only made progress leaves the requests it owes open (sessions/request-progress.ts):

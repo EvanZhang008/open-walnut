@@ -1765,6 +1765,37 @@ if (outputFormat === 'stream-json') {
       process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
       return;
     }
+    // 2a.0d. "limit-error[:<reset epoch seconds>]" — the subscription's usage limit refused the turn,
+    //        as Claude Code reports it: a rejected rate_limit_event, the blocked reply (error
+    //        "rate_limit" with api_error_params), and an error result in the CLI's own words. Drives
+    //        the usage-limit wait (src/core/sessions/usage-limit-wait.ts). Without a time the reset is
+    //        WALNUT_MOCK_LIMIT_RESET_SECS (default 3600) from now. While the file named by
+    //        WALNUT_MOCK_LIMIT_FLAG exists, the wait's continue is refused too.
+    const limitFlag = process.env.WALNUT_MOCK_LIMIT_FLAG;
+    const continueLimited = !!limitFlag && effectiveMessage.includes('Your usage limit has reset.') && fs.existsSync(limitFlag);
+    if (effectiveMessage === 'limit-error' || effectiveMessage.startsWith('limit-error:') || continueLimited) {
+      const named = Number(effectiveMessage.split(':')[1]);
+      const resetsAt = Number.isFinite(named) && named > 0
+        ? named
+        : Math.floor(Date.now() / 1000) + Number(process.env.WALNUT_MOCK_LIMIT_RESET_SECS || 3600);
+      const info = { status: 'rejected', rateLimitType: 'five_hour', resetsAt, overageStatus: 'rejected', overageDisabledReason: 'org_level_disabled' };
+      // The CLI's words name the same reset as its event: "resets 3pm" or "resets 3:30pm", in a zone.
+      const at = new Date(resetsAt * 1000);
+      const h12 = at.getUTCHours() % 12 || 12;
+      const mins = at.getUTCMinutes();
+      const clock = `${h12}${mins ? `:${String(mins).padStart(2, '0')}` : ''}${at.getUTCHours() < 12 ? 'am' : 'pm'}`;
+      const text = `You've hit your session limit · resets ${clock} (UTC)`;
+      const lines = [
+        { type: "rate_limit_event", rate_limit_info: info, uuid: randomUUID(), session_id: outputSessionId },
+        { type: 'assistant', error: 'rate_limit', api_error_params: { rate_limit_info: info },
+          message: { id: `msg_limit_${Date.now()}`, role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+          session_id: outputSessionId, uuid: randomUUID() },
+        { type: 'result', subtype: 'success', is_error: true, api_error_status: 429, duration_ms: 20, num_turns: 1,
+          result: text, session_id: outputSessionId, total_cost_usd: 0.0, usage: { input_tokens: 0, output_tokens: 0 } },
+      ];
+      process.stdout.write(lines.map((l) => JSON.stringify(l)).join('\n') + '\n', () => process.exit(0));
+      return;
+    }
     const continueAlwaysTimesOut = process.env.WALNUT_MOCK_CONTINUE_TIMEOUT === '1'
       && resume && effectiveMessage === 'continue';
     if (effectiveMessage === 'timeout-error' || effectiveMessage.startsWith('timeout-error:') || continueAlwaysTimesOut) {

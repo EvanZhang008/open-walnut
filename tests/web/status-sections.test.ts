@@ -94,6 +94,16 @@ describe('sortSectionTasks', () => {
     const monday = task({ start_date: '2026-11-02' });
     expect(ids(sortSectionTasks('waiting', [noClockOld, friday, noClockNew, monday]))).toEqual([monday.id, friday.id, noClockNew.id, noClockOld.id]);
   });
+
+  it('Waiting puts the rows a usage limit holds first, where the Limited summary leads', () => {
+    const soon = task({ id: 'soon', phase: 'WAITING', wait_until: '2026-01-05T09:00:00Z' });
+    const limited = task({ id: 'limited', phase: 'WAITING', wait_until: '2026-01-09T09:00:00Z', user_status: { state: 'waiting', limit: { auto: true, engine: 'claude', resetsAt: '2026-01-09T09:00:00Z' } } as Task['user_status'] });
+    expect(ids(sortSectionTasks('waiting', [soon, limited]))).toEqual([limited.id, soon.id]);
+    // Among them, the one Walnut continues soonest first.
+    const later = task({ id: 'later', phase: 'WAITING', user_status: { state: 'waiting', limit: { auto: true, engine: 'codex', resetsAt: '2026-01-09T12:00:00Z', dueAt: '2026-01-09T12:01:00Z' } } as Task['user_status'] });
+    const sooner = task({ id: 'sooner', phase: 'WAITING', user_status: { state: 'waiting', limit: { auto: true, engine: 'claude', resetsAt: '2026-01-09T08:00:00Z', dueAt: '2026-01-09T08:01:00Z' } } as Task['user_status'] });
+    expect(ids(sortSectionTasks('waiting', [later, soon, sooner]))).toEqual([sooner.id, later.id, soon.id]);
+  });
   it('Completed: latest completion first; Needs you: latest activity first', () => {
     const early = task({ status: 'done', phase: 'COMPLETE', completed_at: '2026-10-01T00:00:00Z' });
     const late = task({ status: 'done', phase: 'COMPLETE', completed_at: '2026-10-20T00:00:00Z' });

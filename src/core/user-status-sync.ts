@@ -61,6 +61,7 @@ export interface StatusFacts {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
     errorKind?: string; restartLoss?: { state: string; cause?: string };
     endpointWait?: UserStatusInput['endpointWait'];
+    usageLimit?: UserStatusInput['usageLimit'];
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
     /** Its own work that runs on after its turn (sessions/outliving-work.ts), from the live runner. */
     outliving?: OutlivingSource[];
@@ -330,6 +331,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     const { listSessionsForTasks } = await import('./session-tracker.js');
     const runner = await import('../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
     const endpoint = await import('./sessions/endpoint-wait.js').catch(() => null);
+    const limits = await import('./sessions/usage-limit-wait.js').catch(() => null);
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
       if (rec.provider === 'embedded') continue;
       // Only a live process carries work on: a stopped one's runner state is its last word.
@@ -344,6 +346,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
         errorKind: rec.errorKind,
         restartLoss: liveRestartLoss(rec, recovery),
         ...(endpoint && rec.process_status !== 'running' ? { endpointWait: endpointWaitOf(rec, endpoint) } : {}),
+        ...(limits && rec.process_status !== 'running' ? { usageLimit: limits.usageLimitOfRecord(rec) } : {}),
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
       });
@@ -457,6 +460,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     errorKind: main?.errorKind ?? null,
     restartLoss: main?.restartLoss ?? null,
     endpointWait: main?.endpointWait ?? null,
+    usageLimit: main?.usageLimit ?? null,
     projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
     undeliveredMessage: undelivered?.reason ?? null,
     statusSince: main?.statusSince ?? null,
@@ -515,6 +519,9 @@ export function handBackSettlesAt(
   if (next.toRead !== 'turn' || next.waitingOn !== TURN_TO_READ) return null;
   const was = task.user_status;
   if (!hasSession || !was || (was.state !== 'working' && was.state !== 'waiting') || was.kind === 'not-started') return null;
+  // It read "Limited" (or Walnut's continue after it): the turn that ended was the end of that wait,
+  // so the row moves on at once rather than reading Limited for the hold.
+  if (was.limit) return null;
   const movedAt = Date.parse(task.phase_changed_at ?? '');
   if (!Number.isFinite(movedAt)) return null;
   const at = movedAt + HANDBACK_SETTLE_MS;
@@ -840,6 +847,7 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.SESSION_PERMISSION_RESOLVED:
     case EventNames.SESSION_ENDED:
     case EventNames.SESSION_STARTED:
+    case EventNames.SESSION_USAGE_LIMIT:
       if (d.taskId) mark(d.taskId); else markSession(d.sessionId);
       return;
     case EventNames.HUMAN_INBOX_LETTER:
@@ -878,7 +886,7 @@ export function startUserStatusSync(): void {
     interest: [
       EventNames.TASK_CREATED, EventNames.TASK_UPDATED, EventNames.TASK_COMPLETED,
       EventNames.SESSION_STATUS_CHANGED, EventNames.SESSION_PERMISSION_REQUEST, EventNames.SESSION_PERMISSION_RESOLVED,
-      EventNames.SESSION_ENDED, EventNames.SESSION_STARTED,
+      EventNames.SESSION_ENDED, EventNames.SESSION_STARTED, EventNames.SESSION_USAGE_LIMIT,
       EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, EventNames.BOARD_CHANGED,
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
       EventNames.ORG_THREADS_CHANGED,

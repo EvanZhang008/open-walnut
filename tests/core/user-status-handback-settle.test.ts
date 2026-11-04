@@ -43,6 +43,14 @@ async function handBack(id: string, sid: string) {
 }
 
 describe('hand-back settle hold', () => {
+  it('a task that read Limited moves on at once: that turn ended its usage-limit wait', () => {
+    const next = { state: 'read', toRead: 'turn', waitingOn: TURN_TO_READ } as never
+    const limited = { phase_changed_at: new Date(1_000_000).toISOString(), user_status: { state: 'waiting', kind: 'time', limit: { engine: 'claude', auto: true } } } as never
+    expect(handBackSettlesAt(limited, next, 1_000_000 + 1_000, true)).toBeNull()
+    const plain = { phase_changed_at: new Date(1_000_000).toISOString(), user_status: { state: 'waiting', kind: 'time' } } as never
+    expect(handBackSettlesAt(plain, next, 1_000_000 + 1_000, true)).toBe(1_000_000 + HANDBACK_SETTLE_MS)
+  })
+
   it('keeps the last status during the hold, then reads its turn to read', async () => {
     const t = await workingTask('Turn ended, nothing asked', 'sess-settle-1')
     await handBack(t.id, 'sess-settle-1')

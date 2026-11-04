@@ -206,6 +206,17 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  // "usage-limit-hit": the subscription's usage limit refused the turn, the way codex-acp reports a
+  // Codex usageLimitExceeded to a client without typed failures: the provider's words as the turn's
+  // last text, then an internal error whose data carries them and the code.
+  if (text.includes('usage-limit-hit')) {
+    const words = "You've hit your usage limit. Upgrade to Pro (https://example.invalid/pro) or try again in 2 hours 13 minutes.";
+    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'limit', content: { type: 'text', text: `${words}\n\n` } } });
+    turnRunning = false;
+    send({ jsonrpc: '2.0', id, error: { code: -32603, message: 'Internal error', data: { message: words, codexErrorInfo: 'usageLimitExceeded' } } });
+    return;
+  }
+
   if (text.includes('stream-retry-check')) {
     notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'attempt-old', content: { type: 'text', text: 'Partial reply before transport stopped.' } } });
     notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', _meta: { codex: { error: { willRetry: true, codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } } } } } } });

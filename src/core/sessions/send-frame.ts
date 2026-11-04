@@ -41,7 +41,7 @@ export function readsAsPerson(text: string): boolean {
  * Wrap text that would read as a person's in a Walnut envelope naming `source`. Text an envelope
  * already frames (a peer note, a trigger, a notice) and empty text come back as they are.
  */
-export function frameAsWalnut(text: string, source: string | undefined): string {
+export function frameAsWalnut(text: string, source: string | undefined, label?: string): string {
   if (!readsAsPerson(text)) return text;
   // A slash command must reach the CLI byte-exact or it stops being one. Only text the user wrote
   // into his own hook or routine gets that pass: a command from any other sender is framed, because
@@ -52,7 +52,7 @@ export function frameAsWalnut(text: string, source: string | undefined): string 
   if (walnutCommandFor(source, text)) return text;
   return buildWalnutMessage({
     kind: 'peer-note',
-    attrs: { from: `Walnut (${sourceLabel(source)})`, note: NOTE_WALNUT_SEND },
+    attrs: { from: `Walnut (${label ?? sourceLabel(source)})`, note: NOTE_WALNUT_SEND },
     body: text,
   });
 }

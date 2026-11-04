@@ -96,6 +96,9 @@ import { classifyInjectedLine, interruptingLine, noteInjectedLine, strongerLine,
 import { LiveActivityTracker, toolTarget, type LiveActivity } from '../core/live-activity.js'
 import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
+import { parseRateLimitInfo } from '../core/sessions/subscription-limits-model.js'
+import { blockedLimitOf, claudeUsageLimitFacts, usageLimitTakes } from '../core/sessions/usage-limit-model.js'
+import { matchesUsageLimitText, parseUsageLimitReset } from './usage-limit-text.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { joinQueuedRows } from '../lib/ai-only-envelope.js'
@@ -1333,6 +1336,10 @@ export class ClaudeCodeSession {
    *  result signature when the CLI's final error text is generic, so the
    *  retryExhausted signal on SESSION_RESULT stays reliable. */
   private _sawApiTimeoutThisTurn = false
+  /** The subscription's usage limit blocked this turn (a rejected rate_limit_event, or the blocked
+   *  reply's own api_error_params): its reset and window. Reset at every turn boundary; read at the
+   *  result for the usage-limit wait (core/sessions/usage-limit-wait.ts). */
+  private _turnLimitRejected: { resetsAt?: number; window?: string; blocked?: boolean } | null = null
   /** Delivery latency + path of the most recent delivered batch, surfaced into the
    *  per-turn wide event (forensic observability). Stamped by SessionRunner's
    *  logDeliveryLatency onto the target session instance (not `private` because the
@@ -2925,6 +2932,7 @@ export class ClaudeCodeSession {
     this._costBaselineKnown = !resumeSessionId
     this._askUserIntercepted = false
     this._sawApiTimeoutThisTurn = false
+    this._turnLimitRejected = null
     this.fullText = ''
     this._emittedAssistantText = false  // Fresh process — nothing streamed yet
     this._failedLocalCommandThisTurn = false
@@ -4257,6 +4265,7 @@ export class ClaudeCodeSession {
       this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
       this._askUserIntercepted = false
       this._sawApiTimeoutThisTurn = false
+      this._turnLimitRejected = null
       this._toolInputFilePaths = new Map()
       this._emittedStreamKeys = new Set()
       this._lastEmittedText = new Map()
@@ -7391,6 +7400,12 @@ export class ClaudeCodeSession {
 
       case 'assistant': {
         const msg = event as StreamMessageEvent
+        // The CLI sends a limit event only when the snapshot changes, but repeats the limit on every
+        // reply it blocks: the usage-limit wait needs its reset.
+        const blocked = event as { error?: unknown; api_error_params?: { rate_limit_info?: unknown } }
+        if (blocked.error === 'rate_limit' && blocked.api_error_params && this._isReplayedByOffset() !== true) {
+          this.noteTurnLimit(blocked.api_error_params.rate_limit_info, true)
+        }
         if (!Array.isArray(msg.message?.content)) break
         if (!msg.parent_tool_use_id && msg.local_command_outcome?.kind === 'failed') {
           if (!firstSightingOfLine(this._seenCompactionLineUuids, msg.uuid)) break
@@ -8520,6 +8535,11 @@ export class ClaudeCodeSession {
             matchesRetryExhaustion(resultText)
             || this._sawApiTimeoutThisTurn
           )
+          // The subscription's usage limit stopped it: the usage-limit wait continues it at the reset.
+          const usageLimit = effectiveIsError
+            ? claudeUsageLimitFacts(this._turnLimitRejected, resultText, Date.now(), matchesUsageLimitText, parseUsageLimitReset)
+            : undefined
+          this._turnLimitRejected = null
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
@@ -8533,6 +8553,7 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             retryExhausted,
+            ...(usageLimit ? { usageLimit } : {}),
             ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
             ...(onlyCompactionStopped ? { compactionStopped: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),
@@ -8998,7 +9019,10 @@ export class ClaudeCodeSession {
       case 'rate_limit_event': {
         // The host's subscription usage window (claude.ai sign-in only). A
         // host-level reading, never a chat row; a replayed line is old news.
-        if (this._isReplayedByOffset() !== true) noteRateLimitEvent(this._host, this.claudeSessionId, event)
+        if (this._isReplayedByOffset() !== true) {
+          noteRateLimitEvent(this._host, this.claudeSessionId, event)
+          this.noteTurnLimit((event as { rate_limit_info?: unknown }).rate_limit_info)
+        }
         break
       }
 
@@ -9029,6 +9053,15 @@ export class ClaudeCodeSession {
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  /** A limit snapshot the turn saw: a rejected one blocks the turn (its reset is kept), an allowed
+   *  one lifts it. `blockedReply`: from a reply the CLI blocked, which only ever adds. */
+  private noteTurnLimit(raw: unknown, blockedReply = false): void {
+    const r = blockedLimitOf(parseRateLimitInfo(raw))
+    if (r === null) return
+    if (r === 'allowed') { if (!blockedReply) this._turnLimitRejected = null; return }
+    this._turnLimitRejected = { ...this._turnLimitRejected, ...r, ...(blockedReply ? { blocked: true } : {}) }
   }
 
   private emitStatusChanged(phase: TaskPhase, errorMessage?: string, stamp?: {
@@ -11161,7 +11194,7 @@ export class SessionRunner {
                   // Nor does a death restart recovery starts again (sessions/start-recovery.ts).
                   if (event.name === EventNames.SESSION_ERROR && (event.data as { startRecovery?: boolean }).startRecovery) return
                   import('../core/sessions/endpoint-wait.js').then(({ endpointWaitTakes }) => {
-                    if (rec.process_status === 'error' && result && endpointWaitTakes(result)) return
+                    if (rec.process_status === 'error' && result && (endpointWaitTakes(result) || usageLimitTakes(result))) return
                     return import('../core/task-manager.js').then(({ clearSessionSlot }) => {
                       clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
                     })

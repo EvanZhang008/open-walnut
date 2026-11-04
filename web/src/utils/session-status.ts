@@ -114,6 +114,8 @@ export const PROCESS_LABELS: Record<ProcessStatus, string> = {
 
 /** A task nobody started yet (its phase TODO, its user status a wait of kind `not-started`). */
 export const NOT_STARTED_LABEL = 'Not started';
+/** A task its session's usage limit stopped, which Walnut continues at the reset (user_status.limit). */
+export const LIMITED_LABEL = 'Limited';
 
 /**
  * The words for a PHASE, in the user's status names (2026-11-03, the user's call: no surface he reads
@@ -140,6 +142,7 @@ export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_stat
   if (state !== 'waiting') return USER_STATE_LABELS[state];
   const us = task.user_status;
   const isSnoozed = us ? !!us.snoozed : snoozed;
+  if (!isSnoozed && us?.limit) return LIMITED_LABEL;
   if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO')) return NOT_STARTED_LABEL;
   return stateWord('waiting', isSnoozed);
 }

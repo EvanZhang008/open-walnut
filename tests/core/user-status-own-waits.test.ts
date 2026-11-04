@@ -28,6 +28,8 @@ const WAIT_SOURCES: Record<string, { input: Partial<UserStatusInput>; reads: 'ta
   schedules: { input: { schedules: [{ name: 'Nightly digest', nextAt: '2026-11-07T06:00:00Z' }] }, reads: 'not a wait of a hand-back' },
   // A count of every open subtask, handed back ones too: the hand-back reads workersAtWork.
   openWorkers: { input: { openWorkers: 2 }, reads: 'not a wait of a hand-back' },
+  // A usage limit stopped its turn: Walnut continues it at the reset, so it waits on that time.
+  usageLimit: { input: { usageLimit: { state: 'waiting', engine: 'claude', window: 'five_hour', resetsAt: '2026-11-07T03:00:00Z', dueAt: '2026-11-07T03:01:00Z' } }, reads: 'time' },
   // A model endpoint Walnut retries on its own: a machine wait, read before any of these.
   endpointWait: { input: {}, reads: 'not a wait of a hand-back' },
   // Main's and a lead's own wait (the user's next message), never a worker's.

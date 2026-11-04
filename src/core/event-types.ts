@@ -271,6 +271,8 @@ export interface SessionResultEvent {
   isError?: boolean;
   /** True only for a terminal upstream retry-exhaustion signature. */
   retryExhausted?: boolean;
+  /** The subscription's usage limit stopped the turn (sessions/usage-limit-wait.ts continues it at the reset). */
+  usageLimit?: import('./sessions/usage-limit-model.js').UsageLimitFacts;
   interrupted?: boolean;
   /** The turn was a compaction stopped before its boundary (claude-code-session.ts): it ends as no work stopped. */
   compactionStopped?: boolean;
@@ -319,6 +321,8 @@ export interface SessionErrorEvent {
   error: string;
   taskId?: string;
   sessionId?: string;
+  /** An ACP engine's turn the subscription's usage limit stopped (sessions/usage-limit-wait.ts). */
+  usageLimit?: import('./sessions/usage-limit-model.js').UsageLimitFacts;
   fromPlanSessionId?: string;
   /**
    * Structured error kind — lets downstream consumers (agent tools, UI) react
@@ -437,6 +441,15 @@ export interface SessionUnknownEventPayload {
   eventType: string;
   /** First 500 chars of the raw JSONL line, for diagnostics. */
   snippet: string;
+}
+
+/** A session's usage-limit wait moved (SessionRecord.usageLimit; null = closed). */
+export interface SessionUsageLimitEvent {
+  sessionId: string;
+  taskId?: string;
+  usageLimit: import('./types.js').SessionUsageLimit | null;
+  /** Present when the continued note moved (null: cleared). */
+  continued?: import('./types.js').SessionUsageLimitContinued | null;
 }
 
 /** One host's Claude subscription limit readings (GET /api/subscription-limits returns the same frames). */
@@ -1422,6 +1435,7 @@ export interface EventPayloadMap {
   'session:tool-result': SessionToolResultEvent;
   'session:unknown-event': SessionUnknownEventPayload;
   'host:subscription-limits': HostSubscriptionLimitsEvent;
+  'session:usage-limit': SessionUsageLimitEvent;
   'session:status-changed': SessionStatusChangedEvent;
   'session:messages-delivered': SessionMessagesDeliveredEvent;
   'session:queued-cancelled': SessionQueuedCancelledEvent;

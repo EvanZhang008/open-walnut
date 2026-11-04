@@ -10,7 +10,7 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  *  server's the moment a third engine landed. SESSION_ENGINE_IDS is the runtime
  *  membership list (validators, catalog defaults). Imported rather than
  *  `export ... from` because SessionRecord below refers to it. */
-import type { SessionEngine, SessionTurnSpeed } from '@open-walnut/core';
+import type { SessionEngine, SessionTurnSpeed, SessionUsageLimit, SessionUsageLimitContinued } from '@open-walnut/core';
 export type { SessionEngine, SessionTurnSpeed };
 export { SESSION_ENGINE_IDS } from '@open-walnut/core';
 
@@ -233,6 +233,11 @@ export interface SessionRecord {
    *  `history` 'found' = it can continue in `newCwd` with its conversation; 'missing' = only a
    *  new conversation can carry the work on. */
   cwdGone?: { cwd: string; at: string; history: 'found' | 'missing' | 'unknown'; newCwd?: string };
+  /** Its last turn hit the subscription's usage limit: Walnut continues it at the reset
+   *  (server sessions/usage-limit-wait.ts; UsageLimitBanner shows it). */
+  usageLimit?: SessionUsageLimit;
+  /** Walnut continued it by itself after the reset and that turn ran (cleared by the next send). */
+  usageLimitContinued?: SessionUsageLimitContinued;
   /** Walnut moved it out of a folder that was gone. */
   folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
   /** Pending permission prompt (control_request) the CLI is PAUSED on. The CLI's

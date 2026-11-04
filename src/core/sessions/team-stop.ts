@@ -232,7 +232,7 @@ export interface WakeSources {
   /** The clocks that would wake one of them: a WAITING task's wait_until, a follow-up alarm, an
    *  endpoint wait that continues its session once the model endpoint answers (`at` = since when;
    *  a team stop holds it: sessions/endpoint-wait.ts reads team_stop before it continues). */
-  clocks: { taskId: string; kind: 'wait_until' | 'promise_alarm' | 'endpoint_wait'; at: string }[];
+  clocks: { taskId: string; kind: 'wait_until' | 'promise_alarm' | 'endpoint_wait' | 'usage_limit'; at: string }[];
   /** A team stop not resumed yet on the task. */
   stopped?: { at: string; by: string; keptSessions?: boolean };
 }
@@ -270,8 +270,12 @@ export async function wakeSourcesOf(rootRef: string, opts: { team?: boolean } = 
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     for (const t of members) {
-      const w = t.session_id ? (await getSessionByClaudeId(t.session_id).catch(() => null))?.endpointWait : undefined;
+      const rec = t.session_id ? await getSessionByClaudeId(t.session_id).catch(() => null) : null;
+      const w = rec?.endpointWait;
       if (w && w.state !== 'gave_up') clocks.push({ taskId: t.id, kind: 'endpoint_wait', at: w.since });
+      // A usage-limit wait continues its session at the reset (sessions/usage-limit-wait.ts); a team stop holds it too.
+      const ul = rec?.usageLimit;
+      if (ul && (ul.state === 'waiting' || ul.state === 'resumed')) clocks.push({ taskId: t.id, kind: 'usage_limit', at: ul.dueAt ?? ul.since });
     }
   } catch { /* sessions unreadable: the task clocks above still list */ }
   return {

@@ -13,6 +13,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import {
+  limitedLine,
   NEEDS_CATEGORY_LABELS, USER_STATES, dueAtMs, fallbackUserState, needsLineOf, shownState, stateCountLabel,
   storedUserState, type NeedsCategory, type UserState, type UserStatus, type WaitKind,
 } from '@open-walnut/user-status';
@@ -155,6 +156,8 @@ export function waitingSentence(status: UserStatus): string {
 }
 
 export function waitingLine(status: UserStatus, formatUntil: (iso: string) => string): string {
+  const limited = limitedLine(status);
+  if (limited) return limited;
   const on = (status.waitingOn ?? '').trim();
   const short = sameAskLine(status);
   if (short) return short;

@@ -31,7 +31,9 @@
 
 import { infraStopCause } from './session-error-kind.js';
 import { endpointGaveUpWords, endpointWords } from './sessions/endpoint-unreachable.js';
-import type { SessionEndpointWait } from './types.js';
+import type { SessionEndpointWait, SessionUsageLimit } from './types.js';
+import { limitAskWords, limitTimeWords, limitWaitingWords } from './sessions/usage-limit-model.js';
+export { limitName, limitTimeWords } from './sessions/usage-limit-model.js';
 import { startDateMs } from './snooze.js';
 import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
@@ -251,6 +253,10 @@ export interface UserStatusInput {
    *  it and continues the turn (sessions/endpoint-wait.ts), so it waits on its machine, not the user,
    *  until the wait gives up. The sync passes it only while no turn runs. */
   endpointWait?: Pick<SessionEndpointWait, 'state' | 'url' | 'where' | 'since' | 'resumes' | 'gaveUpWhy' | 'probeError'> | null;
+  /** Its last turn hit the subscription's usage limit (SessionRecord.usageLimit): Walnut continues it
+   *  at the reset (sessions/usage-limit-wait.ts), so it waits on the reset, not the user, unless the
+   *  user turned that off or the wait gave up. The sync passes it only while no turn runs. */
+  usageLimit?: Pick<SessionUsageLimit, 'state' | 'engine' | 'window' | 'resetsAt' | 'dueAt' | 'resetsFrom'> | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
   /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
@@ -378,6 +384,11 @@ export interface UserStatus {
   /** The machine stopped it (a lost host, a restart, a dead process), not its work: Walnut
    *  resumes it, its lead restarts it when Walnut cannot (machineStop). */
   stoppedBy?: 'machine';
+  /** Its session's usage limit stopped it (SessionRecord.usageLimit): every surface reads "Limited"
+   *  with the reset. `auto`: Walnut continues it by itself at `dueAt`. */
+  limit?: { engine: string; window?: string; resetsAt?: string; dueAt?: string; auto: boolean;
+    /** The reset was read from the limit's own words ("try again in 2 hours"): said as "about". */
+    estimate?: boolean };
   /** Its due date has passed (`overdue`) or comes within a day (`soon`); absent otherwise
    *  (2026-10-28, the Grok Bot study: deadlines in the status). `at` is the due date as set. */
   due?: { at: string; state: 'overdue' | 'soon' };
@@ -533,6 +544,21 @@ function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs:
   // Its turn never reached the model endpoint: Walnut continues it once the endpoint answers, and
   // only a wait that gave up is the user's (2026-11-03: eight sessions read Needs you over a proxy
   // that went down with the Mac's login session).
+  // Its subscription's usage limit stopped the turn: Walnut continues it at the reset, and only a
+  // wait the user turned off, or one that gave up, is the user's (2026-11-04: every session of one
+  // account stops at once, and each needed a nudge after the reset).
+  const ul = input.usageLimit;
+  if (ul && input.processStatus !== 'running') {
+    const limit = strip({ engine: ul.engine, window: ul.window, resetsAt: ul.resetsAt, dueAt: ul.dueAt, auto: ul.state === 'waiting' || ul.state === 'resumed',
+      ...(ul.resetsFrom === 'text' ? { estimate: true } : {}) });
+    // Its continue went in and the new turn has not started yet: Walnut is at it, not the limit.
+    if (ul.state === 'resumed') return strip<UserStatus>({ state: 'working', ...w, now: 'Continuing after the usage limit', limit });
+    if (ul.state === 'off' || ul.state === 'gave_up') {
+      return strip<UserStatus>({ state: 'needs', source: 'error', ask: limitAskWords(ul, nowMs), ...w, limit });
+    }
+    const until = ul.resetsAt && Date.parse(ul.resetsAt) > nowMs ? ul.resetsAt : ul.dueAt;
+    return strip<UserStatus>({ state: 'waiting', kind: 'time', waitingOn: limitWaitingWords(ul, nowMs), ...(until ? { until } : {}), ...w, limit });
+  }
   const ew = input.endpointWait;
   if (ew && input.processStatus !== 'running') {
     if (ew.state === 'gave_up') return strip<UserStatus>({ state: 'needs', source: 'error', ask: endpointGaveUpWords(ew), ...w, stoppedBy: 'machine' });
@@ -691,6 +717,9 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   let category = needsCategoryOf(out, review);
   // An ask with no kind of the user's own reads as a result, but it asked something: never Can close.
   if (category === 'close' && input.report?.kindless_ask) category = 'look';
+  // A usage-limit wait the user turned off, or one that gave up, waits on their choice: continue now
+  // or at the reset. Not a failure to look at.
+  if (category === 'look' && out.limit && !out.limit.auto) category = 'decide';
   if (category) out.category = category;
   return out;
 }
@@ -1289,4 +1318,18 @@ export interface BriefSectionTask extends BriefTask {
 
 export function resultIsPartial(r: BriefSectionTask['result_report']): boolean {
   return !!r?.not_done?.length && !r.settled;
+}
+
+/** "Limited · resets 3:00 PM" for a task whose usage-limit wait Walnut ends by itself (status.limit),
+ *  else null. Every row and status word of the web reads this one line. */
+export function limitedLine(status: Pick<UserStatus, 'state' | 'limit'> | null | undefined, nowMs: number = Date.now()): string | null {
+  const l = status?.limit;
+  if (!l || status?.state !== 'waiting') return null;
+  // The banner's own clock words (limitTimeWords), so the row and the banner name one time one way.
+  if (l.resetsAt && Date.parse(l.resetsAt) > nowMs) return `Limited · resets ${l.estimate ? 'about ' : ''}${limitTimeWords(l.resetsAt, nowMs)}`;
+  // The reset has passed (or was never named): what comes next is Walnut's continue.
+  const due = l.dueAt ? Date.parse(l.dueAt) : NaN;
+  // Past the reset the limit no longer holds it: "Continuing", the banner's own word.
+  if (l.resetsAt) return Number.isFinite(due) && due > nowMs ? `Continuing · at ${limitTimeWords(l.dueAt, nowMs)}` : 'Continuing · shortly';
+  return Number.isFinite(due) && due > nowMs ? `Limited · tries again ${limitTimeWords(l.dueAt, nowMs)}` : 'Limited · trying again shortly';
 }

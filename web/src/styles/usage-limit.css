@@ -1,0 +1,93 @@
+/* A session the usage limit stopped (UsageLimitBanner.tsx). Waiting: a wait Walnut ends by itself,
+   so a calm accent, not the red of a failure. Off: the user's own choice, so neutral. Gave up: it
+   needs them, so amber.
+   It carries session-error-banner too (placement under the glass header); these rules, one class
+   more specific, replace that banner's red. */
+.session-error-banner.usage-limit-banner {
+  /* A row: the base banner stacks its children (a narrow column's error text). */
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 10px 12px 10px 14px;
+  background: color-mix(in srgb, var(--accent, #0a84ff) 7%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 24%, transparent);
+  line-height: 1.45;
+  color: var(--fg);
+}
+.session-error-banner.usage-limit-banner.is-off {
+  background: var(--bg-secondary);
+  border-color: var(--border);
+}
+.session-error-banner.usage-limit-banner.is-gave_up {
+  background: color-mix(in srgb, var(--warning, #f59e0b) 8%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--warning, #f59e0b) 28%, transparent);
+}
+.usage-limit-banner-icon { display: flex; flex-shrink: 0; align-self: flex-start; margin-top: 1px; color: var(--accent, #0a84ff); }
+.usage-limit-banner.is-off .usage-limit-banner-icon { color: var(--fg-muted, var(--fg-secondary)); }
+.usage-limit-banner.is-gave_up .usage-limit-banner-icon { color: var(--warning, #f59e0b); }
+/* The words take the row; the buttons go on the line below them. */
+.usage-limit-banner-body { flex: 1 1 0; min-width: 0; }
+.usage-limit-banner-head { font-weight: 600; }
+.usage-limit-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  vertical-align: 1px;
+  color: var(--accent, #0a84ff);
+  background: color-mix(in srgb, var(--accent, #0a84ff) 14%, transparent);
+}
+.usage-limit-banner.is-off .usage-limit-tag {
+  color: var(--fg-secondary, var(--fg-muted));
+  background: color-mix(in srgb, var(--fg, #000) 8%, transparent);
+}
+.usage-limit-banner.is-gave_up .usage-limit-tag {
+  color: var(--warning, #b45309);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent);
+}
+.usage-limit-banner-detail { margin-top: 2px; color: var(--fg-secondary, var(--fg-muted)); }
+.usage-limit-banner-failure { margin-top: 4px; color: var(--danger, #ff3b30); }
+/* Always on their own line under the words, lined up with them (icon 16px + gap 10px), so they
+   sit in one place at every column width. */
+.usage-limit-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 26px; }
+.usage-limit-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* A border on hover, never a fill: the button that appears under the pointer after a click must
+   not read as pressed. */
+.usage-limit-btn:hover:not(:disabled) { border-color: var(--accent, #0a84ff); }
+.usage-limit-btn:disabled { opacity: 0.6; cursor: default; }
+.usage-limit-btn.is-primary { background: var(--accent, #0a84ff); border-color: transparent; color: #fff; }
+.usage-limit-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); border-color: transparent; }
+.usage-limit-btn:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 1px; }
+.usage-limit-when { white-space: nowrap; }
+/* Walnut continued it after the reset: one quiet line with its dismiss. */
+.session-error-banner.usage-limit-banner.usage-limit-note {
+  flex-wrap: nowrap; padding: 5px 8px 5px 14px; font-size: 12px; color: var(--fg-secondary, var(--fg-muted));
+  background: var(--bg-secondary); border-color: var(--border);
+}
+.usage-limit-note .usage-limit-banner-icon { align-self: center; margin-top: 0; color: var(--success, #2f9e44); }
+.usage-limit-note-close {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; margin-left: auto; border: 0; border-radius: 5px;
+  background: transparent; color: var(--fg-muted, var(--fg-secondary)); cursor: pointer;
+}
+.usage-limit-note-close:hover { background: color-mix(in srgb, var(--fg, #000) 8%, transparent); color: var(--fg); }
+.usage-limit-note-close:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 1px; }
+
+/* The banner takes focus after a switch (UsageLimitBanner): a ring only for the keyboard. */
+.usage-limit-banner:focus { outline: none; }
+.usage-limit-banner:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

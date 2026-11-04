@@ -499,6 +499,16 @@ describe('ACP journal projector', () => {
     ])
   })
 
+  it('a usage-limit stop adds no failure line (the provider\'s words and the banner say it)', () => {
+    const records: JournalRecord[] = [
+      meta(1, { type: 'turn-started', commandId: 'limited' } as never),
+      meta(2, { type: 'error', errorKind: 'usage_limit', message: 'Usage limit reached' } as never),
+      meta(3, { type: 'turn-interrupted', reason: 'worker-crash', commandId: 'limited' } as never),
+    ]
+    const system = projectAcpJournalHistory('runtime-limit', records).filter((m) => m.role === 'system')
+    expect(system).toEqual([])
+  })
+
   it('surfaces indeterminate prompt delivery as an explicit retry warning', () => {
     const projector = new AcpJournalProjector('runtime-uncertain')
     const events = [

@@ -422,6 +422,9 @@ async function defaultHoldsOff(rec: SessionRecord): Promise<string | null> {
   return null
 }
 
+/** The same check for every wait that continues a session by itself (sessions/usage-limit-wait.ts too). */
+export const sessionWaitHoldsOff = defaultHoldsOff
+
 /** Start the waiter (primary only). `gaveUp` raises the session's error card the server owns. */
 export function startEndpointWait(opts: {
   gaveUp?: (rec: SessionRecord, words: string) => Promise<void>

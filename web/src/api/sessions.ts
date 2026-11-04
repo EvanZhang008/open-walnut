@@ -1337,6 +1337,14 @@ export async function continueInNewFolder(sessionId: string): Promise<ContinueIn
   return apiPost(`/api/sessions/${sessionId}/continue-in-new-folder`, {}, { timeoutMs: 30_000 });
 }
 
+export type UsageLimitAction = 'continue' | 'off' | 'auto' | 'dismiss';
+
+/** The session's usage limit stopped it: continue now, or turn the auto-continue at the reset off or on
+ *  (POST /api/sessions/:id/usage-limit, server core/sessions/usage-limit-wait.ts). */
+export async function usageLimitAction(sessionId: string, action: UsageLimitAction): Promise<{ ok: true; usageLimit: NonNullable<SessionRecord['usageLimit']> | null }> {
+  return apiPost(`/api/sessions/${sessionId}/usage-limit`, { action }, { timeoutMs: 20_000 });
+}
+
 /** Mirrors RecheckResult in src/core/sessions/session-lifecycle.ts. */
 export interface SessionRecheck {
   sessionId: string;

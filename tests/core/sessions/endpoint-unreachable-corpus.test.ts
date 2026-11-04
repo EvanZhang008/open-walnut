@@ -70,6 +70,14 @@ const CORPUS: Array<[string, Handling]> = [
   ['API Error: terminated', 'retry'],
   // An answer a retry cannot change.
   ["API Error: Fable 5 can't help with this. Start a new session to continue.", 'terminal'], // real
+  // The subscription's usage limit: the usage-limit wait continues it at the reset (sessions/usage-limit-wait.ts).
+  ["You've hit your session limit \u00b7 resets 3pm (America/Los_Angeles)", 'terminal'], // Claude Code
+  ["You've hit your usage limit. Upgrade to Pro or try again at 3:05 PM.", 'terminal'], // Codex
+  ['Claude AI usage limit reached|1762282800', 'terminal'], // older Claude Code
+  ["You're out of extra usage \u00b7 resets 3pm (UTC)", 'terminal'],
+  ['usageLimitExceeded', 'terminal'], // codex error info
+  // A provider's per-minute rate limit is no usage limit: retried as before.
+  ["API Error: You've hit your rate limit, retry in 20s", 'retry'],
   ['API Error: the model refused to answer', 'terminal'],
   ['API Error: stop_reason: "refusal"', 'terminal'],
   ['Prompt too long', 'terminal'],

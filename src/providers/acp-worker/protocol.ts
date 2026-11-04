@@ -51,6 +51,7 @@ export interface WorkerError {
     | 'steer_unsupported'      // adapter did not advertise _meta.steering at initialize
     | 'steer_race'             // turn ended mid-steer; message must re-queue as a prompt
     | 'protocol'               // ACP-level error from the adapter
+    | 'usage_limit'            // the subscription's usage limit refused the turn (Codex usageLimitExceeded)
     | 'internal'
   message: string
 }
@@ -501,7 +502,8 @@ export type JournalMetaEvent =
   | { type: 'permission-auto-cancelled'; providerRequestId: string }
   | { type: 'config-option-set'; configId: string; value: string | boolean }
   | { type: 'command-accepted'; op: string; commandId: string }
-  | { type: 'error'; errorKind: string; message: string; commandId?: string }
+  /** `resetsAt` (epoch ms, read on the host in its own time zone): a usage_limit's reset, when the provider named one. */
+  | { type: 'error'; errorKind: string; message: string; commandId?: string; resetsAt?: number }
 
 /**
  * Spawn env for the worker (daemon side) and the adapter (worker side): base

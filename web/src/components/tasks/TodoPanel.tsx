@@ -52,6 +52,7 @@ import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
 import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { TaskLimitPill } from './limit-row';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
@@ -123,7 +124,7 @@ import { markTierUsed, readTierUsed } from './filter-bar-persist';
 import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
-import { StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
+import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
 import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
 import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
@@ -1239,7 +1240,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               {dueDateLabel}
             </span>
           )}
-          {task.phase === 'WAITING' && task.wait_until && (
+          {/* A usage limit holds it: the Flat view's Limited words, and its reset is the row's time. */}
+          <TaskLimitPill task={task} />
+          {task.phase === 'WAITING' && task.wait_until && !task.user_status?.limit && (
             <span
               className="todo-item-due-pill todo-item-wait-pill"
               data-testid="task-row-wait-until"
@@ -4839,6 +4842,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (jumpLiveRef.current) openJumpFolds(key, true);
     else setSectionOpenTo(key, true);
   }, [setSectionOpenTo, openJumpFolds]);
+  /** The Limited summary's click: open the section holding them, then bring its heading into view. */
+  // A count of the Limited summary: open its section, bring its first row into view and mark its
+  // rows a moment (state, so a re-render keeps the mark).
+  const [limitFlash, setLimitFlash] = useState<ReadonlySet<string>>(() => new Set());
+  const limitFlashTimer = useRef<number | undefined>(undefined);
+  const showLimitedSection = useCallback((key: StatusSectionKey, taskIds: string[]) => {
+    openStatusSection(key);
+    setLimitFlash(new Set(taskIds));
+    window.clearTimeout(limitFlashTimer.current);
+    limitFlashTimer.current = window.setTimeout(() => setLimitFlash(new Set()), 1800);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const first = taskIds.map((id) => document.querySelector<HTMLElement>(`.status-section-card[data-task-id="${window.CSS.escape(id)}"]`)).find(Boolean);
+      // To the top, just under the stuck headings (the card's scroll margin): the rows it led to
+      // come first in what the user sees, never mid-list under unrelated ones.
+      (first ?? document.querySelector(`[data-testid="status-section-${key}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }));
+  }, [openStatusSection]);
+  useEffect(() => () => window.clearTimeout(limitFlashTimer.current), []);
+  // Each task's usage-limit wait as last announced (one subscription for the whole list): a row
+  // turns to Continuing the moment its continue goes in, before its stored status is derived again.
+  const [limitLive, setLimitLive] = useState<ReadonlyMap<string, string>>(() => new Map());
+  useEvent('session:usage-limit', (data) => {
+    const d = data as { taskId?: string; usageLimit?: { state?: string } | null } | null;
+    if (!d?.taskId || !('usageLimit' in d)) return;
+    const state = d.usageLimit?.state ?? 'gone';
+    setLimitLive((prev) => (prev.get(d.taskId!) === state ? prev : new Map(prev).set(d.taskId!, state)));
+  });
   /** The section each task was drawn in last render: one completed or parked from a
    *  section stays there through its exit grace instead of popping into the list. */
   const lastPlaceRef = useRef<Map<string, StateSectionKey>>(new Map());
@@ -6976,6 +7006,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  the moment it opens would eat the click that asked for it. */
   const sectionRowHandlers = useMemo<SectionRowHandlers>(() => ({
     focusedTaskId,
+    limitFlash,
+    limitLive,
     suppressDetail,
     openSessionTaskIds,
     isPinned: (id) => !!pinnedTaskIds?.has(id),
@@ -7002,7 +7034,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onMoveToProject: onMoveTask ? handleMoveToProject : undefined,
     onDelete,
     onFilterProject: jumpToProject,
-  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
+  }), [focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
@@ -7925,6 +7957,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         />
       )}
       {flatSections && filterOverrideNode}
+      {!isSearchMode && !phoneFirstLoad && (
+        <LimitedSummary model={sectionModel} onShow={showLimitedSection} />
+      )}
       {!isSearchMode && !phoneFirstLoad && (
         <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
       )}

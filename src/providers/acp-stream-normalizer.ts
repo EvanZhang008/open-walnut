@@ -32,6 +32,9 @@ export class AcpStreamNormalizer {
 
   constructor(private readonly projector: AcpJournalProjector) {}
 
+  /** The current turn's answer so far (an error turn ends with no result to carry it). */
+  answerSoFar(): string { return this.answer }
+
   normalize(record: JournalRecord): NormalizedEvent[] {
     // A resume replays the whole past conversation: none of it is this turn's answer.
     const replay = record.kind === 'acp' && record.source === 'provider-replay'

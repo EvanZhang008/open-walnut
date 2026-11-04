@@ -3047,6 +3047,35 @@ sessionsRouter.post('/:sessionId/continue-in-new-folder', async (req: Request, r
   }
 })
 
+// POST /api/sessions/:sessionId/usage-limit {action}: the session's usage limit stopped it
+// (core/sessions/usage-limit-wait.ts). `continue` continues it now, `off` turns the
+// auto-continue at the reset off (the task is the user's then), `auto` turns it back on, `dismiss`
+// clears the note that Walnut continued it after the reset.
+sessionsRouter.post('/:sessionId/usage-limit', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const action = (req.body as { action?: unknown } | undefined)?.action
+    if (action !== 'continue' && action !== 'off' && action !== 'auto' && action !== 'dismiss') {
+      res.status(400).json({ error: 'action must be "continue", "off", "auto" or "dismiss"' })
+      return
+    }
+    const { getUsageLimitWaiter } = await import('../../core/sessions/usage-limit-wait.js')
+    const waiter = getUsageLimitWaiter()
+    if (!waiter) {
+      res.status(409).json({ error: 'the usage-limit wait is not running on this server', code: 'usage_limit_wait_off' })
+      return
+    }
+    const out = await waiter.act(sessionId, action)
+    if (!out.ok) {
+      res.status(out.error === 'session not found' ? 404 : 409).json({ error: out.error })
+      return
+    }
+    res.json(out)
+  } catch (err) {
+    next(err)
+  }
+})
+
 // POST /api/sessions/:sessionId/recheck — ask the session's host, right now,
 // whether it is reachable and whether the CLI is alive, and reconcile the record
 // from the daemon's own snapshot. Sends nothing, spawns nothing, never dials a

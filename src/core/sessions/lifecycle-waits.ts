@@ -176,4 +176,5 @@ export const TURN_END_OBSERVERS: Readonly<Record<string, string>> = {
   'src/core/user-status-sync.ts': 'derives the user status from the session\'s status on each change; waits for nothing',
   'src/core/sessions/start-queue.ts': 'nudges the start queue when a session leaves its turn (a host slot may be free); waits for nothing, the drain asks each host again',
   'src/core/sessions/queue-after-turn.ts': 'releases the messages held for a turn\'s end; its sweep releases them once it finds the session idle (a crash, a reap, a restart), so no hold outlives its turn',
+  'src/core/sessions/usage-limit-wait.ts': 'decides a usage-limit wait when its session stops; the wait itself ends on its own clock, bounded by LIMIT_MAX_WAIT_MS and LIMIT_MAX_TRIES',
 };

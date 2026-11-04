@@ -103,6 +103,8 @@ import {
   type AcpAutoAnswer,
 } from './acp-permission-posture.js'
 import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
+import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
+import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -735,6 +737,8 @@ export class AcpSession {
   private _cursorCommit: Promise<void> = Promise.resolve()
   private _establishing: Promise<string> | null = null
   private _turnHadError = false
+  /** The provider's usage-limit words when the usage limit ended this turn (the record's errorMessage). */
+  private _turnLimitText: string | null = null
   /** Commands with an observed terminal fact. Recovery may append a missing
    * prompt-accepted fact after daemon repair already closed the turn. */
   private _terminalCommands = new Set<string>()
@@ -985,8 +989,15 @@ export class AcpSession {
 
     this.meterTurnSpeed(record)
 
+    // The turn's error is a usage limit: the facts ride its session:error to the usage-limit wait.
+    const usageLimit = record.kind === 'meta' && record.event.type === 'error' && v > this._committedV
+      ? this.usageLimitOf(record.event as { errorKind?: string; resetsAt?: number }) : undefined
     for (const { name, payload } of this.normalizer.normalize(record)) {
       const full: Record<string, unknown> = { ...payload, sessionId: this.trackingId(), taskId: this.taskId }
+      if (name === 'session:error' && usageLimit) {
+        full.usageLimit = usageLimit
+        this._turnLimitText = usageLimit.text ?? null
+      }
       if (name === 'session:permission-request') {
         const requestId = full.requestId as string
         const options = (full.acpOptions as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
@@ -1032,6 +1043,25 @@ export class AcpSession {
     if (record.kind === 'meta'
       && (record.event.type === 'turn-ended' || record.event.type === 'turn-interrupted')) {
       this.commitTerminal(v, record)
+    }
+  }
+
+  /**
+   * A worker error that is the subscription's usage limit: the worker names it (errorKind
+   * 'usage_limit', with the reset it read on the host), or an older worker's protocol error whose
+   * turn ended on the provider's limit words (codex-acp streams them as the turn's last text).
+   */
+  private usageLimitOf(event: { errorKind?: string; resetsAt?: number }): UsageLimitFacts | undefined {
+    // Only the provider's limit words: the answer so far may hold the model's own text before them.
+    const words = usageLimitSentence(this.normalizer.answerSoFar())
+    if (event.errorKind !== 'usage_limit' && !(event.errorKind === 'protocol' && words)) return undefined
+    const now = Date.now()
+    const fromText = event.resetsAt ? undefined : parseUsageLimitReset(words, now)
+    const resetsAt = event.resetsAt ?? fromText
+    return {
+      engine: this.engineId,
+      ...(resetsAt ? { resetsAt, resetsFrom: 'text' as const } : {}),
+      text: words ?? 'Usage limit reached',
     }
   }
 
@@ -2617,6 +2647,8 @@ export class AcpSession {
     const isError = this._turnHadError
       || (event.type === 'turn-interrupted' && event.reason === 'worker-crash')
     this._turnHadError = false
+    const limitText = isError ? this._turnLimitText : null
+    this._turnLimitText = null
 
     this._cursorCommit = this._cursorCommit.then(async () => {
       if (v <= this._committedV) return
@@ -2629,6 +2661,8 @@ export class AcpSession {
         last_status_change: new Date().toISOString(),
         status_reason: isError ? 'api_error' : (isInterrupted ? 'turn_interrupted' : 'turn_completed'),
         status_changed_by: 'session-runner',
+        // The usage limit's own words, so the session says why it stopped (sessions/usage-limit-wait.ts).
+        ...(limitText ? { errorMessage: limitText } : {}),
       })
       this._committedV = updated.consumedOffset ?? this._committedV
       emitSessionStatusChanged(updated, {}, ['*'], { source: 'session-runner' })

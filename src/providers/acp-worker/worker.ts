@@ -36,6 +36,7 @@ import type {
 import { AcpJournal, readJournal } from './journal.js'
 import { redactSensitiveText } from '../../logging/redact.js'
 import { mergeAcpSpawnEnv, snapshotAcpTurnUsage } from './protocol.js'
+import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text.js'
 import type {
   AcpMcpServer,
   WorkerRequest,
@@ -413,11 +414,14 @@ export class AcpWorker {
       // Only the error category is safe to persist; provider diagnostics may contain credentials.
       const kind = classifyPromptRejection(e)
       this.reportProviderError('prompt', kind, e)
+      // A usage limit's reset is read here, on the host: Codex writes it in the host's local time.
+      const resetsAt = kind === 'usage_limit' ? parseUsageLimitReset(rejectionText(e), Date.now()) : undefined
       this.journal.appendMeta({
         type: 'error',
         errorKind: kind,
         message: safeWorkerErrorMessage(kind),
         commandId: params.commandId,
+        ...(resetsAt ? { resetsAt } : {}),
       })
       this.journal.appendMeta({
         type: 'turn-interrupted',
@@ -1027,12 +1031,24 @@ function sanitizeWorkerError(error: WorkerError, provider?: unknown): WorkerErro
 
 const AUTH_REJECTION_RE = /\b(?:(?:no|missing|invalid|expired) (?:api[ -]?key|credentials?)|unauthori[sz]ed|unauthenticated|not (?:signed|logged) in|authentication (?:required|failed)|auth required|login required|401)\b/i
 
-export function classifyPromptRejection(error: unknown): Extract<WorkerError['kind'], 'auth_required' | 'protocol'> {
+export function classifyPromptRejection(error: unknown): Extract<WorkerError['kind'], 'auth_required' | 'protocol' | 'usage_limit'> {
   const record = asObject(error)
   const text = error instanceof Error ? error.message : typeof error === 'string' ? error : record.message
+  // codex-acp rejects a turn its usage limit refused with the provider's error in `data`
+  // ({message, codexErrorInfo: 'usageLimitExceeded'}).
+  const data = asObject(record.data)
+  if (data.codexErrorInfo === 'usageLimitExceeded' || matchesUsageLimitText(rejectionText(error))) return 'usage_limit'
   return record.code === -32000 || (typeof text === 'string' && AUTH_REJECTION_RE.test(text))
     ? 'auth_required'
     : 'protocol'
+}
+
+/** The provider's own words on a rejected prompt (its message, and the adapter's `data.message`). */
+function rejectionText(error: unknown): string {
+  const record = asObject(error)
+  const data = asObject(record.data)
+  const parts = [error instanceof Error ? error.message : typeof error === 'string' ? error : record.message, data.message, data.additionalDetails]
+  return parts.filter((p): p is string => typeof p === 'string').join(' \n')
 }
 
 function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
@@ -1048,6 +1064,7 @@ function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
     case 'steer_unsupported': return 'ACP adapter does not support mid-turn steering'
     case 'steer_race': return 'ACP live turn ended before steering applied'
     case 'protocol': return 'ACP provider protocol operation failed'
+    case 'usage_limit': return 'Usage limit reached'
     case 'internal': return 'ACP worker operation failed'
   }
 }

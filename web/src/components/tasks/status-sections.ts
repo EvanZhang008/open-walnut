@@ -26,7 +26,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
-import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, needsLineOf, shownState, type NeedsCategory } from '@open-walnut/user-status';
+import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, limitedLine, needsLineOf, shownState, type NeedsCategory } from '@open-walnut/user-status';
 import { sameAskLine, waitingLine, waitingSentence } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
@@ -89,6 +89,8 @@ export function waitingReason(task: Task, formatUntil: (iso: string) => string):
   const on = (us.waitingOn ?? '').trim();
   // Snoozed is why it sleeps here, whatever it would wait on after; its date is on the row.
   if (us.snoozed) return 'Snoozed';
+  const limited = limitedLine(us);
+  if (limited) return limited;
   if (us.kind === 'stuck') return on || 'Stopped: nothing will wake it';
   if (us.kind === 'time') {
     const when = us.until && !task.wait_until && !us.snoozed ? formatUntil(us.until) : '';
@@ -143,7 +145,8 @@ const byDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 /**
  * Order inside a section. Watching keeps the order the user added them (a new watch
  * lands at the bottom, nothing reshuffles); Needs you and Working put the latest
- * activity first; Waiting the soonest wake first, then the ones with no clock;
+ * activity first; Waiting the rows a usage limit holds first (the Limited summary over the
+ * sections leads to them), then the soonest wake, then the ones with no clock;
  * Completed the latest completion first.
  */
 export function sortSectionTasks(key: StatusSectionKey, tasks: readonly Task[]): Task[] {
@@ -154,6 +157,13 @@ export function sortSectionTasks(key: StatusSectionKey, tasks: readonly Task[]):
       return rows.sort((a, b) => ((a as Watchable).watched_at ?? '').localeCompare((b as Watchable).watched_at ?? '') || a.id.localeCompare(b.id));
     case 'waiting':
       return rows.sort((a, b) => {
+        const la = a.user_status?.limit, lb = b.user_status?.limit;
+        if (!!la !== !!lb) return la ? -1 : 1;
+        // Among them, the one Walnut continues soonest first.
+        if (la && lb) {
+          const ka = la.dueAt ?? la.resetsAt ?? '', kb = lb.dueAt ?? lb.resetsAt ?? '';
+          if (ka !== kb) return !ka ? 1 : !kb ? -1 : ka.localeCompare(kb);
+        }
         const wa = wakeAt(a), wb = wakeAt(b);
         if (wa && wb) return wa.localeCompare(wb);
         if (wa || wb) return wa ? -1 : 1;

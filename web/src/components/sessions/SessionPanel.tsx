@@ -84,6 +84,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
 import { SessionBrowserCard } from './SessionBrowserCard';
+import { UsageLimitBanner, UsageLimitContinuedNote } from './UsageLimitBanner';
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
@@ -850,6 +851,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     if (d.sessionId === sessionId) {
       fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
     }
+  });
+
+  // The usage-limit wait moved (server sessions/usage-limit-wait.ts): it is written after the
+  // turn's result, so the refetch above can miss it; the event carries the stored wait.
+  useEvent('session:usage-limit', (data) => {
+    const d = data as { sessionId?: string; usageLimit?: SessionRecord['usageLimit'] | null; continued?: SessionRecord['usageLimitContinued'] | null };
+    if (d.sessionId !== sessionId) return;
+    setSession(prev => prev ? {
+      ...prev, usageLimit: d.usageLimit ?? undefined,
+      ...('continued' in d ? { usageLimitContinued: d.continued ?? undefined } : {}),
+    } : prev);
   });
 
   // Applied-settings read-back (server pulled the CLI's get_settings). This is the
@@ -3148,7 +3160,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         {(ps === 'error' || ps === 'stopped') && !session?.cwdGone && session && needsContextRecovery({ ...session, process_status: ps }) && (
           <ContextFullBanner sessionId={sessionId} session={session} onResuming={handleResuming} />
         )}
-        {ps === 'error' && !session?.cwdGone && !(session && needsContextRecovery({ ...session, process_status: ps })) && (() => {
+        {session?.usageLimit && !session.archived && !session.cwdGone && ps !== 'running'
+          && !(session.usageLimit.state === 'resumed' && ps !== 'error') && (
+          <UsageLimitBanner sessionId={sessionId} usageLimit={session.usageLimit}
+            onChange={(next) => setSession(prev => prev ? { ...prev, usageLimit: next ?? undefined } : prev)} />
+        )}
+        {session?.usageLimitContinued && !session.usageLimit && !session.archived && !session.cwdGone && (
+          <UsageLimitContinuedNote sessionId={sessionId} note={session.usageLimitContinued}
+            onDismiss={() => setSession(prev => prev ? { ...prev, usageLimitContinued: undefined } : prev)} />
+        )}
+        {ps === 'error' && !session?.cwdGone && !session?.usageLimit && !(session && needsContextRecovery({ ...session, process_status: ps })) && (() => {
           // Render even with NO errorMessage. An error the backend couldn't label
           // used to render nothing at all \u2014 the user got a red "Error" pill and
           // zero explanation, with the Retry button (which lives in this banner)

@@ -42,6 +42,9 @@ import {
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
 import { FOLD_KEY_ATTR } from './section-fold-rule';
 import { useTaskStatusLines } from './useTaskStatusLines';
+import { limitedLine, limitTimeWords } from '@open-walnut/user-status';
+import { LimitTag, TaskLimitPill, useLimitNow } from './limit-row';
+import { LIMIT_HEAD, limitOwnWords, limitRowWords, type LimitRowLine } from './limit-row-words';
 import '@/styles/status-sections.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
@@ -52,9 +55,12 @@ export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   done: ICONS.ICON_PHASE_COMPLETE,
 };
 
-export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }: {
+export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, limited = 0 }: {
   sectionKey: StatusSectionKey;
   count: number;
+  /** Rows a usage limit stopped (Walnut continues them at the reset): named on the heading, so a
+   *  folded Waiting still says a limit stopped work. */
+  limited?: number;
   /** More not counted yet (the unloaded archive under a chip): the count reads "N+". */
   more?: boolean;
   open: boolean;
@@ -75,6 +81,12 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
         <span className="status-section-heading-icon" aria-hidden="true">{SECTION_ICONS[sectionKey]}</span>
         <span className="navigation-label">{label}</span>
         <span className="navigation-heading-count status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
+        {limited > 0 && (
+          <span className="status-section-limited" data-testid={`status-section-${sectionKey}-limited`}
+            title={`${limited} ${limited === 1 ? 'task' : 'tasks'} a usage limit stopped; Walnut continues ${limited === 1 ? 'it' : 'them'} at the reset`}>
+            · {limited} limited
+          </span>
+        )}
         <span className="navigation-heading-rule" aria-hidden="true" />
         <NavigationChevron collapsed={!open} />
       </button>
@@ -85,6 +97,11 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
 /** The row callbacks a section card needs: the same handlers TodoPanel gives its own rows. */
 export interface SectionRowHandlers {
   focusedTaskId?: string | null;
+  /** Rows the Limited summary just led to, marked a moment. */
+  limitFlash?: ReadonlySet<string>;
+  /** Task id -> the state its usage-limit wait was last announced in (`gone` when it closed), so a
+   *  row turns to Continuing the moment a continue goes in, before its stored status catches up. */
+  limitLive?: ReadonlyMap<string, string>;
   suppressDetail?: boolean;
   openSessionTaskIds?: Set<string>;
   isPinned: (id: string) => boolean;
@@ -141,16 +158,30 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
   // show what need u", "in one line").
   const need = isDone || sectionKey !== 'needs' ? null : needsLine(task);
-  const reasonText = isDone ? '' : sectionKey === 'waiting' ? waitingReason(task, formatWaitUntil)
+  const limitNow = useLimitNow(task.user_status?.limit);
+  // Its continue went in (or the wait closed) and the stored status has not caught up yet.
+  const liveState = handlers.limitLive?.get(task.id);
+  const continuingNow = !isDone && !!task.user_status?.limit && (liveState === 'resumed' || liveState === 'gone');
+  const limitWaitLine = sectionKey === 'waiting' && !isDone ? (continuingNow ? 'Continuing · now' : limitedLine(task.user_status, limitNow)) : null;
+  // A waiting row turned off reads off at once, before it moves under Needs you.
+  const limitWaitOwn = limitWaitLine && !continuingNow && liveState === 'off' ? limitOwnWords(task, '', limitNow, liveState) : null;
+  const limitOwn: LimitRowLine | null = need ? (continuingNow ? { tag: 'Continuing', text: 'now' } : limitOwnWords(task, need.text ?? '', limitNow, liveState)) : null;
+  const reasonText = isDone ? '' : limitWaitOwn ? `${limitWaitOwn.tag} ${limitWaitOwn.text}`
+    : sectionKey === 'waiting' ? limitWaitLine ?? waitingReason(task, formatWaitUntil)
+    : limitOwn ? `${limitOwn.tag ? `${limitOwn.tag} ` : ''}${limitOwn.text}`
     : need ? [need.label, need.text].filter(Boolean).join(': ') : '';
   // Flat: the sentence of what it waits on is a third line under the title, so the top line
   // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
   // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
   const reasonBelow = twoLine && reasonText !== '' && reasonText !== 'Snoozed';
   const reason = !showStatusLines && reasonText !== 'Snoozed' ? null : need ? (
-    <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
-      <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text ? ':' : ''}</span>
-      {need.text ? <span className="needs-line-text">{need.text}</span> : null}
+    <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}${limitOwn ? ' is-limit' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
+      {limitOwn ? null : <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text || limitOwn ? ':' : ''}</span>}
+      {/* A usage-limit wait that is the user's: a tag saying why, then when it resets, on one
+          line (status-sections.css). */}
+      {limitOwn ? (
+        <span className="needs-line-text needs-line-limit">{limitOwn.tag ? <LimitTag tag={limitOwn.tag} tone={limitOwn.tone} /> : null}{limitOwn.text}</span>
+      ) : need.text ? <span className="needs-line-text">{need.text}</span> : null}
       {need.category === 'close' && handlers.onSetPhase ? (
         <button
           type="button"
@@ -163,7 +194,13 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       ) : null}
     </span>
   ) : reasonText ? (
-    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>{reasonText}</span>
+    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>
+      {/* "Limited" wears the session banner's tag, so a limit stop stands out among the waits. */}
+      {limitWaitOwn ? <><LimitTag tag={limitWaitOwn.tag!} tone={limitWaitOwn.tone} /> {limitWaitOwn.text}</>
+        : limitWaitLine && LIMIT_HEAD.test(reasonText)
+        ? <><span className="status-card-limit-tag">{reasonText.match(LIMIT_HEAD)![1]}</span>{limitRowWords(reasonText)}</>
+        : reasonText}
+    </span>
   ) : null;
   // The same rename as every task row: double-click the title (useInlineTitleEdit).
   const title = (
@@ -181,8 +218,14 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       <AwaySyncMark item={task} />
     </>
   );
+  // A row a usage limit holds says its reset on its own line, so its time slot stays empty (its
+  // clock is Walnut's continue, a minute after the reset).
   const wake = snoozedUntil ? (
     <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${snoozeDate}`}>▶︎ {snoozedUntil}</span>
+  ) : task.user_status?.limit && !isDone ? (
+    // With the status sentences hidden (Display), the limit still shows: the pill a By project row
+    // wears; with them shown, the sentence says it.
+    showStatusLines ? null : <TaskLimitPill task={task} />
   ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
     <span
       className="todo-item-due-pill todo-item-wait-pill"
@@ -200,7 +243,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   return (
     <div
       data-task-id={task.id}
-      className={`todo-pinned-card status-section-card${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card status-section-card${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (edit.isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -349,6 +392,45 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
   );
 }
 
+/** The tasks a usage limit stopped (Waiting, or Needs you once auto-continue is off), and the
+ *  section to open to show them. */
+export function limitedTasksOf(model: StatusSectionsModel): { waiting: Task[]; needs: Task[] } {
+  return { waiting: model.waiting.filter((t) => t.user_status?.limit), needs: model.needs.filter((t) => t.user_status?.limit) };
+}
+
+/** One strip over the sections while a usage limit holds sessions: on a long Home its rows sit far
+ *  down. Each count leads to its own rows (the section opens, the first comes into view, all are
+ *  marked a moment): the waiting ones under Waiting, the ones turned off under Needs you. */
+export function LimitedSummary({ model, onShow }: { model: StatusSectionsModel; onShow: (key: StatusSectionKey, taskIds: string[]) => void }) {
+  const { waiting, needs } = limitedTasksOf(model);
+  const n = waiting.length + needs.length;
+  if (n === 0) return null;
+  const now = Date.now();
+  const next = [...waiting, ...needs].map((t) => t.user_status?.limit?.resetsAt).filter((iso): iso is string => !!iso && Date.parse(iso) > now).sort()[0];
+  const parts: Array<{ key: StatusSectionKey; tasks: Task[]; words: string }> = [
+    ...(waiting.length ? [{ key: 'waiting' as const, tasks: waiting, words: `${waiting.length} waiting` }] : []),
+    ...(needs.length ? [{ key: 'needs' as const, tasks: needs, words: `${needs.length} need${needs.length === 1 ? 's' : ''} you` }] : []),
+  ];
+  return (
+    <div className="status-limit-summary" data-testid="status-limit-summary" role="group"
+      aria-label={`Limited: ${parts.map((p) => p.words).join(', ')}${next ? `, next reset ${limitTimeWords(next, now)}` : ''}`}
+      title={`${n} ${n === 1 ? 'session' : 'sessions'} stopped by a usage limit`}>
+      <span className="status-card-limit-tag">Limited</span>
+      {/* Two lines, always: the counts, then the next reset, so it reads the same at every width. */}
+      <span className="status-limit-summary-text">
+        <span className="status-limit-summary-counts">
+          {parts.map((p, i) => (
+            <span key={p.key}>{i > 0 ? ' · ' : ''}<button type="button" className="status-limit-summary-part" data-testid={`status-limit-summary-${p.key}`}
+              title={`Show ${p.words === '1 waiting' ? 'it' : 'them'}: under ${p.key === 'waiting' ? 'Waiting' : 'Needs you'}`}
+              onClick={() => onShow(p.key, p.tasks.map((t) => t.id))}>{p.words}</button></span>
+          ))}
+        </span>
+        {next ? <span className="status-limit-summary-when">Next reset {limitTimeWords(next, now)}</span> : null}
+      </span>
+    </div>
+  );
+}
+
 /** Rows a section holds in the model, and the count its heading shows. */
 export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey): { tasks: Task[]; count: number } {
   switch (key) {
@@ -399,7 +481,8 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
         if (count === 0 && !archiveLeft) return null;
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]} {...{ [FOLD_KEY_ATTR]: key }}>
-            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft} />
+            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft}
+              limited={key === 'waiting' ? tasks.filter((t) => limitedLine(t.user_status)).length : 0} />
             {/* A folded Needs you still shows its approvals: a script is blocked on each, for minutes. */}
             {extra && <ApprovalRows list={waiting} variant="home" />}
             {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft} />}

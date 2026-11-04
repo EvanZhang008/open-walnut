@@ -74,6 +74,7 @@ SOURCES=(
   src/providers/acp-worker/worker-main.ts
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
+  src/providers/usage-limit-text.ts
   src/logging/redact.ts
   src/providers/session-changes-core.ts
   src/providers/usage-host-core.ts

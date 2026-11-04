@@ -76,6 +76,8 @@ export const EventNames = {
   // A host's Claude subscription limit reading moved (one frame per host,
   // src/core/sessions/subscription-limits.ts). About a host, never a session.
   HOST_SUBSCRIPTION_LIMITS: 'host:subscription-limits',
+  // A session's usage-limit wait moved (src/core/sessions/usage-limit-wait.ts).
+  SESSION_USAGE_LIMIT: 'session:usage-limit',
   SESSION_STATUS_CHANGED: 'session:status-changed',
   SESSION_MESSAGES_DELIVERED: 'session:messages-delivered',
   SESSION_QUEUED_CANCELLED: 'session:queued-cancelled',

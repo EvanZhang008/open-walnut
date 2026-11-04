@@ -740,6 +740,7 @@ let autoContinueHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
 let contextFullRecoveryHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
+let usageLimitWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
 let autoRecoverHandle: { stop: () => void } | null = null
@@ -3898,6 +3899,29 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
+  // Usage-limit wait: a turn the subscription's usage limit stopped continues once the window
+  // resets (sessions/usage-limit-wait.ts). Primary only, like auto-continue. An ephemeral server
+  // runs it too, for the waits its own sessions open, and never picks up the copied records'
+  // waits: those are the real Walnut's sessions.
+  if (bootPolicy('primary-store-jobs')) {
+    const { startUsageLimitWait, usageLimitWaitEnabled } = await import('../core/sessions/usage-limit-wait.js')
+    if (usageLimitWaitEnabled()) {
+      usageLimitWaitHandle = startUsageLimitWait({
+        pickUp: !isEphemeral,
+        handBack: async (rec, words) => {
+          const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
+          await publishSessionErrorNotification({
+            title: 'Session Error',
+            body: `${ref ? `${ref}: ` : ''}${words}`,
+            dedupScope: `session:${rec.claudeSessionId}:runtime`,
+            sessionId: rec.claudeSessionId,
+            taskId: rec.taskId,
+          })
+        },
+      })
+    }
+  }
+
   // -- Init Hook Dispatcher (unified: session + task + cron domains) --
   // Deliberately BEFORE subagentRunner/sessionRunner init: those can start
   // emitting bus events (reconnect replays, plugin sync mutating tasks) and
@@ -5441,7 +5465,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
       const { endpointWaitTakes } = await import('../core/sessions/endpoint-wait.js')
-      const endpointWaitHolds = !!sessionId && endpointWaitTakes(eventData<'session:result'>(event))
+      const { usageLimitTakes } = await import('../core/sessions/usage-limit-model.js')
+      // The usage-limit wait (sessions/usage-limit-wait.ts) holds the same way, as long as it runs here.
+      const limitWaitHolds = !!sessionId && !!usageLimitWaitHandle && usageLimitTakes(eventData<'session:result'>(event))
+      const endpointWaitHolds = (!!sessionId && endpointWaitTakes(eventData<'session:result'>(event))) || limitWaitHolds
       // "Prompt is too long" of a session Walnut recovers: it compacts and resends
       // (sessions/context-full-recovery.ts), so the task keeps its session and its phase.
       const { contextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
@@ -5463,9 +5490,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // raises the card itself only if it gives up.
           log.session.info('session error card held: the context recovery compacts this session', { sessionId, taskId })
         } else if (endpointWaitHolds) {
-          // The endpoint was never reached: Walnut waits for it and continues (sessions/endpoint-wait.ts),
-          // and raises the card itself only if it gives up.
-          log.session.info('session error card held: the endpoint wait continues this turn', { sessionId, taskId })
+          // The endpoint was never reached, or the usage limit stopped it: Walnut waits and continues
+          // (sessions/endpoint-wait.ts, sessions/usage-limit-wait.ts), and raises the card itself only
+          // if it gives up.
+          log.session.info(limitWaitHolds ? 'session error card held: the usage-limit wait continues this turn' : 'session error card held: the endpoint wait continues this turn', { sessionId, taskId })
         } else {
           await publishSessionErrorNotification({
             title: 'Session Error',
@@ -5595,6 +5623,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (event.name === 'session:error') {
       const { error, taskId, sessionId, errorKind, parked, retryAt, startRecovery } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
+      // An ACP engine's turn the usage limit stopped: the usage-limit wait continues it at the reset
+      // (sessions/usage-limit-wait.ts), so no card, no phase flip, and the task keeps its session.
+      const { usageLimitTakes } = await import('../core/sessions/usage-limit-model.js')
+      if (!isDeliveryFailure && sessionId && usageLimitWaitHandle && usageLimitTakes(eventData<'session:error'>(event))) {
+        log.web.info('session error held: the usage-limit wait continues this turn', { sessionId, taskId })
+        bus.emit(EventNames.SESSION_ENDED, { sessionId, taskId }, ['web-ui'], { source: 'session-error' })
+        return
+      }
       const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
       let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
       // A send the host did not answer in time goes out again by itself, and its
@@ -7258,6 +7294,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (contextFullRecoveryHandle) {
     contextFullRecoveryHandle.stop()
     contextFullRecoveryHandle = null
+  }
+  if (usageLimitWaitHandle) {
+    usageLimitWaitHandle.stop()
+    usageLimitWaitHandle = null
   }
   if (autoContinueHandle) {
     autoContinueHandle.stop()

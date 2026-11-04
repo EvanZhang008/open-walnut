@@ -309,6 +309,25 @@ describe('AcpWorker lifecycle', () => {
     expect(providerErrorDetail(new Error('x'.repeat(2000)))!.length).toBe(501)
   })
 
+  it('a prompt the usage limit refused journals usage_limit with the reset read on the host', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const before = Date.now()
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-limit', walnutMessageId: 'qm-limit', text: 'usage-limit-hit' })
+    const recs = await waitForJournal((r) => metas(r).some((e) => e.type === 'turn-interrupted'))
+    const err = metas(recs).find((e) => e.type === 'error') as { errorKind: string; message: string; resetsAt?: number } | undefined
+    expect(err?.errorKind).toBe('usage_limit')
+    expect(err?.message).toBe('Usage limit reached')
+    expect(err?.resetsAt).toBeGreaterThanOrEqual(before + (2 * 60 + 13) * 60_000)
+    expect(err?.resetsAt).toBeLessThan(Date.now() + (2 * 60 + 14) * 60_000)
+  })
+
+  it('classifyPromptRejection: a usage limit by its code or its words', () => {
+    expect(classifyPromptRejection({ code: -32603, message: 'Internal error', data: { message: 'x', codexErrorInfo: 'usageLimitExceeded' } })).toBe('usage_limit')
+    expect(classifyPromptRejection({ code: -32603, message: 'Internal error', data: { message: "You've hit your usage limit. Try again later." } })).toBe('usage_limit')
+    expect(classifyPromptRejection(new Error('429 Too Many Requests'))).toBe('protocol')
+  })
+
   it('classifyPromptRejection: auth-shaped text → auth_required, anything else → protocol', () => {
     expect(classifyPromptRejection(new Error('turn failed: llm-deepseek: no API key for provider route "deepseek-official"'))).toBe('auth_required')
     expect(classifyPromptRejection(new Error('401 Unauthorized'))).toBe('auth_required')

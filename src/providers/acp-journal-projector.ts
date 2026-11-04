@@ -119,6 +119,8 @@ export type AcpProjectedEvent =
       commandId: string
       msgId: string
       error: string
+      /** A stop that is no failure of the work (the usage limit): the history shows it as a note. */
+      notice?: boolean
     }
 
 interface TextSegment {
@@ -276,6 +278,15 @@ export class AcpJournalProjector {
       case 'error': {
         this.turnHasError = true
         const commandId = event.commandId ?? this.currentCommandId
+        // The usage limit is no failure of the turn's work: the provider's words above say it, and
+        // Walnut continues the session at the reset (core/sessions/usage-limit-wait.ts). Still an
+        // error event: the live path ends the turn on it (acp-stream-normalizer.ts session:error).
+        if (event.errorKind === 'usage_limit') {
+          return [{
+            type: 'error', ts: record.ts, commandId, msgId: this.id(commandId, 'error'), notice: true,
+            error: 'Usage limit reached. Walnut continues this session when the limit resets.',
+          }]
+        }
         return [{
           type: 'error',
           ts: record.ts,
@@ -621,6 +632,9 @@ export class AcpHistoryFold {
           break
         }
         case 'error':
+          // A usage-limit stop: the provider's own words above say it and the session's banner
+          // explains the wait, as for Claude Code, whose transcript holds only the CLI's words.
+          if (event.notice) break
           this.messages.push({
             role: 'system',
             text: event.error,

@@ -2364,6 +2364,13 @@ const TERMINAL_TURN_ERROR_PATTERNS: RegExp[] = [
   /\b401\b|\b403\b/,
   /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
   /quota exceeded|insufficient (?:quota|funds|credit)|bil{2}ing/i,
+  // A subscription usage limit ("You've hit your session limit · resets 3pm"): retrying before the
+  // reset is refused the same way. The server's usage-limit wait continues it at the reset
+  // (core/sessions/usage-limit-wait.ts). Same list as usage-limit-text.ts USAGE_LIMIT_PATTERNS.
+  /you(?:'|\u2019)?ve hit your\b(?![^.\u00b7\n]{0,40}\brate[ _-]?limit)[^.\u00b7\n]{0,40}\blimit\b/i,
+  /\busage limit reached\b/i,
+  /you(?:'|\u2019)?re out of extra usage/i,
+  /\busage_?limit_?exceeded\b/i,
   /permission denied/i,
   /not\s+found:\s*model|model .* (?:not found|does not exist|unavailable in)/i,
   /aborted by user|user (?:aborted|cancell?ed|interrupted)|request cancell?ed/i,

@@ -151,3 +151,51 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-section-card .pinned-phase-picker[data-row-mark="waiting"],
 .status-section-card .pinned-phase-picker[data-row-mark="snoozed"] { color: var(--fg-muted); }
 .status-section-card > .task-unread-dot.task-unread-dot-quiet { background: var(--fg-muted); opacity: 0.55; }
+/* A usage limit stopped it (Walnut continues it at the reset): the session banner's tag
+   (usage-limit.css), on the row and as a count on the Waiting heading. */
+.status-card-limit-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  color: var(--accent, #0a84ff);
+  background: color-mix(in srgb, var(--accent, #0a84ff) 14%, transparent);
+}
+/* Off (the user's choice) and refused again wear their banner's colours (usage-limit.css). */
+.status-card-limit-tag.is-off { color: var(--fg-secondary, var(--fg-muted)); background: color-mix(in srgb, var(--fg, #000) 8%, transparent); }
+.status-card-limit-tag.is-refused { color: var(--warning, #b45309); background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent); }
+/* A count in words beside the heading's own count, not a pill: it filters nothing. */
+.status-section-limited { flex: none; margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--accent, #0a84ff); }
+/* While a usage limit holds sessions: one line over the sections, a way to their rows. */
+.status-limit-summary {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 6px 8px 2px; padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 24%, transparent); border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #0a84ff) 7%, var(--bg-secondary)); color: var(--fg);
+  font-size: 12px; text-align: left;
+}
+.status-limit-summary-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+.status-limit-summary-when { font-size: 11px; color: var(--fg-secondary, var(--fg-muted)); }
+/* Each count is a way to its own rows. */
+.status-limit-summary-part {
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--fg, #000) 30%, transparent); text-underline-offset: 2px;
+}
+.status-limit-summary-part:hover { color: var(--accent, #0a84ff); text-decoration-color: currentColor; }
+.status-limit-summary-part:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 3px; }
+/* The rows a count led to, marked a moment. */
+.status-section-card.is-limit-flash { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent); border-radius: 8px; transition: box-shadow 0.3s; }
+
+/* A limit row that is the user's: "[Auto-continue off] resets 5:44 AM", why in its tag, then the
+   reset, one line like every needs line. */
+.status-card-needs-line.is-limit .status-card-limit-tag { margin-right: 5px; }
+
+/* A By project / In one list row a usage limit holds (limit-row.tsx TaskLimitPill): the Flat view's
+   tag and words after the title, one line; the words give way before the title does. */
+.todo-item-limit-pill {
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
+  font-size: 11px; color: var(--fg-secondary, var(--fg-muted)); white-space: nowrap;
+}
+.todo-item-limit-pill .status-card-limit-tag { flex: none; }
+.todo-item-limit-pill-words { overflow: hidden; text-overflow: ellipsis; min-width: 0; }

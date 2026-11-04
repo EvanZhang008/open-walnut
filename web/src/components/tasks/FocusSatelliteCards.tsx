@@ -11,6 +11,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { groupSortableId, intoFolderId } from './tier-group-sentinels';
+import { TaskLimitPill } from './limit-row';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
@@ -431,6 +432,9 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
       </button>
+      {/* A usage limit holds it: its tag and reset ahead of the title, so a long title never hides
+          them (limit-row.tsx; the list row draws the same words). */}
+      <TaskLimitPill task={task} />
       {/* Editable title */}
       <span
         {...titleProps}

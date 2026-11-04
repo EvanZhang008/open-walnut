@@ -78,6 +78,7 @@ export const SESSION_ACTION_PARITY: Readonly<Record<string, ParityEntry>> = {
   effort: { op: 'task_session_set.effort' },
   retry: { op: ['task_send', 'task_restart'], note: 'a message resumes a failed or stopped session; task_restart respawns it' },
   'continue-in-new-folder': { op: 'api', note: 'POST /api/sessions/:id/continue-in-new-folder moves a session whose folder is gone into its task directory and sends what waited' },
+  'usage-limit': { op: 'api', note: 'POST /api/sessions/:id/usage-limit {action: continue|off|auto|dismiss} continues a session its usage limit stopped, turns its auto-continue off or on, or clears the note that Walnut continued it' },
   controls: { none: 'An ACP engine\'s own option pills (approval mode, thought level) for the session it runs; its effort rides the model id.' },
   fork: { op: 'task_transfer', note: 'a new task carrying the conversation' },
   permission: { none: 'The person answers a permission prompt; an agent never approves a tool for another session.' },

@@ -91,6 +91,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/worker-main.ts',
   'src/providers/acp-worker/journal.ts',
   'src/providers/acp-worker/protocol.ts',
+  // The worker names a usage-limit refusal and reads its reset on the host.
+  'src/providers/usage-limit-text.ts',
   // The worker redacts provider error words with it before the daemon logs them.
   'src/logging/redact.ts',
   // Session-changes host-local compute (changes.compute / changes.file).

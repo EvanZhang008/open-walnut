@@ -203,6 +203,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/sessions/thread-title.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/time-tracking/agent-time.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/triage/runs.ts': 'a session:result: an intermediate result is no turn end',
+  'src/core/sessions/usage-limit-model.ts': 'a session:result: a limited turn whose own work runs on is that work\'s end, not the usage-limit wait\'s',
   'src/core/observability/invariants.ts': 'a session:result: an intermediate result is no turn end',
   'src/core/observability/recorder.ts': 'records a session:result',
   'src/core/observability/types.ts': 'the recorder\'s turn record',

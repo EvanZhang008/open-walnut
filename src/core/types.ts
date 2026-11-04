@@ -2447,6 +2447,59 @@ export interface SessionEndpointWait {
   gaveUpWhy?: 'time' | 'resumes';
 }
 
+/**
+ * A session whose turn the subscription's usage limit stopped (Claude Code's 5-hour or weekly
+ * window, Codex's usage limit). Walnut continues it once the window resets
+ * (sessions/usage-limit-wait.ts):
+ *   waiting  until the reset; the task reads Waiting, "Limited · resets 3:00 PM"
+ *   resumed  its continue went out; its turn's end closes the wait or opens it again
+ *   off      the user turned auto-continue off for this stop: Needs you, with Continue now
+ *   gave_up  the continues kept hitting a limit whose reset Walnut could not read: Needs you
+ */
+export interface SessionUsageLimit {
+  state: 'waiting' | 'resumed' | 'off' | 'gave_up';
+  /** The engine whose limit it is ('claude', 'codex', ...). */
+  engine: string;
+  /** The window that limits ('five_hour', 'seven_day', 'seven_day_opus', 'overage', ...). */
+  window?: string;
+  /** The first stop of this limit (ISO). */
+  since: string;
+  /** When the window resets (ISO); absent = the CLI did not say. */
+  resetsAt?: string;
+  /** Where resetsAt came from: the CLI's own limit event, its words, or the host's last reading. */
+  resetsFrom?: 'event' | 'text' | 'host';
+  /** The CLI's own words (at most 300 characters). */
+  text?: string;
+  /** Continues sent for this limit. */
+  resumes: number;
+  /** Continues that hit the limit again with no later reset to wait for. */
+  tries: number;
+  /** When Walnut continues it (ISO), while waiting. */
+  dueAt?: string;
+  resumedAt?: string;
+  /** Who sent the continue: Walnut at the reset, or the user's Continue now. */
+  resumedBy?: 'walnut' | 'user';
+  /** The user's Continue now went in before the reset while Walnut would have continued it there. */
+  resumedEarly?: boolean;
+  offAt?: string;
+  gaveUpAt?: string;
+}
+
+/** Walnut continued the session by itself after a usage limit reset, and that turn ran: the panel
+ *  says so (a person coming back later reads why it went on) until someone sends it a message or
+ *  the user dismisses it. */
+export interface SessionUsageLimitContinued {
+  at: string;
+  /** Walnut at the reset, the user's Continue now, or a new message into the waiting session
+   *  (`your-message`: a person typed it; `message`: another task, a trigger, a Retry). */
+  by?: 'walnut' | 'user' | 'your-message' | 'message';
+  /** A new message ended a wait Walnut would have continued at the reset. */
+  autoCancelled?: boolean;
+  engine: string;
+  window?: string;
+  resetsAt?: string;
+}
+
 /** Persisted auto-recover budget for one session. */
 export interface SessionAutoRecoverState {
   /** Auto-resumes fired inside the rolling window. */
@@ -3512,6 +3565,10 @@ export interface SessionRecord {
   restartLoss?: SessionRestartLoss;
   /** Its last turn could not reach the model endpoint: Walnut waits for it and continues (sessions/endpoint-wait.ts). No status write touches it. */
   endpointWait?: SessionEndpointWait;
+  /** Its last turn hit the subscription's usage limit: Walnut continues it at the reset (sessions/usage-limit-wait.ts). No status write touches it. */
+  usageLimit?: SessionUsageLimit;
+  /** Walnut's continue after a usage limit reset ran (sessions/usage-limit-wait.ts); cleared by the next send. */
+  usageLimitContinued?: SessionUsageLimitContinued;
   /** When a person (console, phone, CLI, a letter) last sent this session a message. */
   humanInputAt?: string;
   /** When a person last typed into this session's chat (console, phone, CLI; never a letter's answer):
