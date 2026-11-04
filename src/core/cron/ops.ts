@@ -129,14 +129,18 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   });
 }
 
-export async function add(state: CronServiceState, input: CronJobCreate) {
+export async function add(state: CronServiceState, input: CronJobCreate, opts?: { id?: string }) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'add');
     // forceReload on every mutating op: the store file is shared with other
     // processes (and git-sync), so mutating a stale in-memory snapshot and
     // blind-writing it would revert their changes (2026-08-04 re-fire storm).
     await ensureLoaded(state, { forceReload: true });
-    const job = createJob(state, input);
+    // An id given by its creator (a host's trigger, trigger-api.ts) is stored once: the
+    // caller compared the two, and two replays that raced both get the one job.
+    const prior = opts?.id ? state.store?.jobs.find((j) => j.id === opts.id) : undefined;
+    if (prior) return prior;
+    const job = createJob(state, input, opts?.id);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency

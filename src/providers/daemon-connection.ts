@@ -610,6 +610,8 @@ export class DaemonConnection {
   /** triggers.configure serialization — same three fields, same reasons (see pushTriggers). */
   private triggersPushInFlight = false
   private triggersPushRerun = false
+  /** The push in flight, for pushTriggersNow callers that wait for it. */
+  private triggersPushDone: Promise<void> | null = null
   private lastTriggersPushHash: string | null = null
   /** host.slice serialization (see pushHostSlice) — same three fields, same reasons. */
   private hostSlicePushInFlight = false
@@ -1439,11 +1441,20 @@ export class DaemonConnection {
   }
 
   pushTriggers(): void {
-    if (this.isReadOnlyRemote) return
-    if (this._capabilities && !this.hasCapability('triggers-v1')) return
-    if (this.triggersPushInFlight) { this.triggersPushRerun = true; return }
+    void this.pushTriggersNow()
+  }
+
+  /**
+   * The same push, resolved once the set as it is now has gone out (or nothing needed to):
+   * a push in flight runs once more for a change it may have missed, and this waits for that.
+   * Never rejects.
+   */
+  pushTriggersNow(): Promise<void> {
+    if (this.isReadOnlyRemote) return Promise.resolve()
+    if (this._capabilities && !this.hasCapability('triggers-v1')) return Promise.resolve()
+    if (this.triggersPushInFlight && this.triggersPushDone) { this.triggersPushRerun = true; return this.triggersPushDone }
     this.triggersPushInFlight = true
-    void (async () => {
+    const done = (async () => {
       try {
         do {
           this.triggersPushRerun = false
@@ -1485,8 +1496,11 @@ export class DaemonConnection {
         })
       } finally {
         this.triggersPushInFlight = false
+        this.triggersPushDone = null
       }
     })()
+    this.triggersPushDone = done
+    return done
   }
 
   /**
@@ -2418,6 +2432,7 @@ export class DaemonConnection {
       // journal-v2: the drain names its kinds, reads the host clock, acks exact seqs.
       journalV2: this.hasCapability('journal-v2'),
       alive: () => this._connected,
+      pushTriggers: () => this.pushTriggersNow(),
     }
   }
 

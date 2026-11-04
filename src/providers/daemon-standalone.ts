@@ -3986,6 +3986,8 @@ const offlineHost = createOfflineHostCore({
     test: async (check, triggerId, home) => (await runTriggerTest(check, triggerId, home ?? '')) as unknown as Record<string, unknown>,
     changed: () => triggerHoldsChanged(),
     cwdOf: (sid) => sessions.get(sid)?.cwd,
+    // A trigger created here is checked as a pushed one is, before it is journaled.
+    validate: (def) => { const r = validateTriggerDef(def); return r.ok ? { ok: true } : { ok: false, error: r.error } },
   },
   log: (level, msg, data) => logMsg(level, msg, data),
   isLive: (sid) => sessions.get(sid)?.state === 'running',

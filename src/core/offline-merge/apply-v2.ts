@@ -41,9 +41,11 @@ export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'boa
 /**
  * What `leader.configure {drains}` names: the kinds, plus device actors this Mac checks, plus
  * `routine-run` (a `session` record with `routine` is adopted as a routine's run, not an ask:
- * apply-session.ts; a host starts one only for a Mac that says so).
+ * apply-session.ts; a host starts one only for a Mac that says so), plus `trigger-create` (a
+ * `trigger_create` op record is replayed under the id the host gave it: trigger-api.ts; a host
+ * arms one while this Mac is away only for a Mac that says so).
  */
-export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run'];
+export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run', 'trigger-create'];
 
 export type JournalActorLike = { kind: 'session'; sid: string } | { kind: 'device'; deviceId: string; name?: string } | { kind: 'trigger'; id: string };
 

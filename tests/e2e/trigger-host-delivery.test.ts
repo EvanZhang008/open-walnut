@@ -324,3 +324,38 @@ describe('no verdict, no delivery', () => {
     })
   }
 })
+
+// A trigger its host created while this server was away (offline-host-core.ts opTriggerCreate):
+// until the drain stores it, its fires are the host's. A claim would make one this server's with
+// no routine to deliver it, and an ack as an unknown routine's would drop it for good.
+describe('a trigger its host created while this server was away', () => {
+  it('its fires are neither claimed nor acked until the drain stores it, then recorded once', async () => {
+    const taskId = await newTask('Created on the host')
+    await sessionOn(taskId, 'host-e2e-created')
+    const hostId = `${Date.now().toString(36)}-0a1b2c3d`
+    sends.length = 0
+    daemon.clearCommandHistory()
+    // Owed (no host mark), then the host's own delivery of the next one.
+    handleTriggerEvent('__local__', fire(hostId, 'ep-created', 1, Date.now()))
+    const delivered = { atMs: Date.now(), sessionId: 'host-e2e-created', messageId: 'qm-trigger-ee55', seqs: [2] }
+    handleTriggerEvent('__local__', fire(hostId, 'ep-created', 2, Date.now(), { host: delivered }))
+    await sleep(1_500)
+    expect(claimsFor(hostId)).toHaveLength(0)
+    expect(acksFor(hostId)).toEqual([])
+    expect(envelopes('ep-created')).toEqual([])
+    // The drain stores it under the host's id; the daemon's replay brings the fires again.
+    const stored = await req('POST', '/api/v1/routines/trigger', {
+      id: hostId, run: 'bash created-on-host.sh', every: 60_000, prompt: 'Handle each new message.',
+      description: 'Checks for new messages every minute; the session handles each one.', session: taskId, host: '__local__', cwd: '/tmp',
+    })
+    expect(stored.status, JSON.stringify(stored.json)).toBe(201)
+    expect(stored.json.job.id).toBe(hostId)
+    handleTriggerEvent('__local__', fire(hostId, 'ep-created', 2, Date.now(), { host: delivered, replay: true }))
+    await until('the host delivery recorded', () => acksFor(hostId), (a) => a.includes(2))
+    expect((await jobState(hostId)).state.fireCount).toBe(1)
+    expect(envelopes('ep-created')).toEqual([])
+    // An id the server gave, unknown here, is still acked as an orphan (unchanged).
+    handleTriggerEvent('__local__', fire('mgone000-1a2b', 'ep-gone', 1, Date.now()))
+    await until('the orphan acked', () => acksFor('mgone000-1a2b'), (a) => a.length === 1)
+  })
+})

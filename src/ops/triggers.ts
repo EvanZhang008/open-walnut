@@ -98,7 +98,9 @@ defineOp({
     + 'While you or the user still have work on this task, leave wait out, and park it later with task_update '
     + 'phase=WAITING once only the wait is left. The main agent\'s task is never parked. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
-    + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
+    + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it. '
+    + 'It works while the Walnut server is away too: the host your session runs on arms the check at once and '
+    + 'Walnut records it, with the same id, when the server is back (the answer then says queued).',
   input: {
     run: z.string().min(1).optional().describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh"). '
       + 'Required unless `template` is given'),
@@ -132,6 +134,8 @@ defineOp({
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '
       + 'Default 4 hours; "" = no clock (only when the user asked for no time limit)'),
+    id: z.string().optional().describe('Never pass it: Walnut names the trigger. Set only by a host that armed this trigger '
+      + 'while the Walnut server was away, so the server keeps the id the host gave it'),
   },
   // The old park receipt's text (removed 2026-10-05), still sent by older sessions.
   retiredInput: ['wait_report'],

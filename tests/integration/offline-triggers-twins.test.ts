@@ -283,4 +283,34 @@ describe.each(twins)('trigger ops on the real %s daemon while its Walnut is away
     await pushSet([T_PR, T_THEIRS])
     expect(await armedNow([T_PR, T_CI, T_THEIRS])).toEqual([T_PR, T_THEIRS])
   }, 30_000)
+
+  it('a create runs here at once under the host\'s id, through a set pushed before the drain and a restart', async () => {
+    const before = await gateway(d.sock, 'trigger_create', { run: `sh ${check}`, every: '1h', prompt: 'Look at it.', description: 'Checks the PR every hour.' })
+    // A Mac that never said it replays one keeps trigger_create on the server.
+    expect(!before.ok && before.error.code).toBe('hub_unreachable')
+    const server = await FakeServer.connect(d.port)
+    const conf = await server.cmd({ cmd: 'leader.configure', home: HOME, walnutId: 'w-fixture', backup: false, drains: ['task-fields', 'trigger-create'] })
+    expect(conf.ok, JSON.stringify(conf)).toBe(true)
+    await server.close()
+    const r = ok(await gateway(d.sock, 'trigger_create', { run: `sh ${check}`, every: '1h', prompt: 'Look at it.', description: 'Checks the PR every hour.' }))
+    expect(r).toMatchObject({ queued: true, offline: true, host: 'devbox' })
+    const id = String(r.id)
+    expect(await armedNow([id])).toEqual([id])
+    // The returning Mac pushes its set (without the new trigger) before its drain.
+    await pushSet([T_PR, T_THEIRS])
+    expect(await armedNow([id, T_PR])).toEqual([id, T_PR])
+    await stopDaemon(d)
+    d = await spawnDaemon(twin, d.dir)
+    await sleep(300)
+    expect(await armedNow([id, T_PR])).toEqual([id, T_PR])
+    const s2 = await FakeServer.connect(d.port)
+    const records = data(await s2.cmd({ cmd: 'offline.drain', home: HOME, kinds: ['task-fields'] })).records as Array<Record<string, any>>
+    expect(records.map((x) => [x.op, x.args.id])).toEqual([['trigger_create', id]])
+    expect(records[0]).toMatchObject({ args: { session: TASK, host: 'devbox', every: 3_600_000, cwd: expect.any(String) }, trigger: { id, deliver: { home: HOME, taskId: TASK } } })
+    // The Mac stored it and pushes it in its set; then the ack lifts the hold, and it keeps running.
+    await pushSet([T_PR, T_THEIRS, id])
+    expect((await s2.cmd({ cmd: 'offline.ack', home: HOME, seqs: records.map((x) => x.seq) })).ok).toBe(true)
+    await s2.close()
+    expect(await armedNow([id, T_PR])).toEqual([id, T_PR])
+  }, 90_000)
 })

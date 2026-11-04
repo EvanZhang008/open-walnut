@@ -15,8 +15,9 @@
  *   - a trigger fire no server claimed reaches the target task's live session
  *     here (deliverTrigger; the trigger's own fire queue reports it);
  *   - the checks run here, so trigger_list / trigger_test answer here, and a
- *     trigger_pause / _resume / _delete takes effect here at once (the daemon
- *     arms by triggerHolds() until the server has taken the record).
+ *     trigger_create / _pause / _resume / _delete takes effect here at once (the
+ *     daemon arms by triggerHolds() until the server has taken the record; a
+ *     trigger created here keeps the id this host gave it).
  * Everything the server must learn goes into a per-Walnut journal it drains on
  * reconnect (`offline.drain` / `offline.ack`); until the journal is empty the
  * gateway keeps answering here, so no id the server has not seen yet reaches it.
@@ -175,8 +176,9 @@ export type OfflineRecord =
   | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean; routingTold?: string }
   /**
    * `base`: the copy's updated_at for that task when the write was queued (the server's clock).
-   * `trigger`: for a trigger pause, resume or delete made here, the trigger as this host ran it,
-   * so a resume here can arm it again (the server's set no longer carries a paused trigger).
+   * `trigger`: for a trigger created, paused, resumed or deleted here, the trigger as this host
+   * runs it, so a resume here can arm it again (the server's set no longer carries a paused
+   * trigger) and a trigger created here runs before the server has it.
    */
   | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string; trigger?: OfflineTrigger }
   /**
@@ -274,14 +276,23 @@ export interface OfflineTriggerTable {
   armed(): Array<{ home?: string; def: OfflineTrigger; status: OfflineTriggerStatus }>
   /** Run a check once and read or write no state (`triggers.test`); rejects with the daemon's refusal. */
   test(check: { run: string; cwd?: string; timeoutSeconds?: number }, triggerId?: string, home?: string): Promise<Record<string, unknown>>
-  /** A pause, resume or delete was made here: arm and disarm by `triggerHolds()` now. */
+  /** A create, pause, resume or delete was made here: arm and disarm by `triggerHolds()` now. */
   changed(): void
-  /** A session's working directory, for a test that names none. */
+  /** A session's working directory, for a test or a create that names none. */
   cwdOf?(sid: string): string | undefined
+  /**
+   * The daemon's own check of a wire def (trigger-check-core.ts validateTriggerDef), so a
+   * trigger created here is refused at once rather than journaled and never armed.
+   * Absent: trigger_create needs the server.
+   */
+  validate?(def: OfflineTrigger): { ok: true } | { ok: false; error: string }
 }
 
-/** The last trigger write made here per id that the server has not taken yet. */
-export interface TriggerHold { home: string; on: boolean; deleted?: boolean; def?: OfflineTrigger }
+/**
+ * The last trigger write made here per id that the server has not taken yet.
+ * `created`: the trigger itself was created here (the server has no routine of that id yet).
+ */
+export interface TriggerHold { home: string; on: boolean; deleted?: boolean; created?: true; def?: OfflineTrigger }
 
 export interface OfflineHostDeps {
   fs: typeof import('node:fs')
@@ -447,9 +458,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   if (deps.openItems) {
     OFFLINE_OPS.push({ name: 'open_items', title: 'What is still open for your task (copy on this host)', description: 'Unfinished subtasks and pending reply requests, as this host\'s copy has them; also what Walnut puts into your context after a compaction.', readonly: true, signature: '[hook]' })
   }
-  // The checks run on this host, so it answers for them itself (pause, resume and
-  // delete take effect here at once and reach Walnut when the server is back).
-  const TRIGGER_WRITE_OPS = ['trigger_pause', 'trigger_resume', 'trigger_delete']
+  // The checks run on this host, so it answers for them itself (create, pause, resume
+  // and delete take effect here at once and reach Walnut when the server is back).
+  const TRIGGER_WRITE_OPS = ['trigger_create', 'trigger_pause', 'trigger_resume', 'trigger_delete']
   if (deps.triggers) {
     OFFLINE_OPS.push(
       { name: 'trigger_list', title: 'List the triggers this host runs', description: 'The triggers this host checks for this Walnut, with their last check and next run, as this host has them now.', readonly: true, signature: '' },
@@ -469,9 +480,22 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     description: 'Checked as online and saved on this host; it reaches the user\'s inbox, with its id, when the Walnut server is back. A payload over 1 MB (one that rides in a file) needs the server.',
     readonly: false, signature: 'subject type markdown|html [text] [actions] [task_refs] [pin]',
   }
-  /** The ops this host answers for `home` (tools.list, walnut_status): a letter only when the leading Mac drains it. */
+  /** A trigger armed here: only for a Mac that replays it under the id this host gave it. */
+  const TRIGGER_CREATE_OP = {
+    name: 'trigger_create', title: 'Create a trigger on this host (runs here now, sent later)',
+    description: 'This host starts checking it at once and delivers its fires into sessions here; Walnut records it, with the same id, when the server reconnects. A template trigger, or one for a task or host this host does not hold, needs the server.',
+    readonly: false, signature: 'run every prompt description [name] [session] [cwd] [timeoutSeconds] [maxFiresPerDay] [wait] [wait_until] [watches]',
+  }
+  function createsTriggers(home: string): boolean {
+    return !!deps.triggers && typeof deps.triggers.validate === 'function' && drainsKind(home, 'trigger-create')
+  }
+  /** The ops this host answers for `home` (tools.list, walnut_status): a letter or a new trigger only when the leading Mac drains it. */
   function awayOps(home: string): typeof OFFLINE_OPS {
-    return deps.letters && drainsKind(home, 'letter') ? OFFLINE_OPS.concat([LETTER_OP]) : OFFLINE_OPS
+    const extra = [
+      ...(deps.letters && drainsKind(home, 'letter') ? [LETTER_OP] : []),
+      ...(createsTriggers(home) ? [TRIGGER_CREATE_OP] : []),
+    ]
+    return extra.length ? OFFLINE_OPS.concat(extra) : OFFLINE_OPS
   }
 
   /** How long a drained-but-unacked row is left to the server before this host acts on it again. */
@@ -1651,9 +1675,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     }
   }
 
-  function opQueued(home: string, callerSid: string, name: string, args: Record<string, unknown>): GatewayResult {
-    const ref = typeof args.id === 'string' ? args.id : ''
+  function opQueued(home: string, callerSid: string, name: string, rawArgs: Record<string, unknown>): GatewayResult {
+    const ref = typeof rawArgs.id === 'string' ? rawArgs.id : ''
     if (!ref) return fail('bad_request', `${name} needs "id"`)
+    // A clock named as a duration ("6h") counts from now, not from when the server replays it:
+    // journal v2 stores the value as written (apply-fields.ts). A v1 record is replayed through
+    // task_update, which reads a duration from the replay and refuses a time already past.
+    let args = rawArgs
+    if (name === 'task_update' && rawArgs.wait_until !== undefined && rawArgs.wait_until !== null && drainsKind(home, 'task-fields')) {
+      try { args = { ...rawArgs, wait_until: waitClock(rawArgs.wait_until) } } catch (err) { return fail('bad_request', (err as Error).message) }
+    }
     const { task, error } = resolveTask(home, ref)
     if (error) return error
     if (!task) return needsServer(`Task ${ref} is not in this host's offline copy; changing it`)
@@ -1966,8 +1997,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   // ── triggers: the checks this host runs (walnut-trigger) ──
 
   /**
-   * The last pause, resume or delete made here per Walnut and trigger id, until the
-   * server takes it. Per Walnut: two Walnuts on one host each hold their own.
+   * The last create, pause, resume or delete made here per Walnut and trigger id, until
+   * the server takes it. Per Walnut: two Walnuts on one host each hold their own. A
+   * trigger created here stays `created` through the changes made to it after.
    */
   function triggerHoldsByHome(): Map<string, Map<string, TriggerHold>> {
     const out = new Map<string, Map<string, TriggerHold>>()
@@ -1979,7 +2011,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         if (!id) continue
         const prev = holds.get(id)
         const def = r.trigger ?? prev?.def
-        holds.set(id, { home, on: r.op === 'trigger_resume', ...(r.op === 'trigger_delete' ? { deleted: true } : {}), ...(def ? { def } : {}) })
+        const created = r.op === 'trigger_create' || prev?.created === true
+        holds.set(id, {
+          home, on: r.op === 'trigger_resume' || r.op === 'trigger_create',
+          ...(r.op === 'trigger_delete' ? { deleted: true } : {}), ...(created ? { created: true as const } : {}), ...(def ? { def } : {}),
+        })
       }
       if (holds.size) out.set(home, holds)
     }
@@ -2034,7 +2070,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       ...(status && iso(status.lastRunAtMs) ? { lastCheckAt: iso(status.lastRunAtMs) } : {}),
       ...(status && iso(status.lastFireAtMs) ? { lastFireAt: iso(status.lastFireAtMs) } : {}),
       ...(status ? { consecutiveErrors: status.consecutiveErrors ?? 0, unackedFires: status.pendingFires ?? 0 } : {}),
-      ...(holds.get(def.id) ? { changedHere: holds.get(def.id)!.on ? 'resumed' : 'paused' } : {}),
+      ...(holds.get(def.id) ? { changedHere: holds.get(def.id)!.created && holds.get(def.id)!.on ? 'created' : holds.get(def.id)!.on ? 'resumed' : 'paused' } : {}),
+      // Created here: the server has no routine of this id until it reconnects.
+      ...(holds.get(def.id)?.created ? { queued: true } : {}),
     })
     const triggers: Array<Record<string, unknown>> = table.armed()
       .filter((t) => armedHome(t) === home)
@@ -2046,7 +2084,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return ok({
       count: triggers.length, triggers, offline: true, as_of: asOf(home),
       outcome: `${triggers.length} trigger(s) this host checks for this Walnut, as this host runs them now. Triggers on other hosts, and ones paused or stopped before the server went away, are listed by the Walnut server.`,
-      next: triggers.length === 0 ? 'No trigger runs here. trigger_create needs the Walnut server.' : 'trigger_test runs a check once here; trigger_pause / trigger_delete stop one here at once.',
+      next: triggers.length === 0
+        ? (createsTriggers(home) ? 'No trigger runs here. trigger_create arms one here now.' : 'No trigger runs here. trigger_create needs the Walnut server.')
+        : 'trigger_test runs a check once here; trigger_pause / trigger_delete stop one here at once.',
     })
   }
 
@@ -2079,7 +2119,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       result, offline: true, outcome,
       next: !parsed
         ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'
-        : 'Arming it (trigger_create) needs the Walnut server: create it once the server answers again.',
+        : createsTriggers(home)
+          ? 'Arm it with trigger_create (same run and cwd): this host starts checking it now, and Walnut records it when the server is back.'
+          : 'Arming it (trigger_create) needs the Walnut server: create it once the server answers again.',
     })
   }
 
@@ -2115,6 +2157,154 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return ok({
       id, name: t!.def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
       changed: true, queued: true, offline: true, outcome, next: 'Nothing else is required. Do not repeat the call.',
+    })
+  }
+
+  /**
+   * A wait clock as the server reads one (core/task-wait-clock.ts parseWaitUntil): an ISO
+   * time or a duration from now ("90m", "6h", "3d"), turned into a time HERE, so a queued
+   * park keeps the clock its caller meant and not one counted from when the server is back.
+   * `''` = no clock, undefined = none named; a string that is neither throws.
+   */
+  function waitClock(raw: unknown): string | undefined {
+    if (raw === undefined || raw === null) return undefined
+    if (typeof raw !== 'string' && typeof raw !== 'number') throw new Error('wait_until must be an ISO datetime or a duration like "6h" / "3d"')
+    const text = typeof raw === 'string' ? raw.trim() : String(raw)
+    if (text === '') return ''
+    const units: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+    const duration = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i.exec(text)
+    const now = deps.now()
+    const atMs = duration ? now + Math.floor(Number(duration[1]) * units[(duration[2] ?? 'ms').toLowerCase()]) : Date.parse(text)
+    if (!Number.isFinite(atMs)) throw new Error(`wait_until "${text}" is neither an ISO datetime nor a duration like "6h" / "3d"`)
+    if (atMs <= now) throw new Error(`wait_until "${text}" is not in the future`)
+    return new Date(atMs).toISOString()
+  }
+
+  /**
+   * trigger_create while the Walnut server is away: the same checks as the server's
+   * (core/routines/trigger-api.ts createTriggerRoutine), the routine's id given here, the
+   * check armed here at once (a `trigger_create` record is a hold that is on, with its def),
+   * and its fires delivered by this host as a fire no server claimed is. The server replays
+   * the record under the same id (offline-handover.ts) and pushes its set before the ack, so
+   * the trigger is never armed twice and keeps its seen ids, cursor and fires. A park the
+   * caller asked for (wait:true) is its own queued task_update, after it.
+   */
+  function opTriggerCreate(home: string, callerSid: string, args: Record<string, unknown>): GatewayResult {
+    const table = deps.triggers!
+    const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+    const here = slices.get(home)?.host ?? ''
+    if (text(args.template)) return needsServer('A template trigger (its check asks the Walnut server)', home)
+    if (args.id !== undefined) return fail('bad_request', 'trigger_create takes no "id": Walnut names the trigger')
+    const host = text(args.host)
+    if (host && host !== here && !(here === 'local' && host === '__local__')) return needsServer(`A trigger on host "${host}"`, home)
+    const run = text(args.run)
+    if (!run) return fail('bad_request', 'run is required: the shell command that decides whether to fire')
+    const prompt = text(args.prompt)
+    if (!prompt) return fail('bad_request', 'prompt is required: what the session should do when it fires')
+    // The host delivers the fires itself, so the prompt rides in the def (DELIVER_PROMPT_MAX).
+    if (prompt.length > 32 * 1024) return needsServer('A trigger prompt over 32 KB', home)
+    const description = text(args.description).replace(/\s+/g, ' ')
+    if (!description) {
+      return fail('bad_request', 'description is required: one or two plain sentences saying what this watches, when it fires, and what the session does then')
+    }
+    // TRIGGER_DESCRIPTION_MAX (trigger-api.ts).
+    if (description.length > 600) return fail('bad_request', `description is ${description.length} characters; the limit is 600 (one or two sentences)`)
+    const rawWatch = args.watches
+    const watches = rawWatch === undefined || rawWatch === null || rawWatch === '' ? null : text(rawWatch)
+    if (watches !== null && watches !== 'ask' && !/^lt-[a-z0-9-]{4,60}$/i.test(watches)) {
+      return fail('bad_request', 'watches must be "ask" (your status\'s ask of the user) or a letter id (lt-...)')
+    }
+    const rawEvery = args.every
+    let everyMs: number | null = null
+    if (typeof rawEvery === 'number' && Number.isFinite(rawEvery)) everyMs = Math.floor(rawEvery)
+    else {
+      const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/.exec(text(rawEvery).toLowerCase())
+      const factor: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+      if (m) everyMs = Math.floor(Number(m[1]) * factor[m[2] ?? 'ms'])
+    }
+    if (everyMs === null || !Number.isFinite(everyMs)) return fail('bad_request', 'every is required: milliseconds, or a duration like "30s" / "5m" / "1h"')
+    // MIN_EVERY_MS (trigger-check-core.ts).
+    if (everyMs < 10_000) return fail('bad_request', 'every must be at least 10s')
+    if (args.wait !== undefined && typeof args.wait !== 'boolean') return fail('bad_request', 'wait must be true or false')
+    let waitUntil: string | undefined
+    try { waitUntil = waitClock(args.wait_until) } catch (err) { return fail('bad_request', (err as Error).message) }
+    const max = args.maxFiresPerDay
+    if (max !== undefined && (typeof max !== 'number' || !Number.isInteger(max) || max < 0)) {
+      return fail('bad_request', 'maxFiresPerDay must be a whole number, 0 or more (0 = no limit)')
+    }
+    const rawTimeout = args.timeoutSeconds
+    if (rawTimeout !== undefined && (typeof rawTimeout !== 'number' || !Number.isInteger(rawTimeout) || rawTimeout <= 0)) {
+      return fail('bad_request', 'timeoutSeconds must be a whole number of seconds')
+    }
+    // clampTimeoutSeconds (trigger-check-core.ts): default 30, at most 300.
+    const timeoutSeconds = Math.min(300, Math.max(1, typeof rawTimeout === 'number' ? Math.floor(rawTimeout) : 30))
+
+    // The task its fires go to: the caller's own, or one this host holds.
+    const session = text(args.session) || 'this'
+    const caller = sessionOf(home, callerSid)
+    let target: OfflineSliceTask | undefined
+    if (session === 'this') {
+      if (!caller?.taskId) return fail('bad_request', 'no calling session; pass session: <taskId>')
+      target = tasksWithOverlay(home).find((t) => t.id === caller.taskId)
+      if (!target) return needsServer('A trigger for a task this host does not hold', home)
+    } else {
+      const found = resolveTask(home, session)
+      if (found.error) return found.error
+      if (!found.task) return needsServer(`Task ${session} is not in this host's offline copy; a trigger for it`, home)
+      target = found.task
+    }
+    if (target.phase === 'COMPLETE') return fail('bad_request', `task ${target.id} is complete, so a fire could not land there; point the trigger at an open task`)
+    const own = caller?.taskId === target.id
+    const cwd = text(args.cwd) || table.cwdOf?.(callerSid) || ''
+    // defaultTriggerName (trigger-api.ts): the prompt's opening, cut at a word boundary.
+    let name = text(args.name)
+    if (!name) {
+      const flat = prompt.replace(/\s+/g, ' ').trim()
+      if (flat.length <= 60) name = flat
+      else {
+        const cut = flat.slice(0, 60)
+        const atWord = cut.lastIndexOf(' ')
+        name = `${atWord > 30 ? cut.slice(0, atWord) : cut}...`
+      }
+    }
+    // The server's routine id shape (cron/jobs.ts generateId) with a longer random part, so
+    // an id this host gives can never be one the server gave (trigger-api.ts HOST_TRIGGER_ID_RE).
+    const id = `${deps.now().toString(36)}-${deps.randomHex(4)}`
+    const def: OfflineTrigger = {
+      id, name, everyMs,
+      check: { run, ...(cwd ? { cwd } : {}), timeoutSeconds },
+      // wireFireCap (trigger-push.ts): a stored 0 ("no limit") goes out as a cap nothing reaches.
+      ...(typeof max === 'number' ? { limits: { maxFiresPerDay: max > 0 ? max : 1_000_000 } } : {}),
+      deliver: { home, taskId: target.id, prompt },
+    }
+    const checked = table.validate!(def)
+    if (!checked.ok) return fail('bad_request', checked.error)
+    // What the server is asked to store, all of it decided here: the same id, the task (not
+    // "this": the session could be replaced by then), this host, the cwd it runs in.
+    const replayArgs: Record<string, unknown> = {
+      id, run, prompt, description, name, every: everyMs, session: target.id, host: here === 'local' ? '__local__' : here,
+      ...(cwd ? { cwd } : {}), timeoutSeconds, ...(typeof max === 'number' ? { maxFiresPerDay: max } : {}), ...(watches ? { watches } : {}),
+    }
+    // The budget is charged under the journal lock, so a locked try costs none (opQueued).
+    const saved = refusal(append(home, { kind: 'op', op: 'trigger_create', args: replayArgs, callerSid, trigger: def }, false, { admit: () => admitWrite(callerSid) ?? roomFor(home) }))
+    if (saved) return saved
+    try { table.changed() } catch (err) { deps.log('warn', 'offline host: triggers did not follow a change here', { id, error: (err as Error).message }) }
+    deps.log('info', 'offline host: trigger created here', { home, id, taskId: target.id, everyMs, callerSid })
+
+    // A park is the session's call, as online: only with wait:true, never for a watch of the user.
+    let parked = ''
+    if (args.wait === true && !watches) {
+      const park = opQueued(home, callerSid, 'task_update', { id: target.id, phase: 'WAITING', wait_until: waitUntil ?? new Date(deps.now() + 4 * 3_600_000).toISOString() })
+      parked = park.ok
+        ? ` The task is queued to wait (Waiting) until it fires${waitUntil ? ` or ${waitUntil}` : ''}; Walnut applies that when the server is back.`
+        : ` The task could not be parked here (${park.error.message}); park it with task_update phase=WAITING.`
+    } else if (watches) parked = ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
+    else parked = own ? '' : ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
+    return ok({
+      id, name, host: here, queued: true, offline: true,
+      job: { id, name, description, schedule: { kind: 'every', everyMs }, check: { run, ...(cwd ? { cwd } : {}), host: here }, executor: { type: 'session', config: { target: target.id } } },
+      outcome: `Trigger armed on this host: the daemon here runs the check every ${everyLabel(everyMs)} from now on and delivers the prompt into the task's session when it fires, while the Walnut server is away too. Walnut records trigger ${id} under this id when the server is back.${parked}`,
+      next: `Do not create it again. Tell the user in one line what is watched and how often. Turn it off with trigger_delete '{"id":"${id}"}' once it has done its job.`,
     })
   }
 
@@ -2159,6 +2349,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
           if (deps.triggers) return opTriggerWrite(home, callerSid, name, args)
           return needsServer(`"${name}"`, home)
+        // A Mac that does not replay one under this host's id (an older one) gets it only online.
+        case 'trigger_create':
+          if (createsTriggers(home)) return whenUnlocked(home, name, () => opTriggerCreate(home, callerSid, args))
+          return needsServer('"trigger_create"', home)
         // WP11: a note written while away, when the leading Mac drains notes and this host keeps them.
         case 'note_write': case 'note_edit':
           if (deps.replica && deps.replica.has(home, 'notes') && drainsKind(home, 'note')) {

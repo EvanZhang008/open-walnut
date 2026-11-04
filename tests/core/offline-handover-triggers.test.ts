@@ -72,6 +72,25 @@ describe('offline handover: trigger changes made on a host', () => {
     } finally { warns.mockRestore() }
   })
 
+  it('a create the server cannot take now (its host or engine away, a 5xx) waits for a retry; a refusal is final', async () => {
+    const create = (seq: number): OfflineRecord => ({ ...rec(seq, 'trigger_create', 'mhk2x9ab-1f2e3d4c'), args: { id: 'mhk2x9ab-1f2e3d4c', run: 'sh check.sh' } })
+    executeOp.mockResolvedValue({ ok: false, message: 'Walnut API error (internal): daemon on devbox is not connected' })
+    const later = await replay([create(6)])
+    expect(later.result).toMatchObject({ failed: 1 })
+    expect(later.acks, 'not acked: the host keeps its hold and the record').toEqual([])
+    executeOp.mockResolvedValue({ ok: false, message: 'Walnut request timed out after 10000ms: POST /routines/trigger' })
+    expect((await replay([create(7)])).acks).toEqual([])
+    // The host link dropped mid-drain (a 504 with its own code), and a rate limit: not a refusal either.
+    executeOp.mockResolvedValue({ ok: false, message: 'Walnut API error (host_no_answer): the host did not answer' })
+    expect((await replay([create(9)])).acks).toEqual([])
+    executeOp.mockResolvedValue({ ok: false, message: 'Walnut API error (429): slow down' })
+    expect((await replay([create(10)])).acks).toEqual([])
+    executeOp.mockResolvedValue({ ok: false, message: 'Walnut API error (conflict): a routine mhk2x9ab-1f2e3d4c already exists and is not this trigger' })
+    const refused = await replay([create(8)])
+    expect(refused.result).toMatchObject({ failed: 1 })
+    expect(refused.acks).toEqual([8])
+  })
+
   it('no answer is Walnut\'s own failure, keyed to the caller\'s session and not to a task', async () => {
     executeOp.mockResolvedValue({ ok: false, unreachable: true, message: 'fetch failed' })
     const errors = vi.spyOn(log.session, 'error')

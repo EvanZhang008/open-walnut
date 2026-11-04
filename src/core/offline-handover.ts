@@ -44,6 +44,12 @@ export interface HandoverConnection {
   journalV2?: boolean;
   /** False once the connection is gone: a scheduled retry of a failed record then waits for the next connect. */
   alive?(): boolean;
+  /**
+   * Send this host its trigger set now and resolve once it took it. Awaited before an ack of
+   * trigger records: the ack lifts the host's holds, and a set that does not carry a trigger
+   * created or resumed there yet would disarm it in between (its fires kept, its clock reset).
+   */
+  pushTriggers?(): Promise<void>;
 }
 
 export interface HandoverResult {
@@ -255,10 +261,14 @@ async function drainRounds(
     }
     // Every conflict of what is acked is on disk BEFORE the ack (a write failure throws: no ack).
     batch.conflicts.flush();
+    const pushedTriggers = !!conn.pushTriggers && records.some((r) => r.kind === 'op' && r.op.startsWith('trigger_') && acked.includes(r.seq));
+    if (pushedTriggers) await settlesWithin(conn.pushTriggers!(), TRIGGER_PUSH_WAIT_MS);
     if (v2) {
       // `now`: this server's clock after it applied them, so a host replica can tell a copy
       // manifest built after this ack from one built before it (replica/overlay.ts).
       if (acked.length) await conn.send('offline.ack', { home: WALNUT_HOME, seqs: acked, now: Date.now() }, RPC_TIMEOUT_MS);
+      // The ack lifted the holds: a set the push above did not get there in time goes now.
+      if (pushedTriggers) void conn.pushTriggers?.().catch(() => undefined);
       // WP11: the host holds an acked note until a copy round from after the ack: send its notes again.
       if (records.some((r) => ((r.kind as string) === 'note' || (r.kind as string) === 'note-move') && acked.includes(r.seq))) {
         (await import('./host-replica.js')).noteRecordsAcked(conn.hostKey);
@@ -318,6 +328,8 @@ const letterFailing = new Map<string, { count: number; nextAt: number }>();
 const logDiskErrorHosts = new Set<string>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+/** How long an ack of trigger records waits for the host to take the new trigger set (bounded: the ack still goes). */
+const TRIGGER_PUSH_WAIT_MS = 10_000;
 /** How often a record waits on a running request with its op id before it waits for a retry. */
 const RESERVE_TRIES = 5;
 /** How long one wait on a running request with the record's op id may take. */
@@ -921,16 +933,20 @@ async function applyRecord(
     }
     case 'op': {
       // A Board write made on the host (offline-board-core.ts), or a trigger the
-      // host paused, resumed or deleted (its checks run there): replayed through
-      // the same op, whose own checks decide (an edit whose text moved on is
-      // refused, and the writer is told). There is no updated_at race to judge
-      // here: nobody writes a board's html, or switches a host's trigger, on this
-      // side while that host's sessions are away.
+      // host created, paused, resumed or deleted (its checks run there): replayed
+      // through the same op, whose own checks decide (an edit whose text moved on is
+      // refused, and the writer is told; a created one keeps the id the host gave it,
+      // stored once however often it is replayed). There is no updated_at race to
+      // judge here: nobody writes a board's html, or switches a host's trigger, on
+      // this side while that host's sessions are away.
       if (record.op.startsWith('board_') || record.op.startsWith('trigger_')) {
         const { executeOp } = await import('../ops/index.js');
         const { hostOrigin } = await import('../lib/caller-origin.js');
         const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
-        if (!r.ok) throw r.unreachable ? new Error(r.message) : new RefusedWrite(r.message);
+        // A create needs the host's daemon and the routines engine right now: an answer that
+        // says either is away (a 5xx, a timeout) is tried again, never taken as a refusal that
+        // would lift the hold of a trigger the host has run for hours.
+        if (!r.ok) throw r.unreachable || (record.op === 'trigger_create' && !isRefusal(r.message)) ? new Error(r.message) : new RefusedWrite(r.message);
         result.replayed++;
         if (record.op.startsWith('board_')) {
           log.session.info('offline handover: board write applied', { host, op: record.op, boardTaskId: String(record.args.task ?? ''), callerSid: record.callerSid });
@@ -1035,6 +1051,21 @@ async function applyRecord(
       return;
     }
   }
+}
+
+/**
+ * The server's own refusal of a write (a 4xx: bad input, a conflict, not allowed, gone), as
+ * the op executor words it (ops/executor.ts), against an answer that only says it could not
+ * take the write now (a 5xx, a timeout, a failed request).
+ */
+function isRefusal(message: string): boolean {
+  const m = /^Walnut API error \(([^)]*)\)/.exec(message)
+  if (!m) return false
+  const code = m[1]
+  // A 4xx by its number, but a timeout or a rate limit is "not now"; by its name, only the
+  // refusals the routes answer. Anything else (a 5xx, by number or name) is tried again.
+  if (/^4\d\d$/.test(code)) return code !== '408' && code !== '429'
+  return ['bad_request', 'conflict', 'forbidden', 'not_found', 'unauthorized', 'validation_error', 'user_kind'].includes(code)
 }
 
 /** Hosts whose drained stops this handover still runs (handover()). */

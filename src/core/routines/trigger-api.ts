@@ -19,6 +19,8 @@ import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
 import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
 import { createRoutine } from './routines-core.js';
+import type { CronJob } from '../cron/types.js';
+import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
 import { assertCheckHostAllowed, checkCallerOrigin } from './check-host-policy.js';
 import {
   TriggerTemplateError, exemptTemplateRun, parseTemplateRun, templateOriginRefusal, prepareTemplate, requireTriggerTemplate, templateRun,
@@ -273,6 +275,19 @@ export function defaultTriggerName(prompt: string, max = 60): string {
  */
 export const TRIGGER_DESCRIPTION_MAX = 600;
 
+export { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
+
+/** What a trigger stands in for on its task (sessions/recheck-watch.ts). Never throws. */
+async function recordWatch(taskId: string, jobId: string, watches: string): Promise<void> {
+  const { updateTaskRaw } = await import('../task-manager.js');
+  const { withWatch } = await import('../sessions/recheck-watch.js');
+  const at = new Date().toISOString();
+  await updateTaskRaw(taskId, (cur) => ({ recheck_watch: withWatch(cur.recheck_watch, { trigger: jobId, watches, at }) }),
+    { push: false, source: 'trigger-watch' }).catch((err) => log.web.warn('trigger watch not recorded', {
+    target: taskId, jobId, error: err instanceof Error ? err.message : String(err),
+  }));
+}
+
 /**
  * Create a trigger in one call: check + interval + prompt + description + where
  * to deliver.
@@ -292,6 +307,13 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   wait: TriggerWaitResult;
 }> {
   const b = record(body) ?? {};
+  // A trigger a host created while this server was away comes back under its own id
+  // (offline-handover.ts replays it): stored once, whether the replay runs once or again.
+  const hostId = b.id === undefined || b.id === null ? '' : str(b.id);
+  if (b.id !== undefined && b.id !== null && !HOST_TRIGGER_ID_RE.test(hostId)) {
+    throw new SessionControlError('id is set only by a host that created this trigger while Walnut was away; leave it out', 400);
+  }
+  if (hostId && str(b.template)) throw new SessionControlError('a template trigger is never created on a host; leave id out', 400);
   const fromTemplate = str(b.template) ? await templateTrigger(str(b.template), b.params, str(b.host), b.every, origin) : null;
   const run = fromTemplate?.run ?? str(b.run);
   if (!run) throw new SessionControlError('run is required: the shell command that decides whether to fire (or pass template + params)', 400);
@@ -352,6 +374,22 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   const name = str(b.name) || fromTemplate?.label || defaultTriggerName(prompt);
   const maxFiresPerDay = b.maxFiresPerDay ?? fromTemplate?.maxFiresPerDay;
 
+  if (hostId) {
+    const { getRoutine } = await import('./routines-core.js');
+    const prior = (await getRoutine(hostId).catch(() => null))?.job as CronJob | undefined;
+    if (prior) {
+      // The same trigger again (a replay after a drain that did not finish): nothing is armed twice.
+      const target = (prior.executor?.config as { target?: unknown } | undefined)?.target;
+      if (prior.check?.run === run && target === resolved.target) {
+        log.web.info('trigger created on a host already recorded', { jobId: hostId, host, target: resolved.target });
+        // A replay after a drain that stopped between the store and the watch writes the watch now.
+        if (watches) await recordWatch(resolved.target, hostId, watches);
+        return { job: prior, host, nextCheckAt: null, wait: { parked: false, task_id: resolved.target, reason: resolved.own ? 'wait_false' : 'other_task' } };
+      }
+      throw new SessionControlError(`a routine ${hostId} already exists and is not this trigger`, 409);
+    }
+  }
+
   const created = await createRoutine({
     name,
     description,
@@ -365,19 +403,11 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       ...(fromTemplate ? { template: fromTemplate.template } : {}),
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
-  }, origin);
+  }, origin, hostId ? { id: hostId } : undefined);
 
   if (watches) {
     const jobId = (created.job as { id?: string } | undefined)?.id;
-    if (jobId) {
-      const { updateTaskRaw } = await import('../task-manager.js');
-      const { withWatch } = await import('../sessions/recheck-watch.js');
-      const at = new Date().toISOString();
-      await updateTaskRaw(resolved.target, (cur) => ({ recheck_watch: withWatch(cur.recheck_watch, { trigger: jobId, watches, at }) }),
-        { push: false, source: 'trigger-watch' }).catch((err) => log.web.warn('trigger watch not recorded', {
-        target: resolved.target, jobId, error: err instanceof Error ? err.message : String(err),
-      }));
-    }
+    if (jobId) await recordWatch(resolved.target, jobId, watches);
   }
 
   // A trigger parks the task only when the caller asks with wait:true (2026-10-31, the user: "a

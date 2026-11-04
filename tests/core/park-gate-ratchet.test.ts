@@ -61,6 +61,11 @@ const SITES: Record<string, Site> = {
     mustContain: /migrateWaitingRecordsToPhase/,
     answered: 'a one-time migration, no turn', answeredGate: /migrateWaitingRecordsToPhase/,
   },
+  'src/providers/offline-host-core.ts': {
+    count: 1, gate: 'a trigger created on a host while the server is away queues its park only with wait:true and no watch of the user; the queued task_update is replayed through admitSessionPark (apply-v2.ts, or the PATCH for a v1 record)',
+    mustContain: /args\.wait === true && !watches/,
+    answered: 'parks only on the session\'s own trigger call with wait:true, a step it chose (its prompt: never right after answering the user)', answeredGate: /args\.wait === true && !watches/,
+  },
   'src/web/routes/api-v1.ts': {
     count: 1, gate: 'the phase_ignored answer for Main (no write); a session PATCH to WAITING asks admitSessionPark',
     mustContain: /admitSessionPark\(/,

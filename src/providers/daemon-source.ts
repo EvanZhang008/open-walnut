@@ -5155,6 +5155,8 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
     test: function (check, triggerId, home) { return runTriggerTest(check, triggerId, home || ''); },
     changed: function () { triggerHoldsChanged(); },
     cwdOf: function (sid) { var s = sessions.get(sid); return s ? s.cwd : undefined; },
+    // A trigger created here is checked as a pushed one is, before it is journaled. Twin of daemon-standalone.ts.
+    validate: function (def) { var r = triggerCheckCore.validateTriggerDef(def); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
   },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },

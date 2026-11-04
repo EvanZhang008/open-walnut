@@ -410,4 +410,8 @@ task with them.
 - While the Walnut server is away (an answer says `offline: true`), your host
   answers these itself for the triggers it checks: list, test, pause, resume
   (one paused there) and delete take effect at once and reach Walnut when the
-  server is back. `trigger_create` waits for the server.
+  server is back. `trigger_create` works there too: the host arms the check at
+  once, delivers its fires into your session, and Walnut records it under the
+  same id when the server is back (the answer says `queued`; never create it
+  again). A template trigger, or one for a task or host your host does not
+  hold, still waits for the server.

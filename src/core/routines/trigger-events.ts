@@ -44,6 +44,7 @@ import type { CronJob } from '../cron/types.js';
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
 import { promptOf } from './trigger-push.js';
+import { HOST_TRIGGER_ID_RE } from './host-trigger-id.js';
 
 export { promptOf };
 
@@ -207,8 +208,9 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
     ...(h.started ? { started: true, taskId: h.taskId } : {}),
     deliveredAt: new Date(h.atMs).toISOString(), found: applied.found, duplicate: applied.duplicate,
   });
-  if (!applied.found && !(await hasPushedTriggersTo(host))) {
-    log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
+  if (!applied.found && (HOST_TRIGGER_ID_RE.test(head.id) || !(await hasPushedTriggersTo(host)))) {
+    // A host's own create not drained yet is recorded on a later replay (unrecordedHostTrigger).
+    log.cron.warn('trigger.fired for a routine this server has not recorded: left unacked', { host, jobId: head.id, seqs });
     return;
   }
   await ackFires(host, head.id, seqs);
@@ -337,7 +339,7 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
   });
 
   if (!applied.found) {
-    if (await hasPushedTriggersTo(host)) {
+    if (!HOST_TRIGGER_ID_RE.test(head.id) && await hasPushedTriggersTo(host)) {
       await ackFires(host, head.id, seqs);
     } else {
       log.cron.warn('trigger.fired for a routine this server never pushed: left unacked', { host, jobId: head.id, seqs });
@@ -444,8 +446,33 @@ export type FireVerdict =
 /** One claim RPC per trigger per burst: a reconnect replays up to 50 fires at once. */
 const claimBatches = new Map<string, { host: string; id: string; epoch?: string; clock?: boolean; waiters: Array<{ seq: number; resolve: (v: FireVerdict) => void }> }>();
 
-function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
-  if (isHostDelivery(event.host)) return Promise.resolve({ kind: 'host', host: event.host });
+/**
+ * A trigger its host created while this server was away, whose create the host's journal
+ * still holds (the drain has not stored it yet): its fires are the host's to deliver and
+ * are recorded once the routine exists, so this server neither claims nor acks them. A
+ * claim would make the fire this server's, and its routine is not here to deliver it;
+ * an ack as an unknown routine's would drop it for good (its items are in the seen set).
+ */
+async function unrecordedHostTrigger(id: string): Promise<boolean> {
+  if (!HOST_TRIGGER_ID_RE.test(id) || recordedHostTriggers.has(id)) return false;
+  const service = await resolveService();
+  if (!service) return false;
+  const jobs = await service.list({ includeDisabled: true, recompute: false }).catch(() => null);
+  if (!jobs) return false;
+  if (!jobs.some((j) => j.id === id)) return true;
+  recordedHostTriggers.add(id);
+  return false;
+}
+/** Host ids this server has found stored: their fires need no store read (a stored id stays its routine's). */
+const recordedHostTriggers = new Set<string>();
+
+async function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
+  if (isHostDelivery(event.host)) return { kind: 'host', host: event.host };
+  if (await unrecordedHostTrigger(event.id)) return { kind: 'wait', reason: 'created on its host while this server was away; not recorded yet' };
+  return claimBatched(host, event);
+}
+
+function claimBatched(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
   const key = `${host}|${event.id}|${event.epoch ?? ''}`;
   return new Promise((resolve) => {
     let batch = claimBatches.get(key);

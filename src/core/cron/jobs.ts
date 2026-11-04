@@ -235,9 +235,9 @@ function wakeAtMsOf(state: CronServiceState, j: CronJob): number | undefined {
   return typeof guard === 'number' && guard > next ? guard : next;
 }
 
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+export function createJob(state: CronServiceState, input: CronJobCreate, givenId?: string): CronJob {
   const now = state.deps.nowMs();
-  const id = generateId();
+  const id = givenId || generateId();
   const schedule =
     input.schedule.kind === 'every'
       ? { ...input.schedule, anchorMs: resolveEveryAnchorMs(input.schedule, now) }

@@ -257,8 +257,11 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
   return { job };
 }
 
-/** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
-export async function createRoutine(body: unknown, origin?: string): Promise<{ job: unknown }> {
+/**
+ * `origin`: who asks (a route passes the request's); omitted = the server's own code.
+ * `opts.id`: the id a host gave a trigger it created while this server was away (trigger-api.ts).
+ */
+export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
   if (isCompanion()) return await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown };
   const service = await requireCronService();
@@ -273,8 +276,8 @@ export async function createRoutine(body: unknown, origin?: string): Promise<{ j
   assertWakeNotOnCheck(input);
   const checkHost = await validateCheckForSave(input, body, undefined, origin);
   try {
-    const job = await service.add(input);
-    log.web.info('routine created via shared core', { jobId: job.id, name: job.name, ...(checkHost ? { checkHost } : {}) });
+    const job = await service.add(input, opts?.id ? { id: opts.id } : undefined);
+    log.web.info('routine created via shared core', { jobId: job.id, name: job.name, ...(checkHost ? { checkHost } : {}), ...(opts?.id ? { hostId: true } : {}) });
     pushTriggersFor([checkHost]);
     return { job };
   } catch (err) {

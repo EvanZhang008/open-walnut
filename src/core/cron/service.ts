@@ -64,8 +64,9 @@ export class CronService {
     return await ops.list(this.state, opts);
   }
 
-  async add(input: CronJobCreate): Promise<CronJob> {
-    return await ops.add(this.state, input);
+  /** `opts.id`: a trigger a host created while this server was away keeps the id it gave it. */
+  async add(input: CronJobCreate, opts?: { id?: string }): Promise<CronJob> {
+    return await ops.add(this.state, input, opts);
   }
 
   async update(id: string, patch: CronJobPatch): Promise<CronJob> {
