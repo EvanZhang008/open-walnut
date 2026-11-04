@@ -54,6 +54,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/triage/runs.ts: file',                              // triage run log
   'src/core/triage/state.ts: file',                             // triage state
   'src/providers/daemon-service-files.ts: ownershipPath',       // daemon dir ownership record
+  'src/providers/session-host.ts: manifest',                    // ~/Library/Application Support/Open Walnut/session-host-launch.json: Walnut's own, read by Walnut.app; the deploy and the server approve under one lock whatever their data homes
   'src/providers/wn-cli.ts: file',                              // a plugin job's secrets, <walnut home>/secrets/plugins/<id>.json (PluginSecretStore's lock)
   'src/utils/fs.ts: filePath',                                  // updateJsonFile, Walnut JSON stores only
   'src/utils/user-file-lock.ts: await userFileLockTarget(filePath)', // withUserFileLock itself

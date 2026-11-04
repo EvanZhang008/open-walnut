@@ -55,6 +55,11 @@ const ALLOWLIST: Array<{ file: string; rule: SimRule; reason: string }> = [
     rule: 'first-device',
     reason: 'ranks iPhone device TYPES of the newest runtime for the `simctl create` of its own "Walnut Fleet Test" simulator; it never picks an existing device (it drives the UDID it wrote down when it made one, or --udid)',
   },
+  {
+    file: 'scripts/lib/macho-identity.mjs',
+    rule: 'udid',
+    reason: 'the fixed Mach-O LC_UUIDs Walnut stamps on its darwin builds (macOS keys a program\'s privacy choices on them), not simulator ids: same shape, no device',
+  },
 ]
 
 /** How far (in lines) a lookup may sit from the device list it reads. */

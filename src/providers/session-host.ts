@@ -157,6 +157,18 @@ export async function readSessionHostIdentity(executable: string): Promise<Sessi
   });
 }
 
+/** Why this process may not run the host for that daemon dir (null: it may), read once from its environment. */
+function blockedHere(input: { daemonDir: string; prodDaemonDir: string }): SessionHostUnavailable | null {
+  return sessionHostUnavailableReason({
+    platform: process.platform,
+    cloudMode: CLOUD_MODE,
+    ephemeral: IS_EPHEMERAL,
+    daemonDir: input.daemonDir,
+    prodDaemonDir: input.prodDaemonDir,
+    optedOut: process.env.WALNUT_SESSION_HOST === '0',
+  });
+}
+
 export interface SessionHostInspection {
   /** The app that would supervise the daemon, or null when there is none usable. */
   app: string | null;
@@ -176,14 +188,7 @@ export async function inspectSessionHost(input: {
   daemonDir: string;
   prodDaemonDir: string;
 }): Promise<SessionHostInspection> {
-  const blocked = sessionHostUnavailableReason({
-    platform: process.platform,
-    cloudMode: CLOUD_MODE,
-    ephemeral: IS_EPHEMERAL,
-    daemonDir: input.daemonDir,
-    prodDaemonDir: input.prodDaemonDir,
-    optedOut: process.env.WALNUT_SESSION_HOST === '0',
-  });
+  const blocked = blockedHere(input);
   if (blocked) return { app: null, reason: blocked };
   if (!realHome()) return { app: null, reason: 'not_installed', detail: 'no passwd home for this user' };
   const installed = findDesktopApp();
@@ -210,14 +215,7 @@ export async function resolveSessionHostLaunch(input: {
   daemonDir: string;
   prodDaemonDir: string;
 }): Promise<SessionHostResolution> {
-  const blocked = sessionHostUnavailableReason({
-    platform: process.platform,
-    cloudMode: CLOUD_MODE,
-    ephemeral: IS_EPHEMERAL,
-    daemonDir: input.daemonDir,
-    prodDaemonDir: input.prodDaemonDir,
-    optedOut: process.env.WALNUT_SESSION_HOST === '0',
-  });
+  const blocked = blockedHere(input);
   if (blocked) return { available: false, reason: blocked };
 
   const home = realHome();

@@ -89,7 +89,8 @@ describe('the deploy refuses an ended session before anything it cannot undo', (
 describe('no server starts in a directory that may be deleted', () => {
   it('every server launch in the deploy script cds into the checkout first', () => {
     const lines = devProd.split('\n')
-    const launches = lines.flatMap((l, i) => (/"\$\{server_argv\[@\]\}" web --port/.test(l) && !/^\s*#/.test(l) ? [i] : []))
+    // The launchd job puts the session host before the file, its last word: `"${server_argv[$last]}" web`.
+    const launches = lines.flatMap((l, i) => (/"\$\{server_argv\[(?:@|\$last)\]\}" web --port/.test(l) && !/^\s*#/.test(l) ? [i] : []))
     expect(launches.length).toBeGreaterThanOrEqual(2) // the launchd job and the nohup fallback
     for (const i of launches) {
       const block = lines.slice(Math.max(0, i - 12), i + 1).join('\n')

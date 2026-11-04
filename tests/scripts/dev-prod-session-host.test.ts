@@ -51,7 +51,7 @@ function run(bash: string, f: ReturnType<typeof fixture>, extra = ''): { prefix:
   const body = [
     'set -euo pipefail',
     'uname() { echo Darwin; }',
-    `PORT=3456; LAUNCH_LABEL=com.example.prod; SERVE_ROOT='${f.dir}'; SERVER_LOG='${f.dir}/server.log'; REHEARSAL=0; PATH="$PATH"`,
+    `PORT=3456; LAUNCH_LABEL=com.example.prod; SERVE_ROOT='${f.dir}'; SERVER_LOG='${f.dir}/server.log'; REHEARSAL=0`,
     extra,
     fn('set_server_argv'), fn('launchd_job_argv'), fn('session_host_prefix'),
     `set_server_argv '${f.file}'`,

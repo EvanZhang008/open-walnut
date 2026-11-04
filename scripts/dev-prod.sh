@@ -1766,6 +1766,7 @@ launch_server() {
 # (SESSION_HOST_REFUSAL_STATUS, 125: the command is not approved, a payload hash
 # changed, the manifest is unreadable). launchd would relaunch it into the same
 # refusal every ten seconds.
+# Its one caller holds use_launchd=1 (macOS only).
 session_host_refused() {
   launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null | grep -q 'last exit code = 125'
 }
@@ -1990,6 +1991,16 @@ fi
 # Under Walnut.app's session host (session_host_prefix) the job's PID is the
 # host's first generation and the listener is its grandchild: job -> host
 # (disclaimed) -> server. That chain, and only that one, is the job serving.
+# Whether listener $1 is the grandchild of job PID $2 through Walnut.app's session host:
+# job -> host (disclaimed) -> server.
+listener_under_job_host() {
+  local host_gen2
+  host_gen2="$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$host_gen2" =~ ^[0-9]+$ ]] \
+    && [[ "$(ps -o ppid= -p "$host_gen2" 2>/dev/null | tr -d '[:space:]' || true)" == "$2" ]] \
+    && [[ "$(ps -o command= -p "$host_gen2" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]] \
+    && [[ "$(ps -o command= -p "$2" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]]
+}
 if (( use_launchd )); then
   listener_now="$(listener_pids | head -n 1)"
   if [[ -n "$listener_now" ]] && job_info="$(launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null)"; then
@@ -1997,14 +2008,8 @@ if (( use_launchd )); then
     job_serves=0
     if [[ "$job_pid_now" == "$listener_now" ]]; then
       job_serves=1
-    elif [[ -n "$job_pid_now" ]]; then
-      host_gen2="$(ps -o ppid= -p "$listener_now" 2>/dev/null | tr -d '[:space:]' || true)"
-      if [[ "$host_gen2" =~ ^[0-9]+$ ]] \
-        && [[ "$(ps -o ppid= -p "$host_gen2" 2>/dev/null | tr -d '[:space:]' || true)" == "$job_pid_now" ]] \
-        && [[ "$(ps -o command= -p "$host_gen2" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]] \
-        && [[ "$(ps -o command= -p "$job_pid_now" 2>/dev/null || true)" == *"/Walnut.app/Contents/MacOS/Walnut --session-host -- "* ]]; then
-        job_serves=1
-      fi
+    elif [[ -n "$job_pid_now" ]] && listener_under_job_host "$listener_now" "$job_pid_now"; then
+      job_serves=1
     fi
     if (( ! job_serves )); then
       listener_cmd="$(ps -o command= -p "$listener_now" 2>/dev/null || true)"
