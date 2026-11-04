@@ -29,8 +29,10 @@ export interface HostNetwork {
   invite: NetInvite | null;
   inviteError: string | null;
   making: boolean;
-  /** Make a new link; resolves once it is shown (or why not). */
+  /** Make a new link in place of the one shown; resolves once it is shown (or why not). */
   add: () => Promise<void>;
+  /** Put the link (or why it could not be made) away. */
+  dismiss: () => void;
   /** Remove a machine; resolves true once it is gone from the list. */
   remove: (host: string) => Promise<boolean>;
   removeError: Record<string, string>;
@@ -87,9 +89,13 @@ export function useHostNetwork(refreshKey: unknown): HostNetwork {
     return () => { window.clearInterval(poll); };
   }, [waitingId, load]);
 
+  // A new link takes the old one's place at once: "Making a link..." while it is made, then the
+  // link or why not (2026-11-04 review: a failed second link showed under the first, still
+  // waiting, and the page landed on the old one).
   const add = useCallback(async () => {
     setMaking(true);
     setInviteError(null);
+    setInvite(null);
     try {
       const inv = await makeNetInvite();
       if (!mounted.current) return;
@@ -118,5 +124,7 @@ export function useHostNetwork(refreshKey: unknown): HostNetwork {
     }
   }, [load]);
 
-  return { net, loadError, load, invite, inviteError, making, add, remove, removeError };
+  const dismiss = useCallback(() => { setInvite(null); setInviteError(null); }, []);
+
+  return { net, loadError, load, invite, inviteError, making, add, dismiss, remove, removeError };
 }

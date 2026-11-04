@@ -24,8 +24,10 @@ async function openRemoteHosts(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // The group sits under More settings, closed by default.
+  // The group sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('fleet-secrets-toggle').click()
+  await expect(page.getByTestId('fleet-secrets-toggle')).toHaveAttribute('aria-expanded', 'true')
 }
 
 test('secrets: add with hosts and env, the value never shown again, rotate, untick, delete', async ({ page }) => {
@@ -64,7 +66,7 @@ test('secrets: add with hosts and env, the value never shown again, rotate, unti
   const group = page.getByTestId('fleet-secrets')
   await expect(group).toBeVisible({ timeout: 30_000 })
   const row = (name: string) => group.locator(`[data-secret-name="${name}"]`)
-  await expect(row('npm-publish')).toContainText('npm-publish · npm, publish the package')
+  await expect(row('npm-publish')).toContainText('npm-publish: npm, publish the package')
   await expect(row('npm-publish')).toContainText('devbox: copied')
   await expect(row('npm-publish')).toContainText('buildbox: not copied yet (the host did not answer)')
   await expect(row('npm-publish')).toContainText('sessions there get $NPM_TOKEN')
@@ -85,7 +87,7 @@ test('secrets: add with hosts and env, the value never shown again, rotate, unti
   await editor.getByTestId('secret-save').click()
   await expect(editor).toHaveCount(0)
   expect(puts.at(-1)).toEqual({ name: 'github-read', body: { hosts: ['__local__'], env: 'GH_TOKEN', sessions: true, description: 'GitHub, read only', value: VALUE, create: true } })
-  await expect(row('github-read')).toContainText('this Mac: copied')
+  await expect(row('github-read')).toContainText('This Mac: copied')
   // The value went up once and is nowhere on the page now.
   expect(await page.content()).not.toContain(VALUE)
 

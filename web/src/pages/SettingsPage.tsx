@@ -358,7 +358,11 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
     document.title = `Settings: ${titleLabel}`
   }, [titleLabel])
 
-  const phonePane = usePhoneSettingsPane(paneId, titleLabel, scroller)
+  // The phone's one bar holds the pane's actions once its header scrolled away (2026-11-04
+  // review: at 700 px they made a second, button-only strip under the bar).
+  const [phoneActions, setPhoneActions] = useState<HTMLElement | null>(null)
+  const phoneBarAction = useMemo(() => <span ref={setPhoneActions} className="settings-phone-bar-actions" />, [])
+  const phonePane = usePhoneSettingsPane(paneId, titleLabel, scroller, phoneBarAction)
   phoneOpen.current = phonePane.open
 
   // Switching panes starts at the top.
@@ -427,12 +431,12 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
           aria-labelledby={labelled ? `${paneId}-title` : undefined}
           aria-label={labelled ? undefined : `Settings: ${titleLabel}`}
         >
-          <SettingsPaneStickyBar />
+          <SettingsPaneStickyBar phoneHost={phonePane.layer === 'pane' ? phoneActions : null} />
           <div className="settings-pane-inner" key={paneId}>
             <SettingsPaneBack paneId={paneId} metaFor={model.metaFor} />
             {body}
-            {/* Remote Hosts' header has its own Copy diagnostics while it has a host to report. */}
-            {labelled && <SettingsBuildLine copyLink={paneId !== 'remote-hosts' || !config || !hasStatusHosts(config)} />}
+            {/* On Remote Hosts, while it has a host to report, its Copy diagnostics copies the hosts. */}
+            {labelled && <SettingsBuildLine section={paneId === 'remote-hosts' && config && hasStatusHosts(config) ? 'hosts' : 'all'} />}
             {anchorRoom > 0 && <div className="settings-pane-anchor-room" aria-hidden="true" style={{ height: anchorRoom }} />}
           </div>
         </div>

@@ -1,6 +1,7 @@
 /*
- * Settings > Remote Hosts (RemoteHostsSection.tsx and its rows): the Add host menu, the
- * Hosts list's row controls, the join link card, and the Overview's landing marks.
+ * Settings > Remote Hosts (RemoteHostsSection.tsx and its rows): the Add host menu, the summary
+ * line, the list's rows (HostRow.tsx: dot and name, one state line, one action and More,
+ * Details and Edit in place), the join link card, and the network map's focus ring.
  */
 
 /* ── Opaque menus. Linux WebKit drew the glass menus' backdrop blur as nothing, so "Refresh"
@@ -22,20 +23,156 @@ html body .wn-context-menu.rh-add-menu {
 .rh-add-item-sub { font-size: 12px; line-height: 16px; color: var(--fg-muted); }
 .rh-add-anchor { display: inline-flex; }
 
-/* ── A host row's controls: Use + its switch, the connect button drawn like every text button ── */
-.rh-use { display: inline-flex; align-items: center; gap: 8px; }
-.rh-use-label { font-size: 12.5px; line-height: 17px; color: var(--fg-muted); cursor: pointer; user-select: none; }
-.settings-button.rh-connect-btn {
-  padding: 0 6px;
+/* ── The summary line under the header: the fleet in one line, then Refresh ── */
+.rh-summary { margin: 0 0 14px; padding: 0 calc(var(--settings-row-pad-x, 14px) + 1px); }
+.rh-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.rh-summary-sep { color: var(--fg-muted); white-space: pre; }
+.rh-summary-muted { color: var(--fg-muted); }
+.rh-summary-needs,
+.rh-summary-refresh {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.rh-summary-needs { color: var(--priority-important-text, var(--warning)); font-weight: 500; }
+.rh-summary-needs:hover,
+.rh-summary-refresh:hover { text-decoration: underline; }
+.rh-summary-needs:focus-visible,
+.rh-summary-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.rh-summary-read { display: inline-flex; align-items: baseline; gap: 10px; margin-left: auto; padding-left: 16px; color: var(--fg-muted); font-size: 12.5px; }
+.rh-summary-note { margin: 4px 0 0; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
+.rh-summary-note[data-tone='bad'] { color: var(--error); }
+
+/* ── A row of the list: the name line (28 px, the height of its action) and one state line;
+   the action and More sit on the name line, in one column for every row (2026-11-04 review:
+   they floated in the middle of tall rows, at a different x per row) ── */
+.settings-row.rh-host-row { align-items: flex-start; }
+.rh-host-row > .settings-row-copy { gap: 0; }
+.rh-row-name-line { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
+.rh-row-name-line .rh-host-name { font-weight: 500; }
+.rh-row-name-line .rh-host-hostname { min-width: 0; }
+.rh-row-name-line .settings-tag { flex: none; }
+.rh-row-state { overflow-wrap: anywhere; }
+.rh-row-lines { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; min-width: 0; }
+.rh-row-line { font-size: 12.5px; line-height: 17px; color: var(--fg-muted); overflow-wrap: anywhere; max-width: 72ch; }
+.rh-row-line[data-tone='warn'] { color: var(--priority-important-text, var(--warning)); }
+.rh-row-line[data-tone='bad'] { color: var(--error); }
+.rh-row-line[data-tone='good'] { color: var(--success, var(--fg)); }
+.rh-host-row > .settings-row-actions { align-self: flex-start; }
+.rh-row-actions { display: inline-flex; align-items: center; gap: 4px; }
+.rh-row-primary { display: inline-flex; justify-content: flex-end; min-width: 104px; }
+.rh-row-more {
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 7px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.rh-row-more:hover,
+.rh-row-more[aria-expanded='true'] { background: var(--bg-hover); color: var(--fg); }
+.rh-row-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wn-context-menu.rh-row-menu { width: auto; min-width: 180px; }
+/* Remove asks once, naming the host; Cancel holds the focus. */
+.settings-row.rh-row-confirm .settings-row-label { font-weight: 500; }
+
+/* ── Details and Edit, open in place under their row ── */
+.rh-details,
+.rh-edit { position: relative; }
+.rh-details {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px var(--settings-row-pad-x, 14px) 16px var(--settings-row-indent, 36px);
+  min-width: 0;
+}
+.rh-details-empty { margin: 0; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
+.rh-details-heading { margin: 0 0 -6px; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary, var(--fg)); }
+.rh-details .rh-host-detail { margin-top: 0; }
+.rh-readiness-block { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* The first line: the system, its roles, and how old the reading is (right). */
+.rh-details .hf-card-sys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; }
+.rh-details .hf-card-sys .hf-roles { margin-left: 0; }
+/* Every problem the reading shows: one line each, in its tone (the row names the first). */
+.hf-problem-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
+.hf-problem-list > li[data-tone='warn'] { color: var(--priority-important-text, var(--warning)); }
+.hf-problem-list > li[data-tone='bad'] { color: var(--error); }
+/* A command's Copy and Check again sit on the command's first line, not centred on its block. */
+.rh-details .rh-readiness-line { align-items: flex-start; }
+.rh-details .rh-readiness-actions { min-height: 28px; }
+/* One command look: the box wraps (no scrollbar), its Copy is the page's one Copy button. */
+.rh-details .hc-row { align-items: flex-start; gap: 8px; width: 100%; }
+.rh-details .hc-chip {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid var(--settings-group-border);
+  border-radius: 7px;
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 16px;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rh-details .hc .setup-copy-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--settings-group-bg, var(--card-bg));
+  color: var(--fg);
+  font: inherit;
   font-size: 12.5px;
   font-weight: 500;
 }
-.settings-button.rh-connect-btn:disabled { color: var(--fg-muted); border-color: transparent; }
-/* A text button in a row's status or readiness line follows its words, so its label hugs the
-   left of its reserved width (in the control column it hugs the right, F26). */
-.rh-host-row .settings-row-copy .settings-button-text .settings-button-stack > * { text-align: left; }
+.rh-details .hc .setup-copy-btn:hover { background: var(--bg-hover); }
+.rh-details .hc .setup-copy-btn.hc-copy-failed { color: var(--error); }
+/* One link look in Details: the page's text buttons (accent, no underline until hover). */
+.rh-details :is(.hc-other, .hft-details) {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 17px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.rh-details :is(.hc-other, .hft-details):hover { text-decoration: underline; color: var(--accent); }
+.rh-details .rh-readiness-actions .settings-button-text,
+.rh-details .rh-host-detail .settings-button-text { padding-left: 0; padding-right: 0; }
+.rh-edit { padding-bottom: 4px; }
+.settings-row.rh-edit-done .settings-row-actions { margin-left: auto; }
 
 /* ── The join link: the system, the command and its Copy, how long it lasts, the notes folded ── */
 .rh-join-body {
@@ -49,7 +186,7 @@ html body .wn-context-menu.rh-add-menu {
 .rh-join-step { font-size: 13px; line-height: 18px; color: var(--fg); }
 .rh-join-command {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   width: 100%;
   min-width: 0;
@@ -62,12 +199,23 @@ html body .wn-context-menu.rh-add-menu {
   border: 1px solid var(--settings-group-border);
   border-radius: 7px;
   background: var(--bg);
+  min-height: 32px;
   font-size: 12.5px;
   line-height: 18px;
-  overflow-x: auto;
-  white-space: nowrap;
+  /* Wraps instead of scrolling (2026-11-04 review: a permanent scrollbar in WebKit). */
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   user-select: all;
 }
+.rh-join-command .settings-button { height: 32px; }
+/* The wait wraps beside Done, which stays in the Copy column. */
+.rh-join-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; width: 100%; }
+.rh-join-foot > .rh-join-wait { flex: 1 1 auto; min-width: 0; }
+.rh-join-foot > .settings-button { flex: none; }
+.settings-row.rh-join-making { outline: none; }
+.rh-join-making-label { display: inline-flex; align-items: center; gap: 8px; }
+.rh-join-error-text { color: var(--error); }
 .rh-join-wait { font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); font-variant-numeric: tabular-nums; }
 .rh-join-more {
   appearance: none;
@@ -91,10 +239,23 @@ html body .wn-context-menu.rh-add-menu {
 .rh-join-notes[hidden] { display: none; }
 .rh-join-note { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
 
-/* ── Landing marks: a flashed Overview card (a diagram node, a host that just connected) ── */
-.hf-card.rh-row-flash,
-.hf-off.rh-row-flash { animation: rh-row-flash 1.5s ease-out; }
-@media (prefers-reduced-motion: reduce) {
-  .hf-card.rh-row-flash,
-  .hf-off.rh-row-flash { animation: none; box-shadow: inset 0 0 0 2px var(--accent); }
+/* ── The network map: a node takes a ring like any control ── */
+.hf-topo-node:focus { outline: none; }
+.hf-topo-node:focus-visible .hf-topo-box,
+.hf-topo-node[data-landed='true'] .hf-topo-box { stroke: var(--accent); stroke-width: 2.5px; }
+.hf-topo-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; }
+
+/* ── 700 px and under: one column; the action and More stay on the name line, 44 px tall ── */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .rh-summary-read { margin-left: 0; padding-left: 0; flex-basis: 100%; }
+  /* A 44 px action spans the name and state lines, inside the row (never over its hairline). */
+  .rh-row-more { width: 44px; height: 44px; }
+  .rh-details { padding-left: var(--settings-row-pad-x, 14px); }
+  .rh-join-command code { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
+  .rh-join-command .settings-button { height: 44px; }
+  .rh-details .hc-chip { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
+  .rh-details .hc .setup-copy-btn { height: 44px; }
 }
+
+/* The Kind picker's button (HostProfileDisclosure.tsx): its chevron points down, at the words. */
+.rh-kind-chevron { margin-left: 4px; transform: rotate(90deg); vertical-align: -1px; }

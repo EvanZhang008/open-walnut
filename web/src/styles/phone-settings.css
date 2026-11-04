@@ -234,6 +234,16 @@
   border-radius: 6px;
 }
 
+/* The pane's actions in the phone bar's right slot, once its header scrolled away
+   (SettingsPaneStickyBar `phoneHost`): one row with the bar, never a strip under it. */
+.settings-phone-bar-actions,
+.settings-phone-bar-trailing,
+.settings-phone-bar-trailing .settings-pane-stickybar-actions { display: inline-flex; align-items: center; gap: 8px; }
+.settings-phone-bar-trailing .settings-pane-stickybar-actions:empty { display: none; }
+.phone-topbar .settings-phone-bar-trailing .settings-button { height: 34px; }
+/* The bar keeps 4 px to the edge for its 44 px icons; a text button wants 8. */
+.phone-topbar .settings-phone-bar-trailing { margin-right: 4px; }
+
 /* Every control in a pane offers a finger 44 px (spec 4.2, C19). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* The top bar already names the pane, so the compact bar under it shows only the pane's
@@ -255,13 +265,15 @@
     font-size: 16px;
   }
 
+  /* 44 px in all, the picked pill still inset by 2 px (2026-11-04 review: with no padding the
+     picked segment drew as a square tab). */
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-segmented {
     height: auto;
-    padding: 0;
+    padding: 2px;
   }
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-segment {
-    height: 44px;
+    height: 40px;
     min-width: 44px;
   }
 

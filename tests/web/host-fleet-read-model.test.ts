@@ -95,7 +95,8 @@ describe('the first read and what is drawn', () => {
 
 describe('a card\'s own line', () => {
   it('its read running, not read yet, or how old it is', () => {
-    expect(readLabel(host({ refreshing: true }), NOW)).toBe('Refreshing...')
+    // A read running keeps saying how old what is shown is (the summary line says Refreshing...).
+    expect(readLabel(host({ refreshing: true }), NOW)).toBe('Read 12 min ago')
     expect(readLabel(host({ readAt: null }), NOW)).toBe('Not read yet')
     expect(readLabel(host(), NOW)).toBe('Read 12 min ago')
   })

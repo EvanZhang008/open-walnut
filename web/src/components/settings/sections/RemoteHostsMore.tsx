@@ -2,7 +2,8 @@
  * Remote Hosts > More settings: what a person changes rarely, folded under the Hosts list
  * (2026-11-04 review: the page showed the same hosts in five groups at once). Closed by
  * default; its line says what is inside and how many rows need a look, and each group keeps
- * reading while it is closed (SettingsFold).
+ * reading while it is closed (SettingsFold). Open, each group is one folded line that says
+ * what it holds (SettingsFoldGroup), so the whole of it reads at a glance.
  */
 import type { Config } from '@open-walnut/core';
 import type { NetOverview } from '@/api/hosts-net';
@@ -34,7 +35,7 @@ export function RemoteHostsMore({ hosts, hostLabels, net, onNetChanged, limits, 
       <HostServersGroup hosts={hosts} />
       <HostExecGrantsGroup hostLabels={hostLabels} />
       <SecretsGroup hostLabels={hostLabels} />
-      <SessionLimitsGroup limits={limits} onChange={onLimits} />
+      <SessionLimitsGroup limits={limits} hostLabels={hostLabels} onChange={onLimits} />
     </SettingsFold>
   );
 }

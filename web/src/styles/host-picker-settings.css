@@ -1,7 +1,6 @@
 /*
  * Folder picker host tabs + host note, and Settings > Remote Hosts row pieces
- * (spec 4 and 5). Colors are the existing variables only; the shared classes
- * (.settings-addons-ellipsis, .rh-status, .rh-status-error) are not touched.
+ * (spec 4 and 5). Colors are the existing variables only.
  */
 
 /* ── Picker: the host chips WRAP and never scroll; each label caps at 10em ──
@@ -161,22 +160,22 @@
 .rh-last-checked,
 .rh-receipt { color: var(--fg-muted); font-size: 11px; }
 .rh-action-failed { color: var(--error); font-size: 11px; }
-.rh-status-short { color: var(--fg-muted); }
 .rh-host-detail:empty { display: none; }
 
-/* The relay choice (HostNetworkRelay.tsx): a radio dot before each row's words. */
-.settings-group .settings-row.rh-relay-choice { align-items: flex-start; gap: 10px; }
-.rh-relay-dot {
+/* The relay choice (HostNetworkRelay.tsx): each row's words at the rows' one inset, and a check
+   in the control column on the one picked (no tinted row: a group is the only surface). */
+.settings-group .settings-row.rh-relay-choice { align-items: flex-start; }
+.settings-group .settings-row.settings-addons-choice.rh-relay-choice[aria-checked='true'] { background: transparent; }
+.settings-group .settings-row.settings-addons-choice.rh-relay-choice[aria-checked='true']:hover { background: var(--bg-hover); }
+.rh-relay-check {
   flex: none;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
-  box-sizing: border-box;
-  border: 1.5px solid var(--border-strong);
-  border-radius: 50%;
-  background: var(--bg);
+  display: inline-flex;
+  width: 16px;
+  height: 19px;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
 }
-.rh-relay-choice[aria-checked='true'] .rh-relay-dot { border: 4.5px solid var(--accent); }
 .settings-group .settings-row.rh-relay-choice:disabled { cursor: default; }
 .settings-group .settings-row.rh-relay-choice[aria-disabled='true'] { opacity: 0.55; }
 .settings-group .settings-row.rh-relay-choice[aria-disabled='true']:hover { background: transparent; }

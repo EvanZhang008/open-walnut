@@ -586,8 +586,9 @@ test('Open from a browser: a refused option keeps its value and reason while ano
 test('Walnut on a host: a refused tunnel option keeps its value and reason through other writes, until it is put back or saved', async ({ page }, info) => {
   await reset()
   await openSettings(page, 'settings-nav-remote-hosts')
-  // Walnut on a host sits under More settings, closed by default.
+  // Walnut on a host sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('host-servers-toggle').click()
   const group = page.getByTestId('host-servers')
   const endpoint = group.getByTestId(`host-server-option-${HOST}-endpoint`)
   const token = group.getByTestId(`host-server-option-${HOST}-token`)
@@ -668,8 +669,9 @@ test('Walnut on a host: a refused tunnel option keeps its value and reason throu
 test('Walnut on a host: text typed while an option is being saved stays in its box', async ({ page }) => {
   await reset()
   await openSettings(page, 'settings-nav-remote-hosts')
-  // Walnut on a host sits under More settings, closed by default.
+  // Walnut on a host sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('host-servers-toggle').click()
   const group = page.getByTestId('host-servers')
   const name = group.getByTestId(`host-server-option-${HOST}-name`)
   await expect(name).toHaveValue(fixture!.hosts[HOST]!.server.expose.options.name!, { timeout: 60_000 })
@@ -729,8 +731,9 @@ test('a space typed after a hidden token is refused under that option in both tu
 
   // H6, Walnut on a host.
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // Walnut on a host sits under More settings, closed by default.
+  // Walnut on a host sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('host-servers-toggle').click()
   const hostToken = page.getByTestId('host-servers').getByTestId(`host-server-option-${HOST}-token`)
   const hostStored = fixture!.hosts[HOST]!.server.expose.options.token!
   await expect(hostToken).toHaveValue(tail(hostStored), { timeout: 60_000 })

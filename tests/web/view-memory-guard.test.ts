@@ -157,7 +157,6 @@ const PASSING: Record<string, string> = {
   'components/settings/PluginJobsControls.tsx#openLog': 'one job\'s log, an overlay',
   'components/settings/sections/CloudSection.tsx#selected': 'a provider picked in one setup',
   'components/settings/sections/MailRulesFileRow.tsx#openFailed': 'one failed open, not a choice',
-  'components/settings/sections/RemoteHostsSection.tsx#expanded': 'one host\'s form unfolded while it is edited',
   'components/settings/sections/ReposSection.tsx#selectedSlug': 'one repository being edited',
   'components/settings/sections/SuggestAccuracyPanel.tsx#recentShown': 'the list expanded past its first rows for one look',
   'components/settings/sections/cloud/RemoteAccessCard.tsx#openBusy': 'a request in flight, not a choice',

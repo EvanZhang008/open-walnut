@@ -47,7 +47,11 @@ async function openEditor(page: Page) {
   await expect(section).toBeVisible({ timeout: 30_000 })
   const row = section.locator(`#rh-host-${ALIAS}`)
   await expect(row).toBeVisible({ timeout: 20_000 })
-  await row.getByRole('button', { name: 'Edit' }).click()
+  // Edit is in the row's More menu; what the host keeps is under the fields' More options.
+  await row.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Edit', exact: true }).click()
+  const options = section.getByTestId('rh-more-options')
+  if ((await options.getAttribute('aria-expanded')) !== 'true') await options.click()
   await expect(section.locator('#rh-keep-notes-0')).toBeVisible()
   return section
 }

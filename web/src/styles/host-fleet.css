@@ -1,46 +1,13 @@
 /*
- * Settings › Remote Hosts › Overview (HostFleetGroup.tsx, HostFleetCard.tsx,
- * HostFleetTopology.tsx): a summary strip, the diagram, a grid of host cards and
- * the hosts not connected. It sits in the section beside the groups, never in
- * one, and each surface wears the group's own look (fill, border, radius), so
- * nothing is a card inside a card. Theme variables only; colour is never the
+ * Settings › Remote Hosts: a host's Details (HostFleetVitals.tsx: rings, the online
+ * timeline, numbers, chips, the full table) and the network map (HostFleetTopology.tsx).
+ * Each surface wears the group's own look (fill, border, radius), so nothing is a card
+ * inside a card. Theme variables only; colour is never the
  * only signal (every gauge, segment and node says it in words or a title).
  */
-.hf-dash { margin: 0 0 22px; min-width: 0; }
-.hf-dash-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 6px;
-  padding: 0 calc(var(--settings-row-pad-x) + 1px);
-}
-.hf-dash-title { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
-.hf-dash-updated { font-size: 12px; color: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
-
-/* The title opens and closes the Overview (opening it reads the hosts again). */
-.hf-dash-toggle {
-  appearance: none;
-  border: 0;
-  background: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-.hf-dash-toggle:hover { color: var(--fg); }
-.hf-dash-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.hf-dash-toggle[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
-.hf-dash-read { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; white-space: nowrap; }
-.hf-refreshing { font-size: 12px; color: var(--accent-text); }
-.hf-dash[data-open='false'] { margin-bottom: 14px; }
 
 /* The surfaces: the group's look. */
-.hf-stat, .hf-panel, .hf-card {
+.hf-panel {
   box-sizing: border-box;
   background: var(--settings-group-bg);
   border: 1px solid var(--settings-group-border);
@@ -48,24 +15,6 @@
   color: var(--fg);
   min-width: 0;
 }
-
-.hf-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: 10px;
-}
-.hf-stat { padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
-.hf-stat-value { font-size: 22px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.hf-stat-label { font-size: 12px; color: var(--settings-help-fg); display: flex; align-items: center; gap: 6px; }
-.hf-stat[data-tone] .hf-stat-label::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-}
-.hf-stat[data-tone="good"] .hf-stat-label::before { background: var(--success); }
-.hf-stat[data-tone="warn"] .hf-stat-label::before { background: var(--warning); }
 
 .hf-panel { margin-top: 10px; padding: 8px 10px; }
 
@@ -95,26 +44,9 @@
 .hf-topo-link[data-live="false"] { stroke-dasharray: 5 5; opacity: 0.75; }
 .hf-topo-label { font-size: 10.5px; fill: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
 
-/* The host cards. */
-.hf-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
-  gap: 10px;
-  margin-top: 10px;
-}
-.hf-card {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  outline: none;
-}
-.hf-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-.hf-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.hf-card-head .sps-host-dot { width: 8px; height: 8px; flex: none; }
-.hf-card-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* A host's Details: rings, chips, numbers. */
+
 .hf-roles { margin-left: auto; display: flex; gap: 4px; flex: none; }
-.hf-card-sys { margin: -6px 0 0; font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .hf-chip {
   display: inline-block;
@@ -191,51 +123,11 @@
 .hf-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .hf-numbers > div { display: flex; flex-direction: column; min-width: 0; }
 
-.hf-problem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-  padding: 4px 4px 4px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  --hf-c: var(--warning);
-  background: color-mix(in srgb, var(--hf-c) 12%, var(--settings-group-bg));
-}
-.hf-problem[data-tone="bad"] { --hf-c: var(--error); }
-.hf-problem[data-tone="muted"] { --hf-c: var(--fg-muted); }
-.hf-problem-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-height: 17px;
-}
-.hf-problem .settings-button { flex: none; }
-.hf-action-error { margin: -4px 0 0; font-size: 12px; color: var(--settings-error-text); }
-.hf-action-note { margin: -4px 0 0; font-size: 12px; color: var(--settings-help-fg); }
-
-.hf-card-foot { display: flex; align-items: baseline; gap: 10px; margin-top: -4px; }
-/* How old a card is, or that a read of it runs: small, after Details. */
+/* How old a reading is: small, at the end of the reading. */
 .hf-read { margin-left: auto; font-size: 11.5px; color: var(--settings-help-fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hf-read[data-refreshing='true'] { color: var(--accent-text); }
-.hf-off-line .hf-read { margin-left: 0; flex: none; }
+
 .hf-read-error { margin: -4px 0 0; font-size: 12px; color: var(--settings-error-text); overflow-wrap: anywhere; }
-.hf-off .hf-read-error { margin: 2px 0 0 18px; }
-.hf-dash .hf-loading-more { margin: 8px 0 0; }
-.hf-link {
-  appearance: none;
-  border: 0;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--accent-text);
-  cursor: pointer;
-}
-.hf-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 .hf-details { border-top: 1px solid var(--settings-hairline); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .hf-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
@@ -252,27 +144,13 @@
 .hf-fit { margin: 0; font-size: 12px; color: var(--settings-help-fg); }
 .hf-fit code { font-size: 11.5px; }
 
-/* The hosts not connected: one line each. */
-.hf-off-list { padding: 4px 14px; }
-.hf-off-head { margin: 6px 0 2px; font-size: 12px; font-weight: 600; color: var(--settings-help-fg); }
-.hf-off { padding: 6px 0; outline: none; }
-.hf-off + .hf-off { border-top: 1px solid var(--settings-hairline); }
-.hf-off:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 6px; }
-.hf-off-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
-.hf-off-line .sps-host-dot { width: 8px; height: 8px; flex: none; }
-.hf-off-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 45%; }
-.hf-off-why { font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 0; }
-.hf-off .hf-details { margin: 6px 0 2px 18px; }
-
 /* Shared with other Remote Hosts groups (SecretsGroup, HostExecGrantsGroup): kept as it was. */
-.hf-error, .hf-loading { margin: 8px var(--settings-row-pad-x); font-size: 12.5px; color: var(--fg-muted); }
+.hf-error { margin: 8px var(--settings-row-pad-x); font-size: 12.5px; color: var(--fg-muted); }
 .hf-error { color: var(--warning); }
-.hf-dash .hf-error, .hf-dash .hf-loading { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
-.hf-dash .hf-error { color: var(--settings-error-text); }
 
 /* Why a number slot has no number (FleetNumber.tsx, a ring's why): always visible beside it. */
 .hf-why { font-size: 10.5px; line-height: 14px; color: var(--settings-help-fg); white-space: nowrap; }
 .hf-gauge .hf-why { text-align: center; }
 /* Beside a big number the reason may be a sentence: it wraps in its own half of the card. */
-.hf-numbers .hf-why, .hf-stat .hf-why { white-space: normal; overflow-wrap: anywhere; }
+.hf-numbers .hf-why { white-space: normal; overflow-wrap: anywhere; }
 .hf-gauge-value[data-text="true"] { font-size: 10.5px; }

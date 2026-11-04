@@ -60,6 +60,17 @@
   user-select: text;
 }
 
+/* Between the line's parts: a drawn dot, not a text glyph (C8 keeps panes glyph free). */
+.settings-build-line-sep {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin: 0 7px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
 /* "Copy diagnostics" on the build line: the line's own muted text, underlined on hover. */
 .settings-build-line-action {
   margin: 0;
@@ -89,24 +100,15 @@
 }
 
 /* A failed copy says why without adding a row: one clipped line, full text on hover. */
-.settings-build-line-error,
-.settings-copy-diagnostics-error {
+.settings-build-line-error {
   display: inline-block;
   max-width: 36ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
-  color: var(--settings-error-text, var(--error));
-}
-
-.settings-build-line-error {
   margin-left: 8px;
-}
-
-.settings-copy-diagnostics-error {
-  font-size: 12.5px;
-  line-height: 17px;
+  color: var(--settings-error-text, var(--error));
 }
 
 /* After a failed copy: the text itself, read-only, to select by hand. */

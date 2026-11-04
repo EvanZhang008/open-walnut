@@ -1,7 +1,7 @@
 /**
- * What the fleet dashboard draws (HostFleetGroup.tsx, HostFleetCard.tsx,
- * HostFleetTopology.tsx): the summary, each card's one problem line, its 12 hour
- * timeline, gauges and chips, and where each node sits in the diagram. Pure, so
+ * What Remote Hosts draws from the fleet's readings (HostSummaryLine.tsx, the rows'
+ * HostFleetVitals.tsx, HostFleetTopology.tsx): the summary, each host's one problem line,
+ * its 12 hour timeline, gauges and chips, and where each node sits in the network map. Pure, so
  * each rule has a unit test (tests/web/host-fleet-dashboard-model.test.ts).
  * Shows a host's label only, never its alias.
  */
@@ -289,7 +289,7 @@ export function sparkPaths(values: Array<number | null>, max: number, height = 2
 export function systemLine(h: FleetHost): string {
   const s = h.system;
   if (!s) return h.connection.connected ? 'Not probed yet' : 'Not probed yet (it is, once the host connects)';
-  return [s.os, s.arch, s.cpus ? `${s.cpus} CPUs` : null, gb(s.memBytes)].filter(Boolean).join(' · ') || 'Probed, nothing reported';
+  return [s.os, s.arch, s.cpus ? `${s.cpus} CPUs` : null, gb(s.memBytes)].filter(Boolean).join(', ') || 'Probed, nothing reported';
 }
 
 export interface Chip { key: string; text: string; title?: string; tone?: 'muted' }
@@ -315,7 +315,7 @@ export function capabilityChips(h: FleetHost): Chip[] {
   const relayed = c.browsers.filter((b) => b.relay).map((b) => b.name);
   if (relayed.length) out.push({ key: 'browser', text: 'Browser', title: `Your browser through the relay: ${relayed.join(', ')}` });
   if (c.tags.includes('docker')) out.push({ key: 'docker', text: 'Docker' });
-  if (c.mcp.length) out.push({ key: 'mcp', text: `MCP × ${c.mcp.length}`, title: c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.name)).join(', ') });
+  if (c.mcp.length) out.push({ key: 'mcp', text: `${c.mcp.length} MCP ${c.mcp.length === 1 ? 'server' : 'servers'}`, title: c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.name)).join(', ') });
   for (const t of c.declared) if (!['cloud', 'local', 'always-on'].includes(t)) out.push({ key: `tag:${t}`, text: t, title: 'A tag set in its config' });
   for (const u of c.unknown) if (u !== 'system' && u !== 'always-on') out.push({ key: `unknown:${u}`, text: `${u === 'mcp' ? 'MCP' : u === 'ios' ? 'iOS' : u}?`, title: 'Not reported yet', tone: 'muted' });
   return out;
@@ -326,7 +326,7 @@ export function linkLabel(h: FleetHost): string {
   const c = h.connection;
   if (!c.connected) return c.kind === 'bridge' ? 'Not connected in' : 'Not connected';
   const kind = c.kind === 'bridge' ? 'Bridge' : c.kind === 'host-network' ? 'Host network' : 'SSH tunnel';
-  return c.rttMs ? `${kind} · ${c.rttMs} ms` : kind;
+  return c.rttMs ? `${kind}, ${c.rttMs} ms` : kind;
 }
 
 /** Why a host is not connected, in a few words (the full error is the title). */
@@ -363,5 +363,5 @@ export function topologyLayout(hosts: FleetHost[]): { height: number; centre: To
 
 /** A label that fits a diagram node. */
 export function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  return text.length > max ? `${text.slice(0, max - 3).trimEnd()}...` : text;
 }

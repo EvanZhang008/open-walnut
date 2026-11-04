@@ -1,8 +1,8 @@
 /**
  * The one-line build identity at the bottom of Settings, e.g.
- * `Open Walnut 0.4.5 · commit 3942cf7 · built 2026-09-24`. package.json only
- * moves on npm releases, so the commit is what tells a source checkout of main
- * from the last npm install in a support thread.
+ * `Open Walnut 0.4.5, commit 3942cf7, built 2026-09-24` (commas, so a copied line reads the
+ * same and the pane stays glyph free, C8). package.json only moves on npm releases, so the
+ * commit is what tells a source checkout of main from the last npm install in a support thread.
  */
 import type { BuildInfo } from '@/api/config'
 import type { UpdateStatus } from '@/api/update'
@@ -21,7 +21,7 @@ export function formatBuildLine(info: BuildInfo): string {
   if (info.commit) parts.push(`commit ${info.commit}${info.dirty ? '+dirty' : ''}`)
   const date = buildDate(info.builtAt)
   if (date) parts.push(`built ${date}`)
-  return parts.join(' · ')
+  return parts.join(', ')
 }
 
 /** Hover detail the line leaves out: branch and exact build time. */
@@ -30,7 +30,7 @@ export function buildLineTitle(info: BuildInfo): string | undefined {
   if (info.branch) parts.push(`Branch ${info.branch}`)
   if (info.builtAt) parts.push(`built ${info.builtAt}`)
   if (info.dirty) parts.push('uncommitted changes')
-  return parts.length ? parts.join(' · ') : undefined
+  return parts.length ? parts.join(', ') : undefined
 }
 
 /**

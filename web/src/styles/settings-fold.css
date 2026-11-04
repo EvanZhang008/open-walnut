@@ -54,3 +54,72 @@
   border-radius: 50%;
   background: currentColor;
 }
+
+/*
+ * SettingsFoldGroup: a group whose heading row folds it. One box: the heading row (chevron,
+ * the name, one line of what is inside), then, open, the group's rows under a hairline and
+ * its footer, all inside the same box.
+ */
+.settings-fold-group {
+  box-sizing: border-box;
+  margin: 0 0 12px;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-width: 0;
+}
+.settings-fold-group-heading { margin: 0; font: inherit; }
+.settings-fold-group-toggle {
+  appearance: none;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 1px;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 8px var(--settings-row-pad-x, 14px);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-fold-group-toggle:hover { background: var(--bg-hover); }
+.settings-fold-group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.settings-fold-group-toggle > .settings-disclosure-chevron { grid-row: 1 / span 2; }
+.settings-fold-group-toggle[aria-expanded='true'] > .settings-disclosure-chevron { transform: rotate(90deg); }
+.settings-fold-group-title { grid-column: 2; font-size: 14px; line-height: 19px; font-weight: 500; }
+.settings-fold-group-summary {
+  grid-column: 2;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--settings-help-fg, var(--fg-muted));
+  overflow-wrap: anywhere;
+}
+.settings-fold-group-body { position: relative; }
+.settings-fold-group-body::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x, 14px);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+}
+/* The rows' own group draws nothing, yet keeps the 1px side edges every group has (transparent,
+   pulled under this box's border), so its rows sit where they sit in a plain group: 15px from
+   the edge the eye sees, and 15px from their group's box, which the layout audits measure. */
+.settings-fold-group-body > .settings-group {
+  margin: 0 -1px;
+  background: transparent;
+  border: 0;
+  border-inline: 1px solid transparent;
+  border-radius: 0;
+}
+.settings-fold-group-body > .settings-group-footer { margin: 0; padding: 2px calc(var(--settings-row-pad-x) + 1px) 12px; }

@@ -36,8 +36,11 @@ async function openRemoteHosts(page: Page) {
   const nav = page.getByTestId('settings-nav-remote-hosts')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // The group sits under More settings, closed by default.
+  // The group sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  const toggle = page.getByTestId('host-servers-toggle')
+  await expect(toggle).toBeVisible({ timeout: 30_000 })
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
   const group = page.getByTestId('host-servers')
   await expect(group).toBeVisible({ timeout: 30_000 })
   return group
@@ -104,15 +107,18 @@ test.describe('Walnut on a host', () => {
   test('editing the host in the Hosts editor keeps its server on', async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 900 })
     await openRemoteHosts(page)
-    const hostRow = page.locator(`[data-host-alias="${KEY}"]`)
-    await hostRow.getByRole('button', { name: 'Edit' }).click()
+    const hostRow = page.locator(`#rh-host-${KEY}`)
+    await hostRow.getByTestId('rh-row-more').click()
+    await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Edit', exact: true }).click()
+    const options = page.getByTestId('rh-more-options')
+    if ((await options.getAttribute('aria-expanded')) !== 'true') await options.click()
     const label = page.locator('#remote-hosts input[id^="rh-label-"]')
     await expect(label).toHaveValue('Build box')
     await label.fill('Build box 2')
     // The editor saves the whole hosts map on its own.
     await expect.poll(async () => (await hostsNow(page))[KEY]?.label, { timeout: 15_000 }).toBe('Build box 2')
     expect((await hostsNow(page))[KEY]?.server).toMatchObject({ enabled: true })
-    await hostRow.getByRole('button', { name: 'Done' }).click()
+    await page.getByTestId('rh-edit-done').click()
     const row = page.getByTestId(`host-server-${KEY}`)
     await expect(row).toContainText('Build box 2', { timeout: 15_000 })
     await expect(page.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')

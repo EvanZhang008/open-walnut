@@ -2,9 +2,9 @@
  * "Copy diagnostics": puts the redacted `open-walnut doctor` text on the
  * clipboard (GET /api/diagnostics?format=text, redacted server-side), so a
  * support thread gets build, claude, runtime, PATH and hosts in one paste.
- * Two looks, one behaviour: a muted inline link on the Settings build line, and
- * a regular Settings button in the Remote Hosts header (hosts section only; that
- * pane's build line shows no link of its own, so the pane offers one, not two).
+ * One look: a muted inline link on the Settings build line. On Remote Hosts, while
+ * it has a host to report, the same link copies the hosts section (2026-11-04
+ * review: the pane's header had room for one action, Add host).
  *
  * The first click fetches, then copies: collection takes seconds, and by then a
  * browser without the async clipboard (plain-HTTP LAN, Firefox) has expired the
@@ -16,7 +16,6 @@ import { useEffect, useRef, useState } from 'react'
 import { apiGetText } from '@/api/client'
 import { copyTextDeferred, copyTextRobust } from '@/utils/clipboard'
 import { log } from '@/utils/log'
-import { SettingsButton } from './inputs/SettingsButton'
 import { diagnosticsQuery, type DiagnosticsSection } from './diagnostics-copy'
 
 type CopyState = { kind: 'idle' } | { kind: 'busy' } | { kind: 'copied' } | { kind: 'failed'; message: string }
@@ -87,7 +86,11 @@ function failureText(message: string): string {
 }
 
 /** Muted inline link for the build line; stays on that one row. */
-export function CopyDiagnosticsLink({ copy }: { copy: DiagnosticsCopy }) {
+export function CopyDiagnosticsLink({ copy, testId = 'settings-copy-diagnostics', title = 'Copy build, Claude Code, Node, PATH and host details, with usernames masked' }: {
+  copy: DiagnosticsCopy
+  testId?: string
+  title?: string
+}) {
   const { state } = copy
   const label = state.kind === 'busy' ? 'Collecting...' : state.kind === 'copied' ? 'Copied' : 'Copy diagnostics'
   return (
@@ -100,37 +103,14 @@ export function CopyDiagnosticsLink({ copy }: { copy: DiagnosticsCopy }) {
         onClick={copy.copy}
         disabled={state.kind === 'busy'}
         aria-live="polite"
-        data-testid="settings-copy-diagnostics"
-        title="Copy build, Claude Code, Node, PATH and host details, with usernames masked"
+        data-testid={testId}
+        title={title}
       >
         {label}
       </button>
       {state.kind === 'failed' && (
         <span className="settings-build-line-error" role="alert" title={state.message}>{failureText(state.message)}</span>
       )}
-    </>
-  )
-}
-
-/** Header button for the Remote Hosts pane: the hosts section only (the pane's one Copy diagnostics). */
-export function CopyHostDiagnosticsButton({ copy }: { copy: DiagnosticsCopy }) {
-  const { state } = copy
-  const label = state.kind === 'copied' ? 'Copied' : 'Copy diagnostics'
-  return (
-    <>
-      {state.kind === 'failed' && (
-        <span className="settings-copy-diagnostics-error" role="alert" title={state.message}>{failureText(state.message)}</span>
-      )}
-      <SettingsButton
-        onClick={copy.copy}
-        busy={state.kind === 'busy'}
-        busyLabel="Collecting..."
-        reserve={['Copy diagnostics', 'Copied']}
-        data-testid="remote-hosts-copy-diagnostics"
-        title="Copy each host's connection, daemon and preflight details, with usernames and hostnames masked"
-      >
-        {label}
-      </SettingsButton>
     </>
   )
 }

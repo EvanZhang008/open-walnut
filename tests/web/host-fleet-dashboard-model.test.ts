@@ -204,7 +204,7 @@ describe('gauges, disk and chips', () => {
       ios: { xcode: 'Xcode 26.1', runtimes: ['iOS 26.1'] }, browsers: [{ name: 'chrome', relay: true }],
       mcp: [{ name: 'a' }, { name: 'b', plugin: 'P' }], clis: [], declared: ['gpu', 'cloud'], unknown: ['mcp', 'system'],
     }
-    expect(capabilityChips(h).map((c) => c.text)).toEqual(['iOS simulator', 'Browser', 'Docker', 'MCP × 2', 'gpu', 'MCP?'])
+    expect(capabilityChips(h).map((c) => c.text)).toEqual(['iOS simulator', 'Browser', 'Docker', '2 MCP servers', 'gpu', 'MCP?'])
   })
 })
 
@@ -282,11 +282,11 @@ describe('diagram', () => {
     for (let i = 1; i < left.length; i++) expect(left[i] - left[i - 1]).toBeGreaterThanOrEqual(TOPO.nodeH)
   })
   it('labels each link with its kind and latency', () => {
-    expect(linkLabel(host())).toBe('SSH tunnel · 38 ms')
+    expect(linkLabel(host())).toBe('SSH tunnel, 38 ms')
     expect(linkLabel(offline())).toBe('Not connected')
     // A machine that joined with a link has no SSH at all.
     const joined = host()
-    expect(linkLabel({ ...joined, connection: { ...joined.connection, kind: 'host-network' } })).toBe('Host network · 38 ms')
-    expect(clip('Spare box with a rather long label', 17)).toBe('Spare box with a…')
+    expect(linkLabel({ ...joined, connection: { ...joined.connection, kind: 'host-network' } })).toBe('Host network, 38 ms')
+    expect(clip('Spare box with a rather long label', 17)).toBe('Spare box with...')
   })
 })

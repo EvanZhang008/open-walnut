@@ -10,7 +10,8 @@ import { allowExecGrant, fetchExecGrants, revokeExecGrant, setExecHostClosed, ty
 import { getAllHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 import { log } from '@/utils/log';
-import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsRow } from '../SettingsSection';
+import { SettingsFoldGroup } from '../SettingsFoldGroup';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 
@@ -24,7 +25,8 @@ function when(ms: number): string {
 export function grantSummary(g: ExecGrant, hostLabel: string): string {
   const parts = [`On ${hostLabel}, ${g.via === 'own-host' ? 'allowed (your own host)' : 'allowed'} ${when(g.grantedAt)}`];
   parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
-  return parts.join(' · ');
+  // Each part has its own commas (dates), so the parts are kept apart by a semicolon.
+  return parts.join('; ');
 }
 
 export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string, string> }) {
@@ -109,9 +111,16 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
   // Every host the user has: Settings' own rows, plus the ones the status push knows (the
   // cloud companion is not a Settings row), plus any a grant or a stop names.
   const switchHosts = [...new Set(['__local__', ...Object.keys(hostLabels), ...liveHosts.map((h) => h.host), ...closed])];
+  const summary = [
+    grants.length ? `${grants.length} ${grants.length === 1 ? 'task' : 'tasks'} allowed` : 'No task uses another host',
+    denied.length ? `${denied.length} declined` : '',
+    closed.length ? `${closed.length} ${closed.length === 1 ? 'host' : 'hosts'} closed` : '',
+  ].filter(Boolean).join(', ');
   return (
-    <SettingsGroup
+    <SettingsFoldGroup
+      id="rh-more-exec-grants"
       heading="Tasks using other hosts"
+      summary={summary}
       data-testid="host-exec-grants"
       footer="Revoke stops one task (it asks by letter from then on). A command a task runs on a host can read anything your account can there."
     >
@@ -153,7 +162,7 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
           help={grantSummary(g, label(g.host))}
           control={
             <SettingsButton variant="text" disabled={busy === g.id} aria-label={`Revoke ${g.taskTitle || g.taskId} on ${label(g.host)}`} onClick={() => void revoke(g)}>
-              {busy === g.id ? 'Revoking…' : 'Revoke'}
+              {busy === g.id ? 'Revoking...' : 'Revoke'}
             </SettingsButton>
           }
         />
@@ -168,12 +177,12 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
             help={`On ${label(d.host)}, you declined ${when(d.answeredAt ?? d.askedAt)}`}
             control={
               <SettingsButton variant="text" disabled={busy === key} aria-label={`Allow ${d.taskTitle || d.taskId} on ${label(d.host)}`} onClick={() => void allow(d)}>
-                {busy === key ? 'Allowing…' : 'Allow'}
+                {busy === key ? 'Allowing...' : 'Allow'}
               </SettingsButton>
             }
           />
         );
       })}
-    </SettingsGroup>
+    </SettingsFoldGroup>
   );
 }

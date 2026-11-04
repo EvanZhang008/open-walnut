@@ -1,27 +1,36 @@
 /**
- * Settings › Remote Hosts › Overview (HostFleetGroup.tsx; server: src/core/hosts/fleet.ts):
- * the fleet dashboard at the density of a real fleet (five hosts: this computer, a dev
- * box, the cloud box, and two Walnut is not connected to): the summary strip, the
- * diagram (dashed lines to hosts not connected), one card per live host (rings, disk,
- * 12 hour timeline, numbers, chips, one problem line), the Set up and Connect buttons
- * (pending, done, refused), the key/value table behind Details, no overflow at 1280
- * and 900 px, and the fixture server's own fleet. The page opens on the cached cards
- * (GET /api/v1/hosts?cached=1) and reads the hosts again only on a press (POST
- * /api/v1/hosts/refresh): each card says how old it is, a read in flight marks its card
- * while the old content stays, a failed read keeps the card and says why, and a truly
- * first run shows each card as its own read ends.
- * Navigation is by clicks. WebKit: `PW_WEBKIT=1 ... --project=webkit`.
+ * Settings > Remote Hosts at the density of a real fleet (server: src/core/hosts/fleet.ts): five
+ * hosts, this computer, a dev box, the cloud box, and two Walnut is not connected to. The page is
+ * ONE list of machines (RemoteHostsSection.tsx): the summary line, a row per host with one state
+ * line and at most one action (Set up, Retry), Details in place under a row (rings, disk, the 12
+ * hour timeline, numbers, chips, problems, the key/value table, What Walnut knows), and the
+ * network map, folded. The old Overview (HostFleetGroup.tsx) is gone: its stat tiles are the
+ * summary line, its cards are each row's Details, its per-card read marks are one busy line.
+ * The page opens on the cached readings (GET /api/v1/hosts?cached=1) and reads hosts again only
+ * on a press (POST /api/v1/hosts/refresh: Refresh, a row's Details, Set up); a failed read keeps
+ * the values and says why; a truly first run fills each row as its own read ends.
+ * The config's SSH hosts are pinned to the fixture server's own one (other specs add hosts to the
+ * shared server), so the fleet's SSH hosts render as reading-only rows (FleetHostRow.tsx); the
+ * Connect test saves Home PC as an SSH host for its Retry.
+ * Navigation is by clicks (page.goto only loads the app). WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
+import { pick, row } from './remote-hosts-every-button-helpers'
+import { expectRing } from './remote-hosts-every-button-steps'
+import { cssColorToRgba } from './css-color'
+import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
+test.use({ viewport: { width: 1280, height: 900 } })
+// Settings reads /api/config on its own clock; one may still be in flight as the page closes,
+// and a write sent then must not reach the shared fixture (route-teardown.ts).
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const SHOTS = process.env.PW_SHOTS_DIR || '/tmp/host-fleet-overview'
-const GB = 1024 ** 3
-const NOW = Date.now()
-const DAY = 86_400_000
-const HOUR = 3_600_000
+const [GB, NOW, MIN, HOUR, DAY] = [1024 ** 3, Date.now(), 60_000, 3_600_000, 86_400_000]
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Card = Record<string, any>
 
 function days(upShare: (i: number) => number, covered = 30) {
   return Array.from({ length: 30 }, (_, i) => {
@@ -47,7 +56,7 @@ function recent(opts: { cpu: number; mem: number; gpu?: number; disk: number; se
   }
 }
 
-function card(over: Record<string, unknown>) {
+function card(over: Record<string, unknown>): Card {
   return {
     host: 'x', label: 'X', local: false, line: '', checkedAt: NOW,
     connection: { kind: 'ssh-tunnel', connected: true, phase: 'connected', phaseLabel: 'Connected', since: NOW - 20 * 60_000, rttMs: 38, error: null },
@@ -63,7 +72,7 @@ function card(over: Record<string, unknown>) {
   }
 }
 
-const FLEET = [
+const FLEET: Card[] = [
   card({
     host: '__local__', label: 'This computer', local: true,
     connection: { kind: 'local', connected: true, phase: 'connected', phaseLabel: 'Running on this Mac', since: null, rttMs: 1, error: null },
@@ -73,11 +82,8 @@ const FLEET = [
     sessions: { running: 12 }, spend: { last30dUsd: 2345.6, from: '2026-10-02', basis: 'list-price' },
     daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'binary', vitals: true },
     placement: { score: 3, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['It is a laptop: a job here stops while it sleeps.'] } },
-    capabilities: {
-      tags: ['macos', 'local', 'ios', 'browser', 'mcp:playwright'], alwaysOn: false, placement: 'local', os: 'macos',
-      ios: { xcode: 'Xcode 26.1', runtimes: ['iOS 26.1', 'iOS 18.6'] }, browsers: [{ name: 'chrome', relay: true }, { name: 'brave', relay: false }],
-      mcp: [{ name: 'playwright' }], clis: ['git', 'node', 'xcodegen'], declared: [], unknown: [],
-    },
+    capabilities: { tags: ['macos', 'local', 'ios', 'browser', 'mcp:playwright'], alwaysOn: false, placement: 'local', os: 'macos', ios: { xcode: 'Xcode 26.1', runtimes: ['iOS 26.1', 'iOS 18.6'] },
+      browsers: [{ name: 'chrome', relay: true }, { name: 'brave', relay: false }], mcp: [{ name: 'playwright' }], clis: ['git', 'node', 'xcodegen'], declared: [], unknown: [] },
   }),
   card({
     host: 'devbox', label: 'Big dev box',
@@ -95,11 +101,8 @@ const FLEET = [
       reboot: 'does not start by itself after a reboot: nothing on it starts the daemon at boot',
     },
     placement: { score: 32, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'] } },
-    capabilities: {
-      tags: ['always-on', 'cloud', 'linux', 'docker', 'mcp:docs-mcp', 'mcp:tickets-mcp', 'mcp:mail-mcp', 'gpu'], alwaysOn: true, placement: 'cloud', os: 'linux',
-      ios: null, browsers: [], mcp: [{ name: 'docs-mcp', plugin: 'Tools' }, { name: 'tickets-mcp', plugin: 'Tools' }, { name: 'mail-mcp' }],
-      clis: ['docker', 'gh', 'git', 'go', 'node'], declared: ['gpu'], unknown: [],
-    },
+    capabilities: { tags: ['always-on', 'cloud', 'linux', 'docker', 'mcp:docs-mcp', 'mcp:tickets-mcp', 'mcp:mail-mcp', 'gpu'], alwaysOn: true, placement: 'cloud', os: 'linux', ios: null, browsers: [],
+      mcp: [{ name: 'docs-mcp', plugin: 'Tools' }, { name: 'tickets-mcp', plugin: 'Tools' }, { name: 'mail-mcp' }], clis: ['docker', 'gh', 'git', 'go', 'node'], declared: ['gpu'], unknown: [] },
   }),
   card({
     host: 'olddev', label: 'Spare box with a rather long label that must not break the card',
@@ -128,67 +131,108 @@ const FLEET = [
   }),
 ]
 
-async function openRemoteHosts(page: Page) {
+/** Each row's one state line, in Settings order: This Mac, the saved SSH hosts (the server's own), then the fleet's other hosts. */
+const STATES: Record<string, string> = {
+  __local__: 'Online, 12% CPU, 12 sessions', 'fixture-remote': 'Off: Walnut does not connect to it.', devbox: 'Online, 25% CPU, 19 sessions',
+  olddev: 'Not connected', __cloudbox__: 'Online, 12% CPU, 3 sessions', homepc: 'Could not reach Home PC',
+}
+const DEV_LIVE = STATES.devbox
+
+/** The fixture server's own SSH host (test-server.ts). */
+const OWN_HOSTS: Record<string, unknown> = { 'fixture-remote': { hostname: 'fixture.example.test', label: 'Big remote host', enabled: false } }
+const pinned = new WeakSet<Page>()
+
+/** Settings > Remote Hosts by clicks, the config's SSH hosts pinned to `hosts` (nothing here saves). */
+async function openRemoteHosts(page: Page, hosts = OWN_HOSTS) {
+  if (!pinned.has(page)) {
+    pinned.add(page)
+    await page.route('**/api/config', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      const res = await route.fetch()
+      const body = await res.json() as Card
+      ;(body.config ?? body).hosts = hosts
+      await route.fulfill({ response: res, json: body })
+    })
+  }
   await page.goto('/')
-  await page.waitForLoadState('domcontentloaded')
-  await page.getByRole('link', { name: /settings/i }).first().click()
-  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('sidebar-core-app-settings').click({ timeout: 30_000 })
   await page.getByTestId('settings-nav-remote-hosts').click()
+  await expect(page.locator('#remote-hosts')).toBeVisible({ timeout: 20_000 })
+}
+
+const state = (page: Page, alias: string) => row(page, alias).getByTestId('rh-row-state')
+const details = (page: Page, alias: string) => page.locator(`[data-testid="rh-details"][data-host="${alias}"]`)
+const aliases = (page: Page) => page.locator('[data-testid="remote-hosts-list"] .rh-host-row[data-host-alias]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host-alias')!))
+
+/** A row's Details, from its More menu (closed by default; one open at a time). */
+async function openDetails(page: Page, alias: string): Promise<Locator> {
+  await pick(page, row(page, alias), 'Details')
+  await expect(details(page, alias)).toBeVisible()
+  await expect(page.getByTestId('rh-details')).toHaveCount(1)
+  return details(page, alias)
+}
+
+/** Each part under `scope` (a test id, else a selector) reads its words, or is there that many times. */
+async function see(scope: Locator | Page, want: Record<string, string | RegExp | string[] | number>) {
+  for (const [sel, v] of Object.entries(want)) {
+    const el = /^[\w-]+$/.test(sel) ? scope.getByTestId(sel) : scope.locator(sel)
+    await (typeof v === 'number' ? expect(el).toHaveCount(v) : expect(el).toHaveText(v))
+  }
 }
 
 /** A tall window for the picture, so the whole region shows below the pinned bar. */
-async function shot(page: Page, name: string, region: ReturnType<Page['locator']>) {
+async function shot(page: Page, name: string, region: Locator) {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
   const size = page.viewportSize()!
   await page.setViewportSize({ width: size.width, height: 2400 })
-  await region.evaluate((el) => el.closest('.settings-section')?.scrollIntoView({ block: 'start' }))
+  await region.evaluate((el) => el.closest('#remote-hosts')?.scrollIntoView({ block: 'start' }))
   await region.screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
   await page.setViewportSize(size)
 }
 
-/** Nothing in the dashboard is wider than its box. */
+/** Nothing is wider than its box, the page never scrolls sideways, and the rows are one column. */
 async function expectNoOverflow(page: Page) {
-  const over = await page.getByTestId('host-fleet').evaluate((root) => {
-    const bad: string[] = []
-    for (const el of [root, ...root.querySelectorAll<HTMLElement>('.hf-card, .hf-off, .hf-stat, .hf-panel')]) {
-      if (el.scrollWidth - el.clientWidth > 1) bad.push(`${el.className} ${el.getAttribute('data-host') ?? ''}`)
-    }
+  expect(await page.locator('#remote-hosts').evaluate((root) => {
+    const out: string[] = []
     const r = root.getBoundingClientRect()
-    for (const el of root.querySelectorAll<HTMLElement>('.hf-card, .hf-off, .hf-stat')) {
+    const name = (el: Element) => `${el.getAttribute('class')} ${el.closest('[data-host-alias]')?.getAttribute('data-host-alias') ?? el.closest('[data-host]')?.getAttribute('data-host') ?? ''}`
+    for (const el of root.querySelectorAll<HTMLElement>('.rh-summary, .rh-host-row, .rh-row-state, .rh-details, .hf-vitals-block, .hf-vitals, .hf-numbers, .hf-rows, .hf-problem-list, .hf-topo-panel')) {
+      if (!el.getClientRects().length) continue // folded away
       const b = el.getBoundingClientRect()
-      if (b.right > r.right + 1 || b.left < r.left - 1) bad.push(`outside: ${el.className}`)
+      if (el.scrollWidth - el.clientWidth > 1) out.push(`scrolls: ${name(el)}`)
+      if (b.right > r.right + 1 || b.left < r.left - 1) out.push(`outside: ${name(el)}`)
     }
-    return bad
-  })
-  expect(over).toEqual([])
+    const rows = [...root.querySelectorAll<HTMLElement>('.rh-host-row')].map((el) => el.getBoundingClientRect())
+    if (new Set(rows.map((b) => `${Math.round(b.left)}:${Math.round(b.width)}`)).size !== 1) out.push('the rows are not one column')
+    if (document.documentElement.scrollWidth > window.innerWidth + 1) out.push('the page scrolls sideways')
+    return out
+  })).toEqual([])
 }
-
-const MIN = 60_000
 
 /** Every number slot with no number says why beside it, in words (2026-11-04: "why sesison is ?"). */
 async function expectEveryUnknownSaysWhy(page: Page) {
-  const bare = await page.getByTestId('host-fleet').evaluate((root) => {
+  expect(await page.locator('#remote-hosts').evaluate((root) => {
     const bad: string[] = []
+    const meets = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
     for (const el of root.querySelectorAll<HTMLElement>('[data-num="unknown"]')) {
-      const box = el.closest('.hf-gauge, .hf-numbers > div, .hf-stat') ?? el.parentElement!
+      const box = el.closest<HTMLElement>('.hf-gauge, .hf-numbers > div') ?? el.parentElement!
       const why = box.querySelector<HTMLElement>('.hf-why')
-      const host = el.closest('[data-host]')?.getAttribute('data-host') ?? 'summary'
-      if (!why || !why.textContent?.trim() || why.offsetParent === null) bad.push(`${host}: ${box.textContent}`)
-      // The reason stays inside its own slot, never running into the next one.
-      else {
-        const w = why.getBoundingClientRect()
-        const b = box.getBoundingClientRect()
-        if (w.right > b.right + 1 || w.left < b.left - 1) bad.push(`${host}: reason spills out of its slot`)
-      }
+      const host = el.closest('[data-host]')?.getAttribute('data-host') ?? 'page'
+      if (!why || !why.textContent?.trim() || why.offsetParent === null) { bad.push(`${host}: ${box.textContent}`); continue }
+      // The reason stays in its own slot's room: never into the next slot, never out of the group.
+      const w = why.getBoundingClientRect()
+      const group = box.parentElement!
+      const g = group.getBoundingClientRect()
+      const next = [...group.children].filter((s) => s !== box).flatMap((s) => [s, ...s.querySelectorAll('*')].map((c) => c.getBoundingClientRect()))
+      if (w.left < g.left - 1 || w.right > g.right + 1 || next.some((o) => o.width && meets(w, o))) bad.push(`${host}: reason runs out of its slot`)
     }
-    // A "?" anywhere outside such a slot is a bare one.
-    for (const el of root.querySelectorAll<HTMLElement>('.hf-gauge-value, .hf-big, .hf-stat-value')) {
-      if (el.textContent?.trim() === '?' && el.getAttribute('data-num') !== 'unknown' && !el.querySelector('[data-num="unknown"]')) bad.push(`bare: ${el.className}`)
+    // A "?" anywhere else (a ring, a number, the summary, a row's state line) is a bare one.
+    for (const el of root.querySelectorAll<HTMLElement>('.hf-gauge-value, .hf-big, .rh-summary-line, .rh-row-state')) {
+      if (/(^|\s)\?($|\s)/.test(el.textContent ?? '') && el.getAttribute('data-num') !== 'unknown') bad.push(`bare: ${el.className}`)
     }
     return bad
-  })
-  expect(bare).toEqual([])
+  })).toEqual([])
 }
 
 /** The cached read: each card read 12 minutes ago unless it says otherwise. */
@@ -215,44 +259,60 @@ function serveRefresh(page: Page, onAsk: (hosts: string[] | null) => void = () =
   return asks
 }
 
-test('a fleet of five: summary, diagram, cards for the three live hosts, a row each for the two away', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
-  const calls = serveFleet(page, () => FLEET)
+/** The fleet's cached read and its refresh served, then the page open with the dev box's row on it. */
+async function openFleet(page: Page, hosts: () => unknown[] = () => FLEET) {
+  const calls = serveFleet(page, hosts)
   const asks = serveRefresh(page)
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(3, { timeout: 30_000 })
-  await expect(dash.getByTestId('host-fleet-card').nth(0)).toHaveAttribute('data-host', '__local__')
-  // The cached cards at once, each saying how old it is; only this computer's card, 12 minutes
-  // old, is read behind it (no network); no other host is read to show them.
-  await expect(dash.getByTestId('host-fleet-read')).toHaveText('Read 12 min ago')
-  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="devbox"] [data-testid="host-fleet-read-age"]')).toHaveText('Read 12 min ago')
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
+  await expect(row(page, 'devbox')).toBeVisible({ timeout: 30_000 })
+  return { calls, asks }
+}
+
+test('a fleet of five: the summary line, a row per host, the network map, and Details of live hosts and of the two away', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  const { asks } = await openFleet(page)
+  // The cached readings at once, with their age; only this computer's, 12 minutes old, is read
+  // behind them (no network); no other host is read to show them.
+  await see(page, { 'host-fleet-read': 'Read 12 min ago', 'host-fleet-reading': 0 })
   await expect.poll(() => asks).toEqual([['__local__']])
-  await expectEveryUnknownSaysWhy(page)
-  // The dashboard is beside the groups, never inside one (settings-layout.spec.ts F10).
-  expect(await dash.evaluate((el) => !!el.closest('.settings-group'))).toBe(false)
+  // The summary line (the old stat tiles), beside the groups, never inside one (settings-layout.spec.ts F10).
+  const summary = page.getByTestId('rh-summary')
+  expect(await summary.evaluate((el) => !!el.closest('.settings-group'))).toBe(false)
+  await see(summary, { 'rh-summary-online': '3 of 5 online', 'rh-summary-sessions': '34 sessions open', 'rh-summary-spend': '$5,205 in 30 days', 'rh-summary-needs': '4 need a look' })
+  await expect(summary.getByTestId('rh-summary-spend')).toHaveAttribute('title', 'At list price, not a bill')
 
-  // Summary strip.
-  await expect(dash.getByTestId('host-fleet-stat-online')).toContainText('3/5')
-  await expect(dash.getByTestId('host-fleet-stat-sessions')).toContainText('34')
-  await expect(dash.getByTestId('host-fleet-stat-spend')).toContainText('$5,205')
-  await expect(dash.getByTestId('host-fleet-stat-problems')).toContainText('4')
+  // One row per host in Settings order, each with its one state line, at most one warning and one
+  // action: Set up on the dev box; none on a host away with no SSH entry (Retry: the Connect test).
+  expect((await aliases(page)).filter((a) => a in STATES)).toEqual(Object.keys(STATES))
+  for (const [alias, line] of Object.entries(STATES)) await expect(state(page, alias)).toHaveText(line)
+  const dev = row(page, 'devbox')
+  await see(dev, { 'rh-row-warning': 'Daemon does not come back after a reboot', 'host-fleet-fix': 'Set up' })
+  await see(row(page, '__local__'), { '.rh-host-name': 'This Mac', 'rh-row-warning': 'Up 93% of the last 7 days' })
+  await see(row(page, '__cloudbox__'), { '.settings-tag': 'Cloud', '.rh-row-line': 0 })
+  for (const alias of ['__local__', 'olddev', '__cloudbox__', 'homepc']) await expect(row(page, alias).locator('.rh-row-primary button')).toHaveCount(0)
+  // "4 need a look" are those rows, and the words take you to the first.
+  const marked = await page.locator('[data-testid="remote-hosts-list"] [data-needs-look="true"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host-alias')!))
+  expect(marked.filter((a) => a in STATES)).toEqual(['__local__', 'devbox', 'olddev', 'homepc'])
+  await summary.getByTestId('rh-summary-needs').click()
+  await expectRing(page, row(page, '__local__'))
+  await expectEveryUnknownSaysWhy(page) // the summary and the rows
 
-  // Diagram: five nodes, four lines; the two hosts away are dashed and grey.
-  const topo = dash.getByTestId('host-fleet-topology')
-  await expect(topo.getByTestId('host-fleet-topo-node')).toHaveCount(5)
-  await expect(topo.getByTestId('host-fleet-topo-link')).toHaveCount(4)
-  await expect(topo.locator('[data-testid="host-fleet-topo-link"][data-live="false"]')).toHaveCount(2)
+  // The network map, folded: five nodes, four lines; the two hosts away are dashed and grey.
+  const toggle = page.getByTestId('remote-hosts-map-toggle')
+  const topo = page.getByTestId('host-fleet-topology')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(topo).toBeHidden()
+  await toggle.click()
+  const link = (h: string) => `[data-testid="host-fleet-topo-link"][data-host="${h}"]`
+  await see(topo, {
+    'host-fleet-topo-node': 5, 'path.hf-topo-link': 4, '[data-testid="host-fleet-topo-link"][data-live="false"]': 2,
+    [link('devbox')]: 'SSH tunnel, 38 ms', [link('__cloudbox__')]: 'Bridge, 120 ms', [link('homepc')]: 'Not connected',
+    '[data-host="__cloudbox__"] [data-mark="cloud"], [data-host="devbox"] [data-mark="phone"]': 2, '[data-host="__local__"] .hf-topo-name': 'This Mac',
+  })
   expect(await topo.locator('path.hf-topo-link[data-live="false"]').first().evaluate((el) => getComputedStyle(el).strokeDasharray)).not.toBe('none')
-  await expect(topo.locator('path.hf-topo-link')).toHaveCount(4)
-  await expect(topo.locator('[data-testid="host-fleet-topo-link"][data-host="devbox"]')).toHaveText('SSH tunnel · 38 ms')
-  await expect(topo.locator('[data-testid="host-fleet-topo-link"][data-host="__cloudbox__"]')).toHaveText('Bridge · 120 ms')
-  await expect(topo.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveText('Not connected')
-  // No two pieces of text in the diagram overlap.
-  const clash = await topo.evaluate((svg) => {
+  // No two pieces of text overlap; labels only, never an alias.
+  expect(await topo.evaluate((svg) => {
     const boxes = [...svg.querySelectorAll('text')].map((t) => ({ t: t.textContent, r: t.getBoundingClientRect() }))
     const hits: string[] = []
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
@@ -260,278 +320,238 @@ test('a fleet of five: summary, diagram, cards for the three live hosts, a row e
       if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) hits.push(`${boxes[i].t} / ${boxes[j].t}`)
     }
     return hits
-  })
-  expect(clash).toEqual([])
-  await expect(topo.locator('[data-host="__cloudbox__"] [data-mark="cloud"]')).toHaveCount(1)
-  await expect(topo.locator('[data-host="devbox"] [data-mark="phone"]')).toHaveCount(1)
-  // The diagram shows labels, never an alias.
+  })).toEqual([])
   await expect(topo).not.toContainText('__cloudbox__')
-
-  // The dev box card.
-  const dev = dash.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
-  await expect(dev.locator('.hf-card-name')).toHaveText('Big dev box')
-  await expect(dev.getByTestId('host-fleet-roles')).toHaveText('Always onReplica')
-  await expect(dev.getByTestId('host-fleet-system')).toHaveText('Debian 12 · x64 · 32 CPUs · 128 GB')
-  await expect(dev.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%')
-  await expect(dev.locator('[data-gauge="mem"] .hf-gauge-value')).toHaveText('25%')
-  // Disk is a ring like the others: the share in use, with what is free under it.
-  await expect(dev.locator('[data-gauge="disk"] .hf-gauge-value')).toHaveText('44%')
-  await expect(dev.getByTestId('host-fleet-disk-free')).toHaveText('2.2 TB free')
-  await expect(dev.getByTestId('host-fleet-disk-free')).toHaveAttribute('data-low', 'false')
-  await expect(dev.getByTestId('host-fleet-gauge')).toHaveCount(3) // no GPU on it
-  // The last 12 hours: a small chart each, broken where it was down.
-  await expect(dev.getByTestId('host-fleet-spark')).toHaveCount(3)
-  await expect(dev.locator('[data-spark="sessions"] .hf-lane-value')).toHaveText(/^max \d+$/)
-  expect((await dev.locator('[data-spark="cpu"] .hf-spark-line').getAttribute('d'))!.split('M').filter(Boolean)).toHaveLength(2)
-  const tl = dev.getByTestId('host-fleet-timeline')
-  await expect(tl.locator('i[data-tone="bad"]')).toHaveCount(1)
-  await expect(tl.locator('i[data-tone="warn"]')).toHaveCount(1)
-  await expect(tl.locator('i[data-tone="bad"]')).toHaveAttribute('title', /: down \(40 min\)$/)
-  await expect(dev.getByTestId('host-fleet-sessions')).toContainText('19')
-  await expect(dev.getByTestId('host-fleet-spend')).toContainText('$1,234')
-  await expect(dev.getByTestId('host-fleet-caps').locator('.hf-chip')).toHaveText(['Docker', 'MCP × 3', 'gpu'])
-  const problem = dev.getByTestId('host-fleet-problem')
-  await expect(problem).toHaveAttribute('data-problem', 'reboot')
-  await expect(problem.locator('.hf-problem-text')).toHaveText('Daemon does not come back after a reboot')
-  await expect(problem).toHaveAttribute('title', 'does not start by itself after a reboot: nothing on it starts the daemon at boot')
-  await expect(problem.getByTestId('host-fleet-fix')).toHaveText('Set up')
-
-  // The Mac: Primary, iOS and the browser, its uptime and its laptop verdict on one line.
-  const mac = dash.locator('[data-testid="host-fleet-card"][data-host="__local__"]')
-  await expect(mac.getByTestId('host-fleet-roles')).toHaveText('Primary')
-  await expect(mac.locator('[data-gauge]')).toHaveCount(4)
-  await expect(mac.locator('[data-gauge="gpu"] .hf-gauge-value')).toHaveText('18%')
-  await expect(mac.locator('[data-gauge="disk"] .hf-gauge-value')).toHaveText('95%')
-  await expect(mac.getByTestId('host-fleet-disk-free')).toHaveText('50 GB free')
-  await expect(mac.locator('[data-spark]')).toHaveCount(4)
-  await expect(mac.locator('[data-spark="gpu"]')).toHaveAttribute('title', /^GPU over the last 12 hours/)
-  await expect(mac.getByTestId('host-fleet-caps').locator('.hf-chip')).toHaveText(['iOS simulator', 'Browser', 'MCP × 1'])
-  await expect(mac.getByTestId('host-fleet-problem').locator('.hf-problem-text')).toHaveText('Up 93% of the last 7 days (+1)')
-  await expect(mac.getByTestId('host-fleet-fix')).toHaveCount(0)
-  // The cloud box is fine: no problem line.
-  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]').getByTestId('host-fleet-problem')).toHaveCount(0)
-  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]').getByTestId('host-fleet-roles')).toHaveText('Cloud')
-
-  // The two hosts away: one row each, Retry (its last try failed, the Hosts list's word), the error in the title.
-  const away = dash.getByTestId('host-fleet-offline')
-  await expect(away).toHaveCount(2)
-  const home = dash.locator('[data-testid="host-fleet-offline"][data-host="homepc"]')
-  await expect(home.locator('.hf-off-why')).toHaveText('Could not reach Home PC')
-  await expect(home.locator('.hf-off-why')).toHaveAttribute('title', 'ssh: connection timed out')
-  await expect(home.getByTestId('host-fleet-connect')).toHaveText('Retry')
-  const card = await home.boundingBox()
-  expect(card && card.height < 50).toBe(true)
-
-  // Details: the whole key/value table, the 30 day cells, the long-running verdict.
-  // Opening it reads that host again (the person is looking at it); closing it reads nothing.
-  await expect(dev.getByTestId('host-fleet-details')).toHaveCount(0)
-  await dev.getByTestId('host-fleet-details-toggle').click()
-  await expect(dev.getByTestId('host-fleet-details-toggle')).toHaveAttribute('aria-expanded', 'true')
-  await expect.poll(() => asks).toEqual([['__local__'], ['devbox']])
-  await expect(dev.locator('[data-row="now"] dd')).toHaveText('CPU 25% · load 6.16 · 96 GB of 128 GB memory free · up 13 d')
-  await expect(dev.locator('[data-row="server"] dd')).toHaveText('Replica · running · 0.6.20-abc1234 · phone tunnel connected')
-  await expect(dev.getByTestId('host-fleet-days').locator('i')).toHaveCount(30)
-  await expect(dev.getByTestId('host-fleet-fit').locator('code')).toHaveText(['walnut daemon install --yes', 'sudo loginctl enable-linger $USER'])
-  await home.getByTestId('host-fleet-details-toggle').click()
-  await expect(home.locator('[data-row="connection"] dd')).toHaveText('SSH tunnel · Could not reach Home PC (ssh: connection timed out)')
-  const old = dash.locator('[data-testid="host-fleet-offline"][data-host="olddev"]')
-  await old.getByTestId('host-fleet-details-toggle').click()
-  await expect(old.locator('[data-row="now"] dd')).toHaveText('Its daemon is older than this view (it upgrades on the next connect)')
-  await expectNoOverflow(page)
-  await dev.getByTestId('host-fleet-details-toggle').click()
-  await home.getByTestId('host-fleet-details-toggle').click()
-  await old.getByTestId('host-fleet-details-toggle').click()
-  await expect(dash.getByTestId('host-fleet-details')).toHaveCount(0)
-  expect(asks).toEqual([['__local__'], ['devbox'], ['homepc'], ['olddev']])
-
-  // A node in the diagram takes you to its card.
+  // A node takes you to its row.
   await topo.locator('[data-testid="host-fleet-topo-node"][data-host="devbox"]').click()
-  await expect(dev).toBeFocused()
+  await expectRing(page, dev)
 
-  await dash.scrollIntoViewIfNeeded()
+  // The dev box's Details (the old card), closed until asked for: opening them reads that host again.
+  await expect(page.getByTestId('rh-details')).toHaveCount(0)
+  const d = await openDetails(page, 'devbox')
+  await expect.poll(() => asks).toEqual([['__local__'], ['devbox']])
+  // Rings (disk too: the share in use, what is free under it; no GPU on it), the last 12 hours (a
+  // chart each), numbers, chips, its one problem in full, the key/value table, the long-running
+  // verdict; the row keeps the one Set up.
+  await see(d, {
+    'host-fleet-system': /^Debian 12, x64, 32 CPUs, 128 GB/, 'host-fleet-roles': 'Always onReplica', 'host-fleet-read-age': 'Read 12 min ago',
+    '[data-gauge="cpu"] .hf-gauge-value': '25%', '[data-gauge="mem"] .hf-gauge-value': '25%', '[data-gauge="disk"] .hf-gauge-value': '44%',
+    'host-fleet-disk-free': '2.2 TB free', 'host-fleet-gauge': 3, 'host-fleet-spark': 3, '[data-spark="sessions"] .hf-lane-value': /^max \d+$/,
+    '[data-testid="host-fleet-sessions"] .hf-big': '19', '[data-testid="host-fleet-spend"] .hf-big': '$1,234',
+    '[data-testid="host-fleet-caps"] .hf-chip': ['Docker', '3 MCP servers', 'gpu'], 'host-fleet-problem': 'Daemon does not come back after a reboot',
+    '[data-row="now"] dd': 'CPU 25%, load 6.16, 96 GB of 128 GB memory free, up 13 d',
+    '[data-row="server"] dd': 'Replica, running, 0.6.20-abc1234, phone tunnel connected', '[data-testid="host-fleet-days"] i': 30,
+    '[data-testid="host-fleet-fit"] code': ['walnut daemon install --yes', 'sudo loginctl enable-linger $USER'], 'host-fleet-fix': 0,
+    // The timeline is broken where it was down (40 min) or had no link.
+    '[data-testid="host-fleet-timeline"] i[data-tone="bad"]': 1, '[data-testid="host-fleet-timeline"] i[data-tone="warn"]': 1,
+  })
+  await expect(d.getByTestId('host-fleet-disk-free')).toHaveAttribute('data-low', 'false')
+  await expect(d.getByTestId('host-fleet-problem')).toHaveAttribute('title', 'does not start by itself after a reboot: nothing on it starts the daemon at boot')
+  await expect(d.getByTestId('host-fleet-problem')).toHaveAttribute('data-problem', 'reboot')
+  await expect(d.locator('[data-testid="host-fleet-timeline"] i[data-tone="bad"]')).toHaveAttribute('title', /: down \(40 min\)$/)
+  expect((await d.locator('[data-spark="cpu"] .hf-spark-line').getAttribute('d'))!.split('M').filter(Boolean)).toHaveLength(2)
+
+  // This Mac: Primary, iOS and the browser, a GPU ring and chart, its uptime and its laptop verdict.
+  const mac = await openDetails(page, '__local__')
+  await see(mac, {
+    'host-fleet-roles': 'Primary', '[data-gauge="gpu"] .hf-gauge-value': '18%', '[data-gauge="disk"] .hf-gauge-value': '95%', 'host-fleet-disk-free': '50 GB free',
+    '[data-gauge]': 4, '[data-spark]': 4, '[data-testid="host-fleet-caps"] .hf-chip': ['iOS simulator', 'Browser', '1 MCP server'],
+    'host-fleet-problem': ['Up 93% of the last 7 days', 'Laptop: not for jobs that must keep running'],
+  })
+  await expect(mac.locator('[data-spark="gpu"]')).toHaveAttribute('title', /^GPU over the last 12 hours/)
+  // The two hosts away: why, with the error; an older daemon's empty reading; each unknown says why.
+  await see(await openDetails(page, 'homepc'), { '[data-row="connection"] dd': 'SSH tunnel: Could not reach Home PC (ssh: connection timed out)' })
+  await expectEveryUnknownSaysWhy(page)
+  await see(await openDetails(page, 'olddev'), { '[data-row="now"] dd': 'Its daemon is older than this view (it upgrades on the next connect)' })
+  await expectEveryUnknownSaysWhy(page)
   await expectNoOverflow(page)
-  await shot(page, '1-fleet-1280', dash)
-  expect(calls()).toBeGreaterThanOrEqual(1)
+  await shot(page, '1-fleet-1280', page.getByTestId('remote-hosts-list'))
+  // Closing them reads nothing.
+  await pick(page, row(page, 'olddev'), 'Hide details')
+  await expect(page.getByTestId('rh-details')).toHaveCount(0)
+  expect(asks).toEqual([['__local__'], ['devbox'], ['__local__'], ['homepc'], ['olddev']])
   expect(errors).toEqual([])
 })
 
-test('at 900 px the dashboard still fits: cards wrap, nothing spills', async ({ page }) => {
-  await page.setViewportSize({ width: 900, height: 900 })
-  serveFleet(page, () => FLEET)
-  await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(3, { timeout: 30_000 })
-  await expectNoOverflow(page)
-  const label = await dash.locator('[data-testid="host-fleet-topo-link"][data-host="devbox"]').boundingBox()
-  expect(label && label.height >= 7).toBe(true) // the diagram scales down, still readable
-  await shot(page, '2-fleet-900', dash)
-})
-
-test('dark: every surface keeps its text readable', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  await page.emulateMedia({ colorScheme: 'dark' })
-  serveFleet(page, () => FLEET)
-  await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(3, { timeout: 30_000 })
-  // Text and its own surface differ: no dark text left on a dark card.
-  const same = await dash.evaluate((root) => {
-    const bad: string[] = []
-    for (const el of root.querySelectorAll<HTMLElement>('.hf-card-name, .hf-big, .hf-stat-value, .hf-problem-text, .hf-chip')) {
-      const fg = getComputedStyle(el).color
-      if (fg === 'rgb(0, 0, 0)' || fg === 'rgb(29, 29, 31)') bad.push(el.className)
+for (const { width, dark } of [{ width: 900 }, { width: 700 }, { width: 1280, dark: true }]) {
+  test(`at ${width} px${dark ? ', dark,' : ''} the list stays readable: one column, nothing spills, Details and the map included`, async ({ page }) => {
+    if (dark) await page.emulateMedia({ colorScheme: 'dark' })
+    await openFleet(page)
+    // Narrowed once open (under 768 px the app's rail folds behind its menu).
+    await page.setViewportSize({ width, height: 900 })
+    await page.getByTestId('remote-hosts-map-toggle').click()
+    await expect(page.getByTestId('host-fleet-topology')).toBeVisible()
+    for (const alias of ['olddev', 'devbox']) {
+      await openDetails(page, alias)
+      await expectNoOverflow(page)
+      await expectEveryUnknownSaysWhy(page)
     }
-    return bad
+    // The long label fits its row (no spill above), its whole name in the title; the map scales down, still readable.
+    await expect(row(page, 'olddev').locator('.rh-host-name')).toHaveAttribute('title', FLEET[2].label)
+    expect((await page.locator('[data-testid="host-fleet-topo-link"][data-host="devbox"]').boundingBox())!.height).toBeGreaterThanOrEqual(7)
+    // Dark: no dark text left on a dark surface (the map's text by its fill).
+    const inks = !dark ? [] : await page.locator('#remote-hosts').evaluate((root) => {
+      const sel = '.rh-summary-line span, .rh-host-name, .rh-row-state, .rh-row-line, .hf-card-sys, .hf-gauge-value, .hf-big, .hf-problem-list li, .hf-chip, .hf-row dd, .hf-topo-name, .hf-topo-label'
+      return [...root.querySelectorAll<HTMLElement>(sel)].map((el) => [el.getAttribute('class'), getComputedStyle(el)[el instanceof SVGElement ? 'fill' : 'color']])
+    })
+    expect(inks.filter(([, ink]) => Math.max(...cssColorToRgba(ink!).slice(0, 3)) < 90)).toEqual([])
+    await shot(page, `2-list-${width}${dark ? '-dark' : ''}`, page.getByTestId('remote-hosts-list'))
   })
-  expect(same).toEqual([])
-  await shot(page, '11-fleet-dark', dash)
-})
+}
 
-test('Set up: the button waits, then the card reads as fixed; a refusal or a check that changed nothing says so', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  serveFleet(page, () => FLEET)
-  let release: () => void = () => {}
+test('Set up: the row waits, then reads as set up; a refusal or a check that changed nothing says so under it', async ({ page }) => {
+  let hold = Promise.resolve()
   let answer: 'refuse' | 'unchanged' | 'ok' = 'refuse'
-  const base = FLEET[1] as Record<string, unknown> & { daemon: Record<string, unknown> }
+  let served = FLEET[1] // the server's cached card follows what the host answered
+  const base = FLEET[1]
   const fixed = { ...base, daemon: { ...base.daemon, startsAfterReboot: true, bootStart: { mode: 'boot', backend: 'systemd-user', reason: null, checkedAt: NOW, setupRunning: false, setupError: null, next: null }, reboot: 'starts by itself after a reboot (as a systemd user service)' } }
   const unchanged = { ...base, daemon: { ...base.daemon, bootStart: { mode: 'none', backend: null, reason: null, checkedAt: NOW, setupRunning: false, setupError: 'this account cannot start the daemon at boot without root', next: 'recheck' }, reboot: 'does not start by itself after a reboot: this account cannot start the daemon at boot without root' } }
   await page.route('**/api/v1/hosts/devbox/boot-start', async (route) => {
-    await new Promise<void>((r) => { release = r })
+    await hold
     if (answer === 'refuse') return route.fulfill({ status: 502, json: { error: 'Walnut could not check Big dev box: ssh: connection reset', code: 'check_failed' } })
-    return route.fulfill({ json: { host: answer === 'ok' ? fixed : unchanged } })
+    served = answer === 'ok' ? fixed : unchanged
+    return route.fulfill({ json: { host: served } })
   })
-  await openRemoteHosts(page)
-  const dev = page.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
+  await openFleet(page, () => FLEET.map((h) => (h.host === 'devbox' ? served : h)))
+  const dev = row(page, 'devbox')
   const fix = dev.getByTestId('host-fleet-fix')
-  await expect(fix).toHaveText('Set up', { timeout: 30_000 })
-  await fix.click()
-  await expect(fix).toBeDisabled()
-  await expect(fix).toHaveText('Setting up...')
-  // The card's own Set up never shows as busy on another host's row.
-  await expect(page.getByTestId('host-fleet-connect').first()).toHaveText(/^(Retry|Connect now)$/)
-  release()
-  await expect(dev.getByTestId('host-fleet-action-error')).toHaveText('Could not set it up: Walnut could not check Big dev box: ssh: connection reset.')
+  // Each press waits until the test lets its answer go, so the busy words can be seen.
+  const press = async (keyboard = false) => {
+    let release = () => {}
+    hold = new Promise<void>((r) => { release = r })
+    if (keyboard) { await fix.focus(); await page.keyboard.press('Enter') } else await fix.click()
+    await expect(fix).toHaveText('Setting up...')
+    await expect(fix).toBeDisabled()
+    await expect(page.getByText('Setting up...', { exact: true })).toHaveCount(1) // this row's alone
+    release()
+  }
+  await press()
+  await see(dev, { 'host-fleet-action-error': 'Could not set it up: Walnut could not check Big dev box: ssh: connection reset.', 'host-fleet-fix': 'Set up' })
   await expect(fix).toBeEnabled()
   await shot(page, '3-setup-refused', dev)
   answer = 'unchanged'
-  await fix.click()
-  release()
-  await expect(dev.getByTestId('host-fleet-action-note')).toHaveText('Checked just now: does not start by itself after a reboot: this account cannot start the daemon at boot without root.')
-  await expect(dev.getByTestId('host-fleet-action-error')).toHaveCount(0)
-  await expect(fix).toHaveText('Check again')
+  await press()
+  await see(dev, { 'host-fleet-action-note': 'Checked just now: does not start by itself after a reboot: this account cannot start the daemon at boot without root.', 'host-fleet-fix': 'Check again', 'host-fleet-action-error': 0 })
+  // By the keyboard: the button goes away with the warning, and the focus moves to the row's More.
   answer = 'ok'
-  await fix.click()
-  await expect(fix).toHaveText('Setting up...')
-  release()
-  await expect(dev.getByTestId('host-fleet-problem')).toHaveCount(0)
-  // A short confirmation of what the setup did.
-  await expect(dev.getByTestId('host-fleet-action-note')).toHaveText('Set up: starts by itself after a reboot (as a systemd user service).')
+  await press(true)
+  await see(dev, { 'host-fleet-action-note': 'Set up: starts by itself after a reboot (as a systemd user service).', 'rh-row-warning': 0, 'host-fleet-fix': 0, 'rh-row-state': DEV_LIVE })
+  await expect(dev.getByTestId('rh-row-more')).toBeFocused()
   await shot(page, '4-setup-done', dev)
 })
 
-test('Connect: the row waits, then the host comes back as a card; a refusal stays on its row', async ({ page }) => {
+test('Connect: the row waits, then comes back live; a refusal stays on its row; the focus never falls to the page', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
-  // A clock of its own, so the Connect's look 5 s later runs inside this test.
+  // A clock of its own, so six seconds after the Connect run inside this test.
   await page.clock.install()
   let homeUp = false
-  const fleetReads = serveFleet(page, () => FLEET.map((h) => (homeUp && (h as { host: string }).host === 'homepc'
-    ? { ...h, connection: { kind: 'ssh-tunnel', connected: true, phase: 'connected', phaseLabel: 'Connected', since: NOW, rttMs: 51, error: null }, now: { ...(h as { now: Record<string, unknown> }).now, stale: false, at: NOW } }
-    : h)))
+  let upAt = 0
+  const live = () => ({ kind: 'ssh-tunnel', connected: true, phase: 'connected', phaseLabel: 'Connected', since: upAt, rttMs: 51, error: null })
+  serveFleet(page, () => FLEET.map((h) => (homeUp && h.host === 'homepc' ? { ...h, connection: live(), now: { ...h.now, stale: false, at: upAt } } : h)))
   const asks = serveRefresh(page)
-  let release: () => void = () => {}
+  // Home PC saved as an SSH host, with its live status (the fixture server knows neither): its row is the editor's.
+  const wire = () => ({
+    host: 'homepc', label: 'Home PC', hostname: 'homepc.example.test', connected: homeUp, phase: homeUp ? 'connected' : 'failed', steps: [], at: Date.now(),
+    phaseLabel: homeUp ? 'Connected' : 'Could not reach Home PC', ...(homeUp ? {} : { error: 'ssh: connection timed out', kind: 'network' }),
+  })
+  await page.route('**/api/hosts/status', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { hosts?: Card[] }
+    await route.fulfill({ response: res, json: { ...body, hosts: [...(body.hosts ?? []).filter((h) => h.host !== 'homepc'), wire()] } })
+  })
+  let hold = Promise.resolve()
   let refuse = true
   await page.route('**/api/hosts/homepc/connect', async (route) => {
-    await new Promise<void>((r) => { release = r })
+    await hold
     if (refuse) return route.fulfill({ status: 409, json: { error: 'Home PC refused the sign-in' } })
     homeUp = true
+    upAt = Date.now()
     // What the server answers: the host's status now (the store takes it, as from a push).
-    return route.fulfill({ json: { ok: true, status: { host: 'homepc', label: 'Home PC', connected: true, phase: 'connected', phaseLabel: 'Connected', at: Date.now(), serverNow: Date.now() } } })
+    return route.fulfill({ json: { ok: true, status: { ...wire(), serverNow: Date.now() } } })
   })
-  await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  const row = dash.locator('[data-testid="host-fleet-offline"][data-host="homepc"]')
-  const connect = row.getByTestId('host-fleet-connect')
-  await expect(connect).toBeVisible({ timeout: 30_000 })
-  await connect.click()
-  // The host's one connect attempt, in the Hosts list's words.
-  await expect(connect).toHaveText('Retrying...')
-  release()
-  await expect(row.getByTestId('host-fleet-action-error')).toHaveText('Could not retry right now.')
+  await openRemoteHosts(page, { ...OWN_HOSTS, homepc: { hostname: 'homepc.example.test', label: 'Home PC', enabled: true } })
+  const r = row(page, 'homepc')
+  const connect = r.getByTestId('rh-row-connect')
+  await expect(connect).toHaveText('Retry', { timeout: 30_000 })
+  const failed = 'Could not connect to Home PC'
+  await see(r, { '.settings-tag': 'SSH', 'rh-row-state': failed })
+  // Pressed by the keyboard (the focus rule is about it); while it waits, the focus stays on the page's controls.
+  const press = async () => {
+    let release = () => {}
+    hold = new Promise<void>((res) => { release = res })
+    await connect.focus()
+    await page.keyboard.press('Enter')
+    await expect(connect).toHaveText('Retrying...')
+    await expect(connect).toBeDisabled()
+    await expect.poll(() => page.evaluate(() => !!document.activeElement && document.activeElement !== document.body)).toBe(true)
+    release()
+  }
+  await press()
+  await see(r, { 'host-fleet-action-error': 'Could not retry right now.', 'rh-row-state': failed })
   await expect(connect).toBeEnabled()
   refuse = false
-  await connect.click()
-  release()
-  const homeCard = dash.locator('[data-testid="host-fleet-card"][data-host="homepc"]')
-  await expect(homeCard).toBeVisible()
-  await expect(homeCard.getByTestId('host-fleet-action-note')).toHaveText('Connected.')
-  await expect(homeCard).toBeFocused()
-  await expect(dash.getByTestId('host-fleet-offline')).toHaveCount(1)
-  await expect(dash.getByTestId('host-fleet-stat-online')).toContainText('4/5')
-  await expect(dash.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
-  // The connect read that host again, and only it (this computer's old card was read on open).
-  expect(asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
+  await press()
+  await see(r, { 'rh-row-state': /^Online, 5% CPU/, 'host-fleet-action-note': 'Connected.', 'host-fleet-action-error': 0, 'rh-row-connect': 0 })
+  // Its Retry went away with its state: the focus is on the row's More.
+  await expect(r.getByTestId('rh-row-more')).toBeFocused()
+  await see(page, { 'rh-summary-online': '4 of 5 online' })
+  await expect(state(page, 'olddev')).toHaveText(STATES.olddev) // the other host away stays as it was
+  await page.getByTestId('remote-hosts-map-toggle').click()
+  await expect(page.locator('[data-testid="host-fleet-topo-link"][data-host="homepc"]')).toHaveAttribute('data-live', 'true')
+  // It came up after its last read: that host alone is read again (this computer's old reading was read on open).
+  await expect.poll(() => asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
   // A connect reads its host once per link (2026-11-04: the press read it at once, again 5 s
-  // later, and the per-link read on top): the look 5 s on reads the cached cards, no host.
-  const before = fleetReads()
+  // later, and the per-link read on top): six seconds on, still no other read of a host.
   await page.clock.runFor(6_000)
-  await expect.poll(fleetReads).toBeGreaterThan(before)
-  await expect(dash.locator('[data-testid="host-fleet-card"][data-host="homepc"]')).toBeVisible()
+  await expect(r.getByTestId('rh-row-state')).toHaveText(/^Online, 5% CPU/)
   expect(asks.filter((x) => x?.[0] !== '__local__')).toEqual([['homepc']])
-  await shot(page, '5-connected', dash)
+  await shot(page, '5-connected', r)
 })
 
-test('no other host is read while the page is just open; this computer\'s old card is read once; opening the Overview or Refresh reads them', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
+test('no other host is read while the page is just open; this computer\'s old reading is read once; Details or Refresh read them', async ({ page }) => {
   await page.clock.install()
   // Fixed read times (the page's clock runs ahead of the real one): the box was read 12 minutes
-  // ago; this computer too, until its read on open lands, as a real read does.
+  // ago; this computer too, until its read on open lands (half a minute before it answers).
   const readAt = Date.now() - 12 * MIN
   let localAt = readAt
   let skew = 0 // how far the page's clock runs ahead of this one
-  serveFleet(page, () => FLEET.slice(0, 2).map((h) => ({ ...(h as object), readAt: (h as { local?: boolean }).local ? localAt : readAt, refreshing: false, readError: null, readFailedAt: null })))
-  const asks = serveRefresh(page, (hosts) => { if (!hosts || hosts.includes('__local__')) localAt = Date.now() + skew })
+  serveFleet(page, () => FLEET.slice(0, 2).map((h) => ({ ...h, readAt: h.local ? localAt : readAt, refreshing: false, readError: null, readFailedAt: null })))
+  const asks = serveRefresh(page, (hosts) => { if (!hosts || hosts.includes('__local__')) localAt = Date.now() + skew - MIN / 2 })
+  // This computer is read again whenever its reading is over 5 minutes old (no network); the rest are counted exactly.
+  const local = () => asks.filter((a) => a?.length === 1 && a[0] === '__local__').length
+  const others = () => asks.filter((a) => !(a?.length === 1 && a[0] === '__local__'))
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2, { timeout: 30_000 })
-  const box = dash.locator('[data-testid="host-fleet-card"][data-host="fixture-remote"], [data-testid="host-fleet-card"]:not([data-host="__local__"])').first()
-  // This computer's card is 12 minutes old: it alone is read, once (no network).
+  await expect(row(page, 'devbox')).toBeVisible({ timeout: 30_000 })
+  // This computer's reading is 12 minutes old: it alone is read, once.
   await expect.poll(() => asks).toEqual([['__local__']])
+  await see(page, { 'host-fleet-read': 'Read just now' })
   // Five minutes on the page (the old page read every host every 30 s): the words age, no host is read.
   await page.clock.runFor(5 * MIN)
   skew = 5 * MIN
-  await expect(box.getByTestId('host-fleet-read-age')).toHaveText('Read 17 min ago')
-  expect(asks).toEqual([['__local__']])
-
-  // Closing it reads nothing; opening it reads every host.
-  const toggle = dash.getByTestId('host-fleet-toggle')
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(0)
-  await expect(dash.getByTestId('host-fleet-read')).toBeVisible() // the age stays in the head
-  expect(asks).toEqual([['__local__']])
-  await toggle.click()
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2)
-  await expect.poll(() => asks).toEqual([['__local__'], null])
-  await dash.getByTestId('host-fleet-refresh').click()
-  await expect.poll(() => asks).toEqual([['__local__'], null, null])
+  await see(page, { 'host-fleet-read': 'Read 5 min ago' })
+  expect(others()).toEqual([])
+  // A host's Details read it (the Overview's fold, which read every host as it opened, is gone);
+  // the cached read after it finds this computer's reading old again and reads it once more.
+  await see(await openDetails(page, 'devbox'), { 'host-fleet-read-age': 'Read 17 min ago' })
+  await expect.poll(others).toEqual([['devbox']])
+  await expect.poll(local).toBeGreaterThanOrEqual(2)
+  // Refresh reads every host.
+  await page.getByTestId('host-fleet-refresh').click()
+  await expect.poll(others).toEqual([['devbox'], null])
 })
 
-test('this computer\'s card 19 minutes old: its last session count stays, read again on open; a slot with no number says why', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
+test('this computer\'s reading 19 minutes old: its last session count stays, read again on open; a slot with no number says why', async ({ page }) => {
   let read = false
-  const local = FLEET[0] as Record<string, any>
-  const cloud = FLEET[3] as Record<string, any>
+  const [local, cloud] = [FLEET[0], FLEET[3]]
   serveFleet(page, () => {
     const at = Date.now()
     const done = { refreshing: false, readError: null, readFailedAt: null }
     const mac = read
       ? { ...local, ...done, readAt: at, now: { ...local.now, at, stale: false }, sessions: { running: 5, source: 'host', why: null } }
       : { ...local, ...done, readAt: at - 19 * MIN, now: { ...local.now, at: at - 19 * MIN, stale: true }, sessions: { running: 4, source: 'host', why: null, at: at - 19 * MIN } }
-    const box = { ...cloud, ...done, readAt: at - 12 * MIN, sessions: { running: null, source: null, why: 'the cloud box runs no sessions of its own' }, spend: null }
-    return [mac, box]
+    return [mac, { ...cloud, ...done, readAt: at - 12 * MIN, sessions: { running: null, source: null, why: 'the cloud box runs no sessions of its own' }, spend: null }]
   })
-  // Hold the read so the records count can be seen first.
+  // Hold the reads (briefly: the page gives one up after 10 s) so the kept count can be seen first.
   let release = () => {}
   const held = new Promise<void>((r) => { release = r })
   const asks: Array<string[] | null> = []
@@ -542,211 +562,192 @@ test('this computer\'s card 19 minutes old: its last session count stays, read a
     return route.fulfill({ status: 202, json: { started: ['__local__'], refreshing: [] } })
   })
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  const mac = dash.locator('[data-testid="host-fleet-card"][data-host="__local__"]')
+  // The old reading keeps its own count, on the row and in Details, whose tooltip says how old it is.
+  await expect(state(page, '__local__')).toHaveText('Online, 12% CPU, 4 sessions', { timeout: 30_000 })
+  await expect.poll(() => asks).toEqual([['__local__']])
+  const mac = await openDetails(page, '__local__')
   const sessions = mac.getByTestId('host-fleet-sessions')
-  // The old reading keeps its own count, and the tooltip says how old it is.
-  await expect(sessions.locator('.hf-big')).toHaveText('4', { timeout: 30_000 })
+  await see(mac, { '[data-testid="host-fleet-sessions"] .hf-big': '4', '[data-num="unknown"]': 0 })
   await expect(sessions).toHaveAttribute('data-source', 'host')
   await expect(sessions).toHaveAttribute('title', 'Counted by the host 19 min ago (its last reading)')
-  await expect(mac.locator('[data-num="unknown"]')).toHaveCount(0)
-  await expect.poll(() => asks).toEqual([['__local__']])
-  // The cloud box has no sessions of its own: its slot says so in words, never a bare "?".
-  const box = dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]')
-  await expect(box.getByTestId('host-fleet-sessions').getByTestId('host-fleet-why')).toHaveText('the cloud box runs no sessions of its own')
-  await expect(box.getByTestId('host-fleet-spend').getByTestId('host-fleet-why')).toHaveText('not counted yet')
-  await expectEveryUnknownSaysWhy(page)
-  await expectNoOverflow(page)
-  await shot(page, '11-stale-local', dash)
+  // The cloud box runs no sessions of its own: its row and the summary leave them out.
+  await see(page, { 'rh-summary-sessions': '4 sessions open' })
+  await expect(state(page, '__cloudbox__')).toHaveText('Online, 12% CPU')
   release()
-  // The read ends: the host's own count, read just now.
+  // The read ends: the open Details and the row show the host's own count, read just now.
   await expect(sessions.locator('.hf-big')).toHaveText('5', { timeout: 15_000 })
   await expect(sessions).toHaveAttribute('title', 'Counted by the host itself')
-  await expect(mac.getByTestId('host-fleet-read-age')).toHaveText('Read just now')
-  expect(asks).toEqual([['__local__']])
+  await see(mac, { 'host-fleet-read-age': 'Read just now' })
+  await expect(state(page, '__local__')).toHaveText('Online, 12% CPU, 5 sessions')
+  // The cloud box's Details say why in words, never a bare "?".
+  const box = await openDetails(page, '__cloudbox__')
+  await see(box, { '[data-testid="host-fleet-sessions"] .hf-why': 'the cloud box runs no sessions of its own', '[data-testid="host-fleet-spend"] .hf-why': 'not counted yet' })
+  await expectEveryUnknownSaysWhy(page)
+  await expectNoOverflow(page)
+  await shot(page, '11-stale-local', box)
+  expect(asks).toEqual([['__local__'], ['__local__'], ['__cloudbox__']])
 })
 
-test('a reopened page shows the last cards at once, before the server answers; a reading hours old keeps every value', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  const dev = FLEET[1] as Record<string, any>
+test('a reopened page shows the last readings at once, before the server answers; a reading hours old keeps every value', async ({ page }) => {
   let answer: 'first' | 'later' = 'first'
   let hold: Promise<void> | null = null
   await page.route((url) => url.pathname === '/api/v1/hosts', async (route) => {
     if (hold) await hold
     const at = Date.now()
-    const done = { refreshing: false, readError: null, readFailedAt: null }
-    if (answer === 'first') return route.fulfill({ json: { hosts: FLEET.slice(0, 2).map((h) => ({ ...(h as object), ...done, readAt: at - 2 * MIN })), checkedAt: at, refreshing: false } })
-    // Three hours later, never read since: the server still answers its last reading, marked stale.
+    // Three hours later, never read since: the server still answers the box's last reading, marked stale.
     const old = at - 3 * HOUR
-    const hosts = FLEET.slice(0, 2).map((h) => {
-      const x = h as Record<string, any>
-      return x.host === 'devbox'
-        ? { ...x, ...done, readAt: old, now: { ...dev.now, cpuUtil: 0.61, at: old, stale: true }, sessions: { running: 7, source: 'host', why: null, at: old } }
-        : { ...x, ...done, readAt: at - 2 * MIN }
-    })
+    const hosts = FLEET.slice(0, 2).map((x) => ({ ...x, refreshing: false, readError: null, readFailedAt: null, readAt: at - 2 * MIN, ...(answer === 'later' && x.host === 'devbox'
+      ? { readAt: old, now: { ...x.now, cpuUtil: 0.61, at: old, stale: true }, sessions: { running: 7, source: 'host', why: null, at: old } } : {}) }))
     return route.fulfill({ json: { hosts, checkedAt: at, refreshing: false } })
   })
   serveRefresh(page)
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  const devCard = dash.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%', { timeout: 30_000 })
-
-  // Reopen with the server slow to answer: the last cards paint at once from this browser.
+  const devState = state(page, 'devbox')
+  await expect(devState).toHaveText(DEV_LIVE, { timeout: 30_000 })
+  // Reopen with the server slow to answer: the last readings paint at once from this browser.
   let release = () => {}
   hold = new Promise<void>((r) => { release = r })
   answer = 'later'
   await openRemoteHosts(page)
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%', { timeout: 10_000 })
-  await expect(devCard.getByTestId('host-fleet-sessions').locator('.hf-big')).toHaveText(/^\d+$/)
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
-  await expect(page.locator('.hf-loading')).toHaveCount(0)
+  await expect(devState).toHaveText(DEV_LIVE, { timeout: 10_000 })
+  await see(page, { 'rh-summary-online': '2 of 2 online', 'host-fleet-reading': 0 })
   release()
   hold = null
   // The server's answer replaces them; three hours old, every value stays, with its age.
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('61%', { timeout: 10_000 })
-  await expect(devCard.getByTestId('host-fleet-sessions').locator('.hf-big')).toHaveText('7')
-  await expect(devCard.getByTestId('host-fleet-sessions')).toHaveAttribute('title', 'Counted by the host 3 h ago (its last reading)')
-  await expect(devCard.getByTestId('host-fleet-read-age')).toHaveText('Read 3 h ago')
-  await expect(devCard.locator('[data-num="unknown"]')).toHaveCount(0)
-  for (const g of await devCard.getByTestId('host-fleet-gauge').all()) await expect(g.locator('.hf-gauge-value')).not.toHaveText('?')
+  await expect(devState).toHaveText('Online, 61% CPU, 7 sessions', { timeout: 10_000 })
+  const d = await openDetails(page, 'devbox')
+  await see(d, { '[data-gauge="cpu"] .hf-gauge-value': '61%', '[data-testid="host-fleet-sessions"] .hf-big': '7', 'host-fleet-read-age': 'Read 3 h ago', '[data-num="unknown"]': 0 })
+  await expect(d.getByTestId('host-fleet-sessions')).toHaveAttribute('title', 'Counted by the host 3 h ago (its last reading)')
+  for (const g of await d.getByTestId('host-fleet-gauge').all()) await expect(g.locator('.hf-gauge-value')).not.toHaveText('?')
   await expectEveryUnknownSaysWhy(page)
-  await expect(dash.getByTestId('host-fleet-stat-sessions').locator('[data-num="known"]')).toHaveText(/^\d+$/)
+  await see(page, { 'rh-summary-sessions': '19 sessions open' })
 })
 
-test('a read keeps the old cards with a mark on each one being read; each changes as it ends; a failed one says why', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  let state: 'cached' | 'reading' | 'done' = 'cached'
-  const dev = FLEET[1] as Record<string, any>
-  const cloud = FLEET[3] as Record<string, any>
+test('a read keeps the old values with ONE "Refreshing..." for the page; each row and Details change as its read ends; a failed one says why', async ({ page }) => {
+  let stage: 'cached' | 'reading' | 'done' = 'cached'
   serveFleet(page, () => {
     const at = Date.now()
     const old = { readAt: at - 12 * MIN, refreshing: false, readError: null, readFailedAt: null }
-    if (state === 'cached') return FLEET
-    if (state === 'reading') return FLEET.map((h) => ({ ...(h as object), ...old, refreshing: true }))
-    return FLEET.map((h) => {
-      const x = h as Record<string, any>
-      if (x.host === 'devbox') return { ...x, now: { ...dev.now, cpuUtil: 0.6, at }, readAt: at, refreshing: false, readError: null, readFailedAt: null }
-      if (x.host === '__cloudbox__') return { ...x, now: { ...cloud.now, stale: true }, ...old, readError: 'it did not answer in 25 s', readFailedAt: at }
+    if (stage === 'cached') return FLEET
+    if (stage === 'reading') return FLEET.map((h) => ({ ...h, ...old, refreshing: true }))
+    return FLEET.map((x) => {
+      if (x.host === 'devbox') return { ...x, now: { ...x.now, cpuUtil: 0.6, at }, readAt: at, refreshing: false, readError: null, readFailedAt: null }
+      if (x.host === '__cloudbox__') return { ...x, now: { ...x.now, stale: true }, ...old, readError: 'it did not answer in 25 s', readFailedAt: at }
       return { ...x, ...old, readAt: at }
     })
-  }, () => state === 'reading')
-  // Only the press reads every host; this computer's own read on open leaves the cards as cached.
-  serveRefresh(page, (hosts) => { if (hosts === null) state = 'reading' })
+  }, () => stage === 'reading')
+  // Only the press reads every host; this computer's own read on open leaves the readings as cached.
+  serveRefresh(page, (hosts) => { if (hosts === null) stage = 'reading' })
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
-  const devCard = dash.locator('[data-testid="host-fleet-card"][data-host="devbox"]')
-  const cloudCard = dash.locator('[data-testid="host-fleet-card"][data-host="__cloudbox__"]')
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%', { timeout: 30_000 })
-
-  await dash.getByTestId('host-fleet-refresh').click()
-  // The old content stays; only the head and each card being read say so.
-  await expect(dash.getByTestId('host-fleet-refreshing')).toHaveText('Refreshing...')
-  await expect(devCard.getByTestId('host-fleet-read-age')).toHaveText('Refreshing...')
-  await expect(devCard.getByTestId('host-fleet-read-age')).toHaveAttribute('data-refreshing', 'true')
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('25%')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(3)
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
-  await shot(page, '6-refreshing', dash)
-
-  state = 'done'
-  await expect(devCard.locator('[data-gauge="cpu"] .hf-gauge-value')).toHaveText('60%', { timeout: 10_000 })
-  await expect(devCard.getByTestId('host-fleet-read-age')).toHaveText('Read just now')
-  await expect(dash.getByTestId('host-fleet-refreshing')).toHaveCount(0)
-  await expect(dash.getByTestId('host-fleet-read')).toHaveText('Read just now')
-  // The host that did not answer keeps its card, with one line saying why and how old it is.
-  await expect(cloudCard.getByTestId('host-fleet-read-error')).toHaveText('Could not read it: it did not answer in 25 s. Showing what it read 12 min ago.')
-  await expect(cloudCard.getByTestId('host-fleet-read-age')).toHaveText('Read 12 min ago')
-  await expect(cloudCard.getByTestId('host-fleet-problem')).toHaveCount(0) // no second line saying the same
-  await expect(devCard.getByTestId('host-fleet-read-error')).toHaveCount(0)
+  const devState = state(page, 'devbox')
+  await expect(devState).toHaveText(DEV_LIVE, { timeout: 30_000 })
+  // The person looks at the dev box while every host is read.
+  const d = await openDetails(page, 'devbox')
+  await page.getByTestId('host-fleet-refresh').click()
+  // The old values stay; the summary line alone says a read runs (no mark per host or in Details).
+  await see(page, { 'host-fleet-refreshing': 'Refreshing...', 'host-fleet-reading': 0 })
+  await expect(page.getByText('Refreshing...', { exact: true })).toHaveCount(1)
+  await expect(devState).toHaveText(DEV_LIVE)
+  await see(d, { '[data-gauge="cpu"] .hf-gauge-value': '25%', 'host-fleet-read-age': 'Read 12 min ago' })
+  expect(await aliases(page)).toEqual(Object.keys(STATES)) // every row stays
+  await shot(page, '6-refreshing', page.getByTestId('remote-hosts-list'))
+  // Its read ends: the row and the open Details change in place.
+  stage = 'done'
+  await expect(devState).toHaveText('Online, 60% CPU, 19 sessions', { timeout: 10_000 })
+  await see(d, { '[data-gauge="cpu"] .hf-gauge-value': '60%', 'host-fleet-read-age': 'Read just now', 'host-fleet-read-error': 0 })
+  await see(page, { 'host-fleet-refreshing': 0, 'host-fleet-read': 'Read just now' })
+  // The host that did not answer keeps its reading, with one line saying why and how old it is.
+  const c = await openDetails(page, '__cloudbox__')
+  await see(c, {
+    'host-fleet-read-error': 'Could not read it: it did not answer in 25 s. Showing what it read 12 min ago.', 'host-fleet-read-age': 'Read 12 min ago',
+    'host-fleet-problem': 0, // no second line saying the same
+  })
+  await expect(state(page, '__cloudbox__')).toHaveText(STATES.__cloudbox__)
+  expect(await aliases(page)).toEqual(Object.keys(STATES))
   await expectNoOverflow(page)
-  await shot(page, '7-read-failed', cloudCard)
+  await shot(page, '7-read-failed', c)
 })
 
-test('a truly first run: "Reading each host...", then each card as its own read ends', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
+test('a truly first run: the summary says it is reading, then each row as its own read ends', async ({ page }) => {
   let stage = 0 // 0 never read, 1 all being read, 2 the Mac read, 3 all read
   const unread = { readAt: null, refreshing: false, readError: null, readFailedAt: null }
   serveFleet(page, () => FLEET.slice(0, 3).map((h, i) => {
-    const at = Date.now()
-    if (stage === 0) return { ...(h as object), ...unread }
+    if (stage === 0) return { ...h, ...unread }
     const read = stage === 3 || (stage === 2 && i === 0)
-    return { ...(h as object), ...(read ? { readAt: at, refreshing: false, readError: null, readFailedAt: null } : { ...unread, refreshing: true }) }
+    return { ...h, ...(read ? { readAt: Date.now(), refreshing: false, readError: null, readFailedAt: null } : { ...unread, refreshing: true }) }
   }), () => stage === 1 || stage === 2)
   const asks = serveRefresh(page, () => { stage = 1 })
   await openRemoteHosts(page)
-  const dash = page.getByTestId('host-fleet')
   // Nothing was ever read: the page reads every host once, on its own.
   await expect.poll(() => asks, { timeout: 30_000 }).toEqual([['__local__', 'devbox', 'olddev']])
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveText('Reading each host...')
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(0)
+  await see(page, { 'host-fleet-reading': 'Reading each host...' })
+  for (const alias of ['__local__', 'devbox', 'olddev']) await expect(row(page, alias)).toHaveCount(0)
   stage = 2
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(1, { timeout: 10_000 })
-  await expect(dash.getByTestId('host-fleet-card').first()).toHaveAttribute('data-host', '__local__')
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveText('Reading 2 more hosts...')
-  await shot(page, '8-first-run', dash)
+  await expect(state(page, '__local__')).toHaveText(STATES.__local__, { timeout: 10_000 })
+  expect((await aliases(page))[0]).toBe('__local__')
+  await see(page, { 'rh-summary-online': '1 of 1 online', 'host-fleet-reading': 'Reading 2 more hosts...' })
+  await expect(row(page, 'devbox')).toHaveCount(0)
+  await shot(page, '8-first-run', page.getByTestId('remote-hosts-list'))
   stage = 3
-  await expect(dash.getByTestId('host-fleet-card')).toHaveCount(2, { timeout: 10_000 })
-  await expect(dash.getByTestId('host-fleet-offline')).toHaveCount(1)
-  await expect(dash.getByTestId('host-fleet-reading')).toHaveCount(0)
+  await expect(state(page, 'devbox')).toHaveText(DEV_LIVE, { timeout: 10_000 })
+  await expect(state(page, 'olddev')).toHaveText(STATES.olddev)
+  await see(page, { 'host-fleet-reading': 0, 'rh-summary-online': '2 of 3 online' })
   expect(asks).toHaveLength(1) // read once, not again on every poll
 })
 
-test('a failed read keeps the cards and says why; the next press recovers', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
+test('a failed read keeps the rows and says why; the next press recovers', async ({ page }) => {
   let fail: 'none' | 'read' | 'refresh' = 'none'
   await page.route((url) => url.pathname === '/api/v1/hosts', (route) => fail === 'read'
     ? route.fulfill({ status: 500, json: { error: 'host table locked' } })
-    : route.fulfill({ json: { hosts: FLEET.slice(0, 2).map((h) => ({ ...(h as object), readAt: Date.now() - 12 * MIN, refreshing: false, readError: null })), checkedAt: NOW, refreshing: false } }))
+    : route.fulfill({ json: { hosts: FLEET.slice(0, 2).map((h) => ({ ...h, readAt: Date.now() - 12 * MIN, refreshing: false, readError: null })), checkedAt: NOW, refreshing: false } }))
   await page.route('**/api/v1/hosts/refresh', (route) => fail === 'refresh'
     ? route.fulfill({ status: 503, json: { error: 'Walnut is restarting' } })
     : route.fulfill({ status: 202, json: { started: [], refreshing: [] } }))
   await openRemoteHosts(page)
-  const group = page.getByTestId('host-fleet')
-  await expect(group.getByTestId('host-fleet-card')).toHaveCount(2, { timeout: 30_000 })
+  const devState = state(page, 'devbox')
+  const bad = page.locator('[data-testid="rh-summary"] [data-tone="bad"]')
+  // Every row stays, with its last values.
+  const kept = async () => {
+    await expect(devState).toHaveText(DEV_LIVE)
+    expect(await aliases(page)).toEqual(['__local__', 'fixture-remote', 'devbox'])
+  }
+  await expect(devState).toHaveText(DEV_LIVE, { timeout: 30_000 })
   fail = 'read'
-  await group.getByTestId('host-fleet-refresh').click()
-  await expect(group.locator('.hf-error')).toHaveText('Could not read the overview: host table locked. Showing the last cards.')
-  await expect(group.getByTestId('host-fleet-card')).toHaveCount(2)
+  await page.getByTestId('host-fleet-refresh').click()
+  await expect(bad.first()).toHaveText('Could not read the hosts: host table locked. Showing what was read last.')
+  await kept()
   fail = 'refresh'
-  await group.getByTestId('host-fleet-refresh').click()
-  await expect(group.getByTestId('host-fleet-refresh-error')).toHaveText('Could not read the hosts again: Walnut is restarting. Showing what was read 12 min ago.')
-  await expect(group.getByTestId('host-fleet-card')).toHaveCount(2)
-  await shot(page, '9-refresh-failed', group)
+  await page.getByTestId('host-fleet-refresh').click()
+  await see(page, { 'host-fleet-refresh-error': 'Could not read the hosts again: Walnut is restarting. Showing what was read 12 min ago.' })
+  await kept()
+  await shot(page, '9-refresh-failed', page.getByTestId('rh-summary'))
   fail = 'none'
-  await group.getByTestId('host-fleet-refresh').click()
-  await expect(group.locator('.hf-error')).toHaveCount(0)
-  await expect(group.getByTestId('host-fleet-card')).toHaveCount(2)
+  await page.getByTestId('host-fleet-refresh').click()
+  await expect(bad).toHaveCount(0)
+  await kept()
 })
 
-test('opening a host\'s "What Walnut knows" reads that host again', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
-  serveFleet(page, () => FLEET.slice(0, 2))
-  const asks = serveRefresh(page)
-  await openRemoteHosts(page)
-  // What Walnut knows sits under the host's Edit.
-  await page.locator('#rh-host-fixture-remote').getByRole('button', { name: 'Edit' }).click({ timeout: 30_000 })
-  const toggle = page.getByTestId('host-profile-toggle-fixture-remote')
-  await expect(toggle).toBeVisible({ timeout: 30_000 })
-  await expect.poll(() => asks).toEqual([['__local__']]) // this computer's 12 minute old card
-  await toggle.click()
+test('opening a host\'s Details reads it again, What Walnut knows inside them; closing reads nothing', async ({ page }) => {
+  const { asks } = await openFleet(page, () => FLEET.slice(0, 2))
+  await expect.poll(() => asks).toEqual([['__local__']]) // this computer's 12 minute old reading
+  // What Walnut knows moved from under Edit into Details: the one read is the opening of Details.
+  const box = await openDetails(page, 'fixture-remote')
+  await see(box, { 'host-profile-heading-fixture-remote': 'What Walnut knows', '.rh-details-empty': 'Walnut has no reading of Big remote host yet: it reads a host once it connects.' })
   await expect.poll(() => asks).toEqual([['__local__'], ['fixture-remote']])
-  await toggle.click() // closing reads nothing
-  await toggle.click()
+  await pick(page, row(page, 'fixture-remote'), 'Hide details')
+  await expect(box).toHaveCount(0)
+  await openDetails(page, 'fixture-remote')
   await expect.poll(() => asks).toEqual([['__local__'], ['fixture-remote'], ['fixture-remote']])
 })
 
 test('the fixture server answers its own fleet: this computer first', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 })
   await openRemoteHosts(page)
-  // A fresh fixture has no cache: the page reads each host once, and the Mac's card lands when its read ends.
-  const first = page.getByTestId('host-fleet').getByTestId('host-fleet-card').first()
-  await expect(first).toHaveAttribute('data-host', '__local__', { timeout: 30_000 })
-  await expect(first.locator('.hf-card-name')).toHaveText('This computer')
-  await expect(first.getByTestId('host-fleet-spend')).toBeVisible()
-  await expect(first.getByTestId('host-fleet-timeline')).toBeVisible()
-  await first.getByTestId('host-fleet-details-toggle').click()
-  await expect(first.locator('[data-row="can"]')).toBeVisible() // the real server sends capabilities
-  await expect(first.getByTestId('host-fleet-read-age')).toHaveText(/^Read (just now|\d+ min ago)$/)
-  await shot(page, '10-fixture-server', page.getByTestId('host-fleet'))
+  // A fresh fixture has no cache: the page reads each host once, and This Mac's row lands when its read ends.
+  await expect(row(page, '__local__')).toBeVisible({ timeout: 30_000 })
+  expect((await aliases(page))[0]).toBe('__local__')
+  await see(row(page, '__local__'), { '.rh-host-name': 'This Mac', 'rh-row-state': /^Online/ })
+  const mac = await openDetails(page, '__local__')
+  for (const part of [mac.getByTestId('host-fleet-spend'), mac.getByTestId('host-fleet-timeline'), mac.locator('[data-row="can"]')]) await expect(part).toBeVisible() // the real server sends capabilities
+  await expect(mac.getByTestId('host-fleet-read-age')).toHaveText(/^Read (just now|\d+ min ago)$/, { timeout: 30_000 })
+  await shot(page, '10-fixture-server', page.getByTestId('remote-hosts-list'))
 })

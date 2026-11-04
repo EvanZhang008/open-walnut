@@ -12,23 +12,23 @@ const info = { version: '0.4.5', commit: '3942cf7', branch: 'main', builtAt: BUI
 
 describe('formatBuildLine', () => {
   it('names version, commit and build date', () => {
-    expect(formatBuildLine(info)).toBe('Open Walnut 0.4.5 · commit 3942cf7 · built 2026-09-24')
+    expect(formatBuildLine(info)).toBe('Open Walnut 0.4.5, commit 3942cf7, built 2026-09-24')
   })
 
   it('marks a dirty tree on the commit', () => {
-    expect(formatBuildLine({ ...info, dirty: true })).toBe('Open Walnut 0.4.5 · commit 3942cf7+dirty · built 2026-09-24')
+    expect(formatBuildLine({ ...info, dirty: true })).toBe('Open Walnut 0.4.5, commit 3942cf7+dirty, built 2026-09-24')
   })
 
   it('leaves out what is unknown', () => {
-    expect(formatBuildLine({ ...info, commit: null })).toBe('Open Walnut 0.4.5 · built 2026-09-24')
+    expect(formatBuildLine({ ...info, commit: null })).toBe('Open Walnut 0.4.5, built 2026-09-24')
     expect(formatBuildLine({ ...info, commit: null, builtAt: null })).toBe('Open Walnut 0.4.5')
   })
 })
 
 describe('buildLineTitle', () => {
   it('carries branch and exact build time', () => {
-    expect(buildLineTitle(info)).toBe(`Branch main · built ${BUILT}`)
-    expect(buildLineTitle({ ...info, dirty: true })).toBe(`Branch main · built ${BUILT} · uncommitted changes`)
+    expect(buildLineTitle(info)).toBe(`Branch main, built ${BUILT}`)
+    expect(buildLineTitle({ ...info, dirty: true })).toBe(`Branch main, built ${BUILT}, uncommitted changes`)
   })
 
   it('is absent when there is nothing more to say', () => {

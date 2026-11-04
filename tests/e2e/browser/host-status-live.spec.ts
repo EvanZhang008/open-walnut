@@ -406,42 +406,48 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   await page.getByTestId('settings-nav-remote-hosts').click()
   await waitForWs(page)
 
-  const row = page.locator(`.rh-status[data-host="${HOST}"]`)
+  const row = page.locator(`#rh-host-${HOST}`)
+  const state = row.getByTestId('rh-row-state')
+  const connect = row.getByTestId('rh-row-connect')
   const dot = row.locator('.sps-host-dot')
   await expect(row).toBeVisible()
-  await expect(row).toContainText('Checking...')
+  await expect(state).toHaveText('Checking...')
   await expect(dot).toHaveAttribute('data-kind', 'unknown')
   await expect(row).not.toContainText('unknown')
   releaseStatus()
-  await expect(row).toContainText(/Not connected/)
-  await row.locator('.rh-connect-btn').click()
+  await expect(state).toHaveText('Not connected')
+  await expect(connect).toHaveText('Connect now')
+  await connect.click()
   await expect.poll(() => connects).toEqual(['POST'])
   // The button's answer seeds the store: the wait shows without any WS frame
   // (never "Not connected" or a bare failure), and the button stays out of the
   // way while a connect is queued or running.
-  await expect(row).toContainText('Waiting for another host')
+  await expect(state).toContainText('Waiting for another host')
   await expect(dot).toHaveAttribute('data-kind', 'connecting')
-  await expect(row.locator('.rh-connect-btn')).toBeDisabled()
+  await expect(connect).toHaveText('Connecting...')
+  await expect(connect).toBeDisabled()
 
   await pushStatus(page, status('ssh'))
-  await expect(row).toContainText(PHASE_LABEL.ssh)
+  await expect(state).toContainText(PHASE_LABEL.ssh)
   await pushStatus(page, status('install-runtime'))
-  await expect(row).toContainText('Installing the session daemon runtime')
+  await expect(state).toContainText('Installing the session daemon runtime')
   await pushStatus(page, status('connected'))
-  await expect(row).toContainText('Connected')
+  await expect(state).toHaveText(/^Online/)
   await expect(dot).toHaveAttribute('data-kind', 'connected')
   // F25: a connected host offers no connect action.
-  await expect(row.locator('.rh-connect-btn')).toHaveCount(0)
+  await expect(connect).toHaveCount(0)
 
   await pushStatus(page, status('failed', { error: 'Connection timed out', kind: 'network', hint: 'Check the VPN.' }))
-  // The status line stays short; the failure is its own block under it (spec 5.2).
-  await expect(row).toContainText('Not connected')
+  // The state line stays one short line; the failure is in the host's Details (spec 5.2).
+  await expect(state).toHaveText(`Could not connect to ${HOST_LABEL}`)
   await expect(dot).toHaveAttribute('data-kind', 'failed')
-  const failure = page.locator(`[data-host-alias="${HOST}"] .rh-failure`)
+  await expect(connect).toHaveText('Retry')
+  await expect(connect).toBeEnabled()
+  await row.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Details', exact: true }).click()
+  const failure = page.locator(`[data-testid="rh-details"][data-host="${HOST}"] .rh-failure`)
   await expect(failure.locator('.hft-headline')).toHaveText(`Could not connect to ${HOST_LABEL}`)
   await expect(failure.locator('.hft-hint')).toHaveText('Check the VPN.')
-  await expect(row.locator('.rh-connect-btn')).toHaveText('Retry')
-  await expect(row.locator('.rh-connect-btn')).toBeEnabled()
   // Settings re-reads /api/config on its own clock; WebKit tears the page down
   // fast enough that one such read is still in flight when the test ends.
   await page.unrouteAll({ behavior: 'ignoreErrors' })

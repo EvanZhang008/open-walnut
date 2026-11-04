@@ -1,14 +1,15 @@
 /**
- * Settings › Remote Hosts: what a CONNECTED host still needs (spec 5.3), inside
- * that host's own row (never stacked above the list).
+ * Settings › Remote Hosts: what a CONNECTED host still needs (spec 5.3), in that
+ * host's Details. The fix itself (Install, Update, Try again) is the row's one action.
  *
  * - A problem reads the server's message verbatim (it already names the host:
- *   no `{alias}: ` prefix), its command as a chip with Copy, then its buttons.
+ *   no `{alias}: ` prefix), its command as a chip with Copy, then Check again.
  * - An automatic fix reads 'Updating Claude Code on {L}...' and HOLDS that text
  *   until the re-check answers (useHostActions.fixing), so the old warning never
  *   flashes back for the ~14s between the fix ending and the new answer. After
  *   5s it shows how long; after 3 minutes 'Still updating ...' and Check again.
- * - A cleared problem says '✓ {L} is ready (Claude Code {version})' for 3s.
+ * - A cleared problem says '✓ {L} is ready (Claude Code {version})' for 3s, unless the row
+ *   already says what the fix did ('Updated Claude Code to 2.1.281.').
  * - Informational lines (daemon_dir_fallback, status.warnings) are grey notes
  *   with no button: nothing to do.
  */
@@ -61,7 +62,6 @@ interface LineProps {
   label: string;
   installMethod?: string;
   actions: HostActions;
-  replica: boolean;
   /** 'Check again' rides the first line that still asks the user for something. */
   withRecheck: boolean;
   now: number;
@@ -81,7 +81,7 @@ function CheckAgainButton({ actions }: { actions: HostActions }) {
   );
 }
 
-function ProblemLine({ problem, alias, label, installMethod, actions, replica, withRecheck, now, fixStartedAt }: LineProps) {
+function ProblemLine({ problem, alias, label, installMethod, actions, withRecheck, now, fixStartedAt }: LineProps) {
   const blocking = BLOCKING_READINESS_KINDS.includes(problem.kind);
   const verb = blocking ? autofixVerbFor(problem, installMethod) : null;
   const serverRunning = problem.fix?.state === 'running';
@@ -109,24 +109,13 @@ function ProblemLine({ problem, alias, label, installMethod, actions, replica, w
     );
   }
   const failedFix = problem.fix?.state === 'failed' ? problem.fix : undefined;
-  const canFix = !!verb && !replica;
   return (
     <div className="rh-readiness-line" data-tone="warn">
       <span className="rh-readiness" {...common} data-fix={failedFix ? 'failed' : undefined} title={failedFix?.detail}>
         {failedFix ? `Update failed: ${failedFix.text}` : <InlineCodeText text={problem.message} />}
       </span>
       <HostCommands commands={problem.commands} testId={`rh-readiness-commands-${problem.kind}`} />
-      <span className="rh-readiness-actions">
-        {canFix && (
-          <SettingsButton
-            variant="text" reserve={['Try again', 'Install', 'Update']}
-            onClick={() => { void actions.update(verb ?? 'update'); }} data-testid={`rh-readiness-fix-${problem.kind}`}
-          >
-            {failedFix ? 'Try again' : verb === 'install' ? 'Install' : 'Update'}
-          </SettingsButton>
-        )}
-        {withRecheck && <CheckAgainButton actions={actions} />}
-      </span>
+      {withRecheck && <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>}
     </div>
   );
 }
@@ -137,10 +126,9 @@ export interface RemoteHostReadinessProps {
   label: string;
   status: HostStatus | undefined;
   actions: HostActions;
-  replica: boolean;
 }
 
-export function RemoteHostReadiness({ alias, label, status, actions, replica }: RemoteHostReadinessProps) {
+export function RemoteHostReadiness({ alias, label, status, actions }: RemoteHostReadinessProps) {
   const problems = hostReadinessProblems(status);
   const info = hostReadinessInfoNotes(status);
   // When THIS status arrived, on this browser's clock: a finished-fix note's age is
@@ -174,10 +162,10 @@ export function RemoteHostReadiness({ alias, label, status, actions, replica }: 
       {problems.map((problem, idx) => (
         <ProblemLine
           key={problem.kind} problem={problem} alias={alias} label={label} installMethod={installMethod}
-          actions={actions} replica={replica} withRecheck={idx === recheckAt} now={now} fixStartedAt={fixStartedAt}
+          actions={actions} withRecheck={idx === recheckAt} now={now} fixStartedAt={fixStartedAt}
         />
       ))}
-      {ready && (
+      {ready && !fixNotes.some((n) => n.kind === 'done') && (
         <div className="rh-readiness-line" data-tone="success">
           <span className="rh-readiness rh-readiness-ready" data-host={alias} role="status">{ready}</span>
         </div>
@@ -190,9 +178,10 @@ export function RemoteHostReadiness({ alias, label, status, actions, replica }: 
       {info.map((text) => (
         <span key={text} className="rh-readiness-note" data-host={alias}><InlineCodeText text={text} /></span>
       ))}
-      {fixNotes.map((note) => (
+      {/* What a finished fix did is the row's line (useLinkedHostRow); only one running here. */}
+      {fixNotes.filter((note) => note.kind === 'running').map((note) => (
         <span key={note.key} className="rh-readiness-note" data-host={alias} data-fix={note.kind} title={note.detail}>
-          {note.kind === 'running' ? `${note.text} on ${label}...` : `${note.text}.`}
+          {`${note.text} on ${label}...`}
         </span>
       ))}
     </div>

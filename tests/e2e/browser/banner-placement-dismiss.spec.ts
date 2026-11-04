@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test'
 import {
   DISMISS_KEY, banner, connected, expandSystemAttention, failed, isolatePrefs, loadHome, resetServerHostFixture, row, signedOut, storedKeys,
 } from './host-problems-helpers'
-import { bell, hostRow, loadApp, loadFixture, openBell, openRemoteHosts, panelBanner, tasksBanner } from './host-problems-fixture-helpers'
+import { bell, hostMenuPick, hostRow, loadApp, loadFixture, openBell, openRemoteHosts, panelBanner, tasksBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, cardRow, closePanel, countInFirstFrameAfterClick, errorsBadge, expectTasksCard, goRail,
   hostsOf, openProblems, panelLocalCard, panelProblems, pickRail, problemHosts, problemRow, problemRowHosts, railButton,
@@ -202,7 +202,7 @@ test.describe('expiry, undo and the way back', () => {
     expect(await storedKeys(page)).toContain('netbox|connect')
   })
 
-  test('BP-C55: Settings says the problem was hidden on the home page, with Show again for a dismissed host only; Show again brings the row back', async ({ page, request }) => {
+  test('BP-C55: Settings says the problem was hidden on the home page, with Show again (its More menu) for a dismissed host only; Show again brings the row back', async ({ page, request }) => {
     await isolatePrefs(page)
     await page.addInitScript((k) => localStorage.removeItem(k), DISMISS_KEY)
     await loadFixture(request, 'host-problems')
@@ -212,12 +212,17 @@ test.describe('expiry, undo and the way back', () => {
     await cardRow(tasksBanner(page), 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(cardRow(tasksBanner(page), 'certbox')).toHaveCount(0)
     await openRemoteHosts(page)
-    await expect(hostRow(page, 'certbox')).toContainText('You hid this problem on the home page.')
+    await expect(hostRow(page, 'certbox').getByTestId('rh-banner-hidden')).toHaveText('You hid this problem on the home page.')
     await expect(hostRow(page, 'keybox')).not.toContainText('You hid this problem on the home page.')
-    await expect(hostRow(page, 'keybox').getByRole('button', { name: 'Show again' })).toHaveCount(0)
+    // Only the hidden host's menu offers Show again.
+    await hostRow(page, 'keybox').getByTestId('rh-row-more').click()
+    await expect(page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Show again on the home page' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
     await hostRow(page, 'certbox').screenshot({ path: `${BP_SHOTS}/c55-settings-hidden.png` })
-    await hostRow(page, 'certbox').getByRole('button', { name: 'Show again' }).click()
+    await hostMenuPick(page, 'certbox', 'Show again on the home page')
     await expect(hostRow(page, 'certbox')).not.toContainText('You hid this problem on the home page.')
+    // The focus went back to the row's More, never to the page.
+    await expect(hostRow(page, 'certbox').getByTestId('rh-row-more')).toBeFocused()
     await goRail(page, 'home')
     await expandSystemAttention(page)
     await expect(cardRow(tasksBanner(page), 'certbox')).toBeVisible({ timeout: 20_000 })

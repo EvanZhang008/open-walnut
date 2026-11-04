@@ -281,22 +281,31 @@ test('N3-18: a stacked control starts at the label and spans the row', async ({ 
   await expect(page.locator('#plugin-store')).not.toContainText('On, with no sign-in state to report.')
 })
 
-test('N3-20, N3-21, N3-22: host row shows its address, Remove sits by Edit, limits are labelled rows, Shell setup stacks', async ({ page }) => {
+test('N3-20, N3-21, N3-22: host row shows its address, Edit and Remove share its menu, limits are labelled rows, Shell setup stacks', async ({ page }) => {
   await recordWrites(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await openSettings(page)
   await clickNav(page, 'remote-hosts')
-  const host = page.locator('.rh-host-row').first()
+  const host = page.locator('.rh-host-row').filter({ has: page.locator('.settings-tag', { hasText: 'SSH' }) }).first()
   await expect(host).toBeVisible({ timeout: 20_000 })
   const sub = host.locator('.settings-addons-mono')
   if (await sub.count()) await expect(sub.first()).toHaveText(/\./) // a hostname, not the display label
-  const remove = (await host.getByTestId('devices-remove').or(host.getByRole('button', { name: /^Remove/ })).first().boundingBox())!
-  const edit = (await host.getByRole('button', { name: 'Edit' }).boundingBox())!
-  expect(edit.x - (remove.x + remove.width)).toBeLessThanOrEqual(12)
+  // Edit first and Remove last (in red) in the row's one menu.
+  await host.getByTestId('rh-row-more').click()
+  const items = page.getByTestId('rh-row-menu').getByRole('menuitem')
+  await expect(items.first()).toHaveText('Edit')
+  await expect(items.last()).toHaveText('Remove')
+  await expect(items.last()).toHaveClass(/danger/)
+  await page.keyboard.press('Escape')
+  // Session limits, under More settings: labelled rows, the last one adds.
+  await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('rh-session-limits-toggle').click()
   const add = page.locator('.rh-limit-add')
   await expect(add.locator('.settings-row-label')).toHaveText('Add limit')
   await expect(page.locator('.kv-editor')).toHaveCount(0)
-  await host.getByRole('button', { name: 'Edit' }).click()
+  await host.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Edit', exact: true }).click()
+  await page.getByTestId('rh-more-options').click()
   const shell = page.locator('.settings-row', { has: page.locator('textarea[id^="rh-shell-"]') }).first()
   const label = (await shell.locator('.settings-row-label').boundingBox())!
   const area = (await shell.locator('textarea').boundingBox())!

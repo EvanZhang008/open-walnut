@@ -77,8 +77,9 @@ test('F02: Remote Hosts still saves a real edit', async ({ page }) => {
   await clickNav(page, 'remote-hosts')
   await page.getByTestId('remote-hosts-add').click()
   await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
-  await page.locator('#remote-hosts').getByPlaceholder('devbox').last().fill('box-one')
-  await page.locator('#remote-hosts').getByPlaceholder('host.example.com').last().fill('box-one.example.test')
+  // Hostname first, then the alias (its placeholder is one no host has).
+  await page.locator('#remote-hosts input[id^="rh-hostname-"]').fill('box-one.example.test')
+  await page.locator('#remote-hosts input[id^="rh-alias-"]').fill('box-one')
   await expect.poll(() => writes.filter((w) => w.includes('/api/config') && w.includes('box-one')).length,
     { timeout: 10_000 }).toBeGreaterThan(0)
 })

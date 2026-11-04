@@ -18617,50 +18617,6 @@ a.task-kebab-info:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* Settings › Remote hosts: status + an explicit connect, on the host's summary row. */
-.rh-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  font-size: 12px;
-  font-weight: 400;
-}
-.rh-status .status-text {
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rh-status-elapsed {
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-}
-.rh-status-error {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--error);
-}
-.rh-connect-btn {
-  flex: none;
-  padding: 2px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.rh-connect-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.rh-connect-btn:disabled {
-  color: var(--fg-muted);
-  border-color: var(--border);
-  cursor: default;
-}
-
 /* "Create <path> & start session" row for nonexistent leaf dirs */
 .sps-create-row {
   display: flex;

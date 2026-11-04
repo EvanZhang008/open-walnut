@@ -29,7 +29,7 @@ import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot
 import { hostDisplayLabel } from '@/utils/host-display-label';
 import { SingleHostRow } from './HostProblemRows';
 
-/** Settings' word for a host switched off there (RemoteHostStatus DISABLED_TEXT). */
+/** A host switched off in Settings. */
 const DISABLED_TEXT = 'Disabled';
 
 /** A host with nothing to fix: the dot, the name, the status sentence. */

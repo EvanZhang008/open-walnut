@@ -96,7 +96,7 @@ export function ReplicaKeepRows({ idOf, name, keep, excludeText, onKeep, onExclu
       <SettingsRow
         label="Memory"
         htmlFor={idOf('memory')}
-        help="MEMORY.md, USER.md and the rest of the memory folder."
+        help={<><span className="settings-addons-mono">MEMORY.md</span>, <span className="settings-addons-mono">USER.md</span> and the rest of the memory folder.</>}
         indent
         control={<ToggleSwitch id={idOf('memory')} checked={keep.memory !== false} disabled={disabled} onChange={(v) => onKeep({ memory: v })} aria-label={`Keep memory on ${name}`} />}
       />

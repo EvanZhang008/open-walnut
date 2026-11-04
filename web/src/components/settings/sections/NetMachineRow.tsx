@@ -1,12 +1,15 @@
 /**
- * Settings > Remote Hosts: one machine that joined with a link, as a row of Hosts beside the
+ * Settings > Remote Hosts: one machine that joined with a link, a row of the list beside the
  * SSH hosts (useHostNetwork.ts): its name, its system and how this Mac reaches it, a Link
- * tag, its status line, and Remove (which also takes it off the companion's list).
+ * tag, its state line and one action (useLinkedHostRow.tsx). Remove, in its menu, also takes
+ * it off the companion's list.
  */
+import type { FleetHost } from '@/api/hosts-fleet';
 import type { NetMachine, NetRelay } from '@/api/hosts-net';
-import { SettingsRow, SettingsTag } from '../SettingsSection';
-import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
-import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
+import { SettingsTag } from '../SettingsSection';
+import { HostDetails } from './HostDetails';
+import { HostRow } from './HostRow';
+import { useLinkedHostRow } from './useLinkedHostRow';
 import { hostRowId } from '@/utils/host-settings-nav';
 
 /** `linux-x64` -> `Linux x86_64`. */
@@ -19,35 +22,42 @@ export function platformLabel(p?: string): string {
 }
 
 export function pathLabel(m: Pick<NetMachine, 'path' | 'rttMs'>, relay: NetRelay = 'own'): string {
-  const rtt = typeof m.rttMs === 'number' ? ` · ${Math.round(m.rttMs)} ms` : '';
+  const rtt = typeof m.rttMs === 'number' ? `, ${Math.round(m.rttMs)} ms` : '';
   if (m.path === 'direct') return `Direct${rtt}`;
   if (m.path === 'relay') return `${relay === 'public' ? 'Through a public relay' : 'Through your relay'}${rtt}`;
-  // No link right now: the status line under the name says why.
+  // No link right now: the state line under the name says why.
   return '';
 }
 
-export function NetMachineRow({ machine: m, name, relay, error, onRemove }: {
-  machine: NetMachine; name: string; relay: NetRelay; error?: string; onRemove: () => void | Promise<unknown>;
+export function NetMachineRow({ machine: m, name, relay, error, card, now, detailsOpen, onDetails, onRemove }: {
+  machine: NetMachine; name: string; relay: NetRelay; error?: string; card?: FleetHost; now: number;
+  detailsOpen: boolean; onDetails: (open: boolean) => void; onRemove: () => void | Promise<unknown>;
 }) {
-  const sub = [platformLabel(m.platform), pathLabel(m, relay)].filter(Boolean).join(' · ');
+  // "Linux x86_64, direct, 31 ms": the path reads on in the platform's sentence.
+  const path = pathLabel(m, relay);
+  const sub = [platformLabel(m.platform), path && path[0].toLowerCase() + path.slice(1)].filter(Boolean).join(', ');
+  const live = useLinkedHostRow({ alias: m.host, name, enabled: m.enabled, saved: true, card, now });
   return (
-    <SettingsRow
+    <HostRow
+      rowKey={`net:${m.host}`}
       id={hostRowId(m.host)}
-      className="rh-host-row"
-      data-host-alias={m.host}
-      data-net-path={m.path}
-      data-row-key={`net:${m.host}`}
-      label={
-        <span className="settings-addons-inline">
-          <span className="rh-host-name">{name}</span>
-          {sub && <span className="settings-addons-muted settings-addons-ellipsis" data-testid="host-network-path">{sub}</span>}
-          <SettingsTag title="Joined with a link: no SSH">Link</SettingsTag>
-        </span>
-      }
-      help={<RemoteHostStatus alias={m.host} name={name} enabled={m.enabled} />}
-      error={error}
-      children={<RemoteHostDetail alias={m.host} name={name} enabled={m.enabled} />}
-      control={<InlineConfirmButton quiet aria-label={`Remove ${name}`} onConfirm={onRemove} />}
+      alias={m.host}
+      name={name}
+      sub={sub && <span className="settings-addons-muted settings-addons-ellipsis" data-testid="host-network-path">{sub}</span>}
+      tag={<SettingsTag title="Joined with a link: no SSH">Link</SettingsTag>}
+      dot={live.dot}
+      state={live.state}
+      lines={error ? [...live.lines, <span key="err" className="rh-row-line" data-tone="bad" role="alert">{error}</span>] : live.lines}
+      primary={live.primary}
+      menu={[
+        { key: 'details', label: detailsOpen ? 'Hide details' : 'Details', onSelect: () => onDetails(!detailsOpen) },
+        ...(live.hidden ? [{ key: 'show-again', label: 'Show again on the home page', onSelect: live.showOnBanner }] : []),
+      ]}
+      onRemove={onRemove}
+      removeNote="It leaves your machines (and the companion's list): joining again takes a new link."
+      needsLook={live.needsLook}
+      data={{ 'data-net-path': m.path }}
+      panel={detailsOpen && <HostDetails alias={m.host} name={name} card={card} now={now} linked profile={false} />}
     />
   );
 }

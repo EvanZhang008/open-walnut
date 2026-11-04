@@ -8,7 +8,7 @@
  */
 import type { FleetHost } from '@/api/hosts-fleet';
 import { clip, linkLabel, systemLine, topologyLayout, TOPO, type TopoNode } from './host-fleet-dashboard-model';
-import { statusKind } from './host-fleet-model';
+import { statusKind, THIS_MAC } from './host-fleet-model';
 
 function Node({ node, host, onPick }: { node: TopoNode; host: FleetHost; onPick: (host: string) => void }) {
   const { nodeW: w, nodeH: h } = TOPO;
@@ -16,18 +16,20 @@ function Node({ node, host, onPick }: { node: TopoNode; host: FleetHost; onPick:
   const phone = host.server?.phone === 'connected';
   const cloud = host.connection.kind === 'bridge';
   const mark = cloud ? 'Cloud' : phone ? 'Phone' : null;
+  // The list's name for it: "This Mac", never the reading's own label.
+  const name = host.local ? THIS_MAC : host.label;
   return (
     <g
       className="hf-topo-node" data-kind={kind} data-live={node.live ? 'true' : 'false'} data-testid="host-fleet-topo-node" data-host={host.host}
       transform={`translate(${node.x - w / 2} ${node.y - h / 2})`}
-      role="button" tabIndex={0} aria-label={`${host.label}: ${node.live ? 'connected' : 'not connected'}`}
+      role="button" tabIndex={0} aria-label={`${name}: ${node.live ? 'connected' : 'not connected'}`}
       onClick={() => onPick(host.host)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(host.host); } }}
     >
-      <title>{`${host.label}\n${systemLine(host)}`}</title>
+      <title>{`${name}\n${systemLine(host)}`}</title>
       <rect className="hf-topo-box" width={w} height={h} rx={10} />
       <circle className="hf-topo-dot" cx={14} cy={h / 2} r={4.5} />
-      <text className="hf-topo-name" x={26} y={19}>{clip(host.label, mark ? 11 : 17)}</text>
+      <text className="hf-topo-name" x={26} y={19}>{clip(name, mark ? 11 : 17)}</text>
       <text className="hf-topo-sub" x={26} y={34}>{clip(host.local ? 'Primary' : host.system?.os ?? (node.live ? 'Connected' : 'Offline'), 19)}</text>
       {mark && (
         <g className="hf-topo-mark" data-mark={mark.toLowerCase()} transform={`translate(${w - 50} 8)`}>

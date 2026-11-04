@@ -1,6 +1,6 @@
 /**
- * Settings "Copy diagnostics": the build line's, and Remote Hosts' header button
- * (the hosts section; that pane's build line has none), clicked as a user would, in either engine:
+ * Settings "Copy diagnostics": the build line's, and the one at the end of Remote Hosts
+ * (that pane's build line has none), clicked as a user would, in either engine:
  * `PW_WEBKIT=1 npx playwright test --project=webkit settings-copy-diagnostics`
  * is the Mac app's WKWebView.
  *

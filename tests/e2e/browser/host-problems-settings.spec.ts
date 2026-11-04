@@ -6,12 +6,13 @@
  *                  banner row, the picker note and the Settings row, with
  *                  Show SSH output, Retry and a quieter Open Settings (C7, C8, C27)
  *   the row        label title, alias, row id; Open Settings flashes it every
- *                  time (C68); a hint that wraps, outside .rh-status (C78)
+ *                  time (C68); the hint wraps whole in the host's Details, never
+ *                  in the row's one state line (C78)
  *   reconnecting   the last cause and an enabled Connect now (C9)
  *   off            an ephemeral fixture: every row is off, nothing to press (C24)
- *   autofix        Update holds 'Updating Claude Code on Fix box...' until the
- *                  re-check answers (C29); a slow one shows its time and, after
- *                  3 minutes, Still updating + Check again (C95)
+ *   autofix        the row's Update holds 'Updating Claude Code on Fix box...'
+ *                  until the re-check answers (C29); a slow one shows its time
+ *                  and, after 3 minutes, Still updating + Check again (C95)
  *   elsewhere      the System pane's host row, an outdated Build box included (C71);
  *                  the rail dot when no banner is on screen (C67), lit by the
  *                  banner's own rows (a signed-out host, not a version floor)
@@ -27,7 +28,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { firstSentence } from '../../../src/core/hosts/host-problem'
 import {
   HEALTHY, bannerRow, bell, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
-  openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
+  openHostDetails, openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
 } from './host-problems-fixture-helpers'
 import { bareLayout, expandSystemAttention } from './host-problems-helpers'
 import { openRow } from './banner-placement-helpers'
@@ -100,40 +101,42 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     const settingsRow = hostRow(page, 'keybox')
     await expect(settingsRow).toBeVisible({ timeout: 20_000 })
-    const inSettings = await readFailure(settingsRow.locator('.rh-failure'), wire.error!)
-    await expect(settingsRow.locator('.rh-status').getByRole('button', { name: 'Retry' })).toBeEnabled()
+    // The row: its one state line and its one action; the whole failure is in its Details.
+    await expect(settingsRow.getByTestId('rh-row-state')).toHaveText('Could not connect to Key box')
+    await expect(settingsRow.getByTestId('rh-row-connect')).toHaveText('Retry')
+    await expect(settingsRow.getByTestId('rh-row-connect')).toBeEnabled()
+    await expect(settingsRow.locator('.hft')).toHaveCount(0)
+    const details = await openHostDetails(page, 'keybox')
+    const inSettings = await readFailure(details.locator('.rh-failure'), wire.error!)
 
     expect(inBanner.headline).toBe('Could not connect to Key box')
     expect(inPicker).toEqual(inBanner)
     expect(inSettings).toEqual(inBanner)
     expect(inBanner.hint).toBe(wire.hint!.replace(/`/g, ''))
-    await settingsRow.screenshot({ path: `${SHOTS}/settings-keybox-open.png` })
+    await details.screenshot({ path: `${SHOTS}/settings-keybox-open.png` })
   })
 
-  test('at 900px the Settings hint wraps whole, outside the one-line status classes (C78)', async ({ page }) => {
+  test('at 900px the Settings hint wraps whole in Details, never in the row (C78)', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 900 })
     await loadApp(page, '/settings')
     await openRemoteHosts(page)
     const r = hostRow(page, 'keybox')
     await r.scrollIntoViewIfNeeded()
-    const hint = r.locator('.rh-failure .hft-hint')
+    const details = await openHostDetails(page, 'keybox')
+    const hint = details.locator('.rh-failure .hft-hint')
     await expect(hint).toBeVisible()
     const m = await hint.evaluate((el) => ({
       scrollW: el.scrollWidth, clientW: el.clientWidth, h: el.getBoundingClientRect().height,
       line: parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.4,
-      insideStatus: !!el.closest('.rh-status, .rh-status-error'),
+      inRow: !!el.closest('.rh-host-row'),
     }))
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW)
     expect(m.h).toBeGreaterThan(m.line * 1.5)
-    expect(m.insideStatus).toBe(false)
-    expect(await r.locator('.rh-status .hft, .rh-status-error .hft').count()).toBe(0)
-    // The shared one-line rule is still what it was: the hint escaped it, the rule did not change.
-    const statusText = await r.locator('.rh-status .status-text').evaluate((el) => {
-      const cs = getComputedStyle(el)
-      return { ws: cs.whiteSpace, ov: cs.overflow, to: cs.textOverflow }
-    })
-    expect(statusText).toEqual({ ws: 'nowrap', ov: 'hidden', to: 'ellipsis' })
-    await r.screenshot({ path: `${SHOTS}/settings-900-keybox.png` })
+    expect(m.inRow).toBe(false)
+    // The row keeps one short state line: no hint, no SSH output.
+    await expect(r.locator('.hft, .hft-hint')).toHaveCount(0)
+    await expect(r.getByTestId('rh-row-state')).toHaveText('Could not connect to Key box')
+    await details.screenshot({ path: `${SHOTS}/settings-900-keybox.png` })
   })
 })
 
@@ -176,14 +179,19 @@ test.describe('the Settings row itself', () => {
     await loadApp(page, '/settings')
     await openRemoteHosts(page)
     const r = hostRow(page, 'devbox')
-    await expect(r.locator('.rh-status-short')).toHaveText('Reconnecting to Dev box')
-    await expect(r.locator('.rh-failure[data-type="reconnecting"] .hft-headline')).toHaveText('Last attempt: Connecting to Dev box timed out')
-    const now = r.locator('.rh-status').getByRole('button', { name: 'Connect now' })
+    await expect(r.getByTestId('rh-row-state')).toHaveText('Reconnecting to Dev box')
+    const details = await openHostDetails(page, 'devbox')
+    await expect(details.locator('.rh-failure[data-type="reconnecting"] .hft-headline')).toHaveText('Last attempt: Connecting to Dev box timed out')
+    const now = r.getByTestId('rh-row-connect')
+    await expect(now).toHaveText('Connect now')
     await expect(now).toBeEnabled()
     await r.screenshot({ path: `${SHOTS}/settings-reconnecting.png` })
     const before = (await fixtureCounters(request)).connect.devbox ?? 0
     await now.click()
-    await expect(r.locator('.rh-status-short')).toHaveText('Connected', { timeout: 10_000 })
+    await expect(r.getByTestId('rh-row-state')).toHaveText(/^Online/, { timeout: 10_000 })
+    await expect(r.getByTestId('rh-row-connect')).toHaveCount(0)
+    // The press held the focus: it moved to the row's More, never to the page.
+    await expect(r.getByTestId('rh-row-more')).toBeFocused()
     expect((await fixtureCounters(request)).connect.devbox ?? 0).toBe(before + 1)
   })
 })
@@ -199,26 +207,30 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
     for (const host of hosts) {
       expect((await wireHost(request, host)).phase).toBe('off')
       const r = hostRow(page, host)
-      await expect(r.locator('.rh-status-short')).toHaveText('Off on this test server')
-      await expect(r.locator('.rh-status').getByRole('button')).toHaveCount(0)
-      await expect(r.locator('.rh-readiness, .rh-failure')).toHaveCount(0)
+      await expect(r.getByTestId('rh-row-state')).toHaveText('Off on this test server')
+      await expect(r.locator('.rh-row-primary button')).toHaveCount(0)
+      await expect(r.locator('.rh-row-line')).toHaveCount(0)
     }
+    // Its Details say nothing about a failure or what Claude Code needs.
+    await expect((await openHostDetails(page, 'keybox')).locator('.rh-readiness, .rh-failure')).toHaveCount(0)
     for (const host of hosts) {
       await expect(hostRow(page, host).getByRole('button', { name: /^(Connect now|Retry|Update|Install|Check again)$/ })).toHaveCount(0)
     }
     // Every OTHER row is a host switched off in Settings (the test server's own
-    // `fixture-remote`): it reads Disabled with no button (a Connect now there
-    // only ever answered 409 host_disabled), and nothing below the status line.
+    // `fixture-remote`): it reads Off and offers Turn on, never a connect (a Connect
+    // now there only ever answered 409 host_disabled), and nothing below the state line.
     const aliases = await page.locator('#remote-hosts .rh-host-row[data-host-alias]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-host-alias')!))
-    const others = aliases.filter((a) => !hosts.includes(a))
+    // This Mac is a row of the list too: the test server runs here, so it reads Online.
+    await expect(hostRow(page, '__local__').getByTestId('rh-row-state')).toHaveText(/^Online/)
+    const others = aliases.filter((a) => !hosts.includes(a) && a !== '__local__')
     expect(others).toContain('fixture-remote')
     for (const alias of others) {
       const r = hostRow(page, alias)
-      await expect(r.locator('.rh-status-short')).toHaveText('Disabled')
-      await expect(r.locator('.rh-status').getByRole('button')).toHaveCount(0)
+      await expect(r.getByTestId('rh-row-state')).toHaveText('Off: Walnut does not connect to it.')
+      await expect(r.locator('.rh-row-primary button')).toHaveText(['Turn on'])
       await expect(r.getByRole('button', { name: /^(Connect now|Retry|Update|Install|Check again)$/ })).toHaveCount(0)
-      await expect(r.locator('.rh-readiness, .rh-failure')).toHaveCount(0)
+      await expect(r.locator('.rh-row-line')).toHaveCount(0)
     }
     // The host rows' status lines: the fleet overview above them (2026-10-31) reads a host's
     // live state as its own Now line, "Not connected" for an off host, and offers nothing.
@@ -227,12 +239,12 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
   })
 })
 
-/** The Fix box row's readiness block text, sampled until `until` matches or 20s pass. */
-async function sampleUntil(block: Locator, until: RegExp, everyMs = 250, maxMs = 20_000): Promise<string[]> {
+/** The text of the Fix box row and its Details together, sampled until `until` matches or 20s pass. */
+async function sampleUntil(blocks: Locator[], until: RegExp, everyMs = 250, maxMs = 20_000): Promise<string[]> {
   const out: string[] = []
   const deadline = Date.now() + maxMs
   while (Date.now() < deadline) {
-    const t = await block.innerText().catch(() => '')
+    const t = (await Promise.all(blocks.map((b) => b.innerText().catch(() => '')))).join('\n')
     out.push(t)
     if (until.test(t)) return out
     await new Promise((r) => setTimeout(r, everyMs))
@@ -246,44 +258,65 @@ test.describe('Update on a host the server can fix', () => {
   })
   test.beforeEach(async ({ request }) => { await loadFixture(request, FIX_FILE) })
 
-  async function openFixRow(page: Page): Promise<{ row: Locator; message: string }> {
+  /** The row (its warning and its one action, Update) with its Details open (the whole message). */
+  async function openFixRow(page: Page): Promise<{ row: Locator; details: Locator; message: string }> {
     await loadApp(page, '/settings')
     await openRemoteHosts(page)
     const row = hostRow(page, 'fixbox')
-    const line = row.locator('.rh-readiness[data-problem="claude_outdated"]')
+    await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toHaveText('Update')
+    const details = await openHostDetails(page, 'fixbox')
+    const line = details.locator('.rh-readiness[data-problem="claude_outdated"]')
     await expect(line).toBeVisible()
-    return { row, message: (await line.innerText()).trim() }
+    const message = (await line.innerText()).trim()
+    await expect(row.getByTestId('rh-row-warning')).toHaveText(firstSentence(message))
+    // Details never repeat the row's one action.
+    await expect(details.getByRole('button', { name: /^(Update|Install|Try again)$/ })).toHaveCount(0)
+    return { row, details, message }
   }
 
   test('from Update until the re-check answers, the line only ever reads Updating Claude Code on Fix box... (C29)', async ({ page, request }) => {
-    const { row, message } = await openFixRow(page)
+    const { row, details, message } = await openFixRow(page)
     expect(message).toContain('Claude Code on Fix box is 2.1.220')
     await row.getByTestId('rh-readiness-fix-claude_outdated').click()
-    const samples = await sampleUntil(row, /✓ Fix box is ready \(Claude Code 2\.1\.281\)/)
+    // The row says what the fix did, once (its Details do not repeat it).
+    const samples = await sampleUntil([row, details], /Updated Claude Code to 2\.1\.281\./)
     const during = samples.slice(0, -1)
     expect(during.length).toBeGreaterThan(8)
     for (const t of during) {
       expect(t).toContain('Updating Claude Code on Fix box...')
-      expect(t).not.toContain(message)
+      expect(t).not.toContain(firstSentence(message))
     }
+    await expect(row.getByTestId('rh-row-fix-note')).toHaveText('Updated Claude Code to 2.1.281.')
+    await expect(details).not.toContainText('Updated Claude Code')
+    await expect(details.locator('.rh-readiness-ready')).toHaveCount(0)
+    // The fix is done before the re-check answers: in that gap the old problem never comes back.
+    const deadline = Date.now() + 20_000
+    for (;;) {
+      expect(await row.innerText(), 'the old problem, before the re-check').not.toContain(firstSentence(message))
+      if (!(await wireHost(request, 'fixbox')).readiness?.problems?.length) break
+      expect(Date.now(), 'the re-check answers').toBeLessThan(deadline)
+      await page.waitForTimeout(150)
+    }
+    await expect(row.getByTestId('rh-row-warning')).toHaveCount(0)
     // The fixture really went through the gap: fixing dropped before the re-check landed.
     expect((await fixtureCounters(request)).connect.fixbox).toBe(1)
-    const wire = await wireHost(request, 'fixbox')
-    expect(wire.readiness?.problems).toEqual([])
   })
 
   test('a slow fix shows its time, then Still updating and Check again after 3 minutes (C95)', async ({ page, request }) => {
     await hostFixture(request, { action: 'autofix-slow', host: 'fixbox', ms: 200_000 })
-    const { row } = await openFixRow(page)
+    const { row, details } = await openFixRow(page)
     await row.getByTestId('rh-readiness-fix-claude_outdated').click()
-    const running = row.locator('.rh-readiness[data-fix="running"]')
+    await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toHaveText('Updating...')
+    await expect(row.getByTestId('rh-readiness-fix-claude_outdated')).toBeDisabled()
+    const running = details.locator('.rh-readiness[data-fix="running"]')
     await expect(running).toHaveText(/^Updating Claude Code on Fix box\.\.\.$/)
     await page.waitForTimeout(6_000)
     await expect(running).toHaveText(/^Updating Claude Code on .+\.\.\. \d+s$/)
+    await expect(row.getByTestId('rh-row-fixing')).toHaveText(/^Updating Claude Code on Fix box\.\.\. \d+s$/)
     await hostFixture(request, { action: 'advance-clock', ms: 180_000 })
     await expect(running).toHaveText(/^Still updating Claude Code on Fix box\.\.\. 3m \d+s$/, { timeout: 5_000 })
-    await expect(row.getByRole('button', { name: 'Check again' })).toBeVisible()
-    await row.screenshot({ path: `${SHOTS}/settings-still-updating.png` })
+    await expect(details.getByRole('button', { name: 'Check again' })).toBeVisible()
+    await details.screenshot({ path: `${SHOTS}/settings-still-updating.png` })
   })
 })
 

@@ -14,7 +14,7 @@
  * replace, which drops the layer's history marker; it is put back on the same entry,
  * so Back still pops this layer's own entry and never leaves an empty Back behind.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { markerDepth, stateWithMarker, usePhoneOverlay, type OverlayMarker } from '@/hooks/usePhoneOverlayHistory'
@@ -27,7 +27,8 @@ export interface PhoneSettingsPane {
   open: () => void
 }
 
-export function usePhoneSettingsPane(paneId: string, title: string, scroller: HTMLElement | null): PhoneSettingsPane {
+/** `action`: the bar's right slot (a stable element: the pane's actions portal into it once its header scrolls away). */
+export function usePhoneSettingsPane(paneId: string, title: string, scroller: HTMLElement | null, action?: ReactNode): PhoneSettingsPane {
   const phone = usePhoneLayout()
   const navigate = useNavigate()
   const [paneOpen, setPaneOpen] = useState(() => /^#./.test(window.location.hash))
@@ -38,7 +39,7 @@ export function usePhoneSettingsPane(paneId: string, title: string, scroller: HT
     id: `settings-pane:${paneId}`,
     kind: 'settings-pane',
     open: phone && paneOpen,
-    bar: { title },
+    bar: { title, action },
     onClose: () => {
       // Leaving phone layout closes every layer too: a desktop window keeps its sub-page.
       if (parent && isPhoneLayout()) {

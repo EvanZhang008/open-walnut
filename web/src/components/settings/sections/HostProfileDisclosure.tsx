@@ -1,18 +1,14 @@
 /**
- * Settings › Remote Hosts, under each host: "What Walnut knows" about it.
+ * Settings › Remote Hosts, in a host's Details (HostDetails.tsx): "What Walnut knows" about it.
  *
- * One collapsed row that expands into the host's learned profile (server:
- * core/hosts/host-profile.ts): its kind and why, the system, the tools it has,
- * the repositories sessions used there, and what Walnut learned it is used for
- * (core/hosts/host-learning.ts, from the sessions that ran there). The person can
- * probe it again, name its kind (or hand that back to Walnut) and leave a
- * one-line note. Each open reads the profile again (what it read before stays
- * on screen meanwhile) and has the Overview read the host again, since a person
- * opening it wants it current (HostFleetGroup.tsx follows that read).
+ * The host's learned profile (server: core/hosts/host-profile.ts): its kind and why, the
+ * system, the tools it has, the repositories sessions used there, and what Walnut learned it
+ * is used for (core/hosts/host-learning.ts, from the sessions that ran there). The person can
+ * probe it again, name its kind (or hand that back to Walnut) and leave a one-line note. Each
+ * opening of Details reads the profile again (and the Details' opening reads the host again).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchHostProfile, updateHostProfile, type HostKind, type HostProfile } from '@/api/transfer';
-import { refreshFleet } from '@/api/hosts-fleet';
 import { ApiError } from '@/api/client';
 import { OptionPickerFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { hostKindLabel, HOST_KIND_OPTIONS } from '@/components/transfer/transfer-model';
@@ -42,13 +38,12 @@ function systemLine(p: HostProfile): string {
     o.cpus ? `${o.cpus} CPUs` : null,
     gb(o.memBytes) ? `${gb(o.memBytes)} memory` : null,
     gb(o.diskFreeBytes) ? `${gb(o.diskFreeBytes)} free` : null,
-  ].filter(Boolean).join(' · ') || 'Probed, nothing reported.';
+  ].filter(Boolean).join(', ') || 'Probed, nothing reported.';
 }
 
 const message = (err: unknown) => (err instanceof ApiError || err instanceof Error ? err.message : String(err));
 
 export function HostProfileDisclosure({ alias, name }: { alias: string; name: string }) {
-  const [open, setOpen] = useState(false);
   const [profile, setProfile] = useState<HostProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'probe' | 'kind' | 'note' | null>(null);
@@ -70,13 +65,11 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   }, []);
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
     fetchHostProfile(alias).then((r) => { if (!cancelled) apply(r.profile); })
       .catch((err) => { if (!cancelled) setError(message(err)); });
-    void refreshFleet([alias]).catch((err) => log.warn('host-profile', 'fleet refresh failed', { host: alias, error: message(err) }));
     return () => { cancelled = true; };
-  }, [open, alias, apply]);
+  }, [alias, apply]);
 
   // The kind picker closes on a press outside it or Escape; Escape and a pick give focus back
   // to the Kind button (it fell to the page).
@@ -133,25 +126,10 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
 
   return (
     <>
-      <button
-        type="button"
-        className="settings-row settings-disclosure-row settings-row-indent"
-        data-indent="true"
-        aria-expanded={open}
-        data-open={open ? 'true' : 'false'}
-        data-testid={`host-profile-toggle-${alias}`}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="settings-row-copy"><span className="settings-row-label">What Walnut knows</span></span>
-        <span className="settings-row-actions">
-          {profile && <span className="settings-disclosure-summary">{hostKindLabel(profile.kind)}</span>}
-          <ChevronGlyph size={12} className="settings-disclosure-chevron" />
-        </span>
-      </button>
-      {open && (
-        <div className="settings-disclosure-content" data-testid={`host-profile-${alias}`}>
+      <p className="rh-details-heading" data-testid={`host-profile-heading-${alias}`}>What Walnut knows</p>
+      <div className="settings-disclosure-content" data-testid={`host-profile-${alias}`}>
           {error && <SettingsRow indent label="Could not read this host" help={error} />}
-          {!profile && !error && <SettingsRow indent label="Reading…" />}
+          {!profile && !error && <SettingsRow indent label="Reading..." />}
           {profile && (
             <>
               <SettingsRow
@@ -170,7 +148,8 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                       if (r) setPicker({ x: r.left, y: r.bottom + 2 });
                     }}
                   >
-                    {hostKindLabel(profile.kind)}{profile.kindSetByUser ? '' : ' (automatic)'} ▾
+                    {hostKindLabel(profile.kind)}{profile.kindSetByUser ? '' : ' (automatic)'}
+                    <ChevronGlyph size={10} className="rh-kind-chevron" />
                   </SettingsButton>
                   </span>
                 }
@@ -239,8 +218,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
               />
             </>
           )}
-        </div>
-      )}
+      </div>
       {picker && profile && (
         <OptionPickerFlyout
           anchorPoint={picker}

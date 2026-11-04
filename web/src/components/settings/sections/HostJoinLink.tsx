@@ -4,7 +4,9 @@
  * runs (macOS, Linux or Windows; the pick is remembered); the notes (Windows signing, the
  * PowerShell way, how the machines reach each other) fold under "More about this link".
  * 2026-11-04 review: six lines of notes stood before the command, so the command did not
- * stand out.
+ * stand out. Done puts the card away (there is no way to call a link back: it ends on its own
+ * after 10 minutes). While a link is made, "Making a link..." holds its place; a link that
+ * could not be made says why there, with Try again.
  */
 import { useEffect, useId, useState } from 'react';
 import type { NetInvite, NetRelay } from '@/api/hosts-net';
@@ -14,7 +16,7 @@ import { SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CopyButton } from '../inputs/CopyButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { ChevronGlyph } from '../settings-glyphs';
+import { ChevronGlyph, SpinnerGlyph } from '../settings-glyphs';
 
 type JoinOs = 'mac' | 'linux' | 'windows';
 const isOs = oneOf(['mac', 'linux', 'windows'] as const);
@@ -35,8 +37,8 @@ export function relayNote(relay: NetRelay): string {
 function Command({ text, testId, copyId }: { text: string; testId: string; copyId: string }) {
   return (
     <span className="rh-join-command">
-      <code className="settings-addons-mono" data-testid={testId} title={text}>{text}</code>
-      <CopyButton text={text} variant="primary" data-testid={copyId} />
+      <code className="settings-addons-mono" data-testid={testId}>{text}</code>
+      <CopyButton text={text} variant="default" data-testid={copyId} />
     </span>
   );
 }
@@ -48,9 +50,44 @@ interface Props {
   relay: NetRelay;
   making: boolean;
   onNewLink: () => void;
+  onDone: () => void;
 }
 
-export function HostJoinLink({ invite, companion, relay, making, onNewLink }: Props) {
+/** The row in the link's place while it is made (in view, and focused, from the press). */
+export function HostJoinMaking() {
+  return (
+    <SettingsRow
+      className="rh-join rh-join-making"
+      data-testid="host-network-making"
+      role="status"
+      aria-live="polite"
+      tabIndex={-1}
+      label={<span className="rh-join-making-label"><SpinnerGlyph size={12} />Making a link...</span>}
+      help="A link works once, for 10 minutes."
+    />
+  );
+}
+
+/** Why the link could not be made, in its place, with Try again (which takes the focus). */
+export function HostJoinError({ error, onRetry, onDone }: { error: string; onRetry: () => void; onDone: () => void }) {
+  return (
+    <SettingsRow
+      className="rh-join rh-join-error"
+      state="error"
+      data-testid="host-network-invite-error"
+      label="Could not make a link"
+      help={<span className="rh-join-error-text" role="alert">{error}.</span>}
+      control={
+        <>
+          <SettingsButton variant="text" onClick={onDone} data-testid="host-network-error-done">Done</SettingsButton>
+          <SettingsButton onClick={onRetry} data-testid="host-network-try-again">Try again</SettingsButton>
+        </>
+      }
+    />
+  );
+}
+
+export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDone }: Props) {
   // The countdown ticks here, so only this row re-renders each second.
   const [now, setNow] = useState(() => Date.now());
   const waiting = invite.state === 'waiting';
@@ -79,9 +116,12 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink }: Pr
         data-invite-state={state}
         label={label}
         help={state === 'joined' ? 'It is in the list below.' : 'A link works once, for 10 minutes.'}
-        control={state === 'joined' ? undefined : (
-          <SettingsButton onClick={onNewLink} disabled={making} data-testid="host-network-new-link">New link</SettingsButton>
-        )}
+        control={
+          <>
+            <SettingsButton variant={state === 'joined' ? 'default' : 'text'} onClick={onDone} data-testid="host-network-done">Done</SettingsButton>
+            {state !== 'joined' && <SettingsButton onClick={onNewLink} disabled={making} data-testid="host-network-new-link">New link</SettingsButton>}
+          </>
+        }
       />
     );
   }
@@ -127,9 +167,12 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink }: Pr
               <Command text={invite.windowsCommand} testId="host-network-windows-command" copyId="host-network-windows-copy" />
             </>
           )}
-          <span className="rh-join-wait" data-testid="host-network-wait">
-            {`Waiting for the machine... The link works once, for 10 minutes (${left(invite.expiresAt - now)} left).`}
-            {companion === false && ' Keep this Mac awake and online until it joins.'}
+          <span className="rh-join-foot">
+            <span className="rh-join-wait" data-testid="host-network-wait">
+              {`Waiting for the machine... The link works once, for 10 minutes (${left(invite.expiresAt - now)} left).`}
+              {companion === false && ' Keep this Mac awake and online until it joins.'}
+            </span>
+            <SettingsButton onClick={onDone} title="Put this link away. It still works until it ends." data-testid="host-network-done">Done</SettingsButton>
           </span>
           <button
             type="button"

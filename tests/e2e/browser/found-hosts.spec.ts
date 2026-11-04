@@ -1,9 +1,9 @@
 /**
  * Hosts found in ~/.ssh/config (src/core/hosts/found-hosts.ts; RemoteHostsSection.tsx,
- * BrowserAccessGroup.tsx): Remote Hosts lists one with its Auto-discovered tag and asks
- * "Connect to it?" in place of the switch. Not now keeps it listed, quiet, with Connect
- * on its row; Connect makes it a normal host, switch on. Runs on leads to a found
- * always-on host with "Connect <host> first".
+ * BrowserAccessGroup.tsx): Remote Hosts lists one with its SSH tag and asks "Connect to
+ * it?" as its state line, Connect its one action. Not now (its More menu) keeps it listed,
+ * quiet, with Connect on its row; Connect makes it a normal host, on. Runs on leads to a
+ * found always-on host with "Connect <host> first".
  *
  * The test server reads no real ~/.ssh/config, so this spec lays the found hosts over
  * the server's own GET /api/config and answers the answer route and the config save
@@ -75,7 +75,22 @@ async function shot(page: Page, name: string, region: Locator) {
 // A late config read (serveFound) may still be out when a test ends: drop it, never fail the next test on it.
 test.afterEach(async ({ page }) => { await dropFakes(page) })
 
-const row = (page: Page, alias: string) => page.locator(`[data-host-alias="${alias}"]`)
+const row = (page: Page, alias: string) => page.locator(`[data-testid="remote-hosts-list"] .rh-host-row[data-host-alias="${alias}"]`)
+
+/** The labels of a row's More menu, then closes it. */
+async function menuItems(page: Page, rowEl: Locator): Promise<string[]> {
+  await rowEl.getByTestId('rh-row-more').click()
+  const items = await page.getByTestId('rh-row-menu').getByRole('menuitem').allTextContents()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('rh-row-menu')).toHaveCount(0)
+  return items
+}
+
+async function pick(page: Page, rowEl: Locator, item: string): Promise<void> {
+  await rowEl.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: item, exact: true }).click()
+  await expect(page.getByTestId('rh-row-menu')).toHaveCount(0)
+}
 
 test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect makes it a normal host', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
@@ -90,18 +105,17 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
   // Its kind tag (SSH) says where it was found; the question says the rest.
   await expect(lab.locator('.settings-tag', { hasText: 'SSH' })).toHaveAttribute('title', 'Found in ~/.ssh/config: Walnut reaches it with ssh')
   await expect(lab.getByTestId('rh-found-question')).toHaveText('Walnut found lab-mac in ~/.ssh/config. Connect to it?')
-  await expect(lab.getByTestId('rh-found-connect')).toBeVisible()
-  await expect(lab.getByTestId('rh-found-not-now')).toBeVisible()
-  // No switch until the person says yes: nothing about this host suggests it is in use.
-  await expect(lab.getByRole('switch')).toHaveCount(0)
+  await expect(lab.getByTestId('rh-found-connect')).toHaveText('Connect')
+  // Nothing about this host suggests it is in use until the person says yes: no Turn off, no Details.
+  expect(await menuItems(page, lab)).toEqual(['Edit', 'Not now', 'Remove'])
   await expect(lab).toHaveAttribute('data-found', 'ask')
-  const hostsGroup = page.locator('.settings-group').filter({ has: lab })
+  const hostsGroup = page.getByTestId('remote-hosts-list')
   await shot(page, '1-asked', hostsGroup)
 
   // Not now: listed, quiet, not asked again; Connect stays on its row.
-  await lab.getByTestId('rh-found-not-now').click()
+  await pick(page, lab, 'Not now')
   await expect(lab.getByTestId('rh-found-question')).toHaveText('Found in ~/.ssh/config. Walnut does not connect to it.')
-  await expect(lab.getByTestId('rh-found-not-now')).toHaveCount(0)
+  expect(await menuItems(page, lab)).toEqual(['Edit', 'Remove'])
   await expect(lab.getByTestId('rh-found-connect')).toBeVisible()
   await expect(lab).toHaveAttribute('data-found', 'not_now')
   expect(seen.answers).toEqual([{ host: 'lab-mac', answer: 'not_now' }])
@@ -109,11 +123,12 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
   await expect(row(page, 'home-pc').getByTestId('rh-found-question')).toHaveText('Walnut found home-pc in ~/.ssh/config. Connect to it?')
   await shot(page, '2-not-now', hostsGroup)
 
-  // Connect: a normal host, its switch on, the question gone.
+  // Connect: a normal host, on, the question gone.
   await lab.getByTestId('rh-found-connect').click()
   await expect(lab.getByTestId('rh-found-question')).toHaveCount(0)
-  await expect(lab.getByRole('switch', { name: 'Use lab-mac' })).toBeChecked()
   await expect(lab).not.toHaveAttribute('data-found', /.+/)
+  await expect(lab).not.toHaveAttribute('data-host-off', 'true')
+  await expect(lab.getByTestId('rh-turn-on')).toHaveCount(0)
   expect(seen.answers).toEqual([{ host: 'lab-mac', answer: 'not_now' }, { host: 'lab-mac', answer: 'yes' }])
   await shot(page, '3-connected', hostsGroup)
 
@@ -126,10 +141,12 @@ test('Remote Hosts asks about a found host; Not now keeps it quiet, Connect make
 
   // Editing a host that waits is no yes: a new label is saved, and the question stays.
   const home = row(page, 'home-pc')
-  await home.getByRole('button', { name: 'Edit' }).click()
-  // The edit fields open below the row, one host at a time.
+  await pick(page, home, 'Edit')
+  // The edit fields open below the row; Label is under More options.
+  const options = page.getByTestId('rh-more-options')
+  if ((await options.getAttribute('aria-expanded')) !== 'true') await options.click()
   await page.locator('input[id^="rh-label-"]').fill('Home PC')
-  await home.getByRole('button', { name: 'Done' }).click()
+  await page.getByTestId('rh-edit-done').click()
   await expect.poll(() => lastSaved()?.['home-pc']?.label, { timeout: 15_000 }).toBe('Home PC')
   expect(lastSaved()!['home-pc']).toMatchObject({ connect: 'ask', enabled: false })
   await expect(home.getByTestId('rh-found-question')).toBeVisible()

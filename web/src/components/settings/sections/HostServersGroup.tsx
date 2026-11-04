@@ -16,7 +16,8 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { apiGet, apiPost, apiPut } from '@/api/client';
 import { log } from '@/utils/log';
-import { SettingsDisclosure, SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsDisclosure, SettingsRow } from '../SettingsSection';
+import { SettingsFoldGroup } from '../SettingsFoldGroup';
 import { useFoldAttention } from '../SettingsFold';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -105,10 +106,17 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
 
   if (!data || data.hosts.length === 0) return null;
   const providers = data.providers;
+  const onCount = data.hosts.filter((h) => h.settings.enabled).length;
+  const summary = [
+    onCount ? `On for ${onCount} of ${data.hosts.length} ${data.hosts.length === 1 ? 'host' : 'hosts'}` : 'Off on every host',
+    needs ? `${needs} ${needs === 1 ? 'needs' : 'need'} a look` : '',
+  ].filter(Boolean).join(', ');
 
   return (
-    <SettingsGroup
+    <SettingsFoldGroup
+      id="rh-more-host-servers"
       heading="Walnut on a host"
+      summary={summary}
       footer="A browser opening it signs in with a code (Phones & Cloud, Open from a browser)."
       data-testid="host-servers"
     >
@@ -161,7 +169,8 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                 <span className="settings-addons-inline">
                   {on && line.retry && (
                     <SettingsButton variant="text" onClick={() => { void call(host.hostKey, () => apiPost(`${PATH}/${encodeURIComponent(host.hostKey)}/retry`)); }} data-testid={`host-server-retry-${host.hostKey}`}>
-                      Try again
+                      {/* A running Walnut on an older build: the retry starts this computer's build. */}
+                      {running && host.view?.notice ? 'Update to this build' : 'Try again'}
                     </SettingsButton>
                   )}
                   <ToggleSwitch
@@ -217,7 +226,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                     indent
                     label="Address"
                     help={<a className="settings-addons-link browser-access-url" href={tunnel.url} target="_blank" rel="noopener noreferrer" data-testid={`host-server-url-${host.hostKey}`}>{tunnel.url.replace(/^https?:\/\//, '')}</a>}
-                    control={<CopyButton text={tunnel.url} data-testid={`host-server-copy-url-${host.hostKey}`} />}
+                    control={<CopyButton text={tunnel.url} variant="default" data-testid={`host-server-copy-url-${host.hostKey}`} />}
                   />
                 )}
               </>
@@ -303,7 +312,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                     indent
                     label="Address"
                     help={<a className="settings-addons-link browser-access-url" href={tunnel.url} target="_blank" rel="noopener noreferrer" data-testid={`host-server-url-${host.hostKey}`}>{tunnel.url.replace(/^https?:\/\//, '')}</a>}
-                    control={<CopyButton text={tunnel.url} data-testid={`host-server-copy-url-${host.hostKey}`} />}
+                    control={<CopyButton text={tunnel.url} variant="default" data-testid={`host-server-copy-url-${host.hostKey}`} />}
                   />
                 )}
               </>
@@ -311,6 +320,6 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
           </Fragment>
         );
       })}
-    </SettingsGroup>
+    </SettingsFoldGroup>
   );
 }

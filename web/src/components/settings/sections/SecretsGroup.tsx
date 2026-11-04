@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { deleteSecret, fetchSecrets, saveSecret, type FleetSecret, type SecretChange } from '@/api/secrets';
 import { log } from '@/utils/log';
-import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsRow } from '../SettingsSection';
+import { SettingsFoldGroup } from '../SettingsFoldGroup';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SecretInput } from '../inputs/SecretInput';
@@ -31,8 +32,9 @@ export function copiesLine(s: FleetSecret, label: (host: string) => string): str
     if (c && c.version !== null) return [`${label(h)}: ${c.error ? `still there, removed when it connects (${c.error})` : 'removing'}`];
     return [];
   });
-  if (s.deletedAt) return `Deleted. ${parts.join(' · ')}`;
-  return parts.length ? parts.join(' · ') : 'Kept on this Mac only: tick a host to copy it there';
+  // A host's part can carry its own commas (an error), so the parts are kept apart by a semicolon.
+  if (s.deletedAt) return `Deleted. ${parts.join('; ')}`;
+  return parts.length ? parts.join('; ') : 'Kept on this Mac only: tick a host to copy it there';
 }
 
 /** Which field a refusal is about: it shows under that field, which takes the focus. */
@@ -96,7 +98,8 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
   }, [load]);
 
   if (state === null) return null;
-  const label = (host: string) => (host === LOCAL ? 'this Mac' : hostLabels[host] || host);
+  // A host's name, as its row says it (This Mac is a name here, like the others).
+  const label = (host: string) => (host === LOCAL ? 'This Mac' : hostLabels[host] || host);
   // A host no longer configured but still ticked stays in the list, so it can be unticked.
   const hostKeys = [...new Set([LOCAL, ...Object.keys(hostLabels), ...draft.hosts])];
   const open = (s: FleetSecret | null) => {
@@ -106,7 +109,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     // Add: straight into the Name field.
     if (!s) setFocusField('name-new');
   };
-  const close = () => { setEditing(null); setDraft(draftOf(null)); };
+  // Cancel ends the edit and what it was refused for (2026-11-04 review: the refusal stayed on top
+  // of the group after Cancel).
+  const close = () => { setEditing(null); setDraft(draftOf(null)); setError(null); };
   const isNew = editing === '';
 
   const save = async () => {
@@ -149,12 +154,17 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
     }
   };
 
+  const live = state.secrets.filter((s) => !s.deletedAt).length;
+  const secretsSummary = [
+    !state.active ? 'Off on a test server' : live ? `${live} ${live === 1 ? 'secret' : 'secrets'}` : 'None yet',
+    needs ? `${needs} ${needs === 1 ? 'needs' : 'need'} a look` : '',
+  ].filter(Boolean).join(', ');
   const footer = state.active
     ? 'Kept on this Mac and copied only to the hosts you tick, readable only by your account there, so a task there keeps working while the Mac is away. A value is never shown again, logged or synced. A session already running keeps the environment it started with: restart it after a rotate or revoke.'
     : 'This Walnut is a test or throwaway server: secrets live with your own Walnut.';
 
   return (
-    <SettingsGroup heading="Secrets" data-testid="fleet-secrets" footer={footer}>
+    <SettingsFoldGroup id="rh-more-secrets" heading="Secrets" data-testid="fleet-secrets" footer={footer} summary={secretsSummary}>
       {error && editing === null && <p className="hf-error" role="status">{error.text}</p>}
       {state.active && state.secrets.length === 0 && editing === null && (
         <SettingsRow label="No secret yet" help="Add one (a read-only GitHub token, say) and pick the hosts that may use it." />
@@ -163,8 +173,8 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
         <SettingsRow
           key={s.name}
           data-secret-name={s.name}
-          label={s.description ? `${s.name} · ${s.description}` : s.name}
-          help={`${copiesLine(s, label)}${s.env && s.sessions && s.hosts.length ? ` · sessions there get $${s.env}` : ''}`}
+          label={s.description ? `${s.name}: ${s.description}` : s.name}
+          help={`${copiesLine(s, label)}${s.env && s.sessions && s.hosts.length ? `; sessions there get $${s.env}` : ''}`}
           control={
             <>
               {!s.deletedAt && (
@@ -176,7 +186,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
         />
       ))}
       {state.active && editing === null && (
-        <SettingsRow label="Add a secret" control={<SettingsButton onClick={() => open(null)} data-testid="secret-add">Add…</SettingsButton>} />
+        <SettingsRow label="Add a secret" control={<SettingsButton onClick={() => open(null)} data-testid="secret-add">Add</SettingsButton>} />
       )}
       {editing !== null && (
         <div className="fleet-secret-editor" data-testid="secret-editor" ref={root}>
@@ -207,11 +217,11 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
           <SettingsRow error={error?.field === 'form' ? error.text : undefined} control={
             <>
               <SettingsButton variant="text" onClick={close} disabled={busy}>Cancel</SettingsButton>
-              <SettingsButton variant="primary" onClick={() => void save()} disabled={busy} data-testid="secret-save">{busy ? 'Saving…' : 'Save'}</SettingsButton>
+              <SettingsButton variant="primary" onClick={() => void save()} disabled={busy} data-testid="secret-save">{busy ? 'Saving...' : 'Save'}</SettingsButton>
             </>
           } />
         </div>
       )}
-    </SettingsGroup>
+    </SettingsFoldGroup>
   );
 }

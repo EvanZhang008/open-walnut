@@ -86,6 +86,34 @@ export async function openRemoteHostsMore(page: Page): Promise<void> {
 }
 
 export const hostRow = (page: Page, alias: string): Locator => page.locator(`#rh-host-${alias}`)
+/** A host's Details, open under its row (HostDetails.tsx). */
+export const hostDetails = (page: Page, alias: string): Locator => page.locator(`[data-testid="rh-details"][data-host="${alias}"]`)
+
+/** Picks an item of a host row's More menu (Edit, Details, Not now, Show again..., Remove). */
+export async function hostMenuPick(page: Page, alias: string, item: string | RegExp): Promise<void> {
+  await hostRow(page, alias).getByTestId('rh-row-more').click()
+  const menu = page.getByTestId('rh-row-menu')
+  await expect(menu).toBeVisible()
+  await menu.getByRole('menuitem', { name: item, exact: typeof item === 'string' }).click()
+  await expect(menu).toHaveCount(0)
+}
+
+/** Opens a host's Details (closed by default) and returns them. */
+export async function openHostDetails(page: Page, alias: string): Promise<Locator> {
+  const details = hostDetails(page, alias)
+  if (!(await details.count())) await hostMenuPick(page, alias, 'Details')
+  await expect(details).toBeVisible()
+  return details
+}
+
+/** Opens one More settings group (each is one folded line under More settings). */
+export async function openMoreGroup(page: Page, testId: string): Promise<Locator> {
+  await openRemoteHostsMore(page)
+  const toggle = page.getByTestId(`${testId}-toggle`)
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  return page.getByTestId(testId)
+}
 /** The Ask Walnut slot's card: only under slotLayout (the task panel hidden, the slot shown). */
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
 /** The task panel's card (the default layout). */

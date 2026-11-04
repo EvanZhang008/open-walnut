@@ -3,62 +3,73 @@
  * can see (2026-11-04, the user on Add host: "this button doesn't wrok can we make sure it
  * wroks?": it appended an empty row off screen, so a press looked like nothing happened).
  *
- * REGISTRY names every button the pane may show, by a stable key (data-testid, else a known
- * class, else role and accessible name, each host's name written `<host>`), with the check that
- * clicks it. The pane is swept after each step: a button the registry does not name fails the
- * run with its key, a registry key the run never saw fails it too, and so does a key whose
- * check never ran. Adding a button to the pane means adding its check here.
+ * REGISTRY names every button the pane may show, by a stable key (data-testid, else a menu
+ * item's key, else a known class, else role and accessible name, each host's name written
+ * `<host>`), with the check that clicks it. The pane (its build line and any menu it opened
+ * included) is swept after each step: a button the registry does not name fails the run with its
+ * key, a registry key the run never saw fails it too, and so does a key whose check never ran.
+ * Adding a button to the pane means adding its check here.
  *
  * SSH hosts are the server's host fixture (real status frames, real Retry, Check again and
  * Install). The rest is routed (remote-hosts-every-button-helpers.ts): nothing is saved to the
- * server's config, deleted, sent to a real host or started as an agent. Destructive buttons are
- * armed and then cancelled (Escape), or answered by the route. Navigation is by clicks. The
- * longer steps live in remote-hosts-every-button-steps.ts.
+ * server's config, deleted, sent to a real host or started as an agent. Destructive buttons ask
+ * first and are cancelled (Escape), or answered by the route. Navigation is by clicks. The
+ * longer steps live in remote-hosts-every-button-steps.ts and -rows.ts.
  *
  * Run: walnut-dev run env PW_WEBKIT=1 npx playwright test remote-hosts-every-button --project=webkit
  *      walnut-dev run npx playwright test remote-hosts-every-button --project=chromium-host-fixture
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { fixtureCounters, hostFixture, resetServerHostFixture } from './host-problems-fixture-helpers'
-import { armThenCancel, flip, isChromium, openFixturePane, paneKeys } from './remote-hosts-every-button-helpers'
+import { expectFocusKept, flip, isChromium, openFixturePane, paneKeys, pick, row } from './remote-hosts-every-button-helpers'
 import {
   ADD_ITEMS, checkAddHost, checkExecGrants, checkHostServers, checkJoinLink, checkMoreSettings, checkSecrets, checkSessionLimits, expectRing, type StepCtx,
 } from './remote-hosts-every-button-steps'
+import { checkAlphaRow } from './remote-hosts-every-button-rows'
 
-test.setTimeout(300_000)
+test.setTimeout(360_000)
 // A button that is not there fails in seconds, not at the end of the test's budget.
 test.use({ actionTimeout: 15_000 })
 
 /** Every button the pane may show, and the check that clicks it. `optional`: it depends on the engine. */
 const REGISTRY: Record<string, { check: string; optional?: true }> = {
-  'Header/button#remote-hosts-add': { check: 'a menu with the two ways in, under the button; each lands in view with its first control focused and ringed' },
-  'Header/button#remote-hosts-copy-diagnostics': { check: 'reads /api/diagnostics; says Copied or why not' },
-  'Overview/button#host-fleet-toggle': { check: 'folds and opens the Overview; opening reads every host again' },
-  'Overview/button#host-fleet-refresh': { check: 'asks to read every host again; Refreshing... until the read ends' },
-  'Overview/button#host-fleet-topo-node': { check: 'each node lands on its host\'s row in Hosts (this computer: its card), focused' },
-  'Overview/button#host-fleet-details-toggle': { check: 'shows and hides each card\'s details, reading that host again' },
-  'Overview/button#host-fleet-fix': { check: 'Setting up..., then the card says it is set up' },
-  'Overview/button#host-fleet-connect': { check: 'Retrying..., then the host is a card that says Connected, holding the focus' },
-  'Hosts/button:Remove <host>': { check: 'quiet until armed; Escape keeps the host; confirm on a new row or a machine takes it away and focuses the next row' },
-  'Hosts/button:Edit': { check: 'opens the host\'s fields with its values (Done), and closes them' },
-  'Hosts/switch:Use <host>': { check: 'flips and saves the host off, then on; a visible Use label beside it' },
+  'Header/button#remote-hosts-add': { check: 'the one header action: a menu with the two ways in, under the button; each lands at the top of the list, in view, focused and ringed' },
+  'Add host menu/menuitem[join]': { check: 'Making a link... at once, then the link with its Copy focused; a failure says why with Try again' },
+  'Add host menu/menuitem[ssh]': { check: 'a new row at the top, Hostname focused; a second press goes to the same empty row' },
+  'Footer/button#remote-hosts-copy-diagnostics': { check: 'the page-end link copies the hosts section: reads /api/diagnostics; says Copied or why not' },
+  'Pane/button#host-fleet-refresh': { check: 'one Refreshing... for the page until the read ends' },
+  'Pane/button#rh-summary-needs': { check: 'goes to the first row that needs a look, focused and ringed' },
+  'Pane/button#remote-hosts-map-toggle': { check: 'opens and closes the network map' },
+  'Pane/button#host-fleet-topo-node': { check: 'each node lands on its host\'s row, focused' },
+  'Pane/button#remote-hosts-more-toggle': { check: 'closed: says what is inside and how much needs a look; open: one line per group' },
+  'Hosts/button#rh-row-more': { check: 'opens the row\'s menu under it; Escape gives the focus back' },
+  'Row menu/menuitem[edit]': { check: 'opens the fields in place (Done editing closes them); Escape closes them too' },
+  'Row menu/menuitem[details]': { check: 'opens Details in place (Hide details closes them), reading that host again' },
+  'Row menu/menuitem[turn-off]': { check: 'saves the host off; the row says Off and offers Turn on' },
+  'Row menu/menuitem[not-now]': { check: 'answers not_now; the focus stays on the row' },
+  'Row menu/menuitem[show-again]': { check: 'the host\'s problem shows on the home page again; the focus stays on the row' },
+  'Row menu/menuitem[remove]': { check: 'last and red; asks "Remove <host>?" with Cancel focused' },
+  'Hosts/button#rh-row-confirm-cancel': { check: 'keeps the host, sends nothing, the focus back on More' },
+  'Hosts/button#rh-row-confirm-remove': { check: 'takes the host away and focuses the next row' },
+  'Hosts/button#rh-row-connect': { check: 'Retry on a failed host (Retrying...) and Connect now on a machine (Connecting...), then Connected; the focus stays on the row' },
+  'Hosts/button#rh-found-connect': { check: 'Connecting..., answers yes; the row becomes a host; the focus stays on the row' },
+  'Hosts/button#rh-readiness-fix-claude_missing': { check: 'the row\'s one action: Installing..., then Installed, said once' },
+  'Hosts/button#host-fleet-fix': { check: 'Setting up..., then the row says it is set up' },
+  'Hosts/button#rh-turn-on': { check: 'saves the host on again' },
+  'Hosts/button#rh-draft-cancel': { check: 'takes an untouched new row away with no confirm' },
+  'Hosts/button#rh-edit-done': { check: 'closes the fields; the focus goes to More' },
+  'Hosts/button#rh-more-options': { check: 'shows and hides label, shell setup and what it keeps' },
   'Hosts/switch:Keep notes on <host>': { check: 'flips and saves keep.notes' },
   'Hosts/switch:Keep attachments on <host>': { check: 'flips and saves keep.attachments' },
   'Hosts/switch:Keep memory on <host>': { check: 'flips and saves keep.memory' },
   'Hosts/switch:Keep skills on <host>': { check: 'flips and saves keep.skills' },
-  'Hosts/button#rh-found-not-now': { check: 'answers not_now; the question says Walnut does not connect' },
-  'Hosts/button#rh-found-connect': { check: 'answers yes; the row becomes a host with its switch on' },
-  'Hosts/button#host-profile-toggle-<host>': { check: 'under Edit: opens What Walnut knows (reads the profile and the host), closes it' },
-  'Hosts/button:Kind of <host>': { check: 'opens the kinds; Escape gives the focus back; a pick is saved and shown' },
+  'Hosts/button:Kind of <host>': { check: 'in Details: opens the kinds; Escape gives the focus back; a pick is saved and shown' },
   'Hosts/button:Probe again': { check: 'asks for a probe; the new system line shows' },
   'Hosts/button.mic-btn': { check: 'unconfigured voice: takes you to Settings > Voice', optional: true },
   'Hosts/button.setup-copy-btn': { check: 'says Copied or Copy failed' },
   'Hosts/button.hc-other': { check: 'shows and hides the other commands' },
   'Hosts/button#rh-readiness-recheck': { check: 'Checking..., then Check again; the server checked once' },
-  'Hosts/button#rh-readiness-fix-claude_missing': { check: 'asks for the install (agents: true); Installing..., then Installed' },
-  'Hosts/button.rh-connect-btn': { check: 'Retry on a failed host and Connect now on a machine: Retrying..., then Connected' },
   'Hosts/button.hft-details': { check: 'shows and hides the failure details' },
-  'Hosts/button.rh-show-again-btn': { check: 'the host\'s problem shows on the home page again' },
   'Hosts/radio#host-network-os-mac': { check: 'the Terminal command for a Mac (the default)' },
   'Hosts/radio#host-network-os-linux': { check: 'the terminal command for Linux' },
   'Hosts/radio#host-network-os-windows': { check: 'the Windows app and its link' },
@@ -68,11 +79,15 @@ const REGISTRY: Record<string, { check: string; optional?: true }> = {
   'Hosts/link:Walnut for Windows': { check: 'opens the download in a new tab' },
   'Hosts/button#host-network-more': { check: 'shows and hides the notes about the link' },
   'Hosts/button#host-network-new-link': { check: 'an expired link: makes a new one, its Copy focused' },
-  'Pane/button#remote-hosts-more-toggle': { check: 'closed: says what is inside and how much needs a look; opens the groups' },
+  'Hosts/button#host-network-done': { check: 'puts the link away; the focus goes back to Add host' },
+  'Hosts/button#host-network-try-again': { check: 'a link that could not be made: makes one, its Copy focused' },
+  'Hosts/button#host-network-error-done': { check: 'puts the refusal away; the focus goes back to Add host' },
+  'Relay/button#host-network-relay-toggle': { check: 'says which relay is in use; opens the choices' },
   'Relay/radio[relay=own]': { check: 'disabled without a companion, and says why' },
   'Relay/radio[relay=public]': { check: 'picked again: saved and checked' },
   'Relay/radio[relay=none]': { check: 'saved and checked' },
-  'Walnut on a host/button#host-server-retry-<host>': { check: 'busy, then the host starts the new build' },
+  'Walnut on a host/button#host-servers-toggle': { check: 'says how many hosts run Walnut and what needs a look; opens the group' },
+  'Walnut on a host/button#host-server-retry-<host>': { check: '"Update to this build" on an older build: busy, then the host starts the new build' },
   'Walnut on a host/switch#host-server-enabled-<host>': { check: 'flips and saves off, then on' },
   'Walnut on a host/button#host-server-copies-toggle-<host>': { check: 'says how many kinds are copied; shows and hides the 11 switches' },
   'Walnut on a host/switch#host-server-copy-<host>-<kind>': { check: 'every copy switch flips and saves its kind, and back; the line counts it' },
@@ -80,21 +95,25 @@ const REGISTRY: Record<string, { check: string; optional?: true }> = {
   'Walnut on a host/link#host-server-url-<host>': { check: 'opens the host\'s address in a new tab' },
   'Walnut on a host/button#host-server-copy-url-<host>': { check: 'copies the address' },
   'Walnut on a host/button#host-server-tunnel-retry-<host>': { check: 'the tunnel starts again' },
+  'Tasks using other hosts/button#host-exec-grants-toggle': { check: 'says how many tasks are allowed and declined; opens the group' },
   'Tasks using other hosts/switch:Tasks on other hosts may use <host>': { check: 'flips and saves the host closed (it says Off), then open' },
   'Tasks using other hosts/button:Revoke <task> on <host>': { check: 'revokes (routed); the grant goes' },
   'Tasks using other hosts/button:Allow <task> on <host>': { check: 'allows (routed); it becomes a grant' },
+  'Secrets/button#fleet-secrets-toggle': { check: 'says how many secrets; opens the group' },
   'Secrets/button:Edit <secret>': { check: 'opens the editor on that secret' },
   'Secrets/button:Replace': { check: 'a value field, focused' },
   'Secrets/button.secret-toggle': { check: 'shows the typed value, hides it again' },
-  'Secrets/button:Cancel': { check: 'closes the editor, saves nothing' },
-  'Secrets/button#secret-add': { check: 'opens the editor for a new secret, Name focused' },
+  'Secrets/button:Cancel': { check: 'closes the editor, saves nothing, and takes a refusal with it' },
+  'Secrets/button#secret-add': { check: 'opens the editor for a new secret, Name focused, no old refusal' },
   'Secrets/button#secret-save': { check: 'refuses a blank name, and sessions without a variable, each under its field, focused; saves a valid one (routed)' },
   'Secrets/checkbox#secret-host-<host>': { check: 'ticks a host; the save copies to it' },
   'Secrets/checkbox#secret-sessions': { check: 'ticks; the save asks for the variable, then sends sessions: true' },
   'Secrets/button:Delete <secret>': { check: 'arms Confirm delete, Escape keeps it; confirm sends the DELETE (routed) and the row goes' },
   'Removals to confirm/button#replica-removal-confirm-host:<host>/notes': { check: 'arms Confirm remove, Escape sends nothing; confirm sends what the row read (routed) and the row waits' },
+  'Session limits/button#rh-session-limits-toggle': { check: 'names each limit by host; opens the group' },
   'Session limits/button:Remove the limit for <host>': { check: 'the limit row goes and the limits save without it' },
-  'Session limits/button:Add': { check: 'off until a host and a number are typed; adds the limit row and saves it' },
+  'Session limits/combobox#rh-limit-new-host': { check: 'a host picked from the list, by its name' },
+  'Session limits/button:Add': { check: 'off until a host and a number are picked; adds the limit row and saves it' },
 }
 
 interface Ctx extends StepCtx { seen: Set<string>; ranKeys: Set<string> }
@@ -102,6 +121,7 @@ interface Ctx extends StepCtx { seen: Set<string>; ranKeys: Set<string> }
 const unknownKeys = (keys: string[]) => keys.filter((k) => !(k in REGISTRY))
 
 const pane = (page: Page) => page.locator('#remote-hosts')
+const menu = (page: Page) => page.getByTestId('rh-row-menu')
 
 async function setUp(page: Page, request: APIRequestContext): Promise<Ctx> {
   const routes = await openFixturePane(page, request)
@@ -138,108 +158,84 @@ test.describe('Settings > Remote Hosts: every button', () => {
     const { routes, sweep, ran } = ctx
     await sweep()
 
-    await test.step('header: Add host and Copy diagnostics', async () => {
-      await checkAddHost(ctx)
-      const diag = page.locator('[data-testid="remote-hosts-copy-diagnostics"]:visible').first()
-      await expect(diag).toHaveText('Copy diagnostics')
-      const read = page.waitForRequest((r) => new URL(r.url()).pathname === '/api/diagnostics')
-      await diag.click()
-      await read
-      await expect(diag.filter({ hasText: 'Copied' }).or(page.locator('.settings-copy-diagnostics-error:visible'))).toBeVisible({ timeout: 20_000 })
-      ran('Header/button#remote-hosts-copy-diagnostics')
-    })
+    await test.step('the list: one line for the fleet, one row per machine, one action each', async () => {
+      // One fleet: the summary counts the machines the list shows (2026-11-04 review: two fixtures).
+      await expect(page.getByTestId('rh-summary-online')).toHaveText('2 of 4 online')
+      await expect(page.getByTestId('rh-summary-sessions')).toHaveText('4 sessions open')
+      await expect(page.getByTestId('rh-summary-spend')).toHaveText('$241 in 30 days')
+      await expect(page.getByTestId('rh-summary-needs')).toHaveText(/^\d need a look$/)
+      for (const alias of ['__local__', 'devbox', 'downbox', 'gpu-box', 'lab-mac', 'fixture-remote']) await expect(row(page, alias)).toHaveCount(1)
+      await expect(row(page, '__local__').locator('.rh-host-name')).toHaveText('This Mac')
+      // At most one action per row, every one in one column beside its name line.
+      const boxes = await page.locator('[data-testid="remote-hosts-list"] .rh-host-row').evaluateAll((rows) => rows.map((r) => {
+        const more = r.querySelector('[data-testid="rh-row-more"]')!.getBoundingClientRect()
+        const name = r.querySelector('.rh-row-name-line')!.getBoundingClientRect()
+        return { primaries: r.querySelectorAll('.rh-row-primary > button').length, right: Math.round(more.right), dy: Math.abs(more.top + more.height / 2 - (name.top + name.height / 2)) }
+      }))
+      for (const b of boxes) expect(b.primaries).toBeLessThanOrEqual(1)
+      expect(new Set(boxes.map((b) => b.right)).size).toBe(1)
+      for (const b of boxes) expect(b.dy).toBeLessThanOrEqual(2)
+      // The header has one action.
+      await expect(page.locator('#remote-hosts .settings-pane-header button')).toHaveCount(1)
 
-    await test.step('Overview', async () => {
-      const toggle = page.getByTestId('host-fleet-toggle')
-      const reads = () => routes.callsTo('POST', '/api/v1/hosts/refresh').length
-      await toggle.click()
-      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-      await expect(page.getByTestId('host-fleet-summary')).toHaveCount(0)
-      const n = reads()
-      await toggle.click()
-      await expect(page.getByTestId('host-fleet-summary')).toBeVisible()
-      expect((await routes.nth('POST', '/api/v1/hosts/refresh', n + 1)).body).toEqual({})
-      // The read the opening started runs a moment (Refreshing...), then Refresh is back.
+      // "need a look" goes to the first row that does.
+      await page.getByTestId('rh-summary-needs').click()
+      await expectRing(page, page.locator('[data-testid="remote-hosts-list"] [data-needs-look="true"]').first())
+      ran('Pane/button#rh-summary-needs')
+
+      // One Refreshing... for the whole page, then Refresh is back.
+      const reads = routes.callsTo('POST', '/api/v1/hosts/refresh').length
       const refresh = page.getByTestId('host-fleet-refresh')
-      await expect(refresh).toBeVisible({ timeout: 10_000 })
       await refresh.click()
       await expect(page.getByTestId('host-fleet-refreshing')).toHaveText('Refreshing...')
-      expect((await routes.nth('POST', '/api/v1/hosts/refresh', n + 2)).body).toEqual({})
+      await expect(page.getByText('Refreshing...', { exact: true })).toHaveCount(1)
+      expect((await routes.nth('POST', '/api/v1/hosts/refresh', reads + 1)).body).toEqual({})
       await expect(refresh).toBeVisible({ timeout: 10_000 })
-      ran('Overview/button#host-fleet-toggle', 'Overview/button#host-fleet-refresh')
+      ran('Pane/button#host-fleet-refresh')
+    })
 
-      // A node lands on its host's row in Hosts (the card was already in view); this computer has no row.
+    await test.step('header: Add host (a slow link, the SSH draft, Cancel and Escape)', async () => {
+      await checkAddHost(ctx)
+    })
+
+    await test.step('the network map', async () => {
+      const toggle = page.getByTestId('remote-hosts-map-toggle')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(toggle).toContainText('How this Mac reaches each host.')
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
       const nodes = page.getByTestId('host-fleet-topo-node')
       const hosts = await nodes.evaluateAll((els) => els.map((el) => el.getAttribute('data-host')!))
-      expect(hosts.length).toBeGreaterThanOrEqual(3)
+      expect(hosts.sort()).toEqual(['__local__', 'devbox', 'downbox', 'gpu-box'])
+      // The map names this machine as the list does.
+      await expect(page.locator('[data-testid="host-fleet-topo-node"][data-host="__local__"] .hf-topo-name')).toHaveText('This Mac')
+      await sweep()
       for (const host of hosts) {
         await page.locator(`[data-testid="host-fleet-topo-node"][data-host="${host}"]`).click()
-        const row = page.locator(`[id="rh-host-${host}"]`)
-        const target = (await row.count()) ? row : page.locator(`[id="hf-card-${host}"]`)
+        const target = page.locator(`[id="rh-host-${host}"]`)
         await expectRing(page, target)
         await expect(target).toBeInViewport()
       }
-      await expect(page.locator('[id="rh-host-devbox"]')).toHaveCount(1)
-      ran('Overview/button#host-fleet-topo-node')
-
-      for (const host of ['__local__', 'devbox', 'farbox']) {
-        const box = page.locator(`[id="hf-card-${host}"]`)
-        const t = box.getByTestId('host-fleet-details-toggle')
-        const before = reads()
-        await t.click()
-        await expect(t).toHaveText('Hide details')
-        await expect(box.getByTestId('host-fleet-details')).toBeVisible()
-        expect((await routes.nth('POST', '/api/v1/hosts/refresh', before + 1)).body).toEqual({ hosts: [host] })
-      }
-      await sweep()
-      for (const host of ['__local__', 'devbox', 'farbox']) {
-        const box = page.locator(`[id="hf-card-${host}"]`)
-        await box.getByTestId('host-fleet-details-toggle').click()
-        await expect(box.getByTestId('host-fleet-details')).toHaveCount(0)
-      }
-      ran('Overview/button#host-fleet-details-toggle')
-
-      const alpha = page.locator('[id="hf-card-devbox"]')
-      const fix = alpha.getByTestId('host-fleet-fix')
-      await expect(fix).toHaveText('Set up')
-      const releaseBoot = routes.gate('boot')
-      await fix.click()
-      await expect(fix).toHaveText('Setting up...')
-      releaseBoot()
-      await expect(alpha.getByTestId('host-fleet-problem')).toHaveCount(0)
-      await expect(alpha.getByTestId('host-fleet-action-note')).toHaveText('Set up: starts by itself after a reboot (as a systemd user service).')
-      expect(routes.callsTo('POST', '/api/v1/hosts/devbox/boot-start')).toHaveLength(1)
-      ran('Overview/button#host-fleet-fix')
-
-      // Far box's last try failed: Retry, the host's one connect attempt (the Hosts list's words).
-      // Once it answers, the host is live: its card says so and takes the focus the row had.
-      const connect = page.locator('[data-testid="host-fleet-offline"][data-host="farbox"]').getByTestId('host-fleet-connect')
-      await expect(connect).toHaveText('Retry')
-      await expect(connect).toHaveClass(/rh-connect-btn/)
-      const releaseConnect = routes.gate('connect:farbox')
-      await connect.click()
-      await expect(connect).toHaveText('Retrying...')
-      releaseConnect()
-      const far = page.locator('[data-testid="host-fleet-card"][data-host="farbox"]')
-      await expect(far).toBeVisible({ timeout: 10_000 })
-      await expect(far.getByTestId('host-fleet-action-note')).toHaveText('Connected.')
-      await expect(page.locator('[data-testid="host-fleet-offline"][data-host="farbox"]')).toHaveCount(0)
-      await expectRing(page, far)
-      expect(routes.callsTo('POST', '/api/hosts/farbox/connect')).toHaveLength(1)
-      ran('Overview/button#host-fleet-connect')
+      await toggle.click()
+      await expect(nodes.first()).toBeHidden()
+      ran('Pane/button#remote-hosts-map-toggle', 'Pane/button#host-fleet-topo-node')
     })
 
-    await test.step('Hosts: Edit, keep switches, Use, Remove', async () => {
-      const alpha = page.locator('#rh-host-devbox')
-      // Found by its place: its name is Edit, then Done.
-      const edit = alpha.locator('button.settings-button[aria-expanded]')
-      await expect(edit).toHaveText('Edit')
-      await expect(page.getByTestId('host-profile-toggle-devbox')).toHaveCount(0)
-      await edit.click()
-      await expect(edit).toHaveText('Done')
-      await expect(edit).toHaveAttribute('aria-expanded', 'true')
+    await test.step('Alpha box: its menu, Details, Install, Set up', async () => { await checkAlphaRow(ctx) })
+
+    await test.step('Alpha box: Edit (Escape closes), keep switches, Turn off and on, Remove asks', async () => {
+      const alpha = row(page, 'devbox')
+      const more = alpha.getByTestId('rh-row-more')
+      await pick(page, alpha, 'Edit')
+      const hostname = page.locator('input[id^="rh-hostname-"]')
+      await expect(hostname).toHaveValue('alpha.example.com')
+      await expect(hostname).toBeFocused()
       await expect(page.locator('input[id^="rh-alias-"]')).toHaveValue('devbox')
-      await expect(page.locator('input[id^="rh-hostname-"]')).toHaveValue('alpha.example.com')
+      // The rest is folded under More options.
+      const opts = page.getByTestId('rh-more-options')
+      await expect(page.getByRole('switch', { name: 'Keep notes on Alpha box' })).toBeHidden()
+      await opts.click()
+      await expect(opts).toHaveAttribute('aria-expanded', 'true')
       await sweep()
       for (const what of ['notes', 'attachments', 'memory', 'skills'] as const) {
         const sw = pane(page).getByRole('switch', { name: `Keep ${what} on Alpha box` })
@@ -251,192 +247,181 @@ test.describe('Settings > Remote Hosts: every button', () => {
         })
         ran(`Hosts/switch:Keep ${what} on <host>`)
       }
-      await edit.click()
-      await expect(edit).toHaveText('Edit')
-      await expect(page.locator('input[id^="rh-alias-"]')).toHaveCount(0)
-      ran('Hosts/button:Edit')
+      await opts.click()
+      ran('Hosts/button#rh-more-options')
+      // Escape closes the fields, and the focus goes to the row's More.
+      await hostname.focus()
+      await page.keyboard.press('Escape')
+      await expect(hostname).toHaveCount(0)
+      await expectRing(page, more)
+      // Done does the same.
+      await pick(page, alpha, 'Edit')
+      await page.getByTestId('rh-edit-done').click()
+      await expect(hostname).toHaveCount(0)
+      await expectRing(page, more)
+      ran('Row menu/menuitem[edit]', 'Hosts/button#rh-edit-done')
 
-      await expect(alpha.locator('.rh-use-label')).toHaveText('Use')
-      const use = alpha.getByRole('switch', { name: 'Use Alpha box' })
-      const base = routes.callsTo('PUT', '/api/config').length
-      let k = 0
-      await flip(use, async (on) => {
-        const put = await routes.nth('PUT', '/api/config', base + ++k)
-        expect((put.body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(on)
-      })
-      ran('Hosts/switch:Use <host>')
-      const remove = alpha.locator('button[data-armed]')
-      await expect(remove).toHaveClass(/settings-button-text/)
-      await armThenCancel(routes, remove, 'Remove', 'Confirm remove')
+      // Turn off saves it off; Turn on, its row's one action now, saves it on.
+      const puts = routes.callsTo('PUT', '/api/config').length
+      await pick(page, alpha, 'Turn off')
+      expect(((await routes.nth('PUT', '/api/config', puts + 1)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(false)
+      await expect(alpha.getByTestId('rh-row-state')).toHaveText('Off: Walnut does not connect to it.')
+      await sweep()
+      await alpha.getByTestId('rh-turn-on').click()
+      expect(((await routes.nth('PUT', '/api/config', puts + 2)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(true)
+      await expect(alpha.getByTestId('rh-turn-on')).toHaveCount(0)
+      await expectFocusKept(page)
+      ran('Row menu/menuitem[turn-off]', 'Hosts/button#rh-turn-on')
+
+      // Remove: last, red, and it asks, naming the host; Cancel (focused) and Escape keep it.
+      const calls = routes.calls.length
+      await pick(page, alpha, 'Remove')
+      const confirm = page.getByTestId('rh-row-confirm')
+      await expect(confirm).toContainText('Remove Alpha box?')
+      await expect(confirm.getByTestId('rh-row-confirm-remove')).toHaveClass(/settings-button-danger/)
+      await expect(confirm.getByTestId('rh-row-confirm-cancel')).toBeFocused()
+      await sweep()
+      await page.keyboard.press('Escape')
+      await expect(confirm).toHaveCount(0)
+      await expect(more).toBeFocused()
+      await pick(page, alpha, 'Remove')
+      await confirm.getByTestId('rh-row-confirm-cancel').click()
+      await expect(confirm).toHaveCount(0)
+      await expect(more).toBeFocused()
+      expect(routes.calls.slice(calls).filter((c) => c.method !== 'GET')).toEqual([])
       await expect(alpha).toBeVisible()
+      ran('Row menu/menuitem[remove]', 'Hosts/button#rh-row-confirm-cancel')
     })
 
-    await test.step('Hosts: an alias another host has is refused, and nothing is saved over it', async () => {
+    await test.step('a new host: an alias another host has is refused; Saved, and no Connect now before', async () => {
       const puts = routes.callsTo('PUT', '/api/config').length
       await page.locator('[data-testid="remote-hosts-add"]:visible').first().click()
       await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+      const hostname = page.locator('input[id^="rh-hostname-"]')
       const alias = page.locator('input[id^="rh-alias-"]')
+      await hostname.fill('dup.example.com')
       await alias.fill('devbox')
-      await page.locator('input[id^="rh-hostname-"]').fill('dup.example.com')
       const refusal = pane(page).locator('.settings-row-error', { hasText: 'devbox is already Alpha box. Pick another alias.' })
       await expect(refusal).toBeVisible()
       await expect(alias).toHaveAttribute('aria-invalid', 'true')
       await expect(pane(page).locator('.rh-host-row:not([data-host-alias])')).toContainText('Not saved until it has an alias of its own.')
       // Alpha box keeps its row (and its status): one row has its id.
       await expect(page.locator('[id="rh-host-devbox"]')).toHaveCount(1)
-      await expect(page.locator('#rh-host-devbox')).toContainText('alpha.example.com')
       // Three times the autosave's wait: nothing went out.
       await page.waitForTimeout(1_800)
       expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
 
+      // Until the save lands the row says Saving..., with no Connect now (2026-11-04 review).
+      const release = routes.gate('config-put')
       await alias.fill('labbox')
       await expect(refusal).toHaveCount(0)
-      const saved = (await routes.nth('PUT', '/api/config', puts + 1)).body as { hosts: Record<string, Record<string, unknown>> }
+      const lab = row(page, 'labbox')
+      await expect(lab.getByTestId('rh-row-state')).toHaveText('Saving...')
+      await routes.nth('PUT', '/api/config', puts + 1)
+      await expect(lab.getByTestId('rh-row-connect')).toHaveCount(0)
+      release()
+      await expect(lab.getByTestId('rh-row-saved')).toHaveText('Saved.')
+      const saved = routes.callsTo('PUT', '/api/config')[puts].body as { hosts: Record<string, Record<string, unknown>> }
       expect(saved.hosts.devbox).toMatchObject({ hostname: 'alpha.example.com', label: 'Alpha box' })
       expect(saved.hosts.labbox).toMatchObject({ hostname: 'dup.example.com' })
-      const row = page.locator('[data-host-alias="labbox"]')
-      const remove = row.locator('button[data-armed]')
-      await remove.click()
-      await remove.click()
-      await expect(row).toHaveCount(0)
+      await expect(lab.getByTestId('rh-row-saved')).toHaveCount(0, { timeout: 6_000 })
+
+      // Remove asks, then takes it away; the focus goes to the next row.
+      await pick(page, lab, 'Done editing')
+      await pick(page, lab, 'Remove')
+      await page.getByTestId('rh-row-confirm').getByTestId('rh-row-confirm-remove').click()
+      await expect(lab).toHaveCount(0)
       const after = (await routes.nth('PUT', '/api/config', puts + 2)).body as { hosts: Record<string, Record<string, unknown>> }
       expect(Object.keys(after.hosts)).not.toContain('labbox')
       expect(after.hosts.devbox).toMatchObject({ hostname: 'alpha.example.com', label: 'Alpha box' })
+      await expect(page.locator(':focus')).toHaveAttribute('data-row-key', /^(ssh|fleet|net):/)
+      ran('Hosts/button#rh-row-confirm-remove')
     })
 
-    await test.step('Hosts: a host found in ~/.ssh/config', async () => {
-      const lab = page.locator('#rh-host-lab-mac')
+    await test.step('lab-mac, found in ~/.ssh/config: Connect, Not now in its menu, the focus kept', async () => {
+      const lab = row(page, 'lab-mac')
       const q = lab.getByTestId('rh-found-question')
       await expect(q).toHaveText('Walnut found lab-mac in ~/.ssh/config. Connect to it?')
-      await lab.getByTestId('rh-found-not-now').click()
+      await pick(page, lab, 'Not now', sweep)
       expect((await routes.nth('POST', '/api/hosts/lab-mac/found-answer', 1)).body).toEqual({ answer: 'not_now' })
       await expect(q).toHaveText('Found in ~/.ssh/config. Walnut does not connect to it.')
-      await expect(lab.getByTestId('rh-found-not-now')).toHaveCount(0)
+      await expectFocusKept(page)
+      ran('Row menu/menuitem[not-now]')
       await sweep()
-      await lab.getByTestId('rh-found-connect').click()
+      const connect = lab.getByTestId('rh-found-connect')
+      await connect.focus()
+      await page.keyboard.press('Enter')
       expect((await routes.nth('POST', '/api/hosts/lab-mac/found-answer', 2)).body).toEqual({ answer: 'yes' })
       await expect(q).toHaveCount(0)
-      await expect(lab.getByRole('switch', { name: 'Use lab-mac' })).toHaveAttribute('aria-checked', 'true')
-      ran('Hosts/button#rh-found-not-now', 'Hosts/button#rh-found-connect')
+      await expectFocusKept(page)
+      ran('Hosts/button#rh-found-connect')
     })
 
-    await test.step('Hosts: What Walnut knows (under Edit)', async () => {
-      const edit = page.locator('#rh-host-devbox button.settings-button[aria-expanded]')
-      await edit.click()
-      const toggle = page.getByTestId('host-profile-toggle-devbox')
-      const before = routes.callsTo('POST', '/api/v1/hosts/refresh').length
-      await toggle.click()
-      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-      const body = page.getByTestId('host-profile-devbox')
-      await expect(body.getByTestId('host-profile-system')).toHaveText('Ubuntu 24.04 · x64 · 16 CPUs · 64 GB memory · 200 GB free')
-      expect((await routes.nth('POST', '/api/v1/hosts/refresh', before + 1)).body).toEqual({ hosts: ['devbox'] })
+    await test.step('Beta box, not connected: Details, Show again, Retry', async () => {
+      const beta = row(page, 'downbox')
+      await pick(page, beta, 'Details')
+      const details = page.locator('[data-testid="rh-details"][data-host="downbox"]')
+      const output = details.locator('button.hft-details')
+      await expect(output).toBeVisible()
       await sweep()
-      const kind = body.getByRole('button', { name: 'Kind of Alpha box' })
-      await expect(kind).toHaveText('Dev box (automatic) ▾')
-      const list = page.getByRole('listbox', { name: 'Kind of Alpha box' })
-      await kind.click()
-      await expect(list).toBeVisible()
-      await page.keyboard.press('Escape')
-      await expect(list).toHaveCount(0)
-      await expectRing(page, kind)
-      await kind.click()
-      await expect(list.getByRole('option')).toHaveText(['Automatic', 'Laptop', 'Cloud VM (public)', 'Cloud VM (private)', 'Dev box', 'Unknown'].map((t) => new RegExp(`${t.replace(/[()]/g, '\\$&')}$`)))
-      await list.getByRole('option', { name: /Laptop$/ }).click()
-      await expect(list).toHaveCount(0)
-      expect((await routes.nth('PATCH', '/api/v1/hosts/devbox/profile', 1)).body).toEqual({ kind: 'laptop' })
-      await expect(kind).toHaveText('Laptop ▾')
-      await expect(kind).toBeFocused()
-      await body.getByRole('button', { name: 'Probe again' }).click()
-      expect((await routes.nth('PATCH', '/api/v1/hosts/devbox/profile', 2)).body).toEqual({ refresh: true })
-      await expect(body.getByTestId('host-profile-system')).toContainText('32 CPUs')
-      await toggle.click()
-      await expect(body).toHaveCount(0)
-      await edit.click()
-      await expect(toggle).toHaveCount(0)
-      ran('Hosts/button#host-profile-toggle-<host>', 'Hosts/button:Kind of <host>', 'Hosts/button:Probe again')
-    })
-
-    await test.step('Hosts: a failed host (details, Show again, Retry)', async () => {
-      const beta = page.locator('#rh-host-downbox')
-      const details = beta.locator('button.hft-details')
-      await details.click()
-      await expect(details).toHaveAttribute('aria-expanded', 'true')
-      await expect(beta.locator('.hft-more')).toContainText('Connection timed out')
-      await details.click()
-      await expect(beta.locator('.hft-more')).toHaveCount(0)
+      await output.click()
+      await expect(output).toHaveAttribute('aria-expanded', 'true')
+      await expect(details.locator('.hft-more')).toContainText('Connection timed out')
+      await output.click()
+      await expect(details.locator('.hft-more')).toHaveCount(0)
       ran('Hosts/button.hft-details')
+      await pick(page, beta, 'Hide details')
 
-      await expect(beta.locator('.rh-banner-hidden')).toContainText('You hid this problem on the home page.')
-      await beta.locator('button.rh-show-again-btn').click()
-      await expect(beta.locator('.rh-banner-hidden')).toHaveCount(0)
+      await expect(beta.getByTestId('rh-banner-hidden')).toHaveText('You hid this problem on the home page.')
+      await pick(page, beta, 'Show again on the home page', sweep)
+      await expect(beta.getByTestId('rh-banner-hidden')).toHaveCount(0)
       expect(await page.evaluate(() => localStorage.getItem('open-walnut-host-banner-dismissed') ?? '')).not.toContain('downbox')
-      ran('Hosts/button.rh-show-again-btn')
+      await expectFocusKept(page)
+      ran('Row menu/menuitem[show-again]')
 
       await hostFixture(request, { action: 'set-next-connect', host: 'downbox', result: 'ok' })
-      const retry = beta.locator('button.rh-connect-btn')
+      const retry = beta.getByTestId('rh-row-connect')
       await expect(retry).toHaveText('Retry')
       const tries = (await fixtureCounters(request)).connect.downbox ?? 0
-      await retry.click()
-      await expect(beta.locator('.rh-status-short')).toHaveText('Connected', { timeout: 15_000 })
+      await retry.focus()
+      await page.keyboard.press('Enter')
+      await expect(beta.getByTestId('host-fleet-action-note')).toHaveText('Connected.', { timeout: 15_000 })
       expect((await fixtureCounters(request)).connect.downbox).toBe(tries + 1)
+      await expectFocusKept(page)
     })
 
-    await test.step('Hosts: Claude Code is missing (Copy, Other ways, Check again, Install)', async () => {
-      const block = page.locator('.rh-readiness-block[data-host="devbox"]')
-      const copy = block.locator('button.setup-copy-btn').first()
-      await copy.click()
-      await expect(copy).toHaveAccessibleName(/^(Copied|Copy failed)$/)
-      const other = block.locator('button.hc-other')
-      await other.click()
-      await expect(other).toHaveAttribute('aria-expanded', 'true')
-      await expect(block.locator('.hc-other-list')).toContainText('npm install -g @anthropic-ai/claude-code')
-      await sweep()
-      await other.click()
-      await expect(block.locator('.hc-other-list')).toHaveCount(0)
-      ran('Hosts/button.setup-copy-btn', 'Hosts/button.hc-other')
-
-      const check = block.getByTestId('rh-readiness-recheck')
-      const checks = (await fixtureCounters(request)).check.devbox ?? 0
-      await check.click()
-      await expect(check).toHaveText('Checking...')
-      await expect(check).toHaveText('Check again', { timeout: 10_000 })
-      expect((await fixtureCounters(request)).check.devbox).toBe(checks + 1)
-      ran('Hosts/button#rh-readiness-recheck')
-
-      // Installing..., and then where it ended: Installed (the server's fix note), the problem gone.
-      const install = block.getByTestId('rh-readiness-fix-claude_missing')
-      await expect(install).toHaveText('Install')
-      const asked = page.waitForRequest((q) => q.method() === 'POST' && q.url().endsWith('/api/hosts/devbox/connect'))
-      await install.click()
-      expect((await asked).postDataJSON()).toEqual({ agents: true })
-      await expect(page.locator('#rh-host-devbox')).toContainText('Installing Claude Code on Alpha box')
-      await expect(block.locator('.rh-readiness-note')).toContainText('Installed Claude Code', { timeout: 20_000 })
-      await expect(install).toHaveCount(0)
-      await expect(page.locator('#rh-host-devbox')).not.toContainText('Installing Claude Code')
-      ran('Hosts/button#rh-readiness-fix-claude_missing')
-    })
-
-    await test.step('Hosts: the join link, and a machine that joined with one', async () => {
+    await test.step('the join link, and gpu-box, a machine that joined with one', async () => {
+      await page.locator('[data-testid="remote-hosts-add"]:visible').first().click()
+      await page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[0] }).click()
+      await expectRing(page, page.getByTestId('host-network-copy'))
       await checkJoinLink(ctx)
-      const gpu = page.locator('[data-row-key="net:gpu-box"]')
+      const gpu = row(page, 'gpu-box')
       await expect(gpu).toContainText('Link')
-      const connectNow = gpu.locator('button.rh-connect-btn')
+      const connectNow = gpu.getByTestId('rh-row-connect')
       await expect(connectNow).toHaveText('Connect now')
       const release = routes.gate('connect:gpu-box')
       await connectNow.click()
-      await expect(connectNow).toHaveText('Retrying...')
+      await expect(connectNow).toHaveText('Connecting...')
       release()
-      await expect(gpu.locator('.rh-status-short')).toHaveText('Connected')
-      ran('Hosts/button.rh-connect-btn')
-      const remove = gpu.locator('button[data-armed]')
-      await armThenCancel(routes, remove, 'Remove', 'Confirm remove')
-      await expect(gpu).toBeVisible()
-      await remove.click()
-      await remove.click()
+      await expect(gpu.getByTestId('rh-row-state')).toHaveText(/^Online/)
+      await expectFocusKept(page)
+      ran('Hosts/button#rh-row-connect')
+      await pick(page, gpu, 'Remove')
+      await expect(page.getByTestId('rh-row-confirm')).toContainText('Remove gpu-box?')
+      await page.getByTestId('rh-row-confirm-remove').click()
       await routes.nth('DELETE', '/api/hosts/net/machines/gpu-box', 1)
       await expect(gpu).toHaveCount(0)
       // The focus goes to the row before it, never to the page.
-      await expect(page.locator(':focus')).toHaveAttribute('data-row-key', /^ssh:/)
+      await expect(page.locator(':focus')).toHaveAttribute('data-row-key', /^(ssh|fleet|net):/)
+    })
+
+    await test.step('This Mac: its reading in Details', async () => {
+      const mac = row(page, '__local__')
+      await mac.getByTestId('rh-row-more').click()
+      await expect(menu(page).getByRole('menuitem')).toHaveText(['Details'])
+      await menu(page).getByRole('menuitem', { name: 'Details' }).click()
+      await expect(page.locator('[data-testid="rh-details"][data-host="__local__"] [data-testid="host-fleet-card"]')).toBeVisible()
+      await pick(page, mac, 'Hide details')
     })
 
     await test.step('More settings: Relay', async () => { await checkMoreSettings(ctx) })
@@ -446,7 +431,13 @@ test.describe('Settings > Remote Hosts: every button', () => {
 
     await test.step('Removals to confirm', async () => {
       const confirm = page.getByTestId('replica-removal-confirm-host:devbox/notes')
-      await armThenCancel(routes, confirm, 'Remove them there', 'Confirm remove')
+      const calls = routes.calls.length
+      await expect(confirm).toHaveText('Remove them there')
+      await confirm.click()
+      await expect(confirm).toHaveText('Confirm remove')
+      await confirm.press('Escape')
+      await expect(confirm).toHaveText('Remove them there', { timeout: 1_000 })
+      expect(routes.calls.slice(calls).filter((c) => c.method !== 'GET')).toEqual([])
       await confirm.click()
       await confirm.click()
       expect((await routes.nth('POST', '/api/replicas/confirm-removal', 1)).body).toEqual({ target: 'host:devbox', kind: 'notes', entries: 80, keys: 'k80' })
@@ -457,9 +448,20 @@ test.describe('Settings > Remote Hosts: every button', () => {
 
     await test.step('More settings: Session limits', async () => { await checkSessionLimits(ctx) })
 
-    await test.step('Hosts: the note\'s mic (last: it leaves the pane)', async () => {
-      await page.locator('#rh-host-devbox button.settings-button[aria-expanded]').click()
-      await page.getByTestId('host-profile-toggle-devbox').click()
+    await test.step('the page end: Copy diagnostics copies the hosts section', async () => {
+      const diag = page.getByTestId('remote-hosts-copy-diagnostics')
+      await diag.scrollIntoViewIfNeeded()
+      await expect(diag).toHaveText('Copy diagnostics')
+      await sweep()
+      const read = page.waitForRequest((r) => new URL(r.url()).pathname === '/api/diagnostics' && new URL(r.url()).searchParams.get('section') === 'hosts')
+      await diag.click()
+      await read
+      await expect(diag.filter({ hasText: 'Copied' }).or(page.locator('.settings-build-line-error:visible'))).toBeVisible({ timeout: 20_000 })
+      ran('Footer/button#remote-hosts-copy-diagnostics')
+    })
+
+    await test.step('Details\' note mic (last: it leaves the pane)', async () => {
+      await pick(page, row(page, 'devbox'), 'Details')
       const mic = page.getByTestId('host-profile-devbox').locator('button.mic-btn')
       await expect(page.getByTestId('host-profile-system')).toBeVisible()
       // Linux WebKit has no recorder, so no mic; Chromium must show it.
@@ -487,7 +489,8 @@ test.describe('Settings > Remote Hosts: every button', () => {
     await page.setViewportSize({ width: 1280, height: 640 })
     const ctx = await setUp(page, request)
     for (let round = 1; round <= 2; round++) {
-      await page.locator('#remote-hosts').evaluate((el) => el.scrollIntoView({ block: 'start' }))
+      // Scrolled to the end first: whatever Add host makes still lands in view.
+      await page.locator('.settings-pane').first().evaluate((el) => { el.scrollTop = el.scrollHeight })
       await checkAddHost(ctx)
     }
     // The guard: a button nobody registered is named, so a new one cannot slip in unchecked; a

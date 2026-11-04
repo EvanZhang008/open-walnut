@@ -22,6 +22,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertGlyph, CheckGlyph } from './settings-glyphs'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
@@ -381,7 +382,8 @@ export function isHeaderAboveBar(headerBottom: number, rootTop: number, barHeigh
  * `.settings-pane`. Zero height in flow, so showing it never pushes content.
  * Driven by an IntersectionObserver on the lead header (no scroll listener).
  */
-export function SettingsPaneStickyBar() {
+/** `phoneHost`: on a phone, the bar's own right slot; the actions go there instead of a strip. */
+export function SettingsPaneStickyBar({ phoneHost = null }: { phoneHost?: HTMLElement | null } = {}) {
   const ctx = useContext(PaneContext)
   const barRef = useRef<HTMLDivElement>(null)
   const leadHeader = ctx?.leadHeader ?? null
@@ -415,6 +417,20 @@ export function SettingsPaneStickyBar() {
   }, [leadHeader, setCompact])
 
   if (!ctx) return null
+  if (phoneHost) {
+    return (
+      <>
+        <div ref={barRef} className="settings-pane-stickybar is-phone" aria-hidden="true" />
+        {createPortal(
+          <span className={`settings-phone-bar-trailing${compact ? ' is-compact' : ''}`}>
+            <SettingsSavedIndicator placement="sticky" />
+            <span className="settings-pane-stickybar-actions settings-card-actions" ref={ctx.setStickyActionsHost} />
+          </span>,
+          phoneHost,
+        )}
+      </>
+    )
+  }
   const meta = ctx.leadSectionId ? ctx.metaFor(ctx.leadSectionId) : undefined
   return (
     <div ref={barRef} className={`settings-pane-stickybar${compact ? ' is-compact' : ''}`}>

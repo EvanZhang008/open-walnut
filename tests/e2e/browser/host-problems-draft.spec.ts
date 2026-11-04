@@ -22,6 +22,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftQuickChips, openDraft, draftSend } from './draft-helpers'
 import { SHOTS, hostFixture, resetServerHostFixture } from './host-problems-helpers'
+import { openHostDetails } from './host-problems-fixture-helpers'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -188,7 +189,9 @@ test.describe('draft surfaces against the server host fixture', () => {
     await expect(buildRow).toHaveClass(/rh-row-flash/)
     await expect(buildRow.locator('.rh-host-name')).toHaveText('Build box')
     await expect(buildRow.locator('.rh-host-alias')).toHaveText('buildbox')
-    const line = buildRow.locator('.rh-readiness').first()
+    // The row's warning line and, in its Details, the whole message: each names the host once.
+    await expect(buildRow.getByTestId('rh-row-warning')).toBeVisible()
+    const line = (await openHostDetails(page, 'buildbox')).locator('.rh-readiness').first()
     await expect(line).toBeVisible()
     const text = await line.innerText()
     expect(text.startsWith('buildbox: ')).toBe(false)
@@ -196,13 +199,14 @@ test.describe('draft surfaces against the server host fixture', () => {
 
     const keyRow = page.locator('#rh-host-keybox')
     await keyRow.scrollIntoViewIfNeeded()
-    await expect(keyRow.locator('.rh-failure .hft-headline')).toHaveText(/^Could not connect to Key box/)
+    const keyDetails = await openHostDetails(page, 'keybox')
+    await expect(keyDetails.locator('.rh-failure .hft-headline')).toHaveText(/^Could not connect to Key box/)
     // The server's hint verbatim, its `backticks` rendered as inline code.
-    const hint = keyRow.locator('.rh-failure .hft-hint')
+    const hint = keyDetails.locator('.rh-failure .hft-hint')
     await expect(hint).toHaveText(key.hint!.replace(/`/g, ''))
     await expect(hint.locator('code').first()).toHaveText('ssh alice@key.example.com')
     expect(await page.locator('body').innerText()).not.toContain("isn't reachable right now")
-    await keyRow.screenshot({ path: `${SHOTS}/settings-keybox.png` })
+    await keyDetails.screenshot({ path: `${SHOTS}/settings-keybox.png` })
   })
 })
 

@@ -1,5 +1,5 @@
 /**
- * The words on a fleet card (HostFleetGroup.tsx): pure, so each rule has a
+ * The words of a host's Details (HostFleetVitals.tsx): pure, so each rule has a
  * unit test (web/src/__tests__/host-fleet-model.test.ts). Every reading may be
  * missing; a missing one says why in plain words instead of a dash.
  */
@@ -43,7 +43,10 @@ export function usd(v: number): string {
   return `$${Math.round(v).toLocaleString('en-US')}`;
 }
 
-const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: 'This computer', 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'Bridge (it connects in)' };
+/** The local machine's name on Remote Hosts (the rest of the page says "this Mac" too). */
+export const THIS_MAC = 'This Mac';
+
+const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: THIS_MAC, 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'Bridge (it connects in)' };
 
 /** One cell per day: how much of the minutes the ledger covered the host was up. */
 export function dayTone(b: FleetBucket): 'good' | 'warn' | 'bad' | 'none' {
@@ -97,7 +100,7 @@ export function canDoRow(h: FleetHost): FleetRow | null {
   if (c.mcp.length) parts.push(`${c.mcp.length} MCP server${c.mcp.length === 1 ? '' : 's'}`);
   for (const t of c.declared) if (!['cloud', 'local', 'always-on'].includes(t)) parts.push(t);
   const unknown = c.unknown.filter((u) => u !== 'system').map((u) => UNKNOWN_WORDS[u] ?? `${u}: not reported yet`);
-  const value = [...parts, ...unknown].join(' · ') || 'Nothing beyond its system';
+  const value = [...parts, ...unknown].join(', ') || 'Nothing beyond its system';
   const title = [
     c.tags.length ? `A task asks for a host by tag (host "@ios"). This one's tags: ${c.tags.join(', ')}` : '',
     c.mcp.length ? `MCP: ${c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.offered ? `${m.name} (offered to other hosts)` : m.name)).join(', ')}` : '',
@@ -111,7 +114,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   const s = h.system;
   rows.push({
     key: 'system', label: 'System',
-    value: s ? [s.os, s.arch, s.cpus ? `${s.cpus} CPUs` : null, gb(s.memBytes), gb(s.diskFreeBytes) ? `${gb(s.diskFreeBytes)} disk free` : null].filter(Boolean).join(' · ') || 'Probed, nothing reported'
+    value: s ? [s.os, s.arch, s.cpus ? `${s.cpus} CPUs` : null, gb(s.memBytes), gb(s.diskFreeBytes) ? `${gb(s.diskFreeBytes)} disk free` : null].filter(Boolean).join(', ') || 'Probed, nothing reported'
       : 'Not probed yet (it is, once the host connects)',
     tone: s ? undefined : 'muted',
   });
@@ -125,7 +128,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
       n.memAvailBytes === null ? null : `${gb(n.memAvailBytes)} of ${gb(n.memTotalBytes)} memory free`,
       `up ${span(n.uptimeSec * 1000)}`,
     ].filter(Boolean);
-    rows.push({ key: 'now', label: 'Now', value: parts.join(' · ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
+    rows.push({ key: 'now', label: 'Now', value: parts.join(', ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
   } else {
     rows.push({ key: 'now', label: 'Now', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its daemon is older than this view (it upgrades on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
   }
@@ -134,16 +137,18 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const days = week.minutes / 1440;
     const over = days >= 6.95 ? 'the last 7 days' : `the ${recordedSpan(week.minutes)} recorded`;
     const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `daemon started ${week.daemonStarts} times` : null].filter(Boolean);
-    rows.push({ key: 'online', label: 'Online', value: `${pct(week.online, 1)} of ${over}` + (extra.length ? ` · ${extra.join(' · ')}` : ''), tone: week.online >= 0.99 ? 'good' : week.online >= 0.9 ? 'warn' : 'bad' });
+    rows.push({ key: 'online', label: 'Online', value: `${pct(week.online, 1)} of ${over}` + (extra.length ? `, ${extra.join(', ')}` : ''), tone: week.online >= 0.99 ? 'good' : week.online >= 0.9 ? 'warn' : 'bad' });
   } else {
     rows.push({ key: 'online', label: 'Online', tone: 'muted', value: h.history ? 'Recording started; a share shows after the first minutes' : 'No record yet' });
   }
   rows.push({ key: 'sessions', label: 'Sessions', value: h.sessions.running === null ? 'Not known now' : `${h.sessions.running} open`, tone: h.sessions.running === null ? 'muted' : undefined });
   rows.push({ key: 'spend', label: 'Spend, 30 days', value: h.spend ? `${usd(h.spend.last30dUsd)} at list price (not a bill)` : 'Not counted yet', tone: h.spend ? undefined : 'muted' });
   const c = h.connection;
+  // "SSH tunnel: connected 20 min, 38 ms" (the way first, then how it is going).
+  const link = [c.connected ? (c.since ? `connected ${span(now - c.since)}` : 'connected') : c.phaseLabel, c.rttMs ? `${c.rttMs} ms` : null].filter(Boolean).join(', ');
   rows.push({
     key: 'connection', label: 'Connection',
-    value: [KIND_LABEL[c.kind], c.connected ? (c.since ? `connected ${span(now - c.since)}` : 'connected') : c.phaseLabel, c.rttMs ? `${c.rttMs} ms` : null].filter(Boolean).join(' · ')
+    value: (link ? `${KIND_LABEL[c.kind]}: ${link}` : KIND_LABEL[c.kind])
       + (!c.connected && c.error ? ` (${c.error})` : ''),
     tone: c.connected ? undefined : 'bad',
   });
@@ -151,7 +156,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const sv = h.server;
     rows.push({
       key: 'server', label: 'Walnut server',
-      value: sv.enabled ? [sv.program === 'replica' ? 'Replica' : sv.program === 'fallback' ? 'Plain host server (fallback)' : sv.program ? 'Plain host server' : null, sv.phaseLabel, sv.build, sv.phone ? `phone tunnel ${sv.phone}` : null].filter(Boolean).join(' · ') : 'Off',
+      value: sv.enabled ? [sv.program === 'replica' ? 'Replica' : sv.program === 'fallback' ? 'Plain host server (fallback)' : sv.program ? 'Plain host server' : null, sv.phaseLabel, sv.build, sv.phone ? `phone tunnel ${sv.phone}` : null].filter(Boolean).join(', ') : 'Off',
       tone: !sv.enabled ? 'muted' : sv.phase === 'running' ? undefined : 'warn',
     });
   }
@@ -159,7 +164,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const d = h.daemon;
     const reboot = h.local ? null : d.reboot ?? (d.startsAfterReboot ? 'starts after a reboot' : 'does not start by itself after a reboot');
     const settingUp = d.bootStart?.setupRunning === true;
-    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(' · '), tone: reboot && !d.startsAfterReboot && !settingUp ? 'warn' : undefined });
+    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(', '), tone: reboot && !d.startsAfterReboot && !settingUp ? 'warn' : undefined });
   }
   return rows;
 }

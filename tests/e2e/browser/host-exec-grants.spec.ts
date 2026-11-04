@@ -26,8 +26,10 @@ async function openRemoteHosts(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // The group sits under More settings, closed by default.
+  // The group sits under More settings, both closed by default.
   await page.getByTestId('remote-hosts-more-toggle').click()
+  await page.getByTestId('host-exec-grants-toggle').click()
+  await expect(page.getByTestId('host-exec-grants-toggle')).toHaveAttribute('aria-expanded', 'true')
 }
 
 test('grants read in words and Revoke drops one', async ({ page }) => {
@@ -143,8 +145,9 @@ test('each host has a hard stop switch that sends the PUT and sticks', async ({ 
   // Settings opened again reads the stop back from the server.
   await page.getByTestId('settings-nav-general').click()
   await page.getByTestId('settings-nav-remote-hosts').click()
-  // More settings stays open for this tab.
+  // More settings and the group stay open for this tab.
   await expect(page.getByTestId('remote-hosts-more-toggle')).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId('host-exec-grants-toggle')).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByTestId('host-exec-grants').locator('[data-exec-host="__local__"]').getByRole('switch')).toHaveAttribute('aria-checked', 'false')
   await page.getByTestId('host-exec-grants').locator('[data-exec-host="__local__"]').getByRole('switch').click()
   await expect.poll(() => puts.length).toBe(2)

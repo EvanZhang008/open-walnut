@@ -406,7 +406,7 @@ test.describe('Settings host row head', () => {
     const m = await row.evaluate((el) => {
       const a = el.querySelector('.rh-host-alias') as HTMLElement
       const h = el.querySelector('.rh-host-hostname') as HTMLElement
-      const cell = (el.querySelector('.settings-addons-inline') as HTMLElement).getBoundingClientRect()
+      const cell = (el.querySelector('.rh-row-name-line') as HTMLElement).getBoundingClientRect()
       return {
         aliasScroll: a.scrollWidth, aliasClient: a.clientWidth, aliasRight: a.getBoundingClientRect().right, cellRight: cell.right,
         hostScroll: h.scrollWidth, hostClient: h.clientWidth, hostOverflow: getComputedStyle(h).textOverflow,
@@ -433,12 +433,15 @@ test.describe('Settings host row head', () => {
     await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()
     const aliasInput = page.locator('input[id^="rh-alias-"]').last()
     await aliasInput.fill('draftbox')
-    const dot = page.locator('.rh-status[data-host="draftbox"] .sps-host-dot')
+    const row = page.locator('#rh-host-draftbox')
+    const dot = row.locator('.sps-host-dot')
     await expect(dot).toHaveAttribute('data-kind', 'unknown')
     await hosts.push(connected('draftbox', 'Draft box'))
     await expect(dot).toHaveAttribute('data-kind', 'connected')
     await hosts.push(failed('draftbox', 'Draft box', 'auth'))
     await expect(dot).toHaveAttribute('data-kind', 'failed')
-    await expect(page.locator('.rh-status[data-host="draftbox"]')).toContainText('Not connected')
+    // Not saved (no hostname): it says what is missing and offers no connect.
+    await expect(row.getByTestId('rh-row-state')).toHaveText('Add a hostname to save this host.')
+    await expect(row.getByTestId('rh-row-connect')).toHaveCount(0)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * How old the Overview's cards are, in words (HostFleetGroup.tsx, HostFleetCard.tsx).
+ * How old each host's reading is, in words (useHostFleet.ts, HostSummaryLine.tsx, HostFleetVitals.tsx).
  * The page opens on what each host answered last (GET /api/v1/hosts?cached=1, server:
  * src/core/hosts/fleet-refresh.ts) and reads the hosts again only on a press, so every
  * card says when it was read, a read in flight says so on its own card, and a read that
@@ -79,9 +79,11 @@ export function newestRead(hosts: FleetHost[]): number | null {
   return best;
 }
 
-/** The small line on a card: its read running, not read yet, or how old it is. */
+/**
+ * The small line in a host's Details: not read yet, or how old what it shows is. A read
+ * running says nothing here: the summary line is the page's one "Refreshing...".
+ */
 export function readLabel(h: FleetHost, now: number): string | null {
-  if (h.refreshing) return 'Refreshing...';
   if (h.readAt === null) return 'Not read yet';
   if (typeof h.readAt !== 'number') return null;
   return `Read ${readAgo(h.readAt, now)}`;

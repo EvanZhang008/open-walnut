@@ -4,7 +4,7 @@
  * Join a machine with a link puts the link first in Hosts: the command for the new machine's
  * system with Copy and the minutes left, the notes folded; it watches the invite, and the
  * machine that joins becomes a Hosts row (a Link tag) saying how this Mac reaches it; an
- * expired link offers a new one; a refused invite says why; Remove asks once more, sends the
+ * expired link offers a new one; a refused invite says why; Remove (its More menu) asks once, sends the
  * DELETE and drops the row; the relay choice (More settings) says what each one shares, a
  * companion means its relay, without one a pick is sent once and the rows follow it, a
  * refused pick says why, and the invite is a ticket. The server is faked at the route (no
@@ -13,6 +13,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
+import { isolatePrefs } from './host-problems-helpers'
 
 test.setTimeout(120_000)
 
@@ -22,6 +23,8 @@ const LINK = 'https://wn.example.com/join/K7QM-4XTD-92ZD'
 const COMMAND = `curl -fsSL ${LINK} | sh`
 
 async function openRemoteHosts(page: Page) {
+  // A fold one test opens (More about this link is remembered) never reaches the next test's boot.
+  await isolatePrefs(page)
   await page.goto('/')
   await page.waitForLoadState('domcontentloaded')
   await page.getByRole('link', { name: /settings/i }).first().click()
@@ -35,11 +38,13 @@ async function joinWithLink(page: Page) {
   await page.getByRole('menuitem', { name: /^Join a machine with a link/ }).click()
 }
 
-/** The relay picker sits under More settings, closed by default (open stays open for the tab). */
+/** The relay picker sits under More settings, in its own fold, both closed by default (open stays open for the tab). */
 async function openMore(page: Page) {
-  const toggle = page.getByTestId('remote-hosts-more-toggle')
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  for (const id of ['remote-hosts-more-toggle', 'host-network-relay-toggle']) {
+    const toggle = page.getByTestId(id)
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  }
 }
 
 function overview(machines: unknown[], extra: Record<string, unknown> = {}) {
@@ -112,21 +117,21 @@ test('Join a machine with a link: the command, the countdown, the join, the path
   await expect(invite).toContainText('It is in the list below.')
   const row = group.locator('[data-host-alias="gpu-box"]')
   await expect(row).toBeVisible({ timeout: 10_000 })
-  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Direct · 31 ms')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, direct, 31 ms')
   await expect(row).toContainText('Link')
   // A joined link is done: no New link on it (Add host makes the next one).
   await expect(page.getByTestId('host-network-new-link')).toHaveCount(0)
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
   await shot(page, '3-joined')
 
-  // Remove asks once more ("Confirm remove" drops the button's "Remove gpu-box" name,
-  // so it is found by its place), then sends the DELETE and the row goes.
-  await expect(row.getByRole('button', { name: 'Remove gpu-box' })).toBeVisible()
-  const remove = row.locator('button[data-armed]')
-  await remove.click()
-  await expect(remove).toHaveText('Confirm remove')
+  // Remove (last in the row's More menu) asks once, naming the machine, then sends the
+  // DELETE and the row goes.
+  await row.getByTestId('rh-row-more').click()
+  await page.getByTestId('rh-row-menu').getByRole('menuitem', { name: 'Remove', exact: true }).click()
+  const confirm = page.getByTestId('rh-row-confirm')
+  await expect(confirm).toContainText('Remove gpu-box?')
   expect(deleted).toEqual([])
-  await remove.click()
+  await confirm.getByTestId('rh-row-confirm-remove').click()
   await expect.poll(() => deleted, { timeout: 10_000 }).toEqual(['DELETE gpu-box'])
   await expect(row).toHaveCount(0, { timeout: 10_000 })
   expect(errors).toEqual([])
@@ -153,7 +158,7 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   const group = page.getByTestId('remote-hosts-list')
   await expect(group).toBeVisible({ timeout: 30_000 })
   const row = group.locator('[data-net-path="relay"]')
-  await expect(row.getByTestId('host-network-path')).toHaveText('macOS arm64 · Through your relay · 88 ms')
+  await expect(row.getByTestId('host-network-path')).toHaveText('macOS arm64, through your relay, 88 ms')
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 
   await joinWithLink(page)
@@ -220,7 +225,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await picker.scrollIntoViewIfNeeded()
   await pickerShot(page, '6-relay-own')
   const row = page.getByTestId('remote-hosts-list').locator('[data-host-alias="gpu-box"]')
-  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through your relay · 40 ms')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, through your relay, 40 ms')
 
   // No companion: public relays, and Your relay cannot be picked. Another section and back:
   // the page reads the network again.
@@ -235,7 +240,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(own).toBeDisabled()
   await expect(own).toContainText('Pair a cloud companion first (Settings > Cloud Companion).')
   await expect(picker).not.toContainText('While a cloud companion is paired')
-  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through a public relay · 40 ms')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, through a public relay, 40 ms')
 
   // A refused change says why and keeps the choice it had.
   failNext = true
@@ -249,7 +254,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect.poll(() => puts.at(-1)).toEqual({ relay: 'none' })
   await expect(none).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByTestId('host-network-relay-error')).toHaveCount(0)
-  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Direct · 40 ms')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, direct, 40 ms')
 
   // The invite is a ticket, and the Mac must stay on while the machine joins.
   await joinWithLink(page)

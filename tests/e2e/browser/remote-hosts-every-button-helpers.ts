@@ -16,11 +16,11 @@ import path from 'node:path'
 import { expect, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
 import { fixtureFile, hostFixture, isolatePrefs, loadApp, loadFixture, openRemoteHosts, openRemoteHostsMore } from './host-problems-fixture-helpers'
 import { connected, stamp } from './host-problems-helpers'
+import { fleet, hostServer, profile } from './remote-hosts-every-button-fleet'
 
 export interface Call { method: string; path: string; body: unknown }
 interface Grant { id: string; taskId: string; taskTitle: string | null; host: string; grantedAt: number; via: string; runs: number; lastRunAt: number; lastCommand: string }
 
-const GB = 1024 ** 3
 const DAY = 86_400_000
 const MIN = 60_000
 /** How long a read of the hosts runs (the real one waits on each host's daemon). */
@@ -31,7 +31,7 @@ const READ_MS = 1_200
  * one key covers the same button on every row. `fixture-remote` is the test server's own host.
  */
 export const NAMES: Record<string, string> = Object.fromEntries([
-  ...['This computer', 'Alpha box', 'Beta box', 'Far box', 'Big remote host', 'fixture-remote', 'lab-mac', 'gpu-box', 'this Mac', 'This Mac', '__local__', 'devbox', 'downbox', 'farbox'].map((n) => [n, '<host>']),
+  ...['This computer', 'Alpha box', 'Beta box', 'Big remote host', 'fixture-remote', 'lab-mac', 'gpu-box', 'this Mac', 'This Mac', '__local__', 'devbox', 'downbox'].map((n) => [n, '<host>']),
   ...['Nightly build', 'Lint job'].map((n) => [n, '<task>']),
   ...['github-read', 'deploy-key'].map((n) => [n, '<secret>']),
 ])
@@ -48,16 +48,22 @@ const FOLDS: Array<[RegExp, string]> = [[/^(.*)\/switch#host-server-copy-<host>-
 
 /**
  * Every visible button and link on the Remote Hosts pane (and its header's buttons in the sticky
- * bar once the pane scrolled), as stable keys `<group>/<role><id>`: the group is the heading of
- * the settings group it sits in (or Header, Overview), the id its data-testid, else a known
- * class, else its accessible name, with each host's name written `<host>`.
+ * bar once the pane scrolled, its build line, and a menu it opened), as stable keys
+ * `<group>/<role><id>`: the group is the heading of the settings group it sits in (or Header,
+ * Footer, a menu's name, Pane), the id its data-testid, else a known class, else its accessible
+ * name, with each host's name written `<host>`.
  */
 export async function paneKeys(page: Page): Promise<string[]> {
   const raw = await page.evaluate(({ names, classes }) => {
     const root = document.getElementById('remote-hosts')
     if (!root) throw new Error('#remote-hosts is not on the page')
     // Scrolled down, the pane's header buttons move to the sticky bar above it (SettingsSection PaneHeader).
-    const roots = [root, ...document.querySelectorAll<HTMLElement>('.settings-pane-stickybar.is-compact .settings-pane-stickybar-actions')]
+    const roots = [
+      root,
+      ...document.querySelectorAll<HTMLElement>('.settings-pane-stickybar.is-compact .settings-pane-stickybar-actions, .settings-phone-bar-trailing.is-compact .settings-pane-stickybar-actions'),
+      ...document.querySelectorAll<HTMLElement>('[data-testid="settings-build-line"], [data-testid="remote-hosts-add-menu"], [data-testid="rh-row-menu"]'),
+    ]
+    const MENUS: Record<string, string> = { 'remote-hosts-add-menu': 'Add host menu', 'rh-row-menu': 'Row menu' }
     const sorted = Object.keys(names).sort((a, b) => b.length - a.length)
     const norm = (s: string) => {
       let out = s.replace(/\s+/g, ' ').trim()
@@ -66,9 +72,11 @@ export async function paneKeys(page: Page): Promise<string[]> {
     }
     const sel = 'button, a[href], select, summary, input[type="checkbox"], input[type="radio"], [role="button"], [role="link"], [role="switch"], [role="radio"], [role="checkbox"], [role="menuitem"], [role="option"], [role="tab"]'
     const groupOf = (el: HTMLElement) => {
+      const menu = el.closest<HTMLElement>('[data-testid="remote-hosts-add-menu"], [data-testid="rh-row-menu"]')
+      if (menu) return MENUS[menu.dataset.testid!]
+      if (el.closest('[data-testid="settings-build-line"]')) return 'Footer'
       if (!root.contains(el) || el.closest('.settings-pane-header, .settings-card-head')) return 'Header'
-      if (el.closest('[data-testid="host-fleet"]')) return 'Overview'
-      const title = el.closest('.settings-group-block')?.querySelector(':scope > .settings-group-heading .settings-group-title')?.textContent?.trim()
+      const title = el.closest('.settings-group-block')?.querySelector(':scope > .settings-group-heading .settings-group-title, :scope > .settings-fold-group-heading .settings-fold-group-title')?.textContent?.trim()
       return title ?? 'Pane'
     }
     const out: string[] = []
@@ -84,82 +92,13 @@ export async function paneKeys(page: Page): Promise<string[]> {
       const tid = el.getAttribute('data-testid')
       const cls = classes.find((c) => el.classList.contains(c))
       const relay = el.getAttribute('data-relay')
-      out.push(tid ? `${role}#${norm(tid)}` : relay ? `${role}[relay=${relay}]` : cls ? `${role}.${cls}` : `${role}:${norm(el.getAttribute('aria-label') || el.textContent || '')}`)
+      // A menu item by its key (its words follow its state: Edit, Done editing).
+      const item = el.getAttribute('data-menu-key')
+      out.push(tid ? `${role}#${norm(tid)}` : relay ? `${role}[relay=${relay}]` : item ? `${role}[${item}]` : cls ? `${role}.${cls}` : `${role}:${norm(el.getAttribute('aria-label') || el.textContent || '')}`)
     }
     return out
   }, { names: NAMES, classes: STABLE_CLASSES })
   return [...new Set(raw.map((k) => FOLDS.reduce((acc, [re, to]) => acc.replace(re, to), STATE_ALIASES[k] ?? k)))]
-}
-
-// ── Fixtures ──
-
-function days(covered = 30) {
-  const now = Date.now()
-  return Array.from({ length: 30 }, (_, i) => {
-    const minutes = i >= 30 - covered ? 1440 : 0
-    return { start: now - (30 - i) * DAY, minutes, up: minutes, linked: minutes, cpu: 0.3, mem: 0.5, sessionsMax: 3 }
-  })
-}
-
-function card(over: Record<string, unknown>): Record<string, unknown> {
-  const now = Date.now()
-  return {
-    host: 'x', label: 'X', local: false, line: '', checkedAt: now,
-    connection: { kind: 'ssh-tunnel', connected: true, phase: 'connected', phaseLabel: 'Connected', since: now - 20 * MIN, rttMs: 38, error: null },
-    system: { os: 'Ubuntu 24.04', arch: 'x64', cpus: 16, memBytes: 64 * GB, diskFreeBytes: 400 * GB, kind: 'public-cloud-vm', probedAt: null },
-    now: { cpus: 16, cpuUtil: 0.12, load: [1.5, 1.2, 1], memTotalBytes: 64 * GB, memAvailBytes: 40 * GB, uptimeSec: 9 * 86400, bootedAt: now - 9 * DAY, linked: true, gpuUtil: null, disk: { totalBytes: 300 * GB, freeBytes: 200 * GB }, at: now, stale: false },
-    history: { coverageFrom: now - 30 * DAY, bucketMinutes: 1440, buckets: days(), windows: [{ days: 7, minutes: 7 * 1440, up: 7 * 1440, linked: 7 * 1440, online: 1, linkedShare: 1, drops: 0, downs: 0 }], outages: [], boots: [], daemonStarts: 1 },
-    sessions: { running: 2 },
-    spend: { last30dUsd: 120.5, from: '2026-10-05', basis: 'list-price' },
-    server: null,
-    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: now - DAY, startup: 'service', startsAfterReboot: true, runtime: 'bun', vitals: true },
-    placement: { score: 12, busy: false, reasons: [], weight: 50, longRunning: { ok: true, reasons: [] } },
-    readAt: now, refreshing: false, readError: null, readFailedAt: null,
-    ...over,
-  }
-}
-
-/**
- * This computer and Alpha box live (Alpha box's daemon does not start after a reboot: Set up),
- * Far box away (Retry) until a connect brings it up.
- */
-function fleet(alphaFixed: boolean, farUp: boolean): Record<string, unknown>[] {
-  const now = Date.now()
-  const alphaDaemon = alphaFixed
-    ? { version: 'walnut-daemon-0123456789ab', startedAt: now - DAY, startup: 'service', startsAfterReboot: true, runtime: 'bun', vitals: true, bootStart: { mode: 'boot', backend: 'systemd-user', reason: null, checkedAt: now, setupRunning: false, setupError: null, next: null }, reboot: 'starts by itself after a reboot (as a systemd user service)' }
-    : { version: 'walnut-daemon-0123456789ab', startedAt: now - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'bun', vitals: true, bootStart: { mode: 'none', backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: now, setupRunning: false, setupError: null, next: 'install' }, reboot: 'does not start by itself after a reboot: nothing on it starts the daemon at boot' }
-  return [
-    card({
-      host: '__local__', label: 'This computer', local: true,
-      connection: { kind: 'local', connected: true, phase: 'connected', phaseLabel: 'Running on this Mac', since: null, rttMs: 1, error: null },
-      system: { os: 'macOS 15.1', arch: 'arm64', cpus: 10, memBytes: 32 * GB, diskFreeBytes: 300 * GB, kind: 'laptop', probedAt: null },
-    }),
-    card({ host: 'devbox', label: 'Alpha box', daemon: alphaDaemon }),
-    farUp ? card({ host: 'farbox', label: 'Far box' }) : card({
-      host: 'farbox', label: 'Far box',
-      connection: { kind: 'ssh-tunnel', connected: false, phase: 'failed', phaseLabel: 'Could not reach Far box', since: null, rttMs: null, error: 'ssh: connection timed out' },
-      now: null, history: null, sessions: { running: null }, readAt: now - 5 * MIN,
-      placement: { score: null, busy: null, reasons: [], weight: null, longRunning: { ok: false, reasons: ['Walnut is not connected to it now.'] } },
-    }),
-  ]
-}
-
-function profile(host: string, cpus: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const at = new Date(Date.now() - 2 * 3_600_000).toISOString()
-  return {
-    host, kind: 'dev-box', kindReasons: ['It answered over SSH with a home folder'], kindSetByUser: false, userNote: '',
-    probed: { os: { prettyName: 'Ubuntu 24.04' }, arch: 'x64', cpus, memBytes: 64 * GB, diskFreeBytes: 200 * GB, tools: { git: '2.43.0', docker: null }, probedAt: at },
-    observed: { repoPaths: { api: { path: '/home/dev/work/api', at } } },
-    ...extra,
-  }
-}
-
-function hostServer(hostKey: string, label: string, tunnel: Record<string, unknown>, notice?: string): Record<string, unknown> {
-  return {
-    hostKey, label,
-    settings: { enabled: true, program: 'replica', expose: { enabled: true, provider: 'tunnel', options: {} }, copies: {} },
-    view: { hostKey, enabled: true, phase: 'running', since: Date.now() - 3_600_000, build: '0.6.20', ...(notice ? { notice } : {}), server: { route: { kind: 'leader' }, expose: { enabled: true, provider: 'tunnel', providerTitle: 'Test tunnel', since: Date.now() - MIN, ...tunnel } } },
-  }
 }
 
 export const ALPHA_URL = 'https://alpha-tunnel.example.dev'
@@ -172,19 +111,21 @@ export const netWindows = (n: number) => `irm ${netLink(n)}/ps | iex`
 /** The routed side of the pane; `calls` holds every request it answered. */
 export class PaneRoutes {
   readonly calls: Call[] = []
+  /** Machines removed from the host network: the server's fleet no longer lists them. */
+  readonly removed = new Set<string>()
   /** Laid over GET /api/config: null until the editor saves, then what it saved. */
   hosts: Record<string, Record<string, unknown>> | null = null
   limits: Record<string, number> = { devbox: 3 }
   readonly found: Record<string, Record<string, unknown>> = { 'lab-mac': { hostname: '10.0.0.9', user: 'sam', discovered: true, connect: 'ask', enabled: false } }
   alphaFixed = false
-  /** Far box answered a connect: the next read shows it live, as the server's cached read does. */
-  farUp = false
   /** A read of the hosts runs until then (the server answers `refreshing: true` meanwhile). */
   private refreshUntil = 0
   /** The join links read back as expired (the 10 minutes ran out). */
   expireInvites = false
   relay: 'own' | 'public' | 'none' = 'public'
   invites = 0
+  /** The next this many link requests fail (the host network is not running). */
+  failInvites = 0
   readonly servers = [
     hostServer('devbox', 'Alpha box', { state: 'connected', url: ALPHA_URL }, 'It runs an older build than this computer.'),
     hostServer('downbox', 'Beta box', { state: 'retrying', lastError: 'The tunnel stopped', nextRetryAt: Date.now() + 60_000 }),
@@ -240,6 +181,7 @@ export class PaneRoutes {
     await page.route((url) => url.pathname === '/api/config', async (route) => {
       if (route.request().method() === 'PUT') {
         const call = this.record(route)
+        await this.pass('config-put')
         const body = call.body as { hosts?: Record<string, Record<string, unknown>>; session_limits?: Record<string, number> }
         if (body.hosts) this.hosts = body.hosts
         if (body.session_limits) this.limits = body.session_limits
@@ -260,13 +202,12 @@ export class PaneRoutes {
       if (this.hosts?.[host]) this.hosts[host] = { ...this.hosts[host], ...patch }
       return route.fulfill({ json: { ok: true, host, answer } })
     })
-    // Hosts the fixture does not know: a machine on the host network, and the Overview's away host.
-    await page.route(/\/api\/hosts\/(gpu-box|farbox)\/connect$/, async (route) => {
+    // A host the fixture does not know: the machine on the host network.
+    await page.route(/\/api\/hosts\/gpu-box\/connect$/, async (route) => {
       const call = this.record(route)
       const host = call.path.split('/')[3]
       await this.pass(`connect:${host}`)
-      if (host === 'farbox') this.farUp = true
-      return route.fulfill({ json: { ok: true, status: stamp(connected(host, host === 'farbox' ? 'Far box' : host)) } })
+      return route.fulfill({ json: { ok: true, status: stamp(connected(host, host)) } })
     })
     await this.installFleet()
     await this.installNet()
@@ -277,7 +218,7 @@ export class PaneRoutes {
     const page = this.page
     await page.route((url) => url.pathname === '/api/v1/hosts', (route) => {
       const refreshing = Date.now() < this.refreshUntil
-      const hosts = fleet(this.alphaFixed, this.farUp).map((h) => ({ ...h, refreshing }))
+      const hosts = fleet(this.alphaFixed).filter((h) => !this.removed.has(String(h.host))).map((h) => ({ ...h, refreshing }))
       return route.fulfill({ json: { hosts, checkedAt: Date.now(), refreshing } })
     })
     await page.route('**/api/v1/hosts/refresh', (route) => {
@@ -289,7 +230,7 @@ export class PaneRoutes {
       this.record(route)
       await this.pass('boot')
       this.alphaFixed = true
-      return route.fulfill({ json: { host: fleet(true, this.farUp)[1] } })
+      return route.fulfill({ json: { host: fleet(true)[1] } })
     })
     await page.route('**/api/v1/hosts/*/profile', async (route) => {
       const host = decodeURIComponent(new URL(route.request().url()).pathname.split('/')[4])
@@ -316,11 +257,18 @@ export class PaneRoutes {
     await page.route('**/api/hosts/net', (route) => route.fulfill({
       json: { enabled: true, macId: 'a'.repeat(64), companion: false, relay: this.relay, relays: [], syncedAt: Date.now(), error: null, machines },
     }))
-    await page.route('**/api/hosts/net/invites', (route) => { this.record(route); this.invites++; return route.fulfill({ status: 201, json: invite(`ni-${this.invites}`) }) })
+    await page.route('**/api/hosts/net/invites', async (route) => {
+      this.record(route)
+      await this.pass('invite')
+      if (this.failInvites > 0) { this.failInvites--; return route.fulfill({ status: 503, json: { error: 'The host network is not running on this Mac' } }) }
+      this.invites++
+      return route.fulfill({ status: 201, json: invite(`ni-${this.invites}`) })
+    })
     await page.route('**/api/hosts/net/invites/*', (route) => route.fulfill({ json: invite(new URL(route.request().url()).pathname.split('/').pop()!) }))
     await page.route('**/api/hosts/net/machines/*', (route) => {
       const host = decodeURIComponent(this.record(route).path.split('/').pop()!)
       machines = machines.filter((m) => m.host !== host)
+      this.removed.add(host)
       return route.fulfill({ json: { removed: host } })
     })
     await page.route('**/api/hosts/net/relay', (route) => {
@@ -478,17 +426,44 @@ export async function openFixturePane(page: Page, request: APIRequestContext): P
 export async function openPane(page: Page): Promise<void> {
   await openRemoteHosts(page)
   await expect(page.locator('#rh-host-devbox')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('[id="hf-card-devbox"]')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('rh-summary-online')).toHaveText('2 of 4 online', { timeout: 20_000 })
   await expect(page.locator('[data-host-alias="gpu-box"]')).toBeVisible({ timeout: 20_000 })
   for (const id of ['remote-hosts-list', 'replica-removals-host', 'remote-hosts-more']) {
     await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
   }
 }
 
-/** Opens More settings (closed by default) and waits for its groups. */
+/** The More settings groups, each folded to one line until opened. */
+export const MORE_GROUPS = ['host-network-relay', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'rh-session-limits']
+
+/** Opens More settings (closed by default) and waits for its groups' lines. */
 export async function openMore(page: Page): Promise<void> {
   await openRemoteHostsMore(page)
-  for (const id of ['host-network-relay', 'host-servers', 'host-exec-grants', 'fleet-secrets', 'rh-session-limits']) {
-    await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
-  }
+  for (const id of MORE_GROUPS) await expect(page.getByTestId(`${id}-toggle`)).toBeVisible({ timeout: 20_000 })
+}
+
+/** Opens one More settings group (its line is a toggle). */
+export async function openGroup(page: Page, id: string): Promise<void> {
+  const toggle = page.getByTestId(`${id}-toggle`)
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
+/** A row of the list by its alias (`net:`/`fleet:` rows too). */
+export const row = (page: Page, alias: string) => page.locator(`[data-testid="remote-hosts-list"] .rh-host-row[data-host-alias="${alias}"]`)
+
+/** Opens a row's More menu and picks an item; resolves once the menu closed. */
+export async function pick(page: Page, rowEl: Locator, item: string, sweep?: () => Promise<void>): Promise<void> {
+  await rowEl.getByTestId('rh-row-more').click()
+  const menu = page.getByTestId('rh-row-menu')
+  await expect(menu).toBeVisible()
+  // The sweep sees the menu's items while it is open.
+  await sweep?.()
+  await menu.getByRole('menuitem', { name: item, exact: true }).click()
+  await expect(menu).toHaveCount(0)
+}
+
+/** The focus is somewhere on the page, never on body (2026-11-04 review). */
+export async function expectFocusKept(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => !!document.activeElement && document.activeElement !== document.body)).toBe(true)
 }

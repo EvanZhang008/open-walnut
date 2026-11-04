@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import { useInRouterContext } from 'react-router-dom'
 import { hashTargetId, readDisclosureOpen, RouterHashWatcher, sessionStore, writeDisclosureOpen } from './SettingsSection'
 import { ChevronGlyph } from './settings-glyphs'
+import { landOnRow } from '@/utils/scroll-land'
 import '@/styles/settings-fold.css'
 
 type Report = (key: string, count: number) => void
@@ -36,6 +37,7 @@ export function SettingsFold({ id, label, summary, children, 'data-testid': test
   const [open, setOpen] = useState(() => readDisclosureOpen(sessionStore(), id, false))
   const [counts, setCounts] = useState<Record<string, number>>({})
   const bodyRef = useRef<HTMLDivElement>(null)
+  const foldRef = useRef<HTMLElement>(null)
   const bodyId = `${id}-fold-${useId().replace(/:/g, '')}`
 
   const setAndStore = useCallback((next: boolean) => {
@@ -61,7 +63,7 @@ export function SettingsFold({ id, label, summary, children, 'data-testid': test
   const needs = useMemo(() => Object.values(counts).reduce((a, b) => a + b, 0), [counts])
 
   return (
-    <section className="settings-fold" data-open={open ? 'true' : 'false'} data-testid={testId}>
+    <section className="settings-fold" ref={foldRef} data-open={open ? 'true' : 'false'} data-testid={testId}>
       {inRouter && <RouterHashWatcher onHash={openForHash} />}
       <button
         type="button"
@@ -69,7 +71,11 @@ export function SettingsFold({ id, label, summary, children, 'data-testid': test
         aria-expanded={open}
         aria-controls={bodyId}
         data-testid={testId ? `${testId}-toggle` : undefined}
-        onClick={() => setAndStore(!open)}
+        onClick={() => {
+          setAndStore(!open)
+          // Opened near the page end: brought up so what it holds is in view (2026-11-04 review).
+          if (!open) requestAnimationFrame(() => { if (foldRef.current) landOnRow(foldRef.current, { focus: false }) })
+        }}
       >
         <ChevronGlyph size={12} className="settings-disclosure-chevron" />
         <span className="settings-fold-copy">

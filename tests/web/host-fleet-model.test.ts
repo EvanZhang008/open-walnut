@@ -45,14 +45,14 @@ describe('formatting', () => {
 describe('a full card', () => {
   it('reads each row in plain words', () => {
     const h = host()
-    expect(value(h, 'system')?.value).toBe('Debian 12 · x64 · 32 CPUs · 128 GB · 2142 GB disk free')
-    expect(value(h, 'now')?.value).toBe('CPU 25% · load 6.16 · 96 GB of 128 GB memory free · up 13 d')
-    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days · 1 down · 41 link drops · daemon started 15 times', tone: 'good' })
+    expect(value(h, 'system')?.value).toBe('Debian 12, x64, 32 CPUs, 128 GB, 2142 GB disk free')
+    expect(value(h, 'now')?.value).toBe('CPU 25%, load 6.16, 96 GB of 128 GB memory free, up 13 d')
+    expect(value(h, 'online')).toMatchObject({ value: '99.2% of the last 7 days, 1 down, 41 link drops, daemon started 15 times', tone: 'good' })
     expect(value(h, 'sessions')?.value).toBe('19 open')
     expect(value(h, 'spend')?.value).toBe('$1,234 at list price (not a bill)')
-    expect(value(h, 'connection')?.value).toBe('SSH tunnel · connected 20 min · 38 ms')
-    expect(value(h, 'server')?.value).toBe('Replica · running · 0.6.20-abc1234 · phone tunnel connected')
-    expect(value(h, 'daemon')).toMatchObject({ value: 'build 0123456789ab · bun · does not start by itself after a reboot', tone: 'warn' })
+    expect(value(h, 'connection')?.value).toBe('SSH tunnel: connected 20 min, 38 ms')
+    expect(value(h, 'server')?.value).toBe('Replica, running, 0.6.20-abc1234, phone tunnel connected')
+    expect(value(h, 'daemon')).toMatchObject({ value: 'build 0123456789ab, bun, does not start by itself after a reboot', tone: 'warn' })
     expect(statusKind(h)).toBe('connected')
   })
 })
@@ -73,14 +73,14 @@ describe('missing readings say why', () => {
       now: { ...host().now!, stale: true, at: NOW - 5 * 60_000 },
     })
     expect(value(h, 'now')?.value).toMatch(/\(last reading, 5 min ago\)$/)
-    expect(value(h, 'connection')).toMatchObject({ value: 'SSH tunnel · Could not reach Dev box (ssh: connection refused)', tone: 'bad' })
+    expect(value(h, 'connection')).toMatchObject({ value: 'SSH tunnel: Could not reach Dev box (ssh: connection refused)', tone: 'bad' })
     expect(statusKind(h)).toBe('failed')
   })
 
   it('a ledger younger than a week names the time it covers; the Mac has no reboot line', () => {
     const h = host({ local: true, server: null, history: { ...host().history!, windows: [{ days: 7, minutes: 180, up: 170, linked: 170, online: 170 / 180, linkedShare: 1, drops: 0, downs: 1 }], daemonStarts: 1 } })
-    expect(value(h, 'online')).toMatchObject({ value: '94.4% of the 3 hours recorded · 1 down', tone: 'warn' })
-    expect(value(h, 'daemon')?.value).toBe('build 0123456789ab · bun')
+    expect(value(h, 'online')).toMatchObject({ value: '94.4% of the 3 hours recorded, 1 down', tone: 'warn' })
+    expect(value(h, 'daemon')?.value).toBe('build 0123456789ab, bun')
     expect(value(h, 'server')).toBeUndefined()
   })
 })
@@ -100,7 +100,7 @@ describe('day cells', () => {
 describe('words, never codes, on the card', () => {
   it('the Walnut server row reads the phase in words', () => {
     const h = host({ server: { enabled: true, program: 'replica', phase: 'waiting-for-host', phaseLabel: 'waiting for the host to connect', build: null, phone: null, message: null } })
-    expect(value(h, 'server')).toMatchObject({ value: 'Replica · waiting for the host to connect', tone: 'warn' })
+    expect(value(h, 'server')).toMatchObject({ value: 'Replica, waiting for the host to connect', tone: 'warn' })
     expect(fleetRows(h, NOW).map((r) => r.value).join('\n')).not.toContain('waiting-for-host')
   })
 
@@ -114,16 +114,16 @@ describe('words, never codes, on the card', () => {
 
   it('the daemon row follows the server\'s reboot verdict (the cloud box reports on-demand yet comes back)', () => {
     const cloud = host({ connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: null, rttMs: 100, error: null }, daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true } })
-    expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab · bun · starts after a reboot', tone: undefined })
+    expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab, bun, starts after a reboot', tone: undefined })
   })
 
   it('the daemon row reads the host\'s own reboot answer in the server\'s words; a setup in progress is no warning', () => {
     const d = { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', runtime: 'binary', vitals: true }
     const bs = { mode: 'none' as const, backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null }
     const cron = host({ daemon: { ...d, startsAfterReboot: true, bootStart: { ...bs, mode: 'boot', backend: 'cron', reason: null }, reboot: 'starts by itself after a reboot (from its crontab)' } })
-    expect(value(cron, 'daemon')).toMatchObject({ value: 'build 0123456789ab · binary · starts by itself after a reboot (from its crontab)', tone: undefined })
+    expect(value(cron, 'daemon')).toMatchObject({ value: 'build 0123456789ab, binary, starts by itself after a reboot (from its crontab)', tone: undefined })
     const busy = host({ daemon: { ...d, startsAfterReboot: false, bootStart: { ...bs, setupRunning: true }, reboot: 'Walnut is setting it up to start after a reboot' } })
-    expect(value(busy, 'daemon')).toMatchObject({ value: 'build 0123456789ab · binary · Walnut is setting it up to start after a reboot', tone: undefined })
+    expect(value(busy, 'daemon')).toMatchObject({ value: 'build 0123456789ab, binary, Walnut is setting it up to start after a reboot', tone: undefined })
     const none = host({ daemon: { ...d, startsAfterReboot: false, bootStart: bs, reboot: 'does not start by itself after a reboot: nothing on it starts the daemon at boot' } })
     expect(value(none, 'daemon')?.tone).toBe('warn')
   })
@@ -137,7 +137,7 @@ describe('the Can do row', () => {
   })
   it('says what a task can use the host for, with the tags and MCP names on hover', () => {
     const row = value(host({ capabilities: caps() }), 'can')!
-    expect(row.value).toBe('iOS (Xcode 26.1, iOS 26.1) · your browser (chrome) · 2 MCP servers · gpu')
+    expect(row.value).toBe('iOS (Xcode 26.1, iOS 26.1), your browser (chrome), 2 MCP servers, gpu')
     expect(row.title).toContain('tags: macos, local, ios, browser, mcp:playwright')
     expect(row.title).toContain('MCP: playwright, docs-mcp (ToolsPlugin)')
     expect(row.title).toContain('Tools: git, node')
@@ -148,12 +148,12 @@ describe('the Can do row', () => {
   })
   it('a daemon that has not reported yet reads so, never as "none"', () => {
     const row = value(host({ capabilities: caps({ tags: ['linux'], ios: null, browsers: [], mcp: [], declared: [], unknown: ['browser', 'mcp', 'system'] }) }), 'can')!
-    expect(row.value).toBe('browser: not reported yet · MCP servers: not reported yet')
+    expect(row.value).toBe('browser: not reported yet, MCP servers: not reported yet')
     expect(row.tone).toBe('muted')
   })
   it('each unknown names its capability first, after what the host can do', () => {
     const row = value(host({ capabilities: caps({ tags: ['linux', 'docker'], ios: null, browsers: [], mcp: [{ name: 'docs-mcp' }], clis: ['docker'], declared: [], unknown: ['always-on'] }) }), 'can')!
-    expect(row.value).toBe('docker · 1 MCP server · always on: known after a day of uptime records')
+    expect(row.value).toBe('docker, 1 MCP server, always on: known after a day of uptime records')
   })
   it('a server older than capabilities shows no row at all', () => {
     expect(value(host(), 'can')).toBeUndefined()
