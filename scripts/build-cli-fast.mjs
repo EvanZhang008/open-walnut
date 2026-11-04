@@ -19,7 +19,7 @@
  * never correctness. The files still land in an order where a reader never meets
  * an old .jsc: the old one goes first, the new one last, each by rename. Before
  * that the new entry is run where it will run (scripts/cli-fast-probe.mjs): one
- * that cannot answer `--version` and `tools list` fails the build, and the CLI
+ * that cannot answer `--version`, `tools list` and a `tools call` fails the build, and the CLI
  * in place stays.
  */
 import fs from 'node:fs'
@@ -86,39 +86,100 @@ const BUNDLE_URL = '__walnutBundleUrl'
 // tsup build, the tests, the compiled file) runs strict.
 const BANNER = `"use strict";var ${BUNDLE_URL} = require("node:url").pathToFileURL(__filename).href;`
 
-// A file's section in a bun bundle starts with a comment line naming it: its path
-// relative to the build's working directory, or a plugin's `namespace:path`.
-const SECTION = /^\/\/ ((?:[\w@.+-]+\/)+[\w@.+-]+|[\w-]+:[^\s/]\S*)$/
+const B64 = new Map([...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'].map((c, i) => [c, i]))
+
+/**
+ * For each generated line in `want` (0-based), its source map segments as
+ * [column, source index], the index -1 for a segment that maps to no source.
+ * The standard `mappings` format: lines split by `;`, segments by `,`, each a
+ * run of base64 VLQ deltas (column, then source, line, column, name).
+ */
+export function segmentsOnLines(mappings, want) {
+  const out = new Map()
+  let line = 0
+  let col = 0
+  let src = 0
+  let i = 0
+  const vlq = () => {
+    let value = 0
+    let shift = 0
+    for (;;) {
+      const digit = B64.get(mappings[i++])
+      if (digit === undefined) throw new Error(`build-cli-fast: the source map's mappings are not base64 VLQ (at ${i - 1})`)
+      value += (digit & 31) * 2 ** shift
+      shift += 5
+      if (!(digit & 32)) break
+    }
+    return value % 2 === 1 ? -(value - 1) / 2 : value / 2
+  }
+  while (i < mappings.length) {
+    const c = mappings[i]
+    if (c === ';') { line++; col = 0; i++; continue }
+    if (c === ',') { i++; continue }
+    col += vlq()
+    let fields = 1
+    let has = false
+    while (i < mappings.length && mappings[i] !== ',' && mappings[i] !== ';') {
+      const d = vlq()
+      if (fields === 1) { src += d; has = true }
+      fields++
+    }
+    if (want.has(line)) {
+      if (!out.has(line)) out.set(line, [])
+      out.get(line).push([col, has ? src : -1])
+    }
+  }
+  return out
+}
 
 /**
  * The bundled files, not Walnut's own, that read the bundle URL: their
  * import.meta.url. A dependency that finds a file beside itself that way
  * (`new URL('./asset.txt', import.meta.url)`) would look in dist/ and fail when
- * it runs. Walnut's own are `repo`'s src/ and the walnut-ws module; each other
- * file is named relative to `repo` when it is inside it. Fails closed: code
- * outside any section counts too.
+ * it runs. Each read is attributed by the source map (the segment it sits in),
+ * never by bun's `// <path>` comment lines: a line of a template string can look
+ * like one, and their form is bun's to change. The map names each file relative
+ * to the build's working directory (`cwd`), or as a plugin's `namespace:path`.
+ * Walnut's own are `repo`'s src/ and the walnut-ws module; any other file is
+ * named relative to `repo` when inside it. Fails closed: a read the map does not
+ * place counts too.
  */
-export function foreignBundleUrlReaders(js, { repo = root, cwd = process.cwd() } = {}) {
+export function foreignBundleUrlReaders(js, map, { repo = root, cwd = process.cwd() } = {}) {
   const repos = [...new Set([repo, fs.realpathSync(repo)])]
   const bases = [...new Set([cwd, fs.realpathSync(cwd)])]
-  const own = (section) => {
-    if (section.startsWith('walnut-ws:')) return true
-    if (/^[\w-]+:/.test(section)) return false
-    return bases.some((base) => repos.some((r) => /^src\//.test(path.relative(r, path.resolve(base, section)))))
+  const namespaced = (source) => /^[\w-]{2,}:/.test(source)
+  const own = (source) => {
+    if (namespaced(source)) return source.startsWith('walnut-ws:')
+    return bases.some((base) => repos.some((r) => /^src[\\/]/.test(path.relative(r, path.resolve(base, source)))))
   }
-  const name = (section) => {
-    if (/^[\w-]+:/.test(section)) return section
-    const rel = path.relative(repo, path.resolve(cwd, section))
-    return rel.startsWith('..') ? path.resolve(cwd, section) : rel
+  const name = (source) => {
+    if (namespaced(source)) return source
+    const rel = path.relative(repo, path.resolve(cwd, source))
+    return rel.startsWith('..') ? path.resolve(cwd, source) : rel
   }
+  const lines = js.split('\n')
+  // The one declaration: the banner, on the wrapper's line.
+  const declared = lines[1]?.indexOf(BANNER) ?? -1
+  const declaredAt = declared < 0 ? -1 : declared + BANNER.indexOf(BUNDLE_URL)
+  const reads = new Map()
+  lines.forEach((text, n) => {
+    for (let at = text.indexOf(BUNDLE_URL); at >= 0; at = text.indexOf(BUNDLE_URL, at + 1)) {
+      if (n === 1 && at === declaredAt) continue
+      if (!reads.has(n)) reads.set(n, [])
+      reads.get(n).push(at)
+    }
+  })
+  const segments = segmentsOnLines(map.mappings ?? '', new Set(reads.keys()))
   const found = new Set()
-  let section = null
-  for (const line of js.split('\n')) {
-    const head = SECTION.exec(line)
-    if (head) { section = head[1]; continue }
-    if (!line.includes(BUNDLE_URL) || line.includes(`var ${BUNDLE_URL} = `)) continue
-    if (!section) found.add('(code before the first file)')
-    else if (!own(section)) found.add(name(section))
+  for (const [n, cols] of reads) {
+    const segs = segments.get(n) ?? []
+    for (const at of cols) {
+      let source = -1
+      for (const [col, src] of segs) { if (col > at) break; source = src }
+      const file = map.sources?.[source]
+      if (file === undefined) found.add(`(code the source map does not place, line ${n + 1})`)
+      else if (!own(file)) found.add(name(file))
+    }
   }
   return [...found]
 }
@@ -163,6 +224,12 @@ export async function bundleCliFast({ repo = root, entry = CLI_FAST_ENTRY, fromD
   for (const out of result.outputs) files.set(path.basename(out.path), Buffer.from(await out.arrayBuffer()))
   const missing = CLI_FAST_FILES.filter((name) => !files.get(name)?.length)
   if (missing.length) throw new Error(`build-cli-fast: bun wrote no ${missing.join(', ')}`)
+  // Only these three are installed: anything else (an asset imported `with { type:
+  // 'file' }`, a .node addon) would be missing beside cli-fast.js when it runs.
+  const extra = result.outputs.filter((out) => !CLI_FAST_FILES.includes(path.basename(out.path)))
+  if (extra.length) {
+    throw new Error(`build-cli-fast: bun wrote files beyond ${CLI_FAST_FILES.join(', ')}, which the install would drop and cli-fast.js would not find; load what imports them from disk (CLI_FAST_FROM_DISK) or make them code:\n${extra.map((out) => `  ${path.basename(out.path)} (${out.kind})`).join('\n')}`)
+  }
   const js = files.get('cli-fast.js').toString('utf8')
   if (!js.startsWith(CLI_FAST_PRAGMA)) throw new Error(`build-cli-fast: cli-fast.js does not start with "${CLI_FAST_PRAGMA}", so bun would not load its bytecode`)
   // A path of this machine exists on no other one: the checkout, where its modules
@@ -172,23 +239,28 @@ export async function bundleCliFast({ repo = root, entry = CLI_FAST_ENTRY, fromD
   if (baked.size > 0) {
     throw new Error(`build-cli-fast: cli-fast.js carries paths of the build machine; load the dependency that names them from disk (CLI_FAST_FROM_DISK):\n${[...baked.keys()].map((p) => `  ${p}`).join('\n')}`)
   }
-  const foreign = foreignBundleUrlReaders(js, { repo })
+  const foreign = foreignBundleUrlReaders(js, JSON.parse(files.get('cli-fast.js.map').toString('utf8')), { repo })
   if (foreign.length > 0) {
     throw new Error(`build-cli-fast: these bundled files read import.meta.url, which in cli-fast.js is the bundle's own URL, so they would look for their files in dist/; load their package from disk (CLI_FAST_FROM_DISK):\n${foreign.map((f) => `  ${f}`).join('\n')}`)
   }
   return files
 }
 
-/** A killed build's staging dir (`cli-fast.<pid>.tmp`, ~70 MB): a package or a publish would carry it. */
-function removeDeadStages(outDir) {
+// A build stages its files in a dir of its own inside the out dir, named at
+// random (mkdtemp): builds in other containers share the mounted out dir but not
+// a pid namespace, so a pid names neither the dir nor whether its build lives.
+export const STAGE_PREFIX = 'cli-fast.stage-'
+// A build stages, probes and moves its files in seconds; a stage this old was
+// left by a killed one (~70 MB a package or a publish would carry).
+export const STAGE_MAX_AGE_MS = 60 * 60 * 1000
+
+function removeOldStages(outDir, now = Date.now()) {
   for (const name of fs.readdirSync(outDir)) {
-    const m = /^cli-fast\.(\d+)\.tmp$/.exec(name)
-    if (!m || Number(m[1]) === process.pid) continue
+    if (!name.startsWith(STAGE_PREFIX)) continue
+    const dir = path.join(outDir, name)
     try {
-      process.kill(Number(m[1]), 0)
-    } catch (err) {
-      if (err?.code === 'ESRCH') fs.rmSync(path.join(outDir, name), { recursive: true, force: true })
-    }
+      if (now - fs.statSync(dir).mtimeMs > STAGE_MAX_AGE_MS) fs.rmSync(dir, { recursive: true, force: true })
+    } catch { /* another build removed it */ }
   }
 }
 
@@ -199,13 +271,11 @@ function removeDeadStages(outDir) {
  * first and the new one placed last (see header). A failed write or probe leaves
  * the old files. Returns what the probe said.
  */
-export function installCliFast(files, outDir, { probe = probeCliFast, stageName = `cli-fast.${process.pid}.tmp` } = {}) {
+export function installCliFast(files, outDir, { probe = probeCliFast } = {}) {
   fs.mkdirSync(outDir, { recursive: true })
-  removeDeadStages(outDir)
+  removeOldStages(outDir)
   const [js, jsc, map] = CLI_FAST_FILES
-  const stage = path.join(outDir, stageName)
-  fs.rmSync(stage, { recursive: true, force: true })
-  fs.mkdirSync(stage)
+  const stage = fs.mkdtempSync(path.join(outDir, STAGE_PREFIX))
   try {
     for (const name of CLI_FAST_FILES) fs.writeFileSync(path.join(stage, name), files.get(name))
     const probed = probe ? probe(path.join(stage, js)) : null

@@ -186,7 +186,7 @@ describe('bin/open-walnut.js on the CommonJS entry', () => {
     const full = built.get('cli-fast.js')!
     fs.writeFileSync(path.join(from, 'cli-fast.js'), full.subarray(0, Math.floor(full.length / 2)))
     fs.writeFileSync(path.join(checkout, 'dist', 'cli-fast.js'), 'old fast\n')
-    expect(() => publishDist(from, path.join(checkout, 'dist'))).toThrow(/the new CLI does not run, so it is not published/)
+    expect(() => publishDist(from, path.join(checkout, 'dist'))).toThrow(/the new CLI does not run \(probed twice\), so it is not published/)
     expect(fs.readFileSync(path.join(checkout, 'dist', 'cli-fast.js'), 'utf8')).toBe('old fast\n')
   })
 

@@ -2108,7 +2108,10 @@ fi
 # kept the last working-tree build (2026-10-05). Publish the build now serving:
 # the dist of the same build the compiled file was made from (the publish
 # leaves build-binary's staging dir out).
-# Best effort: the server is up either way.
+# The server is up either way, so a failure does not fail the deploy; it ends the
+# deploy's output instead (the queue repeats that line to its caller), because a
+# CLI left on the old build answers with older op text than the server's.
+CLI_NOT_PUBLISHED=""
 if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
   publish_from="$REPO_ROOT/dist"
   publish_to="$SERVE_ROOT/dist"
@@ -2120,6 +2123,7 @@ if [[ "$SERVE_ROOT" != "$REPO_ROOT" ]]; then
     publish_to="$TMPDIR/rehearsal-serve-root/dist"
   fi
   if ! "$JS_BIN" "$REPO_ROOT/scripts/publish-serve-root-dist.mjs" "$publish_from" "$publish_to"; then
+    CLI_NOT_PUBLISHED="$publish_to"
     echo "Warning: could not publish the serving build to $publish_to; the walnut CLI there keeps its last build." >&2
   fi
 fi
@@ -2127,3 +2131,6 @@ fi
 pid="$(listener_pids | head -n 1)"
 date +%s > "$SUCCESS_STAMP"
 echo "Server ready (PID: $pid, $RUNTIME_DESC)"
+if [[ -n "$CLI_NOT_PUBLISHED" ]]; then
+  echo "Deploy incomplete: the server runs the new build, but the walnut CLI in $CLI_NOT_PUBLISHED was NOT updated and keeps its last build, so its op help can be older than the server's (the publish's error is above). Deploy again with WALNUT_DEVPROD_FORCE=1 to publish it."
+fi

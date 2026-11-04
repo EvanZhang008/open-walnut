@@ -22,8 +22,11 @@
 // removed before the entries land and the new one placed after them. bun would
 // refuse a .jsc made from other source anyway; this keeps a reader from ever
 // meeting one. Before anything is written the new cli-fast.js is run
-// (scripts/cli-fast-probe.mjs: `--version` and `tools list`); one that fails
-// it is not published, and the CLI here keeps its build. Copies are clonefile where the
+// (scripts/cli-fast-probe.mjs). The build ran the same probe on the same files
+// seconds before, so a failure here is most likely the machine (a load spike
+// past its timeout): it runs once more, and one that fails twice is not
+// published, the CLI here keeping its build; dev-prod.sh then ends the deploy's
+// output saying so. Copies are clonefile where the
 // filesystem has it (metadata only, nothing for an on-access scanner to read).
 import fs from 'node:fs'
 import path from 'node:path'
@@ -70,7 +73,10 @@ function place(src, dst, kind, tmpTag) {
   }
 }
 
-/** Copy `from` over `to` (see the header). Returns what it did, in order. `probe: null` skips the run (tests). */
+/**
+ * Copy `from` over `to` (see the header). Returns what it did, in order, and the
+ * first probe's failure when the second passed. `probe: null` skips the run (tests).
+ */
 export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp`, probe = probeCliFast } = {}) {
   const src = path.resolve(from)
   const dst = path.resolve(to)
@@ -82,11 +88,18 @@ export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp`, p
   if (!fs.existsSync(path.join(path.dirname(dst), 'package.json'))) {
     throw new Error(`${path.dirname(dst)} is not a checkout (no package.json)`)
   }
+  const said = (err) => (err instanceof Error ? err.message : String(err))
+  let probeRetried = null
   if (probe) {
     try {
       probe(path.join(src, 'cli-fast.js'))
-    } catch (err) {
-      throw new Error(`the new CLI does not run, so it is not published: ${err instanceof Error ? err.message : String(err)}`)
+    } catch (first) {
+      try {
+        probe(path.join(src, 'cli-fast.js'))
+        probeRetried = said(first)
+      } catch (err) {
+        throw new Error(`the new CLI does not run (probed twice), so it is not published: ${said(err)}`)
+      }
     }
   }
 
@@ -124,7 +137,7 @@ export function publishDist(from, to, { tmpTag = `publish-${process.pid}.tmp`, p
       pruned.push(it.rel)
     }
   }
-  return { order, pruned }
+  return { order, pruned, probeRetried }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
@@ -135,7 +148,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   }
   try {
     const t0 = Date.now()
-    const { order, pruned } = publishDist(from, to)
+    const { order, pruned, probeRetried } = publishDist(from, to)
+    if (probeRetried) process.stderr.write(`publish-serve-root-dist: the new CLI's first probe failed, the second passed: ${probeRetried}\n`)
     process.stdout.write(`Published the serving build to ${path.resolve(to)}: ${order.length} files, ${pruned.length} stale files removed, ${Date.now() - t0}ms.\n`)
   } catch (err) {
     process.stderr.write(`publish-serve-root-dist: ${err instanceof Error ? err.message : String(err)}\n`)

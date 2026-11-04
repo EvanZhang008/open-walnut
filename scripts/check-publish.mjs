@@ -144,9 +144,9 @@ if (notPacked.length) {
   process.exit(1);
 }
 const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin)-/.test(f) || f.endsWith('.map') || f.endsWith('.gz')
-  // A build or a publish killed half way leaves `<file>.<pid>.tmp`, or cli-fast's
-  // staging dir `cli-fast.<pid>.tmp/` (its map alone is ~45 MB).
-  || /^dist\/(?:.*\/)?[^/]*\.tmp(?:\/|$)/.test(f)
+  // A publish killed half way leaves `<file>.<pid>.tmp`, a cli-fast build its
+  // staging dir `cli-fast.stage-<random>/` (its map alone is ~45 MB).
+  || /^dist\/(?:.*\/)?[^/]*\.tmp(?:\/|$)/.test(f) || /^dist\/cli-fast\.stage-[^/]*\//.test(f)
   // CDK build state: cdk.context.json holds the account id, node_modules and cdk.out are local builds.
   || /^infra\/(node_modules|cdk\.out|test)\//.test(f) || f === 'infra/cdk.context.json');
 if (leaked.length) {

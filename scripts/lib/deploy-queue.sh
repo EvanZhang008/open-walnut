@@ -268,7 +268,11 @@ dq_answer() {
     ok)
       if [[ "$target" == "$sha" ]]; then echo "Deployed ${sha:0:12}: production serves it now."
       else echo "Deployed: production serves ${target:0:12}, which includes your commit ${sha:0:12}."; fi
-      [[ "$log" != "-" && -f "$log" ]] && echo "Deploy log: $log"
+      if [[ "$log" != "-" && -f "$log" ]]; then
+        echo "Deploy log: $log"
+        # A part of the deploy that failed while the server went live (dev-prod.sh).
+        grep -h '^Deploy incomplete: ' "$log" >&2 || true
+      fi
       return 0 ;;
     refused)
       echo "Not deployed: your commit ${sha:0:12} is not on the checkout's HEAD (a rebase replaced it, or it is on another branch), and production serves ${log:0:12}, which deploying it alone would take back. Deploy the commit that carries it now (usually HEAD)." >&2

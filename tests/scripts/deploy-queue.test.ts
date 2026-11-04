@@ -34,6 +34,10 @@ if [[ -f "$STUB_FAIL" ]]; then echo "type-check failed in the stub" >&2; exit 7;
 printf '{"build":{"commit":"%s","dirty":false,"builtAt":"%s"}}' "\${sha:0:9}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STUB_CONFIG"
 date +%s > "$TMPDIR/open-walnut-dev-prod.last-success"
 echo "end $sha $(date +%s)" >> "$STUB_DEPLOYS"
+echo "Server ready (PID: 1, stub)"
+if [[ -f "$STUB_FAIL.incomplete" ]]; then
+  echo "Deploy incomplete: the server runs the new build, but the walnut CLI in $PWD/dist was NOT updated (stub)."
+fi
 `
 
 interface Fixture { root: string; repo: string; tmp: string; queue: string; deploys: string; config: string; fail: string }
@@ -185,6 +189,17 @@ describe('the deploy queue', () => {
       expect(fs.existsSync(log)).toBe(true)
     }
     expect(deploys(f).filter((d) => d.kind === 'start')).toHaveLength(1)
+    await runnerGone(f)
+  }, 60_000)
+
+  it('a deploy that went live with a part of it failed says so to the caller, as the last line', async () => {
+    const f = fixture()
+    fs.writeFileSync(`${f.fail}.incomplete`, '')
+    const head = git(f.repo, 'rev-parse', 'HEAD')
+    const r = await call(f).done
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toContain(`Deployed ${head.slice(0, 12)}: production serves it now.`)
+    expect(r.stderr.trim().split('\n').at(-1)).toMatch(/^Deploy incomplete: the server runs the new build, but the walnut CLI in .* was NOT updated \(stub\)\.$/)
     await runnerGone(f)
   }, 60_000)
 
