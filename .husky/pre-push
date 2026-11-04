@@ -16,7 +16,12 @@
 #    pushing to the public mirror. Absent for everyone else, so this hook
 #    degrades to just the type-check.
 #
+# 4. The test gate, last because it is the slowest: see scripts/push-gate.sh.
+#
 # Bypass everything with `git push --no-verify` (not recommended).
+
+# The refs being pushed, read once: the scanner and the test gate below both read them.
+refs=$(cat)
 
 echo "Type-checking before push (tsc --noEmit)…"
 if ! bun run --silent lint; then
@@ -41,5 +46,11 @@ if [ -n "$scanner" ]; then
     echo "Push blocked: walnut.prepushScanner names $scanner, which is not there."
     exit 1
   fi
-  "$scanner" "$@" || exit 1
+  printf '%s\n' "$refs" | "$scanner" "$@" || exit 1
 fi
+
+# 4. The test gate (scripts/push-gate.sh): CI's quick and frontend tiers and the browser specs a
+#    push to main touches, on the commit being pushed, on GitHub's runners (a gate/<sha> branch
+#    and .github/workflows/push-gate.yml). Off unless `git config walnut.pushGate` is true, so a
+#    contributor's push is unchanged.
+printf '%s\n' "$refs" | bash scripts/push-gate.sh "$@" || exit 1

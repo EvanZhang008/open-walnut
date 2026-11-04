@@ -7,6 +7,7 @@ Five layers, chosen so the one you run most often is the one that costs least. R
 | **L1 quick** | `bun run test:quick` | ~2,250 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
 | **L2 focus** | `bun run test:focus <path>` | whatever you name | 0.3 to 30 s | while working on one module |
 | **L3 pre-commit** | `bun run test:pre-commit` | the tiers your diff can break | 1 to 6 min | before a larger commit |
+| **Push gate** | `.husky/pre-push` (opt in: `git config walnut.pushGate true`) | CI's quick and frontend tiers, plus the browser specs the push touches, on GitHub's runners | ~25 min | every push to main |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
 | **L5 live** | `bun run test:live:cloud` / `test:live:daemon` | real cloud + real daemon, zero mocks | ~25 s / ~2 min | cross-machine feature sign-off; part of `test:full` |
 | **Fleet** | `bun run test:fleet` | the Mac + Linux host containers over real SSH, with link faults | ~3 min for both files once the image is cached | a change to how the Mac reaches, deploys to or hands over to a host; opt-in, never in CI |
@@ -129,6 +130,20 @@ A newer push to a pull request cancels its run in progress (`concurrency` with `
 `.github/workflows/flake-hunt.yml` runs after every green CI push on main and reruns the blocking legs (quick 1/3..3/3, e2e 1/4..4/4, slow) on that same commit, with CI's own arguments, workers, retries and baselines. A failure there is a flake by definition: the code passed minutes ago. Flakes are what turned innocent pushes red on 2026-10-02 (an inode the filesystem reused within one millisecond) and 10-03 (a log flush racing a directory removal); the hunt finds them on a commit that is already green, before they cost a push.
 
 The hunt never paints a commit red or mails anyone: its legs stay green (`continue-on-error`), and `scripts/flake-report.mjs` turns what a leg found into warning annotations titled `Flaky test (<leg>)` (or `Flake hunt (<leg>)` when the leg failed with nothing to name: no report, a missing file, a setup step). The release watch reads those annotations and wakes the session that owns the pipeline. `tests/scripts/flake-hunt.test.ts` pins the legs to CI's.
+
+### The test gate before a push to main
+
+Every team pushed to main without CI's checks, so one team's red test turned every later run red and mailed "Run failed" each hour for a day (2026-11-04: most of those failures were new ratchets and guards that CI's quick tier catches). `scripts/push-gate.sh`, run by `.husky/pre-push` after the type check and the leak scan, runs the blocking checks on the commit being pushed before main moves: the quick tier (`scripts/test-baseline.mjs check`, judged against `tests/setup/known-failures.json` as CI judges it), the frontend tier (`test:frontend:ci`), and the browser specs the push touches (a changed spec, or a spec importing a changed browser helper) through `scripts/browser-baseline.mjs check --run` with CI's one retry. A push that fails is refused, and the gate prints the failing tests and every commit the push carries, so the committer knows whose test it is.
+
+It runs on GitHub's own runners: the hook pushes the commit to a `gate/<sha>` branch of the same remote, `.github/workflows/push-gate.yml` runs ci.yml's quick and frontend legs on it command for command (`tests/scripts/push-gate-workflow.test.ts` pins that) plus the touched browser specs, and writes commit statuses, one per tier and `walnut/push-gate` for the whole. The hook waits for that one (75 minutes at most, `WALNUT_PUSH_GATE_TIMEOUT`), deletes the branch, and pushes main only on success. A failing test never fails the gate's run (the test steps may fail; the verdict is a status), so the gate mails nobody. Run on a shared dev host instead, the same tiers took 41 minutes and reported 15 failures, all but one from that host's load and toolchain, which is why the gate uses CI's runners.
+
+It judges only a push to `refs/heads/main`, and it is off unless asked for, so an outside contributor's push is unchanged (GitHub's CI judges a pull request). Turn it on where main is pushed (it needs `gh` signed in there):
+
+```bash
+git config --global walnut.pushGate true
+```
+
+`git config walnut.testRunner '<prefix>'` runs the tiers through a command prefix on a test host instead (the push must then come from a clean checkout of the commit, since the runner tests that checkout; it exits 255 when it could not run them). A gate that cannot judge (no answer in time, an unreachable runner) refuses the push, because an unchecked push is what the gate stops. `WALNUT_PUSH_GATE=0` skips it for one push (say why in the task), `WALNUT_PUSH_GATE=1` turns it on for one push. Browser specs a side config owns (`tests/e2e/browser/side-config-specs.ts`), a change to the shared fixture or a config, a helper no spec imports directly, and a helper so shared that it maps to more than 30 specs are left to CI's browser shards, and the gate prints which. A flaky test is fixed at its cause, never retried past: the gate's one browser retry is CI's own. `tests/scripts/push-gate.test.ts` pins the gate's behavior with a stub `gh`, a local remote and a stub runner.
 
 ## How you learn CI failed, and how it gets fixed
 
