@@ -38,6 +38,7 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   agentId: { none: 'Picks which console agent a Personal AI conversation speaks to; only with walnutAgent.' },
   overrideReadiness: { none: '"Start anyway" answers the host readiness gate of a person\'s launch; task_start does not run that gate.' },
   sessionId: { none: 'A browser-minted id so a lost HTTP answer stays reconcilable; the op reads the id from its answer.' },
+  hints: { none: 'The browser side panel asks for its object-context hint (the page, mail or tab the person asks about); an agent says what it means in its message.' },
 }
 
 /** QuickStartTaskMeta: the draft's task fields. */
