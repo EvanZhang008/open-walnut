@@ -401,7 +401,7 @@ cat ${JSON.stringify(path.join(dir, 'statuses.json'))}
   it('writes a tier\'s outcome with test-baseline\'s verdict line as its description', () => {
     const s = stub([])
     const out = path.join(s.dir, 'out.txt')
-    fs.writeFileSync(out, 'lots of output\n✗ 2 NEW failure(s) — not in the baseline\n')
+    fs.writeFileSync(out, 'lots of output\n✗ 2 NEW failure(s) — not in the baseline\n::group::Full message: tests/x.test.ts :: failed to load\n')
     expect(run(s.env, [out], { OUTCOME: 'failure', CONTEXT: 'walnut/push-gate (quick 1/3)' }).status).toBe(0)
     expect(run(s.env, [out], { OUTCOME: 'skipped', CONTEXT: 'walnut/push-gate (frontend)' }).status).toBe(0)
     const posts = fs.readFileSync(s.posts, 'utf8')

@@ -50,7 +50,11 @@ case ${OUTCOME:-} in
     post success "$CONTEXT" "passed" ;;
   failure)
     # test-baseline's verdict line ("✗ 2 NEW failure(s) ..."), else the last line that says failed.
-    line=$(sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$out" | grep -aE 'NEW failure|failed' | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} ' | tail -1)
+    # test-baseline's verdict line ("✗ N NEW failure(s)"), else the last line that says failed;
+    # never a log group's header that names a failing test.
+    clean=$(sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' "$out" | grep -avE '^[0-9]{2}:[0-9]{2}:[0-9]{2} |^(::|##\[)group')
+    line=$(printf '%s\n' "$clean" | grep -aE '✗ [0-9]+ NEW failure' | head -1)
+    [ -n "$line" ] || line=$(printf '%s\n' "$clean" | grep -aE 'NEW failure|failed' | tail -1)
     post failure "$CONTEXT" "${line:-failed}" ;;
   *)
     post failure "$CONTEXT" "did not run (${OUTCOME:-no outcome}): an earlier step failed" ;;
