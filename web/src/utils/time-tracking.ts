@@ -20,6 +20,7 @@ import { resolveAttribution, sameContext, type TimeContext, type TimeKind } from
 import { visibleInterval } from './page-visibility';
 import { subscribeVoiceStatus } from './voice-status';
 import { log } from './log';
+import { getDeviceToken } from '../api/device-token';
 
 // ── Pure state machine ──
 
@@ -171,11 +172,9 @@ function defaultSend(samples: TimeSample[], unloading: boolean): void {
     } catch { /* fall through to keepalive fetch */ }
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  try {
-    // Cloud mode requires the device token; on a trusted LAN none is stored.
-    const token = localStorage.getItem('walnut.deviceToken');
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-  } catch { /* storage unavailable */ }
+  // Cloud mode requires the device token; on a trusted LAN none is stored.
+  const token = getDeviceToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
     void fetch(HEARTBEAT_PATH, { method: 'POST', headers, body, keepalive: true })
       .catch(() => { /* server down — this window of time is lost, nothing to retry into */ });

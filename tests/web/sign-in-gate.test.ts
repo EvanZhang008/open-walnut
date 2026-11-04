@@ -27,6 +27,15 @@ function page(hash: string) {
   vi.stubGlobal('fetch', fetchMock)
 }
 
+/** Answer each URL the gate asks with its own reply; any other URL fails the test. */
+function answer(routes: Record<string, () => Response>) {
+  fetchMock.mockImplementation(async (url: string) => {
+    const reply = routes[url]
+    if (!reply) throw new Error(`unexpected fetch ${url}`)
+    return reply()
+  })
+}
+
 async function gate() {
   const { resolveSignInGate } = await import('../../web/src/api/sign-in-gate')
   const { getUnpairedState } = await import('../../web/src/api/unpaired')
@@ -49,10 +58,75 @@ describe('resolveSignInGate', () => {
 
   it('a browser the server answers without a token (this computer) boots', async () => {
     page('')
-    fetchMock.mockResolvedValue(json(200, { kind: 'human' }))
+    answer({ '/api/devices/browser-session?secure=1': () => new Response(null, { status: 204 }), '/api/v1/me': () => json(200, { kind: 'human' }) })
     const { resolveSignInGate } = await gate()
     expect(await resolveSignInGate()).toBe('app')
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/me')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/devices/browser-session?secure=1', '/api/v1/me'])
+  })
+
+  // 2026-11-04, the user: "if cookie is cleared need another code". Safari removes an
+  // unopened site's localStorage after 7 days; the server's HttpOnly cookie stays.
+  it('a page Safari cleared signs back in from the server cookie: stored again, then a reload', async () => {
+    page('')
+    answer({ '/api/devices/browser-session?secure=1': () => json(200, { token: 'kept-token', name: 'browser-1' }) })
+    const { resolveSignInGate } = await gate()
+    const result = Promise.race([resolveSignInGate(), new Promise((r) => setTimeout(() => r('pending'), 50))])
+    expect(await result).toBe('pending')
+    expect(store.get('walnut.deviceToken')).toBe('kept-token')
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(window.location.hash).toBe('#signed-in-again')
+    // The cookie rides by itself: the call names no token, and nothing else is asked.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).has('authorization')).toBe(false)
+  })
+
+  it('storage that refuses the token: this page holds it and boots without a reload loop', async () => {
+    page('')
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') }, removeItem: () => {} })
+    answer({ '/api/devices/browser-session?secure=1': () => json(200, { token: 'kept-token', name: 'browser-1' }) })
+    const { resolveSignInGate } = await gate()
+    expect(await resolveSignInGate()).toBe('app')
+    expect(reload).not.toHaveBeenCalled()
+    const { getDeviceToken } = await import('../../web/src/api/device-token')
+    expect(getDeviceToken()).toBe('kept-token')
+  })
+
+  it('a removed phone whose cookie is refused reads This phone was signed out, with no second probe', async () => {
+    page('')
+    answer({ '/api/devices/browser-session?secure=1': () => json(401, { error: 'Invalid or revoked token', code: 'token_refused' }) })
+    const { resolveSignInGate, getUnpairedState } = await gate()
+    expect(await resolveSignInGate()).toBe('sign-in')
+    expect(getUnpairedState()).toBe('revoked')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(store.has('walnut.deviceToken')).toBe(false)
+  })
+
+  it('a restore right after a restore reload boots instead of reloading again (storage that does not outlive a reload)', async () => {
+    page('#signed-in-again')
+    answer({ '/api/devices/browser-session?secure=1': () => json(200, { token: 'kept-token', name: 'browser-1' }) })
+    const { resolveSignInGate } = await gate()
+    expect(await resolveSignInGate()).toBe('app')
+    expect(reload).not.toHaveBeenCalled()
+    expect(window.location.hash).toBe('')
+  })
+
+  it('a rate limit or a server error at the restore is a failed probe, never a console without the token', async () => {
+    for (const status of [429, 503]) {
+      vi.resetModules()
+      page('')
+      answer({ '/api/devices/browser-session?secure=1': () => json(status, { error: 'busy' }) })
+      expect(await (await gate()).resolveSignInGate(), String(status)).toBe('probe-failed')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('an older server without the route falls back to the probe', async () => {
+    page('')
+    answer({ '/api/devices/browser-session?secure=1': () => json(404, { error: 'not found' }), '/api/v1/me': () => json(401, { code: 'not_paired' }) })
+    const { resolveSignInGate, getUnpairedState } = await gate()
+    expect(await resolveSignInGate()).toBe('sign-in')
+    expect(getUnpairedState()).toBe('unpaired')
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/devices/browser-session?secure=1', '/api/v1/me'])
   })
 
   it('a refusal with the primary code gets the sign-in screen alone', async () => {

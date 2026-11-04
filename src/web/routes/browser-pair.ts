@@ -15,6 +15,8 @@
  *     tunnel's loopback address, and a browser still holding a removed token
  *     spends the token count on its first page load, which must not lock it out
  *     of entering a fresh code. A right code clears both counts for the address.
+ *   GET /api/devices/browser-session → { token, name } | 204
+ *     Keeps the token in a long-lived HttpOnly cookie (routes/browser-session.ts).
  */
 
 import crypto from 'node:crypto'
@@ -31,12 +33,17 @@ import { getHostServerManager } from '../../core/host-server/index.js'
 import { isPersonAtThisMachine } from './expose.js'
 import { log } from '../../logging/index.js'
 import { bus } from '../../core/event-bus.js'
+import { BROWSER_SESSION_PATH, browserSessionHandler } from './browser-session.js'
 
 /** A browser signed in with a link's code: the web's phone link makes the next one. */
 export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in'
 
 export const browserCodeRouter = Router()
 export const browserPairV1Router = Router()
+
+// A signed-in browser renews its long-lived cookie at every open, and signs back in
+// from it when Safari cleared its page storage (routes/browser-session.ts).
+browserCodeRouter.get(BROWSER_SESSION_PATH, browserSessionHandler)
 
 /** One address a browser can open Walnut at, with the code after `#pair=`. */
 export interface SignInAddress {

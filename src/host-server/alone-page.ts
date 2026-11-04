@@ -4,7 +4,8 @@
  * leader away").
  *
  * Without a device token it says why Walnut is away and names nothing. With the
- * token this browser signed in with (the same origin, so the same storage), it
+ * token this browser signed in with (the same origin, so the same storage; after
+ * Safari cleared that storage, the token its HttpOnly cookie still holds), it
  * lists this Walnut's sessions on this host, shows a conversation, sends a
  * message to a running session and answers its permission prompts, all through
  * /_alone/ (alone-api.ts). It asks /_alone/state every few seconds and opens
@@ -286,20 +287,40 @@ const SCRIPT = `
     if (state.open) { renderOpen(); loadTranscript(); } else { renderList(); }
   }
 
-  if (!token) { showSignedOut(''); setInterval(checkRoute, 5000); return; }
-  $('send').onclick = send;
-  $('text').onkeydown = function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } };
-  $('back').onclick = function () { location.hash = ''; };
-  $('reload').onclick = function () { location.reload(); };
-  window.addEventListener('hashchange', route);
-  route();
-  loadSessions();
+  // Safari clears an unopened site's page storage after 7 days; the server's HttpOnly
+  // cookie stays, and this server answers the token it holds (host-server/browser-session.ts).
+  function restore() {
+    var secure = location.protocol === 'https:' ? '?secure=1' : '';
+    return fetch('/api/devices/browser-session' + secure, { cache: 'no-store' })
+      .then(function (res) { return res.status === 200 ? res.json() : null; })
+      .then(function (body) { return body && typeof body.token === 'string' ? body.token : null; })
+      .catch(function () { return null; });
+  }
+
+  // Signed in or not, the page asks every few seconds whether the console answers again.
   setInterval(checkRoute, 5000);
-  setInterval(function () {
-    // Back with the Mac or the companion: nothing more to read here (the banner says so).
-    if (state.route !== 'alone') return;
-    loadSessions().then(function () { if (state.open && !state.sending) return loadTranscript(); });
-  }, 4000);
+  if (token) { boot(); return; }
+  restore().then(function (kept) {
+    if (!kept) { showSignedOut(''); return; }
+    token = kept;
+    try { localStorage.setItem(TOKEN_KEY, kept); } catch (e) { /* this page still holds it */ }
+    boot();
+  });
+
+  function boot() {
+    $('send').onclick = send;
+    $('text').onkeydown = function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } };
+    $('back').onclick = function () { location.hash = ''; };
+    $('reload').onclick = function () { location.reload(); };
+    window.addEventListener('hashchange', route);
+    route();
+    loadSessions();
+    setInterval(function () {
+      // Back with the Mac or the companion: nothing more to read here (the banner says so).
+      if (state.route !== 'alone') return;
+      loadSessions().then(function () { if (state.open && !state.sending) return loadTranscript(); });
+    }, 4000);
+  }
 })();
 `
 

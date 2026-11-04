@@ -144,6 +144,9 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/usage/sessions/:sid', away: 'needs-leader', why: 'usage_needs_mac' },
   // This server's own health.
   { method: 'GET', pattern: '/api/health', cls: 'local' },
+  // A signed-in browser's cookie is this address's (routes/browser-session.ts): set and
+  // read here, against this replica's device copy, the Mac answering or not.
+  { method: 'GET', pattern: '/api/devices/browser-session', cls: 'local' },
   // The terminal is a /ws RPC the Mac serves (section 3).
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).

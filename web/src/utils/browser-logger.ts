@@ -21,6 +21,7 @@
  */
 
 import { wsClient } from '../api/ws'
+import { getDeviceToken } from '../api/device-token'
 import { detectInputClient } from './input-latency-monitor'
 
 // ── Types ──
@@ -191,10 +192,8 @@ function flush(): void {
       try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' }
         // Cloud mode requires the device token; on a trusted LAN none is stored.
-        try {
-          const token = localStorage.getItem('walnut.deviceToken')
-          if (token) headers['Authorization'] = `Bearer ${token}`
-        } catch { /* storage unavailable */ }
+        const token = getDeviceToken()
+        if (token) headers['Authorization'] = `Bearer ${token}`
         void fetch('/api/browser-logs', {
           method: 'POST',
           headers,

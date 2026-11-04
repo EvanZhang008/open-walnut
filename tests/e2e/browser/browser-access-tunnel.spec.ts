@@ -122,6 +122,24 @@ function phoneDevice() {
   return iphone
 }
 
+/** A line at the foot of the page for a recorded run, held 2 s so the clip shows it. */
+async function demoCaption(page: Page, text: string) {
+  await page.evaluate((t) => {
+    // A page with no viewport tag (a JSON answer) lays out 980 px wide on a phone: give it one.
+    if (!document.querySelector('meta[name="viewport"]')) {
+      const meta = document.createElement('meta')
+      meta.name = 'viewport'
+      meta.content = 'width=device-width, initial-scale=1'
+      ;(document.head ?? document.documentElement).appendChild(meta)
+    }
+    let el = document.getElementById('__demo_cap')
+    if (!el) { el = document.createElement('div'); el.id = '__demo_cap'; document.documentElement.appendChild(el) }
+    el.setAttribute('style', 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(20,20,20,.88);color:#fff;font:600 15px/1.35 -apple-system,Helvetica,sans-serif;padding:12px 14px;pointer-events:none')
+    el.textContent = t
+  }, text).catch(() => {})
+  await page.waitForTimeout(2_000)
+}
+
 /** The sign-in page is opaque and full screen: whatever booted under it takes no tap. */
 async function expectCoversConsole(phone: Page) {
   const vp = phone.viewportSize()!
@@ -312,6 +330,66 @@ test.describe('Open from a browser', () => {
     await phone.context().close()
   })
 
+  // 2026-11-04, the user: "if cookie is cleared need another code"; "how long will cookie
+  // usually last". Safari removes an unopened site's localStorage after 7 days and keeps a
+  // script-written cookie 7 days at most: the server's own HttpOnly cookie stays.
+  test('a phone whose page storage was cleared stays signed in: its server cookie brings the token back', async ({ page, browser }) => {
+    // PW_VIDEO=1: the phone's own window is recorded too, with a line saying each step.
+    const context = await browser.newContext({ ...phoneDevice(), ...(process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone'), size: { width: 390, height: 844 } } } : {}) })
+    const phone = await context.newPage()
+    const say = (text: string) => process.env.PW_VIDEO ? demoCaption(phone, text) : Promise.resolve()
+    await phone.goto(tunnelUrl)
+    await say('A phone opens Walnut through the tunnel: not signed in yet')
+    await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
+    await phone.getByTestId('unpaired-code-input').fill((await mintCode(page)).code)
+    await phone.getByTestId('unpaired-code-submit').click()
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden({ timeout: 30_000 })
+    await settleSignedIn(phone)
+    const token = (await phone.evaluate(() => localStorage.getItem('walnut.deviceToken')))!
+    expect(token).toMatch(/.{20,}/)
+    await say('Signed in with a code')
+
+    // The server set it, under its own name: HttpOnly (out of the page's reach), only
+    // on /api, Strict, for 400 days.
+    // Path=/api: only a URL under it lists the cookie.
+    const serverCookie = async () => (await context.cookies(`${tunnelUrl}/api/devices/browser-session`)).find((c) => c.name === 'walnut_signin')
+    await expect.poll(async () => (await serverCookie())?.httpOnly, { timeout: 15_000 }).toBe(true)
+    const first = (await serverCookie())!
+    expect(decodeURIComponent(first.value)).toBe(token)
+    expect(first.path).toBe('/api')
+    expect(first.sameSite).toBe('Strict')
+    // 400 days asked; an engine may keep less (this WebKit keeps 365): far past Safari's 7.
+    expect(first.expires * 1000).toBeGreaterThan(Date.now() + 300 * 86_400_000)
+
+    // What Safari does to a site left alone for 7 days: its script storage is gone, and so
+    // is the cookie its script wrote (walnut_device, kept 7 days at most). It happens while
+    // the site is not open, so the console is left first (a public JSON page of the same site).
+    await phone.goto(`${tunnelUrl}/api/v1/instance`)
+    await phone.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+    await context.clearCookies({ name: 'walnut_device' })
+    await say('7 days later: Safari wiped the page storage and the script cookie. Open Walnut again…')
+    await phone.waitForTimeout(1_100)
+    await phone.goto(tunnelUrl)
+    await expect.poll(() => phone.evaluate(() => localStorage.getItem('walnut.deviceToken')).catch(() => null), { timeout: 30_000 }).toBe(token)
+    await phone.waitForLoadState('domcontentloaded')
+    await settleSignedIn(phone)
+    await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
+    await say('Still signed in: the server cookie gave the token back, no new code')
+    // Each open renews it: the expiry moved on.
+    await expect.poll(async () => (await serverCookie())!.expires, { timeout: 15_000 }).toBeGreaterThan(first.expires)
+    // The restored token writes too (a header, not the cookie).
+    expect(await phone.evaluate(async () => (await fetch('/api/v1/devices/self', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status)).toBeLessThan(300)
+    await shot(phone, '4b-storage-cleared-still-signed-in')
+
+    // Both gone (the person cleared the site's data): the sign-in page, as before.
+    await context.clearCookies()
+    await phone.evaluate(() => localStorage.clear())
+    await phone.reload()
+    await expect(phone.getByTestId('unpaired-notice').locator('h1')).toHaveText('Sign in to Walnut', { timeout: 30_000 })
+    await say('Site data cleared by hand (cookies too): sign in again, as before')
+    await context.close()
+  })
+
   test('the same link again shows why, with the code filled in', async ({ browser }) => {
     const phone = await tunnelPage(browser)
     await phone.goto(link)
@@ -393,6 +471,11 @@ test.describe('Open from a browser', () => {
     expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(44)
     await expectCoversConsole(phone)
     await shot(phone, '8-removed-phone')
+    // Its cookie never signs it back in: with its storage cleared too, it still reads signed out.
+    await phone.evaluate(() => localStorage.clear())
+    await phone.reload()
+    await expect(phone.getByTestId('unpaired-notice').locator('h1')).toHaveText('This phone was signed out', { timeout: 30_000 })
+    expect(await phone.evaluate(() => localStorage.getItem('walnut.deviceToken'))).toBeNull()
     await context.close()
   })
 

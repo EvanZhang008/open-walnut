@@ -16,29 +16,50 @@
  *           `walnut_device` cookie, which the server accepts for GET and HEAD
  *           only (src/web/middleware/auth.ts). SameSite=Strict, so no other
  *           site's page can make this browser send it.
+ *
+ * Kept across Safari's rules (2026-11-04, the user: "if cookie is cleared need
+ * another code"): Safari removes a site's localStorage after 7 days of browsing
+ * without a visit to it, and keeps a cookie written here 7 days at most. So every
+ * open asks GET /api/devices/browser-session with the token, and the server sets
+ * it in a cookie of its own, `walnut_signin`, HttpOnly, for 400 days, which
+ * neither rule touches (src/web/routes/browser-session.ts). A page that finds no
+ * token in storage asks the same route before it shows the sign-in screen
+ * (sign-in-gate.ts): the cookie rides, and the token comes back and is stored
+ * again. The page's own `walnut_device` stays: it follows a new token at once
+ * (a page cannot write an HttpOnly cookie), and a server older than the route
+ * reads only it.
  */
 
 const STORAGE_KEY = 'walnut.deviceToken';
 export const DEVICE_COOKIE = 'walnut_device';
 
+/** The token while storage refuses it (a private window): this page keeps it until reload. */
+let heldToken: string | null = null;
+
 export function getDeviceToken(): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStorage.getItem(STORAGE_KEY) ?? heldToken;
   } catch {
-    return null;
+    return heldToken;
   }
 }
 
-export function setDeviceToken(token: string): void {
+/** Store the token; true when storage kept it (a reload still has it). */
+export function setDeviceToken(token: string): boolean {
+  let kept = false;
   try {
     localStorage.setItem(STORAGE_KEY, token);
+    kept = localStorage.getItem(STORAGE_KEY) === token;
   } catch {
     // Storage unavailable (private mode) — session works until reload.
   }
+  heldToken = kept ? null : token;
   writeDeviceCookie(token);
+  return kept;
 }
 
 export function clearDeviceToken(): void {
+  heldToken = null;
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
@@ -63,12 +84,63 @@ function writeDeviceCookie(token: string | null): void {
   }
 }
 
+/** The server's sign-in cookie route (src/web/routes/browser-session.ts). */
+export const BROWSER_SESSION_URL = '/api/devices/browser-session';
+
+function browserSessionUrl(): string {
+  return window.location.protocol === 'https:' ? `${BROWSER_SESSION_URL}?secure=1` : BROWSER_SESSION_URL;
+}
+
 /**
- * Called once at boot: re-write the cookie from storage. A browser signed in
- * before the cookie existed gets it now, and a script-written cookie that the
- * browser expired early (Safari caps those at 7 days) comes back.
+ * Called once at boot: re-write the cookie from storage, and have the server
+ * renew its HttpOnly copy for another 400 days. A browser signed in before
+ * either cookie existed gets them now. Nothing waits on the answer: a refused
+ * token shows its notice through the console's own first requests.
  */
 export function syncDeviceCookie(): void {
   const token = getDeviceToken();
-  if (token) writeDeviceCookie(token);
+  if (!token) return;
+  writeDeviceCookie(token);
+  try {
+    void fetch(browserSessionUrl(), { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }).catch(() => undefined);
+  } catch {
+    // No fetch (a test page): the cookie written above still serves.
+  }
+}
+
+export type RestoreResult =
+  /** Stored again: a reload has it. */
+  | { kind: 'restored' }
+  /** Storage refused it (a private window): this page holds it until reload. */
+  | { kind: 'held' }
+  /** 401 with the server's refusal (no cookie, or one it no longer accepts). */
+  | { kind: 'refused'; body: unknown }
+  /**
+   * 204 (no cookie, and this server let the call in without a token: the computer
+   * Walnut runs on), or an older server without the route. The usual probe decides.
+   */
+  | { kind: 'unknown' }
+  /**
+   * No answer, a rate limit or a server error: a probe now would carry the same
+   * cookie and boot a console with no token, so the page waits and asks again.
+   */
+  | { kind: 'no-answer' };
+
+/**
+ * A page with no token in storage: ask the server for the token its HttpOnly
+ * cookie holds (Safari removed the page's storage, the cookie stayed).
+ */
+export async function restoreDeviceToken(timeoutMs: number): Promise<RestoreResult> {
+  let res: Response;
+  try {
+    res = await fetch(browserSessionUrl(), { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+  } catch {
+    return { kind: 'no-answer' };
+  }
+  if (res.status === 401) return { kind: 'refused', body: await res.json().catch(() => null) };
+  if (res.status === 429 || res.status >= 500) return { kind: 'no-answer' };
+  if (res.status !== 200) return { kind: 'unknown' };
+  const body = await res.json().catch(() => null) as { token?: unknown } | null;
+  if (typeof body?.token !== 'string' || !body.token) return { kind: 'unknown' };
+  return { kind: setDeviceToken(body.token) ? 'restored' : 'held' };
 }

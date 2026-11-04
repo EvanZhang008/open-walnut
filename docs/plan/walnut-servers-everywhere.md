@@ -210,6 +210,22 @@ holding a removed token spends the token count on its first page load. In stage
 2 the token is copied to the server's followers the way phone tokens are today
 (device adoption), so the same browser keeps working while the leader is away.
 
+The browser keeps the token in localStorage, and keeps it signed in until the
+device is removed: no server-side expiry. Safari removes a site's script storage
+after 7 days of browsing without a visit to it, and keeps a cookie a script wrote
+7 days at most, so the token also lives in a cookie the server sets
+(`GET /api/devices/browser-session`, `src/web/routes/browser-session.ts`):
+`walnut_signin`, HttpOnly, SameSite=Strict, Path=/api, 400 days (the longest any
+browser keeps a cookie), renewed at every open. It has its own name beside the
+page's `walnut_device`, which the page rewrites at once when its token changes; a
+GET reads the page's cookie first. The route answers only a same-origin call
+(`Sec-Fetch-Site`). A page with empty storage asks the
+same route before it shows the sign-in screen; the cookie rides and the token
+comes back. Every server a phone's address reaches answers it itself, against its
+own device list: the primary, the companion, a host replica (a local row), and the
+plain host server on its alone page. A removed device's cookie is refused like its
+token.
+
 ## A server on a host
 
 A host the user picks can run a follower: the **host server**. It is what makes a

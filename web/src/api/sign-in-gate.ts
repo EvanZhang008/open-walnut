@@ -9,8 +9,13 @@
  *   `#pair=<code>` in the address   trade it, then reload with the token
  *   a token already stored          boot at once (a revoked one still shows the
  *                                   notice when the first request is refused)
- *   anything else                   ask GET /api/v1/me once without a token: a
- *                                   refusal with the primary's code means sign in
+ *   anything else                   ask GET /api/devices/browser-session: the
+ *                                   server's HttpOnly cookie gives a token back
+ *                                   when Safari cleared this page's storage
+ *                                   (device-token.ts), then reload with it; a
+ *                                   refusal with the primary's code means sign
+ *                                   in; an older server's answer falls back to
+ *                                   GET /api/v1/me once without a token
  *
  * The computer Walnut runs on takes the probe too (a few ms there): the host
  * name cannot tell it from a tunnel, which may well be a loopback address.
@@ -23,12 +28,13 @@
  */
 
 import { consumePairFragment } from './browser-pair';
-import { getDeviceToken } from './device-token';
+import { getDeviceToken, restoreDeviceToken } from './device-token';
 import { getUnpairedState, noteAuthRefusal } from './unpaired';
 
 export type SignInGate = 'app' | 'sign-in' | 'probe-failed';
 
 const PROBE_MS = 5_000;
+const RESTORED_MARK = '#signed-in-again';
 
 export async function resolveSignInGate(): Promise<SignInGate> {
   const pairing = consumePairFragment();
@@ -45,7 +51,25 @@ export async function resolveSignInGate(): Promise<SignInGate> {
     window.location.reload();
     return new Promise<SignInGate>(() => {});
   }
+  // The reload after a restore says so in the address, so a page whose storage does
+  // not outlive a reload (some embedded browsers) boots instead of reloading forever.
+  const afterRestore = window.location.hash === RESTORED_MARK;
+  if (afterRestore) history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}`);
   if (getDeviceToken()) return 'app';
+  const kept = await restoreDeviceToken(PROBE_MS);
+  if (kept.kind === 'restored' && !afterRestore) {
+    // As after a code: modules that ran at import asked without the token.
+    window.location.hash = RESTORED_MARK;
+    window.location.reload();
+    return new Promise<SignInGate>(() => {});
+  }
+  if (kept.kind === 'restored') return 'app';
+  if (kept.kind === 'held') return 'app';
+  if (kept.kind === 'no-answer') return 'probe-failed';
+  if (kept.kind === 'refused') {
+    noteAuthRefusal(kept.body);
+    return getUnpairedState() === 'ok' ? 'app' : 'sign-in';
+  }
   try {
     const res = await fetch('/api/v1/me', { signal: AbortSignal.timeout(PROBE_MS), cache: 'no-store' });
     if (res.status !== 401) return 'app';

@@ -43,6 +43,7 @@ import { answerTunnelProbe } from '../core/expose/probe.js'
 import { sendAlone } from './pages.js'
 import { createAloneApi, ALONE_PREFIX } from './alone-api.js'
 import { createDeviceCopy } from './device-copy.js'
+import { answerBrowserSession, isBrowserSessionRequest } from './browser-session.js'
 
 const REPORT_MS = 5_000
 /** A browser's request waits this long for the Mac or the companion to take its stream. */
@@ -156,6 +157,8 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
       return
     }
     const route = routeNow()
+    // A phone Safari cleared signs back in from its cookie on the alone page too.
+    if (route.kind === 'alone' && isBrowserSessionRequest(req)) return answerBrowserSession(req, res, devices)
     if (route.kind === 'alone') return answerAlone(req, res, route.why)
     const read = req.method === 'GET' || req.method === 'HEAD'
     let again = false
