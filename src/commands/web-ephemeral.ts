@@ -4,7 +4,7 @@
  *   1. Launcher (parent): copies ~/.open-walnut/ to /tmp/open-walnut-{PPID}-{random}/,
  *      spawns a detached child, polls for port, prints JSON, exits.
  *   2. Child (--_ephemeral-child): runs the real server on a random port,
- *      writes ephemeral.json, self-destructs after 10 min of idle.
+ *      writes ephemeral.json, self-destructs after 10 min of idle (WALNUT_EPHEMERAL_IDLE_MINUTES).
  */
 
 import { spawn } from 'node:child_process'
@@ -22,10 +22,11 @@ import {
   removeEphemeralRuntimeDirsNow,
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
+import { ephemeralIdleTtlMs } from './ephemeral-idle.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
-/** Auto-shutdown after 10 minutes of no HTTP requests. */
-const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
+/** Auto-shutdown after this long with no HTTP request (WALNUT_EPHEMERAL_IDLE_MINUTES, default 10). */
+const EPHEMERAL_IDLE_TTL_MS = ephemeralIdleTtlMs()
 /** How often to check for idle timeout (milliseconds). */
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000
 
@@ -241,7 +242,7 @@ function pollForControlFile(controlFile: string): Promise<{
  * Child process that:
  * 1. Starts the real server on port 0 (random)
  * 2. Writes ephemeral.json with { pid, port, tmpDir, startedAt }
- * 3. Tracks HTTP activity and self-destructs after 10 min idle
+ * 3. Tracks HTTP activity and self-destructs after 10 min idle (WALNUT_EPHEMERAL_IDLE_MINUTES)
  * 4. Cleans up tmpdir on exit
  */
 export async function runEphemeralChild(): Promise<void> {
