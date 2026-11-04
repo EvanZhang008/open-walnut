@@ -22,6 +22,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { getHookInventory } from '../../core/hooks/registry.js'
+import { reloadSessionHooks } from '../../core/session-hooks/index.js'
 import { DAEMON_POLICIES } from '../../core/hooks/daemon-policies.js'
 import { buildSettingsPatch, mergeTopLevel } from '../../core/hooks/settings.js'
 import { emitConfigChanged } from '../../core/config-broadcast.js'
@@ -154,7 +155,9 @@ hooksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     hooks.overrides = overrides
     await updateConfig({ hooks })
 
-    // Nudge the dispatcher's live reload (same event PUT /api/config emits).
+    // The dispatcher's hooks are in before the answer, so a list read next shows this one; then the
+    // event every other config consumer reloads on (the same one PUT /api/config emits).
+    await reloadSessionHooks()
     emitConfigChanged(await getConfig(), ['web-ui'], { source: 'hooks-api' })
 
     log.web.info('hook override updated via /api/hooks', { id, enabled, priority, timeoutMs })

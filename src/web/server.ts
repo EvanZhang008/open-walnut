@@ -3815,15 +3815,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // dispatches them for the same phase change arriving via task sync.
       const domains = bootPolicy('hook-task-domains') ? undefined : (['session'] as const)
       hookDispatcher.init(buildDefs(bootConfig), buildCfg(bootConfig), domains ? { domains: [...domains] } : undefined)
-      setSessionHookDispatcher(hookDispatcher)
+      const reloadHooks = () => getHooksConfig().then((cfg) => { hookDispatcher.reload(buildDefs(cfg), buildCfg(cfg)) })
+      setSessionHookDispatcher(hookDispatcher, reloadHooks)
       // Live reload on config change: pure in-memory recompute of defs/overrides
       // (no resubscribe; .mjs files are NOT re-scanned — restart for those).
       // global+interest instead of a name in PUT /api/config's destination list:
       // other config writers emit to ['web-ui'] only and would miss a named sub.
       bus.subscribe('hook-dispatcher-reload', () => {
-        void getHooksConfig().then((cfg) => {
-          hookDispatcher.reload(buildDefs(cfg), buildCfg(cfg))
-        }).catch((err) => {
+        void reloadHooks().catch((err) => {
           log.web.warn('hook dispatcher reload failed', { error: err instanceof Error ? err.message : String(err) })
         })
         // Daemon-runtime hooks ride the same trigger: recompile the YAML rules
