@@ -366,12 +366,14 @@ humanInboxV1Router.post('/human-inbox/:id/reply', async (req: Request, res: Resp
     if (CLOUD_MODE) {
       // `id` LAST: the URL owns the letter id, so a body field named `id` can
       // never make the primary answer a different letter than the one logged.
-      await relayControlAction(res, 'server.human-inbox.reply', SERVER_RELAY_SID, { ...b, id }, 200)
+      await relayControlAction(res, 'server.human-inbox.reply', SERVER_RELAY_SID, { ...b, callerSid: callerSid(req) ?? null, id }, 200)
       return
     }
-    const { agentReply } = await import('../../core/human-inbox/store.js')
-    // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts).
-    const letter = await agentReply(id, b as unknown as AgentReplyInput, { refuseDuplicate: true })
+    const { agentReplyAsCaller } = await import('../../core/human-inbox/letter-ops.js')
+    // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts),
+    // and a node's turn about one of its open threads too (thread-instead.ts).
+    const { callerSid: _c, ...input } = b as Record<string, unknown>
+    const letter = await agentReplyAsCaller(id, input as unknown as AgentReplyInput, callerSid(req))
     log.notif.info('human-inbox: agent reply accepted', { letterId: id, callerSid: callerSid(req) })
     res.json({ letter })
   })

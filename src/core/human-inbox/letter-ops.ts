@@ -39,7 +39,7 @@ import {
   type SendLetterOptions,
 } from './store.js';
 import type {
-  LetterAnsweredBy, LetterDetail, LetterRecord, LetterSender, NewLetter, ThreadEntryDelivery,
+  AgentReplyInput, LetterAnsweredBy, LetterDetail, LetterRecord, LetterSender, NewLetter, ThreadEntryDelivery,
 } from './types.js';
 
 /** Which edge recorded the answer. `'plugin'` is a sender taking its own question back. */
@@ -258,6 +258,32 @@ export async function sendLetterAsCallerOnce(
   if (out.duplicate) charge?.release();
   else charge?.commit(out.letter.id);
   return hinted(out);
+}
+
+/**
+ * A session's reply in a letter thread (human_inbox_reply), on the primary: the HTTP route and the
+ * cloud replica's relay both come through here. A reply from Main or a lead posting a thread's
+ * result into one of its letters is refused like the letter would be (thread-instead.ts).
+ */
+export async function agentReplyAsCaller(
+  id: string,
+  input: AgentReplyInput,
+  callerSid: string | undefined,
+): Promise<LetterRecord> {
+  if (callerSid) {
+    const letter = await getLetter(id).catch(() => null);
+    if (letter) {
+      const sender = await resolveLetterSender(callerSid);
+      const { findThreadInsteadForReply, threadInsteadMessage } = await import('./thread-instead.js');
+      const hit = await findThreadInsteadForReply(letter, sender);
+      if (hit) {
+        log.notif.info('human-inbox: reply refused, it belongs to an open thread', { taskId: sender.taskId, letterId: id, threadId: hit.threadId, why: hit.why });
+        throw new LetterError(threadInsteadMessage(hit), 'thread_instead', 409);
+      }
+    }
+  }
+  const { agentReply } = await import('./store.js');
+  return agentReply(id, input, { refuseDuplicate: true });
 }
 
 /** Agent-authored spans in the wrapper (subject, button label): one short line. */

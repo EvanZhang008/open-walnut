@@ -18,8 +18,8 @@ const ROOT = path.resolve(__dirname, '../..');
 
 /** Files outside the store that call agentReply, with whose news the turn is. */
 const THREAD_WRITERS: Record<string, string> = {
-  'src/web/routes/human-inbox-v1.ts': 'a session replying in its own letter (POST /human-inbox/:id/reply)',
-  'src/core/human-inbox/relay.ts': 'the same reply through the cloud bridge',
+  // POST /human-inbox/:id/reply and the same reply through the cloud bridge both come through agentReplyAsCaller.
+  'src/core/human-inbox/letter-ops.ts': 'a session replying in its own letter (the route and the cloud relay)',
   'src/core/plugins/server-api.ts': 'a plugin replying in its own letter',
   'src/core/human-inbox/away-thread.ts': 'an away update with no letter of its own, folded as the turn itself',
 };

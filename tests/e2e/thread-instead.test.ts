@@ -13,7 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('thread-instead-e2e', { IS_EPHEMERAL: true }));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { listLetters, sendLetterOnce } from '../../src/core/human-inbox/store.js';
+import { humanReply, listLetters, sendLetterOnce } from '../../src/core/human-inbox/store.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { createSessionRecord } from '../../src/core/session-tracker.js';
 import { executeOp } from '../../src/ops/index.js';
@@ -93,6 +93,26 @@ describe('a node\'s letter about one of its open threads', () => {
     await threadOf(mainId, MAIN_SID, 'Ask the VP about the board', leadId);
     const vpWork = await run('human_inbox_send', { subject: 'The VP needs a paid plan: buy it?', type: 'action_required', markdown: 'A or B', actions: [{ id: 'a', label: 'A' }], task_refs: [leadId], ...KIND }, MAIN_SID);
     expect(vpWork.letterId).toMatch(/^lt-/);
+  });
+});
+
+describe('a node\'s turn in an old letter about one of its open threads', () => {
+  it('is refused through the op, the route and the relay; after his own reply in that letter it goes', async () => {
+    const pkg = (await addTask({ title: 'Package the app', project: 'Walnut', source: 'local', parent_task_id: leadId } as never)).task.id;
+    // A letter about that work before any thread of his held it: it goes.
+    const old = await run('human_inbox_send', { subject: 'Packaging: signing needs a cert, buy one?', type: 'action_required', markdown: 'A or B', actions: [{ id: 'a', label: 'A' }], task_refs: [pkg], ...KIND }, LEAD_SID);
+    expect(old.letterId).toMatch(/^lt-/);
+    // Then he asks about it in the chat, and the lead puts that work on his thread.
+    const thread = await threadOf(leadId, LEAD_SID, 'Is the packaging done?', pkg);
+    const turn = { text: 'Packaging shipped, video at /x/pkg.mp4' };
+    await expect(run('human_inbox_reply', { letter: old.letterId, ...turn }, LEAD_SID)).rejects.toThrow(new RegExp(`thread_instead[\\s\\S]*${thread}`));
+    const res = await post(`/human-inbox/${old.letterId}/reply`, turn, LEAD_SID);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error?: { code?: string } }).error?.code).toBe('thread_instead');
+    await expect(handleHumanInboxRelayAction('reply', { id: old.letterId, ...turn, callerSid: LEAD_SID })).rejects.toMatchObject({ status: 409, code: 'thread_instead' });
+    // He writes in the letter itself: answering him there is that conversation's one place.
+    await humanReply(old.letterId, { text: 'Buy the cert, then tell me here' });
+    await expect(run('human_inbox_reply', { letter: old.letterId, ...turn }, LEAD_SID)).resolves.toBeDefined();
   });
 });
 

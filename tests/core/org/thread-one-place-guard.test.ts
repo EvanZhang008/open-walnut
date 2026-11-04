@@ -18,7 +18,7 @@ import { THREAD_ONE_PLACE_RULE, THREADS_OPEN_RULE } from '../../../src/core/org/
 import { AWAY_INBOX_LINE, THREADS_LINE, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { USER_BACK_TEXT, effectiveHints, userAwayText } from '../../../src/core/hints/hint-registry.js'
-import { THREAD_JUST_UPDATED_MS, threadInsteadMessage, threadInsteadOf } from '../../../src/core/human-inbox/thread-instead.js'
+import { THREAD_GATE_SITES, THREAD_JUST_UPDATED_MS, answersHimThere, threadInsteadMessage, threadInsteadOf } from '../../../src/core/human-inbox/thread-instead.js'
 import { emptyThreads, fileMessage, setAnswers, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
 import { getOp, listOps } from '../../../src/ops/index.js'
 
@@ -243,6 +243,58 @@ describe('the gate (threadInsteadOf)', () => {
     expect(msg).toMatch(/state "needs" with user_kind/)
     expect(msg).toMatch(/user_asked:true only when he asked in his own words for this as a letter/)
     expect(threadInsteadMessage({ threadId: 'th-1', title: 'x', state: 'working', why: 'just_updated' })).toMatch(/a report naming no task, and you just put a result in/)
+  })
+})
+
+describe('every way into the inbox meets the rule (a new send path is decided, not missed)', () => {
+  // Every way a letter or a letter's turn is written: the store's writers, the session entry points, the plugin API.
+  const SEND = /(?<![\w.])sendLetter(Once)?\s*\(|\bstore\.sendLetter(Once)?\s*\(|\bsendLetterAsCaller(Once)?\s*\(|\bletters\.send\s*\(|(?<![\w])(?:store\.)?agentReply(AsCaller)?\s*\(/
+  const files: Array<{ f: string; text: string }> = []
+  const walk = (dir: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (/\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts')) files.push({ f: path.relative(process.cwd(), p).split(path.sep).join('/'), text: fs.readFileSync(p, 'utf8') })
+    }
+  }
+  walk(path.resolve('src'))
+  const sites = files.filter(({ text }) => SEND.test(text)).map(({ f }) => f).sort()
+
+  it('finds the send sites at all', () => {
+    expect(sites).toEqual(expect.arrayContaining(['src/core/human-inbox/store.ts', 'src/core/human-inbox/letter-ops.ts', 'src/web/routes/human-inbox-v1.ts', 'src/core/plugins/server-api.ts']))
+  })
+
+  it('each one is listed in THREAD_GATE_SITES with how the rule meets it, and each listed one still sends', () => {
+    expect(sites.filter((f) => !(f in THREAD_GATE_SITES)), 'A new letter send or reply path: route a session\'s send through letter-ops '
+      + '(sendLetterAsCallerOnce / agentReplyAsCaller) or list it in THREAD_GATE_SITES with why no node\'s words reach the inbox there').toEqual([])
+    for (const f of Object.keys(THREAD_GATE_SITES)) expect(sites, `${f} is listed but writes no letter`).toContain(f)
+    for (const [f, why] of Object.entries(THREAD_GATE_SITES)) expect(why.length, f).toBeGreaterThan(15)
+  })
+
+  it('a gated site writes only through the gate, and the gate checks before it writes', () => {
+    for (const [f, why] of Object.entries(THREAD_GATE_SITES)) {
+      if (!why.startsWith('gated')) continue
+      const text = files.find((x) => x.f === f)!.text
+      expect(text, f).toMatch(/sendLetterAsCallerOnce|agentReplyAsCaller/)
+      expect(text, `${f} writes around the gate`).not.toMatch(/(?<![\w.])(?:store\.)?(?:sendLetter(Once)?|agentReply)\s*\(/)
+    }
+    const ops = files.find((x) => x.f === 'src/core/human-inbox/letter-ops.ts')!.text
+    const send = ops.slice(ops.indexOf('export async function sendLetterAsCallerOnce'), ops.indexOf('export async function agentReplyAsCaller'))
+    expect(send.indexOf('findThreadInstead(')).toBeGreaterThan(0)
+    expect(send.indexOf('findThreadInstead(')).toBeLessThan(send.indexOf('sendAway('))
+    expect(send.indexOf('findThreadInstead(')).toBeLessThan(send.indexOf('sendLetterOnce('))
+    const reply = ops.slice(ops.indexOf('export async function agentReplyAsCaller'))
+    expect(reply.indexOf('findThreadInsteadForReply(')).toBeGreaterThan(0)
+    expect(reply.indexOf('findThreadInsteadForReply(')).toBeLessThan(reply.indexOf('agentReply(id'))
+  })
+
+  it('a reply answering him where he wrote is that conversation\'s place; one after the node\'s own turn is not', () => {
+    expect(answersHimThere({ thread: [{ from: 'agent', at: 1 } as never, { from: 'human', at: 2 } as never] })).toBe(true)
+    expect(answersHimThere({ thread: [{ from: 'human', at: 1 } as never, { from: 'agent', at: 2 } as never] })).toBe(false)
+    expect(answersHimThere({ thread: [], answered: { actionId: 'a', label: 'A', at: 5 } })).toBe(true)
+    // A task's answer in his place is not him writing there.
+    expect(answersHimThere({ thread: [], answered: { actionId: 'a', label: 'A', at: 5, by: { sessionId: 's' } } })).toBe(false)
+    expect(answersHimThere({ thread: [] })).toBe(false)
   })
 })
 

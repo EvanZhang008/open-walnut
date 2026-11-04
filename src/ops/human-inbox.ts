@@ -144,7 +144,9 @@ defineOp({
     + 'option. Same standard as the letter itself: answer the question first, keep it to a few '
     + 'sentences, link anything long. This flips the letter back to unread and notifies them, so '
     + 'reply here rather than only in the session, otherwise your answer never leaves this host. '
-    + 'Post each reply once: the same text as your latest reply there, within 10 minutes, is refused (409 duplicate_reply).',
+    + 'Post each reply once: the same text as your latest reply there, within 10 minutes, is refused (409 duplicate_reply). '
+    + 'Main and the leads: a turn about one of the user\'s open Threads goes to that thread (thread_update), not into an old '
+    + 'letter, so it is refused (409 thread_instead) unless he wrote in this letter since your last turn there.',
   input: {
     letter: z.string().min(1).describe('Letter id from human_inbox_send (lt-...)'),
     text: z.string().min(1).describe('Your reply as plain text (always required: it is the thread line)'),

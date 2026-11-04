@@ -29,7 +29,7 @@
  * file that cannot be read costs nothing but the check.
  */
 import type { OrgThread } from '../org/threads-model.js';
-import type { LetterSender, LetterType } from './types.js';
+import type { LetterRecord, LetterSender, LetterType } from './types.js';
 
 const REPORT_TYPES: ReadonlySet<LetterType> = new Set(['info', 'completion', 'review']);
 
@@ -145,3 +145,61 @@ export async function findThreadInstead(
     return null;
   }
 }
+
+/**
+ * A reply a node posts in one of its letters meets the same rule (2026-11-04, the user: "this should
+ * be a generic walnut code"): a turn added to an old letter reaches his inbox and buzzes like a new
+ * letter, so a thread's result posted there is the same duplicate. Judged by the letter's own task
+ * pills and type, as a letter with those would be. Never refused: a turn answering him where he
+ * wrote (his reply or his choice in this letter is newer than the node's last turn there: the letter
+ * is that conversation's one place), and anything the gate above lets through.
+ */
+export function answersHimThere(letter: Pick<LetterRecord, 'thread' | 'answered'>): boolean {
+  let human = letter.answered && !letter.answered.by ? letter.answered.at : 0;
+  let agent = 0;
+  for (const e of letter.thread ?? []) {
+    if (e.from === 'human') human = Math.max(human, e.at);
+    else agent = Math.max(agent, e.at);
+  }
+  return human > agent;
+}
+
+/** The open thread a node's reply in `letter` belongs to, or null. */
+export async function findThreadInsteadForReply(
+  letter: Pick<LetterRecord, 'type' | 'taskRefs' | 'thread' | 'answered' | 'pinnedAt' | 'items'>,
+  sender: LetterSender,
+  nowMs = Date.now(),
+): Promise<ThreadHit | null> {
+  if (answersHimThere(letter)) return null;
+  return findThreadInstead({
+    type: letter.type, taskRefs: letter.taskRefs ?? [], pinned: typeof letter.pinnedAt === 'number',
+    items: Array.isArray(letter.items) && letter.items.length > 0,
+  }, sender, nowMs);
+}
+
+/**
+ * Every place in src/ that writes a letter or a letter's turn, and how this rule meets it. A session
+ * of Main or a lead can only reach the inbox through a `gated` site; every other site writes words
+ * that are not a node's (Walnut's own letters, a plugin's, the report he scheduled) or replays a
+ * journal written while the server was away. tests/core/org/thread-one-place-guard.test.ts finds
+ * the sites in the source and fails on one missing here, so a new send path is decided, not missed.
+ */
+export const THREAD_GATE_SITES: Readonly<Record<string, string>> = {
+  'src/core/human-inbox/letter-ops.ts': 'gate: sendLetterAsCallerOnce and agentReplyAsCaller call the thread checks before any write',
+  'src/web/routes/human-inbox-v1.ts': 'gated: POST /human-inbox and /human-inbox/:id/reply go through letter-ops',
+  'src/core/human-inbox/relay.ts': 'gated: a replica\'s send and reply go through letter-ops with the caller\'s session',
+  'src/core/human-inbox/store.ts': 'the store itself, below every gate',
+  'src/core/human-inbox/away-thread.ts': 'inside the gated send: an away update folded into the absence\'s letter after the check',
+  'src/core/offline-merge/apply-letter.ts': 'journal replay of a letter written while the server was away: never refused on the way in',
+  'src/core/offline-merge/letter.ts': 'Walnut\'s own letter: changes made while the Mac was away that did not merge',
+  'src/core/org/morning-report.ts': 'org_report: the report the user asked for at a time',
+  'src/core/plugins/server-api.ts': 'a plugin\'s letter and its turns: a plugin is never an org node',
+  'src/core/hosts/host-auth-alert.ts': 'Walnut\'s own letter: a host sign-in expired',
+  'src/core/hosts/host-exec-grant.ts': 'Walnut\'s own letter: a command waiting for the user\'s approval',
+  'src/core/hosts/local-network-alert.ts': 'Walnut\'s own letter: macOS blocked the local network',
+  'src/core/usage/session-budget.ts': 'Walnut\'s own letter: a session paused on its budget',
+  'src/integrations/git-sync-secrets.ts': 'Walnut\'s own letter: a secret held back from a sync',
+  'src/integrations/mail/approvals.ts': 'the mail plugin\'s approval of a send, Walnut\'s own words',
+  'src/integrations/mail/digest.ts': 'the mail plugin\'s digest the user set up',
+  'src/integrations/mail/unsubscribe.ts': 'the mail plugin\'s unsubscribe request, Walnut\'s own words',
+};

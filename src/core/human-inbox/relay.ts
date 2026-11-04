@@ -15,7 +15,6 @@
  */
 
 import {
-  agentReply,
   getLetter,
   listLetters,
   readLetterBodyRange,
@@ -32,6 +31,7 @@ import {
   humanReplyAndDeliver,
   savePicturesOnce,
   sendLetterAsCallerOnce,
+  agentReplyAsCaller,
 } from './letter-ops.js';
 import type { AgentReplyInput, NewLetter } from './types.js';
 
@@ -141,9 +141,11 @@ export async function handleHumanInboxRelayAction(
       return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) };
     }
     case 'reply': {
-      const { id, ...input } = p;
-      // A session's reply through a replica meets the same repeat check as on the primary (duplicate-letter.ts).
-      return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput, { refuseDuplicate: true }) };
+      const { id, callerSid, ...input } = p;
+      // A session's reply through a replica meets the same checks as on the primary: a repeat
+      // (duplicate-letter.ts) and a node's turn about an open thread (thread-instead.ts). A replica
+      // older than this sends no callerSid, and its replies are judged by the repeat check alone.
+      return { letter: await agentReplyAsCaller(requireId({ id }), input as unknown as AgentReplyInput, typeof callerSid === 'string' ? callerSid : undefined) };
     }
     // The reader's flags answer with the index clock the write stamped: that is
     // how the replica knows when its git-synced copy has caught up with it (see
