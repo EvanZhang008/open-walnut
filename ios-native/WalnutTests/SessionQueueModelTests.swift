@@ -141,7 +141,7 @@ final class SessionQueueModelTests: XCTestCase {
         let m = model(t)
         await m.refresh()
         await m.withdraw(m.rows[0])
-        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words", wasLast: true))
+        XCTAssertEqual(m.withdrawn, WithdrawnQueuedMessage(id: "qm-a", text: "keep these words", followers: [], wasSetAside: false))
         m.clearUndo()
         XCTAssertNil(m.withdrawn)
     }
@@ -163,20 +163,36 @@ final class SessionQueueModelTests: XCTestCase {
         XCTAssertTrue(m.takeRowTap(at: t0.addingTimeInterval(1.5)))
     }
 
-    func testUndoSaysWhenTheMessageWillComeBackLast() async {
+    func testUndoRemembersWhoStoodBehindTheMessageSoTheOrderCanBeKept() async {
         let t = Transport()
-        t.rows = [row("qm-a", "first"), row("qm-b", "second")]
+        t.rows = [row("qm-a", "first"), row("qm-b", "second"), row("qm-c", "third", status: "parked")]
         let m = model(t)
         await m.refresh()
         await m.withdraw(m.rows[0])
-        XCTAssertEqual(m.withdrawn?.wasLast, false, "others stood behind it: Undo puts it at the back")
-        await m.withdraw(m.rows[0])
-        XCTAssertEqual(m.withdrawn?.wasLast, true)
+        XCTAssertEqual(m.withdrawn?.followers.map(\.id), ["qm-b"], "only the ones still waiting are sent again behind it")
+        XCTAssertEqual(m.withdrawn?.wasSetAside, false)
+        await m.withdraw(m.rows[1])
+        XCTAssertEqual(m.withdrawn?.wasSetAside, true, "a Stop had set it aside: Undo returns it to the box")
+        XCTAssertEqual(m.withdrawn?.followers, [])
+    }
+
+    func testPullingAMessageOffTheLineForRequeueTellsThePageAndKeepsNoUndo() async {
+        let t = Transport()
+        t.rows = [row("qm-a", "first")]
+        let m = model(t)
+        var gone: [String] = []
+        m.onWithdrawn = { gone.append($0) }
+        await m.refresh()
+        let pulled = await m.pullForRequeue(m.rows[0])
+        XCTAssertTrue(pulled)
+        XCTAssertEqual(gone, ["qm-a"])
+        XCTAssertTrue(m.rows.isEmpty)
+        XCTAssertNil(m.withdrawn, "the pull is part of an Undo, not a withdrawal")
     }
 
     func testTheOfferToTakeItBackLapses() async {
         SessionQueueModel.undoWindow = 0.05
-        defer { SessionQueueModel.undoWindow = 6 }
+        defer { SessionQueueModel.undoWindow = 10 }
         let t = Transport()
         t.rows = [row("qm-a")]
         let m = model(t)

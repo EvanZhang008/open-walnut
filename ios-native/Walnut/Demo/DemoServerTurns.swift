@@ -327,11 +327,27 @@ extension DemoServer {
         let key = "s:\(id)"
         cancelTurnToken(key)
         let wasLive = withState { state -> Bool in
-            let live = state.liveTurns[key] != nil
+            let partial = state.liveTurns[key]
+            let live = partial != nil
             state.liveTurns[key] = nil
             state.heldTurns.remove(id)
             state.pendingPermissions[id] = nil
-            state.sessionQueue[id] = nil
+            if status == "stopped" {
+                // Terminate kills the process: what the turn had written stays in the transcript,
+                // and the messages waiting in line are set aside, as a Stop sets them.
+                if let partial, !partial.isEmpty, let i = state.sessionIndex(id) {
+                    state.sessions[i].transcript.append(
+                        SessionTranscript.Message(role: "assistant", text: partial, timestamp: nowISO, kind: nil)
+                    )
+                }
+                state.sessionQueue[id] = (state.sessionQueue[id] ?? []).map { row in
+                    var row = row
+                    if row.status == "pending" { row.status = "parked" }
+                    return row
+                }
+            } else {
+                state.sessionQueue[id] = nil
+            }
             if let i = state.sessionIndex(id) {
                 state.sessions[i].processStatus = status
                 state.sessions[i].lastActiveAt = nowISO

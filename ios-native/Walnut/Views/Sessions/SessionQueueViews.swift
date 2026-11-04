@@ -16,8 +16,8 @@ struct SessionQueueStrip: View {
     let turnRunning: Bool
     let onOpen: (QueueRowRef) -> Void
     let onShowAll: () -> Void
-    /// Put a message the person just withdrew back in line.
-    let onUndo: (String) -> Void
+    /// Put a message the person just withdrew back where it was.
+    let onUndo: (WithdrawnQueuedMessage) -> Void
 
     /// Rows listed in the strip; the rest are one tap away in the list.
     static let visibleRows = 3
@@ -26,53 +26,79 @@ struct SessionQueueStrip: View {
 
     /// The tray shares the screen with the composer and the keyboard: at the accessibility
     /// sizes it lists one message and the rest are behind "Show all".
-    private var shownRows: Int { dynamicTypeSize.isAccessibilitySize ? 1 : Self.visibleRows }
+    private var shownRows: Int {
+        dynamicTypeSize.isAccessibilitySize ? 1 : (keyboardUp ? Self.visibleRowsWithKeyboard : Self.visibleRows)
+    }
+
+    /// With the keyboard up the conversation above has little room: the tray lists fewer rows.
+    static let visibleRowsWithKeyboard = 2
+    @State private var keyboardUp = false
 
     var body: some View {
         if queue.hasRows || queue.withdrawn != nil {
-            VStack(alignment: .leading, spacing: 0) {
-                if queue.hasRows {
-                    header
-                    ForEach(queue.rows.prefix(shownRows)) { row in
-                        rowView(row)
-                    }
-                }
-                if queue.rows.count > shownRows {
-                    Button(action: onShowAll) {
-                        Text("Show all \(queue.rows.count)")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.tint)
-                            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                            .padding(.horizontal, 14)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("session.queue.showAll")
-                }
-                if let notice = queue.notice {
-                    Text(notice)
-                        .font(.caption)
-                        .foregroundStyle(Theme.danger)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
-                        .accessibilityIdentifier("session.queue.notice")
-                }
+            // The offer to take a withdrawn message back sits ABOVE the tray, in a card of its own:
+            // when it goes the rows below do not move, so no tap meant for Undo can land on a cross.
+            VStack(spacing: 6) {
                 if let gone = queue.withdrawn {
                     undoLine(gone)
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+                        )
+                }
+                if queue.hasRows {
+                    trayCard
                 }
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
-            )
             .padding(.horizontal, ComposerCard.sideInset)
             .padding(.top, 6)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("session.queue.strip")
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardUp = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardUp = false
+            }
         }
+    }
+
+    private var trayCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            ForEach(queue.rows.prefix(shownRows)) { row in
+                rowView(row)
+            }
+            if queue.rows.count > shownRows {
+                Button(action: onShowAll) {
+                    Text("Show all \(queue.rows.count)")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.tint)
+                        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                        .padding(.horizontal, 14)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("session.queue.showAll")
+            }
+            if let notice = queue.notice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(Theme.danger)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                    .accessibilityIdentifier("session.queue.notice")
+            }
+        }
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+        )
     }
 
     private var header: some View {
@@ -101,7 +127,7 @@ struct SessionQueueStrip: View {
         Image(systemName: "tray.full")
             .font(.caption.weight(.semibold))
         Text("Queued")
-            .font(.footnote.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
         Text("\(queue.rows.count)")
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 6)
@@ -112,7 +138,7 @@ struct SessionQueueStrip: View {
 
     private var headline: some View {
         Text(queue.rows.headline(turnRunning: turnRunning))
-            .font(.caption)
+            .font(.footnote)
             .accessibilityIdentifier("session.queue.headline")
     }
 
@@ -143,7 +169,7 @@ struct SessionQueueStrip: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if row.canEdit {
                         Image(systemName: "pencil")
-                            .font(.caption.weight(.semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.secondaryOnCard)
                             .accessibilityHidden(true)
                     }
@@ -185,7 +211,7 @@ struct SessionQueueStrip: View {
                     Task { await queue.withdraw(row) }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 20))
+                        .font(.title3)
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(Theme.secondaryOnCard)
                         .frame(width: 44, height: 44)
@@ -206,19 +232,19 @@ struct SessionQueueStrip: View {
 struct QueueUndoLine: View {
     let queue: SessionQueueModel
     let gone: WithdrawnQueuedMessage
-    let onUndo: (String) -> Void
+    let onUndo: (WithdrawnQueuedMessage) -> Void
     let identifier: String
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(gone.wasLast ? "Message withdrawn" : "Withdrawn \u{00B7} Undo puts it last")
+            Text(gone.wasSetAside ? "Withdrawn \u{00B7} Undo returns it to the box" : "Message withdrawn")
                 .font(.footnote)
                 .foregroundStyle(Theme.secondaryOnCard)
             Spacer(minLength: 8)
             Button {
                 queue.noteRowTap()
                 queue.clearUndo()
-                onUndo(gone.text)
+                onUndo(gone)
             } label: {
                 Text("Undo")
                     .font(.footnote.weight(.semibold))
@@ -350,7 +376,7 @@ struct SessionQueuedMessageSheet: View {
             Button("Keep editing", role: .cancel) {}
             Button("Discard changes", role: .destructive) { dismiss() }
         } message: {
-            Text("The new words have not been saved.")
+            Text("Your changes to this message have not been saved yet.")
         }
         .onAppear {
             if !seeded, let row {
@@ -370,6 +396,7 @@ struct SessionQueuedMessageSheet: View {
     }
 
     private func caption(for row: SessionQueuedMessage) -> String {
+        if emptied && row.canEdit { return "There is nothing to save or send. Type the message again, or withdraw it." }
         switch row.status {
         case "pending":
             return turnRunning

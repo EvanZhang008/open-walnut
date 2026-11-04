@@ -116,7 +116,7 @@ final class ReviewSurfaceTests: XCTestCase {
         let send = try XCTUnwrap(composer.range(of: "private var sendButton: some View {"))
         // "Send" ("Queue message" while a turn runs and the words wait behind it), or while it
         // waits for dictated words the sentence that says so.
-        let label = String(composer[send.upperBound...].prefix(1_600))
+        let label = String(composer[send.upperBound...].prefix(3_200))
         XCTAssertTrue(label.contains("sendGate.isWaiting ? DictationSendGate.waitingLabel")
                       && label.contains("\"Queue message\" : \"Send\""),
                       "VoiceOver reads the chat send arrow as Up")

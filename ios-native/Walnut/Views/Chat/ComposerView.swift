@@ -1660,6 +1660,19 @@ struct ComposerBar: View {
                     .tint(Theme.onTint)
                     .frame(width: 32, height: 32)
                     .background(Theme.tint, in: Circle())
+            } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
+                // Its whole name: this send puts the words in the queue, the others act now.
+                HStack(spacing: 5) {
+                    Image(systemName: Symbol.queue)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Queue")
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Capsule())
             } else {
                 Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
                     .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))

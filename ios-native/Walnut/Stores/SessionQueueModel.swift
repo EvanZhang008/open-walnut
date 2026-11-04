@@ -28,7 +28,7 @@ final class SessionQueueModel {
     private(set) var withdrawn: WithdrawnQueuedMessage?
     @ObservationIgnored private var withdrawnClear: Task<Void, Never>?
     /// How long a withdrawn message can be taken back.
-    nonisolated(unsafe) static var undoWindow: TimeInterval = 6
+    nonisolated(unsafe) static var undoWindow: TimeInterval = 10
 
     /// The queue row with this id was withdrawn (server confirmed).
     @ObservationIgnored var onWithdrawn: ((String) -> Void)?
@@ -132,7 +132,8 @@ final class SessionQueueModel {
         do {
             try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
             onWithdrawn?(row.id)
-            offerUndo(of: row, wasLast: original.last?.id == row.id)
+            let behind = original.drop(while: { $0.id != row.id }).dropFirst().filter { $0.status == "pending" }
+            offerUndo(of: row, followers: Array(behind))
             AppLog.info("session", "queued message withdrawn", ["sessionId": sessionId, "messageId": row.id])
         } catch let error as APIError where error.isConflict {
             notice = "That message already started delivering."
@@ -143,9 +144,11 @@ final class SessionQueueModel {
         }
     }
 
-    private func offerUndo(of row: SessionQueuedMessage, wasLast: Bool) {
+    private func offerUndo(of row: SessionQueuedMessage, followers: [SessionQueuedMessage]) {
         withdrawnClear?.cancel()
-        withdrawn = WithdrawnQueuedMessage(id: row.id, text: row.message, wasLast: wasLast)
+        withdrawn = WithdrawnQueuedMessage(
+            id: row.id, text: row.message, followers: followers, wasSetAside: row.status == "parked"
+        )
         withdrawnClear = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.undoWindow))
             guard !Task.isCancelled else { return }
@@ -158,6 +161,22 @@ final class SessionQueueModel {
         withdrawnClear?.cancel()
         withdrawnClear = nil
         if withdrawn != nil { withdrawn = nil }
+    }
+
+    /// Take a waiting message off the line so Undo can put it back behind the one it follows.
+    /// True = the server let it go; false = it already started going out, and stays where it is.
+    func pullForRequeue(_ row: SessionQueuedMessage) async -> Bool {
+        guard !busyIds.contains(row.id) else { return false }
+        generation += 1
+        do {
+            try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
+            rows.removeAll { $0.id == row.id }
+            onWithdrawn?(row.id)
+            return true
+        } catch {
+            await refresh()
+            return false
+        }
     }
 
     /// Save new words for a pending row. True = the server holds them now.
@@ -218,8 +237,12 @@ final class SessionQueueModel {
 struct WithdrawnQueuedMessage: Equatable {
     let id: String
     let text: String
-    /// Undo sends it again, so it takes the back of the line; the page says so when others stood behind it.
-    let wasLast: Bool
+    /// The messages that stood behind it and still wait: Undo sends them again behind it, so the
+    /// order is what it was.
+    let followers: [SessionQueuedMessage]
+    /// A Stop had set it aside: Undo hands the words back to the message box instead of sending
+    /// them (nothing had asked for them to go).
+    let wasSetAside: Bool
 }
 
 extension Array where Element == SessionQueuedMessage {

@@ -84,9 +84,13 @@ final class SessionStopSteerUITests: XCTestCase {
             // Messages waiting in line: Stop asks first, because a Stop sets them aside.
             let confirm = app.alerts.buttons["Stop"]
             if confirm.waitForExistence(timeout: 1.5) { confirm.tap() }
+            // Counted, never read: the button can vanish between a look at it and a read of its label.
+            let anyStop = app.descendants(matching: .any).matching(identifier: "chat.stop")
+            let stopping = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier == 'chat.stop' AND label == 'Stopping'"))
             let deadline = Date().addingTimeInterval(2)
             while Date() < deadline {
-                if !stop.exists || stop.label == "Stopping" { return }
+                if anyStop.count == 0 || stopping.count > 0 { return }
                 usleep(100_000)
             }
         }
@@ -221,6 +225,58 @@ final class SessionStopSteerUITests: XCTestCase {
         XCTAssertTrue(rows.element(boundBy: 0).label.contains("First waiting words"))
         XCTAssertTrue(rows.element(boundBy: 1).label.contains("Second waiting words"))
         attach(app, "12-undo-double-tap")
+    }
+
+    func testTheRowsStayPutWhenTheOfferToUndoGoesAway() throws {
+        let app = openLongSession()
+        type("First waiting words", in: app)
+        element(app, "chat.send").tap()
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        type("Second waiting words", in: app)
+        element(app, "chat.send").tap()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        let deadline = Date().addingTimeInterval(20)
+        while rows.count < 2 && Date() < deadline { usleep(200_000) }
+        XCTAssertEqual(rows.count, 2)
+        elements(app, beginningWith: "session.queue.withdraw.").element(boundBy: 1).tap()
+        let undo = element(app, "session.queue.undo")
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        let cross = elements(app, beginningWith: "session.queue.withdraw.").firstMatch
+        let before = cross.frame
+        // Undo's place and the cross must never be the same place: the cross does not move when
+        // the offer lapses, so a second tap meant for Undo cannot withdraw the next message.
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 20), "the offer to undo never lapsed")
+        XCTAssertEqual(cross.frame, before, "the rows moved when the offer to undo went away")
+        XCTAssertEqual(rows.count, 1)
+    }
+
+    func testUndoPutsTheMessageBackWhereItWasAndKeepsTheOrder() throws {
+        let app = openLongSession()
+        type("First waiting words", in: app)
+        element(app, "chat.send").tap()
+        XCTAssertTrue(elements(app, beginningWith: "session.queue.row.").firstMatch.waitForExistence(timeout: 20))
+        type("Second waiting words", in: app)
+        element(app, "chat.send").tap()
+        let rows = elements(app, beginningWith: "session.queue.row.")
+        var deadline = Date().addingTimeInterval(20)
+        while rows.count < 2 && Date() < deadline { usleep(200_000) }
+        XCTAssertEqual(rows.count, 2)
+        sleep(1)
+        elements(app, beginningWith: "session.queue.withdraw.").firstMatch.tap()
+        let undo = element(app, "session.queue.undo")
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        undo.tap()
+        // Undo sends it again and the one behind it follows, so the line reads as before.
+        deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            if rows.count == 2, rows.element(boundBy: 0).label.contains("First waiting words"),
+               rows.element(boundBy: 1).label.contains("Second waiting words") { break }
+            usleep(300_000)
+        }
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.element(boundBy: 0).label.contains("First waiting words"), "Undo changed the order")
+        XCTAssertTrue(rows.element(boundBy: 1).label.contains("Second waiting words"))
+        attach(app, "13-undo-keeps-order")
     }
 
     // MARK: - Stop with a message waiting

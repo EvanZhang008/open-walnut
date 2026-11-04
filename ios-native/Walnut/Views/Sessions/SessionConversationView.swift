@@ -281,7 +281,7 @@ struct SessionConversationView: View {
         // Wave-2 extras: queue / plan / side questions / files.
         .sheet(isPresented: $showQueue) {
             SessionQueueSheet(queue: queue, turnRunning: store.streaming,
-                              onUndo: { text in Task { _ = await store.sendFromComposer(text) } })
+                              onUndo: { gone in Task { await undoWithdraw(gone) } })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -378,6 +378,24 @@ struct SessionConversationView: View {
         .onChange(of: store.acceptedSends) { _, _ in Task { await queue.refresh() } }
     }
 
+    /// Take a withdrawn message back. One that was waiting goes in line again and the ones that stood
+    /// behind it follow it, so the order is what it was. One a Stop had set aside returns to the
+    /// message box: nothing had asked for it to go.
+    private func undoWithdraw(_ gone: WithdrawnQueuedMessage) async {
+        if gone.wasSetAside {
+            let key = "session:\(session.id)"
+            let now = ComposerDrafts.shared.draft(key)
+            ComposerDrafts.shared.setDraft(now.isEmpty ? gone.text : now + "\n" + gone.text, key: key)
+            return
+        }
+        guard await store.sendFromComposer(gone.text) else { return }
+        for later in gone.followers {
+            // Its words as they are now (it may have been edited meanwhile); gone from the line = gone.
+            guard let current = queue.rows.first(where: { $0.id == later.id }) else { continue }
+            if await queue.pullForRequeue(current) { _ = await store.sendFromComposer(current.message) }
+        }
+    }
+
     /// Messages waiting in line that a Stop would set aside.
     private var waitingToGoIn: Int { queue.rows.filter { $0.status == "pending" }.count }
 
@@ -395,7 +413,7 @@ struct SessionConversationView: View {
         SessionQueueStrip(
             queue: queue, turnRunning: store.streaming,
             onOpen: { managingQueueRow = $0 }, onShowAll: { showQueue = true },
-            onUndo: { text in Task { _ = await store.sendFromComposer(text) } }
+            onUndo: { gone in Task { await undoWithdraw(gone) } }
         )
     }
 

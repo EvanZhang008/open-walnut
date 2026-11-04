@@ -9,8 +9,8 @@ struct SessionQueueSheet: View {
     let queue: SessionQueueModel
     /// A turn runs: the rows wait for its end.
     let turnRunning: Bool
-    /// Put a message the person just withdrew back in line.
-    let onUndo: (String) -> Void
+    /// Put a message the person just withdrew back where it was.
+    let onUndo: (WithdrawnQueuedMessage) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var managing: QueueRowRef?
@@ -31,7 +31,7 @@ struct SessionQueueSheet: View {
                     }
                 } else if queue.rows.isEmpty {
                     Section {
-                        Text("No queued messages. Everything you sent has been delivered.")
+                        Text("Nothing is waiting in line.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 24)
@@ -53,6 +53,7 @@ struct SessionQueueSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .presentationBackground(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) {
                 if let gone = queue.withdrawn {
                     QueueUndoLine(queue: queue, gone: gone, onUndo: onUndo, identifier: "session.queue.list.undo")
