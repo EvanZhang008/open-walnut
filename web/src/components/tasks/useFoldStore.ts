@@ -24,6 +24,7 @@ import {
   foldBusy,
   foldIsDue,
   foldIsOpen,
+  inPanelView,
   mergeFoldChanges,
   nextAutoClose,
   parseFoldStore,
@@ -116,13 +117,22 @@ function beforeClockFold(key: string): 'visible' | 'plain' | null {
   if (!focused || focused === document.body || !foldElements(key).some((e) => e.contains(focused))) return null;
   try { return focused.matches(':focus-visible') ? 'visible' : 'plain'; } catch { return 'plain'; }
 }
+/** No input anywhere for this long: the user is away, and a due fold folds. */
+const AWAY_MS = 5 * 60_000;
+/** The window in front, the fold on screen and the user still for a while (past FOLD_READING_MS,
+ *  short of AWAY_MS): they may be reading it, so it waits. Input elsewhere, the window going to the
+ *  background or AWAY_MS of stillness lets it fold. */
+function maybeReading(key: string): boolean {
+  if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
+  const still = Date.now() - lastActivity.at;
+  if (still < FOLD_READING_MS || still >= AWAY_MS) return false;
+  return foldElements(key).some(inPanelView);
+}
 /** The pointer rests on the list below a fold that is on screen: folding it would slide the rows
  *  under the pointer, so it waits for the pointer to go. One scrolled above the panel folds, and
  *  the row under the pointer keeps its place (beforeClockFold). */
 function restingBelow(key: string): boolean {
-  if (!rowUnderPointerBelow(key, toggleOf(key))) return false;
-  const vh = window.innerHeight;
-  return foldElements(key).some((f) => { const r = f.getBoundingClientRect(); return r.height > 0 && r.bottom > 0 && r.top < vh; });
+  return !!rowUnderPointerBelow(key, toggleOf(key)) && foldElements(key).some(inPanelView);
 }
 /** The row the pointer rests on, when it sits after the fold in the same panel. */
 function rowUnderPointerBelow(key: string, toggle: HTMLElement | null): Element | null {
@@ -206,7 +216,7 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
     for (const key of Object.keys(cur)) {
       // Folds due within a moment of each other go together, never one after the other.
       if (!foldIsDue(cur, key, kind, t + FOLD_BATCH_MS)) continue;
-      if (foldBusy(document, key, readingAround, navigatedTo) || restingBelow(key)) { busy = true; continue; }
+      if (foldBusy(document, key, readingAround, navigatedTo) || restingBelow(key) || maybeReading(key)) { busy = true; continue; }
       const focus = beforeClockFold(key);
       if (focus) focusedRef.current.push({ key, visible: focus === 'visible' });
       clockFoldedRef.current.push(key);
@@ -249,9 +259,13 @@ export function useFoldStore(lsKey: string, kind: FoldKindOf, now: () => number 
       queued = true;
       queueMicrotask(() => { queued = false; if (!foldDue()) setHeld(false); });
     };
-    const types = ['pointermove', 'pointerdown', 'focusin', 'focusout', 'keyup'] as const;
+    const types = ['pointermove', 'pointerdown', 'focusin', 'focusout', 'keyup', 'visibilitychange'] as const;
     for (const type of types) document.addEventListener(type, look, { capture: true, passive: true });
-    return () => { for (const type of types) document.removeEventListener(type, look, { capture: true }); };
+    window.addEventListener('blur', look);
+    return () => {
+      for (const type of types) document.removeEventListener(type, look, { capture: true });
+      window.removeEventListener('blur', look);
+    };
   }, [held, foldDue]);
   useEffect(() => () => { if (retryRef.current !== null) window.clearTimeout(retryRef.current); }, []);
 

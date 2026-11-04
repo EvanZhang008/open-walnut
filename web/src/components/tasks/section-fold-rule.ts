@@ -175,9 +175,18 @@ function keyboardFocus(el: Element): boolean {
   try { return el.matches(':focus-visible'); } catch { return false; }
 }
 
-function onScreen(el: Element, view: { width: number; height: number }): boolean {
+/** Less of a group than this in view is its edge (padding, a border), not something to read. */
+const IN_VIEW_MIN_PX = 8;
+/** Is some of it in the part of its panel the user sees: the window clipped to the scroller it
+ *  scrolls in, so a group scrolled up under the panel's toolbar is not on screen. */
+export function inPanelView(el: Element): boolean {
+  const win = el.ownerDocument.defaultView;
+  const vh = win?.innerHeight ?? 0, vw = win?.innerWidth ?? 0;
   const r = el.getBoundingClientRect();
-  return r.bottom > 0 && r.top < view.height && r.right > 0 && r.left < view.width && r.height > 0;
+  const s = scrollParentOf(el, false).getBoundingClientRect();
+  const top = Math.max(0, s.top), bottom = s.bottom > s.top ? Math.min(vh, s.bottom) : vh;
+  const shown = Math.min(r.bottom, bottom) - Math.max(r.top, top);
+  return r.height > 0 && shown >= Math.min(IN_VIEW_MIN_PX, r.height) && r.right > 0 && r.left < vw;
 }
 
 /**
@@ -198,7 +207,6 @@ export function foldBusy(
   const typing = !!focused && focused !== doc.body && focused.matches(EDITING);
   const keyFocus = !!focused && focused !== doc.body && !typing
     && keyboardFocus(focused) && !focused.hasAttribute('aria-expanded');
-  const view = { width: doc.defaultView?.innerWidth ?? 0, height: doc.defaultView?.innerHeight ?? 0 };
   for (const el of doc.querySelectorAll(`[${FOLD_KEY_ATTR}]`)) {
     if (el.getAttribute(FOLD_KEY_ATTR) !== key) continue;
     if (el.matches(':hover')) return true;
@@ -207,7 +215,7 @@ export function foldBusy(
     // closing menu put back (Escape) holds it only while they keep working in the panel.
     if (keyFocus && el.contains(focused) && (navigated(focused!) || reading(el))) return true;
     if (el.querySelector(MENU_OPEN) || el.querySelector(OPEN_TASK_ROW)) return true;
-    if (onScreen(el, view) && reading(el)) return true;
+    if (inPanelView(el) && reading(el)) return true;
   }
   return false;
 }

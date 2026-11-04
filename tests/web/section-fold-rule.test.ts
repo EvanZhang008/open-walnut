@@ -99,9 +99,12 @@ describe('the fold rule', () => {
 
 describe('foldBusy', () => {
   interface FakeFold { key: string; hover: boolean; contains?: boolean; menu?: boolean; openTask?: boolean; top?: number }
-  const fakeDoc = (els: FakeFold[], active: { editing: boolean; keyboard?: boolean; toggle?: boolean } | null = null) => ({
+  const fakeDoc = (els: FakeFold[], active: { editing: boolean; keyboard?: boolean; toggle?: boolean } | null = null, listTop = 0): Document => {
+    const doc = {
     body: {},
     defaultView: { innerWidth: 1280, innerHeight: 800 },
+    // The panel's list area: the whole window here (no scroller around the fold).
+    scrollingElement: { getBoundingClientRect: () => ({ top: listTop, bottom: 800, left: 0, right: 1280, height: 800 - listTop }) },
     activeElement: active && {
       matches: (sel: string) => (sel === ':focus-visible' ? !!active.keyboard : active.editing),
       hasAttribute: (name: string) => name === 'aria-expanded' && !!active.toggle,
@@ -112,8 +115,12 @@ describe('foldBusy', () => {
       contains: () => !!e.contains,
       querySelector: (sel: string) => ((sel.includes('menu') ? e.menu : e.openTask) ? {} : null),
       getBoundingClientRect: () => ({ top: e.top ?? 100, bottom: (e.top ?? 100) + 200, left: 0, right: 400, height: 200 }),
+      parentElement: null,
+      ownerDocument: doc,
     })),
-  }) as unknown as Document;
+    };
+    return doc as unknown as Document;
+  };
 
   it('the pointer over the fold, or typing inside it, keeps it open; a focused toggle does not', () => {
     expect(foldBusy(fakeDoc([{ key: 'waiting', hover: true }]), 'waiting')).toBe(true);
@@ -147,6 +154,11 @@ describe('foldBusy', () => {
     expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false }]), 'waiting', reading)).toBe(true);
     expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: 2000 }]), 'waiting', reading)).toBe(false);
     expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -500 }]), 'waiting', reading)).toBe(false);
+    // Scrolled up under the panel's toolbar (its list starts at 120): not on screen.
+    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -100 }], null, 120), 'waiting', reading)).toBe(false);
+    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -60 }], null, 120), 'waiting', reading)).toBe(true);
+    // Only its bottom edge (a few px of padding) below the toolbar: not on screen either.
+    expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false, top: -76 }], null, 120), 'waiting', reading)).toBe(false);
     expect(foldBusy(fakeDoc([{ key: 'waiting', hover: false }]), 'waiting', () => false)).toBe(false);
   });
 });

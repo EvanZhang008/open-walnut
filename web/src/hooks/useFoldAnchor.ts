@@ -32,8 +32,9 @@ import { useEffect, type RefObject } from 'react';
  *  same hold as a click: it dispatches this event from its toggle just before it folds. */
 export const FOLD_PIN_EVENT = 'walnut-fold-pin';
 /** Its `detail`: `inView` lands a heading scrolled above the scroller on its top edge, since
- *  nobody clicked it and the user would not see what folded, and adds no room past the end: a
- *  list the fold made too short just ends, rather than leave a blank under it. */
+ *  nobody clicked it and the user would not see what folded, and adds no room past the end for
+ *  it: a list the fold made too short just ends. A heading on screen keeps its place, as a
+ *  clicked one does. */
 export type FoldPinDetail = { inView?: boolean };
 /** …and this one once its fold has committed, so the hold corrects before the frame paints. */
 export const FOLD_SETTLE_EVENT = 'walnut-fold-settle';
@@ -166,10 +167,14 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       const stuck = stickyOf(row, scroller);
       const box = stuck?.parentElement ?? null;
       const shown = row.getBoundingClientRect().top;
+      const edge = scroller.getBoundingClientRect().top;
+      // A heading scrolled above lands on the top edge, and a list that got too short just ends;
+      // one on screen keeps its place like a clicked one, with room past the end if it needs it.
+      const above = inView && shown < edge - 0.5;
       hold = {
         row, stuck, box, boxHeight: box?.getBoundingClientRect().height ?? 0,
-        top: inView ? Math.max(shown, scroller.getBoundingClientRect().top) : shown, list: listTop(row, stuck),
-        scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor, settled: false, noRoom: inView,
+        top: above ? edge : shown, list: listTop(row, stuck),
+        scroller, frames: HOLD_FRAMES, expected: scroller.scrollTop, anchor: scroller.style.overflowAnchor, settled: false, noRoom: above,
       };
       // Chromium's own anchoring would move the scroller by a rule of its own; off
       // for the hold, so both engines end up exactly here.
