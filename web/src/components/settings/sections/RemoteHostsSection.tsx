@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import type { Config } from '@open-walnut/core';
 import { COMPANION_ALIAS, companionAliasRefusal } from '@open-walnut/companion-keep';
 import { SectionCard } from '../inputs/SectionCard';
@@ -14,6 +14,7 @@ import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
 import { landOnRow } from '@/utils/scroll-land';
+import { ContextMenu, type ContextMenuPoint } from '@/components/common/ContextMenu';
 import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
 import { HostExecGrantsGroup } from './HostExecGrantsGroup';
@@ -199,7 +200,31 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   const addHost = () => {
     setHosts((prev) => [...prev, emptyHost()]);
     setExpanded(hosts.length);
+    setNewHostAt(hosts.length);
   };
+
+  // Add host offers both ways in: the one-line join (no SSH) and an SSH host. 2026-11-04: it
+  // only appended an empty SSH row at the bottom of the page, off screen, so a press looked
+  // like nothing happened, and the join was not reachable from it at all.
+  const [addMenu, setAddMenu] = useState<{ point: ContextMenuPoint; from: HTMLElement } | null>(null);
+  const [joinNonce, setJoinNonce] = useState(0);
+  const [newHostAt, setNewHostAt] = useState<number | null>(null);
+  const openAddMenu = (e: ReactMouseEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setAddMenu({ point: { x: r.left, y: r.bottom + 4 }, from: e.currentTarget });
+  };
+  // The new SSH row: in view, its Alias field focused.
+  useEffect(() => {
+    if (newHostAt === null) return;
+    const raf = requestAnimationFrame(() => {
+      const input = document.getElementById(`rh-alias-${newHostAt}`);
+      const row = input?.closest<HTMLElement>('.settings-row') ?? input;
+      if (row) { landRef.current?.(); landRef.current = landOnRow(row, { focus: false }); }
+      input?.focus({ preventScroll: true });
+      setNewHostAt(null);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [newHostAt]);
 
   const removeHost = (idx: number) => {
     setHosts((prev) => prev.filter((_, i) => i !== idx));
@@ -347,7 +372,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   };
 
   const addButton = (
-    <SettingsButton onClick={addHost} data-testid="remote-hosts-add">Add host</SettingsButton>
+    <SettingsButton onClick={openAddMenu} aria-haspopup="menu" aria-expanded={!!addMenu} data-testid="remote-hosts-add">Add host</SettingsButton>
   );
 
   return (
@@ -474,7 +499,20 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         })}
       </SettingsGroup>
 
-      <HostNetworkGroup />
+      <HostNetworkGroup addNonce={joinNonce} />
+      {addMenu && (
+        <ContextMenu
+          point={addMenu.point}
+          ariaLabel="Add a host"
+          testId="remote-hosts-add-menu"
+          returnFocus={addMenu.from}
+          onClose={() => setAddMenu(null)}
+          items={[
+            { key: 'join', label: 'A machine, with a one-line command (no SSH)', title: 'Makes a one-use link you run on the new machine', onSelect: () => setJoinNonce((n) => n + 1) },
+            { key: 'ssh', label: 'An SSH host', title: 'A host this machine reaches with ssh', onSelect: addHost },
+          ]}
+        />
+      )}
       <HostServersGroup hosts={config.hosts} />
       <HostExecGrantsGroup hostLabels={hostLabels} />
       <SecretsGroup hostLabels={hostLabels} />

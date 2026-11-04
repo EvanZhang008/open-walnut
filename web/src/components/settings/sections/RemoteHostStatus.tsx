@@ -65,7 +65,8 @@ export function RemoteHostStatus({ alias, name, enabled = true }: { alias: strin
   let line: Line;
   // Off in Settings: nothing to connect (a Connect now there only ever answered 409 host_disabled).
   if (!enabled) line = { text: DISABLED_TEXT, title: DISABLED_TITLE, button: null };
-  else if (!status) line = { text: hydrating ? 'Checking...' : 'Not connected', button: hydrating ? null : { label: 'Connect now', disabled: false, kind: 'connectNow' } };
+  // No frame yet (a machine that just joined): the press still shows it runs, as on every other line.
+  else if (!status) line = { text: hydrating ? 'Checking...' : 'Not connected', button: hydrating ? null : { label: retrying ? 'Retrying...' : 'Connect now', disabled: retrying, kind: 'connectNow' } };
   else if (problem?.type === 'off') line = { text: OFF_PHASE_LABEL, title: OFF_TITLE, button: null };
   else if (problem?.type === 'connect') line = { text: 'Not connected', button: { label: retrying ? 'Retrying...' : 'Retry', disabled: retrying, kind: 'retry' } };
   else if (problem?.type === 'reconnecting') line = { text: `Reconnecting to ${label}`, button: { label: retrying ? 'Retrying...' : 'Connect now', disabled: retrying, kind: 'connectNow' } };

@@ -17,6 +17,7 @@ import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { HostNetworkRelay } from './HostNetworkRelay';
 import { CopyButton } from '../inputs/CopyButton';
+import { landOnRow } from '@/utils/scroll-land';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
 import { hostRowId } from '@/utils/host-settings-nav';
@@ -52,7 +53,8 @@ function left(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function HostNetworkGroup() {
+/** `addNonce`: each new value makes a link, as Add a machine does (Remote Hosts' Add host menu). */
+export function HostNetworkGroup({ addNonce = 0 }: { addNonce?: number } = {}) {
   const [net, setNet] = useState<NetOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [invite, setInvite] = useState<NetInvite | null>(null);
@@ -122,6 +124,24 @@ export function HostNetworkGroup() {
       if (mounted.current) setMaking(false);
     }
   };
+
+  // Asked from Add host: make the link, then land on it with its Copy focused (or on why not).
+  const [landAt, setLandAt] = useState(0);
+  useEffect(() => {
+    if (addNonce <= 0) return;
+    void add().then(() => { if (mounted.current) setLandAt((n) => n + 1); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addNonce]);
+  useEffect(() => {
+    if (landAt <= 0) return;
+    const raf = requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>('[data-testid="host-network-invite"], [data-testid="host-network-invite-error"]');
+      if (!row) return;
+      landOnRow(row, { focus: false });
+      row.querySelector<HTMLElement>('[data-testid="host-network-copy"]')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [landAt]);
 
   const remove = async (host: string) => {
     setRemoveError((e) => { const n = { ...e }; delete n[host]; return n; });
