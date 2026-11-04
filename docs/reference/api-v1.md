@@ -3645,7 +3645,8 @@ needed; an old primary answers `400 session_control_needs_upgrade`).
     after a relaunch; an empty list means nothing is waiting (it says nothing
     about messages that were settled as not sent).
   - `PATCH /api/v1/sessions/:id/queue/:messageId` body `{ "text" }` →
-    `{ "ok" }`; already processing/gone → `409 conflict`.
+    `{ "ok" }`; works for a pending or parked row (a parked row is one a Stop set
+    aside, waiting for its owner to send it); already processing/gone → `409 conflict`.
   - `DELETE /api/v1/sessions/:id/queue/:messageId` → `{ "ok" }`; works for a
     pending or parked row, `409 conflict` for one already in flight.
 
