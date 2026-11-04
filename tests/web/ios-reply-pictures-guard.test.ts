@@ -22,6 +22,7 @@ const TEXT_ONLY_TO_AI: Record<string, string> = {
   'Views/Sessions/NewSessionSheet.swift': "a new session's optional first message rides the start route, which carries text only; the session's composer takes pictures",
   'Views/Sessions/SessionComposerSheets.swift': "a fork's optional first message rides the fork route, which carries text only; the fork's composer takes pictures",
   'Views/Sessions/SessionExtrasSheets.swift': "a side question is asked of the live CLI through its side-question channel, which carries text only",
+  'Views/Sessions/SessionQueueViews.swift': "a queued message is edited through the queue route's PATCH, which carries text only; pictures are added when the message is composed",
 }
 
 /** Files whose text inputs never reach an AI as a message, and what they hold. */

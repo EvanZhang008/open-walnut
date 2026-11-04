@@ -151,14 +151,11 @@ messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Respon
     // A session caller's send now is a peer's nudge (its turn interrupts a wait, as a
     // task_send's does); with no caller it is the person's, the bubble's Send now.
     const callerSid = header(req, 'x-walnut-caller-sid')
-    // `interrupt: true` stops the running turn so the row goes out in a fresh one: the person's choice only.
+    // `interrupt: true` stops the running turn so the row goes out in a fresh one. A person or a session may
+    // ask for it; the stop is recorded under the same source as the send (the person's, or a peer's).
     const rawInterrupt = (req.body ?? {}).interrupt
     if (rawInterrupt !== undefined && typeof rawInterrupt !== 'boolean') {
       sendError(res, 400, 'bad_request', 'interrupt must be a boolean')
-      return
-    }
-    if (rawInterrupt === true && callerSid) {
-      sendError(res, 400, 'bad_request', 'Only a person can interrupt a running turn with Send now')
       return
     }
     const { sendQueuedNow } = await import('../../core/sessions/send-now.js')

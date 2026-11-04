@@ -33,6 +33,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
@@ -457,7 +458,7 @@ sessionLifecycleV1Router.post('/sessions/:id/interrupt', async (req: Request, re
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (await refuseSessionControl(req, res, sessionId, 'stop')) return
-    if (CLOUD_MODE) {
+    if (isCompanion()) {
       await relayControlAction(res, 'interrupt', sessionId, undefined, 200)
       return
     }

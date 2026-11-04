@@ -2918,8 +2918,9 @@ ledger. Both end up in the same persistent message queue.
   it was set aside, for example by the user's Stop: a session caller never puts
   that back in line, only the user's Retry does. `404 not_found` for an unknown
   request, `501` on the cloud companion. Body `{ "interrupt": true }` (additive,
-  2026-11, a person's call only: `400` from a session caller) stops the session's
-  running turn first, so the row goes out in a fresh one.
+  2026-11; a session may ask for it as a person can, and the `message_send_now`
+  op takes it) stops the session's running turn first, so the row goes out in a
+  fresh one.
 - A send with no caller session that carries `x-walnut-caller-kind: automation`
   and `x-walnut-sender: <label>` (additive, 2026-10-29) is a script or scheduled
   job, never the user: it is delivered as an anonymous peer note from

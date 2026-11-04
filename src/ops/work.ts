@@ -301,6 +301,7 @@ defineOp({
     + 'again, and one set aside (the user stopped that session) stays for the user\'s Retry.',
   input: {
     id: z.string().regex(/^(rq-[a-f0-9]{6,}|qm-[A-Za-z0-9-]{1,64})$/).describe('The request id (rq-…) or the queued message id (qm-…)'),
+    interrupt: z.boolean().optional().describe('Stop the session\'s running turn first, so the message goes out in a fresh one (what the phone\'s Interrupt & send now does). Leave it out to wait for the turn to end.'),
   },
   bind: { method: 'POST', path: '/messages/:id/send-now' },
   mapResult: ({ body }) => {

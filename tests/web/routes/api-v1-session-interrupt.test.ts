@@ -184,13 +184,13 @@ describe('POST /api/v1/messages/:id/send-now with interrupt', () => {
     expect(sends).toEqual([{ sessionId: 'now-int-2', message: 'queued', interrupt: undefined }])
   })
 
-  it('a session caller cannot interrupt with it: 400', async () => {
+  it('a session caller may interrupt with it too, as a person can (an agent does what a person does)', async () => {
     await createSessionRecord('now-int-3', 'task-now3', 'proj', '/tmp', { initialProcessStatus: 'running' })
     const row = await enqueueMessage('now-int-3', 'queued')
     const res = await request(createApp()).post(`/api/v1/messages/${row.id}/send-now`)
       .set('x-walnut-caller-sid', 'some-other-session').send({ interrupt: true })
-    expect(res.status).toBe(400)
-    expect(sends).toEqual([])
+    expect(res.status).toBe(200)
+    expect(sends).toEqual([{ sessionId: 'now-int-3', message: 'queued', interrupt: true }])
   })
 
   it('a non-boolean interrupt is 400', async () => {
