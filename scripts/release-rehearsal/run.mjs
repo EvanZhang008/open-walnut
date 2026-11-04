@@ -56,6 +56,7 @@ import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
 import { rehearseBinary } from './binary.mjs'
 import { FIELD_SCENARIOS, rehearseField } from './field.mjs'
+import { failureLogs } from './failure-logs.mjs'
 import { readFieldJson } from './field-packs.mjs'
 import { rehearseRuntime } from './runtime.mjs'
 import { rehearseLive } from './live.mjs'
@@ -112,15 +113,17 @@ const walnuts = []
 
 async function scenario(name, fn) {
   const started = Date.now()
+  // The walnuts this scenario makes: a failure prints their logs (failure-logs.mjs).
+  const mine = walnuts.length
   process.stdout.write(`\n▶ ${name}\n`)
   try {
     const detail = await fn()
-    results.push({ name, ok: true, secs: (Date.now() - started) / 1000, detail: detail ?? '' })
+    results.push({ name, ok: true, secs: (Date.now() - started) / 1000, detail: detail ?? '', made: walnuts.slice(mine) })
     process.stdout.write(`✓ ${name} (${Math.round((Date.now() - started) / 1000)}s) ${detail ?? ''}\n`)
     return true
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    results.push({ name, ok: false, secs: (Date.now() - started) / 1000, detail: message })
+    results.push({ name, ok: false, secs: (Date.now() - started) / 1000, detail: message, made: walnuts.slice(mine) })
     process.stdout.write(`✗ ${name}: ${message}\n`)
     return false
   }
@@ -198,13 +201,12 @@ async function rehearseUpdate(work, label, fromTgz, toTgz) {
 async function finish(opts, work, title, expected) {
   // A scenario that failed half way left its server and daemon running.
   for (const x of walnuts) await x.shutdown().catch(() => {})
-  for (const r of results.filter((r) => !r.ok)) {
-    for (const x of walnuts) {
+  for (const r of failureLogs(results, walnuts)) {
+    for (const x of r.walnuts) {
       process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
       // The daemon spawns the sessions: a session that never answers is told here.
       for (const f of daemonLogs(x.daemonDir)) process.stdout.write(`\n── ${f} (tail) ──\n${tailOf(f, 60)}\n`)
     }
-    break
   }
   const table = ['| Scenario | Result | Time | Detail |', '|---|---|---|---|',
     ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : '**FAIL**'} | ${Math.round(r.secs)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 200)} |`)]

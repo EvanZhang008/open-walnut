@@ -74,6 +74,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { retryRegistryLag } from '../npm-registry-lag.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 import { readFieldJson } from './field-packs.mjs'
 import { PACKAGE, UPSTREAM, publishedVersion, startRegistry } from './registry.mjs'
@@ -238,6 +239,19 @@ function runTo(w, label, file, args, env = w.env) {
   })
 }
 
+/**
+ * An `npm install` of published packages, run again past a dependency npm does not
+ * serve yet (scripts/npm-registry-lag.mjs): a publish in flight, not the install's fault.
+ */
+async function installTo(w, label, args) {
+  let r
+  await retryRegistryLag(async () => {
+    r = await runTo(w, label, w.npm, args)
+    return { code: r.code, output: r.text }
+  })
+  return r
+}
+
 /** `walnut update` as a person types it; the server it asks about is this install's own (or none). */
 async function cliUpdate(w, label) {
   const env = { ...w.env, OPEN_WALNUT_API_URL: w.server ? w.base : 'http://127.0.0.1:9' }
@@ -248,7 +262,7 @@ async function cliUpdate(w, label) {
 
 /** `npm install -g open-walnut@<version>` as a person types it: their npm, their config, no --allow-scripts. */
 async function handInstall(w, version) {
-  const r = await runTo(w, `npm-install-${version}`, w.npm, ['install', '-g', `${PACKAGE}@${version}`])
+  const r = await installTo(w, `npm-install-${version}`, ['install', '-g', `${PACKAGE}@${version}`])
   if (r.code !== 0) throw new Error(`npm install -g ${PACKAGE}@${version} exited ${r.code}: ${r.text.slice(-800)} (${r.out})`)
   return r.text
 }
@@ -619,7 +633,7 @@ async function unscripted({ from, field, work, walnuts, opts }) {
     await installStart(w, from, opts.upstream)
     registry.setDistTags(tags(field.release.version))
     registry.setWithheld([hostPackage()])
-    const r = await runTo(w, 'npm-install-unscripted', w.npm, ['install', '-g', `${PACKAGE}@${field.release.version}`, '--ignore-scripts'])
+    const r = await installTo(w, 'npm-install-unscripted', ['install', '-g', `${PACKAGE}@${field.release.version}`, '--ignore-scripts'])
     if (r.code !== 0) throw new Error(`npm install --ignore-scripts exited ${r.code}: ${r.text.slice(-800)}`)
     if (fs.existsSync(path.join(launcherRoot(w), 'node_modules', hostPackage()))) throw new Error(`npm installed ${hostPackage()} while the registry did not serve it`)
     registry.setWithheld([])

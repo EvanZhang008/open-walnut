@@ -9,8 +9,16 @@
  * `@aws-sdk/middleware-eventstream@^3.972.31`, three to six minutes after both
  * were published.
  *
- * So an install that fails with npm's "No matching version found" runs again
- * after a wait; any other failure is the install's own and ends at once.
+ * The tarball lags the same way: npm's index names the new version before the
+ * registry serves its file, and an install inside that window fails with E404 on
+ * the `.tgz` (2026-11-04: `prosemirror-transform-1.12.5.tgz`, two to four minutes
+ * after it was published, failed the field rehearsal's install of an older release,
+ * whose dependency range took the newest version).
+ *
+ * So an install that fails with npm's "No matching version found", or with a 404
+ * on a version's tarball, runs again after a wait; any other failure (a 404 on a
+ * package's index included: a name that does not exist) is the install's own and
+ * ends at once.
  *
  *   bun scripts/npm-registry-lag.mjs <command> [args...]
  *     runs the command with its output passed through, and again after 1, 2 and
@@ -28,11 +36,21 @@ export const LAG_WAITS_MS = [60_000, 120_000, 240_000]
 /** How much of a command's output is kept to read npm's verdict from. */
 const TAIL_CHARS = 64 * 1024
 
-/** The dependency npm could not find, when `output` is npm's ETARGET failure; otherwise null. */
+/**
+ * The dependency npm could not get, when `output` is npm's ETARGET failure or its
+ * E404 on a version's tarball (`<name>@<version>`); otherwise null.
+ */
 export function missingVersion(output) {
-  if (!/\b(?:ETARGET|notarget)\b/.test(output)) return null
-  const m = /No matching version found for (\S+?)\.?(?:\s|$)/.exec(output)
-  return m ? m[1] : null
+  if (/\b(?:ETARGET|notarget)\b/.test(output)) {
+    const m = /No matching version found for (\S+?)\.?(?:\s|$)/.exec(output)
+    if (m) return m[1]
+  }
+  if (/\bE404\b/.test(output)) {
+    // `GET <registry>/<name>/-/<basename>-<version>.tgz`, <name> scoped or not.
+    const m = /404 Not Found - GET \S*?\/((?:@[^/\s]+\/)?([^/\s]+))\/-\/\2-([^/\s]+?)\.tgz(?:\s|$)/.exec(output)
+    if (m) return `${m[1]}@${m[3]}`
+  }
+  return null
 }
 
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

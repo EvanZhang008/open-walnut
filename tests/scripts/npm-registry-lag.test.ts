@@ -29,6 +29,14 @@ const ETARGET_STREAM = [
   'npm error notarget No matching version found for @aws-sdk/middleware-eventstream@^3.972.31.',
 ].join('\n')
 
+// 2026-11-04: the index named prosemirror-transform 1.12.5 at 19:05; installs at 19:07-19:09 got this.
+const E404_TARBALL = [
+  'npm error code E404',
+  'npm error 404 Not Found - GET https://registry.npmjs.org/prosemirror-transform/-/prosemirror-transform-1.12.5.tgz - Not found',
+  'npm error 404',
+  "npm error 404  The requested resource 'prosemirror-transform@https://registry.npmjs.org/prosemirror-transform/-/prosemirror-transform-1.12.5.tgz' could not be found or you do not have permission to access it.",
+].join('\n')
+
 let tmp: string
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-npm-lag-')) })
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }) })
@@ -62,12 +70,26 @@ describe('npm-registry-lag · which failures are a publish in flight', () => {
     expect(missingVersion(ETARGET_STREAM)).toBe('@aws-sdk/middleware-eventstream@^3.972.31')
   })
 
+  it('names the version whose tarball npm did not serve yet, scoped or not, from any registry', () => {
+    expect(missingVersion(E404_TARBALL)).toBe('prosemirror-transform@1.12.5')
+    expect(missingVersion('npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.972.80.tgz - Not found'))
+      .toBe('@aws-sdk/client-s3@3.972.80')
+    expect(missingVersion('npm error code E404\nnpm error 404 Not Found - GET http://127.0.0.1:41234/open-walnut/-/open-walnut-0.6.27-rehearsal.1.tgz'))
+      .toBe('open-walnut@0.6.27-rehearsal.1')
+  })
+
   it('leaves every other npm failure alone', () => {
     for (const other of [
       'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/no-such-package',
       'npm error code ERESOLVE\nnpm error ERESOLVE unable to resolve dependency tree',
       'npm error code EACCES\nnpm error syscall mkdir',
       'npm error code ECONNRESET\nnpm error network aborted',
+      // A 404 on a package's index is a name that does not exist, not a publish in flight.
+      'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@acme%2fno-such - Not found',
+      // A tarball URL without npm's E404 code is not npm's verdict.
+      'npm error 404 Not Found - GET https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz',
+      // A tarball whose file name is not the package's own.
+      'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad/-/right-pad-1.3.0.tgz',
       // The words alone, without npm's code, are not npm's verdict.
       'No matching version found for left-pad@^9 in the docs',
       '',
@@ -156,6 +178,35 @@ describe('npm-registry-lag · every install of a published package goes through 
     fs.writeFileSync(w.logFile, `${ETARGET_HTTP}\n`)
     await expect(w.install('open-walnut@0.0.0', ['open-walnut'], noWait)).rejects.toThrow(/exited 1/)
     expect(runs()).toBe(1)
+  })
+
+  it('the rehearsal\'s install runs again past a tarball npm does not serve yet', async () => {
+    const w = new IsolatedWalnut({ work: tmp, name: 'iso', npm: fakeNpm(1, E404_TARBALL) })
+    await w.install('open-walnut@0.0.0', ['open-walnut'], noWait)
+    expect(runs()).toBe(2)
+  })
+
+  it('every npm install the release rehearsals run goes through it', () => {
+    // Each `['install', ...]` argv in a rehearsal script is the updater-style install
+    // (walnut.mjs, inside retryRegistryLag) or a field install typed by hand (installTo).
+    const dir = path.join(REPO, 'scripts/release-rehearsal')
+    const offenders: string[] = []
+    let installs = 0
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.mjs'))) {
+      const lines = fs.readFileSync(path.join(dir, file), 'utf8').split('\n')
+      lines.forEach((line, i) => {
+        if (!/\[\s*'install'\s*,\s*'-g'/.test(line)) return
+        installs++
+        const near = lines.slice(i, i + 4).join('\n')
+        if (!/\binstallTo\(|\bretryRegistryLag\(/.test(near)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+    expect(installs).toBeGreaterThanOrEqual(3)
+    // installTo is the only place field.mjs hands npm a command.
+    const field = fs.readFileSync(path.join(dir, 'field.mjs'), 'utf8')
+    expect(field.match(/\bw\.npm\b/g)).toHaveLength(1)
+    expect(field).toMatch(/async function installTo\([^)]*\) \{\n {2}let r\n {2}await retryRegistryLag\(async \(\) => \{\n {4}r = await runTo\(w, label, w\.npm, args\)/)
   })
 
   it('the archive build installs through it', () => {
