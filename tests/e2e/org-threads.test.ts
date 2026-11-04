@@ -360,3 +360,21 @@ describe('a question for the user names which of their kinds it is', () => {
     expect((await move({}, null)).status).toBe(200)
   })
 })
+
+describe('a phone Follow up names its thread through POST /api/v1/sessions/:id/messages', () => {
+  it('is filed under that thread; a malformed thread id is ignored, never refused', async () => {
+    await typeIntoChat(LEAD_SID, 'Rename the export button on the phone')
+    const opened = (await threads()).find((t) => t.title === 'Rename the export button on the phone')
+    expect(opened).toBeTruthy()
+    const send = (body: unknown) => fetch(`${base}/api/v1/sessions/${LEAD_SID}/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const res = await send({ text: 'and keep its icon', threadId: opened!.id, messageId: 'qm-phone-follow-1' })
+    expect(res.status).toBe(202)
+    const after = (await threads()).find((t) => t.id === opened!.id)!
+    expect(after.messages.map((m) => [m.via, m.text])).toEqual([['chat', 'Rename the export button on the phone'], ['follow-up', 'and keep its icon']])
+    // An older or broken client's id: the send still goes, filed the way a plain message is.
+    expect((await send({ text: 'one more thing about exports', threadId: 'not-a-thread' })).status).toBe(202)
+    expect((await threads()).find((t) => t.id === opened!.id)!.messages.some((m) => m.text === 'one more thing about exports' && m.via === 'follow-up')).toBe(false)
+  })
+})

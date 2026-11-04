@@ -2548,9 +2548,15 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"? }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"?, "voice"?, "threadId"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
+  - `threadId` (additive, 2026-11) — a thread's `th-…` id when the person sent
+    this from that thread's Follow up (an Org node's Threads, `GET
+    /tasks/:id/threads`): the message is filed under that thread instead of the
+    one Walnut would pick. Any other value, or a session that is no Org node's,
+    is ignored, never refused. The primary box only; the companion relays the
+    words without it.
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
     will hear the answer read aloud (the phone's voice mode). The CLI also
     receives the `voice-reply` message hint after the text (a

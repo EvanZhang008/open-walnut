@@ -47,6 +47,11 @@ export function extractValidImages(raw: unknown): SessionImage[] {
 
 // ─── POST /sessions/:id/messages ────────────────────────────────────────────
 
+/** A thread id a phone's Follow up names (threads-model.ts `th-` ids), else null. */
+function threadIdOf(raw: unknown): string | null {
+  return typeof raw === 'string' && /^th-[a-f0-9]{6,32}$/.test(raw) ? raw : null
+}
+
 export async function postSessionMessage(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const sessionId = String(req.params.id ?? '')
@@ -171,6 +176,9 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       sentBy: routeSource('mobile', req.headers) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
       // A retry reuses its qm- id: an Org node's Threads file it once (core/org/thread-capture.ts).
       ...(clientMessageId ? { threadKey: clientMessageId } : {}),
+      // Additive: sent from a thread's Follow up on the phone, filed under that thread (the
+      // console's `session:send` threadId). Anything else is ignored, never refused.
+      ...(threadIdOf(req.body?.threadId) ? { threadId: req.body.threadId as string } : {}),
     })
     const cliText = outputMode.enqueueText
     const { sendMessageToSession, findQueuedMessage, settledLineUuid } = await import('../../core/session-message-queue.js')
