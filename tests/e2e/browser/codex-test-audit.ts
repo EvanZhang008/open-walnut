@@ -249,7 +249,9 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
               // slot back. A pick that closes the picker at once does that (CI run 41614274036).
               || /^\/api\/sessions\/[^/]+\/cost(?:\/compare)?$/.test(pathname)
               // Who-am-I, read at every page load: a reload cuts the previous one.
-              || pathname === '/api/v1/me'))
+              || pathname === '/api/v1/me'
+              // The sign-in cookie refresh, also sent at every page load (web/src/api/device-token.ts).
+              || pathname === '/api/devices/browser-session'))
           || (failure.method === 'POST' && pathname === '/api/browser-logs')
           // A draft save cut by a reload: pagehide flushes it again with keepalive (utils/drafts.ts).
           || (failure.method === 'PUT' && pathname === '/api/drafts')

@@ -308,7 +308,9 @@ test('N2-35: the sign-in page sends nothing but the sign-in probe, and writes no
   await expect(page.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
   // Past two of the deferred-start fallbacks (4 s each).
   await page.waitForTimeout(9_000)
-  const extra = calls.filter((c) => !/^GET \/api\/v1\/me$/.test(c) && !/^(GET|POST) \/api\/browser-logs$/.test(c))
+  // The sign-in probe is who-am-I plus the sign-in cookie read: a page with no token asks for
+  // the one its cookie holds before it shows the sign-in screen (web/src/api/device-token.ts).
+  const extra = calls.filter((c) => !/^GET \/api\/(?:v1\/me|devices\/browser-session)$/.test(c) && !/^(GET|POST) \/api\/browser-logs$/.test(c))
   expect(extra, JSON.stringify(calls)).toEqual([])
   expect(calls.filter((c) => !c.startsWith('GET ') && !c.includes('/api/browser-logs'))).toEqual([])
 })

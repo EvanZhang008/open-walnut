@@ -150,7 +150,8 @@ const OTHER_PANE_ENDPOINTS = [
   /^\/api\/usage\//,
   /^\/api\/calendar\/sources/,
   /^\/api\/plugin-sources/,
-  /^\/api\/devices/,
+  // The Devices pane's reads; the sign-in cookie read is every page's (web/src/api/device-token.ts).
+  /^\/api\/devices(?!\/browser-session$)/,
   /^\/api\/engines\/[^/]+\/settings/,
 ]
 
