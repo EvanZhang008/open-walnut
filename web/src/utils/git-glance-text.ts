@@ -118,12 +118,10 @@ export function changedChipTitle(glance: SessionGitGlance | null): string {
   let head = base;
   if (glance.changedFiles !== null && glance.changedFiles > 0) {
     head = `This session changed ${plural(glance.changedFiles, 'file')}`;
-    const where = s?.extraRepos ? 'its repos' : 'its repo';
+    // Two counts, two sentences: the repo's uncommitted files are not a part of the session's.
     if (s) {
       head += s.files === 0 ? ', all committed'
-        // More uncommitted than it changed: the rest came from outside the session.
-        : s.files > glance.changedFiles ? `. ${where[0]!.toUpperCase()}${where.slice(1)} ${s.extraRepos ? 'have' : 'has'} ${plural(s.files, 'uncommitted file')} (some changed outside this session)`
-        : ` (${s.files} still uncommitted in ${where})`;
+        : `. ${s.extraRepos ? 'Its repos have' : 'Its repo has'} ${plural(s.files, 'uncommitted file')}${s.files > glance.changedFiles ? ' (some changed outside this session)' : ''}`;
     }
     head += '. Click to see them in a full-screen diff alongside the chat.';
   } else if (glance.changedFiles === 0) {

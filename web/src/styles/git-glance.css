@@ -47,11 +47,10 @@
 .git-glance-line .git-glance-branch.git-glance-branch-split { min-width: 8ch; }
 /* Cut by BranchName at a whole character: it keeps that width. */
 .git-glance-branch-head.is-cut { flex: none; min-width: 0; text-overflow: clip; }
-/* A pill giving way (usePillFit): first the +/- lines; then the branch, the lines
-   taking its room back; then both. */
+/* A pill giving way (usePillFit): first the +/- lines, then the branch; the file
+   count and unpushed commits stay. */
 .git-glance-pill.git-glance-fit-1 > .git-glance-lines,
-.git-glance-pill:is(.git-glance-fit-2, .git-glance-fit-3) > :is(.git-glance-icon, .git-glance-branch),
-.git-glance-pill.git-glance-fit-3 > .git-glance-lines { display: none; }
+.git-glance-pill.git-glance-fit-2 > :is(.git-glance-icon, .git-glance-branch, .git-glance-lines) { display: none; }
 .git-glance-detached { font-variant-numeric: normal; }
 .git-glance-branch-tail { flex: none; }
 .git-glance-lines { display: inline-flex; gap: 3px; }
@@ -96,7 +95,11 @@
 /* The phone task list pins its pills' size (phone-pages.css); this one still gives way. */
 .app-shell-navigation .todo-panel .git-glance-pill.todo-item-due-pill { flex-shrink: 1; min-width: 0; max-width: 100%; }
 /* A search row: the pill shrinks (its branch first) rather than leaving the project's line. */
-html .home-navigation-scroll .todo-search-results .todo-item-title-row > .git-glance-pill { flex-shrink: 1; min-width: 0; overflow: hidden; }
+/* It takes the row's room before the project name does, up to its own width, and never
+   wraps (a wrap goes by the pill's full width, before any shrink): its branch cuts first. */
+html .home-navigation-scroll .todo-search-results .todo-item-title-row > .git-glance-pill { flex: 100 1 0px; max-width: max-content; min-width: 0; overflow: hidden; }
+/* Beside a git pill the project name keeps a short word's room (its full name is its tooltip). */
+html .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta]:has(> .todo-item-title-row > .git-glance-pill) > .todo-search-meta-row { min-width: 44px; }
 
 /* The phone search's result row: its own line under the title (12px: a phone's smallest text). */
 .phone-search-row .git-glance-pill { align-self: flex-start; height: 20px; margin-top: 2px; font-size: 12px; }
@@ -122,7 +125,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 .status-card-meta:has(.git-glance-pill) .todo-recent-ago { flex-shrink: 0; }
 /* A card gives way by what fits (usePillFit), not a width: once the branch is down
    to a few characters, the +/- lines go, then the branch; the counts stay. */
-.status-card-meta .git-glance-pill:is(.git-glance-fit-2, .git-glance-fit-3) { flex-shrink: 0; }
+.status-card-meta .git-glance-pill.git-glance-fit-2 { flex-shrink: 0; }
 
 /* Session row line and the Changed tab's strip. */
 .git-glance-line {

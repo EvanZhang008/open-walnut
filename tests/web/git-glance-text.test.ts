@@ -54,8 +54,8 @@ describe('titles', () => {
     expect(changedChipTitle(null)).toMatch(/^See the files this session changed/);
     // Set against git's count, which counts something else (what is not committed yet).
     expect(changedChipTitle(g([repo()], { changedFiles: 1 }))).toMatch(/^This session changed 1 file, all committed\. Click to see them/);
-    expect(changedChipTitle(g([repo({ files: 2 })], { changedFiles: 4 }))).toMatch(/^This session changed 4 files \(2 still uncommitted in its repo\)\./);
-    expect(changedChipTitle(g([repo({ files: 1 }), repo({ repoRoot: '/w/b' })], { changedFiles: 3 }))).toContain('(1 still uncommitted in its repos)');
+    expect(changedChipTitle(g([repo({ files: 2 })], { changedFiles: 4 }))).toMatch(/^This session changed 4 files\. Its repo has 2 uncommitted files\./);
+    expect(changedChipTitle(g([repo({ files: 1 }), repo({ repoRoot: '/w/b' })], { changedFiles: 3 }))).toContain('Its repos have 1 uncommitted file.');
     // More uncommitted than the session changed: never "13 files (14 still uncommitted)".
     expect(changedChipTitle(g([repo({ files: 14 })], { changedFiles: 13 }))).toMatch(/^This session changed 13 files\. Its repo has 14 uncommitted files \(some changed outside this session\)\./);
     expect(changedChipTitle(g([repo({ files: 0 })], { changedFiles: 0 }))).toMatch(/^This session has not changed any files yet\./);

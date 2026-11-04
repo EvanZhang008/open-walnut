@@ -1608,7 +1608,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const applyList = useCallback((res: SessionChangesResult, soft: boolean, all = false): boolean => {
     const prev = dataRef.current;
     if (soft && !all && prev && listShape(prev) === listShape(res)) return false;
-    if (soft && prev) {
+    // Any new list for the list on screen keeps what still holds, soft or not: the tab's
+    // own first read can land after the user opened a file and started a comment there
+    // (clearing every file's content unmounted the pane, and the comment with it).
+    if (prev && prev.sessionId === res.sessionId) {
       const before = new Map<string, string>();
       for (const g of prev.groups) for (const f of g.files) before.set(f.filePath, fileShape(f));
       for (const g of res.groups) for (const f of g.files) {

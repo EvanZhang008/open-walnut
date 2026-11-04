@@ -106,10 +106,9 @@ function BranchName({ text, split, fit = 0, detached = false }: { text: string; 
 }
 
 /** How much a pill gives way to fit its row (no overflow, no wrap below its row's
- *  project name): 0 everything, 1 without the +/- lines, 2 without the branch (the
- *  lines come back into the room it left), 3 the counts alone. The tooltip keeps
- *  every number. */
-function usePillFit(ref: RefObject<HTMLElement | null>, contentKey: string, max = 3): number {
+ *  project name): 0 everything, 1 without the +/- lines, 2 the counts alone (file
+ *  count and unpushed). The tooltip keeps every number. */
+function usePillFit(ref: RefObject<HTMLElement | null>, contentKey: string, max = 2): number {
   const room = useRoomVersion(ref);
   const [level, setLevel] = useState(0);
   useLayoutEffect(() => { setLevel(0); }, [contentKey, room]);

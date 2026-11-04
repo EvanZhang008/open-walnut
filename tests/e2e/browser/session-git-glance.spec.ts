@@ -61,6 +61,17 @@ test('the task row shows the branch, uncommitted files, +/- lines and the unpush
   expect(title).toContain(`branch ${GIT_GLANCE_BRANCH}, tracking origin/${GIT_GLANCE_BRANCH}`)
   expect(title).toContain('2 changed files not committed, 1 new')
   expect(title).toContain('1 commit not pushed')
+  // A pill that gave anything up (a cut branch, hidden lines) has used the row's room first:
+  // no wide gap is left beside the project name.
+  const room = await row.evaluate((el) => {
+    const pill = el.querySelector<HTMLElement>('.git-glance-pill')!
+    const meta = el.querySelector<HTMLElement>('.todo-search-meta-row')
+    const range = document.createRange()
+    if (meta) range.selectNodeContents(meta)
+    const textRight = meta ? range.getBoundingClientRect().right : pill.getBoundingClientRect().left
+    return { gaveWay: Number(pill.dataset.fit) > 0 || !!pill.querySelector('.is-cut'), gap: pill.getBoundingClientRect().left - textRight }
+  })
+  if (room.gaveWay) expect(room.gap, 'room left unused beside the project name').toBeLessThan(24)
 })
 
 test('the Changed chip counts what its tab lists, and the tab shows the git strip', async ({ page }) => {
@@ -68,7 +79,7 @@ test('the Changed chip counts what its tab lists, and the tab shows the git stri
   const chip = panel.getByTestId('session-changed-chip')
   // The number is there before the tab is ever opened, and its tooltip says what it counts.
   await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 20_000 })
-  expect(await chip.getAttribute('title')).toContain('This session changed 2 files (2 still uncommitted in its repo)')
+  expect(await chip.getAttribute('title')).toContain('This session changed 2 files. Its repo has 2 uncommitted files.')
   await chip.click()
   const diff = panel.locator('.session-diff-view')
   await expect(diff).toBeVisible()
@@ -168,4 +179,36 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
     message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${name2}`, name: 'Write', input: { file_path: file2, content: 'export const closed = 1\n' } }] },
   }) + '\n')
   await expect(chip.getByTestId('session-changed-count')).toHaveText(String(shown + 1), { timeout: 90_000 })
+})
+
+test('a comment started while the tab is still reading its list survives that read', async ({ page }) => {
+  test.setTimeout(120_000)
+  const repo = await repoPath(page)
+  const panel = await openPanel(page)
+  const chip = panel.getByTestId('session-changed-chip')
+  await expect(chip.getByTestId('session-changed-count')).toBeVisible({ timeout: 20_000 })
+  // The session writes just before the tab opens: the server's list is behind, so the
+  // tab's first read paints what it had and polls for the new one.
+  const name = `early-${Date.now()}.ts`
+  const file = path.join(repo, 'src', name)
+  await fs.writeFile(file, 'export const early = 1\n')
+  const jsonl = path.join(path.dirname(repo), '..', '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'), `${GIT_GLANCE_SESSION}.jsonl`)
+  await fs.appendFile(jsonl, JSON.stringify({
+    type: 'assistant', sessionId: GIT_GLANCE_SESSION, timestamp: new Date().toISOString(),
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_${name}`, name: 'Write', input: { file_path: file, content: 'export const early = 1\n' } }] },
+  }) + '\n')
+  await chip.click()
+  const diff = panel.locator('.session-diff-view')
+  // At once, before that read lands: open a file and start a comment.
+  await diff.locator('.session-diff-tree').getByText('app.ts', { exact: true }).click()
+  const pane = diff.locator('.session-diff-filepane[data-file-path$="/src/app.ts"]')
+  await expect(pane).toBeVisible({ timeout: 15_000 })
+  await pane.locator('.diff-gutter').first().click()
+  const box = pane.locator('.session-diff-comment-input')
+  await box.fill('typed while the list loads')
+  // The read lands (the new file is listed): the file, its comment and the words are all still there.
+  await expect(diff.locator('.session-diff-tree').getByText(name)).toBeVisible({ timeout: 30_000 })
+  await expect(pane).toBeVisible()
+  await expect(box).toHaveValue('typed while the list loads')
+  await pane.locator('.session-diff-comment-cancel').click()
 })
