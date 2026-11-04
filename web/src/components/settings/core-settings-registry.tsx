@@ -3,6 +3,7 @@ import type { Config } from '@open-walnut/core'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { AudioCaptureSection } from './sections/AudioCaptureSection'
 import { BackupSection } from './sections/BackupSection'
+import { BrowserSection } from './sections/BrowserSection'
 import { BugReportSection } from './sections/BugReportSection'
 import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
@@ -260,6 +261,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'Your password vault: auto-lock, agent access, master password, recovery kit and export.',
     keywords: ['password', 'vault', 'master password', 'secret key', 'recovery', 'forgot', 'auto-lock', 'export', 'agents', 'autofill'],
     render: ({ config, saveSection }) => <PasswordsSection config={config} onSave={saveSection} />,
+  },
+  {
+    owner: 'walnut', id: 'browser', label: 'Browser extension', title: 'Browser extension', group: 'configure',
+    icon: 'globe', tint: '#0A84FF',
+    description: 'The Walnut extension for Chrome and Firefox: fill and save logins, and let agents use your browser.',
+    keywords: ['browser', 'extension', 'chrome', 'firefox', 'autofill', 'agents', 'relay', 'sites', 'tabs'],
+    render: () => <BrowserSection />,
   },
   {
     owner: 'walnut', id: 'backup', label: 'S3 Backup', title: 'S3 Backup', group: 'configure',

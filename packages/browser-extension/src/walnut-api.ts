@@ -82,10 +82,10 @@ async function setVaultSession(token: string | null): Promise<void> {
 }
 
 /** `quiet`: a read the extension makes by itself, which never keeps the vault unlocked. */
-async function call<T>(method: string, path: string, body?: unknown, opts: { conn?: Connection; timeoutMs?: number; noAuth?: boolean; quiet?: boolean } = {}): Promise<T> {
+export async function call<T>(method: string, path: string, body?: unknown, opts: { conn?: Connection; timeoutMs?: number; noAuth?: boolean; quiet?: boolean; noSession?: boolean } = {}): Promise<T> {
   const conn = opts.conn ?? await connection()
   if (!conn) throw new ApiError('The extension is not connected to Walnut yet.', 0, 'not_connected')
-  const session = await vaultSession()
+  const session = opts.noSession ? null : await vaultSession()
   let res: Response
   try {
     res = await fetch(`${conn.serverUrl}/api/v1${path}`, {

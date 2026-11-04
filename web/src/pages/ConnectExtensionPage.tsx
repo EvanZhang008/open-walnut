@@ -85,7 +85,7 @@ export function ConnectExtensionPage() {
               {phase === 'connecting' ? 'Connecting…' : 'Connect'}
             </button>
             {error && <p className="pw-ext-err" role="alert">{error}</p>}
-            <p className="pw-ext-fine">You can remove it any time in Settings, Passwords.</p>
+            <p className="pw-ext-fine">You can remove it any time in Settings, Browser extension.</p>
           </>
         )}
         {phase === 'connected' && (

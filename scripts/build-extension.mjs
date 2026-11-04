@@ -45,8 +45,11 @@ export function manifestFor(browser) {
     action: { default_title: 'Walnut', default_popup: 'popup.html', default_icon: { 16: 'icons/16.png', 32: 'icons/32.png' } },
     background: browser === 'chrome' ? { service_worker: 'background.js' } : { scripts: ['background.js'] },
     content_scripts: [{ matches: SITES, js: ['content.js'], all_frames: true, run_at: 'document_idle' }],
-    permissions: ['storage'],
-    host_permissions: SITES,
+    // alarms: agents in this browser (agent.ts) come back after the background was stopped.
+    permissions: ['storage', 'alarms'],
+    // Every web page (the same warning as http and https alone): a screenshot of an agent's
+    // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.
+    host_permissions: ['<all_urls>'],
     // The in-page menu and save bar are this extension's pages framed into a site.
     web_accessible_resources: [{ resources: ['menu.html', 'savebar.html'], matches: SITES }],
     commands: {

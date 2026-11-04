@@ -1,0 +1,344 @@
+/**
+ * Agents in the person's own browser (core/browser-control/hub.ts):
+ *
+ *   POST /api/v1/browser/poll     the extension asks for work (its device token only)
+ *   POST /api/v1/browser/result   the extension answers one command
+ *   POST /api/v1/browser/off      the extension stopped letting agents in
+ *   POST /api/v1/browser/act      an agent's command: { action, tab?, device?, ...args }
+ *   GET  /api/v1/browser/status   connected browsers, the site setting, the allowed sites
+ *   PUT  /api/v1/browser/settings the person's choice: { mode?, removeSite? }
+ *
+ * A site an agent has not used before asks the person first (a Walnut approval), unless they
+ * let agents use any site; the act answers 202 `needs_ok` with the approval, and the same act
+ * after the person approved goes through. Walnut's own pages and the browser's are never an
+ * agent's (the extension refuses them as well).
+ */
+import { Router, type Request, type Response, type NextFunction } from 'express'
+import { requestOrigin } from '../middleware/request-origin.js'
+import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
+import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { ambientTestRun } from '../../core/test-run.js'
+import { log } from '../../logging/index.js'
+
+export const browserV1Router = Router()
+
+function header(req: Request, name: string): string | undefined {
+  const v = req.headers[name]
+  return typeof v === 'string' && v ? v : undefined
+}
+
+const hub = () => import('../../core/browser-control/hub.js')
+
+/**
+ * Where Walnut itself answers, besides this machine's loopback (the extension knows that one):
+ * its tunnel, the cloud companion, this Mac's LAN and Tailscale addresses. A page there is the
+ * person's Walnut, so no agent opens it, whatever it serves (the app, JSON, a file).
+ */
+let ownCache: { at: number; list: string[] } | null = null
+async function walnutAddresses(req: Request): Promise<string[]> {
+  if (ownCache && Date.now() - ownCache.at < 60_000) return ownCache.list
+  const out = new Set<string>()
+  const add = (u: string | undefined, withPort: boolean) => {
+    if (!u) return
+    try { const x = new URL(u); out.add(withPort && x.port ? `${x.hostname}:${x.port}` : x.hostname) } catch { /* not a URL */ }
+  }
+  try {
+    const { currentExposeStatus } = await import('../../core/expose/status.js')
+    add(currentExposeStatus().url, false)
+  } catch { /* no tunnel */ }
+  try {
+    const p = await import('../../core/pairing-targets.js')
+    add((await p.getCloudPairingEndpointAsync())?.origin, false)
+    const port = req.socket.localPort ?? 0
+    for (const t of await p.getPairingTargets(`http://localhost:${port}`, port)) add(t.origin, t.kind !== 'cloud')
+  } catch { /* none known */ }
+  ownCache = { at: Date.now(), list: [...out].slice(0, 50) }
+  return ownCache.list
+}
+
+function isWalnutAddress(list: string[], url: string): boolean {
+  try {
+    const u = new URL(url)
+    return list.includes(u.hostname) || list.includes(`${u.hostname}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`)
+  } catch { return false }
+}
+const sites = () => import('../../core/browser-control/sites.js')
+
+async function run(res: Response, next: NextFunction, work: () => Promise<unknown>): Promise<void> {
+  try {
+    const out = await work()
+    if (res.headersSent) return
+    res.json(out)
+  } catch (err) {
+    const { BrowserError } = await hub()
+    if (err instanceof BrowserError) { res.status(err.status).json({ error: err.message, code: err.code, ...err.extra }); return }
+    next(err)
+  }
+}
+
+/** The extension's own device (extension-<hex>), from its token. */
+function extensionOf(req: Request, res: Response): string | null {
+  const d = (req as Request & { deviceName?: string }).deviceName
+  if (d && /^extension-[0-9a-f]{6}$/.test(d)) return d
+  res.status(403).json({ error: 'Only the Walnut browser extension polls here, with its own token.', code: 'not_extension' })
+  return null
+}
+
+/** A person's own request: no session, no agent kind, from this machine or their own browser. */
+function personCaller(req: Request): boolean {
+  const origin = requestOrigin(req)
+  return !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER) && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
+}
+
+/** A person, not an agent: what agents may do in the browser is theirs to set. */
+function personOnly(req: Request, res: Response): boolean {
+  const ok = personCaller(req)
+  if (!ok) res.status(403).json({ error: 'Only a person changes which sites agents may use in their browser.', code: 'human_only' })
+  return ok
+}
+
+async function deviceLabel(device: string): Promise<string> {
+  try {
+    const { listDevices } = await import('../../core/device-auth.js')
+    const d = (await listDevices()).find((x) => x.name === device) as { info?: { deviceName?: string } } | undefined
+    return d?.info?.deviceName || device
+  } catch { return device }
+}
+
+browserV1Router.post('/browser/poll', (req, res, next) => {
+  const device = extensionOf(req, res)
+  if (!device) return
+  void run(res, next, async () => {
+    const b = (req.body ?? {}) as { browser?: unknown; version?: unknown; caps?: unknown; tabs?: unknown; waitMs?: unknown }
+    const h = await hub()
+    const tabs = Array.isArray(b.tabs) ? (b.tabs as Array<{ id?: unknown; owner?: unknown }>).filter((t) => typeof t?.id === 'number' && typeof t?.owner === 'string').map((t) => ({ id: t.id as number, owner: t.owner as string })).slice(0, 200) : undefined
+    const label = await deviceLabel(device)
+    let gone = false
+    let polling: Promise<import('../../core/browser-control/hub.js').WireCommand[]> | undefined
+    res.on('close', () => { if (!res.writableFinished) { gone = true; if (polling) h.dropPoll(device, polling) } })
+    // Gone before it asked: nothing is handed to it.
+    if (res.destroyed || req.socket.destroyed) return undefined
+    polling = h.poll({
+      device,
+      label,
+      browser: typeof b.browser === 'string' ? b.browser.slice(0, 40) : 'browser',
+      version: typeof b.version === 'string' ? b.version.slice(0, 40) : '',
+      caps: Array.isArray(b.caps) ? b.caps.filter((c): c is string => typeof c === 'string').slice(0, 20) : [],
+      ...(tabs ? { tabs } : {}),
+    }, typeof b.waitMs === 'number' ? b.waitMs : undefined)
+    const commands = await polling
+    // The extension stopped listening (its background was stopped): the next poll takes them.
+    if (gone) { h.requeue(device, commands); return undefined }
+    return { commands }
+  })
+})
+
+browserV1Router.post('/browser/result', (req, res, next) => {
+  const device = extensionOf(req, res)
+  if (!device) return
+  void run(res, next, async () => {
+    const b = (req.body ?? {}) as { id?: unknown; ok?: unknown; result?: unknown; error?: { message?: string; code?: string; extra?: Record<string, unknown> } }
+    const taken = (await hub()).answer(device, String(b.id ?? ''), b.ok === true, b.result, b.error)
+    return { ok: taken }
+  })
+})
+
+browserV1Router.post('/browser/off', (req, res, next) => {
+  const device = extensionOf(req, res)
+  if (!device) return
+  void run(res, next, async () => {
+    (await hub()).disconnect(device)
+    log.web.info('browser control off', { device })
+    return { ok: true }
+  })
+})
+
+browserV1Router.get('/browser/status', (_req, res, next) => {
+  void run(res, next, async () => {
+    const f = await (await sites()).readSites()
+    return { browsers: (await hub()).connected(), mode: f.mode, sites: f.sites }
+  })
+})
+
+browserV1Router.put('/browser/settings', (req, res, next) => {
+  if (!personOnly(req, res)) return
+  void run(res, next, async () => {
+    const s = await sites()
+    const b = (req.body ?? {}) as { mode?: unknown; removeSite?: unknown }
+    let f = await s.readSites()
+    if (b.mode === 'ask' || b.mode === 'any') f = await s.setMode(b.mode)
+    if (typeof b.removeSite === 'string' && b.removeSite) f = await s.removeSite(b.removeSite)
+    return { mode: f.mode, sites: f.sites }
+  })
+})
+
+// ── an agent's command ──
+
+const ACTIONS = ['tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait', 'screenshot'] as const
+type Action = typeof ACTIONS[number]
+/** Actions that go to a page, so the page's site must be allowed. */
+const ON_TAB = new Set<Action>(['navigate', 'back', 'close', 'snapshot', 'text', 'click', 'type', 'select', 'press', 'scroll', 'wait', 'screenshot'])
+const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000 }
+
+/** The tab each owner used last, so `tab` may be left out. */
+const lastTab = new Map<string, { device: string; tab: number }>()
+/** A site an owner asked the person for, until it is decided. */
+const siteAsks = new Map<string, string>()
+/** A site the person refused an owner, until when. */
+const siteDenied = new Map<string, number>()
+
+function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of ['url', 'ref', 'x', 'y', 'text', 'clear', 'submit', 'value', 'key', 'direction', 'amount', 'ms', 'full', 'max']) {
+    if (b[k] !== undefined) out[k] = b[k]
+  }
+  if (typeof out.text === 'string') out.text = (out.text as string).slice(0, 20_000)
+  if (typeof out.url === 'string') out.url = (out.url as string).slice(0, 4000)
+  return out
+}
+
+/**
+ * The site is allowed, or the person is asked: approved → allowed from now on (and this act
+ * goes through); still pending → the same ask again (held up to `wait_ms` for the answer);
+ * denied → refused, and not asked again for an hour.
+ */
+async function siteGate(req: Request, owner: string, url: string, holdMs: number): Promise<{ ok: true } | { ok: false; status: number; body: Record<string, unknown> }> {
+  const s = await sites()
+  const site = s.siteOf(url)
+  if (!site) return { ok: false, status: 400, body: { error: 'Agents use web pages only (http or https).', code: 'not_a_web_page' } }
+  if (s.isAllowed(await s.readSites(), url)) return { ok: true }
+  const key = `${owner}\0${site}`
+  const denied = { ok: false as const, status: 403, body: { error: `The person did not let agents use ${site}. Do not ask again unless they say so.`, code: 'site_denied', site } }
+  if ((siteDenied.get(key) ?? 0) > Date.now()) return denied
+  const store = await import('../../core/approvals/store.js')
+  let id = siteAsks.get(key)
+  let a = id ? await store.getApproval(id) : undefined
+  if (!a || (a.status !== 'pending' && a.status !== 'approved' && a.status !== 'denied')) {
+    const { requesterOf } = await import('./approvals-v1.js')
+    const requester = await requesterOf(req, (req.body ?? {}) as Record<string, unknown>)
+    const made = await store.createApproval({
+      what: `Let Walnut agents use ${site} in your browser?`,
+      detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
+        + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
+      mode: 'tap', timeoutMs: 10 * 60_000, requester, testRun: ambientTestRun(),
+    })
+    id = made.approval.id
+    siteAsks.set(key, id)
+    a = await store.getApproval(id)
+  }
+  // The asker may hold for the answer (wait_ms), a second at a time.
+  const until = Date.now() + Math.max(0, Math.min(holdMs, Number((req.body as { wait_ms?: unknown } | undefined)?.wait_ms) || 0))
+  while (a?.status === 'pending' && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1000))
+    a = await store.getApproval(id!)
+  }
+  if (a?.status === 'approved') {
+    siteAsks.delete(key)
+    await s.allowSite(site, `approval:${id}`)
+    return { ok: true }
+  }
+  if (a?.status === 'denied') {
+    siteAsks.delete(key)
+    siteDenied.set(key, Date.now() + 60 * 60_000)
+    return denied
+  }
+  return { ok: false, status: 202, body: needsOk(site, id!) }
+}
+
+function needsOk(site: string, approvalId: string): Record<string, unknown> {
+  return {
+    status: 'needs_ok', site, approvalId,
+    error: `Waiting for the person to let agents use ${site} (a notification on their Mac and phone).`,
+    code: 'site_needs_ok',
+  }
+}
+
+/** The whole act answers within this, under the op's own 75 s. */
+const ACT_BUDGET_MS = 70_000
+
+browserV1Router.post('/browser/act', (req, res, next) => {
+  void run(res, next, async () => {
+    const deadline = Date.now() + ACT_BUDGET_MS
+    const left = () => deadline - Date.now()
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const action = String(b.action ?? '') as Action
+    const h = await hub()
+    if (!ACTIONS.includes(action)) throw new h.BrowserError(`Unknown action "${action}". One of: ${ACTIONS.join(', ')}.`, 400, 'bad_action')
+    // What a test run does must stay inside Walnut: the person's browser is not.
+    if (ambientTestRun()) throw new h.BrowserError('A test run does not use the person\'s browser.', 409, 'test_run')
+    const { requesterOf } = await import('./approvals-v1.js')
+    const requester = await requesterOf(req, b)
+    // A task's tabs are its own; a caller Walnut cannot place (a script, an agent outside a
+    // task) shares one set of tabs apart from the person's own.
+    const owner = requester.taskId ? `task:${requester.taskId}` : requester.sessionId ? `session:${requester.sessionId}`
+      : personCaller(req) ? 'person' : 'agent'
+    const s = await sites()
+    const args = cleanArgs(b)
+
+    let tab: number | undefined = typeof b.tab === 'number' ? b.tab : typeof b.tab === 'string' && /^\d+$/.test(b.tab) ? Number(b.tab) : undefined
+    // A tab is in one browser: its commands go there, whichever browser polled last.
+    const last = lastTab.get(owner)
+    const live = new Set(h.connected().map((x) => x.device))
+    const lastHolds = !!last && live.has(last.device) && h.tabOwner(last.device, tab ?? last.tab) === owner
+    const held = typeof b.device === 'string' ? undefined
+      : lastHolds ? last!.device
+        : ON_TAB.has(action) || action === 'tabs' ? h.deviceForTab(owner, tab) : undefined
+    const c = h.pickController(typeof b.device === 'string' ? b.device : held)
+    if (ON_TAB.has(action)) {
+      if (tab === undefined) {
+        const mine = h.tabsOf(c.device, owner)
+        tab = last && last.device === c.device && mine.includes(last.tab) ? last.tab : mine.length === 1 ? mine[0] : undefined
+        if (tab === undefined) {
+          throw new h.BrowserError(mine.length ? `Say which tab: ${mine.join(', ')}.` : 'Open a page first (action "open"): agents act only in tabs they opened.', 400, 'which_tab', { tabs: mine })
+        }
+      }
+      const o = h.tabOwner(c.device, tab)
+      if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task.' : 'That tab is not one an agent opened (or the person took it back with Stop).', 403, 'not_your_tab')
+      args.tab = tab
+    }
+    const own = await walnutAddresses(req)
+    if ((action === 'open' || action === 'navigate') && typeof args.url === 'string') {
+      if (isWalnutAddress(own, args.url)) throw new h.BrowserError('Agents never use Walnut\'s own pages in the browser: use Walnut\'s ops instead.', 403, 'walnut_page')
+      const g = await siteGate(req, owner, args.url, Math.min(25_000, left() - 45_000))
+      if (!g.ok) { res.status(g.status).json(g.body); return undefined }
+    }
+    if (action === 'open') { args.owner = owner; if (requester.taskTitle) args.who = requester.taskTitle.slice(0, 80) }
+
+    let f = await s.readSites()
+    const go = () => {
+      const ms = Math.min(TIMEOUT[action] ?? h.DEFAULT_COMMAND_MS, left())
+      if (ms < 5000) throw new h.BrowserError('Out of time for this call: call it again.', 504, 'browser_timeout')
+      return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own }, ms)
+    }
+    let result: unknown
+    try {
+      result = await go()
+    } catch (err) {
+      // The page went to a site not allowed yet (a link, a redirect): ask, as for an open.
+      if (err instanceof h.BrowserError && err.code === 'site_not_allowed' && typeof err.extra.url === 'string') {
+        const g = await siteGate(req, owner, err.extra.url, 0)
+        if (!g.ok) { res.status(g.status).json(g.body); return undefined }
+        f = await s.readSites()
+        result = await go()
+      } else throw err
+    }
+    const r = (result ?? {}) as { tab?: number; tabs?: Array<{ id: number; owner?: string }>; released?: boolean }
+    if (action === 'open' && typeof r.tab === 'number') h.ownTab(c.device, r.tab, owner)
+    if (action === 'close' && tab !== undefined) h.releaseTab(c.device, tab)
+    const used = action === 'open' ? r.tab : tab
+    if (typeof used === 'number' && action !== 'close') lastTab.set(owner, { device: c.device, tab: used })
+    log.web.info('browser act', { action, device: c.device, owner, tab: used })
+    if (action === 'tabs') {
+      const all = Array.isArray(r.tabs) ? r.tabs : []
+      return { browser: c.label, tabs: all.filter((t) => t.owner === owner).map(({ owner: _o, ...t }) => t) }
+    }
+    return { browser: c.label, ...(r as Record<string, unknown>) }
+  })
+})
+
+export function _resetBrowserRoutesForTesting(): void {
+  ownCache = null
+  lastTab.clear()
+  siteAsks.clear()
+  siteDenied.clear()
+}

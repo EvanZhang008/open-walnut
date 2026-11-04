@@ -76,7 +76,9 @@ async function unlockView(st: State): Promise<HTMLElement> {
       h('span', { class: 'big-icon' }, icon('keyBig')),
       h('h2', {}, 'Set up Passwords first'),
       h('p', {}, 'Your Walnut has no password vault yet. Make one in Walnut, then come back.'),
-      h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut Passwords'))
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut Passwords'),
+      // Agents in this browser need no vault: their switch is in Settings.
+      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings'))
   }
   const pw = h('input', { class: 'input', type: 'password', id: 'pw', autocomplete: 'current-password', 'aria-label': 'Master password', placeholder: 'Master password' })
   const sk = h('input', { class: 'input mono', id: 'sk', 'aria-label': 'Secret Key', placeholder: 'W1-XXXXXX-…', spellcheck: 'false', style: 'margin-top:8px' })
@@ -106,7 +108,8 @@ async function unlockView(st: State): Promise<HTMLElement> {
       h('span', { class: 'big-icon' }, icon('lockBig')),
       h('h2', {}, 'Walnut is locked'),
       h('p', {}, `Unlock to fill passwords${st.serverUrl ? ` from ${new URL(st.serverUrl).host}` : ''}.`)),
-    h('div', { class: 'pane', style: 'padding-top:0' }, form))
+    h('div', { class: 'pane', style: 'padding-top:0' }, form,
+      h('button', { class: 'btn btn-quiet', type: 'button', style: 'margin-top:10px;width:100%', onclick: () => void showSettings(st) }, 'Settings')))
 }
 
 // ── unlocked ──
@@ -193,7 +196,7 @@ async function vaultView(st: State): Promise<HTMLElement> {
     h('div', { class: 'foot' },
       h('button', { class: 'btn', type: 'button', onclick: () => void showGenerator(st) }, 'Generator'),
       h('button', { class: 'btn', type: 'button', onclick: () => void ask({ type: 'open-walnut' }) }, 'Open Walnut'),
-      h('button', { class: 'btn', type: 'button', onclick: () => showSettings(st) }, 'Settings')))
+      h('button', { class: 'btn', type: 'button', onclick: () => void showSettings(st) }, 'Settings')))
 }
 
 // ── the generator ──
@@ -237,9 +240,40 @@ function showGenerator(st: State): void {
 
 // ── settings ──
 
-function showSettings(st: State): void {
+/** Agents in this browser: off until the person turns it on here. */
+async function agentSection(): Promise<HTMLElement> {
+  const st = await ask<{ on: boolean; tabs: number; screenshots: boolean }>({ type: 'agent-get' })
+  const box = h('input', { type: 'checkbox', id: 'agents', 'data-testid': 'popup-agents', role: 'switch' }) as HTMLInputElement
+  box.checked = !!st.on
+  const note = h('p', { class: 'muted', style: 'margin:6px 4px 0;font-size:12px' },
+    st.on
+      ? `On. Agents open their own tabs in a separate Walnut window${st.tabs ? ` (${st.tabs} open now)` : ''}, never yours. A site they have not used asks you first; manage sites in Walnut, Settings, Browser extension.`
+      : 'Your Walnut agents can open pages in this browser (signed in as you), read them, click and type. They use only tabs they open, in their own window, and ask you before each new site.')
+  const err = errLine()
+  box.onchange = async () => {
+    err.textContent = ''
+    if (box.checked) {
+      const r = await ask({ type: 'agent-on' })
+      if (!r.ok) { box.checked = false; err.textContent = r.error ?? 'Could not turn it on.'; return }
+    } else {
+      await ask({ type: 'agent-off' })
+    }
+    const fresh = await agentSection()
+    wrap.replaceWith(fresh)
+  }
+  const wrap = h('div', {},
+    h('div', { class: 'section-label' }, 'Agents'),
+    h('label', { class: 'row switch-row', for: 'agents' },
+      h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let Walnut agents use this browser'), h('span', { class: 'row-sub' }, st.on ? 'On' : 'Off')),
+      box),
+    note, err)
+  return wrap
+}
+
+async function showSettings(st: State): Promise<void> {
   const off = h('button', { class: 'btn', type: 'button', 'data-testid': 'popup-disconnect' }, 'Disconnect this browser')
   off.onclick = async () => { await ask({ type: 'disconnect' }); void render() }
+  const agents = await agentSection()
   root.replaceChildren(h('div', {},
     h('div', { class: 'top' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Back', onclick: () => void render() }, '‹'),
@@ -248,6 +282,7 @@ function showSettings(st: State): void {
       h('div', { class: 'section-label' }, 'Connected to'),
       h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, st.serverUrl ?? ''), h('span', { class: 'row-sub' }, st.device ?? ''))),
+      agents,
       h('div', { class: 'section-label' }, 'Fill shortcut'),
       h('p', { class: 'muted', style: 'margin:0 4px' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page, or opens the menu when there are several.'),
       h('div', { style: 'height:16px' }), off)))

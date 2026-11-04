@@ -5,7 +5,8 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean }
+export interface Tab { id?: number; url?: string; title?: string; windowId?: number; active?: boolean; status?: string }
+export interface Win { id?: number; tabs?: Tab[] }
 export interface Sender { tab?: Tab; frameId?: number; url?: string; origin?: string; id?: string }
 
 interface Event<F> { addListener(f: F): void; removeListener(f: F): void }
@@ -17,6 +18,8 @@ export interface ExtApi {
     sendMessage(msg: unknown): Promise<any>
     onMessage: Event<(msg: any, sender: Sender, sendResponse: (r: unknown) => void) => boolean | void | Promise<unknown>>
     onInstalled: Event<(d: { reason: string }) => void>
+    onStartup?: Event<() => void>
+    getPlatformInfo(): Promise<unknown>
     openOptionsPage?(): Promise<void>
     getManifest(): { version: string; name: string }
   }
@@ -26,15 +29,27 @@ export interface ExtApi {
     onChanged: Event<(changes: Record<string, { newValue?: unknown; oldValue?: unknown }>, area: string) => void>
   }
   tabs: {
-    query(q: { active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean }): Promise<Tab[]>
+    query(q: { active?: boolean; currentWindow?: boolean; lastFocusedWindow?: boolean; windowId?: number }): Promise<Tab[]>
     get(tabId: number): Promise<Tab>
     sendMessage(tabId: number, msg: unknown, opts?: { frameId?: number }): Promise<any>
-    create(o: { url: string; active?: boolean }): Promise<Tab>
-    update(tabId: number, o: { active?: boolean }): Promise<Tab>
+    create(o: { url: string; active?: boolean; windowId?: number }): Promise<Tab>
+    update(tabId: number, o: { active?: boolean; url?: string }): Promise<Tab>
     remove(tabId: number): Promise<void>
+    goBack(tabId: number): Promise<void>
+    captureVisibleTab(windowId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string>
     onRemoved: Event<(tabId: number) => void>
+    onUpdated: Event<(tabId: number, change: { status?: string; url?: string }, tab: Tab) => void>
   }
-  windows: { create(o: { url: string; type: string; width: number; height: number; focused?: boolean }): Promise<unknown> }
+  windows: {
+    create(o: { url: string; type?: string; width?: number; height?: number; focused?: boolean }): Promise<Win>
+    get(id: number, o?: { populate?: boolean }): Promise<Win>
+    onRemoved: Event<(windowId: number) => void>
+  }
+  permissions: {
+    request(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
+    contains(p: { origins?: string[]; permissions?: string[] }): Promise<boolean>
+  }
+  alarms: { create(name: string, o: { periodInMinutes: number }): Promise<void> | void; onAlarm: Event<(a: { name: string }) => void> }
   action: { openPopup?(): Promise<void>; setBadgeText(o: { text: string; tabId?: number }): Promise<void>; setBadgeBackgroundColor(o: { color: string }): Promise<void> }
   commands?: { onCommand: Event<(name: string, tab?: Tab) => void> }
 }

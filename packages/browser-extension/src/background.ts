@@ -16,6 +16,7 @@ import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/
 import type { VaultItem, VaultItemSummary } from '../../../src/core/vault/types'
 import type { FormKind } from './form-detect'
 import { tabStore } from './tab-store'
+import { agentMessage, initAgent, isAgentTab } from './agent'
 
 type Reply = Record<string, unknown> & { ok: boolean }
 const fail = (err: unknown): Reply => err instanceof ApiError
@@ -248,6 +249,7 @@ const ALLOWED: Record<string, SenderKind> = {
   'connect-hello': 'content', 'connect-code': 'content',
   'menu-data': 'menu', 'menu-fill': 'menu', 'menu-generate': 'menu', 'menu-unlock': 'menu', 'menu-connect': 'menu', 'menu-close': 'menu', 'menu-size': 'menu',
   'savebar-data': 'savebar', 'savebar-action': 'savebar', 'savebar-size': 'savebar',
+  'agent-get': 'popup', 'agent-on': 'popup', 'agent-off': 'popup', 'agent-stop': 'content',
 }
 
 /** The open menu of the sender's tab, when the message carries its nonce. */
@@ -270,6 +272,7 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   const tabId = sender.tab?.id
   switch (msg.type) {
     // popup
+    case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': return agentMessage(msg.type, sender)
     case 'state': {
       // The popup opening is when to find out the person removed this extension in Settings
       // (a refusal forgets the connection, so the popup asks to connect again).
@@ -355,7 +358,9 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
         const p = await pendingSave.get(tabId)
         if (p && Date.now() - p.at < PENDING_MS && (siteOf(p.url) === siteOf(page) || Date.now() - p.at < ELSEWHERE_MS)) barNonce = p.nonce
       }
-      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, ...(barNonce ? { barNonce } : {}) }
+      // An agent's tab wears its frame and Stop button (top frame only).
+      const agent = sender.frameId === 0 ? await isAgentTab(tabId) : undefined
+      return { ok: true, connected: st.connected, unlocked: st.unlocked, count, ...(barNonce ? { barNonce } : {}), ...(agent ? { agent: { who: agent.who } } : {}) }
     }
     case 'frame-ready': {
       if (tabId === undefined || sender.frameId === undefined) return { ok: false }
@@ -540,6 +545,8 @@ ext.commands?.onCommand.addListener((name, tab) => {
     }
   })().catch(() => undefined)
 })
+
+initAgent({ isWalnutPage })
 
 ext.runtime.onInstalled.addListener(() => {
   // Content scripts never read the vault session (Chrome's default; Firefox keeps session storage from them too).

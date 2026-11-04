@@ -121,11 +121,17 @@ function makeOwner(auth: LockedAuth, target: DeviceRecord): string[] {
  * token ONCE: it is never stored or shown again. 128-bit random, 32 hex chars.
  * `owner`: it is the Mac this cloud companion belongs to from now on.
  */
+/** `extension-<hex>` is only ever the Walnut browser extension (agents' browser commands go to it). */
+function refuseExtensionName(name: string, extension: boolean | undefined): void {
+  if (!extension && /^extension-/i.test(name)) throw new Error('Device names starting with "extension-" are kept for the Walnut browser extension: connect it from its popup.')
+}
+
 export async function createDevice(
   name: string,
   opts?: { kind?: 'machine'; owner?: boolean },
 ): Promise<{ name: string; token: string; createdAt: string }> {
   validateDeviceName(name)
+  refuseExtensionName(name, false)
   return updateAuth((auth) => {
     if (auth.devices.some((d) => d.name === name)) {
       throw new Error(`Device "${name}" already exists`)
@@ -150,9 +156,10 @@ export async function createDevice(
  */
 export async function createDeviceAs(
   name: string,
-  opts: { by: DeviceActor; kind?: 'machine' },
+  opts: { by: DeviceActor; kind?: 'machine'; extension?: boolean },
 ): Promise<{ name: string; token: string; createdAt: string }> {
   validateDeviceName(name)
+  refuseExtensionName(name, opts.extension)
   return updateAuth((auth) => {
     if (auth.devices.some((d) => d.name === name)) {
       throw new Error(`Device "${name}" already exists`)

@@ -167,7 +167,7 @@ machine; no password or site leaves it.
 `packages/browser-extension` is one source for Chrome (and Edge, Brave, Arc) and Firefox (128
 or later), built by `bun run extension:build` (part of `web:build` and of the compiled release
 build) into `dist/extension/{chrome,firefox}` and the downloads this Walnut serves at
-`/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Passwords, Browser extension shows
+`/downloads/walnut-extension-{chrome,firefox}.zip`. Settings, Browser extension shows
 how to load it and lists the connected ones with Remove.
 
 **Connecting.** The popup's Connect opens `<walnut>/connect-extension` in a tab it remembers
@@ -254,6 +254,8 @@ published it loads as a temporary add-on (about:debugging), which lasts until Fi
 Tests: `tests/e2e/browser/extension-passwords.spec.ts` (Chromium with the extension loaded, test
 sites on `*.example.test`, the attacks above included), `tests/e2e/browser/extension-form-detect.spec.ts`
 (the form shapes), `tests/scripts/build-extension.test.ts`, and the server side in `tests/e2e/vault.test.ts`.
+
+**Agents in the browser.** The same extension can let Walnut agents work in tabs of their own, on sites the person approves; it is off until they turn it on in the popup. See [Agents in your browser](browser-control.md).
 
 ## Agents
 

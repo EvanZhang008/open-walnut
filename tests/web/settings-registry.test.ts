@@ -29,7 +29,7 @@ const EXPECTED_IDS = [
   // Triage, which reads only Important mail when grouping is on.
   // Org (2026-11-03): the switch that turns Main and the VPs off.
   // Passwords (2026-11-03): the vault's auto-lock, agent access, master password and export.
-  'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'passwords', 'backup',
+  'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'passwords', 'browser', 'backup',
   // Phones & Cloud: `devices` is the entry; its four tabs are panes of their own
   // (`tabOf: 'devices'`), the Cloud companion one keeping the old `#cloud` link.
   'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'devices-phones', 'remote-hosts', 'advanced',

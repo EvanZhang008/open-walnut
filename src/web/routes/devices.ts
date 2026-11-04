@@ -388,6 +388,12 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
       res.status(400).json({ error: 'name is required' })
       return
     }
+    // `extension-<hex>` names only the Walnut browser extension, paired through /browser-pair:
+    // agents' browser commands go to the device of that name (routes/browser-v1.ts).
+    if (/^extension-/i.test(name)) {
+      res.status(400).json({ error: 'Names starting with "extension-" are kept for the Walnut browser extension: connect it from its popup.', code: 'reserved_name' })
+      return
+    }
     // On the companion a name that already is a machine credential stays one:
     // a "re-pair" of it (replace:true, no kind) goes through the machine rules
     // too, or it would be a way around them.

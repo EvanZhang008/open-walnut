@@ -134,7 +134,7 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     const body = req.body as { standalone?: unknown; client?: unknown } | undefined
     const extension = body?.client === 'extension'
     const name = await freshBrowserName(extension ? 'extension' : 'browser')
-    const device = await createDeviceAs(name, { by: LOCAL_ACTOR })
+    const device = await createDeviceAs(name, { by: LOCAL_ACTOR, ...(extension ? { extension: true } : {}) })
     // Settings names the row by what it is ("iPhone Safari"), not by the id (N2-21).
     // Only deviceName: no model/os, so this never claims a platform for the record.
     const kind = browserKindFromUserAgent(req.get('user-agent'), { standalone: body?.standalone === true })

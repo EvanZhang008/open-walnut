@@ -96,6 +96,17 @@ export function registerCommands(program: Command): void {
       await runPassCommand(at >= 0 ? process.argv.slice(at + 1) : []);
     });
 
+  program
+    .command('browser [args...]')
+    .description('Your own browser for scripts and agents (the Walnut extension with agents on): open a page, read it, click, type, screenshot')
+    .allowUnknownOption(true)
+    .helpOption(false)
+    .action(async () => {
+      const { runBrowserCommand } = await import('./browser.js');
+      const at = process.argv.indexOf('browser');
+      await runBrowserCommand(at >= 0 ? process.argv.slice(at + 1) : []);
+    });
+
   const approvals = program
     .command('approvals')
     .description('Approvals waiting for you, and the devices that sign them');

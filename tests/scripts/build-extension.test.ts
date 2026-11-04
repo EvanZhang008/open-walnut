@@ -26,11 +26,11 @@ describe('extension manifests', () => {
     expect(c.version).toMatch(/^\d+(\.\d+){0,3}$/)
   })
 
-  it('asks for storage and web pages only, and exposes only the two framed pages', () => {
+  it('asks for storage, alarms and web pages, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage'])
-      expect(m.host_permissions).toEqual(['http://*/*', 'https://*/*'])
+      expect(m.permissions).toEqual(['storage', 'alarms'])
+      expect(m.host_permissions).toEqual(['<all_urls>'])
       expect(m.web_accessible_resources).toEqual([{ resources: ['menu.html', 'savebar.html'], matches: ['http://*/*', 'https://*/*'] }])
       expect(m.content_scripts[0].all_frames).toBe(true)
     }

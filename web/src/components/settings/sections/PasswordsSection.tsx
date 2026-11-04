@@ -4,7 +4,7 @@
  * window unlocked (the Passwords app); auto-lock is a plain config value.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { SectionCard } from '../inputs/SectionCard'
 import { ToggleSwitch } from '../inputs/ToggleSwitch'
@@ -15,7 +15,6 @@ import { SegmentedControl } from '../inputs/SegmentedControl'
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
 import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type VaultStatus } from '@/api/vault'
 import { downloadRecoveryKit, RecoveryKitCard } from '@/components/passwords/LockScreens'
-import { BrowserExtensionGroup } from './BrowserExtensionGroup'
 import '@/styles/passwords.css'
 
 interface Props {
@@ -105,7 +104,12 @@ export function PasswordsSection({ config, onSave }: Props) {
         </SettingsGroup>
       )}
 
-      {status?.setUp && <BrowserExtensionGroup />}
+      {status?.setUp && (
+        <SettingsGroup heading="Browser extension">
+          <SettingsRow label="Fill and save logins in Chrome and Firefox" help="Install the Walnut extension and connect it to this Walnut."
+            control={<Link className="settings-button settings-button-text" to="/settings#browser" data-testid="pw-open-browser-settings">Open</Link>} />
+        </SettingsGroup>
+      )}
 
       {status?.setUp && (
         <SettingsGroup heading="Master password">

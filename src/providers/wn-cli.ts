@@ -75,6 +75,7 @@ export type WalnutCliParsed =
   | { kind: 'trigger-check'; template: string; paramsJson: string | undefined }
   | { kind: 'approve'; argv: string[] }
   | { kind: 'pass'; argv: string[] }
+  | { kind: 'browser'; argv: string[] }
 
 /** `walnut wait` polling cadence + default budget. */
 export const WAIT_POLL_INTERVAL_MS = 5_000
@@ -100,6 +101,8 @@ export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
   if (head === 'approve') return { kind: 'approve', argv: rest }
   // walnut pass list|get|run, parsed by core/vault/pass-cli.ts (the Mac CLI's too).
   if (head === 'pass') return { kind: 'pass', argv: rest }
+  // walnut browser <action>, parsed by core/browser-control/browser-cli.ts (the Mac CLI's too).
+  if (head === 'browser') return { kind: 'browser', argv: rest }
   if (head === 'trigger-check') {
     // The stored command of a plugin trigger template; the daemon runs it with the trigger input on stdin.
     if (!rest[0] || rest.length > 2) return { kind: 'usage-error', message: "trigger-check requires <template> ['{params}']" }
@@ -241,6 +244,7 @@ USAGE
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
   walnut approve "<what>" [--biometric] [--timeout 10m] [--detail file|-]   wait for a person's yes: exit 0 approve, 1 deny, 2 no answer
   walnut pass list | get <item> --purpose "<why>" | run --purpose "<why>" --env NAME=<item> -- <cmd>   passwords from the vault (run masks them in output)
+  walnut browser open <url> | snapshot | click <ref> | type [<ref>] <text> | screenshot [<file>] | ...   the user's own browser (walnut browser for all actions)
   walnut --help | walnut tools --help
 
 THE MODEL (one identity: the task)
@@ -794,6 +798,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   if (parsed.kind === 'trigger-check') return runTriggerCheckViaGateway(socketPath, sid, parsed)
   if (parsed.kind === 'approve') return runApproveViaGateway(socketPath, sid, parsed.argv)
   if (parsed.kind === 'pass') return runPassViaGateway(socketPath, sid, parsed.argv)
+  if (parsed.kind === 'browser') return runBrowserViaGateway(socketPath, sid, parsed.argv)
 
   // tools.call args: inline JSON, @file, - (stdin), or a piped stdin. A big
   // payload MUST use @file or stdin — one argv entry is capped at 128KB on
@@ -1200,6 +1205,23 @@ async function runPassViaGateway(socketPath: string, sid: string, argv: string[]
       process.on('SIGTERM', fn)
       return () => { process.off('SIGINT', fn); process.off('SIGTERM', fn) }
     },
+  })
+}
+
+/** `walnut browser` on a host: the shared loop, its ops through this daemon's gateway to the Mac. */
+async function runBrowserViaGateway(socketPath: string, sid: string, argv: string[]): Promise<number> {
+  const { BROWSER_EXIT, BROWSER_USAGE, parseBrowserArgv, runBrowser } = await import('../core/browser-control/browser-cli.js')
+  const parsed = parseBrowserArgv(argv)
+  if (!parsed.ok) {
+    process.stderr.write(`walnut browser: ${parsed.error}\n${BROWSER_USAGE}\n`)
+    return BROWSER_EXIT.error
+  }
+  return runBrowser(parsed, {
+    call: gatewayOpCall(socketPath, sid),
+    say: (line) => { process.stderr.write(line + '\n') },
+    out: (text) => { process.stdout.write(text) },
+    cwd: process.cwd(),
+    env: process.env,
   })
 }
 

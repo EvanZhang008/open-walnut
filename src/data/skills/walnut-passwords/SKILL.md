@@ -24,8 +24,9 @@ never open the vault yourself: you name an item and say why, and Walnut decides.
   their recovery kit: nothing an agent does needs them. A user who forgot the master password
   uses "Forgot master password?" on the Passwords lock screen with the kit's recovery code.
 - The user's own browser fills and saves their logins with the Walnut browser extension
-  (Chrome, Firefox): if they ask how, point them to Settings, Passwords, Browser extension.
-  It is the user's: an agent never drives it or reads what it fills.
+  (Chrome, Firefox): if they ask how, point them to Settings, Browser extension.
+  An agent never reads what it fills. Agents may work in tabs of their own in that browser
+  when the user turns it on (skill `walnut-browser`).
 
 ## Pick the right way
 

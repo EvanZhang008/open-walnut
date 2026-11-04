@@ -176,7 +176,11 @@ export function groupOfField(groups: LoginGroup[], el: Element): { group: LoginG
 }
 
 /** Set a value the way typing would, so frameworks (React, Vue, Angular) see it. */
+/** Fields Walnut filled from the vault: an agent's snapshot never shows their values. */
+export const walnutFilled = new WeakSet<Element>()
+
 export function setValue(el: HTMLInputElement, value: string): void {
+  walnutFilled.add(el)
   el.focus()
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
     ?? Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set

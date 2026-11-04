@@ -504,7 +504,7 @@ test('locked: the menu says so and opens the unlock; Remove in Settings disconne
 
   // Settings → Passwords lists it; Remove ends its token, and the popup asks to connect again.
   const settings = await ctx.newPage()
-  await settings.goto(`${base}/settings#passwords`)
+  await settings.goto(`${base}/settings#browser`)
   const row = settings.getByText(/^Walnut extension \(Chrome on /).first()
   await expect(row).toBeVisible({ timeout: 20_000 })
   const before = ((await (await settings.request.get(`${base}/api/devices`)).json()).devices as Array<{ name: string }>).filter((d) => d.name.startsWith('extension-')).length

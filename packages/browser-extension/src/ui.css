@@ -78,3 +78,11 @@ body.popup { width: 360px; min-height: 420px; }
 .toast.on { opacity: 1; }
 .empty { text-align: center; color: var(--muted); padding: 18px 10px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 14px; }
+
+/* The agents switch (popup Settings) */
+.switch-row { cursor: pointer; }
+.switch-row input[role=switch] { appearance: none; -webkit-appearance: none; width: 38px; height: 22px; border-radius: 999px; background: #d6d0c8; position: relative; flex: none; cursor: pointer; transition: background .15s; margin: 0; }
+.switch-row input[role=switch]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s; }
+.switch-row input[role=switch]:checked { background: var(--accent); }
+.switch-row input[role=switch]:checked::after { transform: translateX(16px); }
+.switch-row input[role=switch]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

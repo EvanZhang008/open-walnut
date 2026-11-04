@@ -25,6 +25,9 @@
  */
 import { ext, ask } from './ext'
 import { findLoginGroups, groupOfField, readGroup, setValue, type LoginGroup } from './form-detect'
+import * as pageAgent from './page-agent'
+import { walnutAddress } from './walnut-address'
+import { siteKey } from '../../../src/core/vault/url-match'
 
 const SELF = (() => {
   try {
@@ -70,6 +73,8 @@ const watcher = new MutationObserver((records) => {
       continue
     }
     const h = [...hosts].find((x) => x.el === r.target)
+    // The agent frame is put back as it was (it must stay in sight while the tab is an agent's).
+    if (h && h === agentMark) { if (h.el.style.cssText !== h.expected) h.el.style.cssText = h.expected; for (const a of [...h.el.attributes]) if (a.name !== 'style' && a.name !== 'data-walnut-host') h.el.removeAttribute(a.name); continue }
     if (h && (r.attributeName !== 'style' || h.el.style.cssText !== h.expected)) closeAll()
   }
 })
@@ -363,6 +368,57 @@ function hideBar(): void {
   if (bar) { dropHost(bar.host); bar = null }
 }
 
+// ── an agent's tab: the frame around it says so, and Stop gives it back to the person ──
+
+let agentMark: Host | null = null
+function showAgentMark(on: boolean, who?: string): void {
+  if (SELF !== 'top') return
+  if (!on) { if (agentMark) { dropHost(agentMark); agentMark = null }; return }
+  if (agentMark) return
+  const { host, root } = makeHost(2147483645)
+  // The frame lets every click through; only its Stop button takes one.
+  hostStyle(host, 'z-index: 2147483645 !important; inset: 0 !important; pointer-events: none !important;')
+  const style = document.createElement('style')
+  style.textContent = `.edge{position:fixed;inset:0;border:3px solid #8a5a2b;border-radius:2px;pointer-events:none;box-sizing:border-box}
+.pill{position:fixed;right:14px;bottom:14px;display:flex;gap:10px;align-items:center;padding:7px 8px 7px 12px;background:#2b2118;color:#fff;font:600 12.5px/1.2 -apple-system,system-ui,"Segoe UI",sans-serif;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:auto}
+.stop{all:unset;cursor:pointer;background:#fff;color:#2b2118;border-radius:999px;padding:4px 10px;font:700 12px/1.2 -apple-system,system-ui,sans-serif}
+.stop:focus-visible{outline:2px solid #e8b46a}`
+  const pill = document.createElement('div')
+  pill.className = 'pill'
+  pill.append(document.createTextNode(who ? `Walnut agent is using this tab · ${who.slice(0, 60)}` : 'Walnut agent is using this tab'))
+  const stop = document.createElement('button')
+  stop.className = 'stop'
+  stop.textContent = 'Stop'
+  stop.title = 'Take this tab back: the agent can no longer use it'
+  // Only the person's own click: an agent's synthetic one is not trusted.
+  stop.addEventListener('click', (e) => { if (e.isTrusted) void ask({ type: 'agent-stop' }).then(() => showAgentMark(false)) })
+  pill.append(stop)
+  const edge = document.createElement('div')
+  edge.className = 'edge'
+  root.append(style, edge, pill)
+  agentMark = host
+  // The page may take the frame away: it comes back while the tab is an agent's.
+  markWatch.observe(document.documentElement, { childList: true })
+}
+
+const markWatch = new MutationObserver(() => {
+  if (agentMark && !agentMark.el.isConnected) document.documentElement.appendChild(agentMark.el)
+})
+
+async function agentOp(op: string, args: Record<string, unknown>): Promise<unknown> {
+  switch (op) {
+    case 'snapshot': return pageAgent.snapshot(typeof args.max === 'number' ? args.max : undefined)
+    case 'text': return pageAgent.text(typeof args.max === 'number' ? args.max : undefined)
+    case 'click': return pageAgent.click(args)
+    case 'type': return pageAgent.type(args)
+    case 'select': return pageAgent.select(args)
+    case 'press': return pageAgent.press(args)
+    case 'scroll': return pageAgent.scroll(args)
+    case 'wait': return pageAgent.wait(args)
+  }
+  throw new pageAgent.PageError(`Unknown page action ${op}.`, 'bad_action')
+}
+
 // ── messages from the background ──
 
 ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -384,6 +440,29 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (menu) { menu.height = Math.min(420, Math.max(60, Number(msg.height) || 120)); menu.frame.style.height = `${menu.height}px`; reposition() }
       sendResponse({ ok: true }); return
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
+    case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined); sendResponse({ ok: true }); return
+    case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href }); return
+    case 'agent-mask':
+      if (SELF !== 'top') { sendResponse({ ok: false }); return }
+      if (msg.on === true) sendResponse({ ok: true, masked: pageAgent.maskSecrets() })
+      else { pageAgent.unmask(); sendResponse({ ok: true }) }
+      return
+    case 'agent': {
+      // The background sends these only to the top frame of a tab an agent opened.
+      if (SELF !== 'top') { sendResponse({ ok: false, error: { message: 'Not the top frame.', code: 'bad_frame' } }); return }
+      // Checked again here, against this document: the page may have moved on since the background looked.
+      const allow = msg.allow as { any?: boolean; sites?: string[]; walnut?: string[] } | undefined
+      if (isWalnutApp() || walnutAddress(allow?.walnut, location.href)) { sendResponse({ ok: false, error: { message: 'Agents never use Walnut\'s own pages in the browser.', code: 'walnut_page' } }); return }
+      const here = siteKey(location.href)?.domain
+      if (!allow || !here || !(allow.any === true || (Array.isArray(allow.sites) && allow.sites.includes(here)))) {
+        sendResponse({ ok: false, error: { message: 'That site is not allowed for agents yet.', code: 'site_not_allowed', extra: { url: location.href, site: here } } })
+        return
+      }
+      agentOp(String(msg.op), (msg.args ?? {}) as Record<string, unknown>).then(
+        (result) => sendResponse({ ok: true, result }),
+        (err) => sendResponse({ ok: false, error: { message: err instanceof Error ? err.message : String(err), code: err instanceof pageAgent.PageError ? err.code : 'page_error' } }))
+      return true
+    }
     case 'hide-savebar': hideBar(); sendResponse({ ok: true }); return
     case 'savebar-size':
       if (bar) bar.frame.style.height = `${Math.min(300, Math.max(80, Number(msg.height) || 150))}px`
@@ -424,9 +503,10 @@ if (SELF === 'top') {
 
 function start(): void {
   if (isWalnutApp()) return
-  void ask<{ off?: boolean; barNonce?: string }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
+  void ask<{ off?: boolean; barNonce?: string; agent?: { who?: string } }>({ type: 'page-init', top: SELF === 'top' }).then((r) => {
     if (!r.ok || r.off) return
     off = false
+    if (r.agent) showAgentMark(true, r.agent.who)
     reported = null
     rescan()
     if (r.barNonce) showBar(r.barNonce)

@@ -1,7 +1,7 @@
 /**
- * Settings → Passwords → Browser extension: how to install it in Chrome or Firefox, and the
- * extensions connected to this Walnut (devices named `extension-*`, from the browser pairing
- * code), each with Remove, which ends its token at once.
+ * Settings → Browser extension (BrowserSection.tsx): how to install it in Chrome or Firefox,
+ * and the extensions connected to this Walnut (devices named `extension-*`, from the browser
+ * pairing code), each with Remove, which ends its token at once.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { apiDelete } from '@/api/client'
@@ -20,7 +20,7 @@ function when(iso?: string): string {
   return Number.isNaN(d.getTime()) ? '' : `last used ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
 }
 
-export function BrowserExtensionGroup() {
+export function BrowserExtensionGroup({ agentsOn }: { agentsOn?: ReadonlySet<string> }) {
   const [browser, setBrowser] = useState<ExtBrowser>(detectBrowser())
   const [devices, setDevices] = useState<Device[] | null>(null)
   const [error, setError] = useState('')
@@ -48,8 +48,8 @@ export function BrowserExtensionGroup() {
 
   return (
     <SettingsGroup
-      heading="Browser extension"
-      footer={<>The extension fills and saves logins on the sites you visit, from this vault. It asks for your master password like any window, and fills a login only on its own site.</>}
+      heading="Install and connect"
+      footer={<>The extension fills and saves logins on the sites you visit, from Passwords. It asks for your master password like any window, and fills a login only on its own site.</>}
     >
       <SettingsRow
         label="Install"
@@ -63,7 +63,7 @@ export function BrowserExtensionGroup() {
         <SettingsRow
           key={d.name}
           label={d.info?.deviceName ?? 'Walnut extension'}
-          help={`Connected ${new Date(d.createdAt).toLocaleDateString()}, ${when(d.lastUsedAt)}`}
+          help={`Connected ${new Date(d.createdAt).toLocaleDateString()}, ${when(d.lastUsedAt)}${agentsOn ? (agentsOn.has(d.name) ? '. Agents: on' : '. Agents: off') : ''}`}
           control={<SettingsButton busy={busy === d.name} onClick={() => void remove(d.name)}>Remove</SettingsButton>}
         />
       ))}
