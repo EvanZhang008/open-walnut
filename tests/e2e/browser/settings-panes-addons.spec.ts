@@ -368,6 +368,10 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
     if (new URL(route.request().url()).pathname === '/api/devices/tailscale') {
       return json(route, { installed: false, running: false, peers: [], install: { brew: false, job: null } })
     }
+    // Only a DELETE is a removal. Every page open also reads GET /api/devices/browser-session
+    // (the sign-in gate and the sign-in cookie, web/src/api/device-token.ts): counted here, it
+    // emptied the list above before the pane drew its first row. Let the real server answer it.
+    if (route.request().method() !== 'DELETE') return route.fallback()
     deletes.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`)
     return json(route, { ok: true })
   })

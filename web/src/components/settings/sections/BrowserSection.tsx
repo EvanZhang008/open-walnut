@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { apiGet, apiPut } from '@/api/client'
-import { SettingsGroup, SettingsRow } from '../SettingsSection'
+import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
 import { SegmentedControl } from '../inputs/SegmentedControl'
 import { saveErrorMessage } from '../settings-pane-context'
@@ -47,8 +47,10 @@ export function BrowserSection() {
   }
 
   const agentsOn = new Set(st?.browsers.map((b) => b.device) ?? [])
+  // Every pane is a settings section with its registry id: that draws the pane's title and is
+  // what the nav, search and deep links find (tests/e2e/browser/settings-panes.spec.ts C2).
   return (
-    <>
+    <SettingsSection id="browser" title="Browser extension">
       <BrowserExtensionGroup agentsOn={agentsOn} />
       <SettingsGroup
         heading="Agents in your browser"
@@ -77,6 +79,6 @@ export function BrowserSection() {
         ))}
         {error && <p className="settings-test-result" data-kind="fail" role="alert">{error}</p>}
       </SettingsGroup>
-    </>
+    </SettingsSection>
   )
 }

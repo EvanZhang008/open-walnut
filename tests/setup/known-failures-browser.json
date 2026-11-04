@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 238,
+  "count": 237,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -188,7 +188,6 @@
     "settings-panes-addons.spec.ts :: C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switches only",
     "settings-panes-configure.spec.ts :: C31: hooks are roomy rows with a level chevron; the label discloses Fires on, Action and Order",
     "settings-panes-configure.spec.ts :: C8 + C10 + C80: configure panes use sentence case, no dashes, no decorative symbols",
-    "settings-panes.spec.ts :: C2: each nav entry mounts only its own pane",
     "settings-polish-panes.spec.ts :: N3-28: macOS Access puts the state first, then a named action",
     "show-earlier-scroll-anchor.spec.ts :: bottom content stays above the fog through tool and composer resizing",
     "show-earlier-scroll-anchor.spec.ts :: real stored history stays readable after reopening and viewport changes",
@@ -428,7 +427,6 @@
     "settings-panes-addons.spec.ts :: C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switches only": "Error: pane calendar",
     "settings-panes-configure.spec.ts :: C31: hooks are roomy rows with a level chevron; the label discloses Fires on, Action and Order": "Error: rows 57,57,57,57,57,57,57,57,57,57,57,57,57,57,57",
     "settings-panes-configure.spec.ts :: C8 + C10 + C80: configure panes use sentence case, no dashes, no decorative symbols": "Error: general: symbols",
-    "settings-panes.spec.ts :: C2: each nav entry mounts only its own pane": "Error: expect(received).toEqual(expected) // deep equality",
     "settings-polish-panes.spec.ts :: N3-28: macOS Access puts the state first, then a named action": "[fails on a clean main too (A/B 2026-10-31)] Test timeout of 120000ms exceeded.",
     "show-earlier-scroll-anchor.spec.ts :: bottom content stays above the fog through tool and composer resizing": "Error: expect(locator).toBeVisible() failed",
     "show-earlier-scroll-anchor.spec.ts :: real stored history stays readable after reopening and viewport changes": "Error: expect(locator).toContainText(expected) failed",
