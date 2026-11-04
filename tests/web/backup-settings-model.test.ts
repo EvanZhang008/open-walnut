@@ -5,7 +5,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, missingFields, othersAfterSwitch, sameDestination, testHelp,
+  MAX_INTERVAL_HOURS, blockedReason, buildBackupConfig, destinationSummary, fieldProblem, missingFields, othersAfterSwitch,
+  sameDestination, secretNeedsRetyping, testHelp,
 } from '../../web/src/components/settings/sections/backup/backup-model';
 import { swapCommands } from '../../web/src/components/settings/sections/backup/RestorePanel';
 
@@ -103,5 +104,40 @@ describe('swapCommands', () => {
   it('quotes paths a shell would split, and keeps ~ expandable', () => {
     expect(swapCommands('~/.open-walnut/', "/tmp/my restore's", '2026-11-04T08:00:00Z'))
       .toBe("[ ! -e ~/.open-walnut-before-restore-2026-11-04T08-00-00 ] && mv ~/.open-walnut ~/.open-walnut-before-restore-2026-11-04T08-00-00 && mv '/tmp/my restore'\\''s' ~/.open-walnut");
+  });
+});
+
+describe('fieldProblem', () => {
+  it('asks for the scheme of an endpoint and a 32-character account ID, before any test', () => {
+    expect(fieldProblem({ type: 'r2', endpoint: 'storage.example.com' })).toBe('Start the endpoint with https://');
+    expect(fieldProblem({ type: 's3', endpoint: 'https://' })).toMatch(/not a web address/);
+    expect(fieldProblem({ type: 's3', endpoint: 'http://127.0.0.1:9000' })).toBeNull();
+    expect(fieldProblem({ type: 'r2', account_id: 'abc' })).toMatch(/32 letters and digits/);
+    expect(fieldProblem({ type: 'r2', account_id: '0123456789abcdef0123456789ABCDEF' })).toBeNull();
+    // With an endpoint the account ID is not used, so its shape does not matter.
+    expect(fieldProblem({ type: 'r2', account_id: 'abc', endpoint: 'https://x.example' })).toBeNull();
+    expect(fieldProblem({ type: 'gdrive' })).toBeNull();
+  });
+});
+
+describe('secretNeedsRetyping', () => {
+  const mask = '\u2022\u2022\u2022\u2022NEVG';
+  const saved = { ...r2, secret_access_key: mask };
+  it('a masked key on the place it was saved for is fine; pointed elsewhere it must be typed again', () => {
+    expect(secretNeedsRetyping(saved, [saved])).toBe(false);
+    expect(secretNeedsRetyping({ ...saved, prefix: 'other-folder' }, [saved])).toBe(false);
+    expect(secretNeedsRetyping({ ...saved, bucket: 'other' }, [saved])).toBe(true);
+    expect(secretNeedsRetyping({ ...saved, bucket: 'other', secret_access_key: 'typed' }, [saved])).toBe(false);
+    // A service kept for later owns its own masked key.
+    const kept = { type: 's3' as const, bucket: 'k', endpoint: 'https://m', access_key_id: 'a', secret_access_key: mask };
+    expect(secretNeedsRetyping(kept, [saved, kept])).toBe(false);
+    expect(secretNeedsRetyping({ ...kept, endpoint: 'https://n' }, [saved, kept])).toBe(true);
+  });
+});
+
+describe('destinationSummary', () => {
+  it('says whether the saved bucket is the one in use', () => {
+    expect(destinationSummary({ ...r2, account_id: '0123456789abcdef0123456789abcdef' })).toMatch(/account \.\.\.cdef, key ID k\. Tested and in use\.$/);
+    expect(destinationSummary(r2, false)).toMatch(/Tested before\.$/);
   });
 });

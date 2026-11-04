@@ -276,11 +276,13 @@ test.describe('Backup settings', () => {
     await page.route('**/api/backup/restore/use/cancel', (route) => { pending = null; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
     const section = await openBackup(page)
     await expect(section.getByTestId('backup-restore-done')).toContainText('22,597 files')
-    // The command is there for doing it by hand, folded.
-    await expect(section.getByTestId('backup-restore-swap')).toBeHidden()
+    // The terminal command is one level down: only after "Use this data", folded.
+    await expect(section.getByTestId('backup-restore-command')).toHaveCount(0)
 
     await section.getByTestId('backup-restore-use').click()
     await expect(section.getByTestId('backup-restore-use-confirm')).toContainText(restored)
+    await expect(section.getByTestId('backup-restore-command')).toBeVisible()
+    await expect(section.getByTestId('backup-restore-swap')).toBeHidden()
     await section.getByTestId('backup-restore-use-cancel').click()
     expect(useBody).toBeNull()
     await section.getByTestId('backup-restore-use').click()
@@ -291,6 +293,12 @@ test.describe('Backup settings', () => {
     await expect(row).toContainText('.open-walnut-before-restore-2026-11-04T10-05-00')
     await section.getByTestId('backup-restore-switch-cancel').click()
     await expect(row).toHaveCount(0)
+    // Done puts the result away at once.
+    let dismissed = false
+    await page.route('**/api/backup/restore/dismiss', (route) => { dismissed = true; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
+    await section.getByTestId('backup-restore-dismiss').click()
+    await expect(section.getByTestId('backup-restore-done')).toHaveCount(0)
+    expect(dismissed).toBe(true)
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 })

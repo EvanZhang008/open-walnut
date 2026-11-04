@@ -43,8 +43,8 @@ export function R2Fields({ dest, onChange }: Props) {
   return (
     <>
       <TextRow id="backup-r2-account" label="Account ID" value={dest.account_id} onChange={(v) => set({ account_id: v })}
-        placeholder={dest.endpoint?.trim() ? 'Not needed with a custom endpoint' : 'e.g. 32 letters and digits'} />
-      <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. walnut-backup" />
+        placeholder={dest.endpoint?.trim() ? 'Not needed with an endpoint' : '32 letters and digits'} />
+      <TextRow id="backup-r2-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. my-walnut-backup" />
       <TextRow id="backup-r2-access-key" label="Access key ID" value={dest.access_key_id} onChange={(v) => set({ access_key_id: v })} />
       <SettingsRow
         label="Secret access key"
@@ -67,10 +67,10 @@ export function R2Fields({ dest, onChange }: Props) {
       </SettingsDisclosure>
       <SettingsDisclosure id="backup-r2-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-r2-advanced">
         <TextRow id="backup-r2-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })}
-          placeholder="Default: walnut-backup" />
+          placeholder="Optional" help="Empty: a folder named walnut-backup." />
         <TextRow id="backup-r2-endpoint" label="Custom endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
-          placeholder="e.g. https://<account>.eu.r2.cloudflarestorage.com"
-          help="Only for an EU bucket or another S3-compatible service." />
+          placeholder="https://..."
+          help="Only for an EU bucket (https://<account ID>.eu.r2.cloudflarestorage.com) or another S3-compatible service." />
       </SettingsDisclosure>
     </>
   )
@@ -127,7 +127,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
         </>
       )}
       <SettingsDisclosure id="backup-s3-advanced" label="Advanced" summary={advancedSummary(dest)} data-testid="backup-s3-advanced">
-        <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Default: walnut-backup" />
+        <TextRow id="backup-s3-prefix" label="Folder in the bucket" value={dest.prefix} onChange={(v) => set({ prefix: v })} placeholder="Optional" help="Empty: a folder named walnut-backup." />
         <TextRow id="backup-s3-endpoint" label="S3-compatible endpoint" value={dest.endpoint} onChange={(v) => set({ endpoint: v })}
           placeholder="https://s3.example.com" help="For MinIO, Backblaze B2 and other S3-compatible services." />
         {custom && (

@@ -94,6 +94,7 @@ export async function restoreRepoSnapshot(
           off += bytesWritten;
         }
         written += chunk.length;
+        opts.onProgress?.(doneBytes + Math.min(written, e.s), totalBytes, doneFiles, tree.length);
       }
     } finally {
       await fh.close();

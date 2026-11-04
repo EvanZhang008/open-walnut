@@ -93,6 +93,40 @@ export function missingFields(d: BackupDestinationConfig): string[] {
   return m
 }
 
+/** A field typed in a shape the service never accepts, in words, or null. Checked before any test. */
+export function fieldProblem(d: BackupDestinationConfig): string | null {
+  const endpoint = trimmed(d.endpoint)
+  if ((d.type === 'r2' || d.type === 's3') && endpoint) {
+    if (!/^https?:\/\//i.test(endpoint)) return 'Start the endpoint with https://'
+    try { new URL(endpoint) } catch { return 'The endpoint is not a web address. Example: https://storage.example.com' }
+  }
+  const account = trimmed(d.account_id)
+  if (d.type === 'r2' && account && !endpoint && !/^[0-9a-f]{32}$/i.test(account)) {
+    return 'The account ID is 32 letters and digits (Cloudflare dashboard, R2 page, on the right).'
+  }
+  return null
+}
+
+/** Where a destination writes: a saved (masked) key stands only for the place it was saved for. */
+export function sameTarget(a: BackupDestinationConfig, b: BackupDestinationConfig): boolean {
+  const t = (v?: string) => trimmed(v) ?? ''
+  return a.type === b.type && t(a.bucket) === t(b.bucket) && t(a.account_id) === t(b.account_id)
+    && t(a.endpoint) === t(b.endpoint) && t(a.client_id) === t(b.client_id)
+}
+
+const isMasked = (v?: string): boolean => typeof v === 'string' && v.includes('\u2022')
+
+/**
+ * True when the form still shows a saved (masked) secret but now points at
+ * another bucket, account or endpoint: the server will not send that key
+ * anywhere else, so it has to be typed again.
+ */
+export function secretNeedsRetyping(d: BackupDestinationConfig, owners: BackupDestinationConfig[]): boolean {
+  const hasMask = isMasked(d.secret_access_key) || isMasked(d.access_key_id) || isMasked(d.client_secret)
+    || isMasked(d.auth?.aws_secret_access_key) || isMasked(d.auth?.aws_access_key_id)
+  return hasMask && !owners.some((o) => sameTarget(o, d))
+}
+
 /** The same destination as saved (blanks, key order and the fields of other types never count). */
 export function sameDestination(a: BackupDestinationConfig, b: BackupDestinationConfig): boolean {
   return stableJson(cleanDestination(a)) === stableJson(cleanDestination(b))
@@ -241,7 +275,7 @@ export function recoveryKitText(key: string, destination: string, machine: strin
 }
 
 /** The saved bucket in one line ("walnut-backup, folder walnut-backup, account ...cdef"). */
-export function destinationSummary(d: BackupDestinationConfig): string {
+export function destinationSummary(d: BackupDestinationConfig, inUse = true): string {
   const parts = [`${d.bucket ?? ''}`]
   if (d.prefix && d.prefix !== 'walnut-backup') parts.push(`folder ${d.prefix}`)
   if (d.type === 'r2' && d.account_id && !d.endpoint) parts.push(`account ...${d.account_id.slice(-4)}`)
@@ -250,6 +284,6 @@ export function destinationSummary(d: BackupDestinationConfig): string {
   const keyId = d.access_key_id ?? d.auth?.aws_access_key_id
   if (keyId) parts.push(`key ID ${keyId.slice(0, 6)}`)
   else if (d.auth?.method === 'profile') parts.push(`profile ${d.auth.profile ?? 'default'}`)
-  return `${parts.filter(Boolean).join(', ')}. Tested and in use.`
+  return `${parts.filter(Boolean).join(', ')}. ${inUse ? 'Tested and in use.' : 'Tested before.'}`
 }
 

@@ -130,6 +130,8 @@ export async function runRepoBackup(
         let size = 0;
         const take = async (chunk: Buffer): Promise<void> => {
           size += chunk.length;
+          // A large file moves the count as it goes, not only when it ends.
+          opts.onProgress?.(doneBytes + Math.min(size, file.size), totalBytes);
           const id = repo.blobId(chunk);
           blobs.push(id);
           if (!known.has(id)) {

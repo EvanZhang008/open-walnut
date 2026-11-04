@@ -39,11 +39,13 @@ let computerNameOnce: Promise<string> | null = null;
 /**
  * The name a person knows this computer by: on a Mac its Computer Name
  * ("Evan's MacBook Pro", System Settings, General, About), elsewhere the
- * hostname without a ".local".
+ * hostname without a ".local" (a container's id hostname is named as one).
  */
 export function computerName(): Promise<string> {
   computerNameOnce ??= new Promise<string>((resolve) => {
-    const host = os.hostname().replace(/\.(local|lan|home)$/i, '');
+    const raw = os.hostname().replace(/\.(local|lan|home)$/i, '');
+    // A container's hostname is its id ("3f9c2a7b1d04"): say what it is instead.
+    const host = /^[0-9a-f]{12}$/.test(raw) ? `Linux container ${raw.slice(0, 6)}` : raw;
     if (process.platform !== 'darwin') return resolve(host);
     execFile('scutil', ['--get', 'ComputerName'], { timeout: 2000 }, (err, out) => resolve(!err && out.trim() ? out.trim() : host));
   });

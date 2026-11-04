@@ -69,7 +69,7 @@ export async function requestSwitch(home: string, restored: string, now = new Da
   // Compared as the disk has them: a link must not hide one inside the other.
   const [realH, realR] = await Promise.all([fs.realpath(h), fs.realpath(r)]);
   if (realR === realH || realR.startsWith(realH + path.sep) || realH.startsWith(realR + path.sep)) throw new Error('The restored folder must be apart from the data folder.');
-  if ((await fs.lstat(h)).isSymbolicLink()) throw new Error(`${h} is a link to another folder. Switch by hand (Do it by hand).`);
+  if ((await fs.lstat(h)).isSymbolicLink()) throw new Error(`${h} is a link to another folder. Switch it yourself in a terminal (Use this data, then Advanced).`);
   // Two renames on one disk are instant and safe; across disks they fail.
   const [devHome, devRestored] = await Promise.all([fs.stat(path.dirname(h)), fs.stat(r)]);
   if (devHome.dev !== devRestored.dev) throw new Error(`${r} is on another disk than ${h}. Restore into a folder next to it, then switch.`);

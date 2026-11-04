@@ -28,7 +28,7 @@ import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
 import {
   DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, destinationSummary, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
-  engineOf, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, stableJson, testHelp,
+  engineOf, fieldProblem, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, secretNeedsRetyping, stableJson, testHelp,
   type BackupConfig, type BackupDestinationConfig, type BackupDestinationType, type DestinationTest,
 } from './backup/backup-model'
 import { R2Fields, S3Fields } from './backup/BucketFields'
@@ -70,8 +70,9 @@ interface BackupStatus {
 
 type Drafts = Record<BackupDestinationType, BackupDestinationConfig>
 
-// What was typed for a service not saved yet, kept in this tab across a reload.
-// Never a secret: those are typed again.
+// What was typed and not saved yet (a new service, or edits to a saved one), kept
+// on this browser across a reload. Never a secret: a new one is typed again, a
+// saved one stays masked.
 const TYPED_KEY = 'walnut.backup.typed'
 const withoutSecrets = (d: BackupDestinationConfig): BackupDestinationConfig => {
   const { secret_access_key: _s, client_secret: _c, ...rest } = d
@@ -82,20 +83,27 @@ const withoutSecrets = (d: BackupDestinationConfig): BackupDestinationConfig => 
   return rest
 }
 const readTyped = (): Partial<Drafts> => {
-  try { return JSON.parse(sessionStorage.getItem(TYPED_KEY) ?? '{}') as Partial<Drafts> } catch { return {} }
+  try { return JSON.parse(localStorage.getItem(TYPED_KEY) ?? '{}') as Partial<Drafts> } catch { return {} }
 }
 const writeTyped = (t: Partial<Drafts>): void => {
-  try { sessionStorage.setItem(TYPED_KEY, JSON.stringify(t)) } catch { /* private mode: nothing kept */ }
+  try { localStorage.setItem(TYPED_KEY, JSON.stringify(t)) } catch { /* private mode: nothing kept */ }
 }
 
-const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationConfig[] = []): Drafts => ({
-  r2: { type: 'r2' },
-  gdrive: { type: 'gdrive' },
-  s3: { type: 's3', auth: { method: 'aws_chain' } },
-  ...readTyped(),
-  ...Object.fromEntries(others.map((o) => [o.type, o])),
-  ...(saved ? { [saved.type]: saved } : {}),
-})
+/** A saved destination with the edits typed over it; its masked keys stay. */
+const withTyped = (d: BackupDestinationConfig, typed?: BackupDestinationConfig): BackupDestinationConfig =>
+  typed ? { ...d, ...typed, ...(d.auth || typed.auth ? { auth: { ...d.auth, ...typed.auth } as BackupDestinationConfig['auth'] } : {}) } : d
+
+const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationConfig[] = []): Drafts => {
+  const typed = readTyped()
+  return {
+    r2: { type: 'r2' },
+    gdrive: { type: 'gdrive' },
+    s3: { type: 's3', auth: { method: 'aws_chain' } },
+    ...typed,
+    ...Object.fromEntries(others.map((o) => [o.type, withTyped(o, typed[o.type])])),
+    ...(saved ? { [saved.type]: withTyped(saved, typed[saved.type]) } : {}),
+  }
+}
 
 const legacyOf = (b: BackupConfig): LegacyFields => ({ bucket: b.bucket, region: b.region, prefix: b.prefix, auth: b.auth })
 /** A new, empty folder in the same bucket for backups that start over with a new key. */
@@ -171,7 +179,15 @@ export function BackupSection({ config, onSave }: Props) {
 
   const draft = drafts[type]
   const draftIsSaved = !!savedDest && sameDestination(draft, savedDest)
+  // This service as saved: in use, or kept for later.
+  const keptOf = (t: BackupDestinationType): BackupDestinationConfig | undefined =>
+    savedDest?.type === t ? savedDest : (saved.other_destinations ?? []).find((o) => o.type === t)
+  const kept = keptOf(type)
+  const draftIsKept = !!kept && sameDestination(draft, kept)
   const missing = missingFields(draft)
+  const problem = fieldProblem(draft)
+    ?? (secretNeedsRetyping(draft, [savedDest, ...(saved.other_destinations ?? [])].filter((d): d is BackupDestinationConfig => !!d))
+      ? 'You changed where backups go, so type the secret key again.' : null)
 
   /**
    * The backup section to write, built on `base`. Until an encrypted destination
@@ -235,13 +251,26 @@ export function BackupSection({ config, onSave }: Props) {
 
   const setDest = (next: BackupDestinationConfig) => {
     setDrafts((cur) => ({ ...cur, [next.type]: next }))
-    // Kept only for a service not saved yet; a saved one comes back from config.
-    const isSaved = baseRef.current.destination?.type === next.type || (baseRef.current.other_destinations ?? []).some((o) => o.type === next.type)
-    if (!isSaved) writeTyped({ ...readTyped(), [next.type]: withoutSecrets(next) })
+    const base = baseRef.current
+    const savedOne = base.destination?.type === next.type ? base.destination : (base.other_destinations ?? []).find((o) => o.type === next.type)
+    const typed = readTyped()
+    if (savedOne && sameDestination(next, savedOne)) delete typed[next.type]
+    else typed[next.type] = withoutSecrets(next)
+    writeTyped(typed)
     setTestResult(null)
   }
   const pickType = (t: BackupDestinationType) => {
     setType(t)
+    setEditing(!!keptOf(t) && !!readTyped()[t])
+    setTestResult(null)
+  }
+  /** Back to the saved settings: what was typed since goes. */
+  const cancelEdit = () => {
+    if (!kept) return
+    setDrafts((cur) => ({ ...cur, [type]: kept }))
+    const typed = readTyped()
+    delete typed[type]
+    writeTyped(typed)
     setEditing(false)
     setTestResult(null)
   }
@@ -269,8 +298,11 @@ export function BackupSection({ config, onSave }: Props) {
   }
 
   const [runStarting, setRunStarting] = useState(false)
-  // The saved bucket's fields, folded to one line until "Edit".
-  const [editing, setEditing] = useState(false)
+  // The saved bucket's fields, folded to one line until "Edit" (open again after a reload with edits not saved).
+  const [editing, setEditing] = useState(() => {
+    const t = savedDest?.type ?? 'r2'
+    return !!readTyped()[t] && (savedDest?.type === t || (saved.other_destinations ?? []).some((o) => o.type === t))
+  })
   const handleRunNow = async () => {
     if (runStarting || status?.running) return
     setRunError(null)
@@ -393,6 +425,7 @@ export function BackupSection({ config, onSave }: Props) {
   const connectionHelp = (): string => {
     if (legacyMode) return testHelp(testResult, true)
     if (missing.length > 0) return `Fill in: ${missing.join(', ')}.`
+    if (problem) return problem
     if (testResult && !testResult.ok && savedDest?.type === type && !draftIsSaved) {
       return `${testHelp(testResult, false)} Nothing was saved: backups still use the settings that worked.`
     }
@@ -437,11 +470,11 @@ export function BackupSection({ config, onSave }: Props) {
                 control={<SettingsButton onClick={() => { setLegacyMode(true); setTestResult(null) }} data-testid="backup-legacy-back">Back to it</SettingsButton>}
               />
             )}
-            {type !== 'gdrive' && savedDest?.type === type && draftIsSaved && !editing ? (
-              // Connected and in use: one line, so the key and the backups stay in view.
+            {type !== 'gdrive' && kept && draftIsKept && !editing ? (
+              // Connected before: one line, so the key and the backups stay in view.
               <SettingsRow
                 label="Bucket"
-                help={destinationSummary(savedDest)}
+                help={destinationSummary(kept, savedDest?.type === type)}
                 data-testid="backup-dest-summary"
                 control={<SettingsButton onClick={() => setEditing(true)} data-testid="backup-dest-edit">Edit</SettingsButton>}
               />
@@ -467,15 +500,20 @@ export function BackupSection({ config, onSave }: Props) {
         {(legacyMode || type !== 'gdrive') && (
           <SettingsRow
             label="Connection"
-            help={testResult && !testResult.ok ? undefined : connectionHelp()}
-            error={testResult && !testResult.ok ? connectionHelp() : undefined}
+            help={(testResult && !testResult.ok) || (!legacyMode && missing.length === 0 && problem) ? undefined : connectionHelp()}
+            error={(testResult && !testResult.ok) || (!legacyMode && missing.length === 0 && problem) ? connectionHelp() : undefined}
             data-testid="backup-connection-row"
             control={
-              <SettingsButton onClick={handleTest} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
-                variant={!legacyMode && !draftIsSaved && missing.length === 0 ? 'primary' : undefined}
-                disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0}>
-                {legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
-              </SettingsButton>
+              <span className="settings-inline-pair">
+                {!legacyMode && kept && (editing || !draftIsKept) && (
+                  <SettingsButton onClick={cancelEdit} data-testid="backup-dest-cancel">Cancel</SettingsButton>
+                )}
+                <SettingsButton onClick={handleTest} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
+                  variant={!legacyMode && !draftIsSaved && missing.length === 0 && !problem ? 'primary' : undefined}
+                  disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0 || !!problem}>
+                  {legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
+                </SettingsButton>
+              </span>
             }
           />
         )}
@@ -532,11 +570,13 @@ export function BackupSection({ config, onSave }: Props) {
         <SettingsRow
           label="Every"
           htmlFor="backup-interval"
-          help={legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
+          help={!enabled ? 'Turn on Back up automatically to choose how often.'
+            : legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
           error={intervalOk ? undefined : `Use a whole number of hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
           data-testid="backup-interval-row"
+          disabled={!enabled}
           control={
-            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} />
+            <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours} onChange={setIntervalHours} disabled={!enabled} />
           }
         />
         {otherWriter && (

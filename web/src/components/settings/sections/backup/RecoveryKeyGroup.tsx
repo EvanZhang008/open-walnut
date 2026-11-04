@@ -130,7 +130,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
     <SettingsGroup
       heading="Recovery key"
       data-testid="backup-recovery-group"
-      footer={needsKey ? undefined : 'Your backups are encrypted with this key before they leave this computer. Without it nobody can open them, Walnut included.'}
+      footer={needsKey ? undefined : 'Backups are encrypted with this key before they leave this computer. Without it nobody can open them, Walnut included.'}
     >
       {needsKey ? (
         <>
@@ -190,7 +190,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
         <>
           <SettingsRow
             label="Recovery key"
-            help={accepted ?? 'Opens your backups. Keep a copy somewhere other than this computer.'}
+            help={accepted ?? (savedAt ? 'Opens your backups. You saved a copy; keep it off this computer.' : 'Opens your backups.')}
             error={error ?? undefined}
             data-testid="backup-key-row"
             control={
@@ -210,7 +210,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             <SettingsRow
               state="warning"
               label="Save it somewhere safe"
-              help="Put it in your password manager or print it. You need it to restore on a new computer."
+              help="In a password manager or on paper, not only on this computer: a new computer needs it to restore."
               data-testid="backup-key-unsaved"
               control={
                 <SettingsButton variant={firstSetup ? 'primary' : undefined} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">

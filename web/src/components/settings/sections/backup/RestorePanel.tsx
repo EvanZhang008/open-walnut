@@ -6,7 +6,7 @@
  * come from `backup:status` (`restore`), so they survive closing and reopening
  * Settings, until the user dismisses the result or starts another restore.
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
@@ -76,7 +76,18 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const [startError, setStartError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
-  const dismiss = () => { void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}) }
+  // Done hides the result at once (the status that follows confirms it), never a click that seems to do nothing.
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null)
+  const dismiss = () => {
+    setDismissedAt(restore?.finishedAt ?? null)
+    void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}).finally(() => onSwitchChanged?.())
+  }
+  const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt ? restore : undefined
+  // The picker opened: bring its last row (the folder and Restore) into view.
+  const entryRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (items && items.length > 0) entryRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [items])
   // "Use this restored data": confirm, then ask; Walnut restarts into it when it can.
   const [confirmUse, setConfirmUse] = useState(false)
   const [using, setUsing] = useState(false)
@@ -138,7 +149,9 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     return (
       <SettingsRow
         label="Restoring"
-        help={`Into ${restore.targetDir}. ${restore.doneFiles ?? 0} of ${restore.totalFiles ?? '...'} files, every file checked as it lands.`}
+        help={`Into ${restore.targetDir}. ${restore.totalBytes && restore.doneBytes
+          ? `${fmtBytes(restore.doneBytes)} of ${fmtBytes(restore.totalBytes)} (${(restore.doneFiles ?? 0).toLocaleString()} of ${(restore.totalFiles ?? 0).toLocaleString()} files)`
+          : 'Starting: reading the backup list...'}, every file checked as it lands.`}
         data-testid="backup-restore-progress"
         control={
           <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
@@ -209,7 +222,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             error={startError ?? undefined}
             data-testid="backup-restore-target-row"
           />
-          <div className="settings-row settings-row-indent backup-wide-entry">
+          <div ref={entryRef} className="settings-row settings-row-indent backup-wide-entry">
             <input id="backup-restore-target" type="text" data-no-draft="autosave" spellCheck={false}
               className="settings-input settings-input--mono" aria-label="Restore into folder"
               value={target} onChange={(e) => { setTarget(e.target.value); setStartError(null) }}
@@ -218,7 +231,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
               Restore
             </SettingsButton>
           </div>
-          {target.trim().length > 40 && (
+          {target.trim().length > 40 && !startError && (
             // A long path's end (the folder's own name) never hides inside the field.
             <p className="settings-row settings-row-indent backup-restore-target-full" data-testid="backup-restore-target-full">
               Restores into <code>{target.trim()}</code>
@@ -237,7 +250,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             : <>Quit Walnut and open it again: it then uses <code>{pendingSwitch.restored}</code>, and keeps your current data at <code>{pendingSwitch.aside}</code>. Nothing is deleted.</>}
           control={restarting ? undefined : <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-cancel">Keep current data</SettingsButton>}
         />
-      ) : restore?.finishedAt && !items && (
+      ) : shownResult && restore && !items && (
         restore.error ? (
           <SettingsRow
             label="Restore failed"
@@ -277,8 +290,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           />
         )
       )}
-      {!pendingSwitch && restore?.finishedAt && !restore.error && !items && swap && (
-        <SettingsDisclosure id="backup-restore-command" label="Do it by hand" data-testid="backup-restore-command">
+      {!pendingSwitch && confirmUse && shownResult && !shownResult.error && !items && swap && (
+        <SettingsDisclosure id="backup-restore-command" label="Advanced: switch it yourself in a terminal" data-testid="backup-restore-command">
           <div className="settings-row backup-restore-swap" data-testid="backup-restore-swap">
             <pre className="backup-restore-commands">{swap}</pre>
             <CopyButton text={swap} label="Copy command" bordered data-testid="backup-restore-copy-commands" />
