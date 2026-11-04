@@ -86,4 +86,48 @@ describe('SessionGitStore', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('while the Changed tab is open the chip counts what it lists; closed, the server count is back', () => {
+    const store = new SessionGitStore({ fetch: vi.fn(async () => ({})) }, () => now);
+    const tab = {};
+    store.setTabCount('a', tab, 3); // the tab listed before the first glance came
+    expect(store.get('a')?.changedFiles).toBe(3);
+    store.apply(glance('a', '2026-11-04T00:00:05Z', 1, 4)); // the server counted one more already
+    expect(store.get('a')?.changedFiles).toBe(3);
+    expect(store.get('a')?.repos[0]?.files).toBe(1);
+    store.setTabCount('a', tab, 4); // the tab's re-read lands
+    expect(store.get('a')?.changedFiles).toBe(4);
+    store.setTabCount('a', tab, null);
+    store.apply(glance('a', '2026-11-04T00:00:09Z', 1, 5));
+    expect(store.get('a')?.changedFiles).toBe(5);
+  });
+
+  it('two open tabs of one session: closing one leaves the other\'s count', () => {
+    const store = new SessionGitStore({ fetch: vi.fn(async () => ({})) }, () => now);
+    store.apply(glance('a', '2026-11-04T00:00:05Z', 1, 9));
+    const side = {}, card = {};
+    store.setTabCount('a', side, 4);
+    store.setTabCount('a', card, 5);
+    expect(store.get('a')?.changedFiles).toBe(5);
+    store.setTabCount('a', card, null);
+    expect(store.get('a')?.changedFiles).toBe(4);
+    store.setTabCount('a', side, null);
+    expect(store.get('a')?.changedFiles).toBe(9);
+    // The snapshot is the same object until something changes (no render loop).
+    expect(store.get('a')).toBe(store.get('a'));
+  });
+
+  it('the same reading again notifies no row (nothing re-renders)', () => {
+    const store = new SessionGitStore({ fetch: vi.fn(async () => ({})) }, () => now);
+    const l = vi.fn();
+    store.subscribe('a', l);
+    store.apply(glance('a', '2026-11-04T00:00:05Z'));
+    const first = store.get('a');
+    store.apply(glance('a', '2026-11-04T00:00:05Z'));
+    expect(l).toHaveBeenCalledTimes(1);
+    expect(store.get('a')).toBe(first);
+    store.apply(glance('a', '2026-11-04T00:00:06Z'));
+    expect(l).toHaveBeenCalledTimes(2);
+  });
 });
+

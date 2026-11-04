@@ -5,7 +5,8 @@
  * works in (the repos it edited files in, then its cwd's repo) with their
  * branch, changed paths, +/- lines and commits not pushed yet, plus how many
  * files the session's Changed tab lists (`changedFiles`, read from the
- * changes cache, never computed here).
+ * changes cache; a watched session with no list yet gets one counted in the
+ * background, one at a time, so its chip has a number before the tab opens).
  *
  * Where the git work runs: on the host that owns the repo, like the Changed
  * tab's git diff (session-git-diff.ts). A local session runs createGitStatus
@@ -31,6 +32,7 @@ import { execFile } from 'node:child_process';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { createGitStatus, type GitRepoStatus } from '../providers/git-diff-core.js';
+import { memoryPressureShedding } from './memory-pressure.js';
 
 export type { GitRepoStatus } from '../providers/git-diff-core.js';
 
@@ -60,6 +62,14 @@ const READ_SHARE_MS = 5_000;
 const RPC_TIMEOUT_MS = 15_000;
 const MAX_DIRS = 8;
 const CACHE_MAX = 500;
+/** Background Changed counts: the gap between two, how soon one is tried again (sooner
+ *  for an open panel), the queue's cap, and the longest a count waits behind a compute
+ *  already running (the prewarmer's, a tab's): one transcript parse at a time. */
+const COUNT_PACE_MS = 2_000;
+const COUNT_RETRY_MS = 10 * 60_000;
+const COUNT_RETRY_FRONT_MS = 30_000;
+const COUNT_QUEUE_MAX = 100;
+const COUNT_WAIT_MAX_MS = 2 * 60_000;
 
 interface Entry {
   glance: SessionGitGlance;
@@ -73,15 +83,26 @@ const watched = new Map<string, number>();
 const activityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lanes = new Map<string, { running: number; waiters: Array<() => void> }>();
 const reads = new Map<string, { at: number; p: Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'> }>();
+const countQueue: string[] = [];
+const countQueued = new Map<string, number>();
+let counting = false;
+/** Bumped by the test reset: a drain from before it stops. */
+let countGen = 0;
 
 // ── Dependencies (swappable in tests) ──
 
 interface Deps {
-  getSession: (id: string) => Promise<{ cwd?: string; host?: string } | null>;
+  getSession: (id: string) => Promise<{ cwd?: string; host?: string; outputFile?: string } | null>;
   peekChanges: (id: string, host?: string) => Promise<{ fileCount: number; groups: Array<{ repoRoot: string; files: unknown[] }> } | null>;
   readLocal: (dirs: string[]) => Promise<GitRepoStatus[]>;
   readRemote: (host: string, dirs: string[]) => Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'>;
   emit: (glance: SessionGitGlance) => void;
+  /** Compute the session's Changed list (it reports its count through noteSessionChangesComputed). */
+  countChanges: (id: string, record: { cwd?: string; host?: string; outputFile?: string }) => Promise<unknown>;
+  /** True while the server sheds background work for memory. */
+  shedding: () => boolean;
+  /** True while any Changed compute runs (a count waits for it). */
+  changesBusy: () => boolean;
   now: () => number;
 }
 
@@ -135,10 +156,23 @@ const defaultDeps: Deps = {
     return res.repos as GitRepoStatus[];
   },
   emit: (glance) => { bus.emit(GIT_STATUS_EVENT, glance, ['web-ui'], { source: 'session-git-status' }); },
+  countChanges: async (id, record) => {
+    const { computeSessionChanges } = await import('./session-changes.js');
+    // noRetain: the disk snapshot (what later peeks read), not the in-memory cache of sessions in use.
+    return computeSessionChanges(id, record.cwd, record.host, record.outputFile, { noRetain: true });
+  },
+  changesBusy: () => changesInflightProbe?.() ?? false,
+  shedding: () => {
+    try { return memoryPressureShedding(); } catch { return false; }
+  },
   now: () => Date.now(),
 };
 
 let deps: Deps = defaultDeps;
+
+// session-changes imports this module, so its in-flight probe is wired lazily.
+let changesInflightProbe: (() => boolean) | null = null;
+void import('./session-changes.js').then((m) => { changesInflightProbe = m.anySessionChangesInflight; }).catch(() => { /* waits on nothing */ });
 
 // ── Compute ──
 
@@ -250,6 +284,9 @@ async function computeInner(sessionId: string): Promise<SessionGitGlance> {
       || prev.glance.changedFiles !== glance.changedFiles
       || prev.glance.unavailable !== glance.unavailable;
     if (changed) deps.emit(glance);
+    // No Changed list yet for a session on screen: count one behind (its repos
+    // were just read, so its host is there to read the transcript from).
+    if (changedFiles === null && readOk && record?.cwd && isWatched(sessionId)) queueCount(sessionId);
     return glance;
   }
 }
@@ -283,11 +320,15 @@ export async function getSessionGitGlances(
   for (const id of sessionIds) {
     watched.set(id, now);
     const entry = cache.get(id);
-    const due = !isFresh(entry, opts.refresh ? MIN_INTERVAL_MS : Math.max(FRESH_MS, opts.maxAgeMs ?? 0));
+    const freshFor = opts.refresh ? MIN_INTERVAL_MS : Math.max(MIN_INTERVAL_MS, opts.maxAgeMs ?? FRESH_MS);
+    const due = !isFresh(entry, freshFor);
+    // An open panel asks with refresh: its count goes first.
+    if (opts.refresh && entry && entry.glance.changedFiles === null) queueCount(id, true);
     out[id] = entry?.glance ?? null;
     if (!due) continue;
     const p = computeSessionGitGlance(id);
     p.catch(() => { /* logged inside */ });
+    if (opts.refresh && !entry) void p.then((g) => { if (g.changedFiles === null && isWatched(id)) queueCount(id, true); }).catch(() => {});
     if (!entry || opts.refresh) cold.push({ id, p });
   }
   if (cold.length && (opts.waitMs ?? 0) > 0) {
@@ -325,6 +366,54 @@ export function noteSessionActivity(sessionId: string, delayMs = ACTIVITY_DEBOUN
   }, Math.max(delayMs, floor));
   t.unref?.();
   activityTimers.set(sessionId, t);
+}
+
+// ── Background Changed counts ──
+
+/** Count a watched session's Changed list behind, one session at a time (front = an open panel). */
+function queueCount(sessionId: string, front = false): void {
+  const last = countQueued.get(sessionId);
+  const queued = countQueue.includes(sessionId);
+  if (queued && front) countQueue.splice(countQueue.indexOf(sessionId), 1);
+  else if (queued || (last !== undefined && deps.now() - last < (front ? COUNT_RETRY_FRONT_MS : COUNT_RETRY_MS))) return;
+  if (!queued && countQueue.length >= COUNT_QUEUE_MAX) return;
+  countQueued.set(sessionId, deps.now());
+  if (countQueued.size > CACHE_MAX) {
+    for (const [k, at] of countQueued) if (deps.now() - at >= COUNT_RETRY_MS) countQueued.delete(k);
+  }
+  if (front) countQueue.unshift(sessionId);
+  else countQueue.push(sessionId);
+  void drainCounts();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.(); });
+}
+
+async function drainCounts(): Promise<void> {
+  if (counting) return;
+  counting = true;
+  const gen = countGen;
+  try {
+    while (countQueue.length && gen === countGen) {
+      // Behind a compute already running: never two transcript parses at once.
+      for (let waited = 0; deps.changesBusy() && waited < COUNT_WAIT_MAX_MS && gen === countGen; waited += COUNT_PACE_MS) await sleep(COUNT_PACE_MS);
+      if (gen !== countGen) return;
+      const id = countQueue.shift();
+      if (id === undefined) break;
+      if (!isWatched(id) || cache.get(id)?.glance.changedFiles != null) continue;
+      if (deps.shedding()) { countQueued.delete(id); continue; }
+      try {
+        const record = await deps.getSession(id);
+        if (record?.cwd) await deps.countChanges(id, record);
+      } catch (err) {
+        log.session.debug('session-git-status: Changed count failed', { sessionId: id, error: String(err) });
+      }
+      if (countQueue.length) await sleep(COUNT_PACE_MS);
+    }
+  } finally {
+    if (gen === countGen) counting = false;
+  }
 }
 
 /** The Changed tab's list for a session was recomputed: push the new count. */
@@ -375,4 +464,8 @@ export function _resetSessionGitStatusForTesting(): void {
   activityTimers.clear();
   lanes.clear();
   reads.clear();
+  countQueue.length = 0;
+  countQueued.clear();
+  countGen++;
+  counting = false;
 }

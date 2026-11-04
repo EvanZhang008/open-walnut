@@ -6,14 +6,16 @@
  *    act on (uncommitted files or unpushed commits): a clean, pushed task
  *    stays quiet in a list of thirty.
  *  - GitGlanceLine: a session row's line and the Changed tab's strip. Always
- *    names the branch, and says "clean" when there is nothing else.
+ *    names the branch, words its numbers ("2 uncommitted", "↑1 unpushed": the
+ *    Changed chip beside it counts something else, the session's own edits),
+ *    and says "clean" when there is nothing else.
  * Every number is spelled out in the tooltip (gitGlanceTitle).
  */
 import { memo, useEffect, useState } from 'react';
 import { timeAgo } from '@/utils/time';
 import { useSessionGitGlance } from '@/stores/session-git-store';
 import type { SessionGitGlance } from '@/api/session-git-status';
-import { branchLabel, compactCount, gitGlanceTitle, summarizeGitGlance, type GitGlanceSummary } from '@/utils/git-glance-text';
+import { branchLabel, compactCount, gitGlanceTitle, pillBranchText, summarizeGitGlance, type GitGlanceSummary } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 
 export function BranchIcon() {
@@ -27,6 +29,16 @@ export function BranchIcon() {
   );
 }
 
+/** A commit (a dot on a line): a detached HEAD, where a branch name would be. */
+function CommitIcon() {
+  return (
+    <svg className="git-glance-icon" viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M1.5 8h3.75M10.75 8h3.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** A page with a folded corner: "files" where a row has no room for the word. */
 function FileIcon() {
   return (
@@ -36,23 +48,49 @@ function FileIcon() {
   );
 }
 
-function Counts({ s, filesWord, pull = true }: { s: GitGlanceSummary; filesWord: boolean; pull?: boolean }) {
+/** Where a long branch name is cut: in the middle, its end kept (worktree branches
+ *  share a prefix, so the end is what tells them apart). The head gives way to the
+ *  room the row has; a short name is one piece. */
+const BRANCH_TAIL = 5;
+function BranchName({ text, split }: { text: string; split: boolean }) {
+  if (!split || text.length <= BRANCH_TAIL * 2) return <span className="git-glance-branch">{text}</span>;
+  return (
+    <span className="git-glance-branch git-glance-branch-split">
+      <span className="git-glance-branch-head">{text.slice(0, -BRANCH_TAIL)}</span>
+      <span className="git-glance-branch-tail">{text.slice(-BRANCH_TAIL)}</span>
+    </span>
+  );
+}
+
+/** How the counts read: `icon` a pill's page icon and bare numbers; `short`
+ *  "2 uncommitted", "↑1 unpushed"; `long` "2 uncommitted files". */
+type CountsWords = 'icon' | 'short' | 'long';
+
+function Counts({ s, words, pull = true }: { s: GitGlanceSummary; words: CountsWords; pull?: boolean }) {
   return (
     <>
       {s.files > 0 && (
         <span className="git-glance-files" data-testid="git-glance-files">
-          {!filesWord && <FileIcon />}
-          {compactCount(s.files)}{filesWord ? ` file${s.files === 1 ? '' : 's'}` : ''}
+          {words === 'icon' && <FileIcon />}
+          {compactCount(s.files)}
+          {words === 'short' && ' uncommitted'}
+          {words === 'long' && ` uncommitted file${s.files === 1 ? '' : 's'}`}
         </span>
       )}
       {s.files > 0 && (s.insertions > 0 || s.deletions > 0) && (
         <span className="git-glance-lines">
-          <span className="git-glance-add">+{compactCount(s.insertions)}</span>
-          <span className="git-glance-del">{'−'}{compactCount(s.deletions)}</span>
+          {/* A zero side says nothing: only the side that moved shows. */}
+          {s.insertions > 0 && <span className="git-glance-add">+{compactCount(s.insertions)}</span>}
+          {s.deletions > 0 && <span className="git-glance-del">{'−'}{compactCount(s.deletions)}</span>}
         </span>
       )}
       {s.conflicted > 0 && <span className="git-glance-conflict">{s.conflicted} conflict{s.conflicted === 1 ? '' : 's'}</span>}
-      {!!s.ahead && <span className="git-glance-ahead" data-testid="git-glance-ahead">{'↑'}{compactCount(s.ahead)}</span>}
+      {!!s.ahead && (
+        <span className="git-glance-ahead" data-testid="git-glance-ahead">
+          {'↑'}{compactCount(s.ahead)}
+          {words !== 'icon' && <span className="git-glance-word"> unpushed</span>}
+        </span>
+      )}
       {pull && !!s.behind && <span className="git-glance-behind">{'↓'}{compactCount(s.behind)}</span>}
     </>
   );
@@ -81,15 +119,15 @@ export const GitGlancePill = memo(function GitGlancePill({ sessionId }: { sessio
       role="img"
       data-testid="git-glance-pill"
     >
-      <BranchIcon />
-      <span className="git-glance-branch">{branchLabel(s)}</span>
-      <Counts s={s} filesWord={false} pull={false} />
+      {s.branch ? <BranchIcon /> : <CommitIcon />}
+      <BranchName text={pillBranchText(s)} split={!!s.branch} />
+      <Counts s={s} words="icon" pull={false} />
     </span>
   );
 });
 
 /** The line form, from a glance already read (the Changed tab passes its own). */
-export function GitGlanceLineView({ glance, className = '' }: { glance: SessionGitGlance | null; className?: string }) {
+export function GitGlanceLineView({ glance, className = '', words = 'short' }: { glance: SessionGitGlance | null; className?: string; words?: 'short' | 'long' }) {
   const s = summarizeGitGlance(glance);
   if (!glance || !s) return null;
   return (
@@ -100,10 +138,12 @@ export function GitGlanceLineView({ glance, className = '' }: { glance: SessionG
       role="img"
       data-testid="git-glance-line"
     >
-      <BranchIcon />
-      <span className="git-glance-branch">{branchLabel(s)}</span>
+      {s.branch ? <BranchIcon /> : <CommitIcon />}
+      <BranchName text={branchLabel(s)} split={!!s.branch} />
       {s.extraRepos > 0 && <span className="git-glance-more">+{s.extraRepos} repo{s.extraRepos === 1 ? '' : 's'}</span>}
-      {s.clean ? <span className="git-glance-clean">clean</span> : <Counts s={s} filesWord />}
+      {s.clean
+        ? <span className="git-glance-clean">{words === 'long' ? `all committed${s.ahead === 0 ? ' and pushed' : ''}` : 'clean'}</span>
+        : <Counts s={s} words={words} />}
     </span>
   );
 }

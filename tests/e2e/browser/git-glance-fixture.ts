@@ -175,8 +175,8 @@ export function writeGitGlanceDemo(tmpBase: string, now: number): DemoSession[] 
     git(repo, 'remote', 'add', 'origin', remote)
     git(repo, 'push', '-q', '-u', 'origin', 'main')
     c.build(repo, remote)
-    const sessionId = `pw-git-glance-${c.slug}-session`
-    const taskId = `pw-task-git-glance-${c.slug}`
+    const sessionId = `pw-glance-demo-${c.slug}-session`
+    const taskId = `pw-glance-demo-${c.slug}`
     const at = (ms: number) => new Date(now - ms).toISOString()
     const jsonl = [
       { type: 'user', sessionId, timestamp: at(60_000), message: { role: 'user', content: c.title } },

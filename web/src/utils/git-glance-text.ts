@@ -109,13 +109,23 @@ export function gitGlanceTitle(glance: SessionGitGlance, s: GitGlanceSummary): s
   return lines.join('\n');
 }
 
-/** The Changed chip's tooltip: what its number counts, then the git state. */
+/** The Changed chip's tooltip: what its number counts, set against git's count
+ *  (they differ: the chip counts the session's own edits, committed or not). */
 export function changedChipTitle(glance: SessionGitGlance | null): string {
   const base = 'See the files this session changed, in a full-screen diff alongside the chat';
   if (!glance) return base;
-  const head = glance.changedFiles !== null && glance.changedFiles > 0
-    ? `This session changed ${plural(glance.changedFiles, 'file')}: open them in a full-screen diff alongside the chat`
-    : base;
   const s = summarizeGitGlance(glance);
+  let head = base;
+  if (glance.changedFiles !== null && glance.changedFiles > 0) {
+    head = `This session changed ${plural(glance.changedFiles, 'file')}`;
+    if (s) head += s.files === 0 ? ', all committed' : ` (${s.files} still uncommitted in ${s.extraRepos ? 'its repos' : 'its repo'})`;
+    head += '. Click to see them in a full-screen diff alongside the chat.';
+  }
   return s ? `${head}\n\n${gitGlanceTitle(glance, s)}` : head;
+}
+
+/** The branch as a pill has room for: the name, or the short sha of a detached HEAD. */
+export function pillBranchText(s: GitGlanceSummary): string {
+  if (s.branch) return s.branch;
+  return s.head ? s.head.slice(0, 7) : 'no commits';
 }

@@ -34,6 +34,10 @@
   font-family: var(--font-mono);
   font-size: 0.95em;
 }
+/* A long name cut in the middle (BranchName): the head takes the ellipsis, the tail stays. */
+.git-glance .git-glance-branch.git-glance-branch-split { display: inline-flex; min-width: 8ch; text-overflow: clip; }
+.git-glance-branch-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-glance-branch-tail { flex: none; }
 .git-glance-lines { display: inline-flex; gap: 3px; }
 .git-glance-add { color: var(--git-glance-add); }
 .git-glance-del { color: var(--git-glance-del); }
@@ -43,28 +47,70 @@
 .git-glance-clean, .git-glance-more { color: var(--fg-muted); }
 .git-glance.is-stale { opacity: 0.6; }
 
-/* Task row pill: keeps the row on one line; the branch gives way first. */
+/* Task row pill: one look wherever a task row shows it (a Home card, a search
+   row, a list row), the size of the list's other pills (row-pills.css: 16px, 10px
+   text). The branch name gives way first, to the room the row has; the counts
+   never shrink. */
 .git-glance-pill {
-  max-width: 260px;
+  box-sizing: border-box;
+  height: 16px;
+  padding: 0 7px;
+  gap: 4px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 12px;
+  max-width: 100%;
   flex-shrink: 1;
+  overflow: hidden;
   cursor: default;
 }
-.git-glance-pill .git-glance-branch { max-width: 120px; }
-/* On a Home card's small top line it is plain text like its neighbours, and gives way
-   first: its branch name shrinks to nothing before the project name or the time do. */
-html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pill.todo-item-due-pill,
-.status-card-meta .git-glance-pill { flex: 0 3 auto; min-width: 0; overflow: hidden; gap: 4px; }
-.status-card-meta .git-glance-pill .git-glance-branch { max-width: 96px; min-width: 5ch; }
-/* A card too narrow for a readable branch name leaves it to the tooltip. */
-.status-card-body:has(.git-glance-pill) { container: git-glance-card / inline-size; }
-@container git-glance-card (max-width: 330px) {
-  .status-card-meta .git-glance-pill .git-glance-branch { display: none; }
-}
-.status-card-meta:has(.git-glance-pill) .status-card-project { min-width: min(7ch, 30%); }
-.status-card-meta:has(.git-glance-pill) .todo-recent-ago { flex-shrink: 0; }
+.git-glance-pill .git-glance-branch { flex: 0 1 auto; min-width: 4ch; max-width: 24ch; }
 .git-glance-pill > :not(.git-glance-branch) { flex-shrink: 0; }
 .git-glance-files { display: inline-flex; align-items: center; gap: 2px; }
 .git-glance-file-icon { opacity: 0.7; }
+/* The phone task list pins its pills' size (phone-pages.css); this one still gives way. */
+.app-shell-navigation .todo-panel .git-glance-pill.todo-item-due-pill { flex-shrink: 1; min-width: 0; max-width: 100%; }
+/* A list or search row: short enough to stay on the project's line. */
+.todo-item-title-row .git-glance-pill .git-glance-branch { max-width: 14ch; }
+
+/* The phone search's result row: its own line under the title (12px: a phone's smallest text). */
+.phone-search-row .git-glance-pill { align-self: flex-start; height: 20px; margin-top: 2px; font-size: 12px; }
+
+/* A Home card's top line: the same pill (status-sections.css flattens the pills
+   there; these outrank it), its own separator (no "·" before it), shrinking
+   before the project name and the time do. */
+html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pill.todo-item-due-pill,
+.status-card-meta .git-glance.git-glance-pill.git-glance-pill {
+  flex: 0 3 auto;
+  min-width: 0;
+  height: 15px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 10px;
+  line-height: 15px;
+  gap: 3px;
+}
+.status-card-meta > .git-glance.git-glance-pill.git-glance-pill.git-glance-pill::before { content: none; }
+.status-card-meta:has(.git-glance-pill) .status-card-project { min-width: min(7ch, 30%); }
+.status-card-meta:has(.git-glance-pill) .todo-recent-ago { flex-shrink: 0; }
+/* A card gives way in steps, the tooltip keeping every number: first the +/- lines
+   (the default sidebar width: a cut branch, the files and the unpushed count fit),
+   then the branch (the files and the unpushed count stay). */
+.status-card-body:has(.git-glance-pill) { container: git-glance-card / inline-size; }
+@container git-glance-card (max-width: 270px) {
+  .status-card-meta .git-glance-pill > .git-glance-lines { display: none; }
+}
+@container git-glance-card (max-width: 170px) {
+  .status-card-meta .git-glance-pill > :is(.git-glance-icon, .git-glance-branch) { display: none; }
+  html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pill.todo-item-due-pill,
+  .status-card-meta .git-glance.git-glance-pill.git-glance-pill { flex-shrink: 0; }
+  .status-card-meta:has(.git-glance-pill) .status-card-project { min-width: 3ch; }
+}
 
 /* Session row line and the Changed tab's strip. */
 .git-glance-line {
@@ -73,9 +119,10 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   max-width: 100%;
 }
 .git-glance-line .git-glance-branch { max-width: 220px; }
+.git-glance-word { font-weight: 400; }
 
 .tdp-row-git { flex: 0 1 auto; margin-left: 6px; }
-.tdp-row-git .git-glance-branch { max-width: 110px; }
+.tdp-row-git .git-glance-branch { max-width: 200px; }
 
 /* The Changed chip's count: what the tab lists. */
 .session-chip-count {
@@ -100,8 +147,21 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 10px;
+  padding: 5px 12px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
-.session-diff-gitstrip-when { font-size: 10.5px; color: var(--fg-muted); white-space: nowrap; margin-left: auto; }
+.session-diff-gitstrip .git-glance-line { font-size: 12px; gap: 6px; color: var(--fg-secondary); }
+.session-diff-gitstrip-when { font-size: 11px; color: var(--fg-secondary); opacity: 0.8; white-space: nowrap; margin-left: auto; }
+
+/* A phone-width Changed tab: its toolbar wraps onto a second line instead of
+   cutting its right-hand buttons off (the git strip sits under it either way). */
+@media (max-width: 768px) {
+  .session-diff-view .session-diff-toolbar { flex-wrap: wrap; row-gap: 6px; }
+  .session-diff-view .session-diff-toolbar-actions { flex-wrap: wrap; row-gap: 6px; }
+}
+
+/* A phone reads nothing under 12px: the session row's line in a task's detail too. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .git-glance-line { font-size: 12px; }
+}

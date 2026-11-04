@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { GitRepoStatus, SessionGitGlance } from '../../web/src/api/session-git-status';
-import { changedChipTitle, compactCount, gitGlanceTitle, summarizeGitGlance, branchLabel } from '../../web/src/utils/git-glance-text';
+import { changedChipTitle, pillBranchText, compactCount, gitGlanceTitle, summarizeGitGlance, branchLabel } from '../../web/src/utils/git-glance-text';
 
 function repo(over: Partial<GitRepoStatus> = {}): GitRepoStatus {
   return { repoRoot: '/w/app', branch: 'main', head: 'abcdef123', upstream: 'origin/main', ahead: 0, behind: 0, files: 0, untracked: 0, conflicted: 0, insertions: 0, deletions: 0, ...over };
@@ -52,7 +52,15 @@ describe('titles', () => {
 
   it('the Changed chip says what its number counts', () => {
     expect(changedChipTitle(null)).toMatch(/^See the files this session changed/);
-    expect(changedChipTitle(g([repo()], { changedFiles: 1 }))).toMatch(/^This session changed 1 file: open them/);
+    // Set against git's count, which counts something else (what is not committed yet).
+    expect(changedChipTitle(g([repo()], { changedFiles: 1 }))).toMatch(/^This session changed 1 file, all committed\. Click to see them/);
+    expect(changedChipTitle(g([repo({ files: 2 })], { changedFiles: 4 }))).toMatch(/^This session changed 4 files \(2 still uncommitted in its repo\)\./);
+    expect(changedChipTitle(g([repo({ files: 1 }), repo({ repoRoot: '/w/b' })], { changedFiles: 3 }))).toContain('(1 still uncommitted in its repos)');
+  });
+
+  it('a pill names a detached HEAD by its short sha', () => {
+    expect(pillBranchText(summarizeGitGlance(g([repo({ branch: null, head: '0713ad5c1' })]))!)).toBe('0713ad5');
+    expect(pillBranchText(summarizeGitGlance(g([repo()]))!)).toBe('main');
   });
 });
 

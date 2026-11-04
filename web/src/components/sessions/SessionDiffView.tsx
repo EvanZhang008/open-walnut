@@ -309,8 +309,10 @@ function TreeRow({
  *    immediately (the old behavior), bypassing the batch.
  * ⌘/Ctrl+Enter = Add (the default); ⌘/Ctrl+Shift+Enter = Send now.
  */
-function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }: {
+function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange, lineChanged = false }: {
   loc: string;
+  /** The commented lines read differently now (the session edited them while the box was open). */
+  lineChanged?: boolean;
   /** Where the half-typed comment is kept (per session and line) until it is added, sent or cancelled. */
   keepKey: string;
   onAdd: (text: string) => void;
@@ -341,6 +343,11 @@ function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }:
   return (
     <div className="session-diff-comment-box">
       <div className="session-diff-comment-loc">{loc}</div>
+      {lineChanged && (
+        <div className="session-diff-comment-changed" role="status" data-testid="session-diff-comment-changed">
+          The code here changed since you started this comment
+        </div>
+      )}
       <textarea
         ref={ref}
         className="session-diff-comment-input"
@@ -832,6 +839,29 @@ export const FileDiffPane = memo(function FileDiffPane({
     flatChanges.forEach((c, i) => m.set(getChangeKey(c), i));
     return m;
   }, [flatChanges]);
+  // The open comment's lines, re-read after a live refresh: gone or reworded = changed.
+  const draftLineChanged = useMemo(() => {
+    if (!draft || draft.anchorKey.startsWith('md:')) return false;
+    const now = draft.changeKeys.map((k) => {
+      const i = keyToIdx.get(k);
+      return i === undefined ? null : (flatChanges[i]!.content ?? '');
+    });
+    return now.some((t) => t === null) || now.join('\n') !== draft.code;
+  }, [draft, keyToIdx, flatChanges]);
+  // The line the open box hangs under was rewritten (a live refresh turned it into a
+  // delete + insert): move the box to the same line number, else the nearest line
+  // before it, so it never vanishes with its half-typed words.
+  useEffect(() => {
+    if (!draft || draft.anchorKey.startsWith('md:') || keyToIdx.has(draft.anchorKey) || flatChanges.length === 0) return;
+    const n = Number(draft.anchorKey.slice(1));
+    let next = ['I', 'N', 'D'].map((p) => `${p}${n}`).find((k) => keyToIdx.has(k));
+    if (!next && Number.isFinite(n)) {
+      const lineOf = (c: ChangeData) => (isDelete(c) ? computeOldLineNumber(c) : computeNewLineNumber(c));
+      const before = flatChanges.filter((c) => lineOf(c) > 0 && lineOf(c) <= n).pop();
+      next = getChangeKey(before ?? flatChanges[flatChanges.length - 1]!);
+    }
+    if (next) setDraft((d) => (d && d.anchorKey === draft.anchorKey ? { ...d, anchorKey: next! } : d));
+  }, [draft, keyToIdx, flatChanges]);
 
   // Stat counts come from the ORIGINAL hunks (not the expanded ones) so revealing
   // context never inflates the +N/−N badges with normal lines.
@@ -1006,7 +1036,7 @@ export const FileDiffPane = memo(function FileDiffPane({
             />
           ))}
           {draftHere && (
-            <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+            <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} lineChanged={draftLineChanged} />
           )}
         </>
       );
@@ -1014,11 +1044,11 @@ export const FileDiffPane = memo(function FileDiffPane({
     // Draft anchored on a line that has no recorded comments yet.
     if (draft && !byAnchor.has(draft.anchorKey)) {
       map[draft.anchorKey] = (
-        <CommentBox loc={draft.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+        <CommentBox loc={draft.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} lineChanged={draftLineChanged} />
       );
     }
     return Object.keys(map).length ? map : undefined;
-  }, [pending, draft, addDraft, sendDraftNow, cancelDraft, onDraftDirtyChange, onCopyComment, onRemoveComment]);
+  }, [pending, draft, addDraft, sendDraftNow, cancelDraft, onDraftDirtyChange, onCopyComment, onRemoveComment, draftLineChanged]);
 
   // Recorded comments for the RENDERED-MARKDOWN view, grouped by their md anchor
   // key (`md:L<n>`) so each row can show its own cards + composer (the diff view
@@ -1095,7 +1125,7 @@ export const FileDiffPane = memo(function FileDiffPane({
           />
         ))}
         {draftHere && (
-          <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+          <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} lineChanged={draftLineChanged} />
         )}
       </RenderedMarkdownRow>
     );
@@ -1670,6 +1700,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   }, [sessionId]);
   const liveCancelRef = useRef<(() => void) | null>(null);
   useEffect(() => () => { liveCancelRef.current?.(); liveCancelRef.current = null; }, [load]);
+  // The chip counts what this tab lists while it is open (the session base is the chip's count).
+  // (Only this session's list: on a switch the old list is still in `data` for one render.)
+  const listedCount = isSessionBase && data && data.sessionId === sessionId ? data.fileCount : null;
+  const tabToken = useRef({}).current;
+  useEffect(() => { sessionGitStore.setTabCount(sessionId, tabToken, listedCount); }, [sessionId, tabToken, listedCount]);
+  useEffect(() => () => { sessionGitStore.setTabCount(sessionId, tabToken, null); }, [sessionId, tabToken]);
   useChangedLiveRefresh(sessionId, () => {
     liveCancelRef.current?.();
     liveCancelRef.current = load(false, true);
@@ -2467,7 +2503,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       {/* The session's repos now: branch, uncommitted files, +/- lines, unpushed commits. */}
       {gitGlance && gitGlance.repos.length > 0 && (
         <div className="session-diff-gitstrip" data-testid="session-diff-gitstrip">
-          <GitGlanceLineView glance={gitGlance} />
+          <GitGlanceLineView glance={gitGlance} words="long" />
           <GitCheckedAgo at={gitGlance.checkedAt} />
         </div>
       )}

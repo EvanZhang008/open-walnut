@@ -5,8 +5,13 @@
  *
  * Reads are batched: the rows that mount in one frame ask in ONE request
  * (/api/sessions/git-status, up to 50 ids). After that the server pushes each
- * change as `session:git-status`; a re-ask every few minutes keeps the
- * server watching the sessions still on screen, and a reconnect asks again.
+ * change as `session:git-status`; the rows on screen re-ask every
+ * KEEPALIVE_MS while the page is shown (the server re-reads only answers older
+ * than that), and a reconnect asks again.
+ *
+ * While a session's Changed tab is open, its chip counts what the tab lists
+ * (setTabCount): the two never disagree on screen, even for the moment between
+ * the server's new count and the tab's re-read.
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { fetchSessionGitGlances, type SessionGitGlance } from '@/api/session-git-status';
@@ -18,16 +23,23 @@ const BATCH_DELAY_MS = 60;
 const BATCH_MAX = 50;
 /** An id read this recently is not asked again by a row mounting. */
 const REREAD_MS = 25_000;
-/** Visible rows re-ask this often: keeps the server's watch alive (it lapses after 15 min).
- *  The server re-reads only answers older than KEEPALIVE_MAX_AGE_S (idle rows stay cheap;
- *  an active session's rows are pushed on every change anyway). */
-const KEEPALIVE_MS = 4 * 60_000;
-const KEEPALIVE_MAX_AGE_S = 10 * 60;
+/** Shown rows re-ask this often, so an edit made outside a session (an editor, a
+ *  commit in a terminal) reaches them within about this; it also keeps the server's
+ *  watch alive. The server re-reads only answers older than KEEPALIVE_MAX_AGE_S, and
+ *  a running session's rows are pushed on its own tool calls sooner. */
+const KEEPALIVE_MS = 30_000;
+/** Shorter than KEEPALIVE_MS, so a reading made just before the last ask is not re-read twice in a row by jitter. */
+const KEEPALIVE_MAX_AGE_S = 25;
 /** Entries kept for sessions no row shows any more. */
 const UNSHOWN_MAX = 500;
 
 interface Entry {
+  /** The server's last answer. */
   glance: SessionGitGlance | null;
+  /** What the hooks see: the answer, its count replaced by an open tab's (tabCount). */
+  view: SessionGitGlance | null;
+  /** Each open Changed tab's file count, by tab; the last one written counts. */
+  tabCounts: Map<object, number>;
   /** Date.now() of the last answer, and of the last ask (0 = never). */
   at: number;
   askedAt: number;
@@ -50,7 +62,7 @@ export class SessionGitStore {
   private entry(id: string): Entry {
     let e = this.entries.get(id);
     if (!e) {
-      e = { glance: null, at: 0, askedAt: 0, listeners: new Set() };
+      e = { glance: null, view: null, tabCounts: new Map(), at: 0, askedAt: 0, listeners: new Set() };
       this.entries.set(id, e);
       if (this.entries.size > UNSHOWN_MAX * 2) this.prune();
     }
@@ -64,7 +76,28 @@ export class SessionGitStore {
     for (const [id] of unshown) this.entries.delete(id);
   }
 
-  get = (id: string): SessionGitGlance | null => this.entries.get(id)?.glance ?? null;
+  get = (id: string): SessionGitGlance | null => this.entries.get(id)?.view ?? null;
+
+  private publish(id: string, e: Entry): void {
+    const tabCount = e.tabCounts.size ? [...e.tabCounts.values()].pop()! : null;
+    if (tabCount === null) e.view = e.glance;
+    else if (e.glance) e.view = e.glance.changedFiles === tabCount ? e.glance : { ...e.glance, changedFiles: tabCount };
+    // Not read yet: the chip can still show the tab's count.
+    else e.view = { sessionId: id, repos: [], changedFiles: tabCount, checkedAt: new Date(0).toISOString() };
+    for (const l of e.listeners) l();
+  }
+
+  /** The Changed tab `tab` (any object it keeps) lists `count` files of session `id`
+   *  (null: it closed, or shows another comparison). Two tabs of one session never
+   *  clear each other's: the last one written counts. */
+  setTabCount = (id: string, tab: object, count: number | null): void => {
+    if (!id || isPlaceholderColumnId(id)) return;
+    const e = this.entry(id);
+    if (count === null ? !e.tabCounts.has(tab) : e.tabCounts.get(tab) === count) return;
+    e.tabCounts.delete(tab);
+    if (count !== null) e.tabCounts.set(tab, count);
+    this.publish(id, e);
+  };
 
   subscribe = (id: string, listener: () => void): (() => void) => {
     this.wire();
@@ -83,9 +116,11 @@ export class SessionGitStore {
     // A late response never puts back an older reading than the one shown (a new
     // Changed count goes out with the reading time it was added to, so it passes).
     if (e.glance && Date.parse(glance.checkedAt) < Date.parse(e.glance.checkedAt)) return;
-    e.glance = glance;
     e.at = this.now();
-    for (const l of e.listeners) l();
+    // The same reading again (a keepalive, a second ask): nothing re-renders.
+    if (e.glance && JSON.stringify(e.glance) === JSON.stringify(glance)) return;
+    e.glance = glance;
+    this.publish(glance.sessionId, e);
   };
 
   /** Ask for an id unless it was read lately; batched with the others asked now. */

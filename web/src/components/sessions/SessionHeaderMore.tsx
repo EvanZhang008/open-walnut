@@ -52,6 +52,8 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
+  // A view chip with a number (Changed's file count) keeps it in the menu.
+  else if (!id.startsWith(SLOT_ID_PREFIX) && button.dataset.headerValue) value = button.dataset.headerValue;
   // A pinned plugin fact's row shows what the chip says, so hiding it costs nothing: its
   // `data-header-value` when it gives one (the time pill's exact "You 2h 46m · Agent 8h 26m"
   // behind its "2h" and "8h"), else its text.

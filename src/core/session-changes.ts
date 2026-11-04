@@ -679,7 +679,7 @@ export async function computeSessionChanges(
   cwd?: string,
   host?: string,
   outputFile?: string,
-  opts?: { noCache?: boolean },
+  opts?: { noCache?: boolean; noRetain?: boolean },
 ): Promise<SessionChangesResult> {
   // Serialize per session key. The Changed tab and the Files panel's
   // quick-access fetch fire CONCURRENTLY for the same session; two overlapping
@@ -706,6 +706,11 @@ const inflightByKey = new Map<string, Promise<SessionChangesResult>>();
  *  background pre-warmer use this to avoid queuing duplicate work). */
 export function hasInflightSessionChanges(sessionId: string, host?: string): boolean {
   return inflightByKey.has(cacheKey(sessionId, host));
+}
+
+/** True while any session's compute runs: a background count waits its turn behind it. */
+export function anySessionChangesInflight(): boolean {
+  return inflightByKey.size > 0;
 }
 
 // ── Daemon-side compute (capability 'changes-v1') ──
@@ -779,7 +784,7 @@ async function computeSessionChangesInner(
   cwd?: string,
   host?: string,
   outputFile?: string,
-  opts?: { noCache?: boolean },
+  opts?: { noCache?: boolean; noRetain?: boolean },
 ): Promise<SessionChangesResult> {
   const t0 = Date.now();
 
@@ -794,7 +799,7 @@ async function computeSessionChangesInner(
       // The daemon reports the JSONL's real (mtimeMs, jsonlPath) so the SWR
       // freshness probe works unchanged: probe stats the same file the daemon
       // keyed its cache on. daemonBacked marks the entry as content-light.
-      cacheSet(key, {
+      if (!opts?.noRetain || changesCache.has(key)) cacheSet(key, {
         mtimeMs: daemonResult.mtimeMs, result: light,
         gitRootByDir: new Map(),
         resolvedPath: daemonResult.jsonlPath || undefined,
@@ -1244,7 +1249,9 @@ async function computeSessionChangesInner(
   const anyPartial = groups.some((g) => g.files.some((f) => f.partial));
   const result: SessionChangesResult = { sessionId, groups, fileCount, anyPartial };
 
-  if (mtimeMs !== undefined) {
+  // noRetain (a background count): the disk snapshot only, unless the session is
+  // already cached, so a sweep of old sessions never pushes out the ones in use.
+  if (mtimeMs !== undefined && (!opts?.noRetain || changesCache.has(key))) {
     cacheSet(key, {
       mtimeMs, ...(statSize !== undefined ? { size: statSize } : {}),
       result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath,

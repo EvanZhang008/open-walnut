@@ -41,7 +41,7 @@ import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { SessionChangedTab } from './SessionChangedTab';
-import { useSessionGitGlance } from '@/stores/session-git-store';
+import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store';
 import { changedChipTitle, compactCount } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
@@ -1062,8 +1062,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // Terminal tab. The host's own capability says so (its status frame), never
   // its alias; a host the server has not described yet keeps the tab.
   const terminalOffered = useHostStatus(session?.host)?.terminal !== false;
-  // The Changed chip's count and its git tooltip (session-git-store.ts).
-  const gitGlance = useSessionGitGlance(sessionId);
+  // An open panel asks first: its repos are re-read and its Changed count is
+  // computed ahead of the rows', so the chip has its number without the tab.
+  useEffect(() => { if (sessionId) void sessionGitStore.refresh(sessionId); }, [sessionId]);
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
   } = useSessionLetters(sessionId);
@@ -2495,20 +2496,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             {/* The split views need the whole panel: an inset column has none. */}
             {!inset && (
               <>
-                <button
-                  className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
-                  onClick={() => toggleView('changed')}
-                  title={changedChipTitle(gitGlance)}
-                  data-header-id="changed"
-                  data-hidden={hid('changed')}
-                  data-testid="session-changed-chip"
-                >
-                  Changed
-                  {/* The number the tab lists (this session's own changed files). */}
-                  {!!gitGlance?.changedFiles && (
-                    <span className="session-chip-count" data-testid="session-changed-count">{compactCount(gitGlance.changedFiles)}</span>
-                  )}
-                </button>
+                <ChangedChip sessionId={sessionId} active={activeView === 'changed'} hidden={hid('changed')} onToggle={toggleView} />
                 <button
                   className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
                   onClick={() => toggleView('files')}
@@ -3428,3 +3416,32 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
 function InsetSessionPanel(props: SessionPanelProps) {
   return <SessionPanel {...props} />;
 }
+
+/**
+ * The Changed chip with its count (this session's own changed files) and its git
+ * tooltip. Its own component: a git reading re-renders the chip, not the panel
+ * (whose header refits its row on every render).
+ */
+const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onToggle }: {
+  sessionId: string;
+  active: boolean;
+  hidden: string;
+  onToggle: (view: 'changed') => void;
+}) {
+  const gitGlance = useSessionGitGlance(sessionId);
+  const count = gitGlance?.changedFiles ? compactCount(gitGlance.changedFiles) : null;
+  return (
+    <button
+      className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
+      onClick={() => onToggle('changed')}
+      title={changedChipTitle(gitGlance)}
+      data-header-id="changed"
+      data-hidden={hidden}
+      data-testid="session-changed-chip"
+      data-header-value={count ?? undefined}
+    >
+      Changed
+      {count && <span className="session-chip-count" data-testid="session-changed-count">{count}</span>}
+    </button>
+  );
+});

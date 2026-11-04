@@ -64,6 +64,9 @@ test('the task row shows the branch, uncommitted files, +/- lines and the unpush
 test('the Changed chip counts what its tab lists, and the tab shows the git strip', async ({ page }) => {
   const panel = await openPanel(page)
   const chip = panel.getByTestId('session-changed-chip')
+  // The number is there before the tab is ever opened, and its tooltip says what it counts.
+  await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 20_000 })
+  expect(await chip.getAttribute('title')).toContain('This session changed 2 files (2 still uncommitted in its repo)')
   await chip.click()
   const diff = panel.locator('.session-diff-view')
   await expect(diff).toBeVisible()
@@ -71,8 +74,8 @@ test('the Changed chip counts what its tab lists, and the tab shows the git stri
   const strip = diff.getByTestId('session-diff-gitstrip')
   await expect(strip).toBeVisible()
   await expect(strip.locator('.git-glance-branch')).toHaveText(GIT_GLANCE_BRANCH)
-  await expect(strip.getByTestId('git-glance-files')).toHaveText('2 files')
-  await expect(strip.getByTestId('git-glance-ahead')).toHaveText('↑1')
+  await expect(strip.getByTestId('git-glance-files')).toHaveText('2 uncommitted files')
+  await expect(strip.getByTestId('git-glance-ahead')).toHaveText('↑1 unpushed')
   // The chip's number is the tab's own count, there whether the tab is open or not.
   await expect(chip.getByTestId('session-changed-count')).toHaveText('2', { timeout: 15_000 })
   await chip.click()
@@ -111,9 +114,24 @@ test('an open Changed tab follows the session as it edits, with no Re-scan', asy
   // No click: the tab re-reads its repos, sees the change, and re-reads the list.
   await expect(diff.locator('.session-diff-toolbar-title')).toContainText(`${before + 1} files changed`, { timeout: 60_000 })
   await expect(diff.locator('.session-diff-tree').getByText(name)).toBeVisible()
-  await expect(diff.getByTestId('session-diff-gitstrip').getByTestId('git-glance-files')).toHaveText(`${before + 1} files`)
+  await expect(diff.getByTestId('session-diff-gitstrip').getByTestId('git-glance-files')).toHaveText(`${before + 1} uncommitted files`)
   await expect(chip.getByTestId('session-changed-count')).toHaveText(String(before + 1), { timeout: 15_000 })
   // What the user was doing survived the re-read: the same file, the comment and its text.
   await expect(pane).toBeVisible()
+  await expect(box).toHaveValue('half-typed note')
+  // Another file changed: the commented line did not, so no warning.
+  await expect(diff.getByTestId('session-diff-comment-changed')).toBeHidden()
+
+  // Now the session edits the very line under the comment: the box says so, and keeps the words.
+  const appTs = path.join(repo, 'src', 'app.ts')
+  const before1 = await fs.readFile(appTs, 'utf8')
+  const after1 = before1.replace('export function app(): string {', 'export function app(): number {')
+  expect(after1).not.toBe(before1)
+  await fs.writeFile(appTs, after1)
+  await fs.appendFile(jsonl, JSON.stringify({
+    type: 'assistant', sessionId: GIT_GLANCE_SESSION, timestamp: new Date().toISOString(),
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_line_${Date.now()}`, name: 'Edit', input: { file_path: appTs, old_string: 'export function app(): string {', new_string: 'export function app(): number {' } }] },
+  }) + '\n')
+  await expect(diff.getByTestId('session-diff-comment-changed')).toBeVisible({ timeout: 60_000 })
   await expect(box).toHaveValue('half-typed note')
 })

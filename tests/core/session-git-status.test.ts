@@ -21,6 +21,9 @@ let readLocal: ReturnType<typeof vi.fn>;
 let readRemote: ReturnType<typeof vi.fn>;
 let sessions: Record<string, { cwd?: string; host?: string }>;
 let peeks: Record<string, { fileCount: number; groups: Array<{ repoRoot: string; files: unknown[] }> } | null>;
+let countChanges: ReturnType<typeof vi.fn>;
+let shedding: boolean;
+let busy: boolean;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -36,12 +39,19 @@ beforeEach(() => {
   };
   readLocal = vi.fn(async (dirs: string[]) => dirs.filter((d) => d !== '/w/task-dir').map((d) => repo(d, { files: 1 })));
   readRemote = vi.fn(async (_host: string, dirs: string[]) => dirs.map((d) => repo(d)));
+  shedding = false;
+  busy = false;
+  // The real compute reports its count back through noteSessionChangesComputed.
+  countChanges = vi.fn(async (id: string) => { noteSessionChangesComputed(id, 7); });
   _setSessionGitStatusDepsForTesting({
     getSession: async (id) => sessions[id] ?? null,
     peekChanges: async (id) => peeks[id] ?? null,
     readLocal,
     readRemote,
     emit: (g) => { emitted.push(g); },
+    countChanges,
+    shedding: () => shedding,
+    changesBusy: () => busy,
     now: () => now,
   });
 });
@@ -238,3 +248,93 @@ it('a Changed count that lands while a read runs is not overwritten by it', asyn
   expect(g.changedFiles).toBe(4);
   expect(emitted.at(-1)!.changedFiles).toBe(4);
 });
+
+describe('a Changed count before the tab is ever opened', () => {
+  it('a watched session with no list gets one counted behind, and its count goes out', async () => {
+    peeks.s1 = null;
+    await getSessionGitGlances(['s1'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    expect(countChanges.mock.calls[0]![0]).toBe('s1');
+    expect(emitted.at(-1)!.changedFiles).toBe(7);
+  });
+
+  it('one count at a time, paced; an open panel (refresh) goes first; never twice in 10 minutes', async () => {
+    for (const id of ['a', 'b', 'c']) { sessions[id] = { cwd: `/w/${id}` }; peeks[id] = null; }
+    let release!: () => void;
+    countChanges.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    await getSessionGitGlances(['a', 'b'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges.mock.calls.map((c) => c[0])).toEqual(['a']); // b waits its turn
+    await getSessionGitGlances(['c'], { waitMs: 1_000 });
+    now += 20_000;
+    await getSessionGitGlances(['c'], { refresh: true, waitMs: 1_000 });
+    release();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges.mock.calls.map((c) => c[0])).toEqual(['a', 'c', 'b']);
+    // b's count is known now; a session whose count failed is not retried at every read.
+    countChanges.mockClear();
+    countChanges.mockRejectedValueOnce(new Error('parse failed'));
+    sessions.d = { cwd: '/w/d' }; peeks.d = null;
+    await getSessionGitGlances(['d'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    now += 60_000;
+    await computeSessionGitGlance('d');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges.mock.calls.map((c) => c[0])).toEqual(['d']);
+  });
+
+  it('nothing is counted for a session nobody watches, one with no cwd, or while memory is short', async () => {
+    peeks.s1 = null;
+    await computeSessionGitGlance('s1');
+    sessions.bare = {};
+    await getSessionGitGlances(['bare'], { waitMs: 1_000 });
+    shedding = true;
+    sessions.e = { cwd: '/w/e' }; peeks.e = null;
+    await getSessionGitGlances(['e'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(countChanges).not.toHaveBeenCalled();
+  });
+
+  it('a count waits behind a compute already running (one transcript parse at a time)', async () => {
+    peeks.s1 = null;
+    busy = true;
+    await getSessionGitGlances(['s1'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(countChanges).not.toHaveBeenCalled();
+    busy = false;
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+  });
+
+  it('an open panel retries a failed count after 30 s, a row only after 10 minutes', async () => {
+    peeks.s1 = null;
+    countChanges.mockRejectedValueOnce(new Error('host away'));
+    await getSessionGitGlances(['s1'], { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    now += 60_000;
+    await computeSessionGitGlance('s1'); // a row's re-read: still inside the 10 minutes
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(countChanges).toHaveBeenCalledTimes(1);
+    await getSessionGitGlances(['s1'], { refresh: true, waitMs: 1_000 }); // the panel opens
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(countChanges).toHaveBeenCalledTimes(2);
+  });
+
+  it('the queue holds at most 100 sessions', async () => {
+    let release!: () => void;
+    countChanges.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const ids = Array.from({ length: 130 }, (_, i) => `q${i}`);
+    for (const id of ids) { sessions[id] = { cwd: `/w/${id}` }; peeks[id] = null; }
+    await getSessionGitGlances(ids, { waitMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(countChanges).toHaveBeenCalledTimes(1); // q0 runs, 100 wait, the rest are dropped
+    release();
+    countChanges.mockImplementation(async () => {});
+    await vi.advanceTimersByTimeAsync(130 * 2_100);
+    expect(countChanges).toHaveBeenCalledTimes(101);
+  });
+});
+

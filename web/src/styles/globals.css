@@ -27117,6 +27117,53 @@ a.file-link:hover {
   font-variant-ligatures: none; /* code reads truer without => ≠ ligature merging */
 }
 .session-diff-table .diff-line { font-family: var(--font-mono); }
+/* Dark: react-diff-view only ships light colours (pale green and red under the
+   dark theme's light text left added lines unreadable). Dark tints instead, the
+   text the theme's own (each text colour named: the library resolves them at :root). */
+[data-theme="dark"] .diff {
+  --diff-text-color: var(--fg);
+  --diff-selection-text-color: var(--fg);
+  --diff-gutter-insert-text-color: var(--fg);
+  --diff-gutter-delete-text-color: var(--fg);
+  --diff-gutter-selected-text-color: var(--fg);
+  --diff-code-insert-text-color: var(--fg);
+  --diff-code-delete-text-color: var(--fg);
+  --diff-code-insert-edit-text-color: var(--fg);
+  --diff-code-delete-edit-text-color: var(--fg);
+  --diff-code-selected-text-color: var(--fg);
+  --diff-selection-background-color: #1f3a5f;
+  --diff-gutter-insert-background-color: #1b3a26;
+  --diff-gutter-delete-background-color: #45201f;
+  --diff-code-insert-background-color: #12261a;
+  --diff-code-delete-background-color: #2d1515;
+  --diff-code-insert-edit-background-color: #2a5a37;
+  --diff-code-delete-edit-background-color: #6b2a29;
+  --diff-gutter-selected-background-color: #3a3418;
+  --diff-code-selected-background-color: #2f2a14;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .diff {
+    --diff-text-color: var(--fg);
+  --diff-selection-text-color: var(--fg);
+  --diff-gutter-insert-text-color: var(--fg);
+  --diff-gutter-delete-text-color: var(--fg);
+  --diff-gutter-selected-text-color: var(--fg);
+  --diff-code-insert-text-color: var(--fg);
+  --diff-code-delete-text-color: var(--fg);
+  --diff-code-insert-edit-text-color: var(--fg);
+  --diff-code-delete-edit-text-color: var(--fg);
+  --diff-code-selected-text-color: var(--fg);
+    --diff-selection-background-color: #1f3a5f;
+    --diff-gutter-insert-background-color: #1b3a26;
+    --diff-gutter-delete-background-color: #45201f;
+    --diff-code-insert-background-color: #12261a;
+    --diff-code-delete-background-color: #2d1515;
+    --diff-code-insert-edit-background-color: #2a5a37;
+    --diff-code-delete-edit-background-color: #6b2a29;
+    --diff-gutter-selected-background-color: #3a3418;
+    --diff-code-selected-background-color: #2f2a14;
+  }
+}
 .session-diff-table .diff-code,
 .session-diff-table .diff-gutter { font-family: var(--font-mono); }
 .session-diff-table .diff-gutter { min-width: 2.2em; }
@@ -27578,6 +27625,15 @@ a.file-link:hover {
   font-size: 11px;
   color: var(--fg-muted);
   margin-bottom: 6px;
+}
+/* The commented lines were edited (a live refresh) while the box was open. */
+.session-diff-comment-changed {
+  margin: -2px 0 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning, #b7791f) 14%, transparent);
+  color: var(--fg);
+  font-size: 11.5px;
 }
 .session-diff-comment-input {
   width: 100%;
