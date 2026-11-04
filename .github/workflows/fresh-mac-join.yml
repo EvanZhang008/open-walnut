@@ -126,6 +126,11 @@ jobs:
         run: |
           mkdir -p "$OUT"
           npm i -g "open-walnut@$OLD_WALNUT" > "$OUT/old-install.log" 2>&1 || { tail -n 40 "$OUT/old-install.log"; exit 1; }
+          # A `claude` for its sessions: the fleet's stand-in (it answers "echo: <words>", no model).
+          printf '#!/bin/sh\nexec %s %s "$@"\n' "$(command -v node)" "$GITHUB_WORKSPACE/tests/fleet/host-image/mock-claude.cjs" > "$RUNNER_TEMP/claude"
+          sudo install -m 0755 "$RUNNER_TEMP/claude" /usr/local/bin/claude
+          # Its own walnut, past the daemon's PATH shim (~/.local/bin/walnut, which a newer daemon rewrites).
+          echo "$(npm prefix -g)/bin/walnut" > "$OUT/old-walnut.real"
           # A server that has run for weeks updated itself only when it started, so it is still
           # the older version. Started here, it would install today's nightly first, and the job
           # would test that instead (2026-11-02: every existing-Mac job ran 0.6.24, not 0.6.5).
@@ -135,7 +140,20 @@ jobs:
           curl -fsS -m 5 http://127.0.0.1:39456/api/config | head -c 300; echo
           command -v walnut > "$OUT/old-walnut.path"
           walnut --version | grep -F "$OLD_WALNUT" || { walnut --version; echo "::error::the older Walnut is not $OLD_WALNUT (it updated itself)"; exit 1; }
-          shasum -a 256 "$(cat "$OUT/old-walnut.path")" | tee "$OUT/old-walnut-before.sha"
+          shasum -a 256 "$(realpath "$(cat "$OUT/old-walnut.real")")" | tee "$OUT/old-walnut-before.sha"
+          # One of its sessions runs through its daemon, as on a Mac in use (chen-mac had one for 25 days).
+          OLDW=$(cat "$OUT/old-walnut.real")
+          export OPEN_WALNUT_API_URL=http://127.0.0.1:39456
+          "$OLDW" tools call task_create "{\"title\":\"Older Walnut session\",\"message\":\"hello before the join\",\"cwd\":\"$HOME\"}" > "$OUT/old-task.json" 2>&1 || { cat "$OUT/old-task.json"; exit 1; }
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); r=d.get("result",d); t=r.get("task") or r; print(t["id"])' "$OUT/old-task.json" > "$OUT/old-task.id" || { cat "$OUT/old-task.json"; exit 1; }
+          # fresh: the session's own transcript, read through its daemon. The default read is the
+          # server's cache, which that release refreshed at most once a minute and, for a turn that
+          # ended inside the minute, not again until another session event (2026-11-02: the reply
+          # after the join was in the transcript, and the cache never showed it).
+          for i in $(seq 1 60); do "$OLDW" tools call task_history "{\"id\":\"$(cat "$OUT/old-task.id")\",\"fresh\":true}" > "$OUT/old-history.json" 2>&1; grep -qE 'echo: [^"]*hello before the join' "$OUT/old-history.json" && break; sleep 2; done
+          grep -qE 'echo: [^"]*hello before the join' "$OUT/old-history.json" || { tail -c 3000 "$OUT/old-history.json"; tail -n 60 "$OUT/old-server.log"; echo "::error::the older Walnut's session never answered"; exit 1; }
+          pgrep -f 'mock-claude.cjs.* -p' | tee "$OUT/old-cli.pid"
+          [ "$(wc -l < "$OUT/old-cli.pid")" -eq 1 ] || { ps -axo pid,args | grep mock-claude; echo "::error::expected one session process"; exit 1; }
           echo "old daemon: $(cat /tmp/open-walnut/daemon.version 2>/dev/null) pid $(cat /tmp/open-walnut/daemon.pid 2>/dev/null)"
           [ -s /tmp/open-walnut/daemon.port ] || { tail -n 60 "$OUT/old-server.log"; echo "::error::the older Walnut started no daemon"; exit 1; }
           if [ "${{ matrix.mac }}" = existing-swept ]; then
@@ -223,11 +241,22 @@ jobs:
         run: |
           curl -fsS -m 10 http://127.0.0.1:39456/api/config | head -c 300; echo
           kill -0 "$(cat "$OUT/old-server.pid")"
-          # The join never ran nor updated its walnut (scripts/join.sh uses install.sh's file only).
-          OLD=$(cat "$OUT/old-walnut.path")
-          shasum -a 256 "$OLD" | tee "$OUT/old-walnut-after.sha"
+          # The join never ran nor updated its walnut (scripts/join.sh uses install.sh's file only),
+          # and its `walnut` command still runs it.
+          OLD=$(cat "$OUT/old-walnut.real")
+          shasum -a 256 "$(realpath "$OLD")" | tee "$OUT/old-walnut-after.sha"
           cmp <(cut -d' ' -f1 "$OUT/old-walnut-before.sha") <(cut -d' ' -f1 "$OUT/old-walnut-after.sha")
-          "$OLD" --version
+          walnut --version | grep -F "$OLD_WALNUT" || { walnut --version; echo "::error::walnut no longer runs the older Walnut"; exit 1; }
+          # Its session lives on in the same process, and its server still reaches it through the
+          # daemon that took over: a message goes in, the answer comes back.
+          PID=$(cat "$OUT/old-cli.pid")
+          kill -0 "$PID" || { echo "::error::the older Walnut's session process is gone after the join"; exit 1; }
+          export OPEN_WALNUT_API_URL=http://127.0.0.1:39456
+          TID=$(cat "$OUT/old-task.id")
+          "$OLD" tools call task_send "{\"to\":\"$TID\",\"text\":\"hello after the join\",\"expect_reply\":false}" 2>&1 | tail -c 600
+          for i in $(seq 1 60); do "$OLD" tools call task_history "{\"id\":\"$TID\",\"fresh\":true}" > "$OUT/old-history-after.json" 2>&1; grep -qE 'echo: [^"]*hello after the join' "$OUT/old-history-after.json" && break; sleep 2; done
+          grep -qE 'echo: [^"]*hello after the join' "$OUT/old-history-after.json" || { tail -c 3000 "$OUT/old-history-after.json"; tail -n 80 "$OUT/old-server.log"; echo "::error::the older Walnut's session did not answer after the join"; exit 1; }
+          [ "$(pgrep -f 'mock-claude.cjs.* -p')" = "$PID" ] || { ps -axo pid,args | grep mock-claude; echo "::error::the session is not the same single process after the join"; exit 1; }
           # How its server and daemon took the handover (an older server has no API that
           # says whether it reaches its daemon): read, and flagged when it complains.
           "$OLD" daemon status 2>&1 | head -n 30 || true

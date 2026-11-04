@@ -26,6 +26,12 @@ on:
       - 'tests/e2e/host-network-outside-join.e2e.test.ts'
       - '.github/workflows/windows-join.yml'
   workflow_dispatch:
+    inputs:
+      walnut:
+        description: 'The Walnut the PC installs: this commit, or what is published today (install.sh from the latest release, then the nightly)'
+        type: choice
+        options: [this-commit, published]
+        default: this-commit
 
 permissions:
   contents: read
@@ -120,14 +126,22 @@ jobs:
           $ver = (Get-Content "${{ runner.temp }}\release\version" -Raw).Trim()
           $q = { param($v) "'" + ($v -replace "'", "''") + "'" }
           # What Settings shows sets WALNUT_JOIN_TICKET and runs join.ps1; this commit's copy
-          # stands in for the release's, and its join.sh and Walnut file stand in for theirs.
+          # stands in for the release's, and its join.sh for the one the Mac serves. this-commit:
+          # its install.sh and Walnut file stand in for the release's too; published: the
+          # Walnut a PC gets today (the latest release's install.sh, then the nightly).
+          $own = @()
+          if ('${{ inputs.walnut || 'this-commit' }}' -eq 'this-commit') {
+            $own = @(
+              '$env:WALNUT_JOIN_INSTALL_URL = ' + (& $q "file://$ws/scripts/install.sh")
+              '$env:OPEN_WALNUT_RELEASE_BASE_URL = ' + (& $q "file://$tmp/release")
+              '$env:OPEN_WALNUT_VERSION = ' + (& $q $ver)
+            )
+          }
           # The window shows the line a person pastes, with the ticket cut short.
           @(
             '$env:WALNUT_JOIN_TICKET = ' + (& $q $t)
             '$env:WALNUT_JOIN_SCRIPT_URL = ' + (& $q "file://$ws/scripts/join.sh")
-            '$env:WALNUT_JOIN_INSTALL_URL = ' + (& $q "file://$ws/scripts/install.sh")
-            '$env:OPEN_WALNUT_RELEASE_BASE_URL = ' + (& $q "file://$tmp/release")
-            '$env:OPEN_WALNUT_VERSION = ' + (& $q $ver)
+          ) + $own + @(
             'Clear-Host'
             'Write-Host ("PS " + (Get-Location).Path + "> " + ' + (& $q (Get-Content "$env:OUT\windows-command.txt" -Raw).Trim().Replace($t, 'wn1-...')) + ')'
             '& powershell.exe -NoProfile -Command ("Start-Transcript -Path ''' + "$env:OUT\join.log" + ''' | Out-Null; iex (Get-Content -Raw ''' + '${{ github.workspace }}\scripts\join.ps1' + '''); `$c = `$LASTEXITCODE; Stop-Transcript | Out-Null; exit `$c")'

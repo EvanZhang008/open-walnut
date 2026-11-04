@@ -199,6 +199,25 @@ jobs:
           app="$RUNNER_TEMP/Applications/Walnut.app"
           [ -d "$app" ] || app="desktop/Walnut.app"
           bun harness/scripts/desktop-smoke.mjs --app "$app" --version "$VERSION" --work "$RUNNER_TEMP/smoke"
+      # The update a person on the previous release gets: that release's own app, from
+      # its DMG on GitHub, finds this one on a releases page, downloads it (the first
+      # try breaks off), checks it is signed by the same developer, restarts into it,
+      # and the new app installs the Walnut it carries (scripts/desktop-update-e2e.mjs).
+      # A failure fails this job: its DMG is not attached, and the cask, which needs
+      # both, is not written. Apple silicon only: on this Apple silicon runner an Intel
+      # app updates to the Apple silicon build, which the arm64 job already runs.
+      - name: The previous release's app updates itself to this one
+        if: steps.signing.outputs.signed == 'true' && matrix.arch == 'arm64'
+        run: |
+          prev=$(bun harness/scripts/previous-mac-release.mjs --before "$VERSION" --arch "$ARCH")
+          if [ -z "$prev" ]; then echo "::notice::no release before v$VERSION has Walnut-$ARCH.dmg; nothing to update from"; exit 0; fi
+          echo "Updating Walnut.app $prev (its release's DMG) to $VERSION"
+          mkdir -p "$RUNNER_TEMP/prev/mnt"
+          gh release download "v$prev" --dir "$RUNNER_TEMP/prev" --clobber --pattern "Walnut-$ARCH.dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/prev/mnt" "$RUNNER_TEMP/prev/Walnut-$ARCH.dmg"
+          ditto "$RUNNER_TEMP/prev/mnt/Walnut.app" "$RUNNER_TEMP/prev/Walnut.app"
+          hdiutil detach "$RUNNER_TEMP/prev/mnt"
+          bun harness/scripts/desktop-update-e2e.mjs --old "$RUNNER_TEMP/prev/Walnut.app" --new "$RUNNER_TEMP/Applications/Walnut.app" --work "$RUNNER_TEMP/update"
       - uses: actions/upload-artifact@v4
         if: steps.shape.outputs.app == 'true' && !cancelled()
         with:

@@ -582,6 +582,58 @@ jobs:
             ${{ runner.temp }}/field-run/*/daemon/*.log
           if-no-files-found: ignore
 
+  # ── Rehearse the live update a running install takes ────────────────────────
+  # This commit compiled for this runner at three versions above npm's
+  # (scripts/release-rehearsal/live.mjs), the first installed by install.sh and
+  # started from a terminal: while it serves, it installs each newer one from a
+  # local registry and restarts into it once nobody uses it, on the same port,
+  # with its task, its session's CLI and the daemon kept; a release that exits
+  # at start is gone back from and held; SIGTERM ends the whole chain. The
+  # started process supervises from the start and never serves itself.
+  live:
+    name: Release rehearsal, live update (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    steps:
+      - uses: actions/checkout@v5
+      # npm packs the releases as a release publishes them (scripts/npm-packages.mjs).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+          ONNXRUNTIME_NODE_INSTALL: skip
+      - name: Compile this commit for this runner at three versions above npm's, and a release that cannot start
+        run: bun scripts/release-rehearsal/live.mjs build --out "$RUNNER_TEMP/live"
+      # What runs from here is the compiled file alone, as on a user's machine: no Node.
+      - run: bash scripts/ci-remove-node.sh
+      - name: A serving install updates itself while it runs, and goes back from a broken release
+        run: bun scripts/release-rehearsal/run.mjs --live "$RUNNER_TEMP/live/live.json" --work "$RUNNER_TEMP/live-run" --keep
+      - name: Upload live logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/live-run/*/*.txt
+            ${{ runner.temp }}/live-run/*/daemon/*.log
+          if-no-files-found: ignore
+
   # ── npm's launcher on the oldest Node it runs on ────────────────────────────
   # The open-walnut package runs its compiled file through a launcher on the
   # Node npm installs it with (scripts/npm-launcher/): Ubuntu 18.04's apt Node
@@ -834,6 +886,9 @@ jobs:
     # 2.7x (run 41198110591: a 150 ms tick took 193 ms), and the UI classes that need
     # their own fixture server (run-media-ui.sh, run-inbox-items-ui.sh, the peer and
     # stub servers, a real voice model) and fail, by design, on the offline pairing.
+    # The timed gates it does run are judged on the median of their passes
+    # (ios-native/WalnutTests/PerfGate.swift), so a stall in one pass of three (or two
+    # of five) fails none of them; a stall in most passes still can.
     env:
       IOS_CI_SKIP_UNIT: >-
         -skip-testing:WalnutTests/MarkdownPerfTests
@@ -887,24 +942,51 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
             -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
+      # Its own limit, under the job's 60: a job that runs out of time is cancelled, and a
+      # cancelled job runs no failure() step, so a hang would keep no evidence. A step that
+      # runs out fails, and the steps below still run (the leg took about 36 minutes; this
+      # limit plus the evidence step's stays 5 minutes under the job's).
       - name: UI tests (WalnutUITests, offline pairing)
         if: matrix.layer == 'ui'
+        timeout-minutes: 50
         shell: bash
         run: |
           WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
+            WALNUT_UITEST_RESULT_BUNDLE="$RUNNER_TEMP/ios-ui.xcresult" \
             bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
-      # The failures go into the log, never the result bundle as an artifact: a public
-      # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
-      # the runner's environment) failed the leak audit on 2026-10-31.
-      # Each failed test is also an annotation (::error), which the public API serves with no
+      # The result bundle stays on the runner, never an artifact: a public repo's artifacts
+      # are anyone's to download, and the 130 MB bundle (build logs, the runner's
+      # environment) failed the leak audit on 2026-10-31.
+      # Each failed test is an annotation (::error), which the public API serves with no
       # login (check-runs/<job>/annotations), so the failure can be read without the job log.
       - name: The failed tests
-        if: failure() && matrix.layer == 'unit'
+        if: failure()
         shell: bash
         run: |
-          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-unit.xcresult" --compact \
-            | python3 ios-native/tests/failed-tests.py \
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-${{ matrix.layer }}.xcresult" --compact \
+            | python3 ios-native/tests/failed-tests.py "${{ matrix.layer }}" \
             || echo "no readable result bundle"
+      # What a failed UI test saw, screened, is the one artifact: its screenshots, the text
+      # it attached (the UI hierarchy) and its step log (the taps XCTest made), PNG/JPEG and
+      # plain text only, secrets dropped, paths and hosts redacted, 25 MB at most
+      # (ios-native/tests/ui-failure-evidence.py). The leak audit scans it like any artifact.
+      - name: The failure evidence (UI leg)
+        id: evidence
+        if: failure() && matrix.layer == 'ui'
+        # seconds normally; bounded so the upload step after it still runs in the job's time
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          python3 ios-native/tests/ui-failure-evidence.py \
+            --bundle "$RUNNER_TEMP/ios-ui.xcresult" --out "$RUNNER_TEMP/ios-ui-evidence"
+      - name: Upload the failure evidence
+        if: failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-failure-evidence-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-ui-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ── The single required check ───────────────────────────────────────────────
   #
@@ -916,7 +998,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, old-node, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, live, old-node, archive-targets]
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -932,6 +1014,7 @@ jobs:
           echo "test-e2e:   ${{ needs.test-e2e.result }}"
           echo "rehearsal:  ${{ needs.rehearsal.result }}"
           echo "field:      ${{ needs.field.result }}"
+          echo "live:       ${{ needs.live.result }}"
           echo "old-node:   ${{ needs.old-node.result }}"
           echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
@@ -946,6 +1029,7 @@ jobs:
           [ "${{ needs.test-e2e.result }}" = "success" ] || { echo "::error::the e2e tier failed: a failure not in tests/setup/known-failures-e2e.json, or a run that crashed"; failed=1; }
           [ "${{ needs.rehearsal.result }}" = "success" ] || { echo "::error::the release rehearsal failed: this commit's package does not install, serve or update"; failed=1; }
           [ "${{ needs.field.result }}" = "success" ] || { echo "::error::the field rehearsal failed: an install of a release on npm today does not update to this commit and keep its work"; failed=1; }
+          [ "${{ needs.live.result }}" = "success" ] || { echo "::error::the live rehearsal failed: a serving install does not update itself to this commit, or does not go back from a broken release"; failed=1; }
           [ "${{ needs.old-node.result }}" = "success" ] || { echo "::error::npm's launcher failed on Node 8 or 10, which old Ubuntu systems install it with"; failed=1; }
           [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
