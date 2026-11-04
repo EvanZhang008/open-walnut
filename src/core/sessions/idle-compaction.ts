@@ -11,6 +11,10 @@
  * turn-end hook, no push, no Working. Anything sent to the session meanwhile
  * cancels the timer; the next turn end sets a new one.
  *
+ * When the idle reap is about to end the CLI first (session:will-reap; 15 minutes
+ * under memory pressure), an armed compaction goes out then, while the CLI and
+ * its cache are alive.
+ *
  * Skipped: a session below `session.idle_compaction.min_tokens` (200K), a cache
  * that lives under 30 minutes (5-minute caches: the web's cold-cache offer
  * covers them), a session already compacted since, a running turn, a prompt for
@@ -86,6 +90,8 @@ export interface IdleCompactionDeps {
   /** Whether the row still waits in the queue (pending or on its way). */
   rowQueued: (sessionId: string, rowId: string) => Promise<boolean>;
   emitNote: (sessionId: string, taskId: string | undefined, message: string) => void;
+  /** Tell the open panels it runs (their working line says Walnut is compacting) or ended. */
+  announce: (sessionId: string, active: boolean) => void;
 }
 
 function defaultDeps(): IdleCompactionDeps {
@@ -125,8 +131,14 @@ function defaultDeps(): IdleCompactionDeps {
       bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId, taskId, variant: 'info' as const, message },
         ['main-ai'], { source: IDLE_COMPACT_SOURCE, urgency: 'urgent' });
     },
+    announce: (sessionId, active) => {
+      void import('../../web/ws/handler.js').then(({ broadcastEvent }) => broadcastEvent(IDLE_COMPACTION_EVENT, { sessionId, active })).catch(() => {});
+    },
   };
 }
+
+/** The WebSocket event the panels read (web/src/components/sessions/CompactContext.tsx useIdleCompacting). */
+export const IDLE_COMPACTION_EVENT = 'session:idle-compaction';
 
 type RunnerView = {
   promptCacheOf(id: string): PromptCacheFacts | undefined;
@@ -223,12 +235,25 @@ export class IdleCompaction {
       case EventNames.SESSION_DELETED:
         for (const id of d.sessionIds ?? (d.sessionId ? [d.sessionId] : [])) this.cancel(id, 'deleted');
         return;
+      case EventNames.SESSION_WILL_REAP: {
+        // The idle reap ends the CLI before its armed time (15 min under memory pressure): compact now,
+        // while the CLI and its cache are alive. A reaped session is not compacted later.
+        const armed = d.sessionId ? this.timers.get(d.sessionId) : undefined;
+        // Under a minute left: the reap would cut the compaction off halfway.
+        if (!d.sessionId || !armed || ((event.data as { remainingMs?: number }).remainingMs ?? 0) < 60_000) return;
+        this.deps.clearTimer(armed.timer);
+        void this.fire(d.sessionId, armed.requestAt).then((why) => {
+          if (why === 'sent') log.session.info('idle compaction sent before an idle reap', { sessionId: d.sessionId });
+        }).catch(() => {});
+        return;
+      }
     }
   };
 
   /** A quiet turn ended, whichever way: a row that never went out is taken back, and the end is stored. */
   readonly onQuietEnd = (end: QuietTurnEnd): void => {
     if (end.kind !== 'idle-compact') return;
+    this.deps.announce(end.sessionId, false);
     if (end.rowId && !end.delivered) void this.takeBack(end.sessionId, end.rowId, end.why);
     void this.noteQuietEnd(end.sessionId);
   };
@@ -326,6 +351,7 @@ export class IdleCompaction {
       log.session.info('idle compaction skipped', { sessionId, taskId: rec?.taskId, why: 'busy' });
       return 'busy';
     }
+    this.deps.announce(sessionId, true);
     try {
       await this.deps.send(sessionId, IDLE_COMPACT_TEXT, {
         source: IDLE_COMPACT_SOURCE, ...(rec!.taskId ? { taskId: rec!.taskId } : {}),
@@ -398,7 +424,7 @@ export function startIdleCompaction(
   onQuietTurnEnd(ic.onQuietEnd);
   bus.subscribe('idle-compaction', ic.handleEvent, {
     global: true,
-    interest: ['session:result', 'session:error', 'session:send', 'session:deleted'],
+    interest: ['session:result', 'session:error', 'session:send', 'session:deleted', 'session:will-reap'],
   });
   void ic.rebuild().then((n) => { if (n) log.session.info('idle compaction timers rebuilt', { armed: n }); })
     .catch((err) => log.session.warn('idle compaction rebuild failed', { error: err instanceof Error ? err.message : String(err) }));

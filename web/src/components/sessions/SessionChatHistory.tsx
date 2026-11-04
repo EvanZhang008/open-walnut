@@ -27,6 +27,9 @@ import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, Stre
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
+import { IDLE_COMPACTING_TEXT, useIdleCompacting } from './CompactContext';
+import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
+import { COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
@@ -610,6 +613,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the catalog, so a newly registered engine names itself in the transcript.
   const engineCatalog = useEngineCatalog();
   const assistantLabel = engineCaps(engine, engineCatalog).displayName;
+  const idleCompacting = useIdleCompacting(sessionId);
   // Turn watermark: history length when the CURRENT turn started streaming.
   // Content matching (id-less blocks + bubble text fallback) only trusts
   // messages[watermark..] — identical short texts recur across turns, and the
@@ -4537,7 +4541,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (isAckPart(part)) return [{ kind: 'ack' }];
     const out: FoldStep[] = [];
     for (const m of part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m)) {
-      if (m.role === 'system') { out.push({ kind: 'notice', error: m.systemVariant === 'error' }); continue; }
+      if (m.role === 'system') {
+        const compact = isIdleCompactLine(m.text) ? 'idle' as const
+          : m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE ? 'cli' as const : undefined;
+        out.push({ kind: 'notice', error: m.systemVariant === 'error', ...(compact ? { compact } : {}) });
+        continue;
+      }
       if (m.role === 'user' && isHistorySentRow(m) && !isHistoryUserTurn(m)) { out.push(...receivedSteps(m.text ?? '')); continue; }
       if (m.role !== 'assistant') continue;
       const read = readTurnMarker(stripQuestionTag(m.text ?? ''));
@@ -4717,6 +4726,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // is always a folded row, never its whole card between two answers.
     const sends = (part: HistoryPart) => rowsOf(part).some((m) => (m.tools ?? []).some(isOutboundTool));
     if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
+    // A compaction and the summary it left are said as themselves, one fold deep at most: under a
+    // fold they read "2 notices" and hid that the session was compacted (2026-11-04 review).
+    const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text));
+    if (!answerThinking && !riders && items.some((x) => rowsOf(x.part).some(compactRow))
+      && items.every((x) => isContextPart(x.part) || rowsOf(x.part).every(compactRow))) {
+      for (const x of items) renderOne(x);
+      return;
+    }
     const id = idOf(items[0].part);
     const body = items.map((x) => renderHistoryPart(x.part));
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
@@ -5408,6 +5425,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           <WorkingIndicator
             label={assistantLabel}
             tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
+            {...(idleCompacting ? { text: IDLE_COMPACTING_TEXT } : {})}
           />
         </SessionWorkingIndicator>
       );

@@ -35,7 +35,7 @@ import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
-import { envelopeSteps, foldStepsPhrase } from './fold-steps';
+import { envelopeSteps, foldStepsPhrase, systemRunLabel } from './fold-steps';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
@@ -495,7 +495,8 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
   const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
-  const label = allErrors ? `${members.length} errors` : `${members.length} system messages`;
+  // A compaction's run says so (its explanation and numbers are inside).
+  const label = allErrors ? `${members.length} errors` : systemRunLabel(members);
   return (
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>

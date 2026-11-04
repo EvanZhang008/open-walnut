@@ -75,12 +75,15 @@ async function idleCompactionConfig(request: APIRequestContext): Promise<{ enabl
   return body.config?.session?.idle_compaction
 }
 
-/** The runtime's lines after an answer fold into "N notices" (fold-steps.ts): open the fold to read them. */
+/** A compaction shows under a line that names it (SystemGroupRun, fold-steps.ts): open it when it is a fold. */
+const COMPACT_FOLD = /^(Context compacted|Compacted by Walnut while idle)( \u00b7 .*)?$/
 async function openNotices(panel: Locator) {
-  const fold = panel.locator('.session-history').getByText(/^\d+ notices?$/).last()
+  const fold = panel.locator('.session-history').getByText(COMPACT_FOLD).last()
   await expect(fold).toBeVisible({ timeout: 25_000 })
   await fold.click()
 }
+/** The compaction rows, one per compaction: the live row and the transcript's are the same line. */
+const compactRows = (panel: Locator) => panel.locator('.session-history').getByText(/^400K \u2192 18K tokens$/)
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
@@ -107,10 +110,10 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   await row.click()
   await expect(panel.locator('.session-panel-input .chat-plus-menu')).toHaveCount(0)
   await openNotices(panel)
-  await expect(history).toContainText('Context compacted', { timeout: 25_000 })
+  await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
   // One row for one compaction: the live row and the transcript's are the same line.
   await page.waitForTimeout(1500)
-  await expect(history.getByText('Context compacted', { exact: true })).toHaveCount(1)
+  await expect(compactRows(panel)).toHaveCount(1)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-compacted.png` })
   expect(errors).toEqual([])
 })
@@ -146,12 +149,12 @@ test('a cold cache offers Compact first; Keep full context holds across a reload
   await panel.getByTestId('compact-offer-compact').click()
   await expect(offer2).toHaveCount(0)
   await openNotices(panel)
-  await expect(panel.locator('.session-history')).toContainText('Context compacted', { timeout: 25_000 })
+  await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
   await page.reload()
   panel = await openTask(page, compacted.taskId, compacted.sid)
   await openNotices(panel)
-  await expect(panel.locator('.session-history')).toContainText('Context compacted', { timeout: 25_000 })
-  await expect(panel.locator('.session-history').getByText('Context compacted', { exact: true })).toHaveCount(1)
+  await expect(compactRows(panel).first()).toBeVisible({ timeout: 25_000 })
+  await expect(compactRows(panel)).toHaveCount(1)
   await expect(panel.getByTestId('compact-offer')).toHaveCount(0)
   expect(errors).toEqual([])
 })
@@ -171,7 +174,8 @@ test('Settings has the idle compaction switch and its threshold', async ({ page,
   await expect.poll(async () => (await idleCompactionConfig(request))?.min_tokens ?? null, { timeout: 10_000 }).toBe(300_000)
   await page.locator('#idle-compaction').click()
   await expect.poll(async () => (await idleCompactionConfig(request))?.enabled ?? null, { timeout: 10_000 }).toBe(false)
-  await expect(page.locator('#idle-compaction-min')).toBeDisabled()
+  // The size still decides the cold-cache offer, so it stays editable with the switch off.
+  await expect(page.locator('#idle-compaction-min')).toBeEnabled()
   await row.locator('xpath=ancestor::*[contains(@class,"settings-group")][1]').screenshot({ path: `${SHOTS}/${info.project.name}-settings.png` }).catch(() => {})
   // Back to the defaults for the specs after this one.
   await page.locator('#idle-compaction').click()

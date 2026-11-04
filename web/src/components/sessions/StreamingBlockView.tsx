@@ -255,9 +255,11 @@ function formatTokenCount(tokens: number): string {
  * it stably), so elapsed time is simply time-since-mount — no cross-component
  * turn clock to maintain.
  */
-export function WorkingIndicator({ label, tokens, startedAt }: {
+export function WorkingIndicator({ label, tokens, startedAt, text }: {
   label: string;
   tokens: number;
+  /** The whole line instead of "<label> is working…" (Walnut's idle compaction says what it does). */
+  text?: string;
   /** Epoch ms the work began, when the caller knows it (a subagent's ledger
    *  start): elapsed counts from there instead of from mount, so a reader opened
    *  mid-run shows the run's age, not the reader's. */
@@ -274,7 +276,7 @@ export function WorkingIndicator({ label, tokens, startedAt }: {
   }, []);
   return (
     <div className="session-working-indicator">
-      <span className="session-working-label">{label} is working…</span>
+      <span className="session-working-label">{text ?? `${label} is working…`}</span>
       <span className="session-working-meta">
         {elapsed}s{tokens > 0 ? ` · ${formatTokenCount(tokens)} tokens` : ''}
       </span>

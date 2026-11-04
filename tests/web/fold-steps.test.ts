@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { envelopeSteps, foldStepsPhrase, type FoldStep } from '@/components/sessions/fold-steps';
+import { envelopeSteps, foldStepsPhrase, systemRunLabel, type FoldStep } from '@/components/sessions/fold-steps';
 import { parseSessionEnvelopes } from '../../src/lib/history-session-envelope';
 
 // The first argument names the sender in the test only: a step carries none.
@@ -96,6 +96,28 @@ describe('foldStepsPhrase', () => {
       const line = foldStepsPhrase(envelopeSteps(segments));
       expect(line, kind).toBe('Received 1 message');
     }
+  });
+
+  // 2026-11-04 review: a compaction folded after the answer read "2 notices", and the reader had to
+  // open two folds to learn the session was compacted.
+  it('a compaction is named on the line, never counted as a notice', () => {
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'cli' }])).toBe('Context compacted');
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'idle' }, { kind: 'notice', compact: 'cli' }])).toBe('Compacted by Walnut while idle');
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'cli' }, { kind: 'notice' }])).toBe('Context compacted \u00b7 1 notice');
+    expect(foldStepsPhrase([{ kind: 'notice' }, { kind: 'notice' }])).toBe('2 notices');
+    // Stopped halfway: Walnut's line stays a notice, and nothing says compacted.
+    expect(foldStepsPhrase([{ kind: 'notice', compact: 'idle' }])).toBe('1 notice');
+  });
+
+  it('a run of runtime rows names a compaction only once it made its boundary', () => {
+    const idle = { variant: 'info', message: 'Compacting this idle session (400K tokens) before its prompt cache expires in about 3 min' };
+    const progress = { variant: 'compact', message: 'Compacting context...' };
+    const done = { variant: 'compact', message: 'Context compacted' };
+    const error = { variant: 'error', message: 'API Error: 529 overloaded' };
+    expect(systemRunLabel([idle, progress])).toBe('2 system messages');
+    expect(systemRunLabel([idle, done])).toBe('Compacted by Walnut while idle');
+    expect(systemRunLabel([error, done])).toBe('Context compacted \u00b7 1 more');
+    expect(systemRunLabel([error, { variant: 'info', message: 'Retrying' }])).toBe('2 system messages');
   });
 });
 

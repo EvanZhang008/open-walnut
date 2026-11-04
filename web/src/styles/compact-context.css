@@ -1,9 +1,8 @@
 /* The cold-cache line above a session's composer (components/sessions/CompactContext.tsx). */
 .compact-offer-line {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
+  align-items: flex-start;
+  gap: 8px;
   margin: 4px 12px;
   padding: 7px 10px;
   border: 1px solid var(--border);
@@ -16,7 +15,18 @@
 .compact-offer-icon {
   display: inline-flex;
   flex: 0 0 auto;
+  /* Centred on the first line of text (12px at 1.45 is 17px; the icon is 16px). */
+  margin-top: 1px;
   color: var(--fg-muted);
+}
+/* Text and buttons share one column, so wrapped buttons line up with the text, not the icon. */
+.compact-offer-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
 }
 .compact-offer-text { flex: 1 1 240px; min-width: 0; }
 .compact-offer-text strong { font-weight: 600; }

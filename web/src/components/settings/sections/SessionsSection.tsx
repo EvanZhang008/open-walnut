@@ -161,10 +161,9 @@ export function SessionsSection({ config, onSave }: Props) {
         />
         <SettingsRow
           indent
-          disabled={!idleCompact.value}
           anchor="idle-compaction-min-row"
           label="Only sessions above"
-          help="Smaller sessions are cheap to re-read and keep their full history; empty uses 200K. The same size decides when a session with a cold cache offers to compact first."
+          help="Smaller sessions are cheap to re-read and keep their full history; empty uses 200K. The same size decides when a session with a cold cache offers to compact first, also with the switch above off."
           htmlFor="idle-compaction-min"
           error={compactMin.error}
           control={<NumberInput id="idle-compaction-min" field={compactMin.inputProps} placeholder="200" min={1} unit="K tokens" />}

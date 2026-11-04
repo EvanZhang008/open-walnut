@@ -86,6 +86,26 @@ function useLivePromptCache(sessionId: string | null): PromptCacheFacts | undefi
   return facts;
 }
 
+/** The working line while Walnut's own idle compaction runs (session:idle-compaction). */
+export const IDLE_COMPACTING_TEXT = 'Walnut is compacting this idle session\u2026';
+
+/**
+ * Whether Walnut's idle compaction runs in this session now: the server says when it starts and
+ * ends (session:idle-compaction), and the turn's result ends it here too.
+ */
+export function useIdleCompacting(sessionId: string | null | undefined): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => { setOn(false); }, [sessionId]);
+  useEvent('session:idle-compaction', useCallback((data: unknown) => {
+    const d = data as { sessionId?: string; active?: boolean };
+    if (sessionId && d.sessionId === sessionId) setOn(d.active === true);
+  }, [sessionId]));
+  useEvent('session:result', useCallback((data: unknown) => {
+    if (sessionId && (data as { sessionId?: string })?.sessionId === sessionId) setOn(false);
+  }, [sessionId]));
+  return on;
+}
+
 function readDismissed(sessionId: string | undefined): string | null {
   if (!sessionId) return null;
   try { return localStorage.getItem(DISMISS_KEY(sessionId)); } catch { return null; }
@@ -174,18 +194,20 @@ export function useCompactContext({ sessionId, session, acp, running, send, hist
   const node = offer ? (
     <div className="compact-offer-line" role="status" data-testid="compact-offer">
       <span className="compact-offer-icon" aria-hidden="true">{COMPACT_ICON}</span>
-      <span className="compact-offer-text">
-        <strong>Prompt cache expired {formatAgo(offer.expiredForMs)} ago.</strong>{' '}
-        Your next message re-reads all {formatContextTokens(offer.tokens)} tokens of this conversation at full price.
-        Compacting first replaces them with a short summary.
-      </span>
-      <span className="compact-offer-actions">
-        <button type="button" className="compact-offer-btn compact-offer-btn-primary" onClick={compact} data-testid="compact-offer-compact">
-          Compact first
-        </button>
-        <button type="button" className="compact-offer-btn" onClick={dismiss} data-testid="compact-offer-dismiss">
-          Keep full context
-        </button>
+      <span className="compact-offer-body">
+        <span className="compact-offer-text">
+          <strong>{offer.expiredForMs < 60_000 ? 'Prompt cache just expired.' : `Prompt cache expired ${formatAgo(offer.expiredForMs)} ago.`}</strong>{' '}
+          Your next message re-reads all {formatContextTokens(offer.tokens)} tokens of this conversation at full price.
+          Compacting first replaces them with a short summary.
+        </span>
+        <span className="compact-offer-actions">
+          <button type="button" className="compact-offer-btn compact-offer-btn-primary" onClick={compact} data-testid="compact-offer-compact">
+            Compact first
+          </button>
+          <button type="button" className="compact-offer-btn" onClick={dismiss} data-testid="compact-offer-dismiss">
+            Keep full context
+          </button>
+        </span>
       </span>
     </div>
   ) : null;

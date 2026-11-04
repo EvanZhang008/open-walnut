@@ -70,6 +70,7 @@ function harness(over: Partial<IdleCompactionDeps> = {}): Harness {
     dropRow: async (_sid, rowId) => (rows.get(rowId) === 'pending' ? rows.delete(rowId) : false),
     rowQueued: async (_sid, rowId) => rows.has(rowId),
     emitNote: (_sid, _task, message) => { notes.push(message); },
+    announce: () => {},
     ...over,
   });
   const runDue = async () => {
@@ -239,6 +240,36 @@ describe('when it fires', () => {
     h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
     expect(await h.ic.fire(SID, facts().requestAt)).toBe('send-failed');
     expect(isQuietTurn(SID)).toBe(false);
+  });
+
+  it('tells the open panels when it runs and when it ended, a person\'s send included', async () => {
+    const told: boolean[] = [];
+    const h = harness({ announce: (_sid, active) => { told.push(active); } });
+    h.now.ms = T0 + ONE_HOUR_MS - IDLE_COMPACT_LEAD_MS;
+    expect(await h.ic.fire(SID, facts().requestAt)).toBe('sent');
+    expect(told).toEqual([true]);
+    noteSessionSend(SID, 'ui');
+    expect(told).toEqual([true, false]);
+  });
+
+  // 2026-11-04 on the Mac: under memory pressure the idle reap ends a CLI after 15 minutes, long before
+  // its compaction time, and a reaped session is never compacted. The reap's warning sends it then.
+  it('an idle reap about to end the CLI sends the armed compaction now; an unarmed session is left alone', async () => {
+    const h = harness();
+    h.ic.handleEvent(ev(EventNames.SESSION_WILL_REAP, { sessionId: SID, remainingMs: 240_000 }, 'session-health-monitor'));
+    await h.runDue();
+    expect(h.sends).toEqual([]);
+    await h.ic.onTurnEnd(SID);
+    h.now.ms = T0 + 10 * 60_000;
+    // The reap's own tick (no time left) would cut it off: nothing then.
+    h.ic.handleEvent(ev(EventNames.SESSION_WILL_REAP, { sessionId: SID, remainingMs: 0 }, 'session-health-monitor'));
+    await h.runDue();
+    expect(h.sends).toEqual([]);
+    h.ic.handleEvent(ev(EventNames.SESSION_WILL_REAP, { sessionId: SID, remainingMs: 240_000 }, 'session-health-monitor'));
+    for (let i = 0; i < 50 && h.sends.length === 0; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(h.sends).toEqual([{ sid: SID, text: '/compact', source: IDLE_COMPACT_SOURCE }]);
+    expect(h.timers[0]!.cleared).toBe(true);
+    expect(h.ic.armedFor(SID)).toBeUndefined();
   });
 
   it('off in config, off everywhere', async () => {

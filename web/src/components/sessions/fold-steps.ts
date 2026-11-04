@@ -14,6 +14,8 @@
  */
 import type { EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
+import { COMPACTING_MESSAGE } from '@open-walnut/compaction-notice';
+import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import type { ToolRunMember } from './tool-run-phrase';
 
 export type ReceivedKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'other';
@@ -40,7 +42,7 @@ export type FoldStep =
   | { kind: 'update' }
   /** A line the session's runtime wrote (an API error, a retry, a compaction).
    *  An error one is counted by the fold's red "N failed", not on its line. */
-  | { kind: 'notice'; error?: boolean };
+  | { kind: 'notice'; error?: boolean; compact?: 'cli' | 'idle' };
 
 /** A received row's steps, one per envelope it holds; a row with none is one
  *  message from no one in particular. */
@@ -60,7 +62,8 @@ export function envelopeSteps(segments: readonly EnvelopeSegment[] | null | unde
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools",
- *  and the runtime's lines other than errors ("· 1 notice"; errors are the red count).
+ *  and the runtime's lines other than errors ("· 1 notice"; errors are the red count);
+ *  a compaction by name ("Context compacted", "Compacted by Walnut while idle").
  *  What each step was is inside the fold, one row per step, when it is opened.
  *  A stretch with none of the three reads by what it was: an update, a
  *  runtime notice, an acknowledgement, or "Thinking", the old empty-fold line. */
@@ -72,15 +75,27 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   let acks = 0;
   let notices = 0;
   let errorNotices = 0;
+  let compacted = false;
+  let idleLines = 0;
   for (const s of steps) {
     if (s.kind === 'received') received++;
     else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
     else if (s.kind === 'calls') tools += s.tools.length;
     else if (s.kind === 'update') updates++;
     else if (s.kind === 'ack') acks++;
-    else if (s.kind === 'notice') { if (s.error) errorNotices++; else notices++; }
+    else if (s.kind === 'notice') {
+      if (s.compact === 'cli') compacted = true;
+      else if (s.compact === 'idle') idleLines++;
+      else if (s.error) errorNotices++;
+      else notices++;
+    }
   }
+  // Walnut's own line about its idle compaction is the compaction's when one came, else a notice
+  // (a compaction stopped halfway made none).
+  if (!compacted) notices += idleLines;
   const pieces: string[] = [];
+  // A compaction is said by name, never counted as a notice (2026-11-04 review: "2 notices" hid it).
+  if (compacted) pieces.push(idleLines > 0 ? 'Compacted by Walnut while idle' : 'Context compacted');
   if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
   if (sent > 0) pieces.push(`Sent ${sent}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
@@ -89,4 +104,17 @@ export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   if (updates > 0) return updates === 1 ? 'An update' : `${updates} updates`;
   if (errorNotices > 0) return count(errorNotices, 'notice', 'notices');
   return acks > 0 ? 'Acknowledged' : 'Thinking';
+}
+
+/**
+ * A run of runtime rows' line. A compaction says so by name (its explanation and numbers are
+ * inside), with the count of the other rows; only one that made its boundary does: its progress row
+ * ("Compacting context...") is no result, and one stopped halfway made none.
+ */
+export function systemRunLabel(members: readonly { variant: string; message: string }[]): string {
+  const idle = members.filter((m) => isIdleCompactLine(m.message)).length;
+  const done = members.filter((m) => m.variant === 'compact' && m.message !== COMPACTING_MESSAGE).length;
+  if (!done) return `${members.length} system messages`;
+  const others = members.length - done - idle;
+  return `${idle ? 'Compacted by Walnut while idle' : 'Context compacted'}${others > 0 ? ` \u00b7 ${others} more` : ''}`;
 }

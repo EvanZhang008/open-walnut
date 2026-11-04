@@ -74,11 +74,13 @@ let lastInputUserUuid = null;
 function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
-  if (!root || !sid || !allow.includes(sid)) return null;
+  if (!root || !sid) return null;
   try {
     for (const d of fs.readdirSync(root)) {
       const f = path.join(root, d, `${sid}.jsonl`);
-      if (fs.existsSync(f)) return f;
+      if (!fs.existsSync(f)) continue;
+      // Listed, or a session a big-context-turn began (its later plain turns stay on reload too).
+      if (allow.includes(sid) || fs.readFileSync(f, 'utf8').includes('"msg_big_context_')) return f;
     }
   } catch { /* no transcript dir */ }
   return null;
@@ -850,6 +852,7 @@ if (outputFormat === 'stream-json') {
   let snapshotTurnSeq = 0;
   // The context the last big-context-turn read, for "/compact"'s pre_tokens.
   let mockContextTokens = 0;
+  let plainStaysAlive = false;
   // Cumulative session cost, like the real CLI's `total_cost_usd` (which is the
   // running total for the SESSION, not the turn). Load-bearing for any mode that
   // runs MORE THAN ONE turn on one process: Walnut treats "cumulative cost
@@ -863,9 +866,13 @@ if (outputFormat === 'stream-json') {
     snapshotCostUsd = Math.round((snapshotCostUsd + increment) * 1e6) / 1e6;
     return snapshotCostUsd;
   }
-  function armSnapshotNextTurn() {
+  // `announce`: the queued line starts its own turn with an init, as the real CLI does after a
+  // `/compact` (probed 2026-11-04, CLI 2.1.312: started, init, then the turn).
+  function armSnapshotNextTurn(opts = {}) {
     onUserLine = (content) => {
       onUserLine = null;
+      // A plain turn after a `/compact` stays on this process, as the real CLI does, instead of exiting.
+      plainStaysAlive = opts.announce === true;
       message = content;
       computeMessageParts();
       emitRemainingEvents();
@@ -873,6 +880,7 @@ if (outputFormat === 'stream-json') {
     const queued = queuedUserLines.shift();
     if (queued) {
       if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
+      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' }) + '\n');
       const c = queued.message.content;
       setTimeout(() => onUserLine?.(typeof c === 'string' ? c : JSON.stringify(c)), 0);
     }
@@ -1263,7 +1271,23 @@ if (outputFormat === 'stream-json') {
       mockCompacting = true;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
       emit({ type: 'system', subtype: 'status', status: 'compacting', session_id: sid, uuid: randomUUID() });
-      setTimeout(() => {
+      // An interrupt cancels it the way Claude Code 2.1.312 does (probed 2026-11-04): no boundary,
+      // a "Compaction canceled." line, an empty result, the command cancelled.
+      onInterrupt = () => {
+        clearTimeout(compacting);
+        emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { id: `msg_compact_cancel_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>',
+          content: [{ type: 'text', text: 'Compaction canceled.' }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, num_turns: 0, result: '', session_id: sid,
+          total_cost_usd: nextSnapshotCost(0), usage: { input_tokens: 0, output_tokens: 0 } });
+        if (compactLineUuid) emit({ type: 'command_lifecycle', command_uuid: compactLineUuid, state: 'cancelled', session_id: sid });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        mockCompacting = false;
+        armSnapshotNextTurn({ announce: true });
+      };
+      const compacting = setTimeout(() => {
+        onInterrupt = null;
         mockContextTokens = 18_000;
         // Claude Code 2.1.31x re-announces itself mid-compaction, before the boundary (probed 2026-11-04).
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
@@ -1278,7 +1302,7 @@ if (outputFormat === 'stream-json') {
           total_cost_usd: nextSnapshotCost(0.02), usage: { input_tokens: 0, output_tokens: 0 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
         mockCompacting = false;
-        armSnapshotNextTurn();
+        armSnapshotNextTurn({ announce: true });
       }, Number(process.env.MOCK_COMPACT_MS ?? 1500));
       return;
     }
@@ -2715,6 +2739,10 @@ if (outputFormat === 'stream-json') {
     // the answer never rendered live, and a reload showed it glued onto the first
     // reply. pid + ms is enough — one process runs one plain turn. The multi-turn
     // snapshot modes already mint per-turn ids for the same reason.
+    // After a big-context-turn in this process, a plain turn reads that context from the cache.
+    const plainUsage = mockContextTokens > 0
+      ? { input_tokens: 3, cache_read_input_tokens: mockContextTokens, cache_creation_input_tokens: 0, output_tokens: 50 }
+      : { input_tokens: 100, output_tokens: 50 };
     const assistantEvent = {
       type: 'assistant',
       message: {
@@ -2724,7 +2752,7 @@ if (outputFormat === 'stream-json') {
         model: 'mock-model',
         content: [{ type: 'text', text: resultText }],
         stop_reason: 'end_turn',
-        usage: { input_tokens: 100, output_tokens: 50 },
+        usage: plainUsage,
       },
       session_id: outputSessionId,
     };
@@ -2741,8 +2769,15 @@ if (outputFormat === 'stream-json') {
       result: resultText,
       session_id: outputSessionId,
       total_cost_usd: 0.003,
-      usage: { input_tokens: 100, output_tokens: 50 },
+      usage: plainUsage,
     };
+    if (plainStaysAlive) {
+      plainStaysAlive = false;
+      process.stdout.write(JSON.stringify(resultEvent) + '\n');
+      process.stdout.write(JSON.stringify({ type: 'system', subtype: 'session_state_changed', session_id: outputSessionId, state: 'idle' }) + '\n');
+      armSnapshotNextTurn();
+      return;
+    }
     // Flush stdout before exiting to prevent truncated output
     process.stdout.write(JSON.stringify(resultEvent) + '\n', () => process.exit(0));
   }

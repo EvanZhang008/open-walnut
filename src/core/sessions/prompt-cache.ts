@@ -157,5 +157,11 @@ export function idleCompactLineUuid(random: string): string {
   return IDLE_COMPACT_UUID_PREFIX + random.slice(IDLE_COMPACT_UUID_PREFIX.length);
 }
 /** The history row that stands for the idle compaction's command line. */
-export const IDLE_COMPACT_HISTORY_TEXT = 'Compacted by Walnut while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.';
+export const IDLE_COMPACT_HISTORY_TEXT = 'Walnut sent /compact while the session was idle, before its prompt cache expired, so the next message reads a summary instead of the whole conversation.';
+/** Walnut's own lines about an idle compaction: the live note (idle-compaction.ts) and the history row. */
+export function isIdleCompactLine(text: string | undefined): boolean {
+  // The first wording too: history cached by the first release still holds it.
+  return !!text && (text.startsWith('Walnut sent /compact while the session was idle') || text.startsWith('Compacting this idle session')
+    || text.startsWith('Compacted by Walnut while the session was idle'));
+}
 

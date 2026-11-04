@@ -139,6 +139,41 @@ describe('a big idle session with a 1-hour cache', () => {
     await until('their answer recorded', () => getSessionByClaudeId(w.sid), (r) => (r?.promptCache?.tokens ?? 0) > 50_000 && !r?.promptCache?.compactedAt, 20_000)
   }, 90_000)
 
+  // 2026-11-04 review: a plain message typed while it compacts. Claude Code 2.1.312 runs it after
+  // the compaction as its own turn (started, init, answer, result); that turn hands the task back.
+  it('a plain message typed while it compacts is answered and hands the task back', async () => {
+    const w = await startBig('big-context-turn:400000:1h')
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await sendMessageToSession(w.sid, 'what changed in the parser?', { source: 'ui', taskId: w.taskId })
+    const seen = new Set<string>()
+    const t = await until('their turn handed back', async () => {
+      const t = await task(w.taskId)
+      seen.add(`${t.phase}/${t.user_status?.state ?? '-'}`)
+      return t
+    }, (t) => [...seen].some((s) => s.startsWith('IN_PROGRESS/')) && t.phase === 'NEED_ACTION' && t.user_status?.state !== 'working', 30_000)
+    expect(t.phase, [...seen].join(',')).toBe('NEED_ACTION')
+    const rec = await getSessionByClaudeId(w.sid)
+    expect(rec!.promptCache!.compactedAt).toBeUndefined()
+  }, 90_000)
+
+  // Stopped while it compacts: Claude Code cancels it ("Compaction canceled.", no boundary). The
+  // context stays whole, the task does not move, and Walnut does not try again for that request.
+  it('a Stop while it compacts cancels it, and nothing else moves', async () => {
+    const w = await startBig('big-context-turn:400000:1h')
+    const before = await task(w.taskId)
+    await until('/compact sent', async () => sentTexts(w.sid), (t) => t.some((s) => s.trim() === '/compact'), 20_000)
+    await until('compacting', async () => sessionRunner.findSessionByClaudeId(w.sid)?.inTurn ?? false, (v) => v, 10_000)
+    const stop = await req('POST', `/api/sessions/${w.sid}/interrupt`)
+    expect(stop.status, JSON.stringify(stop.json)).toBeLessThan(300)
+    const rec = await until('the quiet turn ended', () => getSessionByClaudeId(w.sid), (r) => !!r?.idleCompaction?.endedAt, 20_000)
+    expect(rec!.promptCache).toMatchObject({ tokens: 400_040 })
+    expect(rec!.promptCache!.compactedAt).toBeUndefined()
+    await new Promise((r) => setTimeout(r, 1500))
+    const after = await task(w.taskId)
+    expect(after.phase).toBe(before.phase)
+    expect(sentTexts(w.sid).filter((s) => s.trim() === '/compact')).toHaveLength(1)
+  }, 90_000)
+
   it('a 5-minute cache and a small session are left alone', async () => {
     const short = await startBig('big-context-turn:400000:5m')
     const small = await startBig('big-context-turn:60000:1h')
