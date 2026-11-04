@@ -16,6 +16,16 @@ import {
   BACKEND_MAX_SECONDS, backendCommand, reapLiveBackends, _liveBackendsForTesting,
 } from '../../../src/web/routes/git-http.js'
 
+/** True once no process of group `pgid` is left (signal 0 fails), false at the deadline. */
+async function groupGoneWithin(pgid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    try { process.kill(-pgid, 0) } catch { return true }
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
 describe('git http-backend lifetime', () => {
   it('runs under timeout when the box has it, as the group leader, with a kill after the grace', () => {
     expect(backendCommand('/usr/bin/timeout')).toEqual({
@@ -33,8 +43,11 @@ describe('git http-backend lifetime', () => {
     _liveBackendsForTesting().add(child.pid!)
     expect(reapLiveBackends()).toBe(1)
     expect(await exited).toBe('SIGKILL')
-    // The grandchild went with the group.
-    expect(() => process.kill(-child.pid!, 0)).toThrow()
+    // The grandchild went with the group. The group was signalled as one, but
+    // each member dies (and is reaped by its new parent) on its own schedule,
+    // so the leader's exit event can come before the grandchild is gone:
+    // wait for the group to empty rather than reading it at that instant.
+    expect(await groupGoneWithin(child.pid!, 5_000)).toBe(true)
     expect(_liveBackendsForTesting().size).toBe(0)
   })
 
