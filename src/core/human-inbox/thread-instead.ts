@@ -8,8 +8,11 @@
  *
  * So a letter from Main or a lead (a VP is a lead) about one of its open threads is refused, with
  * the thread named and thread_update as the way, away or not. A letter is about an open thread when
- *  - it names a task of that thread (one it went to, or one the node's chat answer in it named;
- *    Main's and the leads' own tasks aside, the sender's included), or
+ *  - it is a report (info, completion, review) naming a task of that thread (one it went to, or one
+ *    the node's chat answer in it named; Main's and the leads' own tasks aside, the sender's included),
+ *    or a decision naming a task that this one open thread went to and no other (a team's long-lived
+ *    task on several threads, or one only named in answers, may be asked about something new: a
+ *    replay of a VP's real letters, 2026-11-04, refused "your Mac was signed out" that way), or
  *  - it is a report (info, completion, review) naming no such task, and the node put a result in
  *    that thread in the last THREAD_JUST_UPDATED_MS (a new summary, or its chat answer filed there):
  *    it wrote the thread's result and then mailed it. A decision naming no task is not judged by
@@ -80,9 +83,18 @@ export function threadInsteadOf(
   if (!open.length) return null;
   const refs = [...new Set(input.taskRefs.map((r) => r.trim()).filter((r) => r && !sameTask(r, input.nodeTaskId) && !isNode(r)))];
   if (refs.length) {
+    const report = REPORT_TYPES.has(input.type);
     for (const ref of refs) {
-      const t = open.find((x) => threadTaskIds(x).some((id) => !isNode(id) && sameTask(id, ref)));
-      if (t) return { threadId: t.id, title: t.title, state: t.state, why: 'task', taskId: ref };
+      const on = (ids: string[]) => ids.some((id) => !isNode(id) && sameTask(id, ref));
+      if (report) {
+        const t = open.find((x) => on(threadTaskIds(x)));
+        if (t) return { threadId: t.id, title: t.title, state: t.state, why: 'task', taskId: ref };
+        continue;
+      }
+      // A decision: only a task that one open thread went to points at that thread's subject. A team's
+      // long-lived task on several threads (or only named in answers) can be asked about anything new.
+      const holders = open.filter((x) => on(x.tasks ?? []));
+      if (holders.length === 1) { const t = holders[0]; return { threadId: t.id, title: t.title, state: t.state, why: 'task', taskId: ref }; }
     }
     return null;
   }
@@ -104,7 +116,8 @@ export function threadInsteadMessage(hit: ThreadHit): string {
     + `never also a letter, whether he is in your chat or away. Write it there with thread_update {"id":"${hit.threadId}",`
     + '"reply":"<the summary, proof by path>"} (a decision he must make: state "needs" with user_kind and user_kind_why); '
     + 'Walnut files your chat reply under his message by itself. Letter him only for what has no open thread; if this letter '
-    + 'is about other work, name that work\'s tasks in task_refs. user_asked:true only when he asked in his own words for this '
+    + 'is about other work, name the task doing that work in task_refs (a new subject of his: open a thread for it with '
+    + 'thread_create). user_asked:true only when he asked in his own words for this '
     + 'as a letter in his inbox.';
 }
 

@@ -181,6 +181,19 @@ describe('the gate (threadInsteadOf)', () => {
     expect(threadInsteadOf({ ...info(['mthfqunw-d46a']), type: 'action_required' }, t, NOW)).toMatchObject({ why: 'task' })
   })
 
+  it('a decision is the thread\'s only through a task that one open thread went to: a team\'s task on several threads, or named only in answers, may be asked about something new', () => {
+    const team = '2be78a01-1dd2'
+    const two = [...threads(`task:${node}`, 600, {}, { tasks: [team] }), ...threads(`task:${node}`, 600, { id: 'th-cccccccccccc' }, { tasks: [team] })]
+    const decision = { ...info([team]), type: 'action_required' as const }
+    expect(threadInsteadOf(decision, two, NOW)).toBeNull()
+    expect(threadInsteadOf(decision, two.slice(0, 1), NOW)).toMatchObject({ why: 'task' })
+    // A report naming it is a result of one of them either way.
+    expect(threadInsteadOf(info([team]), two, NOW)).toMatchObject({ why: 'task' })
+    let f = fileMessage(emptyThreads(node), { text: 'is the Mac ok', via: 'chat', at: iso(300) }).file
+    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Yes.', at: iso(299), about: [team] }]])).file
+    expect(threadInsteadOf(decision, f.threads, NOW)).toBeNull()
+  })
+
   it('a task the node\'s chat answer named in the thread ties a letter to it, as one it went to does', () => {
     let f = fileMessage(emptyThreads(node), { text: 'why does the mic fail', via: 'chat', at: iso(300) }).file
     f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Fixed in the voice task.', at: iso(299), about: ['2be78a01-1dd2'] }]])).file
