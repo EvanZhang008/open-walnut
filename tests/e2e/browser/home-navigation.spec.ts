@@ -5,6 +5,7 @@ import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
 import { openKebabGroup } from './kebab-group-helpers';
+import { answerTaskList } from './task-list-stub';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -373,10 +374,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
     task('nav-list-bravo', 'List bravo', 'Meadowlark', { priority: 'immediate', created_at: ago(2), updated_at: ago(3) }),
     task('nav-list-charlie', 'List charlie', 'Meadowlark', { created_at: ago(1), updated_at: ago(2) }),
   ];
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
-    await route.fulfill({ json: { tasks: board() } });
-  });
+  await answerTaskList(page, () => board());
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const pins = pinning ? ['pw-task-store-sync', 'nav-empty-pin', 'nav-pin-other'] : [];
@@ -897,10 +895,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
     id, title: `Tab pick ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
     created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
   });
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
-    await route.fulfill({ json: { tasks: [task('tabs-focus', { pinned: true, focus_tier: 'focus' }), task('tabs-wait', { pinned: true, focus_tier: 'wait' }), task('tabs-list')] } });
-  });
+  await answerTaskList(page, () => [task('tabs-focus', { pinned: true, focus_tier: 'focus' }), task('tabs-wait', { pinned: true, focus_tier: 'wait' }), task('tabs-list')]);
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: { pinned_tasks: ['tabs-focus', 'tabs-wait'], focus_tasks: ['tabs-focus'], satellite_tasks: [], wait_tasks: ['tabs-wait'], custom_tier_tasks: {} } });
@@ -999,14 +994,11 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
     created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
   });
   const located = 'pw-task-store-sync';
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
-    await route.fulfill({ json: { tasks: [
-      task(located, { session_ids: ['pw-store-sync-session'], ...(where ? { pinned: true, focus_tier: where } : {}) }),
-      task('locate-focus', { pinned: true, focus_tier: 'focus' }),
-      task('locate-list'),
-    ] } });
-  });
+  await answerTaskList(page, () => [
+    task(located, { session_ids: ['pw-store-sync-session'], ...(where ? { pinned: true, focus_tier: where } : {}) }),
+    task('locate-focus', { pinned: true, focus_tier: 'focus' }),
+    task('locate-list'),
+  ]);
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: {
@@ -1129,13 +1121,10 @@ test('Locate never moves or opens a session column, in an unlocked column or the
     id, title: `Locate ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
     created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
   });
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
-    await route.fulfill({ json: { tasks: [
-      task('pw-task-store-sync', { session_ids: ['pw-store-sync-session'], walnut_agent: true, pinned: true, focus_tier: 'focus' }),
-      task('locate-list'),
-    ] } });
-  });
+  await answerTaskList(page, () => [
+    task('pw-task-store-sync', { session_ids: ['pw-store-sync-session'], walnut_agent: true, pinned: true, focus_tier: 'focus' }),
+    task('locate-list'),
+  ]);
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
@@ -1271,13 +1260,12 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
   const folderMembers = range('sg', 3);
   const spanMembers = ['fs1', 'lO1', 'lO2'];
   const groupOf = (id: string) => folderMembers.includes(id) ? 'fold-folder' : spanMembers.includes(id) ? 'fold-span' : undefined;
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+  await answerTaskList(page, () => {
     const pinned = Object.entries(tiers).flatMap(([tier, rows]) => rows.map(([id, project]) =>
       task(id, project, { pinned: true, focus_tier: tier, ...(groupOf(id) ? { group_id: groupOf(id) } : {}) })));
     const list = ['Orchard', 'Meadowlark', 'Juniper'].flatMap(project => range(`l${project[0]}`, project === 'Juniper' ? 12 : 8)
       .map(id => task(id, project, groupOf(id) ? { group_id: groupOf(id) } : {})));
-    await route.fulfill({ json: { tasks: [...pinned, ...list] } });
+    return [...pinned, ...list];
   });
   await page.route('**/api/tasks/groups', async route => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -1460,8 +1448,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
     satellite: [...run(range('so', 8), 'Orchard'), ...run(range('sm', 30), 'Meadowlark')],
     wait: [...run(range('wo', 6), 'Orchard'), ...(where === 'wait' ? run([located], 'Orchard') : []), ...run(range('wm', 4), 'Meadowlark')],
   });
-  await page.route('**/api/tasks?*', async route => {
-    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+  await answerTaskList(page, () => {
     const pinned = Object.entries(tiers()).flatMap(([tier, rows]) => rows.map(([id, project]) =>
       task(id, project, { pinned: true, focus_tier: tier, ...(id === located ? { session_ids: ['pw-store-sync-session'] } : {}) })));
     const list = [
@@ -1472,7 +1459,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
       // Updated longest ago, so it is Juniper's last row.
       ...(where === '' ? [task(located, 'Juniper', { session_ids: ['pw-store-sync-session'], updated_at: '2026-01-01T00:00:00.000Z' })] : []),
     ];
-    await route.fulfill({ json: { tasks: [...pinned, ...list] } });
+    return [...pinned, ...list];
   });
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
