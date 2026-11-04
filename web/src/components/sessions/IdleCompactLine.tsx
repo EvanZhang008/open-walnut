@@ -106,6 +106,7 @@ export function IdleCompactSetting() {
         <input
           className="idle-compact-percent"
           data-testid="idle-compact-percent"
+          data-no-draft="number"
           aria-label="Share of the auto-compaction limit"
           aria-invalid={error ? true : undefined}
           inputMode="numeric"

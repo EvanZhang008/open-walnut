@@ -39,6 +39,7 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/search.ts': 'reindexes the transcript, which really changed',
   'src/core/search/wiring.ts': 'reindexes the transcript, which really changed',
   'src/core/session-changes-prewarm.ts': 'warms the Changed tab cache: harmless',
+  'src/core/session-git-status.ts': 'recounts the session\'s git changes (debounced; a tree a quiet turn left unchanged changes no count)',
   'src/core/sessions/launch-prompts.ts': 'forgets a launch prompt once the transcript has it',
   'src/core/sessions/lane-turn.ts': 'chat lanes are never compacted while idle',
   'src/core/sessions/lane-turn-gate.ts': 'chat lanes are never compacted while idle',

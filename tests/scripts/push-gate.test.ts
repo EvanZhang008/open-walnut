@@ -236,9 +236,9 @@ gate=$(git --git-dir=${JSON.stringify(bare)} for-each-ref --format='%(refname)' 
 echo "$url $gate" >> ${JSON.stringify(seen)}
 case $url in
   *actions/runs\\?*) [ -n "$gate" ] && jq -c '{workflow_runs: .runs}' ${a} || echo '{"workflow_runs":[]}' ;;
-  */statuses*) if [ -n "$gate" ]; then jq -c .statuses ${a}; else jq -c .before ${a}; fi ;;
-  */runs/*/jobs*) jq -c .jobs ${a} ;;
-  */jobs/*/logs) jq -r .log ${a} ;;
+  *statuses*) if [ -n "$gate" ]; then jq -c .statuses ${a}; else jq -c .before ${a}; fi ;;
+  *jobs\\?*) jq -c .jobs ${a} ;;
+  *logs) jq -r .log ${a} ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o755 })
