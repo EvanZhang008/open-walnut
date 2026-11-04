@@ -31,8 +31,8 @@
  * follower holds no vault.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { requestOrigin } from '../middleware/request-origin.js'
-import { classifyLocalRequest, isLoopbackAddress, isTunnelPort } from '../middleware/local-trust.js'
+import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
+import { classifyLocalRequest } from '../middleware/local-trust.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { isFollower, role } from '../../core/server-role.js'
@@ -162,8 +162,10 @@ async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; passwo
  * any client can send one, and a plain relay passes it on.
  */
 function privateLink(req: Request): boolean {
+  // A loopback self-call made for a caller off this machine is that caller's link, not this one.
+  if (isOnBehalfOfRemote(req)) return false
   if (req.secure) return true
-  // This machine, by the caller-origin rule (a loopback self-call made for someone else is not).
+  // This machine, by the caller-origin rule.
   if (requestOrigin(req) === LOCAL_ORIGIN) return true
   // A page or extension on this machine: a loopback connection with no proxy header, addressed
   // to a loopback name, from another origin (the browser extension). Its bytes never left this
@@ -171,9 +173,9 @@ function privateLink(req: Request): boolean {
   // relay (socat, an ssh gateway port) from the network looks.
   const t = classifyLocalRequest(req)
   if (!t.trusted && t.reason === 'foreign-origin') return true
-  // Walnut's own tunnel, while what it publishes is https: https from the browser to its edge,
-  // then this machine's loopback (or a host server's way back to it).
-  if (isTunnelPort(req.socket.localPort) && isLoopbackAddress(req.socket.remoteAddress)) {
+  // Walnut's own tunnel (a loopback connection on its port), while what it publishes is https:
+  // https from the browser to its edge, then this machine's loopback (or a host server's way back).
+  if (!t.trusted && t.reason === 'tunnel-port') {
     const st = currentExposeStatus()
     if (st.url?.startsWith('https://') && (st.port === req.socket.localPort || st.runsOn)) return true
   }
@@ -190,8 +192,11 @@ function privateLink(req: Request): boolean {
  * password through the same proxy is still refused, since a browser that types one is on http.
  */
 function keyLink(req: Request): boolean {
+  if (isOnBehalfOfRemote(req)) return false
   if (privateLink(req)) return true
-  if (!isLoopbackAddress(req.socket.remoteAddress) || isTunnelPort(req.socket.localPort)) return false
+  // A loopback connection off the tunnel's port that carries proxy headers: a proxy on this machine.
+  const t = classifyLocalRequest(req)
+  if (t.trusted || t.reason !== 'proxied') return false
   const proto = req.headers['x-forwarded-proto']
   return typeof proto === 'string' && proto.split(',')[0].trim().toLowerCase() === 'https'
 }

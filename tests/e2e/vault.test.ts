@@ -411,6 +411,17 @@ describe('the vault, start to end', () => {
     const bare = { authorization: `Bearer ${dev.token}`, host: 'mymac.lan', 'x-walnut-vault-session': '' }
     expect((await http('GET', '/vault/status', undefined, bare)).body.privateLink).toBe(false)
     expect((await http('POST', '/vault/unlock', { passwordKey: key, kdfSalt: st.kdf.salt }, bare)).body.code).toBe('insecure_link')
+    // A self-call this machine makes for a caller elsewhere (x-walnut-origin) is that caller's
+    // link: neither a key nor a typed password, also when it adds the TLS proxy's header.
+    for (const origin of ['remote-http', 'host:devbox']) {
+      const forOther = { authorization: `Bearer ${dev.token}`, 'x-walnut-origin': origin, 'x-walnut-vault-session': '' }
+      for (const [body, extra] of [[{ password: 'recovered test phrase' }, {}], [{ passwordKey: key, kdfSalt: st.kdf.salt }, { 'x-forwarded-proto': 'https' }]] as const) {
+        const r = await http('POST', '/vault/unlock', body, { ...forOther, ...extra })
+        expect(r.status).toBeGreaterThanOrEqual(400)
+        expect(['insecure_link', 'human_only']).toContain(r.body.code)
+        expect(r.body.session).toBeUndefined()
+      }
+    }
     // The person's own TLS proxy here: a derived key goes through, a typed password does not.
     const tls = { authorization: `Bearer ${dev.token}`, 'x-forwarded-proto': 'https', 'x-forwarded-for': '192.0.2.4', 'x-walnut-vault-session': '' }
     expect((await http('POST', '/vault/unlock', { password: 'recovered test phrase' }, tls)).body.code).toBe('insecure_link')
