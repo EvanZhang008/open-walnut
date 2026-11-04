@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
+import { guardedPath } from '../setup/exec-guard.js'
 import { CLT_STUBS, cltInstalled, cltMessage, cltStubRun, loginPath, pathHelperOrder, type CltFs } from '../../src/providers/host-exec-clt.js'
 
 function fsWith(files: string[], link: string | null = null): CltFs {
@@ -14,7 +15,8 @@ function fsWith(files: string[], link: string | null = null): CltFs {
   return { exists: (p) => set.has(p), readlink: () => link }
 }
 const BARE_MAC = fsWith(['/usr/bin/git', '/usr/bin/python3', '/usr/bin/make', '/usr/bin/xcodebuild', '/usr/bin/ls'])
-const PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+/** The search path a run gets in most cases below (Homebrew first). */
+const SEARCH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
 
 /** A login shell that prints its profile's noise, then the PATH line, after `ms`; or never. */
 function fakeShell(answer: string | null, ms = 0) {
@@ -33,6 +35,8 @@ function fakeShell(answer: string | null, ms = 0) {
   }
   return { spawn, spawned, killed, killGroup: (p: number) => { killed.push(p) } }
 }
+/** The env the fake login shell is given (it spawns nothing real). */
+const GUARDED = { PATH: guardedPath([], '/usr/bin:/bin') }
 const plan = (line: string) => ({ cmd: '/bin/zsh', args: ['-l', '-c', line] })
 
 describe('the Command Line Tools are read from the filesystem', () => {
@@ -71,33 +75,33 @@ describe('a line that runs a stub is refused on a Mac without them', () => {
     ['/usr/local/../bin/git status', 'git'],
     ['zsh -c "eval xcrun --show-sdk-path"', 'xcrun'],
   ])('%s -> %s', (line, stub) => {
-    expect(cltStubRun(line, PATH, BARE_MAC)).toBe(stub)
+    expect(cltStubRun(line, SEARCH, BARE_MAC)).toBe(stub)
   })
 
   it('a relative path is the stub only where it lands in /usr/bin', () => {
-    expect(cltStubRun('./git status', PATH, BARE_MAC, '/usr/bin')).toBe('git')
-    expect(cltStubRun('../bin/git status', PATH, BARE_MAC, '/usr/lib')).toBe('git')
-    expect(cltStubRun('./git status', PATH, BARE_MAC, '/Users/me/repo')).toBeNull()
-    expect(cltStubRun('cd /usr/bin; cd /tmp; ./git', PATH, BARE_MAC)).toBeNull()
+    expect(cltStubRun('./git status', SEARCH, BARE_MAC, '/usr/bin')).toBe('git')
+    expect(cltStubRun('../bin/git status', SEARCH, BARE_MAC, '/usr/lib')).toBe('git')
+    expect(cltStubRun('./git status', SEARCH, BARE_MAC, '/Users/me/repo')).toBeNull()
+    expect(cltStubRun('cd /usr/bin; cd /tmp; ./git', SEARCH, BARE_MAC)).toBeNull()
   })
 
   it('looking a stub up runs none', () => {
     for (const line of ['command -v git', 'which git', 'type git', 'hash git 2>/dev/null', 'xcode-select -p', 'command -V xcodebuild']) {
-      expect(cltStubRun(line, PATH, BARE_MAC), line).toBeNull()
+      expect(cltStubRun(line, SEARCH, BARE_MAC), line).toBeNull()
     }
   })
 
   it('base macOS programs, `xcode-select -p` and a stub only named are fine', () => {
     for (const line of ['ls -la', 'uname -a', 'xcode-select -p', 'echo git', 'sw_vers', 'perl -e 1', 'cat /tmp/x', 'launchctl print gui/501']) {
-      expect(cltStubRun(line, PATH, BARE_MAC), line).toBeNull()
+      expect(cltStubRun(line, SEARCH, BARE_MAC), line).toBeNull()
     }
   })
 
   it('a bare name is fine when another copy comes first on the PATH; an explicit /usr/bin one is not', () => {
     const brew = fsWith(['/opt/homebrew/bin/git', '/usr/bin/git', '/opt/homebrew/bin/python3', '/usr/bin/python3'])
-    expect(cltStubRun('git status', PATH, brew)).toBeNull()
-    expect(cltStubRun('python3 -V', PATH, brew)).toBeNull()
-    expect(cltStubRun('/usr/bin/git status', PATH, brew)).toBe('git')
+    expect(cltStubRun('git status', SEARCH, brew)).toBeNull()
+    expect(cltStubRun('python3 -V', SEARCH, brew)).toBeNull()
+    expect(cltStubRun('/usr/bin/git status', SEARCH, brew)).toBe('git')
     // A copy only after /usr/bin is never reached.
     expect(cltStubRun('git status', '/usr/bin:/opt/homebrew/bin', brew)).toBe('git')
   })
@@ -114,8 +118,8 @@ describe('a line that runs a stub is refused on a Mac without them', () => {
 describe('the PATH a run gets is the login shell\'s', () => {
   it('path_helper order until the shell answers, then the PATH it printed, asked once', async () => {
     const sh = fakeShell('/opt/homebrew/bin:/usr/bin:/bin', 20)
-    const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: { PATH: '/usr/bin:/bin' }, home: '/Users/me' })
-    expect(get()).toBe(pathHelperOrder({ PATH: '/usr/bin:/bin' }))
+    const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: GUARDED, home: '/Users/me' })
+    expect(get()).toBe(pathHelperOrder(GUARDED))
     expect(get().split(':').slice(0, 2)).toEqual(['/usr/local/bin', '/usr/bin'])
     await new Promise((r) => setTimeout(r, 60))
     expect(get()).toBe('/opt/homebrew/bin:/usr/bin:/bin')
@@ -126,18 +130,18 @@ describe('the PATH a run gets is the login shell\'s', () => {
   it('a shell that never answers is killed after 5 s and the guess stays', async () => {
     let t = 0
     const sh = fakeShell(null)
-    const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: { PATH: '/usr/bin' }, home: '/h', now: () => t })
-    expect(get()).toBe(pathHelperOrder({ PATH: '/usr/bin' }))
+    const get = loginPath({ spawn: sh.spawn as never, killGroup: sh.killGroup, plan, env: GUARDED, home: '/h', now: () => t })
+    expect(get()).toBe(pathHelperOrder(GUARDED))
     await new Promise((r) => setTimeout(r, 5_100))
     expect(sh.killed).toHaveLength(1)
     t += 60_000
-    expect(get()).toBe(pathHelperOrder({ PATH: '/usr/bin' }))
+    expect(get()).toBe(pathHelperOrder(GUARDED))
     expect(sh.spawned).toHaveLength(1)
   }, 10_000)
 
   it('Homebrew is first only when the shell says so: with path_helper order a bare git is the stub', () => {
     const brew = fsWith(['/opt/homebrew/bin/git', '/usr/bin/git'])
-    expect(cltStubRun('git status', pathHelperOrder({ PATH: '/usr/bin:/bin' }), brew)).toBe('git')
+    expect(cltStubRun('git status', pathHelperOrder(GUARDED), brew)).toBe('git')
     expect(cltStubRun('git status', '/opt/homebrew/bin:/usr/bin:/bin', brew)).toBeNull()
   })
 })

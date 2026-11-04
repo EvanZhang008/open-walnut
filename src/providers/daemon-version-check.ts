@@ -127,6 +127,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-core.ts',
   'src/providers/host-exec-line.ts',
   'src/providers/host-exec-guards.ts',
+  'src/providers/host-exec-clt.ts',
   'src/providers/host-exec-watch.ts',
   // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.
   'src/providers/host-exec-run-id.ts',
