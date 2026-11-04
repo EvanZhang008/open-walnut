@@ -71,7 +71,7 @@ function forHostStore(row: SessionRecord): SessionRecord {
 }
 
 /** Left out of the hash (still sent with the next real change). */
-export const VOLATILE_SESSION_FIELDS: readonly string[] = ['lastActiveAt', 'activity', 'contextTokens']
+export const VOLATILE_SESSION_FIELDS: readonly string[] = ['lastActiveAt', 'activity', 'contextTokens', 'promptCache']
 const VOLATILE_SET = new Set(VOLATILE_SESSION_FIELDS)
 
 /** What a session copy row is: the record without its process fields. Idempotent. */

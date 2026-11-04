@@ -30,7 +30,9 @@ import {
   resetCache,
   queueSentBy,
   sendMessageToSession,
+  SendNoLongerWantedError,
 } from '../../src/core/session-message-queue.js';
+import { beginQuietTurn, isQuietTurn, resetQuietTurnsForTest } from '../../src/core/sessions/quiet-turn.js';
 import { bus } from '../../src/core/event-bus.js';
 import { buildWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js';
@@ -184,6 +186,57 @@ describe('markProcessing', () => {
   it('returns empty array for unknown session', async () => {
     const batch = await markProcessing('nonexistent');
     expect(batch).toEqual([]);
+  });
+});
+
+describe('a quiet turn and the lines that go out (sessions/quiet-turn.ts)', () => {
+  afterEach(() => resetQuietTurnsForTest());
+  const UUID = '6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab';
+  const ROW = 'qm-quiet-idle-compact-1';
+  const ids = async () => (await getQueue('sess-q')).map((m) => m.id);
+
+  it('its own row, alone in the queue, goes out to a CLI between turns and stays quiet', async () => {
+    await enqueueMessage('sess-q', '/compact', { id: ROW, userUuid: UUID });
+    beginQuietTurn('sess-q', 'idle-compact', 'idle-compact', Date.now(), ROW);
+    expect((await markProcessing('sess-q')).map((m) => m.id)).toEqual([ROW]);
+    expect(isQuietTurn('sess-q')).toBe(true);
+  });
+
+  it('a person\'s row behind it: the quiet row is dropped and the person\'s goes out', async () => {
+    await enqueueMessage('sess-q', '/compact', { id: ROW, userUuid: UUID });
+    const person = await enqueueMessage('sess-q', 'a person\'s message');
+    beginQuietTurn('sess-q', 'idle-compact', 'idle-compact', Date.now(), ROW);
+    expect((await markProcessing('sess-q')).map((m) => m.id)).toEqual([person.id]);
+    expect(await ids()).toEqual([person.id]);
+    expect(isQuietTurn('sess-q')).toBe(false);
+  });
+
+  it('a person\'s row ahead of it: the same', async () => {
+    const person = await enqueueMessage('sess-q', 'a person\'s message');
+    await enqueueMessage('sess-q', '/compact', { id: ROW, userUuid: UUID });
+    beginQuietTurn('sess-q', 'idle-compact', 'idle-compact', Date.now(), ROW);
+    expect((await markProcessing('sess-q')).map((m) => m.id)).toEqual([person.id]);
+    expect(await ids()).toEqual([person.id]);
+    expect(isQuietTurn('sess-q')).toBe(false);
+  });
+
+  it('a stale quiet row (no quiet turn holds it: a restart, an ended turn) never goes out', async () => {
+    await enqueueMessage('sess-q', '/compact', { id: ROW, userUuid: UUID });
+    expect(await markProcessing('sess-q')).toEqual([]);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('never into a running turn', async () => {
+    await enqueueMessage('sess-q', '/compact', { id: ROW, userUuid: UUID });
+    beginQuietTurn('sess-q', 'idle-compact', 'idle-compact', Date.now(), ROW);
+    expect(await markProcessing('sess-q', undefined, { midTurn: true })).toEqual([]);
+    expect(await ids()).toEqual([]);
+    expect(isQuietTurn('sess-q')).toBe(false);
+  });
+
+  it('a send no longer wanted stores nothing', async () => {
+    await expect(sendMessageToSession('sess-q', '/compact', { source: 'idle-compact', stillWanted: () => false })).rejects.toBeInstanceOf(SendNoLongerWantedError);
+    expect(await getQueue('sess-q')).toEqual([]);
   });
 });
 

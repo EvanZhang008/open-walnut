@@ -134,6 +134,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   // Read only by the leader's send path. Named in the copy, an older replica would refuse the whole session row.
   session: {
     reply_language: 'the reply-language line the Mac adds to each message it delivers',
+    idle_compaction: 'the idle compaction runs on the Mac only (sessions/idle-compaction.ts)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
   },
   'hosts.*': {

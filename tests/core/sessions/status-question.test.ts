@@ -153,13 +153,16 @@ describe('the status question', () => {
       establish: async () => ACP_SID, send: async () => {}, abortTurn: async () => {}, requestTurnCompleteSelfReport: request }
     const acpSessions = (sessionRunner as unknown as { acpSessions: Map<string, unknown> }).acpSessions
     acpSessions.set(ACP_SID, fake)
+    const endedBefore = (await getTask(task.id)).status_report?.turn_ended_at
     try {
       expect(await armStatusQuestion(task.id, ACP_SID)).toBe(asked)
       expect(statusQuestionOwns(ACP_SID)).toBe(asked)
       if (!asked) return
       await expect.poll(() => request.mock.calls.length, { timeout: STATUS_SETTLE_MS + 3000 }).toBe(1)
       expect(String((request.mock.calls[0] as unknown[])[0])).toContain('Do not use any tool and do not continue the work.')
-      await expect.poll(async () => (await getTask(task.id)).status_report?.waiting_on).toBe('the CI run on main')
+      // This ask's own write, not an earlier test's report with the same words.
+      await expect.poll(async () => (await getTask(task.id)).status_report?.turn_ended_at).not.toBe(endedBefore)
+      expect((await getTask(task.id)).status_report?.waiting_on).toBe('the CI run on main')
     } finally { acpSessions.delete(ACP_SID) }
   }, 20_000)
 

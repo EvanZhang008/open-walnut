@@ -46,6 +46,8 @@ export function frameAsWalnut(text: string, source: string | undefined): string 
   // into his own hook or routine gets that pass: a command from any other sender is framed, because
   // the CLI records a command's arguments as typed words (an agent could put "approved" in them).
   if (text.trimStart().startsWith('/') && /^(hook:|routine)/.test(source ?? '')) return text;
+  // Walnut's idle compaction (sessions/idle-compaction.ts) sends the bare command, no arguments.
+  if (source === 'idle-compact' && text.trim() === '/compact') return text;
   return buildWalnutMessage({
     kind: 'peer-note',
     attrs: { from: `Walnut (${sourceLabel(source)})`, note: NOTE_WALNUT_SEND },

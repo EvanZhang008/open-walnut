@@ -694,6 +694,7 @@ let humanInboxQueueFlushHandle: { stop: () => void } | null = null
 let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
+let idleCompactionHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
@@ -2028,6 +2029,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL, cloud: isCompanion() })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
+    // A big idle Claude Code session is compacted shortly before its prompt cache expires, as a quiet
+    // turn, and every turn end stores the facts the panel's cold-cache offer reads (src/core/sessions/idle-compaction.ts).
+    if (role() === 'leader') {
+      const { startIdleCompaction } = await import('../core/sessions/idle-compaction.js')
+      const { sessionRunner: idleRunner } = await import('../providers/claude-code-session.js')
+      idleCompactionHandle = startIdleCompaction(idleRunner)
+    }
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
@@ -5252,6 +5260,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
 
       if (eventData<'session:result'>(event).interrupted) return
+      // A quiet turn (Walnut's idle compaction, core/sessions/quiet-turn.ts): its cost is recorded
+      // above, and nothing else of a turn end happens (no notification, no phase, no ended event).
+      {
+        const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
+        if (isQuietTurn(sessionId, (event.data as { turnGen?: number }).turnGen)) return
+      }
 
       const taskRef = taskId ? await resolveTaskRef(taskId) : null
 
@@ -5445,6 +5459,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
 
       log.web.info('session error received', { sessionId, taskId, error: error?.slice(0, 200), errorKind })
+      // Walnut's own upkeep turn (an idle compaction, sessions/quiet-turn.ts) failed: no card, and the
+      // task keeps its session; the next message resumes it as after any stop.
+      {
+        const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
+        if (isQuietTurn(sessionId)) {
+          log.web.info('quiet turn error: no notice, session slot kept', { sessionId, taskId, errorKind })
+          return
+        }
+      }
       const errorTaskRef = taskId ? await resolveTaskRef(taskId) : null
       if (shouldPublish) {
         const body = isDeliveryFailure
@@ -7036,6 +7059,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (endpointWaitHandle) {
     endpointWaitHandle.stop()
     endpointWaitHandle = null
+  }
+  if (idleCompactionHandle) {
+    idleCompactionHandle.stop()
+    idleCompactionHandle = null
   }
   if (autoContinueHandle) {
     autoContinueHandle.stop()

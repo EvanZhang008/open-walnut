@@ -30,6 +30,7 @@ import type { Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
+import { isQuietTurn } from './sessions/quiet-turn.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -319,7 +320,9 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
       const outliving = live && runner ? runner.outlivingWorkOf(rec.claudeSessionId) : [];
       sessions.set(rec.claudeSessionId, {
         ...(outliving.length ? { outliving } : {}),
-        processStatus: rec.process_status, errorMessage: rec.errorMessage,
+        // A quiet turn (Walnut's idle compaction, sessions/quiet-turn.ts) is no running work.
+        processStatus: rec.process_status === 'running' && isQuietTurn(rec.claudeSessionId) ? 'idle' : rec.process_status,
+        errorMessage: rec.errorMessage,
         errorReason: rec.status_reason, statusSince: rec.statusUpdatedAt || rec.last_status_change || rec.lastActiveAt,
         errorKind: rec.errorKind,
         restartLoss: liveRestartLoss(rec, recovery),

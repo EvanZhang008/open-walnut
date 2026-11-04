@@ -19,6 +19,7 @@
 
 import { bus, EventNames, type BusEvent } from '../../core/event-bus.js'
 import { toolDetail } from '../../core/tool-summary.js'
+import { isQuietTurn } from '../../core/sessions/quiet-turn.js'
 
 /** A follow that sees no end in this long stops; the reply is still in Main's chat. */
 export const MAIN_FOLLOW_MAX_MS = 15 * 60_000
@@ -118,7 +119,7 @@ export function followMainReply(
         return
       }
       case EventNames.SESSION_RESULT: {
-        if (!delivered) return
+        if (!delivered || isQuietTurn(typeof d.sessionId === 'string' ? d.sessionId : undefined, d.turnGen)) return
         // A result of a turn older than the one that took the message is an earlier turn's.
         if (gen !== undefined && typeof d.turnGen === 'number' && d.turnGen < gen) return
         if (d.isError === true) {

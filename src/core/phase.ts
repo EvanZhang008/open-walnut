@@ -98,6 +98,7 @@
 
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
+import { isQuietTurn } from './sessions/quiet-turn.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
@@ -483,6 +484,11 @@ interface ApplySessionPhaseOpts {
   noResume?: boolean
 }
 
+/** The edges of a turn a quiet turn never moves a phase on. */
+const QUIET_TURN_TRIGGERS: ReadonlySet<PhaseTransitionTrigger> = new Set([
+  'session:input', 'session:turn-start', 'session:streaming', 'session:result', 'session:error',
+])
+
 /**
  * Apply a session-driven phase transition with full logging.
  * Single entry point for ALL session → phase updates.
@@ -494,6 +500,12 @@ export async function applySessionPhase(
   source: string,
   opts?: ApplySessionPhaseOpts,
 ): Promise<{ changed: boolean; oldPhase?: TaskPhase; newPhase?: TaskPhase }> {
+  // A quiet turn (sessions/quiet-turn.ts: Walnut's idle compaction) is no work of the task's: its
+  // edges move no phase. A prompt for the human still does.
+  if (QUIET_TURN_TRIGGERS.has(trigger) && isQuietTurn(opts?.sessionId, trigger === 'session:result' ? opts?.turnGen : undefined)) {
+    log.session.debug('applySessionPhase: skip (quiet turn)', { taskId, trigger, source, sessionId: opts?.sessionId })
+    return { changed: false }
+  }
   // Dynamic imports to avoid circular dependencies (phase.ts ← task-manager.ts)
   const { getTask, updateTaskRaw } = await import('./task-manager.js')
   let task: Task

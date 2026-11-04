@@ -35,6 +35,7 @@ import { endpointWaitEnabled, endpointGaveUpWords } from './endpoint-unreachable
 
 export { endpointWaitEnabled, endpointGaveUpWords }
 import { AUTO_CONTINUE_SOURCE } from '../session-auto-continue.js'
+import { isQuietTurn } from './quiet-turn.js'
 
 export type { SessionEndpointWait }
 
@@ -140,6 +141,8 @@ export class EndpointWaiter {
       case EventNames.SESSION_RESULT: {
         const d = event.data as EndpointResultFacts & { sessionId?: string; taskId?: string; interrupted?: boolean }
         if (!d.sessionId) return
+        // A quiet turn (the idle compaction) that failed is not continued: the next real turn decides.
+        if (isQuietTurn(d.sessionId, (d as { turnGen?: number }).turnGen)) return
         if (!d.interrupted && endpointWaitTakes(d)) { void this.onUnreachable(d.sessionId, d.result ?? ''); return }
         // Any other turn end closes the wait: a clean one reached the model (with or without work
         // running on), an interrupted one was stopped by someone, another error is not this wait's.

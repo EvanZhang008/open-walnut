@@ -103,6 +103,8 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/
 import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload, SessionPermissionResolvedEvent } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import { TurnSpeedMeter, tokensPerSecond, type TurnSpeedFinal } from '../core/sessions/turn-speed.js'
+import { noteCompaction, noteRequestUsage, type ClaudeUsageLike, type PromptCacheFacts } from '../core/sessions/prompt-cache.js'
+import { noteTurnStart as noteQuietTurnStart } from '../core/sessions/quiet-turn.js'
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel } from '../model/providers/defaults.js'
 import {
@@ -763,6 +765,10 @@ export class ClaudeCodeSession {
    *  index alignment between the two paths is no longer required. */
   private _currentStreamMsgId: string | null = null
   private _streamInputUsage: Record<string, number> = {}
+  /** The prompt cache facts of the main loop's last request (sessions/prompt-cache.ts). */
+  private _promptCache: PromptCacheFacts | undefined
+  /** Message id of the request `_promptCache` describes: a new id is a new request. */
+  private _promptCacheMsgId: string | null = null
   /** Scopes we've already warned about this turn (top_level / stream_event / delta
    *  keyed by "scope:type"), so a burst of unknown events doesn't spam the UI. */
   private _warnedUnknownTypes = new Set<string>()
@@ -919,6 +925,16 @@ export class ClaudeCodeSession {
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
 
+  /** The prompt cache facts of the main loop's last live request; undefined until one reported usage. */
+  get promptCache(): PromptCacheFacts | undefined { return this._promptCache }
+
+  /** A live main-loop request reported usage: its time, size and cache lifetime. */
+  private notePromptCacheUsage(messageId: string | null | undefined, usage: ClaudeUsageLike | undefined): void {
+    const newRequest = !!messageId && messageId !== this._promptCacheMsgId
+    if (messageId) this._promptCacheMsgId = messageId
+    this._promptCache = noteRequestUsage(this._promptCache, usage, Date.now(), newRequest)
+  }
+
   private emitContextUsage(usage: Record<string, number | null | undefined>, model?: string): void {
     const totalInput = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
       + (usage.cache_read_input_tokens ?? 0)
@@ -932,6 +948,7 @@ export class ClaudeCodeSession {
       inputTokens: totalInput,
       ...(contextWindow != null ? { contextWindow, contextPercent: Math.round(totalInput / contextWindow * 100) } : {}),
       ...(autoCompactAt != null ? { autoCompactAt } : {}),
+      ...(this._promptCache ? { promptCache: this._promptCache } : {}),
     }, ['main-ai'], { source: 'session-runner' })
   }
 
@@ -1673,6 +1690,9 @@ export class ClaudeCodeSession {
     const sid = this.claudeSessionId ?? sidHint
     this.setForegroundActive(true)
     this._turnGen++
+    // A turn after a quiet one (sessions/quiet-turn.ts) is an ordinary turn; the quiet one's own
+    // generations are kept, so a late reader of its result still knows it.
+    noteQuietTurnStart(sid ?? undefined, this._turnGen)
     // A {running} inside a turn that has not ended (a background agent's result
     // picked up, an answered prompt, the CLI's own echo of a turn writeMessage
     // started) is that same turn: it keeps the turn's start (see turnStartedAt).
@@ -6382,6 +6402,9 @@ export class ClaudeCodeSession {
             // stdout (what the daemon stream files hold) uses compact_metadata/pre_tokens.
             const meta = sys.compact_metadata as { trigger?: string; pre_tokens?: number; post_tokens?: number } | undefined
             // A place note given before this boundary may be gone with the old context.
+            if (firstBoundary && this._isReplayedByOffset() !== true) {
+              this._promptCache = noteCompaction(this._promptCache, meta?.post_tokens, Date.now())
+            }
             if (firstBoundary && sid && typeof sys.uuid === 'string' && sys.uuid) {
               const boundary = sys.uuid
               void import('../core/sessions/place-notice.js').then((m) => m.notePlaceCompaction(sid, boundary))
@@ -6421,6 +6444,7 @@ export class ClaudeCodeSession {
                   : {}),
                 inputTokens: cu.totalTokens,
                 ...(autoCompactAt != null ? { autoCompactAt } : {}),
+                ...(this._promptCache ? { promptCache: this._promptCache } : {}),
               }, ['main-ai'], { source: 'session-runner' })
               log.session.info('post-compact context usage re-seeded from CLI', {
                 sessionId: this.claudeSessionId, taskId: this.taskId,
@@ -7285,7 +7309,14 @@ export class ClaudeCodeSession {
         //     - cache_read_input_tokens: tokens read from cache
         //   Their sum = total prompt size = context window usage.
         //   NOT capped at 100 — values >100% indicate wrong contextWindowSize detection.
-        if (msg.message?.usage) this.emitContextUsage(msg.message.usage, msg.message.model)
+        if (msg.message?.usage) {
+          // A live request only: a replayed line is history, and its time is not now.
+          const replayed = this._isReplayedByOffset()
+          if (replayed !== true && !(replayed === undefined && this.resultEmitted && !this._speed.active)) {
+            this.notePromptCacheUsage(msg.message.id, msg.message.usage as ClaudeUsageLike)
+          }
+          this.emitContextUsage(msg.message.usage, msg.message.model)
+        }
         break
       }
 
@@ -8360,7 +8391,10 @@ export class ClaudeCodeSession {
         // ── message_start: capture msg id for dedup tracking ──
         if (innerType === 'message_start') {
           this._currentStreamMsgId = inner?.message?.id ?? null
-          if (!historic && ownsContext) this._streamInputUsage = { ...inner?.message?.usage }
+          if (!historic && ownsContext) {
+            this._streamInputUsage = { ...inner?.message?.usage }
+            this.notePromptCacheUsage(inner?.message?.id, inner?.message?.usage)
+          }
           break
         }
 
@@ -8371,6 +8405,7 @@ export class ClaudeCodeSession {
           if (!historic && ownsContext && inner?.usage && ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens']
               .some((field) => field in inner.usage!)) {
             this._streamInputUsage = { ...this._streamInputUsage, ...inner.usage }
+            this.notePromptCacheUsage(this._currentStreamMsgId, this._streamInputUsage)
             this.emitContextUsage(this._streamInputUsage)
           }
           const sr = (inner?.delta as { stop_reason?: string | null } | undefined)?.stop_reason
@@ -10917,6 +10952,11 @@ export class SessionRunner {
     return this.findSessionByClaudeId(claudeSessionId)?.workOutlivesTurn ?? false
   }
 
+  /** The prompt cache facts of the session's last live request (sessions/prompt-cache.ts); undefined when unknown here. */
+  promptCacheOf(claudeSessionId: string): PromptCacheFacts | undefined {
+    return this.findSessionByClaudeId(claudeSessionId)?.promptCache
+  }
+
   /** Which of the session's own work runs on after its turn; empty when none or no runner holds it. */
   outlivingWorkOf(claudeSessionId: string): OutlivingSource[] {
     return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork ?? []
@@ -12825,7 +12865,7 @@ export class SessionRunner {
     const { ready, release } = this.holdMidTurnWrite(sessionId)
     try {
       await ready
-      const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle })
+      const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle, midTurn: true })
       if (newMsgs.length === 0) return
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
 
@@ -13919,7 +13959,7 @@ export class SessionRunner {
     // A mid-turn write still out holds an earlier line as 'processing': taking the
     // queue's head now would send a later line first (see midTurnWrites).
     await this.midTurnWrites.get(sessionId)
-    const msgs = await markProcessing(sessionId, stopFence, { tracked })
+    const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
     releaseHeld(sessionId, msgs.map((m) => m.id))
     const dedupe = (msgs[0].lineTries ?? 1) > 1

@@ -103,6 +103,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/routines/run-start-deps.ts': 1,
   'src/core/routines/trigger-health.ts': 1,
   'src/core/session-auto-continue.ts': 1,
+  // Walnut's idle compaction: the bare `/compact` command, passed unframed (send-frame.ts), as a quiet turn.
+  'src/core/sessions/idle-compaction.ts': 1,
   'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
   'src/core/sessions/adopt-notice.ts': 1,
   'src/core/sessions/app-state.ts': 1,
@@ -170,7 +172,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
-  'brand-new-source': 'agent',
+  'brand-new-source': 'agent', 'idle-compact': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
 };

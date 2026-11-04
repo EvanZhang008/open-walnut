@@ -46,6 +46,7 @@ import { classifyTurnError } from '../providers/daemon-core.js'
 
 import { endpointWaitEnabled, matchesEndpointUnreachable } from './sessions/endpoint-unreachable.js'
 import { endpointWaitTakes, isEndpointUnreachableError, type EndpointResultFacts } from './sessions/endpoint-wait-takes.js'
+import { isQuietTurn } from './sessions/quiet-turn.js'
 
 export function matchesRetryExhaustion(text: string | null | undefined): boolean {
   if (!text) return false
@@ -149,6 +150,8 @@ export class SessionAutoContinue {
       case EventNames.SESSION_RESULT: {
         const d = event.data as EndpointResultFacts & { sessionId?: string; taskId?: string; result?: string; retryExhausted?: boolean }
         if (!d.sessionId || !d.isError) return
+        // A failed idle compaction (a quiet turn) is not resumed with a "continue".
+        if (isQuietTurn(d.sessionId, (d as { turnGen?: number }).turnGen)) return
         // Intermediate results (team / background still running) are not turn-over.
         if (d.teamActive || d.backgroundActive) return
         // The endpoint wait owns a connection the endpoint never answered at a real turn end,

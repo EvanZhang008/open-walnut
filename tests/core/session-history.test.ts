@@ -10,6 +10,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
+import { IDLE_COMPACT_HISTORY_TEXT } from '../../src/core/sessions/prompt-cache.js';
 import {
   encodeProjectPath,
   findSessionJsonlPath,
@@ -347,6 +348,34 @@ describe('readSessionHistory', () => {
       '<div> tags are escaping in my app, help',
       'On it.',
     ]);
+  });
+
+  it('the idle compaction\'s command line reads as Walnut\'s, a typed /compact as the user\'s', async () => {
+    // sessions/idle-compaction.ts sends `/compact` under a uuid with IDLE_COMPACT_UUID_PREFIX; the CLI files the
+    // command line under it (probed, CLI 2.1.312).
+    await writeJsonl('s-idle-compact', '/test', [
+      msg('u1', 'user', 'refactor the sync engine'),
+      msg('a1', 'assistant', 'Done.'),
+      { type: 'user', timestamp: '2025-01-01T00:59:00Z', uuid: 'cc0a1d1e-1b2c-4d3e-8f40-123456789abc', message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>' } },
+      { type: 'user', timestamp: '2025-01-01T02:00:00Z', uuid: 'd3cdbac0-bb2e-4b8e-add7-7eabbc00c539', message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>' } },
+    ]);
+    const messages = await readSessionHistory('s-idle-compact', '/test');
+    expect(messages.slice(2).map((m) => [m.role, m.text, m.systemVariant ?? null])).toEqual([
+      ['system', IDLE_COMPACT_HISTORY_TEXT, 'info'],
+      ['user', '/compact', null],
+    ]);
+  });
+
+  it('a /compact shows before the compaction it made (the CLI files it after the boundary and the summary)', async () => {
+    const boundary = { type: 'system', subtype: 'compact_boundary', timestamp: '2025-01-01T01:00:00Z', uuid: 'b1', content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 400000, postTokens: 18000 } };
+    const summary = { type: 'user', timestamp: '2025-01-01T01:00:00Z', uuid: 's1', parentUuid: 'b1', isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'This session is being continued from a previous conversation.' } };
+    const command = (uuid: string) => ({ type: 'user', timestamp: '2025-01-01T01:00:01Z', uuid, parentUuid: 's1', message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>' } });
+    for (const [uuid, first] of [['c1', '/compact'], ['cc0a1d1e-1b2c-4d3e-8f40-123456789abc', IDLE_COMPACT_HISTORY_TEXT]] as const) {
+      await writeJsonl(`s-order-${uuid}`, '/test', [msg('u1', 'user', 'go'), msg('a1', 'assistant', 'Done.'), boundary, summary, command(uuid)]);
+      const rows = await readSessionHistory(`s-order-${uuid}`, '/test');
+      expect(rows.slice(2).map((m) => m.text)[0], uuid).toBe(first);
+      expect(rows.slice(2).map((m) => m.systemVariant ?? m.role)[1], uuid).toBe('compact');
+    }
   });
 
   it('stamps injected on CLI-flagged user lines (isMeta / isSynthetic / isCompactSummary)', async () => {

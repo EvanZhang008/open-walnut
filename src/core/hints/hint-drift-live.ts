@@ -34,6 +34,7 @@ import { replyLanguageLines } from './reply-language-lines.js';
 import { findHint } from './hint-registry.js';
 import { replyLanguageText } from '../sessions/output-mode.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
+import { isQuietTurn } from '../sessions/quiet-turn.js';
 
 const SUBSCRIBER = 'hint-drift-live';
 const TEXT_MAX = 4000;
@@ -291,6 +292,8 @@ function onEvent(event: BusEvent): void {
     case EventNames.SESSION_RESULT:
       // A result withheld for background work leaves the turn going (derive/session.ts).
       if (data.teamActive || data.backgroundActive) return;
+      // A quiet turn (Walnut's idle compaction) wrote nothing to judge.
+      if (isQuietTurn(sid, (data as { turnGen?: number }).turnGen)) { endTurn(sid); return; }
       if (data.interrupted || data.isError) { endTurn(sid); return; }
       finishTurn(sid);
       return;

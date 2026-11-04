@@ -93,6 +93,8 @@ import { SessionKebabSection, type SessionViewItemsProps } from './SessionKebabS
 import { SessionMenuOpen } from './SessionMenuOpen';
 import { PinnedSessionFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
+import { useCompactContext } from './CompactContext';
+import { factsFromHistory } from './compact-offer';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
@@ -1885,10 +1887,26 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
     handleSend,
     macSessionAway ? 'Your Mac is away: sending waits until it is back.' : undefined,
   );
-  const plusActions = useMemo(
-    () => (mainQuickActions.length ? [...(composerPlusActions ?? []), ...mainQuickActions] : composerPlusActions),
-    [composerPlusActions, mainQuickActions],
+  // Compact without typing /compact: a "+" row, and a line above the composer when a big
+  // session's prompt cache went cold. Not on a question page or with an engine switch picked:
+  // there the next message goes elsewhere.
+  const compactHistoryFacts = useMemo(
+    () => (historyLoading ? undefined : factsFromHistory(historyMessages)),
+    [historyLoading, historyMessages],
   );
+  const compactContext = useCompactContext({
+    sessionId: onQuestionPage || engineSwitch.pick ? undefined : sessionId,
+    session,
+    acp: engineIsAcp,
+    running: isStreaming || session?.process_status === 'running',
+    send: handleSend,
+    historyFacts: compactHistoryFacts,
+  });
+  const plusActions = useMemo(() => {
+    const base = mainQuickActions.length ? [...(composerPlusActions ?? []), ...mainQuickActions] : composerPlusActions;
+    const compactRow = compactContext.plusAction;
+    return compactRow && !onQuestionPage && !engineSwitch.pick ? [...(base ?? []), compactRow] : base;
+  }, [composerPlusActions, mainQuickActions, compactContext.plusAction, onQuestionPage, engineSwitch.pick]);
 
   // An html-app island's "Send to AI" (island-host.ts): the session's own send, never
   // anchored to a side thread the composer may have open.
@@ -3235,6 +3253,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             onUndo={engineSwitch.clear}
           />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
+          {!macSessionAway && compactContext.offer}
           {/* A host replica's console with the Mac away: a session the Mac runs gets
               the line, and its composer stays mounted with the send controls hidden,
               so a presence flip never takes what is being typed. */}

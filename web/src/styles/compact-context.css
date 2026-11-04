@@ -1,0 +1,41 @@
+/* The cold-cache line above a session's composer (components/sessions/CompactContext.tsx). */
+.compact-offer-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 4px 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.compact-offer-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+.compact-offer-text { flex: 1 1 240px; min-width: 0; }
+.compact-offer-text strong { font-weight: 600; }
+.compact-offer-actions { display: inline-flex; flex: 0 0 auto; gap: 6px; }
+.compact-offer-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.compact-offer-btn:hover { background: var(--bg-tertiary, var(--bg)); }
+.compact-offer-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.compact-offer-btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.compact-offer-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

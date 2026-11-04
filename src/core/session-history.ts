@@ -43,6 +43,7 @@ import { findImagePaths, findRelativeImageNames } from '../providers/session-io.
 import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
+import { IDLE_COMPACT_HISTORY_TEXT, IDLE_COMPACT_UUID_PREFIX } from './sessions/prompt-cache.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
@@ -978,6 +979,28 @@ function logSkippedRewindCuts(skipped: readonly SkippedRewindCut[] | undefined):
  * first), which stays where it was sent and stops being `queued`, so it never
  * blocks the incremental parse. Moves `parentIds` with the rows.
  */
+/**
+ * A `/compact` is filed after the compaction it made: the CLI writes the boundary, the continuation
+ * summary, then the command line (probed, CLI 2.1.312). Shown in the order it happened, the command
+ * first. Only the summary may sit between them; anything else and the row stays where it is.
+ */
+export function floatCompactCommands(rows: SessionHistoryMessage[], parentIds: (string | undefined)[]): void {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const isCommand = (r.role === 'user' && /^\/compact(\s|$)/.test(r.text)) || (r.role === 'system' && r.text === IDLE_COMPACT_HISTORY_TEXT);
+    if (!isCommand) continue;
+    for (let j = i - 1; j >= 0 && j >= i - 2; j--) {
+      const above = rows[j];
+      if (above.role === 'system' && above.systemVariant === 'compact') {
+        rows.splice(j, 0, rows.splice(i, 1)[0]);
+        parentIds.splice(j, 0, parentIds.splice(i, 1)[0]);
+        break;
+      }
+      if (!(above.role === 'user' && above.injected)) break;
+    }
+  }
+}
+
 export function floatQueuedRows(rows: SessionHistoryMessage[], parentIds: (string | undefined)[]): void {
   let lastUser = -1;
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -1863,6 +1886,12 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (transformed === null) continue;
       if (transformed !== undefined) { text = transformed; peerMail = /^<teammate-message/.test(receivedText); }
     }
+    // Walnut's idle compaction (sessions/idle-compaction.ts): its command line is Walnut's, not the user's.
+    if (msg.role === 'user' && mapMsgId.startsWith(IDLE_COMPACT_UUID_PREFIX) && text.trim() === '/compact') {
+      result.push({ role: 'system', text: IDLE_COMPACT_HISTORY_TEXT, timestamp: msg.timestamp, msgId: mapMsgId, systemVariant: 'info' });
+      resultParentIds.push(msg.parentToolUseId);
+      continue;
+    }
     if (msg.role === 'assistant' && dropWarmupReply) {
       dropWarmupReply = false;
       // Unconditional: the warm-up told the model "no tools", so a reply that
@@ -1911,6 +1940,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     resultParentIds.push(msg.parentToolUseId);
   }
 
+  floatCompactCommands(result, resultParentIds);
   floatQueuedRows(result, resultParentIds);
   markMessageAbout(result, resultParentIds);
 

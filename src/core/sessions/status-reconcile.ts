@@ -19,6 +19,7 @@ import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
 import { STATUS_RULE_VERSION } from '../user-status.js';
+import { QUIET_TURN_MAX_MS } from './quiet-turn.js';
 
 export const RECONCILE_EVERY_MS = 5 * 60_000;
 /** A session asked by the loop is not asked by it again for this long. */
@@ -36,7 +37,7 @@ let passRunning = false;
 /** Whether a task's stored status misses its session's last turn. Pure; exported for tests. */
 export function statusMissed(
   task: Pick<Task, 'phase' | 'status' | 'status_report' | 'plugin_only'>,
-  session: Pick<SessionRecord, 'process_status' | 'last_status_change' | 'provider' | 'archived' | 'lane' | 'engine'>,
+  session: Pick<SessionRecord, 'process_status' | 'last_status_change' | 'provider' | 'archived' | 'lane' | 'engine' | 'idleCompaction'>,
   nowMs: number,
 ): number | null {
   if (task.phase === 'COMPLETE' || task.status === 'done' || task.plugin_only) return null;
@@ -44,7 +45,7 @@ export function statusMissed(
   // An embedded subagent and a Personal AI chat lane have no status of their own.
   if (session.provider === 'embedded' || session.lane?.startsWith('chat:')) return null;
   if (isAcpEngine(session.engine)) return null;
-  const ended = Date.parse(session.last_status_change ?? '');
+  const ended = lastWorkTurnEnd(session);
   if (!Number.isFinite(ended) || nowMs - ended < MISSED_AFTER_MS) return null;
   const said = Date.parse(task.status_report?.turn_ended_at ?? task.status_report?.at ?? '');
   if (!Number.isFinite(said) || said < ended - MISSED_AFTER_MS) return ended;
@@ -52,6 +53,26 @@ export function statusMissed(
   // reads Working now: asked once again under the current rules (MAX_PER_TURN_END bounds it).
   return reportUnderOldWaitRule(task.status_report) ? ended : null;
 }
+
+/**
+ * When the session's last turn that was the task's work ended. Walnut's idle compaction
+ * (sessions/idle-compaction.ts) is a quiet turn: its end moves last_status_change, so a status
+ * change since it was sent reads as the turn before it.
+ */
+export function lastWorkTurnEnd(session: Pick<SessionRecord, 'last_status_change' | 'idleCompaction'>): number {
+  const ended = Date.parse(session.last_status_change ?? '');
+  const ic = session.idleCompaction;
+  const sent = Date.parse(ic?.sentAt ?? '');
+  if (!Number.isFinite(sent) || !Number.isFinite(ended) || ended < sent) return ended;
+  // A change well after the compaction's own end is a later turn of the task's. With no end stored
+  // (a restart, a lost write), the quiet turn lasted at most QUIET_TURN_MAX_MS.
+  const storedEnd = Date.parse(ic?.endedAt ?? '');
+  const quietEnd = Number.isFinite(storedEnd) ? storedEnd : sent + QUIET_TURN_MAX_MS;
+  if (ended > quietEnd + QUIET_END_SLACK_MS) return ended;
+  return Date.parse(ic?.priorTurnEnd ?? '');
+}
+/** The runner writes the quiet turn's own status change a moment after its end is stored. */
+const QUIET_END_SLACK_MS = 30_000;
 
 /** A self-reported wait (outside or other) asked before STATUS_RULE_VERSION. Pure. */
 export function reportUnderOldWaitRule(r: Task['status_report'] | undefined): boolean {

@@ -1687,6 +1687,15 @@ export interface Config {
      *  list is about 220 KB of schemas sent on every model call, which a local model on
      *  OpenCode reads in full each turn (src/providers/acp-worker/protocol.ts walnutMcpToolSet). */
     acp_walnut_tools?: 'core' | 'all';
+    /** Compact a big idle Claude Code session shortly before its prompt cache expires
+     *  (src/core/sessions/idle-compaction.ts), so the next message reads a small summary
+     *  instead of paying a full uncached read of the whole context. */
+    idle_compaction?: {
+      /** Default true. */
+      enabled?: boolean;
+      /** Only sessions holding at least this many context tokens. Default 200000. */
+      min_tokens?: number;
+    };
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
     idle_timeout_minutes?: number;
@@ -3293,6 +3302,24 @@ export interface SessionRecord {
    *  number rather than in transcript usage (an ACP `usage_update`'s `used`). With
    *  modelMaxWindow it gives a reloaded page its context percentage. */
   contextTokens?: number;
+  /** The prompt cache facts of the session's last main-loop request, written at each turn end
+   *  (src/core/sessions/prompt-cache.ts): context size, cache lifetime, when it expires. The idle
+   *  compaction and the web's cold-cache offer read it. */
+  promptCache?: import('./sessions/prompt-cache.js').PromptCacheFacts;
+  /** Walnut's last idle compaction of this session (src/core/sessions/idle-compaction.ts). Its turn
+   *  is quiet, so `priorTurnEnd` keeps when the session's last real turn ended. */
+  idleCompaction?: {
+    /** When the /compact was sent. */
+    sentAt: string;
+    /** last_status_change before it: the end of the last turn that was the task's work. */
+    priorTurnEnd?: string;
+    /** Context tokens it compacted. */
+    tokens?: number;
+    /** When its quiet turn ended (its result came, or something else took the session first). */
+    endedAt?: string;
+    /** The queue row that carries the /compact (QueuedMessage.id): a restart finds it still waiting. */
+    rowId?: string;
+  };
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

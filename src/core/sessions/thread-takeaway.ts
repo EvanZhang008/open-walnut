@@ -28,6 +28,7 @@ import {
   type ThreadMetaWrittenEvent,
 } from './thread-meta.js';
 import type { SessionRecord, SessionThreadMeta, SessionThreadMetaPatch } from '../types.js';
+import { isQuietTurn } from './quiet-turn.js';
 
 export const THREAD_TAKEAWAY_REQUIREMENT = 'State the answer this thread reached in one sentence, at most 25 words. No preamble, no "good question". Same language as the question.';
 
@@ -258,7 +259,7 @@ export async function handleThreadTakeawayResult(data: ResultData, turnUuid: str
 function onBusEvent(event: BusEvent): void {
   if (event.name !== EventNames.SESSION_RESULT) return;
   const data = (event.data ?? {}) as ResultData;
-  if (!data.sessionId || data.teamActive || data.backgroundActive) return;
+  if (!data.sessionId || data.teamActive || data.backgroundActive || isQuietTurn(data.sessionId, (data as { turnGen?: number }).turnGen)) return;
   // Synchronous: the next delivery right after this result replaces the uuid.
   const turnUuid = data.userUuid ?? turnUserUuid(data.sessionId);
   lastResultUuid.set(data.sessionId, turnUuid);

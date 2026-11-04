@@ -1,0 +1,414 @@
+/**
+ * Idle compaction: a big Claude Code session left idle is compacted shortly
+ * before its prompt cache expires, so the next message reads a small summary
+ * instead of paying a full uncached read of the whole context (2026-11-04).
+ *
+ * At every turn end the session's prompt cache facts (sessions/prompt-cache.ts,
+ * kept by the runner from the request's own usage) are stored on its record,
+ * and a timer is set for IDLE_COMPACT_LEAD_MS before the cache expires. When it
+ * fires and the session is still idle on that same request, Walnut sends
+ * `/compact` as a quiet turn (sessions/quiet-turn.ts): no phase move, no
+ * turn-end hook, no push, no Working. Anything sent to the session meanwhile
+ * cancels the timer; the next turn end sets a new one.
+ *
+ * Skipped: a session below `session.idle_compaction.min_tokens` (200K), a cache
+ * that lives under 30 minutes (5-minute caches: the web's cold-cache offer
+ * covers them), a session already compacted since, a running turn, a prompt for
+ * the user, queued messages, work that outlives the turn (a background command,
+ * a wakeup, a CLI cron), a lane or ACP session, a completed task, an org node
+ * while the org is off, and a session whose CLI process is gone (stopped: a
+ * resume would build its prompt again and likely miss the cache, so it would pay
+ * the full read the compaction exists to save). `session.idle_compaction.enabled:
+ * false` turns it off. Primary only (server.ts). The timers are rebuilt from the
+ * records at boot.
+ *
+ * The `/compact` row has its own id and a user uuid, so it always goes out alone
+ * (batch-uuid.ts splitBatchAtUuid) and the quiet turn is bound to it. A quiet turn
+ * that ends before its row went out (a person wrote first, the line failed) takes
+ * the row back: a stale `/compact` never runs in front of what they wrote.
+ */
+import { randomUUID } from 'node:crypto';
+import { bus, EventNames, type BusEvent } from '../event-bus.js';
+import { log } from '../../logging/index.js';
+import type { SessionRecord, Task } from '../types.js';
+import {
+  DEFAULT_IDLE_COMPACT_MIN_TOKENS, IDLE_COMPACT_LEAD_MS, idleCompactLineUuid, idleCompactionWindow, type PromptCacheFacts,
+} from './prompt-cache.js';
+import {
+  beginQuietTurn, endQuietTurn, isQuietTurn, noteQuietTurnSettled, onQuietTurnEnd, quietTurnRow, QUIET_ROW_PREFIX, type QuietTurnEnd,
+} from './quiet-turn.js';
+import { isAcpEngine } from '../agents/engine-registry.js';
+
+/** The send source of the idle compaction's `/compact` (send-sent-by: an agent's; framing passes it raw). */
+export const IDLE_COMPACT_SOURCE = 'idle-compact';
+export const IDLE_COMPACT_TEXT = '/compact';
+/** A cache this close to expiring is left alone: the compaction would not start in time. */
+const TOO_LATE_MS = 15_000;
+
+export interface IdleCompactionConfig {
+  enabled: boolean;
+  minTokens: number;
+  leadMs: number;
+}
+
+export function resolveIdleCompactionConfig(
+  session: { idle_compaction?: { enabled?: boolean; min_tokens?: number } } | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): IdleCompactionConfig {
+  const min = session?.idle_compaction?.min_tokens;
+  // Tests and demos move the send earlier (a lead near the whole lifetime fires right after the turn).
+  const lead = Number(env.WALNUT_IDLE_COMPACT_LEAD_MS);
+  return {
+    enabled: session?.idle_compaction?.enabled !== false && env.WALNUT_IDLE_COMPACTION !== '0',
+    minTokens: typeof min === 'number' && Number.isFinite(min) && min > 0 ? min : DEFAULT_IDLE_COMPACT_MIN_TOKENS,
+    leadMs: Number.isFinite(lead) && lead > 0 ? lead : IDLE_COMPACT_LEAD_MS,
+  };
+}
+
+export interface IdleCompactionDeps {
+  now: () => number;
+  setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimer: (t: ReturnType<typeof setTimeout>) => void;
+  config: () => Promise<IdleCompactionConfig>;
+  getSession: (sessionId: string) => Promise<SessionRecord | null>;
+  listSessions: () => Promise<SessionRecord[]>;
+  saveSession: (sessionId: string, updates: Partial<SessionRecord>) => Promise<unknown>;
+  getTask: (taskId: string) => Promise<Task | null>;
+  /** What the live runner knows: its cache facts, a running turn, work that outlives the turn. */
+  live: (sessionId: string) => { promptCache?: PromptCacheFacts; inTurn: boolean | null; outliving: boolean; cron: boolean };
+  /** Rows waiting in Walnut's queue for the session. */
+  queued: (sessionId: string) => Promise<number>;
+  /** The org is off and this task is Main or a VP. */
+  orgOffFor: (task: Task) => Promise<boolean>;
+  send: (sessionId: string, text: string, opts: { source: string; taskId?: string; messageId: string; userUuid: string; stillWanted: () => boolean }) => Promise<unknown>;
+  /** Take back a row that has not gone out; false when it is gone or on its way. */
+  dropRow: (sessionId: string, rowId: string) => Promise<boolean>;
+  /** Whether the row still waits in the queue (pending or on its way). */
+  rowQueued: (sessionId: string, rowId: string) => Promise<boolean>;
+  emitNote: (sessionId: string, taskId: string | undefined, message: string) => void;
+}
+
+function defaultDeps(): IdleCompactionDeps {
+  return {
+    now: () => Date.now(),
+    setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+    clearTimer: (t) => clearTimeout(t),
+    config: async () => {
+      const { getConfig } = await import('../config-manager.js');
+      return resolveIdleCompactionConfig((await getConfig()).session);
+    },
+    getSession: async (id) => (await import('../session-tracker.js')).getSessionByClaudeId(id),
+    listSessions: async () => (await import('../session-tracker.js')).listNonTerminalSessions(),
+    saveSession: async (id, updates) => (await import('../session-tracker.js')).updateSessionRecord(id, updates),
+    getTask: async (id) => (await import('../task-manager.js')).getTask(id).catch(() => null),
+    live: (id) => {
+      const runner = liveRunner;
+      return {
+        promptCache: runner?.promptCacheOf(id),
+        inTurn: runner?.isInTurn(id) ?? null,
+        outliving: runner?.hasWorkOutlivingTurn(id) ?? false,
+        cron: runner?.isCronArmed(id) ?? false,
+      };
+    },
+    queued: async (id) => {
+      const { getQueue } = await import('../session-message-queue.js');
+      return (await getQueue(id)).filter((m) => m.status === 'pending' || m.status === 'processing').length;
+    },
+    orgOffFor: async (task) => {
+      const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
+      return isOrgNode(task) && !(await isOrgEnabled());
+    },
+    send: async (id, text, opts) => (await import('../session-message-queue.js')).sendMessageToSession(id, text, opts),
+    dropRow: async (id, rowId) => (await import('../session-message-queue.js')).deleteMessage(id, rowId),
+    rowQueued: async (id, rowId) => (await import('../session-message-queue.js')).isMessageQueued(id, rowId),
+    emitNote: (sessionId, taskId, message) => {
+      bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId, taskId, variant: 'info' as const, message },
+        ['main-ai'], { source: IDLE_COMPACT_SOURCE, urgency: 'urgent' });
+    },
+  };
+}
+
+type RunnerView = {
+  promptCacheOf(id: string): PromptCacheFacts | undefined;
+  isInTurn(id: string): boolean | null;
+  hasWorkOutlivingTurn(id: string): boolean;
+  isCronArmed(id: string): boolean;
+};
+let liveRunner: RunnerView | null = null;
+
+function formatTokens(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
+}
+
+/** The words of the timeline note when an idle compaction starts. */
+export function idleCompactNote(tokens: number, minutesLeft: number): string {
+  return `Compacting this idle session (${formatTokens(tokens)} tokens) before its prompt cache expires in about ${Math.max(1, Math.round(minutesLeft))} min, so your next message starts from a summary instead of re-reading everything.`;
+}
+
+/** Why a due compaction is not sent now, or null to send it. Pure; exported for tests. */
+export function skipReason(input: {
+  rec: SessionRecord | null;
+  task: Task | null;
+  facts: PromptCacheFacts | undefined;
+  scheduledFor: string;
+  live: { inTurn: boolean | null; outliving: boolean; cron: boolean };
+  queued: number;
+  orgOff: boolean;
+  nowMs: number;
+  cfg: IdleCompactionConfig;
+}): string | null {
+  const { rec, task, facts, live, cfg, nowMs } = input;
+  if (!cfg.enabled) return 'off';
+  if (!rec || rec.archived) return 'session-gone';
+  if (rec.lane || rec.provider === 'embedded' || isAcpEngine(rec.engine)) return 'not-a-claude-session';
+  if (rec.supersededBy) return 'superseded';
+  // Only a live CLI between turns: a stopped one (the user's Stop, an idle reap) is resumed only by a person.
+  if (rec.process_status !== 'idle') return `status-${rec.process_status}`;
+  if (rec.pendingPermission) return 'prompt-open';
+  if (!task || task.phase === 'COMPLETE') return 'task-complete';
+  if (input.orgOff) return 'org-off';
+  if (!facts || facts.requestAt !== input.scheduledFor) return 'newer-request';
+  if (rec.idleCompaction && Date.parse(rec.idleCompaction.sentAt) >= Date.parse(facts.requestAt)) return 'already-compacted';
+  const window = idleCompactionWindow(facts, nowMs, { minTokens: cfg.minTokens, leadMs: cfg.leadMs });
+  if (!window) return 'no-window';
+  if (window.expiresAtMs - nowMs < TOO_LATE_MS) return 'too-late';
+  if (live.inTurn === true) return 'turn-running';
+  if (live.outliving) return 'work-outlives-turn';
+  if (live.cron) return 'cron-armed';
+  if (input.queued > 0) return 'messages-queued';
+  return null;
+}
+
+export class IdleCompaction {
+  private readonly deps: IdleCompactionDeps;
+  /** sessionId → the timer and the request it was set for. */
+  private readonly timers = new Map<string, { timer: ReturnType<typeof setTimeout>; requestAt: string }>();
+  private stopped = false;
+
+  constructor(deps: Partial<IdleCompactionDeps> = {}) {
+    this.deps = { ...defaultDeps(), ...deps };
+  }
+
+  handleEvent = (event: BusEvent): void => {
+    const d = event.data as { sessionId?: string; isError?: boolean; interrupted?: boolean; teamActive?: boolean; backgroundActive?: boolean; sessionIds?: string[] };
+    switch (event.name) {
+      case EventNames.SESSION_RESULT: {
+        if (!d.sessionId) return;
+        if (isQuietTurn(d.sessionId, (d as { turnGen?: number }).turnGen)) {
+          noteQuietTurnSettled(d.sessionId);
+          void this.noteQuietEnd(d.sessionId);
+        }
+        if (d.teamActive || d.backgroundActive) return;
+        if (d.isError || d.interrupted) { this.cancel(d.sessionId, 'turn-not-clean'); return; }
+        void this.onTurnEnd(d.sessionId).catch((err) => log.session.warn('idle compaction: turn end failed', {
+          sessionId: d.sessionId, error: err instanceof Error ? err.message : String(err),
+        }));
+        return;
+      }
+      case EventNames.SESSION_ERROR:
+        if (!d.sessionId) return;
+        if (isQuietTurn(d.sessionId)) {
+          // The line never reached the CLI: its row is back in the queue, and goes no further.
+          const row = quietTurnRow(d.sessionId);
+          if ((event.data as { errorKind?: string }).errorKind === 'delivery_failed' && row) void this.takeBack(d.sessionId, row, 'delivery-failed');
+          noteQuietTurnSettled(d.sessionId);
+          void this.noteQuietEnd(d.sessionId);
+        }
+        this.cancel(d.sessionId, 'session-error');
+        return;
+      case EventNames.SESSION_SEND:
+        // Someone else drives the session now: its next turn end decides again.
+        if (d.sessionId && event.source !== IDLE_COMPACT_SOURCE) this.cancel(d.sessionId, 'send');
+        return;
+      case EventNames.SESSION_DELETED:
+        for (const id of d.sessionIds ?? (d.sessionId ? [d.sessionId] : [])) this.cancel(id, 'deleted');
+        return;
+    }
+  };
+
+  /** A quiet turn ended, whichever way: a row that never went out is taken back, and the end is stored. */
+  readonly onQuietEnd = (end: QuietTurnEnd): void => {
+    if (end.kind !== 'idle-compact') return;
+    if (end.rowId && !end.delivered) void this.takeBack(end.sessionId, end.rowId, end.why);
+    void this.noteQuietEnd(end.sessionId);
+  };
+
+  /** Take the compaction's row back while it has not gone out (one retry: a failed line returns to the queue a moment later). */
+  private async takeBack(sessionId: string, rowId: string, why: string): Promise<void> {
+    try {
+      for (let i = 0; i < 2; i++) {
+        if (await this.deps.dropRow(sessionId, rowId)) {
+          log.session.info('idle compaction taken back', { sessionId, why });
+          return;
+        }
+        if (!(await this.deps.rowQueued(sessionId, rowId))) return;
+        await new Promise((r) => this.deps.setTimer(() => r(undefined), 2_000));
+      }
+    } catch (err) {
+      log.session.warn('idle compaction row not taken back', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** The quiet compaction's turn ended: its record says when (status-reconcile reads it). */
+  private async noteQuietEnd(sessionId: string): Promise<void> {
+    try {
+      const rec = await this.deps.getSession(sessionId);
+      if (!rec?.idleCompaction || rec.idleCompaction.endedAt) return;
+      await this.deps.saveSession(sessionId, { idleCompaction: { ...rec.idleCompaction, endedAt: new Date(this.deps.now()).toISOString() } });
+    } catch (err) {
+      log.session.warn('idle compaction: end not stored', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** A turn ended: store the facts the runner holds, and set the timer from them. */
+  async onTurnEnd(sessionId: string): Promise<void> {
+    const facts = this.deps.live(sessionId).promptCache;
+    if (!facts) return;
+    const rec = await this.deps.getSession(sessionId);
+    if (!rec) return;
+    if (JSON.stringify(rec.promptCache) !== JSON.stringify(facts)) await this.deps.saveSession(sessionId, { promptCache: facts });
+    await this.schedule(sessionId, facts);
+  }
+
+  /** Set (or clear) the session's timer for these facts. */
+  async schedule(sessionId: string, facts: PromptCacheFacts | undefined): Promise<void> {
+    if (this.stopped) return;
+    const cfg = await this.deps.config();
+    const window = cfg.enabled ? idleCompactionWindow(facts, this.deps.now(), { minTokens: cfg.minTokens, leadMs: cfg.leadMs }) : null;
+    if (!window || !facts) { this.cancel(sessionId, 'no-window'); return; }
+    const prev = this.timers.get(sessionId);
+    if (prev?.requestAt === facts.requestAt) return;
+    if (prev) this.deps.clearTimer(prev.timer);
+    const delay = Math.max(0, window.fireAtMs - this.deps.now());
+    const requestAt = facts.requestAt;
+    const timer = this.deps.setTimer(() => { void this.fire(sessionId, requestAt); }, delay);
+    this.timers.set(sessionId, { timer, requestAt });
+    log.session.info('idle compaction armed', { sessionId, tokens: facts.tokens, inMs: delay, expiresAt: facts.expiresAt });
+  }
+
+  cancel(sessionId: string, why: string): void {
+    const t = this.timers.get(sessionId);
+    if (!t) return;
+    this.deps.clearTimer(t.timer);
+    this.timers.delete(sessionId);
+    log.session.debug('idle compaction disarmed', { sessionId, why });
+  }
+
+  /** The timer fired: send the compaction if the session is still idle on the same request. */
+  async fire(sessionId: string, scheduledFor: string): Promise<'sent' | string> {
+    const mine = this.timers.get(sessionId);
+    if (mine?.requestAt === scheduledFor) this.timers.delete(sessionId);
+    if (this.stopped) return 'stopped';
+    const cfg = await this.deps.config();
+    const rec = await this.deps.getSession(sessionId);
+    const task = rec?.taskId ? await this.deps.getTask(rec.taskId) : null;
+    const live = this.deps.live(sessionId);
+    const facts = live.promptCache ?? rec?.promptCache;
+    const why = skipReason({
+      rec, task, facts, scheduledFor, live,
+      queued: rec ? await this.deps.queued(sessionId) : 0,
+      orgOff: task ? await this.deps.orgOffFor(task) : false,
+      nowMs: this.deps.now(), cfg,
+    });
+    if (why) {
+      log.session.info('idle compaction skipped', { sessionId, taskId: rec?.taskId, why });
+      return why;
+    }
+    const now = this.deps.now();
+    const rowId = `${QUIET_ROW_PREFIX}idle-compact-${randomUUID()}`;
+    // Bound to its row from here: a send of anyone else's from now on ends it (and the send below then
+    // stores nothing), so a person's message is never the quiet one.
+    beginQuietTurn(sessionId, 'idle-compact', IDLE_COMPACT_SOURCE, now, rowId);
+    const mineStill = () => quietTurnRow(sessionId) === rowId;
+    // Asked again now that it is bound: a turn or a message that began during the checks above wins.
+    if (this.deps.live(sessionId).inTurn === true || await this.deps.queued(sessionId) > 0) {
+      endQuietTurn(sessionId, 'busy');
+      log.session.info('idle compaction skipped', { sessionId, taskId: rec?.taskId, why: 'busy' });
+      return 'busy';
+    }
+    try {
+      await this.deps.send(sessionId, IDLE_COMPACT_TEXT, {
+        source: IDLE_COMPACT_SOURCE, ...(rec!.taskId ? { taskId: rec!.taskId } : {}),
+        messageId: rowId, userUuid: idleCompactLineUuid(randomUUID()), stillWanted: mineStill,
+      });
+      if (!mineStill()) {
+        // Someone else took the session while the row was being stored: it goes no further.
+        await this.takeBack(sessionId, rowId, 'superseded');
+        return 'superseded';
+      }
+      // Stored once it is on its way: status-reconcile reads the turn before it, a restart finds its row.
+      await this.deps.saveSession(sessionId, {
+        idleCompaction: {
+          sentAt: new Date(now).toISOString(),
+          ...(rec!.last_status_change ? { priorTurnEnd: rec!.last_status_change } : {}),
+          tokens: facts!.tokens,
+          rowId,
+        },
+      });
+      if (!mineStill()) await this.noteQuietEnd(sessionId);
+      const expiresAtMs = Date.parse(facts!.expiresAt ?? '');
+      this.deps.emitNote(sessionId, rec!.taskId, idleCompactNote(facts!.tokens, (expiresAtMs - now) / 60_000));
+      log.session.info('idle compaction sent', { sessionId, taskId: rec!.taskId, tokens: facts!.tokens, expiresAt: facts!.expiresAt });
+      return 'sent';
+    } catch (err) {
+      if (!mineStill()) return 'superseded';
+      endQuietTurn(sessionId, 'send-failed');
+      log.session.warn('idle compaction send failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+      return 'send-failed';
+    }
+  }
+
+  /**
+   * At boot: a timer for every session whose stored facts still have a window. A compaction the
+   * restart cut off is not resumed: its row, if still waiting, is taken back, and its end stored
+   * (a restart forgets which turn was quiet, so a late result reads as an ordinary turn end).
+   */
+  async rebuild(): Promise<number> {
+    let n = 0;
+    for (const rec of await this.deps.listSessions()) {
+      const ic = rec.idleCompaction;
+      if (ic && !ic.endedAt) {
+        if (ic.rowId) await this.takeBack(rec.claudeSessionId, ic.rowId, 'restart');
+        await this.noteQuietEnd(rec.claudeSessionId);
+      }
+      if (!rec.promptCache) continue;
+      await this.schedule(rec.claudeSessionId, rec.promptCache);
+      if (this.timers.has(rec.claudeSessionId)) n++;
+    }
+    return n;
+  }
+
+  stop(): void {
+    this.stopped = true;
+    for (const t of this.timers.values()) this.deps.clearTimer(t.timer);
+    this.timers.clear();
+  }
+
+  /** Tests only. */
+  armedFor(sessionId: string): string | undefined { return this.timers.get(sessionId)?.requestAt; }
+}
+
+/** Start the idle compaction on the primary. */
+export function startIdleCompaction(
+  runner: RunnerView,
+  deps: Partial<IdleCompactionDeps> = {},
+): { stop: () => void; instance: IdleCompaction } {
+  liveRunner = runner;
+  const ic = new IdleCompaction(deps);
+  onQuietTurnEnd(ic.onQuietEnd);
+  bus.subscribe('idle-compaction', ic.handleEvent, {
+    global: true,
+    interest: ['session:result', 'session:error', 'session:send', 'session:deleted'],
+  });
+  void ic.rebuild().then((n) => { if (n) log.session.info('idle compaction timers rebuilt', { armed: n }); })
+    .catch((err) => log.session.warn('idle compaction rebuild failed', { error: err instanceof Error ? err.message : String(err) }));
+  return {
+    instance: ic,
+    stop: () => {
+      bus.unsubscribe('idle-compaction');
+      onQuietTurnEnd(null);
+      ic.stop();
+      if (liveRunner === runner) liveRunner = null;
+    },
+  };
+}

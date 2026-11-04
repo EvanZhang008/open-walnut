@@ -47,6 +47,7 @@ import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 import { frameForSource } from './sessions/send-frame.js';
 import { replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
+import { isQuietRowId, noteQuietTurnDelivery, noteSessionSend as noteQuietTurnSend, quietTurnRow } from './sessions/quiet-turn.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -222,10 +223,15 @@ export async function sendMessageToSession(
     endsWait?: boolean;
     /** The text already went through the hint pipeline (hints/hint-send.ts prepareHintedSend): enqueued as it is. */
     hinted?: boolean;
+    /** Asked right before the row is stored: false drops the send (SendNoLongerWantedError). */
+    stillWanted?: () => boolean;
   },
 ): Promise<QueuedMessage> {
   // A person's own words: they are using Walnut, so a live update waits (idle-gate.ts).
   if (queueSentBy(opts?.source) === 'person') noteUserActivity();
+  // A send of anything but the quiet turn's own ends that quiet turn now, before any reader of
+  // this send's edges asks (sessions/quiet-turn.ts).
+  noteQuietTurnSend(sessionId, opts?.source);
   const { bus, EventNames } = await import('./event-bus.js');
   // A session an engine switch replaced never takes a message: it goes to the
   // task's active session (sessions/engine-switch.ts).
@@ -277,10 +283,14 @@ export async function sendMessageToSession(
   const framedBody = frameForSource(rawBody, opts?.source);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
   const body = outputMode?.enqueueText ?? framedBody;
+  // A slash command must start its line or the CLI no longer reads it as one: Walnut's notes wait
+  // for the next message (each is told only when the row holds it, below).
+  const slashCommand = body.trimStart().startsWith('/');
   const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
-  const enqueueText = notes ? `${notes}\n\n${body}` : body;
+  const enqueueText = notes && !slashCommand ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
+    if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
     msg = await enqueueMessage(sessionId, enqueueText, {
       id: opts?.messageId,
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
@@ -325,6 +335,9 @@ export async function sendMessageToSession(
     await refreshWalnutSessionProfile(sessionId);
   } catch { /* stale persona until next attempt */ }
 
+  // Again at the edge itself: a quiet turn begun while this send was on its way is no longer quiet
+  // when any reader of this edge asks.
+  noteQuietTurnSend(sessionId, opts?.source);
   // Tell session-runner to process the queued message (a row held for a move waits for it)
   if (!heldForMove) bus.emit(EventNames.SESSION_SEND, {
     sessionId,
@@ -335,8 +348,9 @@ export async function sendMessageToSession(
     ...(opts?.endsWait ? { endsWait: true } : {}),
   }, ['session-runner'], { source });
 
-  // Tell UI so the message appears immediately in the session panel
-  bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
+  // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
+  // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.
+  if (!isQuietRowId(msg.id)) bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
     sessionId,
     messageId: msg.id,
     message,
@@ -349,6 +363,11 @@ export async function sendMessageToSession(
   }, ['main-ai'], { source });
 
   return msg;
+}
+
+/** A send whose `stillWanted` said no before its row was stored: nothing was queued. */
+export class SendNoLongerWantedError extends Error {
+  constructor() { super('send no longer wanted'); this.name = 'SendNoLongerWantedError'; }
 }
 
 /**
@@ -367,19 +386,35 @@ export async function sendMessageToSession(
  * never join them. Fresh rows get their line's uuid here, in the same write
  * that marks them, so a crash right after can never send them under another.
  * `tracked`: the CLI they go to reports its queue (QueuedMessage.lineTracked).
+ *
+ * A quiet turn's row (sessions/quiet-turn.ts, Walnut's idle compaction) goes out
+ * only as the live quiet turn's own row, to a CLI between turns (`midTurn` false),
+ * with nothing else waiting. Otherwise it is dropped here, in the same write: a
+ * stale `/compact` never runs in front of, beside or inside anyone's turn.
  */
 export async function markProcessing(
   sessionId: string,
   stopFence?: string | null,
-  opts?: { tracked?: boolean },
+  opts?: { tracked?: boolean; midTurn?: boolean },
 ): Promise<QueuedMessage[]> {
   // A session spawned before its default instructions changed learns the changed
   // lines on the first line frozen for it (sessions/instruction-notice.ts). Read before the lock, and
   // only when a fresh row waits to be frozen.
   const routing = await pendingTaskRouting(sessionId);
+  const liveQuietRow = quietTurnRow(sessionId);
+  const dropped: string[] = [];
   const pending = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [];
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const m = queue[i]!;
+      if (m.status !== 'pending' || !isQuietRowId(m.id)) continue;
+      const others = queue.some((o) => o !== m && (o.status === 'pending' || o.status === 'processing'));
+      if (m.id === liveQuietRow && !others && !opts?.midTurn) continue;
+      queue.splice(i, 1);
+      dropped.push(m.id);
+    }
+    if (queue.length === 0) { delete s.queues[sessionId]; return []; }
     if (stopFence !== undefined) {
       for (const message of queue) {
         if (message.status !== 'pending' || (message.stopFence ?? null) === stopFence) continue;
@@ -412,10 +447,14 @@ export async function markProcessing(
       m.message = staleTriggerText(m.message, m.enqueuedAt, now) ?? m.message;
     }
     return batch;
-  }, stopFence !== undefined);
+  }, stopFence !== undefined || dropped.length > 0);
+  if (dropped.length) log.session.info('quiet turn row dropped: something else holds the session', { sessionId, rows: dropped });
+  if (dropped.includes(liveQuietRow ?? '')) noteQuietTurnDelivery(sessionId, []);
   if (pending.length === 0) return [];
   // The take marker names these rows whichever way the line goes out.
   noteLineCarries(sessionId, pending[0].lineUuid, pending.map((m) => m.id));
+  // A line that is not the quiet turn's own row alone is a real turn (sessions/quiet-turn.ts).
+  noteQuietTurnDelivery(sessionId, pending.map((m) => m.id));
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
 }
@@ -456,6 +495,7 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
     return { next, queueDepth: queue.length };
   });
   if (!picked) return [];
+  noteQuietTurnDelivery(sessionId, [picked.next.id]);
   log.session.info('next message selected for delivery', {
     sessionId,
     messageId: picked.next.id,

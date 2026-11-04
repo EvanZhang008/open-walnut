@@ -43,6 +43,7 @@ import { TRIAGE_RUNS_NOTE_DIR, TRIAGE_STATE_NOTE } from './batch.js';
 import { TRIAGE_PROJECT } from './bootstrap.js';
 import { ackTriageClaim, loadTriageState, markTriageStateStale, recordTriageJournalLine } from './state.js';
 import { TRIAGE_AGENT_ID } from './types.js';
+import { isQuietTurn } from '../sessions/quiet-turn.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -411,6 +412,8 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
         } | undefined;
         const taskId = data?.taskId;
         if (!taskId) return;
+        // A quiet turn (Walnut's idle compaction) neither finishes nor fails the run.
+        if (isQuietTurn((event.data as { sessionId?: string } | undefined)?.sessionId, (event.data as { turnGen?: number } | undefined)?.turnGen)) return;
         // An intermediate result: a team or a background set is still working, so
         // the turn is not over and calling the run finished would be a lie.
         if (data?.teamActive || data?.backgroundActive || data?.detachedBgActive) return;

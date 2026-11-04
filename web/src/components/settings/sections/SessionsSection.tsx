@@ -62,6 +62,11 @@ export function SessionsSection({ config, onSave }: Props) {
   const saveSession = (patch: Partial<SessionBlock>, rowKey: string) =>
     // Spread config.session: updateConfig replaces the whole `session` key.
     save((c) => ({ session: { ...(c.session ?? {}), ...patch } as SessionBlock }), { rowKey });
+  // The idle compaction's two rows share one object: each merges into the one just saved, not the render's.
+  const saveIdleCompaction = (patch: NonNullable<SessionBlock['idle_compaction']>, rowKey: string) =>
+    save((c) => ({
+      session: { ...(c.session ?? {}), idle_compaction: { ...(c.session?.idle_compaction ?? {}), ...patch } } as SessionBlock,
+    }), { rowKey });
 
   const idle = useCommitField<number | undefined>(
     config.session?.idle_timeout_minutes,
@@ -72,6 +77,17 @@ export function SessionsSection({ config, onSave }: Props) {
     config.session?.max_idle,
     (v) => saveSession({ max_idle: v }, 'sessions.max-idle'),
     { rowKey: 'sessions.max-idle', kind: 'number' },
+  );
+  const idleCompact = useOptimisticSetting<boolean>(
+    config.session?.idle_compaction?.enabled !== false,
+    (v) => saveIdleCompaction({ enabled: v }, 'sessions.idle-compaction'),
+    { rowKey: 'sessions.idle-compaction' },
+  );
+  // Shown and typed in thousands of tokens; stored in tokens. Empty = the server's 200K.
+  const compactMin = useCommitField<number | undefined>(
+    config.session?.idle_compaction?.min_tokens != null ? Math.round(config.session.idle_compaction.min_tokens / 1000) : undefined,
+    (v) => saveIdleCompaction({ min_tokens: v != null && v > 0 ? v * 1000 : undefined }, 'sessions.idle-compaction-min'),
+    { rowKey: 'sessions.idle-compaction-min', kind: 'number' },
   );
   const permission = useOptimisticSetting<boolean>(
     config.session?.permission_prompt ?? true,
@@ -129,6 +145,29 @@ export function SessionsSection({ config, onSave }: Props) {
           htmlFor="max-idle"
           error={maxIdle.error}
           control={<NumberInput id="max-idle" field={maxIdle.inputProps} placeholder="30" min={0} unit="sessions" />}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup heading="Context">
+        <SettingsRow
+          anchor="idle-compaction-row"
+          label="Compact idle sessions before the cache expires"
+          help="A big Claude Code session left idle is summarized a few minutes before its one-hour prompt cache runs out, so your next message there reads a short summary instead of paying for the whole conversation again."
+          htmlFor="idle-compaction"
+          error={idleCompact.error}
+          control={
+            <ToggleSwitch id="idle-compaction" checked={idleCompact.value} busy={idleCompact.busy} onChange={idleCompact.set} />
+          }
+        />
+        <SettingsRow
+          indent
+          disabled={!idleCompact.value}
+          anchor="idle-compaction-min-row"
+          label="Only sessions above"
+          help="Smaller sessions are cheap to re-read and keep their full history; empty uses 200K. The same size decides when a session with a cold cache offers to compact first."
+          htmlFor="idle-compaction-min"
+          error={compactMin.error}
+          control={<NumberInput id="idle-compaction-min" field={compactMin.inputProps} placeholder="200" min={1} unit="K tokens" />}
         />
       </SettingsGroup>
 

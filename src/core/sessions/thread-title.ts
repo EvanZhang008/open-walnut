@@ -28,6 +28,7 @@ import {
   MAX_THREAD_TITLE_CHARS, onThreadMetaWritten, writeThreadMetaAsAi, type ThreadMetaWrittenEvent,
 } from './thread-meta.js';
 import type { SessionThreadMeta, SessionThreadMetaPatch } from '../types.js';
+import { isQuietTurn } from './quiet-turn.js';
 
 export const THREAD_TITLE_REQUIREMENT = 'Name this follow-up question for a navigation tree. 2 to 6 words, a noun phrase naming what the question is about, not the whole conversation. Same language as the question.';
 /** The refine call returns the title AND the verdict. One line, because the
@@ -245,7 +246,7 @@ export async function handleThreadTitleResult(data: ResultData, turnUuid: string
 function onBusEvent(event: BusEvent): void {
   if (event.name !== EventNames.SESSION_RESULT) return;
   const data = (event.data ?? {}) as ResultData;
-  if (!data.sessionId) return;
+  if (!data.sessionId || isQuietTurn(data.sessionId, (data as { turnGen?: number }).turnGen)) return;
   // Read the turn's uuid NOW, synchronously: the next batch is delivered right
   // after this result and would overwrite it.
   const turnUuid = data.userUuid ?? turnUserUuid(data.sessionId);

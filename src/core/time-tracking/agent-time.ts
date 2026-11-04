@@ -32,6 +32,7 @@ import { log } from '../../logging/index.js';
 import { addRecord, datesWithAgentTime, localDateKey, mergeIndex } from './rollup.js';
 import { recordTime } from './store.js';
 import type { RollupIndex, TimeRecord } from './types.js';
+import { isQuietTurn } from '../sessions/quiet-turn.js';
 
 const SUBSCRIBER = 'time-tracking-agent';
 /** A turn longer than this is a stuck process, not attention. */
@@ -111,6 +112,8 @@ export function startAgentTimeCollector(): void {
     const ev = (event.data ?? {}) as ResultLike;
     const ms = agentMsFromResult(ev);
     if (ms <= 0 || !ev.sessionId) return;
+    // A quiet turn (Walnut's idle compaction) is no work of the task's.
+    if (isQuietTurn(ev.sessionId, ev.turnGen)) return;
     if (alreadySeen(ev)) return;
     void bank(ev, ms);
   }, { global: true, interest: [EventNames.SESSION_RESULT] });

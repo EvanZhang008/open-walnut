@@ -175,6 +175,7 @@ describe('the decisions go through the shared definition', () => {
 /** Files that read a raw signal of such work, by role. A new one is listed here with its reason. */
 const RAW_READERS: Record<string, string> = {
   'src/core/sessions/outliving-work.ts': 'the shared definition',
+  'src/core/sessions/idle-compaction.ts': 'skips an intermediate result (teamActive) and a session with an armed CLI cron, which a /compact would run beside',
   'src/providers/claude-code-session.ts': 'the live runner: keeps the signals and its turn-over rules',
   'src/providers/daemon-fold.ts': 'the daemon fold that makes the signals',
   'src/providers/daemon-source.ts': 'the daemon (JS twin): folds and adopts',

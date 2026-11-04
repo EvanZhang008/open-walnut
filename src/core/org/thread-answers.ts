@@ -15,6 +15,7 @@ import { log } from '../../logging/index.js';
 import { readAboutTag, stripAboutTag } from './message-about.js';
 import { userWordsOf } from './thread-capture.js';
 import { letterAnswerMissing, type OrgThread, type ThreadAnswer, type ThreadMessage } from './threads-model.js';
+import { isQuietTurn } from '../sessions/quiet-turn.js';
 
 /** A transcript row as the projection gives it (session-projection.ts). */
 export interface AnswerRow {
@@ -338,9 +339,9 @@ export function startThreadAnswers(): { stop: () => void } {
     if (stopped) return;
     bus.subscribe('org-thread-answers', (event) => {
       if (event.name !== EventNames.SESSION_RESULT) return;
-      const d = event.data as { sessionId?: string; taskId?: string; teamActive?: boolean; backgroundActive?: boolean };
+      const d = event.data as { sessionId?: string; taskId?: string; teamActive?: boolean; backgroundActive?: boolean; turnGen?: number };
       // An intermediate result (a team or a background job still running) is not the turn's end.
-      if (!d.sessionId || d.teamActive || d.backgroundActive) return;
+      if (!d.sessionId || d.teamActive || d.backgroundActive || isQuietTurn(d.sessionId, d.turnGen)) return;
       // A moment later: the turn's last words reach its transcript just after its result.
       const endedAt = new Date().toISOString();
       const timer = setTimeout(() => { void answersForSession(d.sessionId!, d.taskId, endedAt); }, RESULT_SETTLE_MS);

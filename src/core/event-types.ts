@@ -779,6 +779,8 @@ export interface SessionUsageUpdateEvent {
    *  model, and a compaction setting is not a property of the model. Absent when
    *  the session compacts only at the model's own limit. */
   autoCompactAt?: number;
+  /** The prompt cache facts of the last main-loop request (sessions/prompt-cache.ts). */
+  promptCache?: import('./sessions/prompt-cache.js').PromptCacheFacts;
 }
 
 /** Live speed readout of the running turn (ttft, generation windows, CLI token

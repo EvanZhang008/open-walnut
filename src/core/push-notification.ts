@@ -32,6 +32,7 @@ import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
 import { getQuiet, logQuietSkipOnce, quietSuppresses } from './quiet/quiet-state.js'
 import { deliverPush } from './push/deliver.js'
+import { isQuietTurn } from './sessions/quiet-turn.js'
 
 /**
  * Send a push notification if no WebSocket clients are connected.
@@ -116,6 +117,8 @@ export function initPushNotifications(): void {
           const data = eventData<typeof EventNames.SESSION_RESULT>(event)
           // The user stopped this turn from the composer — they are looking at it.
           if (data.interrupted) break
+          // Walnut's own idle compaction finished: nothing for the user.
+          if (isQuietTurn(data.sessionId, (data as { turnGen?: number }).turnGen)) break
           const sessionId = data.sessionId
           const lane = await laneIdsFor(sessionId)
           if (lane === 'silent') break

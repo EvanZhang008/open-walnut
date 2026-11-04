@@ -23,6 +23,7 @@ import type {
   OnCronFiredPayload,
   OnSessionWillReapPayload,
 } from '../types.js';
+import { isQuietTurn } from '../../sessions/quiet-turn.js';
 import { log } from '../../../logging/index.js';
 
 // ── Per-session derived state ──
@@ -113,7 +114,7 @@ export function deriveSessionHookPoints(
       state.awaitingFirstResponse = true;
       // Skip onMessageSend for automated sources (triage session_send, subagent-runner,
       // peer-session gateway sends). User-initiated sources (web-ui, cli, web-api) fire hooks normally.
-      if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer') {
+      if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer' && !isQuietTurn(sessionId)) {
         results.push({
           hookPoint: 'onMessageSend',
           extraPayload: {
@@ -133,6 +134,7 @@ export function deriveSessionHookPoints(
       if (event.name === EventNames.SESSION_TEXT_DELTA) noteReply(state, data);
 
       // Derived: onTurnStart fires on first response after send
+      if (state.awaitingFirstResponse && isQuietTurn(sessionId)) state.awaitingFirstResponse = false;
       if (state.awaitingFirstResponse) {
         state.awaitingFirstResponse = false;
         state.turnIndex++;
@@ -202,6 +204,8 @@ export function deriveSessionHookPoints(
     }
 
     case EventNames.SESSION_TURN_SETTLED: {
+      // A quiet turn (sessions/quiet-turn.ts) runs no turn-end hook.
+      if (isQuietTurn(sessionId)) break;
       // A snapshot saw the turn end while no live runner did (server restart or
       // detach at the moment the CLI finished): the turn-end hooks would
       // otherwise never run for that turn. Same hook point as a real result;
@@ -223,6 +227,11 @@ export function deriveSessionHookPoints(
     }
 
     case EventNames.SESSION_RESULT: {
+      if (isQuietTurn(sessionId, data.turnGen)) {
+        takeReplies(getOrCreateSessionState(states, sessionId));
+        log.session.info('SESSION_RESULT skipped — quiet turn', { sessionId });
+        break;
+      }
       // Skip hooks entirely when team subagents OR background workflow tasks are
       // still active. The lead session emits intermediate `result` events while
       // polling for teammate messages, and a dynamic-workflow turn emits one result
@@ -272,6 +281,7 @@ export function deriveSessionHookPoints(
     }
 
     case EventNames.SESSION_ERROR: {
+      if (isQuietTurn(sessionId)) break;
       // delivery_failed = message never reached the CLI (SSH/daemon down) —
       // no turn ran, so onTurnError hooks (triage, notify, …) must not fire.
       // The batch is back in 'pending'; the UI was told via SESSION_BATCH_FAILED.
