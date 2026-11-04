@@ -97,7 +97,7 @@ test.describe('task rows', () => {
 
   const created: string[] = []
   test.afterEach(async ({ request }) => {
-    for (const id of created.splice(0)) await request.delete(`/api/tasks/${id}`).catch(() => {})
+    for (const id of created.splice(0)) await request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
   })
 
   async function createTask(page: Page, data: Record<string, unknown>): Promise<string> {
@@ -275,7 +275,7 @@ test.describe('opening from the needs-you rows', () => {
       expect(Math.abs(again.y - box.y)).toBeLessThanOrEqual(1)
       expect(tabWrites).toEqual([])
     } finally {
-      await page.request.delete(`/api/tasks/${own}`).catch(() => {})
+      await page.request.delete(`/api/tasks/${own}?force=true`).catch(() => {})
     }
   })
 })

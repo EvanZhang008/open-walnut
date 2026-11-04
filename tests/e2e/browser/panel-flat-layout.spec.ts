@@ -19,7 +19,7 @@ test.afterEach(async ({ request }) => {
   for (const sid of turns.splice(0)) await endRunningTurn(request, sid)
   for (const id of made.splice(0)) {
     await request.delete(`/api/focus/tasks/${id}`).catch(() => {})
-    await request.delete(`/api/tasks/${id}`).catch(() => {})
+    await request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
   }
 })
 

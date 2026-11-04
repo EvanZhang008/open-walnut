@@ -1509,3 +1509,51 @@ describe('the phone drawer on the shared fixture', () => {
     expect(own.size).toBeGreaterThan(0)
   })
 })
+
+describe('a spec deleting a task it made', () => {
+  // DELETE /api/tasks/:id refuses a task that still holds a session (409), and a cleanup
+  // that ignores the answer leaves the task on the ONE fixture every spec shares. On
+  // 2026-11-04 org-side-panel's "Side question" task (its session waiting on a question)
+  // outlived its afterAll and was the only row in view of phone-home C18 at 390x844,
+  // which then failed in CI twice in a row. `?force=true` stops the sessions and deletes.
+  const UNFORCED = /\.delete\(`\/api\/tasks\/\$\{[^}`]+\}(?:\?(?!force=true)[^`]*)?`/
+
+  it('every one passes force=true', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      text.split('\n').forEach((line, i) => {
+        if (UNFORCED.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(UNFORCED.test('    const res = await request.delete(`/api/tasks/${id}`)')).toBe(true)
+    expect(UNFORCED.test('    await request.delete(`/api/tasks/${id}?force=true`)')).toBe(false)
+    expect(UNFORCED.test('    await request.delete(`/api/tasks/folders/${gid}`)')).toBe(false)
+    expect(UNFORCED.test('    await request.delete(`/api/tasks/${id}/notes/${n}`)')).toBe(false)
+    expect(UNFORCED.test('    await request.delete(`/api/tasks/${id}?quiet=1`)')).toBe(true)
+  })
+})
+
+describe('a wait for a quick-parse answer', () => {
+  // The draft aborts a parse a newer one replaces, and a request aborted after its
+  // answer arrived never finishes: waiting on `finished()` of the first parse that
+  // answered waited out the 180 s test timeout (2026-11-04, draft-session-seeds twice
+  // on CI). armParse (draft-outcome-helpers.ts) waits for a parse request that finished.
+  const PARSE = /\/api\/tasks\/quick-parse/
+  const WAITS_ON_FINISHED = /\.finished\(\)/
+
+  it('no spec waits on finished() of a parse response', () => {
+    const offenders = sources
+      .filter(({ text }) => PARSE.test(text) && WAITS_ON_FINISHED.test(text))
+      .map(({ file }) => file)
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const text = "const r = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/tasks/quick-parse')\nawait (await r).finished()"
+    expect(PARSE.test(text) && WAITS_ON_FINISHED.test(text)).toBe(true)
+  })
+})

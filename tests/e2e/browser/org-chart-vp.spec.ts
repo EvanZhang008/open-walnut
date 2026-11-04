@@ -39,7 +39,7 @@ const taskOf = async (request: APIRequestContext, id: string) =>
 
 async function removeTask(request: APIRequestContext, id: string): Promise<void> {
   for (let i = 0; i < 10; i++) {
-    const res = await request.delete(`/api/tasks/${id}`)
+    const res = await request.delete(`/api/tasks/${id}?force=true`)
     if (res.ok() || res.status() === 404) return
     await new Promise((r) => setTimeout(r, 500))
   }

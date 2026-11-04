@@ -64,7 +64,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  for (const id of made) await request.delete(`/api/tasks/${id}`)
+  for (const id of made) await request.delete(`/api/tasks/${id}?force=true`)
 })
 
 test('a drag sets the rail\'s width, kept per surface across a reload and in the synced prefs; double-click resets it', async ({ page }) => {

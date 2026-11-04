@@ -33,7 +33,7 @@ test.beforeAll(async () => {
 
 test.afterEach(async ({ request }) => {
   for (const id of litter.splice(0)) {
-    await request.delete(`/api/tasks/${id}`).catch(() => undefined)
+    await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
   }
 })
 

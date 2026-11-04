@@ -90,7 +90,7 @@ test.afterAll(async ({ request }) => {
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })
-    await request.delete(`/api/tasks/${id}`)
+    await request.delete(`/api/tasks/${id}?force=true`)
   }
 })
 

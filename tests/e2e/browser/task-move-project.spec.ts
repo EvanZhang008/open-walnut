@@ -49,7 +49,7 @@ async function taskState(page: Page, id: string): Promise<{ project: string; sou
 async function cleanup(page: Page, ids: string[], projects: string[]): Promise<void> {
   for (const id of ids) {
     await page.request.delete(`/api/focus/tasks/${id}`).catch(() => {})
-    await page.request.delete(`/api/tasks/${id}`).catch(() => {})
+    await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
   }
   for (const name of projects) {
     await page.request.delete(`/api/projects/${encodeURIComponent(name)}`).catch(() => {})

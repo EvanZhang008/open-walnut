@@ -92,20 +92,26 @@ export async function expectTaskInTier(page: Page, taskId: string, tier: string)
  * received.
  *
  * Nothing in the column badges a parsed date or tier any more, so there is no DOM
- * signal to wait on; the response is the only handle. `finished()` covers the body
- * (the client applies the parse after reading it), and the double rAF is a
- * page-side barrier: the fetch resolution and the React commit it triggers are
- * already queued by then, so an assertion issued after this cannot run against
- * the pre-parse state. Register BEFORE typing — a spec that arms the wait after
- * the keystrokes can miss an eager (mid-typing) parse.
+ * signal to wait on; the request is the only handle. It waits for a parse request
+ * that FINISHED (its body read by the client, which applies the parse after
+ * reading it), never for the first one that answered: the draft aborts a parse a
+ * newer one replaces (eager parses every 900 ms while typing, a trailing one per
+ * pause), and a request aborted after its answer arrived never finishes, so
+ * waiting for `finished()` on its response lasted until the test timed out (CI, 2026-11-04:
+ * two 180 s timeouts in this file, reproduced on four busy cores). The double
+ * rAF is a page-side barrier: the fetch resolution and the React commit it
+ * triggers are already queued by then, so an assertion issued after this cannot
+ * run against the pre-parse state. Register BEFORE typing, so a spec that arms
+ * the wait after the keystrokes cannot miss an eager (mid-typing) parse.
  */
 export function armParse(page: Page, status = 200): () => Promise<void> {
-  const response = page.waitForResponse((res) =>
-    res.request().method() === 'POST'
-    && new URL(res.url()).pathname === '/api/tasks/quick-parse'
-    && res.status() === status)
+  const finished = page.waitForEvent('requestfinished', {
+    predicate: async (req) => req.method() === 'POST'
+      && new URL(req.url()).pathname === '/api/tasks/quick-parse'
+      && (await req.response())?.status() === status,
+  })
   return async () => {
-    await (await response).finished()
+    await finished
     await page.evaluate(() => new Promise<void>((done) => {
       requestAnimationFrame(() => requestAnimationFrame(() => done()))
     }))

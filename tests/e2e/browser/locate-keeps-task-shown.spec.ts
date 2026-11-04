@@ -43,7 +43,7 @@ test.afterEach(async ({ request }) => {
   for (const sid of litter.sessions) await endRunningTurn(request, sid)
   for (const id of litter.tasks) {
     await request.delete(`/api/focus/tasks/${id}`).catch(() => undefined)
-    await request.delete(`/api/tasks/${id}`).catch(() => undefined)
+    await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
   }
   for (const gid of litter.folders) await request.delete(`/api/tasks/folders/${gid}`).catch(() => undefined)
   for (const name of litter.projects) await request.delete(`/api/projects/${encodeURIComponent(name)}`).catch(() => undefined)

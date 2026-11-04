@@ -347,7 +347,7 @@ test.describe('zoom stability', () => {
         }
       } finally {
         await request.delete(`/api/focus/tasks/${task.id}`)
-        await request.delete(`/api/tasks/${task.id}`)
+        await request.delete(`/api/tasks/${task.id}?force=true`)
         if (tierId) await request.delete(`/api/focus/tiers/${tierId}`)
       }
     })

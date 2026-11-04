@@ -47,7 +47,7 @@ async function removeTask(request: APIRequestContext, id: string): Promise<void>
   const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
   if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })
   for (let i = 0; i < 10; i++) {
-    const res = await request.delete(`/api/tasks/${id}`)
+    const res = await request.delete(`/api/tasks/${id}?force=true`)
     if (res.ok() || res.status() === 404) return
     await new Promise((r) => setTimeout(r, 500))
   }

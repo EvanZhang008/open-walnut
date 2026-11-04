@@ -71,7 +71,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  for (const id of made) await request.delete(`/api/tasks/${id}`)
+  for (const id of made) await request.delete(`/api/tasks/${id}?force=true`)
 })
 
 test('the line before an opened task drags its width, kept across a reload; double-click resets it', async ({ page }) => {

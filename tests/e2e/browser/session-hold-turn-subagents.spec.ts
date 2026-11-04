@@ -92,7 +92,7 @@ test.afterEach(async ({ page }) => {
 test.afterAll(async ({ request }) => {
   test.setTimeout(120_000)
   for (const id of densityTaskIds) {
-    const response = await request.delete(`/api/tasks/${id}`)
+    const response = await request.delete(`/api/tasks/${id}?force=true`)
     expect(response.ok()).toBe(true)
   }
 })

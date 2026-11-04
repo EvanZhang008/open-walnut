@@ -258,6 +258,6 @@ test('/tasks has one Status section in the status words, matching the home hit s
     await expect(chipX.locator('svg')).toHaveCount(1);
     expect(await page.locator('.task-filter-chips').innerText()).not.toContain('\u00d7');
   } finally {
-    for (const id of ids) await page.request.delete(`/api/tasks/${id}`).catch(() => {});
+    for (const id of ids) await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {});
   }
 });

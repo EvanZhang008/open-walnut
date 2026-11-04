@@ -38,7 +38,7 @@ const unpinAfter: string[] = [];
 test.afterEach(async ({ request }) => {
   for (const id of unpinAfter.splice(0)) {
     await request.delete(`/api/focus/tasks/${id}`).catch(() => {});
-    await request.delete(`/api/tasks/${id}`).catch(() => {});
+    await request.delete(`/api/tasks/${id}?force=true`).catch(() => {});
   }
 });
 

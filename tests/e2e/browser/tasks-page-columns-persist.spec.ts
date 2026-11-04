@@ -257,6 +257,6 @@ test('rows carry the home list\'s circle colour and red marks', async ({ page, b
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.task-unread-dot')).toHaveCount(0)
     await page.screenshot({ path: `${SHOTS}/06-circles-and-marks.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } })
   } finally {
-    await page.request.delete(`/api/tasks/${needsActionId}`).catch(() => undefined)
+    await page.request.delete(`/api/tasks/${needsActionId}?force=true`).catch(() => undefined)
   }
 })

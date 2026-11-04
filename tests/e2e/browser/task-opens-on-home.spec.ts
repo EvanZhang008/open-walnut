@@ -92,5 +92,5 @@ test('opening a task\'s details writes nothing; typing in its description saves'
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()) as { task: { description: string } }).task.description, { timeout: 10_000 })
     .toContain('quoted line typed')
 
-  await request.delete(`/api/tasks/${id}`)
+  await request.delete(`/api/tasks/${id}?force=true`)
 })

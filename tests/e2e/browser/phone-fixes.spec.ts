@@ -85,7 +85,7 @@ test('N24: a tapped drawer draws no keyboard focus ring, before or after it clos
 
 const created: string[] = []
 test.afterEach(async ({ request }) => {
-  for (const id of created.splice(0)) await request.delete(`/api/tasks/${id}`).catch(() => {})
+  for (const id of created.splice(0)) await request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
 })
 
 async function createTask(page: Page, data: Record<string, unknown>): Promise<string> {

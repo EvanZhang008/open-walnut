@@ -62,7 +62,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  for (const id of made) await request.delete(`/api/tasks/${id}`)
+  for (const id of made) await request.delete(`/api/tasks/${id}?force=true`)
 })
 
 test('a snoozed task is not Needs you on the Org page; its date passing brings it back', async ({ page, request }) => {

@@ -51,7 +51,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  for (const id of made) await request.delete(`/api/tasks/${id}`)
+  for (const id of made) await request.delete(`/api/tasks/${id}?force=true`)
 })
 
 test('a VP\'s reply shows the tasks it is about as live pills, and the line never prints', async ({ page }) => {
