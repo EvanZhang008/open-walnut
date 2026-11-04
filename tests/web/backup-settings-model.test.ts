@@ -72,7 +72,10 @@ describe('testHelp', () => {
     expect(testHelp({ ok: true, hasBackups: false }, false)).toBe('Connected. Walnut can write here; no backups yet.');
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: true, savedNow: true }, false))
       .toBe("Connected and saved: backups go here now. It holds this computer's Walnut backups.");
-    expect(testHelp({ ok: true, hasBackups: true, keyMatches: false }, false)).toMatch(/another recovery key/);
+    expect(testHelp({ ok: true, hasBackups: true, keyMatches: false, hasKey: true }, false)).toMatch(/different key from this computer's/);
+    // A new computer (no key of its own): its own backups, asked for the key it saved, no warning.
+    expect(testHelp({ ok: true, hasBackups: true, keyMatches: false, hasKey: false, savedNow: true }, false))
+      .toBe('Connected and saved: backups go here now. It already has Walnut backups: enter the recovery key you saved for them below.');
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: false, writer: 'Old-Mac' }, false)).toMatch(/computer "Old-Mac"/);
     expect(testHelp({ ok: false, error: 'No bucket named "x".' }, false)).toBe('Couldn\'t connect. No bucket named "x".');
   });

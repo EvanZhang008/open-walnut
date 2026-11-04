@@ -74,6 +74,8 @@ export function cleanDestination(d: BackupDestinationConfig): BackupDestinationC
     }
   }
   if (d.type === 'gdrive') (['folder_name', 'client_id', 'client_secret'] as const).forEach(put)
+  // "https://host/" and "https://host" are one endpoint: saved and shown without the trailing slash.
+  if (out.endpoint) out.endpoint = out.endpoint.replace(/\/+$/, '')
   return out
 }
 
@@ -120,7 +122,7 @@ export function fieldProblem(d: BackupDestinationConfig): string | null {
 export function sameTarget(a: BackupDestinationConfig, b: BackupDestinationConfig): boolean {
   const t = (v?: string) => trimmed(v) ?? ''
   return a.type === b.type && t(a.account_id) === t(b.account_id)
-    && t(a.endpoint) === t(b.endpoint) && t(a.client_id) === t(b.client_id)
+    && t(a.endpoint).replace(/\/+$/, '') === t(b.endpoint).replace(/\/+$/, '') && t(a.client_id) === t(b.client_id)
 }
 
 const isMasked = (v?: string): boolean => typeof v === 'string' && v.includes('\u2022')
@@ -165,10 +167,12 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
   if (!r) return legacy ? 'Checks the bucket with these credentials.' : 'Writes, reads back and deletes a small test file.'
   if (!r.ok) return `Couldn't connect. ${r.error ?? ''}`.trim()
   if (legacy) return `Connected as ${r.arn ?? 'unknown identity'}`
-  if (r.askOtherKey) return 'Connected, not saved yet: this folder holds backups made with another recovery key. Using it pauses backups until you enter that key (or start over in a new folder).'
+  if (r.askOtherKey) return "Connected, not saved yet: this folder has Walnut backups made with a different key from this computer's. Using it pauses backups here until you enter that key."
   const head = r.savedNow ? 'Connected and saved: backups go here now.' : 'Connected.'
   if (!r.hasBackups) return r.savedNow ? head : `${head} Walnut can write here; no backups yet.`
-  if (r.keyMatches === false) return `${head} It holds Walnut backups made with another recovery key.`
+  if (r.keyMatches === false) return r.hasKey
+    ? `${head} It holds Walnut backups made with a different key from this computer's.`
+    : `${head} It already has Walnut backups: enter the recovery key you saved for them below.`
   if (r.thisWriter === false && r.writer) return `${head} It holds Walnut backups from the computer "${r.writer}".`
   return `${head} It holds this computer's Walnut backups.`
 }
@@ -262,11 +266,12 @@ export function legacyToEncrypted(saved: BackupConfig): BackupDestinationConfig 
   }
 }
 
+/** Sizes as the Finder and the storage services count them: 1 MB is 1,000,000 bytes. */
 export const fmtBytes = (n?: number): string => {
   if (n === undefined) return 'unknown size'
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`
-  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`
-  return `${Math.max(1, Math.ceil(n / 1024))} KB`
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`
+  return `${Math.max(1, Math.ceil(n / 1e3))} KB`
 }
 
 /** The text of the downloaded recovery kit. */

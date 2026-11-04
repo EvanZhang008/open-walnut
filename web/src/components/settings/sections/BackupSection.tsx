@@ -321,7 +321,8 @@ export function BackupSection({ config, onSave }: Props) {
       const r = await apiPost<DestinationTest>('/api/backup/destination/test', { destination: draft }, { timeoutMs: 45000 })
       if (r.ok && !draftIsSaved) {
         // Backups that would stop (they cannot open this folder's backups) are asked about, never switched silently.
-        if (r.hasBackups && r.keyMatches === false && !confirmed) {
+        // A computer with no key of its own (a new one) has nothing to pause: it goes straight on, then asks for the key.
+        if (r.hasBackups && r.keyMatches === false && r.hasKey && !confirmed) {
           setTestResult({ ...r, askOtherKey: true })
           return
         }
@@ -578,7 +579,7 @@ export function BackupSection({ config, onSave }: Props) {
                 <SettingsButton onClick={() => void handleTest(Boolean(testResult?.askOtherKey))} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
                   variant={!legacyMode && !draftIsSaved && missing.length === 0 && !problem ? 'primary' : undefined}
                   disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0 || !!problem}>
-                  {testResult?.askOtherKey ? 'Use it and enter its key'
+                  {testResult?.askOtherKey ? 'Use this folder'
                     : legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
                 </SettingsButton>
               </span>
@@ -618,8 +619,7 @@ export function BackupSection({ config, onSave }: Props) {
         data-testid="backup-backups-group"
         footer={
           <>
-            Everything in your data folder is backed up (notes, tasks, passwords, sign-ins). Skipped: caches and search indexes (Walnut rebuilds them), Git sync's history (its own repository keeps it), and health and place data (they never leave this computer).
-            {' '}On a new computer: install Walnut, choose the same service here, and type your recovery key when Walnut asks.
+            Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data.
           </>
         }
       >

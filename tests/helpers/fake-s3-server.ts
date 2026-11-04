@@ -14,6 +14,8 @@ export interface FakeS3 {
   objects: Map<string, { body: Buffer; modifiedAt: Date }>;
   requests: string[];
   failNext(n: number, status?: number): void;
+  /** Hold every object GET this long (a slow line, so a restore can be stopped before it ends). */
+  setGetDelay(ms: number): void;
   close(): Promise<void>;
 }
 
@@ -25,6 +27,7 @@ export async function startFakeS3(opts: { buckets?: string[]; port?: number; pag
   const requests: string[] = [];
   let failures = 0;
   let failStatus = 500;
+  let getDelayMs = 0;
   const pageSize = opts.pageSize ?? 1000;
 
   const server = http.createServer((req, res) => {
@@ -56,8 +59,12 @@ export async function startFakeS3(opts: { buckets?: string[]; port?: number; pag
           res.writeHead(404, { 'content-type': 'application/xml' });
           return void res.end(req.method === 'HEAD' ? undefined : '<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>');
         }
-        res.writeHead(200, { 'content-length': obj.body.length, 'content-type': 'application/octet-stream', 'last-modified': obj.modifiedAt.toUTCString() });
-        return void res.end(req.method === 'HEAD' ? undefined : obj.body);
+        const send = () => {
+          res.writeHead(200, { 'content-length': obj.body.length, 'content-type': 'application/octet-stream', 'last-modified': obj.modifiedAt.toUTCString() });
+          res.end(req.method === 'HEAD' ? undefined : obj.body);
+        };
+        if (req.method === 'GET' && getDelayMs > 0) return void setTimeout(send, getDelayMs);
+        return void send();
       }
       if (req.method === 'DELETE' && key) {
         objects.delete(id);
@@ -103,6 +110,9 @@ export async function startFakeS3(opts: { buckets?: string[]; port?: number; pag
     failNext(n: number, status = 500) {
       failures = n;
       failStatus = status;
+    },
+    setGetDelay(ms: number) {
+      getDelayMs = ms;
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };

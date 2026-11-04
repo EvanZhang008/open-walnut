@@ -150,7 +150,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
             <li>Open <a href="https://s3.console.aws.amazon.com/s3/bucket/create" target="_blank" rel="noreferrer">S3: Create bucket</a>, name it (for example <code>my-walnut-backup</code>), keep the defaults, and note its Region.</li>
             <li>Open <a href="https://console.aws.amazon.com/iam/home#/users" target="_blank" rel="noreferrer">IAM: Users</a>, choose <b>Create user</b> (no console access), then <b>Add permissions</b>, <b>Create inline policy</b>: service S3, actions <code>ListBucket</code>, <code>GetObject</code>, <code>PutObject</code> and <code>DeleteObject</code>, on that bucket only.</li>
             <li>On the user choose <b>Security credentials</b>, then <b>Create access key</b> (use: Application running outside AWS).</li>
-            <li>Copy the <b>Access key ID</b> and <b>Secret access key</b> into the rows above (AWS shows the secret once), then choose <b>Test and save</b> (<b>Use Amazon S3</b> when another service is in use) below.</li>
+            <li>Copy the <b>Access key ID</b> and <b>Secret access key</b> into the rows above (AWS shows the secret once), then choose the button in the <b>Connection</b> row below.</li>
           </ol>
         </SettingsDisclosure>
       )}

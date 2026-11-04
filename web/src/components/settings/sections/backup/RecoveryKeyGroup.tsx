@@ -143,8 +143,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             htmlFor="backup-key-input"
             state="warning"
             help={mismatch && key
-              ? `The backups in ${destinationLabel} were made with another recovery key. Type that key. This computer's current key is kept aside, and you can copy it here first.`
-              : `${destinationLabel} already has Walnut backups. Type the key you saved when you set them up (it starts with WB1-).`}
+              ? `The backups in ${destinationLabel} were made with a different key from this computer's. Enter that key to use them. This computer's key is kept aside; copy it here first if you need it.`
+              : `${destinationLabel} already has your Walnut backups. Enter the recovery key you saved for them (it starts with WB1-).`}
             error={error ?? undefined}
             data-testid="backup-key-needed"
             control={mismatch && key ? (

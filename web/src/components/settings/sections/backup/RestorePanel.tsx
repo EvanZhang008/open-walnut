@@ -27,6 +27,8 @@ export interface RestoreStatus {
   totalFiles?: number
   finishedAt?: string
   error?: string
+  /** The user stopped it; the folder it was writing was removed. */
+  cancelled?: boolean
 }
 
 interface BackupItem {
@@ -90,7 +92,13 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     setDismissedAt(restore?.finishedAt ?? null)
     void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}).finally(() => onSwitchChanged?.())
   }
-  const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt ? restore : undefined
+  // A result is news for a day: after that the Restore row stands alone again.
+  const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt && Date.now() - Date.parse(restore.finishedAt) < 86_400_000 ? restore : undefined
+  const [cancelling, setCancelling] = useState(false)
+  const cancelRestore = () => {
+    setCancelling(true)
+    void apiPost('/api/backup/restore/cancel', {}).catch(() => {}).finally(() => { setCancelling(false); onSwitchChanged?.() })
+  }
   // The picker opened: bring its last row (the folder and Restore) into view.
   const entryRef = useRef<HTMLDivElement>(null)
   // A refused start says why where the eye is: the message is brought into view.
@@ -146,12 +154,20 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const [confirmDeletePrevious, setConfirmDeletePrevious] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  // Said for a few seconds after Delete, so the row going away reads as done, not lost.
+  const [deletedNote, setDeletedNote] = useState(false)
+  useEffect(() => {
+    if (!deletedNote) return
+    const t = setTimeout(() => setDeletedNote(false), 6000)
+    return () => clearTimeout(t)
+  }, [deletedNote])
   const deletePrevious = async () => {
     setDeleting(true)
     setDeleteError(null)
     try {
       await apiPost('/api/backup/restore/use/delete-previous', {})
       setConfirmDeletePrevious(false)
+      setDeletedNote(true)
       onSwitchChanged?.()
     } catch (err) {
       setDeleteError(saveErrorMessage(err))
@@ -164,6 +180,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
   const open = async (at: BackupDestinationConfig | null = source) => {
     setLoading(true)
     setError(null)
+    // Each restore goes into a new, empty folder: a folder typed for the last one is not offered again.
+    setTarget('')
     if (restore?.finishedAt) dismiss()
     try {
       const r = await apiPost<{ snapshots: BackupItem[] }>('/api/backup/snapshots', at ? { destination: at } : {}, { timeoutMs: 60000 })
@@ -210,22 +228,29 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           : 'Starting: reading the backup list...'}, every file checked as it lands.`}
         data-testid="backup-restore-progress"
         control={
-          <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
-            <span className="settings-progress-track"><span className="settings-progress-fill" style={{ width: `${pct ?? 0}%` }} /></span>
-            <span className="settings-progress-pct">{pct ?? 0}%</span>
+          <span className="settings-inline-pair">
+            <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? undefined}>
+              <span className="settings-progress-track"><span className="settings-progress-fill" style={{ width: `${pct ?? 0}%` }} /></span>
+              <span className="settings-progress-pct">{pct ?? 0}%</span>
+            </span>
+            <SettingsButton onClick={cancelRestore} busy={cancelling} busyLabel="Cancelling..." data-testid="backup-restore-cancel">Cancel</SettingsButton>
           </span>
         }
       />
     )
   }
 
+  // One time format for the whole list: to the second when any two share a minute.
+  const listSeconds = !!items && items.some((a) => items.some((b) => b.id !== a.id && whenOf(b.createdAt) === whenOf(a.createdAt)))
   const home = dataDir ?? '~/.open-walnut'
   const swap = restore?.targetDir ? swapCommands(home, restore.targetDir, restore.finishedAt) : null
+  // A result shown stands in for the Restore row (Done brings it back): one row, not two.
+  const resultRow = !!shownResult && !items && !pendingSwitch
   return (
     <>
-      <SettingsRow
+      {!resultRow && <SettingsRow
         label="Restore"
-        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder. Set up backups above first.' : 'Bring a backup back into a new folder. The data Walnut runs on now is not touched.'}
+        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder. Set up backups above first.' : 'Bring a backup back into a new folder; the data in use is not touched. On a new computer, set up the same service first.'}
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
@@ -234,7 +259,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             {items ? 'Close' : 'Choose a backup'}
           </SettingsButton>
         }
-      />
+      />}
       {items && sources.length > 1 && (
         <SettingsRow
           indent
@@ -259,7 +284,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
               <label key={it.id} className="backup-restore-item" data-picked={picked === it.id ? 'true' : undefined}>
                 <input type="radio" name="backup-restore-pick" value={it.id} checked={picked === it.id} onChange={() => setPicked(it.id)} />
                 <span className="backup-restore-when">
-                  {whenOf(it.createdAt, items.some((o) => o.id !== it.id && whenOf(o.createdAt) === whenOf(it.createdAt)))}
+                  {whenOf(it.createdAt, listSeconds)}
                   {/* The list is newest first; the newest one says so, not only by its place. */}
                   {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
                 </span>
@@ -311,7 +336,14 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             : <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-cancel">Keep current data</SettingsButton>}
         />
       ) : shownResult && restore && !items && (
-        restore.error ? (
+        restore.cancelled ? (
+          <SettingsRow
+            label="Restore cancelled"
+            help={`The folder it was writing (${restore.targetDir}) was removed. Nothing else changed.`}
+            data-testid="backup-restore-cancelled"
+            control={<SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>}
+          />
+        ) : restore.error ? (
           <SettingsRow
             label="Restore failed"
             error={restore.error}
@@ -363,7 +395,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       )}
       {switchDone && !pendingSwitch && !switchError && (confirmDeletePrevious ? (
         <SettingsRow label="Delete your data from before the restore?" state="warning" wide data-testid="backup-restore-delete-previous-confirm"
-          help="It is deleted from this computer for good. Your backups still hold what they held."
+          help="Anything you changed after the restored backup was made is only in this folder. It is deleted from this computer for good; your backups stay as they are."
           error={deleteError ?? undefined}
           control={
             <span className="settings-inline-pair">
@@ -387,6 +419,9 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           </SettingsDisclosure>
         </>
       ))}
+      {deletedNote && !switchDone && (
+        <SettingsRow label="Deleted" help="The data from before the restore is gone from this computer." data-testid="backup-restore-previous-deleted" />
+      )}
       {switchError && !pendingSwitch && (
         <SettingsRow label="The restored data was not switched in" error={switchError} data-testid="backup-restore-switch-error"
           control={<SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-error-dismiss">Dismiss</SettingsButton>} />

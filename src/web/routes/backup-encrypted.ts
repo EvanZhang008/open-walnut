@@ -42,9 +42,11 @@ const SECRET_KEYS = ['access_key_id', 'secret_access_key', 'client_secret'] as c
 const AUTH_SECRET_KEYS = ['aws_access_key_id', 'aws_secret_access_key'] as const;
 // Where a saved key may be sent: the same service account (keys belong to the account or the
 // endpoint, not to one bucket in it, so another bucket there keeps the saved key).
+/** An endpoint with or without its trailing slash is the same one. */
+const endpointOf = (d: BackupDestinationConfig): string => (d.endpoint ?? '').trim().replace(/\/+$/, '');
 const sameAccount = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
   a.type === b.type && (a.account_id ?? '') === (b.account_id ?? '')
-  && (a.endpoint ?? '') === (b.endpoint ?? '') && (a.client_id ?? '') === (b.client_id ?? '');
+  && endpointOf(a) === endpointOf(b) && (a.client_id ?? '') === (b.client_id ?? '');
 // Where the data goes: another bucket is another place (a request naming one is the person's step).
 const sameTarget = (a: BackupDestinationConfig, b: BackupDestinationConfig): boolean =>
   sameAccount(a, b) && (a.bucket ?? '') === (b.bucket ?? '');
@@ -185,6 +187,10 @@ async function badTarget(target: string): Promise<string | null> {
   return null;
 }
 
+/** The restore under way, so Cancel can stop it (one restore at a time: the job latch). */
+let restoreAbort: AbortController | null = null;
+class RestoreCancelled extends Error {}
+
 // POST /api/backup/restore — bring one backup back into a new folder (202; progress on backup:status).
 encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   const { dest, cfg, custom, error } = await requestDestination(req.body);
@@ -221,12 +227,17 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   const source = mirror ? 'Amazon S3 (older copy)' : ({ r2: 'Cloudflare R2', gdrive: 'Google Drive', s3: 'Amazon S3' } as const)[dest!.type];
   const status: RestoreStatus = { running: true, snapshotId, targetDir, source };
   const job = runBackupJob('restore', async () => {
+    const abort = new AbortController();
+    restoreAbort = abort;
+    // Checked at every file and chunk: Cancel stops the restore within a chunk.
+    const stopIfCancelled = () => { if (abort.signal.aborted) throw new RestoreCancelled('cancelled'); };
     setRestore(status);
     try {
       if (mirror) {
         const r = await restoreFromBackup(cfg, targetDir, {
           versionId: snapshotId === 'latest' ? undefined : snapshotId,
           onFile: (_rel, i, total) => {
+            stopIfCancelled();
             if (i % 50 === 0 || i === total) setRestore({ ...status, doneFiles: i, totalFiles: total });
           },
         });
@@ -236,6 +247,7 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
         const r = await restoreEncryptedBackup(cfg, {
           dataDir: WALNUT_HOME, snapshotId, targetDir, recoveryKey,
           onProgress: (doneBytes, totalBytes, doneFiles, totalFiles) => {
+            stopIfCancelled();
             if (Date.now() - last < 500 && doneFiles !== totalFiles) return;
             last = Date.now();
             setRestore({ ...status, doneBytes, totalBytes, doneFiles, totalFiles });
@@ -248,9 +260,19 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
         log.web.info('backup: restore complete', { files: r.restoredFiles, bytes: r.restoredBytes });
       }
     } catch (err) {
+      if (abort.signal.aborted) {
+        // The folder was new or empty when this restore began (checked above): all in it is
+        // this restore's, so it goes, and no half-restored data is left to be taken for whole.
+        await fs.rm(await fs.realpath(targetDir).catch(() => targetDir), { recursive: true, force: true }).catch(() => {});
+        log.web.info('backup: restore cancelled', { targetDir });
+        setRestore({ ...status, running: false, cancelled: true, finishedAt: new Date().toISOString() });
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       log.web.warn('backup: restore failed', { error: msg });
       setRestore({ ...status, running: false, error: msg, finishedAt: new Date().toISOString() });
+    } finally {
+      if (restoreAbort === abort) restoreAbort = null;
     }
   });
   job.catch((err) => {
@@ -263,6 +285,14 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   res.status(202).json({ started: true, targetDir });
 });
 
+// POST /api/backup/restore/cancel — stop the restore under way; the folder it was writing is removed.
+encryptedBackupRouter.post('/restore/cancel', (req: Request, res: Response) => {
+  if (!personOnly(req, res, 'A restore is cancelled')) return;
+  if (!restoreAbort) return void res.status(400).json({ error: 'No restore is running.' });
+  restoreAbort.abort();
+  res.json({ ok: true });
+});
+
 // POST /api/backup/restore/use — "Use this restored data": the folder of the restore
 // just finished becomes the data folder at the next start (restore-switch.ts), and
 // Walnut restarts now when it can.
@@ -270,7 +300,7 @@ encryptedBackupRouter.post('/restore/use', async (req: Request, res: Response) =
   if (!personOnly(req, res, 'Walnut switches to restored data')) return;
   const last = getBackupScheduler()?.health.restore;
   const targetDir = typeof req.body?.targetDir === 'string' ? req.body.targetDir : '';
-  if (!last || last.running || last.error || !last.finishedAt || !last.targetDir || path.resolve(targetDir) !== path.resolve(last.targetDir)) {
+  if (!last || last.running || last.error || last.cancelled || !last.finishedAt || !last.targetDir || path.resolve(targetDir) !== path.resolve(last.targetDir)) {
     return void res.status(400).json({ error: 'Only the folder of the restore that just finished can be switched in. Restore again.' });
   }
   try {
@@ -408,6 +438,8 @@ encryptedBackupRouter.get('/gdrive/status', async (_req: Request, res: Response)
     email: tokens?.email ?? null,
     folderName: tokens?.folder_name ?? null,
     connectedAt: tokens?.connected_at ?? null,
+    // Which client the sign-in used (kept with its token): the user's own one is said in the pane.
+    ...(tokens?.folder_id ? { signedInWith: builtin && tokens.client_id === builtin.clientId ? 'builtin' : 'custom', signedInClientId: tokens.client_id } : {}),
     pending: connectDone !== null,
     ...(connectDone !== null && connectAuthUrl ? { authUrl: connectAuthUrl } : {}),
   });

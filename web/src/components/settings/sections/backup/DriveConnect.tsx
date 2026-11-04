@@ -22,6 +22,9 @@ import type { BackupDestinationConfig } from './backup-model'
 interface DriveStatus {
   builtinClient: boolean
   client: 'builtin' | 'custom' | null
+  /** The client the sign-in used (from its token), when connected. */
+  signedInWith?: 'builtin' | 'custom'
+  signedInClientId?: string
   connected: boolean
   email: string | null
   folderName: string | null
@@ -151,8 +154,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
 
   if (status.connected) {
     const who = `${status.email ? ` as ${status.email}` : ''}`
-    const clientId = dest.client_id?.trim()
-    const ownClientNote = status.client === 'custom'
+    const clientId = dest.client_id?.trim() || status.signedInClientId
+    const ownClientNote = (status.signedInWith ?? status.client) === 'custom'
       ? ` Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
       : ''
     if (confirmingDisconnect) {

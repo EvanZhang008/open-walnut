@@ -156,6 +156,8 @@ export interface RestoreStatus {
   totalFiles?: number;
   finishedAt?: string;
   error?: string;
+  /** The user stopped it; the folder it was writing was removed. */
+  cancelled?: boolean;
 }
 
 /** Outcome of one backup run. */

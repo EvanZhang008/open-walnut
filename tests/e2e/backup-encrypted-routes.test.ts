@@ -189,6 +189,28 @@ describe('encrypted backups through the routes', () => {
     await until(() => !scheduler.health.running && scheduler.health.dueNow === undefined);
   }, 60_000);
 
+  it('a restore under way can be cancelled: it stops and the folder it was writing goes', async () => {
+    // Nothing to cancel: said plainly; a session may not cancel the person's restore.
+    expect((await call('POST', '/restore/cancel', {})).status).toBe(400);
+    const target = `${WALNUT_HOME}-restored-cancel`;
+    s3.setGetDelay(1500);
+    try {
+      expect((await call('POST', '/restore', { snapshotId: 'latest', targetDir: target })).status).toBe(202);
+      await until(() => scheduler.health.restore?.running === true);
+      expect((await call('POST', '/restore/cancel', {}, { 'x-walnut-caller-sid': 'session-under-test' })).status).toBe(403);
+      expect((await call('POST', '/restore/cancel', {})).body).toMatchObject({ ok: true });
+      await until(() => scheduler.health.restore?.running === false);
+    } finally {
+      s3.setGetDelay(0);
+    }
+    expect(scheduler.health.restore).toMatchObject({ cancelled: true, targetDir: target });
+    expect(scheduler.health.restore?.error).toBeUndefined();
+    expect(await fsp.stat(target).then(() => true, () => false)).toBe(false);
+    // A cancelled restore is never switched in.
+    expect((await call('POST', '/restore/use', { targetDir: target })).status).toBe(400);
+    expect((await call('POST', '/restore/dismiss', {})).status).toBe(200);
+  }, 60_000);
+
   it('masked secrets stand only for the saved service account', async () => {
     const masked = { ...r2(), secret_access_key: '••••••alue' };
     expect((await call('POST', '/destination/test', { destination: masked })).body).toMatchObject({ ok: true });
@@ -295,7 +317,8 @@ describe('encrypted backups through the routes', () => {
     await until(() => events.some((e) => e.name === 'backup:gdrive'));
     expect(events.find((e) => e.name === 'backup:gdrive')!.data).toMatchObject({ connected: true });
     const after = await call('GET', '/gdrive/status');
-    expect(after.body).toMatchObject({ connected: true, folderName: 'Walnut Backup' });
+    // Signed in with Walnut's own client: the pane says nothing about a client of the user's.
+    expect(after.body).toMatchObject({ connected: true, folderName: 'Walnut Backup', signedInWith: 'builtin' });
 
     // Same recovery key as before (this machine has one); Drive gets a new repository.
     scheduler.resetAnchor();

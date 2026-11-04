@@ -69,7 +69,7 @@ test.describe('Backup settings', () => {
     })
 
     const section = await openBackup(page)
-    await expect(section).toContainText('Everything in your data folder is backed up')
+    await expect(section).toContainText('Your whole data folder is backed up')
     // The service picker leads, R2 first; its free tier is stated in place.
     await expect(section.getByTestId('backup-service-r2')).toHaveAttribute('aria-checked', 'true')
     await expect(section).toContainText('Free up to 10 GB a month')
@@ -129,8 +129,13 @@ test.describe('Backup settings', () => {
     await expect(list.locator('label')).toHaveCount(2)
     await expect(list).toContainText('22,597 files')
     await list.locator('label').nth(1).click()
+    await section.locator('#backup-restore-target').fill('/Users/me/my-restore')
     await section.getByTestId('backup-restore-start').click()
-    await expect.poll(() => restoreBody).toMatchObject({ snapshotId: 'snap-1' })
+    await expect.poll(() => restoreBody).toMatchObject({ snapshotId: 'snap-1', targetDir: '/Users/me/my-restore' })
+    // The next restore never offers the folder the last one filled: the field starts empty again.
+    await section.getByTestId('backup-restore-open').click()
+    await expect(section.getByTestId('backup-restore-list').locator('label')).toHaveCount(2)
+    await expect(section.locator('#backup-restore-target')).toHaveValue('')
     await expect(section.getByTestId('backup-backups-group')).toContainText('On a new computer')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
@@ -293,19 +298,37 @@ test.describe('Backup settings', () => {
     const config = await holdConfigWrites(page, { enabled: false, interval_hours: 24 })
     await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true, engine: null })
     await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: null })
-    await answer(page, '**/api/backup/destination/test', { ok: true, hasBackups: true, keyMatches: false })
+    await answer(page, '**/api/backup/destination/test', { ok: true, hasBackups: true, keyMatches: false, hasKey: true })
     const section = await openBackup(page)
     await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
     await section.locator('#backup-r2-bucket').fill('old-backups')
     await section.locator('#backup-r2-access-key').fill('AK')
     await section.locator('#backup-r2-secret').fill('SK')
     await section.getByTestId('backup-test-connection').click()
-    await expect(section.getByTestId('backup-connection-row')).toContainText('another recovery key')
-    await expect(section.getByTestId('backup-test-connection')).toHaveText('Use it and enter its key')
+    await expect(section.getByTestId('backup-connection-row')).toContainText("a different key from this computer's")
+    await expect(section.getByTestId('backup-test-connection')).toHaveText('Use this folder')
     await page.waitForTimeout(500)
     expect(config.last()).toBeNull()
     await section.getByTestId('backup-test-connection').click()
     await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({ type: 'r2', bucket: 'old-backups' })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('a new computer (no key of its own) uses a folder with backups at once, then asks for the saved key', async ({ page }) => {
+    const config = await holdConfigWrites(page, { enabled: false, interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true, engine: null })
+    await answer(page, '**/api/backup/recovery-key', { key: null })
+    await answer(page, '**/api/backup/recovery-key/ensure', { key: null, needsKey: true })
+    await answer(page, '**/api/backup/destination/test', { ok: true, hasBackups: true, keyMatches: false, hasKey: false })
+    const section = await openBackup(page)
+    await section.locator('#backup-r2-account').fill('0123456789abcdef0123456789abcdef')
+    await section.locator('#backup-r2-bucket').fill('my-backups')
+    await section.locator('#backup-r2-access-key').fill('AK')
+    await section.locator('#backup-r2-secret').fill('SK')
+    await section.getByTestId('backup-test-connection').click()
+    await expect.poll(() => (config.last()?.backup as { destination?: Record<string, unknown> } | undefined)?.destination).toMatchObject({ type: 'r2', bucket: 'my-backups' })
+    await expect(section.getByTestId('backup-connection-row')).toContainText('enter the recovery key you saved for them below')
+    await expect(section.getByTestId('backup-connection-row')).not.toContainText('different key')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
@@ -314,13 +337,16 @@ test.describe('Backup settings', () => {
     const config = await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2 })
     await answer(page, '**/api/backup/status', { configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted' })
     await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
-    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'someone@example.com', folderName: 'Walnut Backup', pending: false })
+    // Signed in with the user's own client, its settings not saved anywhere yet: the pane still says so.
+    await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'someone@example.com', folderName: 'Walnut Backup', pending: false,
+      signedInWith: 'custom', signedInClientId: '1234567890-abcdefghijklmnop.apps.googleusercontent.com' })
     let disconnects = 0
     await page.route('**/api/backup/gdrive/disconnect', (route) => { disconnects++; return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' }) })
     const section = await openBackup(page)
     await section.getByTestId('backup-service-gdrive').click()
     const row = section.getByTestId('backup-gdrive-connected')
     await expect(row).toContainText('Backups still go to Cloudflare R2')
+    await expect(row).toContainText('Uses your own Google client (1234567890-a...rcontent.com)')
     await page.waitForTimeout(800)
     expect(config.last()).toBeNull()
 
@@ -414,6 +440,33 @@ test.describe('Backup settings', () => {
     await expect(row).toHaveCount(0)
     await expect(section.getByTestId('backup-restore-delete-previous-confirm')).toHaveCount(0)
     expect(deleted).toBe(1)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('a restore under way can be cancelled; the result says the folder was removed', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '\u2022\u2022\u2022\u2022\u2022\u2022mple' }
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2, recovery_key_saved_at: '2026-11-01T00:00:00Z' })
+    const targetDir = '/Users/me/open-walnut-restored-2026-11-04T10-00-00'
+    let restore: Record<string, unknown> = { running: true, targetDir, doneBytes: 3e8, totalBytes: 1.2e9, doneFiles: 900, totalFiles: 22597, source: 'Cloudflare R2' }
+    await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut', pendingSwitch: null, restore,
+    }) }))
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    let cancels = 0
+    await page.route('**/api/backup/restore/cancel', (route) => {
+      cancels++
+      restore = { running: false, targetDir, cancelled: true, finishedAt: new Date().toISOString(), source: 'Cloudflare R2' }
+      return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' })
+    })
+    const section = await openBackup(page)
+    // Decimal sizes, as the storage services count them.
+    await expect(section.getByTestId('backup-restore-progress')).toContainText('300.0 MB of 1.2 GB')
+    await section.getByTestId('backup-restore-cancel').click()
+    await expect.poll(() => cancels).toBe(1)
+    const row = section.getByTestId('backup-restore-cancelled')
+    await expect(row).toContainText('Restore cancelled')
+    await expect(row).toContainText(`${targetDir}) was removed`)
+    await expect(section.getByTestId('backup-restore-use')).toHaveCount(0)
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
