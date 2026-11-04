@@ -46,6 +46,19 @@ enum ComposerPrimaryAction: Equatable {
         return hasContent ? .send : .disabled
     }
 
+    /// Whether "Interrupt & send" sits beside the send seat: only while a turn runs, with
+    /// something ready to send, and never when the words are an answer to the agent's
+    /// question (the turn is waiting for them, not in the way), while a file is still being
+    /// read, while the voice recorder holds the field, or while a send already waits for its
+    /// words. A composer with no owner for it (the chat tab) never offers it.
+    static func offersInterruptSend(
+        canInterrupt: Bool, busy: Bool, pendingQuestion: Bool, hasContent: Bool, disabled: Bool,
+        importingFiles: Int, voiceIdle: Bool, sendWaiting: Bool
+    ) -> Bool {
+        canInterrupt && busy && !pendingQuestion && hasContent && !disabled
+            && importingFiles == 0 && voiceIdle && !sendWaiting
+    }
+
     /// Resolve against whether this composer can actually stop anything. The
     /// new-session launcher is `busy` while it creates a session, and there is
     /// no turn behind that to abort, so it keeps the greyed send it always had.

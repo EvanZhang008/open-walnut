@@ -45,8 +45,13 @@ extension DemoServer {
                 return .error(400, "bad_request", "A message needs some text or a photo.")
             }
             let messageID = r.string("messageId") ?? withState { $0.nextID("qm") }
-            sendToSession(id, text: withPhotoPaths(text, r.usableImages))
+            // "Interrupt & send": the turn in flight ends where it is, then the words go.
+            if r.bool("interrupt") == true { interruptSessionTurn(id, parkQueue: false) }
+            sendToSession(id, text: withPhotoPaths(text, r.usableImages), messageID: messageID)
             return .object(["messageId": messageID], status: 202)
+        case ("POST", "interrupt"):
+            let wasRunning = interruptSessionTurn(id, parkQueue: true)
+            return .encoded(SessionInterruptResult(status: "interrupted", sessionId: id, wasRunning: wasRunning))
         case ("POST", "permission"):
             let requestID = r.string("requestId") ?? ""
             let allow = r.bool("allow") ?? false
@@ -92,7 +97,7 @@ extension DemoServer {
         case ("GET", "queue"):
             return .encoded(SessionQueueResponse(messages: queued(id)))
         case ("DELETE", "queue"), ("PATCH", "queue"):
-            return .ok
+            return changeQueuedMessage(r, sessionID: id, messageID: s.count > 3 ? s[3] : "")
         case ("GET", "plan"):
             return .error(404, "not_found", "This session has no plan.")
         case ("GET", "side-questions"):
@@ -254,10 +259,62 @@ extension DemoServer {
 
     private func queued(_ id: String) -> [SessionQueuedMessage] {
         withState { state in
-            (state.sessionQueue[id] ?? []).enumerated().map { index, text in
-                SessionQueuedMessage(id: "q-\(id)-\(index)", message: text, status: "pending", enqueuedAt: nowISO)
+            (state.sessionQueue[id] ?? []).map {
+                SessionQueuedMessage(id: $0.id, message: $0.text, status: $0.status, enqueuedAt: $0.enqueuedAt)
             }
         }
+    }
+
+    /// Edit or withdraw one queued message, as the server does: only a message that has not
+    /// started going out can change (409 `conflict` otherwise).
+    private func changeQueuedMessage(_ r: DemoRequest, sessionID: String, messageID: String) -> DemoReply {
+        let edit = r.method == "PATCH" ? r.string("text") : nil
+        enum Outcome { case missing, started, done }
+        let outcome = withState { state -> Outcome in
+            guard var rows = state.sessionQueue[sessionID], let at = rows.firstIndex(where: { $0.id == messageID }) else {
+                return .missing
+            }
+            if r.method == "PATCH" {
+                guard rows[at].status == "pending", let edit, !edit.isEmpty else { return .started }
+                rows[at].text = edit
+            } else {
+                guard rows[at].status != "processing" else { return .started }
+                rows.remove(at: at)
+            }
+            state.sessionQueue[sessionID] = rows
+            return .done
+        }
+        switch outcome {
+        case .missing: return .error(404, "not_found", "That message is not queued.")
+        case .started: return .error(409, "conflict", "That message already started going out.")
+        case .done: return .ok
+        }
+    }
+
+    /// `POST /messages/:id/send-now`: put a queued message back in line now. With `interrupt`
+    /// the turn in flight ends first, so the message goes out in a fresh one.
+    func routeMessages(_ r: DemoRequest, _ s: [String]) -> DemoReply? {
+        guard r.method == "POST", s.count == 3, s[2] == "send-now" else { return nil }
+        let messageID = s[1]
+        let found = withState { state -> (session: String, text: String)? in
+            for (session, rows) in state.sessionQueue {
+                if let row = rows.first(where: { $0.id == messageID }) { return (session, row.text) }
+            }
+            return nil
+        }
+        guard let found else {
+            return .error(409, "not_queued", "That message is no longer queued: it went in, or was deleted.")
+        }
+        if r.bool("interrupt") == true { interruptSessionTurn(found.session, parkQueue: false) }
+        let running = withState { $0.liveTurns["s:\(found.session)"] != nil }
+        // Still running (no interrupt): the message keeps its place and goes with the turn's end.
+        if !running {
+            withState { state in
+                state.sessionQueue[found.session]?.removeAll { $0.id == messageID }
+            }
+            sendToSession(found.session, text: found.text, messageID: messageID)
+        }
+        return .object(["sent": true, "messageId": messageID, "sessionId": found.session])
     }
 
     private func listDirs(_ r: DemoRequest) -> DemoReply {

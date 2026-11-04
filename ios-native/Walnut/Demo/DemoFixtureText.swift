@@ -163,8 +163,25 @@ enum DemoFixtureText {
                     say("I added two rules, **site-down** and **api-down**, that fire after two minutes without an answer. To load them, the alert agent on this machine has to restart.", c.minutesAgo(5)),
                 ]
             ),
+            DemoSession(
+                id: "s-index", title: "Rebuild the search index",
+                taskId: "t-index", host: "", processStatus: "running",
+                model: DemoFixtures.mainModel, mode: "default",
+                startedAt: c.minutesAgo(9), lastActiveAt: c.minutesAgo(1),
+                cwd: pebble, description: "Rebuild the album search index from scratch.",
+                transcript: [
+                    user("Rebuild the search index for all albums. It is slow, so keep going until every shard is done.", c.minutesAgo(9)),
+                    tool("Bash", "Start the index rebuild",
+                         input: "command: pebble index rebuild --all\ndescription: Start the index rebuild",
+                         result: "Rebuilding 120 shards", c.minutesAgo(8)),
+                ]
+            ),
         ]
     }
+
+    /// The live region of the long-running session: a turn that keeps going until it is
+    /// stopped or steered, so Stop and "Interrupt & send" have something to act on.
+    static let indexLiveText = "Rebuilding the search index. 38 of 120 shards are done; the rest will take a few more minutes."
 
     /// The live region of the session blocked on a permission prompt, as the
     /// stream's attach snapshot carries it.

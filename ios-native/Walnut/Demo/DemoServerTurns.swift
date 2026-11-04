@@ -122,8 +122,8 @@ extension DemoServer {
     // MARK: - Coding sessions
 
     /// A message into a session: runs now, or after the turn in flight.
-    func sendToSession(_ id: String, text: String) {
-        guard beginSessionTurn(id, text: text) else { return }
+    func sendToSession(_ id: String, text: String, messageID: String? = nil) {
+        guard beginSessionTurn(id, text: text, messageID: messageID) else { return }
         // A message with photos names them in an "[Images attached]" header
         // (`withPhotoPaths`); the reply answers its words and its photos.
         let parts = Self.photoParts(text)
@@ -137,12 +137,14 @@ extension DemoServer {
 
     /// Put `text` in the transcript and mark the session running, when nothing
     /// else is in flight there. False = queued behind the turn in flight.
-    func beginSessionTurn(_ id: String, text: String) -> Bool {
+    func beginSessionTurn(_ id: String, text: String, messageID: String? = nil) -> Bool {
         let key = "s:\(id)"
         let startNow = withState { state -> Bool in
             guard let i = state.sessionIndex(id) else { return false }
             if state.liveTurns[key] != nil || state.pendingPermissions[id] != nil {
-                state.sessionQueue[id, default: []].append(text)
+                state.sessionQueue[id, default: []].append(DemoQueuedMessage(
+                    id: messageID ?? state.nextID("qm"), text: text, status: "pending", enqueuedAt: nowISO
+                ))
                 return false
             }
             state.sessions[i].transcript.append(
@@ -222,10 +224,12 @@ extension DemoServer {
                 touched.append(taskID)
             }
             touched += effects?(&state) ?? []
-            guard var queue = state.sessionQueue[id], !queue.isEmpty else { return (nil, touched) }
-            let first = queue.removeFirst()
+            // A row a Stop set aside stays where it is; the next pending one goes out.
+            guard var queue = state.sessionQueue[id],
+                  let at = queue.firstIndex(where: { $0.status == "pending" }) else { return (nil, touched) }
+            let first = queue.remove(at: at)
             state.sessionQueue[id] = queue
-            return (first, touched)
+            return (first.text, touched)
         }
         let channel = DemoStreams.Channel.session(id)
         frame(channel, "turn-end", [:], turnEnd: true)
@@ -277,6 +281,43 @@ extension DemoServer {
         return true
     }
 
+    /// A Stop: the turn in flight ends where it is. What it had written is kept, the
+    /// process stays, nothing is sent. Messages queued behind it are set aside when
+    /// `parkQueue` (a bare Stop), so they do not start a turn the person just ended; a
+    /// send that interrupts leaves them in line. False = no turn was running.
+    @discardableResult
+    func interruptSessionTurn(_ id: String, parkQueue: Bool) -> Bool {
+        let key = "s:\(id)"
+        let stopped = withState { state -> Bool in
+            guard let partial = state.liveTurns[key], let i = state.sessionIndex(id) else { return false }
+            state.liveTurns[key] = nil
+            state.heldTurns.remove(id)
+            state.pendingPermissions[id] = nil
+            if !partial.isEmpty {
+                state.sessions[i].transcript.append(
+                    SessionTranscript.Message(role: "assistant", text: partial, timestamp: nowISO, kind: nil)
+                )
+            }
+            state.sessions[i].processStatus = "idle"
+            state.sessions[i].lastActiveAt = nowISO
+            if parkQueue {
+                state.sessionQueue[id] = (state.sessionQueue[id] ?? []).map { row in
+                    var row = row
+                    if row.status == "pending" { row.status = "parked" }
+                    return row
+                }
+            }
+            return true
+        }
+        guard stopped else { return false }
+        cancelTurnToken(key)
+        let channel = DemoStreams.Channel.session(id)
+        frame(channel, "turn-end", [:], turnEnd: true)
+        frame(channel, "status", ["processStatus": "idle"])
+        publishSession(id)
+        return true
+    }
+
     /// Terminate / restart / retry: end any turn, settle the status.
     func endSessionTurn(_ id: String, status: String) {
         let key = "s:\(id)"
@@ -284,6 +325,7 @@ extension DemoServer {
         let wasLive = withState { state -> Bool in
             let live = state.liveTurns[key] != nil
             state.liveTurns[key] = nil
+            state.heldTurns.remove(id)
             state.pendingPermissions[id] = nil
             state.sessionQueue[id] = nil
             if let i = state.sessionIndex(id) {

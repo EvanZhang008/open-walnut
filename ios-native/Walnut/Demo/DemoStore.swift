@@ -134,7 +134,10 @@ struct DemoState {
     /// The turn id of each chat turn in flight, by channel key.
     var liveTurnIDs: [String: String] = [:]
     /// Messages sent to a session while its turn runs, delivered in order after.
-    var sessionQueue: [String: [String]] = [:]
+    var sessionQueue: [String: [DemoQueuedMessage]] = [:]
+    /// Sessions whose turn in flight plays no script: it runs until stopped, and an attach
+    /// snapshot carries the text it has written so far.
+    var heldTurns: Set<String> = []
     /// Photos sent into sessions, by the path the transcript names them with
     /// (`DemoServer.withPhotoPaths`); `GET /media` serves them back. The newest
     /// ten are kept.
@@ -293,4 +296,14 @@ struct DemoState {
         }
         return build(prefix: "")
     }
+}
+
+/// One message waiting in a session's queue: it has an id the page edits, withdraws or
+/// sends now by, and a status (`pending` = goes out when the turn ends, `parked` = set
+/// aside by a Stop).
+struct DemoQueuedMessage: Equatable {
+    var id: String
+    var text: String
+    var status: String
+    var enqueuedAt: String
 }

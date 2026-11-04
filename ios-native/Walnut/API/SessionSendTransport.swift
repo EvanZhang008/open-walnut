@@ -38,6 +38,12 @@ protocol SessionSendTransport {
     func sendSessionMessage(
         id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool
     ) async throws -> SessionSendReceipt
+    /// The same send that first stops the running turn ("Interrupt & send"), and the
+    /// bare stop. See `WalnutAPI.interruptSession` / `sendSessionMessage(…interrupt:)`.
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool, interrupt: Bool
+    ) async throws -> SessionSendReceipt
+    func interruptSession(id: String) async throws -> SessionInterruptResult
 }
 
 extension SessionSendTransport {
@@ -46,6 +52,19 @@ extension SessionSendTransport {
         id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool
     ) async throws -> SessionSendReceipt {
         try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId)
+    }
+}
+
+extension SessionSendTransport {
+    /// A transport with no interrupt channel sends plainly; it never claims to have stopped a turn.
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool, interrupt: Bool
+    ) async throws -> SessionSendReceipt {
+        try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId, voice: voice)
+    }
+
+    func interruptSession(id: String) async throws -> SessionInterruptResult {
+        throw APIError.badResponse
     }
 }
 

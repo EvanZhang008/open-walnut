@@ -398,7 +398,7 @@ final class DemoStoryTests: XCTestCase {
         "t-copy": ["headline"], "t-notes": ["release notes"], "t-testflight": ["testflight"],
         "t-coldstart": ["cold start"], "t-l10n": ["localize the settings"], "t-cache": ["image cache"],
         "t-pricing": ["pricing page"], "t-uptime": ["uptime", "alert"], "t-hero": ["hero image"],
-        "t-links": ["footer links", "broken links"],
+        "t-links": ["footer links", "broken links"], "t-index": ["search index", "shards"],
         "t-quotes": ["counter quotes", "quotes for the kitchen", "three quotes"],
         "t-plumber": ["plumber"], "t-car": ["car registration"], "t-meals": ["meals for the weekend"],
         "t-train": ["train tickets"], "t-pack": ["packing"], "t-dentist": ["dentist"],

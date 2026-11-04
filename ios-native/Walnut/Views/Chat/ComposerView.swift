@@ -79,6 +79,16 @@ struct ComposerBar: View {
     /// (the new-session launcher is `busy` while it CREATES a session), and the
     /// primary button keeps its greyed-send treatment.
     var onStop: (() async -> Void)? = nil
+    /// Stop was tapped and the turn has not ended yet: the Stop button shows a spinner
+    /// and ignores taps, so a second tap cannot ask twice.
+    var stopping: Bool = false
+    /// "Interrupt & send": stop the running turn and send this message now, in a fresh
+    /// one. Present = this composer offers it beside Send while a turn runs and there is
+    /// something to send. Same no-loss answer as `onSend`: true = the owner holds the words.
+    var onInterruptSend: ((String, [SelectedImage], [ComposerFile]) async -> Bool)? = nil
+    /// A view the owner puts at the top of the composer, inside its measured height (the
+    /// session page's queued messages), so the file-preview dock clears it too.
+    var topAccessory: AnyView? = nil
     var disabled: Bool = false
     var disabledNotice: String? = nil
     /// A sentence the OWNER wants in the composer's notice row (today: the send
@@ -311,6 +321,16 @@ struct ComposerBar: View {
                         busyAcceptsSend: Bool) -> Bool {
         hasContent && !disabled && (!waitingForReply || busyAcceptsSend)
     }
+    /// A turn runs, this composer is not its answer field, and there are words (or
+    /// photos, or files) ready: "Interrupt & send" means something.
+    private var showsInterruptSend: Bool {
+        ComposerPrimaryAction.offersInterruptSend(
+            canInterrupt: onInterruptSend != nil, busy: busy, pendingQuestion: pendingQuestion,
+            hasContent: hasContent, disabled: disabled, importingFiles: importingFiles,
+            voiceIdle: voice.state == .idle, sendWaiting: sendGate.isWaiting
+        )
+    }
+
     private var primaryAction: ComposerPrimaryAction {
         ComposerPrimaryAction
             .decide(busy: busy, hasContent: sendable, pendingQuestion: pendingQuestion,
@@ -436,6 +456,7 @@ struct ComposerBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let topAccessory { topAccessory }
             if disabled, let notice = disabledNotice {
                 noticeRow(notice, icon: Symbol.offlineNotice)
             }
@@ -452,6 +473,22 @@ struct ComposerBar: View {
                     self.imageNotice = nil
                 }
             }
+            // The other way to send while a turn runs: stop it first. On its own row above
+            // the card, with its whole name: the bottom row has no width to spare for a
+            // fourth control (the pills shrank to a few letters when it sat there), and
+            // only while it means something (a turn runs and there are words).
+            Group {
+                if showsInterruptSend {
+                    HStack {
+                        Spacer(minLength: 0)
+                        interruptSendButton
+                    }
+                    .padding(.horizontal, ComposerCard.sideInset + 4)
+                    .padding(.top, 4)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: showsInterruptSend)
             // Camera access denied. The same row the image notice uses:
             // the mic's "enable it in Settings" line is the precedent, and a
             // permission dead end deserves the same non-modal, dismissible shape
@@ -988,6 +1025,7 @@ struct ComposerBar: View {
         static let mic = "mic.fill"
         static let send = "arrow.up"
         static let stop = "stop.fill"
+        static let interruptSend = "bolt.fill"
         static let voiceMode = "waveform"
         /// Stop a recording that lands in the draft (vs `send`, which auto-sends).
         static let confirm = "checkmark"
@@ -1484,14 +1522,52 @@ struct ComposerBar: View {
         Button {
             Task { await onStop?() }
         } label: {
-            Image(systemName: Symbol.stop)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(Theme.danger, in: Circle())
+            ZStack {
+                if stopping {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else {
+                    Image(systemName: Symbol.stop)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 32, height: 32)
+            .background(Theme.danger, in: Circle())
         }
+        .disabled(stopping)
         .accessibilityIdentifier("chat.stop")
-        .accessibilityLabel("Stop")
+        .accessibilityLabel(stopping ? "Stopping" : "Stop")
+    }
+
+    /// "Interrupt & send": a soft tinted capsule with its whole name, 44pt to touch.
+    private var interruptSendButton: some View {
+        Button {
+            gatedInterruptSend()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: Symbol.interruptSend)
+                    .font(.system(size: 12, weight: .bold))
+                Text("Interrupt & send")
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.tint)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 34)
+            .background(Theme.tintSoft, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("session.interruptSend")
+        .accessibilityLabel("Interrupt and send")
+        .accessibilityHint("Stops the running turn and sends this message now")
+    }
+
+    private func gatedInterruptSend() {
+        sendGate.send { _ in send(interrupting: true) }
     }
 
     private var sendButton: some View {
@@ -1596,7 +1672,7 @@ struct ComposerBar: View {
 
     /// Hand the composed message to the owner, and keep the field's contents alive
     /// unless the owner says it KEPT the words.
-    private func send() {
+    private func send(interrupting: Bool = false) {
         let text = trimmed
         let images = selectedImages
         let files = selectedFiles
@@ -1608,7 +1684,12 @@ struct ComposerBar: View {
         if !files.isEmpty { fileNotice = nil }
         Task {
             let disposition: SendDisposition
-            if !files.isEmpty, let onSendFiles {
+            if interrupting, let onInterruptSend {
+                disposition = await Self.deliver(
+                    text: text, images: images, files: files, draftKey: draftKey, drafts: drafts,
+                    onSend: onInterruptSend
+                )
+            } else if !files.isEmpty, let onSendFiles {
                 disposition = await Self.deliver(
                     text: text, images: images, files: files, draftKey: draftKey, drafts: drafts,
                     onSend: onSendFiles

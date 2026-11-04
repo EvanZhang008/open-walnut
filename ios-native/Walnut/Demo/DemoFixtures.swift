@@ -54,6 +54,9 @@ enum DemoFixtures {
         // has something to show.
         state.pendingPermissions["s-uptime"] = DemoFixtureText.uptimePermission()
         state.liveTurns["s:s-uptime"] = DemoFixtureText.uptimePendingText
+        // One more turn that runs until the person stops or steers it.
+        state.liveTurns["s:s-index"] = DemoFixtureText.indexLiveText
+        state.heldTurns.insert("s-index")
         // Link each session into its task's `session_ids`, oldest first, the way
         // the server appends them.
         for session in state.sessions.sorted(by: { $0.startedAt < $1.startedAt }) {
@@ -133,6 +136,11 @@ enum DemoFixtures {
                  phase: "IN_PROGRESS", priority: "important", folder: "g-redesign",
                  created: c.daysAgo(6), updated: c.hoursAgo(3),
                  summary: "Draft is live on the preview site. Review requested."),
+            // A long job whose turn runs until the person stops or steers it (`s-index`).
+            task("t-index", "Rebuild the search index", project: "Pebble",
+                 phase: "IN_PROGRESS", priority: "none", pinned: false,
+                 created: c.hoursAgo(2), updated: c.minutesAgo(1),
+                 summary: "Rebuilding the album search index: 38 of 120 shards are done."),
             task("t-uptime", "Set up uptime alerts", project: "Acme Website",
                  phase: "IN_PROGRESS", priority: "important",
                  created: c.daysAgo(1), updated: c.minutesAgo(4),

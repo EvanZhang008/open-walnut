@@ -273,6 +273,7 @@ final class DemoServer: @unchecked Sendable {
         if s.first == "tasks" { return routeTasks(r, s) }
         if s.first == "focus" { return routeFocus(r, s) }
         if s.first == "sessions" { return routeSessions(r, s) }
+        if s.first == "messages" { return routeMessages(r, s) }
         if s.first == "notes" { return routeNotes(r, s) }
         if s.first == "human-inbox" { return routeInbox(r, s) }
         if s.first == "routines" { return routeRoutines(r, s) }
@@ -343,6 +344,13 @@ final class DemoServer: @unchecked Sendable {
                             SnapshotBlock(type: "text", content: state.liveTurns[key], name: nil, status: nil),
                             SnapshotBlock(type: "tool_call", content: nil, name: pending.toolName, status: "calling"),
                         ],
+                        isStreaming: true, completedLen: 0, processStatus: "running"
+                    )
+                }
+                // A turn that plays no script has nothing to replay: the snapshot carries its text.
+                if state.heldTurns.contains(id), let text = state.liveTurns[key] {
+                    return SessionSnapshot(
+                        blocks: [SnapshotBlock(type: "text", content: text, name: nil, status: nil)],
                         isStreaming: true, completedLen: 0, processStatus: "running"
                     )
                 }

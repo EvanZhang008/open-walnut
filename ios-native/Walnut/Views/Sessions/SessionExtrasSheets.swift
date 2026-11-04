@@ -2,39 +2,32 @@ import SwiftUI
 
 // MARK: - Queued messages (Wave 2 /v1/sessions/:id/queue)
 
-/// Messages you sent that haven't reached the CLI yet — view and withdraw.
-/// Pending rows can be deleted; a processing row is already being delivered.
+/// Messages you sent that haven't reached the CLI yet: the full list behind the strip
+/// above the composer. Tap one to edit it, send it now or withdraw it; swipe to withdraw.
+/// A message being delivered can be neither changed nor withdrawn.
 struct SessionQueueSheet: View {
-    let sessionId: String
+    let queue: SessionQueueModel
+    /// A turn runs: the rows wait for its end.
+    let turnRunning: Bool
 
     @Environment(\.dismiss) private var dismiss
-    private let api = WalnutAPI()
-
-    @State private var messages: [SessionQueuedMessage] = []
-    @State private var loaded = false
-    @State private var loadError: String?
-    @State private var actionError: String?
-    @State private var busyIds = Set<String>()
+    @State private var managing: QueueRowRef?
 
     var body: some View {
         NavigationStack {
             List {
-                if let actionError {
+                if let notice = queue.notice {
                     Section {
-                        Label(actionError, systemImage: "exclamationmark.triangle.fill")
+                        Label(notice, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundStyle(Theme.danger)
                     }
                 }
-                if !loaded {
+                if !queue.loaded {
                     Section {
                         HStack { ProgressView(); Text("Loading queue…").foregroundStyle(.secondary) }
                     }
-                } else if let loadError {
-                    Section {
-                        retryBlock(loadError) { Task { await load() } }
-                    }
-                } else if messages.isEmpty {
+                } else if queue.rows.isEmpty {
                     Section {
                         Text("No queued messages. Everything you sent has been delivered.")
                             .foregroundStyle(.secondary)
@@ -43,11 +36,13 @@ struct SessionQueueSheet: View {
                     }
                 } else {
                     Section {
-                        ForEach(messages) { message in
+                        ForEach(queue.rows) { message in
                             queueRow(message)
                         }
                     } footer: {
-                        Text("Pending messages deliver when the session finishes its current turn. Swipe to withdraw one before it's delivered.")
+                        Text(turnRunning
+                             ? "Pending messages go out when the session finishes its current turn. Tap one to edit it or send it now; swipe to withdraw."
+                             : "Pending messages are about to go out. Tap one to edit it or send it now; swipe to withdraw.")
                     }
                 }
             }
@@ -58,74 +53,52 @@ struct SessionQueueSheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
             .accessibilityIdentifier("session.queue.list")
-            .refreshable { await load() }
-            .task { await load() }
+            .refreshable { await queue.refresh() }
+            .task { await queue.refresh() }
+            .sheet(item: $managing) { ref in
+                SessionQueuedMessageSheet(queue: queue, rowID: ref.id, turnRunning: turnRunning)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
         }
     }
 
     @ViewBuilder
     private func queueRow(_ message: SessionQueuedMessage) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(message.message)
-                .font(.subheadline)
-                .lineLimit(4)
-            HStack(spacing: 6) {
-                Text(message.isPending ? "Pending" : "Delivering…")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(message.isPending ? Theme.warning : Theme.success)
-                if let when = message.enqueuedDate {
-                    Text(AppClock.relativeNamed(when))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+        Button {
+            managing = QueueRowRef(id: message.id)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message.message)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                HStack(spacing: 6) {
+                    Text(message.statusNote ?? "Waiting")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(message.status == "processing" ? Theme.success : Theme.warning)
+                    if let when = message.enqueuedDate {
+                        Text(AppClock.relativeNamed(when))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if queue.busyIds.contains(message.id) { ProgressView().controlSize(.small) }
                 }
-                if busyIds.contains(message.id) { ProgressView().controlSize(.small) }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("session.queue.row.\(message.id)")
         .swipeActions(edge: .trailing) {
-            if message.isPending {
+            if message.canWithdraw {
                 Button(role: .destructive) {
-                    Task { await remove(message) }
+                    Task { await queue.withdraw(message) }
                 } label: {
                     Label("Withdraw", systemImage: "trash")
                 }
             }
-        }
-    }
-
-    private func load() async {
-        do {
-            messages = try await api.sessionQueue(id: sessionId)
-            loadError = nil
-        } catch let error as APIError where error.isCancelled {
-            return
-        } catch {
-            loadError = SessionControlsSheet.friendlyControlError(error)
-        }
-        loaded = true
-    }
-
-    /// Optimistic removal + rollback. A 409 means it already started
-    /// delivering — refresh instead of restoring (server truth).
-    private func remove(_ message: SessionQueuedMessage) async {
-        guard !busyIds.contains(message.id) else { return }
-        busyIds.insert(message.id)
-        actionError = nil
-        let original = messages
-        messages.removeAll { $0.id == message.id }
-        defer { busyIds.remove(message.id) }
-        do {
-            try await api.deleteQueuedMessage(sessionId: sessionId, messageId: message.id)
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            AppLog.info("session", "queued message withdrawn", [
-                "sessionId": sessionId, "messageId": message.id,
-            ])
-        } catch let error as APIError where error.isConflict {
-            actionError = "That message already started delivering."
-            await load()
-        } catch {
-            messages = original
-            actionError = SessionControlsSheet.friendlyControlError(error)
         }
     }
 }

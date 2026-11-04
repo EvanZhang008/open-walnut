@@ -28,6 +28,9 @@ struct SessionTimelineBody: View {
     var keyboardGeometryFrozen: () -> Bool = { false }
     /// Pull-to-refresh (SwiftUI .refreshable can't reach the hosted list).
     var onRefresh: (() async -> Void)? = nil
+    /// The messages waiting in the session's queue: a bubble that is one of them wears the
+    /// same "Queued" badge and Withdraw the chat tab's banked messages wear.
+    var queue: SessionQueueModel? = nil
 
     @State private var previewTarget: FilePreviewTarget?
     /// Non-HTML file taps: the text viewer, anchored to the referenced line.
@@ -40,6 +43,18 @@ struct SessionTimelineBody: View {
     /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
     /// reference opens, so a task reads the same wherever it was cited.
     @State private var openedTask: InboxTaskDestination?
+
+    /// Which bubbles are still waiting in the queue (`pending`), and which are being delivered.
+    private var queuedStates: [String: QueuedSend.Status] {
+        guard let queue, queue.hasRows else { return [:] }
+        var states: [String: QueuedSend.Status] = [:]
+        for message in store.messages {
+            guard let id = message.clientMessageId,
+                  let row = queue.rows.first(where: { $0.id == id }) else { continue }
+            states[message.id] = row.status == "processing" ? .processing : .pending
+        }
+        return states
+    }
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29) — same fix as
@@ -63,6 +78,7 @@ struct SessionTimelineBody: View {
                 // folds into one line, and the conversation above it is one tap away.
                 showLoadEarlier: store.showsLoadEarlier,
                 loadEarlierState: store.loadEarlierState,
+                queuedMessageStates: queuedStates,
                 afterLiveMessageIDs: store.afterLiveMessageIDs,
                 // The server's "always show what Walnut added"; off, each bubble's
                 // long-press item shows it for that message (TimelineTurnFold).
@@ -81,6 +97,13 @@ struct SessionTimelineBody: View {
                     case .discard(let messageID):
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
+                        }
+                    case .withdrawQueued(let messageID):
+                        if let queue,
+                           let message = store.messages.first(where: { $0.id == messageID }),
+                           let row = queue.rows.first(where: { $0.id == message.clientMessageId }),
+                           row.canWithdraw {
+                            Task { await queue.withdraw(row) }
                         }
                     case .loadEarlier:
                         Task { await store.loadEarlier() }

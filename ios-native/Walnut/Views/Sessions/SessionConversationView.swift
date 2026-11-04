@@ -36,6 +36,9 @@ struct SessionConversationView: View {
     /// rename / archive) — separate from the conversation store on purpose:
     /// zero writes into the timeline rendering path.
     @State private var lifecycle: SessionLifecycleController
+    /// The messages sent to this session that have not reached its CLI (above the composer).
+    @State private var queue: SessionQueueModel
+    @State private var managingQueueRow: QueueRowRef?
     @State private var showInfo = false
     @State private var showControls = false
     /// Full task detail for the linked task — every task capability in place.
@@ -80,6 +83,15 @@ struct SessionConversationView: View {
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
+        _queue = State(initialValue: Self.makeQueue(sessionId: session.id, store: store))
+    }
+
+    /// The queue, wired to the page's store: a withdrawn or edited row changes its bubble too.
+    private static func makeQueue(sessionId: String, store: SessionConversationStore) -> SessionQueueModel {
+        let queue = SessionQueueModel(sessionId: sessionId)
+        queue.onWithdrawn = { [weak store] id in store?.queuedMessageWithdrawn(id) }
+        queue.onEdited = { [weak store] id, text in store?.queuedMessageEdited(id, text: text) }
+        return queue
     }
 
     /// WalnutTests seam: host the REAL page around a pre-seeded store (event-
@@ -91,6 +103,7 @@ struct SessionConversationView: View {
         _store = State(initialValue: store)
         _pageOperations = State(initialValue: SessionPageOperations(store: store))
         _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
+        _queue = State(initialValue: Self.makeQueue(sessionId: session.id, store: store))
     }
 
     var body: some View {
@@ -250,7 +263,12 @@ struct SessionConversationView: View {
         }
         // Wave-2 extras: queue / plan / side questions / files.
         .sheet(isPresented: $showQueue) {
-            SessionQueueSheet(sessionId: session.id)
+            SessionQueueSheet(queue: queue, turnRunning: store.streaming)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $managingQueueRow) { ref in
+            SessionQueuedMessageSheet(queue: queue, rowID: ref.id, turnRunning: store.streaming)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -315,6 +333,7 @@ struct SessionConversationView: View {
             // stream gives none (a companion stream attaches without one).
             lifecycle.statusSink = store
             lifecycle.start()
+            queue.start { [store] in store.streaming }
             if voiceModeOnOpen == .awaitingAnswer, !voiceModeOnOpenDone {
                 voiceModeOnOpenDone = true
                 startVoiceMode(awaitingAnswer: true)
@@ -332,15 +351,36 @@ struct SessionConversationView: View {
             programmaticFreezeTask?.cancel()
             programmaticGeometryFrozen = false
             lifecycle.stop()
+            queue.stop()
             stopVoiceMode()
         }
+        // The queue is read again at the moments it changes: a turn starts or ends (the
+        // queue drains at its end), and the server accepts a message (it may be waiting).
+        .onChange(of: store.streaming) { _, _ in Task { await queue.refresh() } }
+        .onChange(of: store.acceptedSends) { _, _ in Task { await queue.refresh() } }
     }
 
     private var composer: some View {
         ComposerBar(
             placeholder: "Message this session",
+            // A turn runs: the primary button is Stop while the field is empty and Send once
+            // there are words (a send mid-turn joins the turn or waits behind it, and shows in
+            // the queue above); "Interrupt & send" stops the turn first.
+            busy: store.streaming,
+            onStop: { await store.stopTurn() },
+            stopping: store.stopRequestedAt != nil,
+            onInterruptSend: { text, images, files in
+                await store.sendFromComposer(text, images: images, files: files, interrupt: true)
+            },
+            topAccessory: AnyView(
+                SessionQueueStrip(
+                    queue: queue, turnRunning: store.streaming,
+                    onOpen: { managingQueueRow = $0 }, onShowAll: { showQueue = true }
+                )
+            ),
             disabled: !store.canSend,
             disabledNotice: store.composerNotice,
+            busyAcceptsSend: true,
             draftKey: "session:\(session.id)",
             // The SCREEN this composer is on, for the file-preview dock's
             // clearance. Paired with the `.composerSurface(...)` claim below: the
@@ -612,7 +652,8 @@ struct SessionConversationView: View {
             showMessageAbout: linkedTask?.orgRole == "main" || linkedTask?.orgRole == "lead",
             repinSignal: repinSignal,
             keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
-            onRefresh: { await pageOperations.refresh() }
+            onRefresh: { await pageOperations.refresh() },
+            queue: queue
         )
         .modifier(KeyboardBottomRepin(
             keyboardGeometryFrozen: $keyboardGeometryFrozen,

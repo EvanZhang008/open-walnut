@@ -79,6 +79,10 @@ final class SessionConversationStore {
     @ObservationIgnored private var retryTasks: [String: Task<Void, Never>] = [:]
     /// Bubbles that were spoken in voice mode: their sends carry `voice: true`.
     @ObservationIgnored private var voiceBubbleIDs: Set<String> = []
+    /// Bubbles sent with "Interrupt & send": every attempt of one carries `interrupt: true`.
+    /// The server stops the turn only on the FIRST arrival of the bubble's id, so a retry
+    /// after a lost answer cannot cut off the turn its own first send started.
+    @ObservationIgnored private var interruptBubbleIDs: Set<String> = []
     /// When each file send's progress was last written to its kept copy.
     @ObservationIgnored private var heldSavedAt: [String: Date] = [:]
     private var isActive = true
@@ -126,6 +130,15 @@ final class SessionConversationStore {
 
     /// Live turn accumulation (mirrors ChatStore.streamText / .activity).
     var streaming = false
+    /// When the person tapped Stop on the turn that still runs: the Stop button shows
+    /// "stopping" until the turn ends or `stopWait` passes. Cleared by the turn's end.
+    private(set) var stopRequestedAt: Date?
+    /// Bumps each time the server accepts a message of this page. The queue strip reads the
+    /// queue again then: a message sent mid-turn is waiting in it.
+    private(set) var acceptedSends = 0
+    @ObservationIgnored private var stopResetTask: Task<Void, Never>?
+    /// How long Stop shows "stopping" before it offers itself again.
+    nonisolated(unsafe) static var stopWait: TimeInterval = 10
     /// Bounded at ~LiveMarkdownWindow.liveTextCap Characters (see
     /// flushPendingDelta / seedFromSnapshot): the render window fix bounded
     /// per-tick RENDER cost, but retaining the whole in-flight reply here kept
@@ -174,7 +187,7 @@ final class SessionConversationStore {
     /// already coalesced (8Hz flush); these two flags were the leak.
     private func setStreaming(_ value: Bool) {
         if value, !streaming, !seeding { markTurnStart() }
-        if !value { turnMark = nil }
+        if !value { turnMark = nil; clearStopRequest() }
         if streaming != value { streaming = value }
     }
 
@@ -1209,7 +1222,7 @@ final class SessionConversationStore {
     /// to retry under the same id when the page is back.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = [], files: [ComposerFile] = [],
-              voice: Bool = false) async -> Bool {
+              voice: Bool = false, interrupt: Bool = false) async -> Bool {
         guard canSend else { return false }
         errorMessage = nil
         let jpegDatas = images.map(\.jpegData)
@@ -1223,6 +1236,7 @@ final class SessionConversationStore {
         // Spoken (voice mode): every attempt of this bubble, retries included,
         // goes out with `voice: true`.
         if voice { voiceBubbleIDs.insert(optimistic.id) }
+        if interrupt { interruptBubbleIDs.insert(optimistic.id) }
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -1356,9 +1370,10 @@ final class SessionConversationStore {
             let wireText = try await textWithUploadedFiles(bubbleID: bubbleID, text: text)
             let receipt = try await api.sendSessionMessage(
                 id: sessionId, text: wireText, images: payloads, messageId: messageId,
-                voice: voiceBubbleIDs.contains(bubbleID)
+                voice: voiceBubbleIDs.contains(bubbleID), interrupt: interruptBubbleIDs.contains(bubbleID)
             )
             voiceBubbleIDs.remove(bubbleID)
+            interruptBubbleIDs.remove(bubbleID)
             // Accepted: the server holds the message under this bubble's id, so
             // what follows is written whatever the page is doing: on screen, in the
             // background, closed, or this attempt's task cancelled (a manual retry
@@ -1454,6 +1469,7 @@ final class SessionConversationStore {
     /// of its files and its kept copy go (the host and the server hold them now),
     /// and its row takes its place once the transcript has it.
     private func markAccepted(_ bubbleID: String) {
+        acceptedSends &+= 1
         if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
             pendingUser[idx].pending = false
             pendingUser[idx].failed = false
@@ -1681,6 +1697,7 @@ final class SessionConversationStore {
         retryTasks[message.id]?.cancel()
         retryTasks[message.id] = nil
         voiceBubbleIDs.remove(message.id)
+        interruptBubbleIDs.remove(message.id)
         if let files = pendingUser.first(where: { $0.id == message.id })?.localFiles {
             for file in files { forgetUpload(file) }
         }
@@ -1900,6 +1917,7 @@ final class SessionConversationStore {
             awaitingFirstTurn = false
             if sentRuns.hasUnsettled { sentRuns.settle() }
             streaming = false
+            clearStopRequest()
             activity = nil
             errorMessage = p?.message ?? "The session turn failed."
         case "bridge-offline":
@@ -2298,6 +2316,7 @@ final class SessionConversationStore {
         deltaFlushTask = nil
         let wasPinned = bottomPinned
         streaming = false
+        clearStopRequest()
         activity = nil
         // Clip to the rich read's row limit (clipProvisional: 16K prose, 48K
         // markup): the refetch below replaces this row with the canonical
@@ -2523,9 +2542,77 @@ extension SessionConversationStore {
     /// same words back with "That message was not sent", the retry delivered the
     /// bubble, and a second tap would have sent the message again under a new id
     /// (send-once r2, seen on the simulator in SendOnceUITests).
-    func sendFromComposer(_ text: String, images: [SelectedImage] = [], files: [ComposerFile] = []) async -> Bool {
+    func sendFromComposer(
+        _ text: String, images: [SelectedImage] = [], files: [ComposerFile] = [], interrupt: Bool = false
+    ) async -> Bool {
         let before = Set(pendingUser.map(\.id))
-        if await send(text, images: images, files: files) { return true }
+        if await send(text, images: images, files: files, interrupt: interrupt) { return true }
         return pendingUser.contains { !before.contains($0.id) && $0.text == text }
+    }
+
+    // MARK: - Queued messages
+
+    /// A queued message was withdrawn on the queue page: its bubble goes with it, or it
+    /// would sit on the page for good (no transcript row will ever absorb it).
+    func queuedMessageWithdrawn(_ messageId: String) {
+        guard let bubble = pendingUser.first(where: { $0.clientMessageId == messageId }) else { return }
+        discardFailed(bubble)
+    }
+
+    /// A queued message was edited: its bubble shows the new words, and the transcript row
+    /// the server writes will carry them, which is what absorbs the bubble.
+    func queuedMessageEdited(_ messageId: String, text: String) {
+        guard let idx = pendingUser.firstIndex(where: { $0.clientMessageId == messageId }),
+              pendingUser[idx].text != text else { return }
+        pendingUser[idx].text = text
+    }
+
+    // MARK: - Stop and Interrupt & send
+
+    /// The composer's Stop: ends the running turn and nothing else. The process, the
+    /// session and what is queued stay (a terminate kills the process; this does not).
+    /// The page learns the turn ended from the stream like any turn end, so this only
+    /// marks the request (Stop shows "stopping") and reports a failure.
+    func stopTurn() async {
+        guard streaming, stopRequestedAt == nil else { return }
+        stopRequestedAt = Date()
+        stopResetTask?.cancel()
+        stopResetTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.stopWait))
+            guard !Task.isCancelled else { return }
+            self?.stopRequestedAt = nil
+        }
+        do {
+            let result = try await api.interruptSession(id: sessionId)
+            AppLog.info("session", "turn stopped", [
+                "sessionId": sessionId, "wasRunning": String(result.wasRunning),
+            ])
+            // The server says nothing ran: this page was out of date (a turn end it
+            // never heard). Read the transcript so the page settles.
+            if !result.wasRunning { _ = await open() }
+        } catch {
+            clearStopRequest()
+            guard !Self.isCancellation(error) else { return }
+            errorMessage = Self.stopFailureText(error)
+        }
+    }
+
+    /// A stop failed: the sentence says what to do, never a status code.
+    static func stopFailureText(_ error: Error) -> String {
+        guard let apiError = error as? APIError else { return error.localizedDescription }
+        switch apiError.code {
+        case "bridge_offline": return "Can't reach your Mac to stop it. Try again in a moment."
+        case "not_found": return "This session no longer exists on the server."
+        case "session_control_needs_upgrade":
+            return "Your Mac needs a Walnut update before this phone can stop a turn."
+        default: return apiError.localizedDescription
+        }
+    }
+
+    /// Forget a Stop request: the turn ended (or the request failed).
+    func clearStopRequest() {
+        stopResetTask?.cancel()
+        stopResetTask = nil
+        if stopRequestedAt != nil { stopRequestedAt = nil }
     }
 }

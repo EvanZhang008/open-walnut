@@ -86,6 +86,36 @@ final class MockSessionSendTransport: SessionSendTransport, @unchecked Sendable 
         return try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId)
     }
 
+    /// The interrupt flag of every attempt, in order ("Interrupt & send").
+    private(set) var interruptFlags: [Bool] = []
+
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload], messageId: String?, voice: Bool, interrupt: Bool
+    ) async throws -> SessionSendReceipt {
+        lock.lock()
+        interruptFlags.append(interrupt)
+        lock.unlock()
+        return try await sendSessionMessage(id: id, text: text, images: images, messageId: messageId, voice: voice)
+    }
+
+    /// Every bare Stop, by session id, and how the next one is answered.
+    private(set) var interruptCalls: [String] = []
+    var interruptResult = SessionInterruptResult(status: "interrupted", sessionId: "mock", wasRunning: true)
+    var interruptError: Error?
+    var interruptGate: CheckedContinuationGate?
+
+    func interruptSession(id: String) async throws -> SessionInterruptResult {
+        lock.lock()
+        interruptCalls.append(id)
+        let result = interruptResult
+        let error = interruptError
+        let gate = interruptGate
+        lock.unlock()
+        if let gate { await gate.wait() }
+        if let error { throw error }
+        return result
+    }
+
     func sessionTranscript(id: String, fresh: Bool, rich: Bool) async throws -> SessionTranscript {
         lock.lock()
         reads.append(TranscriptRead(fresh: fresh, rich: rich))

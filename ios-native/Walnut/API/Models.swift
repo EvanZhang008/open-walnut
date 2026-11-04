@@ -113,7 +113,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     let id: String
     let role: String // "user" | "assistant"
-    let text: String
+    /// `var` for one reason: a queued message the person edited keeps its bubble, with the new words.
+    var text: String
     let createdAt: String
     let kind: Kind?
     /// Notification provenance ("session-error", "cron", …) — drives card styling.

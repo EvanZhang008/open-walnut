@@ -1,0 +1,204 @@
+import Foundation
+
+/// The messages a person sent a session that have not reached its CLI yet, for the
+/// session page: listed above the composer, edited, sent now, or withdrawn.
+///
+/// Separate from `SessionConversationStore` on purpose, like the lifecycle controller:
+/// it writes nothing into the timeline's rendering state. The two meet at two seams
+/// only (`onWithdrawn`, `onEdited`), which keep the message's bubble in step with the
+/// row: a withdrawn row's bubble would otherwise sit on the page for good, and an
+/// edited row's transcript line would never match its old bubble.
+///
+/// The server has no queue event on the session stream, so this reads `GET /queue`:
+/// on the page opening, after a send is accepted, when a turn starts or ends, and on a
+/// clock whose pace follows how likely the answer is to change (`pollInterval`).
+@Observable
+@MainActor
+final class SessionQueueModel {
+    private let api: SessionQueueTransport
+    let sessionId: String
+
+    private(set) var rows: [SessionQueuedMessage] = []
+    private(set) var loaded = false
+    private(set) var busyIds: Set<String> = []
+    /// One line the page shows under the list: why an action did not go through.
+    var notice: String?
+
+    /// The queue row with this id was withdrawn (server confirmed).
+    @ObservationIgnored var onWithdrawn: ((String) -> Void)?
+    /// The queue row with this id now holds these words (server confirmed).
+    @ObservationIgnored var onEdited: ((String, String) -> Void)?
+
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var failures = 0
+    /// Bumps per accepted write so a slower GET that started before it cannot put the
+    /// old list back over it.
+    @ObservationIgnored private var generation = 0
+
+    init(sessionId: String, api: SessionQueueTransport = WalnutAPI()) {
+        self.sessionId = sessionId
+        self.api = api
+    }
+
+    var hasRows: Bool { !rows.isEmpty }
+
+    // MARK: - Reading
+
+    /// The pace of the read clock, nil = do not poll. Fast while there is something to
+    /// watch (a turn runs, or rows wait), slow when idle (a message from another surface
+    /// still shows up), and backed off while the server does not answer.
+    static func pollInterval(turnRunning: Bool, hasRows: Bool, failures: Int) -> TimeInterval {
+        let base: TimeInterval
+        switch (turnRunning, hasRows) {
+        case (true, true): base = 3
+        case (false, true): base = 5
+        case (true, false): base = 6
+        case (false, false): base = 15
+        }
+        return min(base * pow(2, Double(min(failures, 4))), 60)
+    }
+
+    func refresh() async {
+        let started = generation
+        do {
+            let next = try await api.sessionQueue(id: sessionId)
+            guard started == generation else { return }
+            failures = 0
+            if next != rows { rows = next }
+            loaded = true
+        } catch {
+            if let e = error as? APIError, e.isCancelled { return }
+            failures += 1
+            // A list that cannot be read keeps what it last showed: an empty strip is a claim.
+            loaded = true
+        }
+    }
+
+    /// Read now and keep reading while the page is up. `turnRunning` is asked each lap.
+    func start(turnRunning: @escaping @MainActor () -> Bool) {
+        stop()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refresh()
+                let wait = Self.pollInterval(turnRunning: turnRunning(), hasRows: self.hasRows, failures: self.failures)
+                try? await Task.sleep(for: .seconds(wait))
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    // MARK: - Writing
+
+    /// Optimistic removal with a rollback. A 409 means the message already started
+    /// delivering: the server's list is the truth, so read it again instead of restoring.
+    func withdraw(_ row: SessionQueuedMessage) async {
+        guard !busyIds.contains(row.id) else { return }
+        busyIds.insert(row.id)
+        notice = nil
+        generation += 1
+        let original = rows
+        rows.removeAll { $0.id == row.id }
+        defer { busyIds.remove(row.id) }
+        do {
+            try await api.deleteQueuedMessage(sessionId: sessionId, messageId: row.id)
+            onWithdrawn?(row.id)
+            AppLog.info("session", "queued message withdrawn", ["sessionId": sessionId, "messageId": row.id])
+        } catch let error as APIError where error.isConflict {
+            notice = "That message already started delivering."
+            await refresh()
+        } catch {
+            rows = original
+            notice = SessionConversationStore.queueFailureText(error)
+        }
+    }
+
+    /// Save new words for a pending row. True = the server holds them now.
+    func edit(_ row: SessionQueuedMessage, to text: String) async -> Bool {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty, !busyIds.contains(row.id) else { return false }
+        busyIds.insert(row.id)
+        notice = nil
+        generation += 1
+        defer { busyIds.remove(row.id) }
+        do {
+            try await api.editQueuedMessage(sessionId: sessionId, messageId: row.id, text: words)
+            if let index = rows.firstIndex(where: { $0.id == row.id }) {
+                rows[index] = SessionQueuedMessage(
+                    id: row.id, message: words, status: row.status, enqueuedAt: row.enqueuedAt
+                )
+            }
+            onEdited?(row.id, words)
+            return true
+        } catch let error as APIError where error.isConflict {
+            notice = "That message already started delivering."
+            await refresh()
+            return false
+        } catch {
+            notice = SessionConversationStore.queueFailureText(error)
+            return false
+        }
+    }
+
+    /// Send a queued message now. While a turn runs this stops it first (`interrupt`),
+    /// so the row goes out in a fresh turn; the list is read again after.
+    func sendNow(_ row: SessionQueuedMessage, interrupt: Bool) async -> Bool {
+        guard !busyIds.contains(row.id) else { return false }
+        busyIds.insert(row.id)
+        notice = nil
+        generation += 1
+        defer { busyIds.remove(row.id) }
+        do {
+            try await api.sendQueuedNow(messageId: row.id, interrupt: interrupt)
+            AppLog.info("session", "queued message sent now", [
+                "sessionId": sessionId, "messageId": row.id, "interrupt": String(interrupt),
+            ])
+            await refresh()
+            return true
+        } catch let error as APIError where error.isConflict || error.code == "not_queued" {
+            // The send-now route names a gone row `not_queued`; the queue routes say `conflict`.
+            notice = "That message is no longer waiting."
+            await refresh()
+            return false
+        } catch {
+            notice = SessionConversationStore.queueFailureText(error)
+            return false
+        }
+    }
+}
+
+extension SessionConversationStore {
+    /// A queue write failed: the sentence says what to do, never a status code.
+    static func queueFailureText(_ error: Error) -> String {
+        guard let apiError = error as? APIError else { return error.localizedDescription }
+        switch apiError.code {
+        case "bridge_offline": return "Can't reach your Mac right now. Try again in a moment."
+        case "not_found": return "This session no longer exists on the server."
+        case "not_supported_cloud": return "Send now needs your Mac online."
+        default: return SessionControlsSheet.friendlyControlError(error)
+        }
+    }
+}
+
+extension SessionQueuedMessage {
+    /// What the row says about itself when it is not simply waiting for the turn to end.
+    var statusNote: String? {
+        switch status {
+        case "processing": return "Delivering…"
+        case "parked": return "Set aside"
+        case "held": return "Waiting for your Mac"
+        default: return nil
+        }
+    }
+
+    /// Only a pending row can be edited; a pending or set-aside one can be withdrawn or sent
+    /// now (a person's Send now puts a set-aside row back in line). A row being delivered or
+    /// held on the companion can be none of them (the server answers 409).
+    var canEdit: Bool { status == "pending" }
+    var canWithdraw: Bool { status == "pending" || status == "parked" }
+    var canSendNow: Bool { status == "pending" || status == "parked" }
+}
