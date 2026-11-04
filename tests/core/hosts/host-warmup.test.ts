@@ -375,6 +375,25 @@ describe('HostWarmup', () => {
     } finally { slow.stop(); }
   });
 
+  // 2026-11-03: a machine removed from the host network left its reconnect loop dialling
+  // the old machine; one that joined under the same name was never dialled.
+  it('a dial of another machine under the name is not this host\'s: the host is dialled', async () => {
+    const connect = vi.fn(async () => {});
+    const seen: Array<[string, unknown]> = [];
+    const now = { hostname: 'devbox-clean.walnut-net.invalid', via: 'net' as const, endpoint: 'e52b' };
+    warmup = new HostWarmup({
+      startupDelayMs: 1, paceMs: 1, resweepIntervalMs: 0, log: silent,
+      listHosts: async () => [host('devbox-clean', { sshTarget: now })],
+      connect, isConnected: () => false,
+      // The pooled loop dials endpoint 60d5: in flight, but for another machine.
+      isConnecting: (key, target) => { seen.push([key, target]); return (target as { endpoint?: string } | undefined)?.endpoint === '60d5'; },
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(seen[0]).toEqual(['devbox-clean', now]);
+    expect(connect.mock.calls.map((c) => c[0])).toEqual(['devbox-clean']);
+  });
+
   it('a connect that resolves without a live connection is a failure, not done', async () => {
     warmup = new HostWarmup({
       startupDelayMs: 1, paceMs: 1, resweepIntervalMs: 0, log: silent,

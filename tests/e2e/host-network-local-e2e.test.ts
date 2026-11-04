@@ -18,7 +18,10 @@
  *     was (the Mac still reaches it);
  *  5. a restart of the machine keeps the port it listens on, so with no relay the Mac
  *     reaches it again;
- *  6. Remove turns the machine's network off and drops it from this Mac's list.
+ *  6. Remove turns the machine's network off and drops it from this Mac's list, and its
+ *     connection with it;
+ *  7. the machine joins again under its name, nothing reads as dialling it, and the Mac
+ *     reaches it.
  *
  * Needs walnut-net (WALNUT_NET_TEST_BIN, else dist/daemon-binaries/walnut-net-<platform>-<arch>)
  * and bun; skipped without them. WALNUT_NET_E2E_RELAY=public runs it live on iroh's public
@@ -48,6 +51,8 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { decodeTicket, encodeTicket, ticketCommand } from '../../src/core/net/join-ticket.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { peekDaemonConnection } from '../../src/providers/daemon-connection.js'
+import { CONNECT_IN_FLIGHT_PHASES } from '../../src/core/sessions/host-connect-hint.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const NET_BIN = (() => {
@@ -167,6 +172,8 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
     const bin = path.join(base, 'host', 'bin')
     await fsp.mkdir(bin, { recursive: true })
     await fsp.writeFile(path.join(bin, 'walnut'), `#!/bin/sh\nexec ${JSON.stringify(BUN)} ${JSON.stringify(path.join(REPO, 'src/cli.ts'))} "$@"\n`, { mode: 0o755 })
+    // The join ends by naming the coding agents here (`claude --version`): this one, not the real CLI.
+    await fsp.writeFile(path.join(bin, 'claude'), '#!/bin/sh\necho "2.1.999 (Claude Code)"\n', { mode: 0o755 })
     hostEnv = {
       ...process.env, HOME: host.home, WALNUT_HOME_OVERRIDE: host.home, SHELL: '/bin/sh',
       WALNUT_DAEMON_DIR: host.daemonDir, WALNUT_STREAMS_DIR: path.join(base, 'host', 'streams'),
@@ -303,5 +310,27 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
     expect(cfg).not.toContain(machineId)
     const o = await (await api('/api/hosts/net')).json() as { machines: Array<{ host: string }> }
     expect(o.machines.map((m) => m.host)).not.toContain(machine)
+    // No reconnect loop is left dialling a machine that is out (2026-11-03: it ran on,
+    // read as a dial in flight, and the machine that joined again was never dialled).
+    expect(peekDaemonConnection(machine)).toBeNull()
   }, 120_000)
+
+  it('the machine joins again under its name, nothing reads as dialling it, and the Mac reaches it', async () => {
+    const made = await api('/api/hosts/net/invites', { method: 'POST', body: '{}' })
+    const invite = await made.json() as { id: string; link: string }
+    expect(made.status, JSON.stringify(invite)).toBe(201)
+    const again = RELAY === 'public' ? encodeTicket({ ...decodeTicket(invite.link)!, addrs: [] }) : invite.link
+    const r = await runJoin(again)
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`done: this machine is "${machine}"`)
+    const row = await waitFor(async () => {
+      const s = await (await api('/api/hosts/status')).json() as { hosts?: Array<{ host: string; phase?: string; connected: boolean }> }
+      return s.hosts?.find((x) => x.host === machine)
+    }, 30_000, 'the machine listed again')
+    // What the warmup asks before it dials: no dial of the old machine stands in the way.
+    expect(row.connected).toBe(false)
+    expect(CONNECT_IN_FLIGHT_PHASES.has((row.phase ?? 'idle') as never), JSON.stringify(row)).toBe(false)
+    await connected(machine)
+    expect(await filesOnMachine(machine)).toContain('on-the-machine.txt')
+  }, 300_000)
 })

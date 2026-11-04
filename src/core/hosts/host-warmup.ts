@@ -87,8 +87,10 @@ export interface HostWarmupDeps {
    * picker click, the connection's own reconnect loop). The warmup never stacks a
    * second connect on top of one: the reconnect path has no pool-level dedup, so
    * a resweep landing on it would open a second tunnel on the same instance.
+   * `sshTarget`, when known: a dial of another machine under this name (the alias
+   * now names a new one) is not this host's.
    */
-  isConnecting?: (key: string) => boolean
+  isConnecting?: (key: string, sshTarget?: SshTarget) => boolean
   now?: () => number
   /** Delay before the first sweep (server settle time). */
   startupDelayMs?: number
@@ -349,7 +351,7 @@ export class HostWarmup {
       // satisfied by definition).
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
       // Somebody else is already connecting it: theirs to finish.
-      if (this.isConnecting(host.key)) continue
+      if (this.isConnecting(host.key, host.sshTarget)) continue
       // The credential clock alone re-dials a waiting host (else each tier advances twice).
       if ((reason === 'resweep' || reason === 'soon') && this.credentialWaits.has(host.key)) continue
       if (reason === 'resweep' && !this.dueForResweep(host.key)) continue
@@ -380,8 +382,8 @@ export class HostWarmup {
     try { return this.deps.isConnected(key) } catch { return false }
   }
 
-  private isConnecting(key: string): boolean {
-    try { return this.deps.isConnecting?.(key) ?? false } catch { return false }
+  private isConnecting(key: string, sshTarget?: SshTarget): boolean {
+    try { return this.deps.isConnecting?.(key, sshTarget) ?? false } catch { return false }
   }
 
   /** Exponential per-host backoff: interval × 2^(failures-1), capped. */
@@ -429,7 +431,7 @@ export class HostWarmup {
       this.queued.delete(host.key)
       const soonDial = this.soonDials.delete(host.key)
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
-      if (this.isConnecting(host.key)) {
+      if (this.isConnecting(host.key, host.sshTarget)) {
         // Queued behind a long connect, and meanwhile somebody else took this
         // host on. Nothing to say about it any more.
         this.states.delete(host.key)

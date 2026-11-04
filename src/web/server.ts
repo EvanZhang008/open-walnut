@@ -4271,7 +4271,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A replica has no ssh and no daemons of its own — the whole block is the
   // primary's job.
   if (bootPolicy('host-wiring')) {
-    const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, isDaemonConnected } =
+    const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, isDaemonConnected, pooledConnectionTargets } =
       await import('../providers/daemon-connection.js')
     const { link, linkTarget } = await import('../core/hosts/link.js')
     const { getConfig, isFallbackConfig } = await import('../core/config-manager.js')
@@ -4416,7 +4416,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         connect: (key) => link(key),
         isConnected: (key) => isDaemonConnected(key),
         // A host mid-connect (picker click, its own reconnect loop) is left alone.
-        isConnecting: (key) => CONNECT_IN_FLIGHT_PHASES.has(getDaemonConnectState(key).phase),
+        isConnecting: (key, target) => CONNECT_IN_FLIGHT_PHASES.has(getDaemonConnectState(key).phase)
+          && (target === undefined || pooledConnectionTargets(key, target)),
         onChange: (host) => emitHostStatus(host),
         clearFailure: (key) => clearDaemonFailureCache(key),
       })

@@ -444,6 +444,13 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
     }
     if (syncing) await syncing.catch(() => {})
     await reconcileHosts([], { drop: endpoint })
+    // Its row is gone: so is its connection, or its reconnect loop dials a machine that is out.
+    try {
+      const { dropDaemonConnection } = await import('../../providers/daemon-connection.js')
+      dropDaemonConnection(host)
+    } catch (err) {
+      log.session.warn('net: could not drop a removed machine\'s connection', { host, error: (err as Error).message })
+    }
     await setJoined(endpoint, null)
     await markRemoving(endpoint, false)
   } finally {

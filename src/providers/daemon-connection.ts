@@ -1969,7 +1969,7 @@ export class DaemonConnection {
       }
       this._connecting = false
       this.setPhase('failed')
-      if (resumeLoop) void this.handleReconnectFailure(annotated, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS, true)
+      if (resumeLoop) void this.failReconnect(annotated, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS, true)
       throw annotated
     }
   }
@@ -6122,12 +6122,28 @@ export class DaemonConnection {
       try {
         await this.reconnect()
       } catch (rawErr) {
-        throw await this.handleReconnectFailure(rawErr, chainDelayMs)
+        throw await this.failReconnect(rawErr, chainDelayMs)
       }
     })()
     const inFlight: Promise<void> = run.finally(() => { if (this._reconnectInFlight === inFlight) this._reconnectInFlight = null })
     this._reconnectInFlight = inFlight
     return inFlight
+  }
+
+  /**
+   * handleReconnectFailure, and if the handler itself fails the loop still goes on: else
+   * the host reads as mid-dial forever and nothing else dials it (host-warmup.ts
+   * isConnecting; 2026-11-03, a host network machine's handler threw).
+   */
+  private failReconnect(rawErr: unknown, chainDelayMs: number, annotated = false): Promise<unknown> {
+    return this.handleReconnectFailure(rawErr, chainDelayMs, annotated).catch((bug: unknown) => {
+      log.session.error('DaemonConnection: reconnect failure handling failed', { host: this.hostKey, error: String(bug), cause: String(rawErr) })
+      if (!this._destroyed && !this._connected) {
+        this.scheduleReconnect(Math.max(chainDelayMs, DaemonConnection.RECONNECT_DELAY_MS))
+        this.setPhase('reconnecting')
+      }
+      return rawErr
+    })
   }
 
   /**
@@ -6146,7 +6162,9 @@ export class DaemonConnection {
     // resolves. Credential waits follow the warmup's schedule (1, 2, 5
     // minutes, then every 5) so a login done elsewhere reconnects soon;
     // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
-    const kind = this.sshTarget
+    // A host network machine has no ssh target to read: `this.ssh` throws for it (2026-11-03:
+    // its failed reconnect threw here, and its loop ended unseen). The cloud box's has one.
+    const kind = this.sshTarget && !this.isNetHost
       ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
       : 'unknown'
     // Which of these, and the cause every surface reads: daemon-reconnect-cause.ts.
@@ -6216,6 +6234,8 @@ export class DaemonConnection {
     if (this.isNetHost) {
       this.closeBulkChannel()
       await this.dialNetHost()
+      // Dropped while it dialled (the machine was removed): this instance connects nothing.
+      if (this._destroyed) { this.closeTransport(); return }
       this.setConnected(true)
       this.startPing()
       log.session.info('DaemonConnection: host network machine reconnected', {
@@ -7586,6 +7606,29 @@ export function reconnectHostNow(hostKey: string, sshTarget?: SshTarget | null):
 /** A wake or network change: run a pending reconnect of this host now. True when one was pending. */
 export function expediteReconnect(hostKey: string): boolean {
   return connectionPool.get(hostKey)?.expediteReconnect() ?? false
+}
+
+/**
+ * A host taken out of the config (a machine removed from the host network): its
+ * connection and its reconnect loop end now. Left pooled, the loop dialled a machine that
+ * is gone, and read as a dial in flight for the alias, so a machine that later joined
+ * under the same name was never dialled (2026-11-03). True when one was pooled.
+ */
+export function dropDaemonConnection(hostKey: string): boolean {
+  const conn = connectionPool.get(hostKey)
+  if (!conn) return false
+  conn.disconnect()
+  poolDelete(hostKey)
+  failureCache.delete(hostKey)
+  // A dial of it still running is nobody's: the next caller for the name starts its own.
+  connectingPromises.delete(hostKey)
+  notifyDaemonPhaseChange(hostKey)
+  return true
+}
+
+/** The pooled connection for `hostKey` dials `sshTarget` (or none is pooled): another machine's dial is not this one's. */
+export function pooledConnectionTargets(hostKey: string, sshTarget: SshTarget): boolean {
+  return connectionPool.get(hostKey)?.targetsSame(sshTarget) ?? true
 }
 
 /** Test seam ONLY (@internal): pool a connection built without dialling, or drop it (null). */
