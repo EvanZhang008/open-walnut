@@ -126,7 +126,7 @@ import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { ACP_HOST_FILES, ACP_HOST_WORKER } from './acp-host-artifacts.js'
 import { singleFile } from '../lib/single-file.js'
 import { resolveAgentCommand } from './agent-command-map.js'
-import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
+import { computeGitDiff, createGitStatus, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
@@ -2647,6 +2647,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     }
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
+    // 'git-status-v1': the glanceable state (branch, changed files, +/- lines,
+    // unpushed commits) of the repos some directories sit in. Read-only, but
+    // NOT in BRIDGE_ALLOWED_COMMANDS: it reads arbitrary host paths.
+    case 'git.status': return cmdGitStatus(ws, id as number, cmd)
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
     // it reads arbitrary host paths, which the cloud bridge must never reach.
     case 'git.fileLog': return cmdGitFileLog(ws, id as number, cmd)
@@ -10839,6 +10843,40 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   } catch (err: unknown) {
     if (err instanceof GitDiffError) return sendError(ws, id, err.message)
     sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
+  }
+}
+
+// ── Glanceable git state (host-local, capability 'git-status-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is createGitStatus in
+// git-diff-core.ts (inlined into the source twin as text).
+const gitStatus = createGitStatus({
+  exec: (argv, runCwd) => new Promise((resolve) => {
+    execFileCb(argv[0], argv.slice(1), { cwd: runCwd, timeout: 10_000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf-8' },
+      (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
+        if (!err) return resolve({ stdout, stderr, code: 0 })
+        resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 })
+      })
+  }),
+  readText: async (absPath, maxBytes) => {
+    try {
+      const st = await fs.promises.stat(absPath)
+      if (!st.isFile()) return null
+      if (st.size > maxBytes) return { tooBig: true as const }
+      return { text: await fs.promises.readFile(absPath, 'utf-8') }
+    } catch { return null }
+  },
+})
+
+async function cmdGitStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const dirs = Array.isArray(cmd.dirs)
+    ? (cmd.dirs as unknown[]).filter((d): d is string => typeof d === 'string' && d.length > 0)
+      .map((d) => (d === '~' || d.startsWith('~/') ? HOME_DIR + d.slice(1) : d))
+    : []
+  if (!dirs.length) return sendError(ws, id, 'git.status: missing dirs')
+  try {
+    sendOk(ws, id, { repos: await gitStatus.status(dirs) })
+  } catch (err: unknown) {
+    sendError(ws, id, 'git.status failed: ' + (err as Error).message)
   }
 }
 

@@ -21,6 +21,7 @@ import {
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-seed'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
+import { GIT_GLANCE_SESSION, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, writeGitGlanceDemo, writeGitGlanceRepo } from './git-glance-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
@@ -123,6 +124,10 @@ const agoIso = (msAgo: number): string => new Date(SEED_NOW - msAgo).toISOString
 const { sweepStaleTmpDirs, writeOwnerPid } = await import('../../setup/stale-tmp.js')
 sweepStaleTmpDirs([{ prefix: 'walnut-pw-', name: /^walnut-pw-\d+$/, pidFrom: 'owner-file' }])
 await fs.rm(tmpBase, { recursive: true, force: true })
+// session-git-glance.spec.ts: a session working in a real git repo (git-glance-fixture.ts),
+// plus, with PW_GIT_GLANCE_DEMO=1, a board of other git states for a person to look at.
+const gitGlanceRoot = writeGitGlanceRepo(tmpBase)
+const gitGlanceDemo = writeGitGlanceDemo(tmpBase, Date.now())
 // The daemon's sidecars and the ACP worker, built from this tree's source in about 2 s
 // (build-daemon.sh's sidecars-only mode) before any server module reads where they are,
 // and after the wipe of tmpBase just above.
@@ -1189,6 +1194,8 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      gitGlanceTask(new Date().toISOString()),
+      ...gitGlanceDemo.map((d) => d.task),
       {
         id: 'pw-task-codex-customer',
         title: 'Playwright Codex customer task',
@@ -2848,6 +2855,16 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   // while line 12 exists (the gutter-exclusion proof) — edit the .go fixtures
   // with those assertions in mind. The tool_use deliberately has no matching
   // tool_result: the changes pipeline reads tool_use inputs only.
+  {
+    const glanceDir = path.join(tmpBase, '.claude', 'projects', gitGlanceRoot.replace(/[^a-zA-Z0-9]/g, '-'))
+    await fs.mkdir(glanceDir, { recursive: true })
+    await fs.writeFile(path.join(glanceDir, `${GIT_GLANCE_SESSION}.jsonl`), gitGlanceJsonl(sessionFixtureNow, gitGlanceRoot))
+    for (const d of gitGlanceDemo) {
+      const dir = path.join(tmpBase, '.claude', 'projects', d.repo.replace(/[^a-zA-Z0-9]/g, '-'))
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, `${d.sessionId}.jsonl`), d.jsonl)
+    }
+  }
   const controllerPath = path.join(vscodeFixtureRoot, 'sync-controller.go')
   const controllerContent = await fs.readFile(controllerPath, 'utf8')
   await fs.writeFile(
@@ -3862,6 +3879,8 @@ await fs.writeFile(
         cwd: vscodeFixtureRoot,
         title: 'Send waits for dictation fixture session 2',
       },
+      gitGlanceRecord(sessionFixtureNow, gitGlanceRoot),
+      ...gitGlanceDemo.map((d) => d.record),
       {
         claudeSessionId: 'pw-changed-session',
         taskId: 'pw-task-changed',

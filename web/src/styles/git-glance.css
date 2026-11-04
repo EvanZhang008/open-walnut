@@ -1,0 +1,107 @@
+/* A session's git state at a glance (components/sessions/GitGlance.tsx). */
+
+:root {
+  --git-glance-add: #1a7f37;
+  --git-glance-del: #cf222e;
+  --git-glance-ahead: #0969da;
+}
+:root[data-theme="dark"] {
+  --git-glance-add: #3fb950;
+  --git-glance-del: #f85149;
+  --git-glance-ahead: #58a6ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --git-glance-add: #3fb950;
+    --git-glance-del: #f85149;
+    --git-glance-ahead: #58a6ff;
+  }
+}
+
+.git-glance {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.git-glance-icon { flex: none; opacity: 0.75; }
+.git-glance-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.git-glance-lines { display: inline-flex; gap: 3px; }
+.git-glance-add { color: var(--git-glance-add); }
+.git-glance-del { color: var(--git-glance-del); }
+.git-glance-ahead { color: var(--git-glance-ahead); font-weight: 600; }
+.git-glance-behind { color: var(--warning, #b7791f); font-weight: 600; }
+.git-glance-conflict { color: var(--git-glance-del); font-weight: 600; }
+.git-glance-clean, .git-glance-more { color: var(--fg-muted); }
+.git-glance.is-stale { opacity: 0.6; }
+
+/* Task row pill: keeps the row on one line; the branch gives way first. */
+.git-glance-pill {
+  max-width: 260px;
+  flex-shrink: 1;
+  cursor: default;
+}
+.git-glance-pill .git-glance-branch { max-width: 120px; }
+/* On a Home card's small top line it is plain text like its neighbours, and gives way
+   first: its branch name shrinks to nothing before the project name or the time do. */
+html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pill.todo-item-due-pill,
+.status-card-meta .git-glance-pill { flex: 0 3 auto; min-width: 0; overflow: hidden; gap: 4px; }
+.status-card-meta .git-glance-pill .git-glance-branch { max-width: 96px; min-width: 5ch; }
+/* A card too narrow for a readable branch name leaves it to the tooltip. */
+.status-card-body:has(.git-glance-pill) { container: git-glance-card / inline-size; }
+@container git-glance-card (max-width: 330px) {
+  .status-card-meta .git-glance-pill .git-glance-branch { display: none; }
+}
+.status-card-meta:has(.git-glance-pill) .status-card-project { min-width: min(7ch, 30%); }
+.status-card-meta:has(.git-glance-pill) .todo-recent-ago { flex-shrink: 0; }
+.git-glance-pill > :not(.git-glance-branch) { flex-shrink: 0; }
+.git-glance-files { display: inline-flex; align-items: center; gap: 2px; }
+.git-glance-file-icon { opacity: 0.7; }
+
+/* Session row line and the Changed tab's strip. */
+.git-glance-line {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  max-width: 100%;
+}
+.git-glance-line .git-glance-branch { max-width: 220px; }
+
+.tdp-row-git { flex: 0 1 auto; margin-left: 6px; }
+.tdp-row-git .git-glance-branch { max-width: 110px; }
+
+/* The Changed chip's count: what the tab lists. */
+.session-chip-count {
+  display: inline-block;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.session-action-chip-active .session-chip-count {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  color: inherit;
+}
+
+.session-diff-gitstrip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.session-diff-gitstrip-when { font-size: 10.5px; color: var(--fg-muted); white-space: nowrap; margin-left: auto; }

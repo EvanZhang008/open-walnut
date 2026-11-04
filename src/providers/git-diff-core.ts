@@ -194,3 +194,188 @@ export async function computeGitDiff(
   files.sort((a, b) => a.relPath.localeCompare(b.relPath));
   return { repoRoot, files };
 }
+
+// ── Glanceable git state (capability 'git-status-v1') ──
+//
+// What a session row shows without opening the session: the branch, how many
+// paths are changed in the working tree, the +/- lines of those changes, and
+// the commits not pushed yet. ONE small read per repository, host-side like the
+// diff above (daemon `git.status`, or in-process for `__local__`).
+//
+// Read-only and lock-free: every git call passes --no-optional-locks, so a
+// glance never takes index.lock under an agent's own `git commit`.
+//
+// Self-contained factory: daemon-source.ts inlines `createGitStatus.toString()`
+// through `__CREATE_GIT_STATUS__`, so nothing at module scope is referenced and
+// the body carries no backticks.
+
+export interface GitRepoStatus {
+  /** Absolute repo root (`git rev-parse --show-toplevel`). */
+  repoRoot: string;
+  /** Current branch; null when HEAD is detached. */
+  branch: string | null;
+  /** Short HEAD sha; null before the first commit. */
+  head: string | null;
+  /** Upstream ref (e.g. origin/main); null when the branch tracks none. */
+  upstream: string | null;
+  /** Commits on HEAD not on the upstream (or, with no upstream, on no remote).
+   *  null = unknown (a repo with no remote at all, or a detached HEAD). */
+  ahead: number | null;
+  /** Commits on the upstream not on HEAD; null without an upstream. */
+  behind: number | null;
+  /** Changed paths: staged, unstaged, untracked and conflicted (ignored files never). */
+  files: number;
+  untracked: number;
+  conflicted: number;
+  /** Lines added / removed across tracked changes (vs HEAD) and untracked text files. */
+  insertions: number;
+  deletions: number;
+  /** True when some untracked files were too many or too big to count. */
+  linesPartial?: boolean;
+}
+
+export interface GitStatusDeps {
+  exec: ExecFn;
+  /** Reads an untracked file's text when it is at most maxBytes; null when it
+   *  is unreadable or not a regular file. */
+  readText?: (absPath: string, maxBytes: number) => Promise<{ text: string } | { tooBig: true } | null>;
+  /** Stop starting new repos after this long (default 12 s, under the server's RPC timeout). */
+  deadlineMs?: number;
+}
+
+export function createGitStatus(deps: GitStatusDeps) {
+  var UNTRACKED_COUNT_MAX = 200;
+  var UNTRACKED_BYTES_BUDGET = 512 * 1024;
+  var DEADLINE_MS = deps.deadlineMs || 12000;
+
+  function git(args: string[], cwd: string) {
+    return deps.exec(['git', '--no-optional-locks', '-c', 'core.quotePath=false'].concat(args), cwd);
+  }
+
+  function countLines(text: string): number {
+    if (!text) return 0;
+    var n = 0;
+    for (var i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+    return text.charCodeAt(text.length - 1) === 10 ? n : n + 1;
+  }
+
+  function sumNumstat(out: string): { add: number; del: number } {
+    var add = 0;
+    var del = 0;
+    var parts = out.split('\u0000');
+    for (var i = 0; i < parts.length; i++) {
+      var m = /^(\d+|-)\t(\d+|-)\t/.exec(parts[i]);
+      if (!m) continue;
+      if (m[1] !== '-') add += Number(m[1]);
+      if (m[2] !== '-') del += Number(m[2]);
+    }
+    return { add: add, del: del };
+  }
+
+  async function one(top: string): Promise<GitRepoStatus> {
+    var st = await git(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'], top);
+    if (st.code !== 0) throw new Error('git status failed: ' + (st.stderr || '').trim().slice(0, 200));
+    var out: GitRepoStatus = {
+      repoRoot: top, branch: null, head: null, upstream: null, ahead: null, behind: null,
+      files: 0, untracked: 0, conflicted: 0, insertions: 0, deletions: 0,
+    };
+    var untrackedPaths: string[] = [];
+    var recs = st.stdout.split('\u0000');
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      if (!r) continue;
+      if (r.indexOf('# branch.oid ') === 0) {
+        var oid = r.slice(13);
+        out.head = oid === '(initial)' ? null : oid.slice(0, 9);
+      } else if (r.indexOf('# branch.head ') === 0) {
+        var h = r.slice(14);
+        out.branch = h === '(detached)' ? null : h;
+      } else if (r.indexOf('# branch.upstream ') === 0) {
+        out.upstream = r.slice(18);
+      } else if (r.indexOf('# branch.ab ') === 0) {
+        var ab = /^\+(\d+) -(\d+)$/.exec(r.slice(12));
+        if (ab) { out.ahead = Number(ab[1]); out.behind = Number(ab[2]); }
+      } else if (r.charAt(0) === '1') {
+        out.files++;
+      } else if (r.charAt(0) === '2') {
+        out.files++;
+        i++; // a rename record carries its original path as the next field
+      } else if (r.charAt(0) === 'u') {
+        out.files++;
+        out.conflicted++;
+      } else if (r.charAt(0) === '?') {
+        out.files++;
+        out.untracked++;
+        untrackedPaths.push(r.slice(2));
+      }
+    }
+
+    // Tracked lines: the working tree against HEAD (or the empty tree before the
+    // first commit), staged and unstaged together. diff-index, not `git diff`:
+    // the porcelain diff refreshes the index and so takes index.lock even under
+    // --no-optional-locks; the plumbing one only reads it.
+    if (out.files > out.untracked) {
+      var base = out.head ? 'HEAD' : null;
+      if (!base) {
+        var empty = await git(['hash-object', '-t', 'tree', '/dev/null'], top);
+        if (empty.code === 0 && empty.stdout.trim()) base = empty.stdout.trim();
+      }
+      if (base) {
+        var d = await git(['diff-index', '--numstat', '-z', '--no-renames', base], top);
+        if (d.code === 0) { var s = sumNumstat(d.stdout); out.insertions += s.add; out.deletions += s.del; }
+      }
+    }
+
+    // Untracked text files count as added lines, as the Changed tab shows them,
+    // within a byte budget per repo: past it the count says it is partial.
+    if (untrackedPaths.length) {
+      if (!deps.readText || untrackedPaths.length > UNTRACKED_COUNT_MAX) out.linesPartial = true;
+      if (deps.readText) {
+        var take = untrackedPaths.slice(0, UNTRACKED_COUNT_MAX);
+        var budget = UNTRACKED_BYTES_BUDGET;
+        for (var k = 0; k < take.length; k++) {
+          if (budget <= 0) { out.linesPartial = true; break; }
+          var abs = top.charAt(top.length - 1) === '/' ? top + take[k] : top + '/' + take[k];
+          var got = await deps.readText(abs, budget);
+          if (!got) continue;
+          if ('tooBig' in got) { out.linesPartial = true; continue; }
+          budget -= got.text.length;
+          if (got.text.indexOf('\u0000') !== -1) continue; // binary: no lines
+          out.insertions += countLines(got.text);
+        }
+      }
+    }
+
+    // No upstream (a new branch), or one whose remote branch is gone: the
+    // commits no remote has are the unpushed ones.
+    if (out.ahead === null && out.branch && out.head) {
+      var remotes = await git(['remote'], top);
+      if (remotes.code === 0 && remotes.stdout.trim()) {
+        var cnt = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], top);
+        if (cnt.code === 0 && /^\d+$/.test(cnt.stdout.trim())) out.ahead = Number(cnt.stdout.trim());
+      }
+    }
+    return out;
+  }
+
+  /** The state of every repository the given directories sit in (deduped; a
+   *  directory in no repository, or one that no longer exists, is skipped). */
+  async function status(dirs: string[]): Promise<GitRepoStatus[]> {
+    var seen: Record<string, boolean> = {};
+    var results: GitRepoStatus[] = [];
+    var started = Date.now();
+    for (var i = 0; i < dirs.length && i < 16; i++) {
+      // Past the deadline the caller has given up: answer what is read so far.
+      if (Date.now() - started > DEADLINE_MS) break;
+      var top = await git(['rev-parse', '--show-toplevel'], dirs[i]).catch(function () { return { stdout: '', stderr: '', code: 1 }; });
+      var root = top.code === 0 ? top.stdout.trim() : '';
+      if (!root || seen[root]) continue;
+      seen[root] = true;
+      // One unreadable repo (a broken index, a timeout) never hides the others.
+      try { results.push(await one(root)); } catch (_) { /* skipped */ }
+    }
+    return results;
+  }
+
+  return { status: status };
+}

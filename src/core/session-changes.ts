@@ -61,6 +61,7 @@ import {
 } from '../providers/session-changes-core.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import { noteSessionChangesComputed } from './session-git-status.js';
 
 // The compute PRIMITIVES (op parse, reverse-apply reconstruction, grouping
 // policy) live in providers/session-changes-core.ts, shared verbatim with the
@@ -694,6 +695,8 @@ export async function computeSessionChanges(
   void run.finally(() => {
     if (inflightByKey.get(key) === run) inflightByKey.delete(key);
   }).catch(() => { /* observed by the caller */ });
+  // The rows' Changed count (session-git-status.ts) follows every compute.
+  void run.then((r) => { noteSessionChangesComputed(sessionId, r.fileCount); }).catch(() => { /* observed by the caller */ });
   return run;
 }
 

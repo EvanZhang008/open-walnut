@@ -1055,6 +1055,39 @@ sessionsRouter.get('/status', async (req: Request, res: Response, next: NextFunc
   }
 })
 
+// GET /api/sessions/git-status?ids=<provider-id,...>[&refresh=1] — each session's
+// git glance (branch, changed files, +/- lines, unpushed commits, the Changed
+// tab's count), from session-git-status.ts. Cached answers come at once; a
+// session never read waits a moment for its first one, and every later change
+// arrives as a `session:git-status` event. refresh=1 re-reads now (an open
+// Changed tab); maxAge=<s> re-reads only older answers. Registered before /:sessionId so "git-status" is never an ID.
+sessionsRouter.get('/git-status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const raw = Array.isArray(req.query.ids) ? req.query.ids.join(',') : req.query.ids
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      res.status(400).json({ error: 'ids is required' })
+      return
+    }
+    const ids = [...new Set(raw.split(',').map((id) => id.trim()))]
+    if (ids.some((id) => id.length === 0 || id.length > 256)) {
+      res.status(400).json({ error: 'ids contains an invalid provider session ID' })
+      return
+    }
+    if (ids.length > 100) {
+      res.status(400).json({ error: 'ids supports at most 100 provider session IDs' })
+      return
+    }
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true'
+    // maxAge=<seconds>: re-read only answers older than this (a page keeping its rows watched).
+    const maxAge = Number(req.query.maxAge)
+    const maxAgeMs = Number.isFinite(maxAge) && maxAge > 0 ? Math.min(maxAge, 3_600) * 1_000 : undefined
+    const { getSessionGitGlances } = await import('../../core/session-git-status.js')
+    res.json({ glances: await getSessionGitGlances(ids, { waitMs: refresh ? 8_000 : 1_500, refresh, maxAgeMs }) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/task/:taskId
 sessionsRouter.get('/task/:taskId', async (req: Request, res: Response, next: NextFunction) => {
   try {

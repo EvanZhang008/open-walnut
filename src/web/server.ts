@@ -612,6 +612,7 @@ function releaseSelfApiRoot(): void {
 let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
+let stopSessionGitStatus: (() => void) | null = null
 let unsubscribeMemoryPressure: (() => void) | null = null
 let sessionReaper: SessionReaper | null = null
 /** Primary box only: warms every configured host's daemon at startup. */
@@ -4060,6 +4061,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     changesPrewarmer = new SessionChangesPrewarmer()
     changesPrewarmer.start()
 
+    // -- Session git glance: watched sessions re-read their repos as they work --
+    const { startSessionGitStatus } = await import('../core/session-git-status.js')
+    stopSessionGitStatus?.()
+    stopSessionGitStatus = startSessionGitStatus()
+
     // -- Start side-thread manager --
     // Side threads are taskless hidden forks, so no other reaper will ever touch
     // them: this owns their standby TTL, live cap and idle retirement, and sweeps
@@ -6847,6 +6853,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     healthMonitor.stop()
     healthMonitor = null
   }
+  stopSessionGitStatus?.()
+  stopSessionGitStatus = null
   if (changesPrewarmer) {
     changesPrewarmer.stop()
     changesPrewarmer = null

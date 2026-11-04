@@ -13,7 +13,8 @@ import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { isBuiltinTier } from '@/api/focus';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { taskNeedsAction, taskUserState } from '@/utils/session-status';
+import { resolveTaskSessionId, taskNeedsAction, taskUserState } from '@/utils/session-status';
+import { GitGlancePill } from '../sessions/GitGlance';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
 import { NavigationChevron } from './NavigationSections';
@@ -176,6 +177,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <AwaySyncMark item={task} />
+      {/* Uncommitted files, +/- lines, unpushed commits of the task's session. */}
+      {!isDone && <GitGlancePill sessionId={resolveTaskSessionId(task)} />}
     </>
   );
   const wake = snoozedUntil ? (

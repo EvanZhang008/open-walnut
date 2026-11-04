@@ -13,6 +13,9 @@ import {
 import 'react-diff-view/style/index.css';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { useSessionGitGlance, sessionGitStore } from '@/stores/session-git-store';
+import { useChangedLiveRefresh, CHANGED_REFRESH_MIN_MS } from '@/hooks/useChangedLiveRefresh';
+import { GitGlanceLineView, GitCheckedAgo } from './GitGlance';
 import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, fetchChangesTriage, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope, type FileChangeSummary } from '@/api/session-changes';
 import { ApiError } from '@/api/client';
 import { buildFileData } from '@/components/sessions/diffPatch';
@@ -1451,6 +1454,18 @@ const DIFF_SEARCH_SKIP = '.diff-gutter, .diff-widget, .session-diff-expander, .s
 // `data=null` → a full spinner, and git bases re-ran their whole (possibly
 // remote, 10-30s) diff while the user stared at it. LRU-capped: git-base
 // results carry before/after content and a monorepo entry can be MBs.
+/** What a soft re-read compares: the list, without the SWR markers. */
+function listShape(r: SessionChangesResult): string {
+  return JSON.stringify([r.fileCount, r.anyPartial, r.groups]);
+}
+/** One file's light row: a new op, status or rename means its content changed. */
+function fileShape(f: SessionFileChange): string {
+  return `${f.status}|${f.ops}|${f.partial}|${f.oldRelPath ?? ''}|${f.before.length}|${f.after.length}`;
+}
+
+/** How often an open Changed tab re-reads its session's repos. */
+const GIT_POLL_MS = 15_000;
+
 const lastChangesCache = new Map<string, SessionChangesResult>();
 const LAST_CHANGES_CACHE_MAX = 24;
 function rememberChanges(key: string, res: SessionChangesResult): void {
@@ -1544,10 +1559,40 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     prevBaseKey.current = baseKey;
     setData(lastChangesCache.get(cacheKey) ?? null);
     fileContentRef.current.clear();
+    staleContentRef.current.clear();
   }, [baseKey, cacheKey]);
 
-  const load = useCallback((refresh = false) => {
-    setLoading(true);
+  // The list on screen, for a soft (automatic) re-read to compare against.
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  // A soft re-read keeps what still holds: the old content of a file that
+  // changed stays on screen (staleContentRef) until its new content lands, and
+  // files that did not change keep theirs. So the open file, its scroll, an
+  // open comment box and the folded folders all survive the session's edits.
+  const staleContentRef = useRef(new Map<string, SessionFileChange>());
+  const applyList = useCallback((res: SessionChangesResult, soft: boolean): boolean => {
+    const prev = dataRef.current;
+    if (soft && prev && listShape(prev) === listShape(res)) return false;
+    if (soft && prev) {
+      const before = new Map<string, string>();
+      for (const g of prev.groups) for (const f of g.files) before.set(f.filePath, fileShape(f));
+      for (const g of res.groups) for (const f of g.files) {
+        if (before.get(f.filePath) === fileShape(f)) continue;
+        const had = fileContentRef.current.get(f.filePath);
+        if (had) staleContentRef.current.set(f.filePath, had);
+        fileContentRef.current.delete(f.filePath);
+      }
+    } else {
+      fileContentRef.current.clear();
+      staleContentRef.current.clear();
+    }
+    setData(res);
+    setContentVersion((v) => v + 1);
+    return true;
+  }, []);
+
+  const load = useCallback((refresh = false, soft = false) => {
+    if (!soft) setLoading(true);
     setError(null);
     const ctrl = new AbortController();
     const light = isSessionBase;
@@ -1573,9 +1618,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               return;
             }
             rememberChanges(cacheKey, res);
-            setData(res);
-            fileContentRef.current.clear();
-            setContentVersion((v) => v + 1);
+            applyList(res, soft);
             setRefreshingBg(false);
           })
           .catch(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); });
@@ -1586,10 +1629,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         // Cache stale results too — a stale list is exactly what a re-entry
         // wants to paint first; the background poll upgrades it in place.
         rememberChanges(cacheKey, res);
-        setData(res);
-        if (refresh) {
-          fileContentRef.current.clear();
-          setContentVersion((v) => v + 1);
+        if (soft) applyList(res, true);
+        else {
+          setData(res);
+          if (refresh) {
+            fileContentRef.current.clear();
+            staleContentRef.current.clear();
+            setContentVersion((v) => v + 1);
+          }
         }
         if (res.stale && light) pollUntilFresh(0);
       })
@@ -1599,14 +1646,35 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         setError(msg);
         log.warn('session-changes', 'fetch failed', { sessionId, base, scope, error: msg });
       })
-      .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
+      .finally(() => { if (!ctrl.signal.aborted && !soft) setLoading(false); });
     return () => { ctrl.abort(); if (pollTimer) clearTimeout(pollTimer); };
-  }, [sessionId, base, scope, isSessionBase, cacheKey]);
+  }, [sessionId, base, scope, isSessionBase, cacheKey, applyList]);
 
   useEffect(() => {
     const cancel = load(false);
     return cancel;
   }, [load]);
+
+  // Live: the open tab follows the session's edits (useChangedLiveRefresh) and
+  // its git strip re-reads the repos on open and with every re-read.
+  const gitGlance = useSessionGitGlance(sessionId);
+  // While the tab is open and shown, its repos are re-read every GIT_POLL_MS:
+  // an edit by anyone (the session, an editor, a formatter) moves them, and the
+  // server's `session:git-status` for that change re-reads the list below.
+  useEffect(() => {
+    void sessionGitStore.refresh(sessionId);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void sessionGitStore.refresh(sessionId);
+    }, GIT_POLL_MS);
+    return () => clearInterval(t);
+  }, [sessionId]);
+  const liveCancelRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { liveCancelRef.current?.(); liveCancelRef.current = null; }, [load]);
+  useChangedLiveRefresh(sessionId, () => {
+    liveCancelRef.current?.();
+    liveCancelRef.current = load(false, true);
+    void sessionGitStore.refresh(sessionId);
+  }, { minIntervalMs: isSessionBase ? CHANGED_REFRESH_MIN_MS : 30_000 });
 
   useEffect(() => {
     try { localStorage.setItem('open-walnut-diff-view-mode', viewType); } catch { /* ignore */ }
@@ -1624,6 +1692,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     // session's files linger under the new session while its fetch runs.
     setData(lastChangesCache.get(`${sessionId}|${mem.base ?? 'session'}|session`) ?? null);
     fileContentRef.current.clear();
+    staleContentRef.current.clear();
     setSelectedId(null);
     pendingRestoreRef.current = mem.selectedId ?? null;
   }, [sessionId]);
@@ -1639,6 +1708,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     });
   }, [sessionId, base, selectedId]);
 
+  // Every folder id the tree has shown for this session and comparison.
+  const knownContainersRef = useRef(new Set<string>());
+  useEffect(() => { knownContainersRef.current = new Set(); }, [sessionId, base, scope]);
   const tree2 = useMemo<DiffTreeRepoNode[]>(() => buildDiffTree(data?.groups ?? []), [data]);
   const files = useMemo(() => flattenFiles(tree2), [tree2]);
 
@@ -1646,7 +1718,11 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // still in the list, else the first file.
   useEffect(() => {
     if (!tree2.length) { setSelectedId(null); return; }
-    setExpanded(new Set(allContainerIds(tree2)));
+    // Folders open as they appear; one the user folded stays folded on a re-read.
+    const all = allContainerIds(tree2);
+    const fresh = all.filter((id) => !knownContainersRef.current.has(id));
+    for (const id of fresh) knownContainersRef.current.add(id);
+    if (fresh.length) setExpanded((prev) => new Set([...prev, ...fresh]));
     setSelectedId((prev) => {
       const want = prev ?? pendingRestoreRef.current;
       pendingRestoreRef.current = null;
@@ -1704,6 +1780,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     fetchSessionFileChange(sessionId, filePath)
       .then((res) => {
         fileContentRef.current.set(filePath, res.file);
+        staleContentRef.current.delete(filePath);
         setContentVersion((v) => v + 1);
       })
       .catch((err) => {
@@ -1731,7 +1808,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     void contentVersion;
     if (!selectedChangeRaw) return null;
     if (!isSessionBase) return selectedChangeRaw;
-    const full = fileContentRef.current.get(selectedChangeRaw.filePath);
+    const full = fileContentRef.current.get(selectedChangeRaw.filePath) ?? staleContentRef.current.get(selectedChangeRaw.filePath);
     return full ? { ...selectedChangeRaw, before: full.before, after: full.after, partial: full.partial } : null;
   }, [selectedChangeRaw, isSessionBase, contentVersion]);
   const selectedContentLoading = isSessionBase && !!selectedChangeRaw && !selectedChange;
@@ -2386,6 +2463,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       onContextMenu={handleDiffContextMenu}
     >
       {toolbar}
+
+      {/* The session's repos now: branch, uncommitted files, +/- lines, unpushed commits. */}
+      {gitGlance && gitGlance.repos.length > 0 && (
+        <div className="session-diff-gitstrip" data-testid="session-diff-gitstrip">
+          <GitGlanceLineView glance={gitGlance} />
+          <GitCheckedAgo at={gitGlance.checkedAt} />
+        </div>
+      )}
 
       {/* Refresh failed but the cached list is still on screen — say so in a
           slim strip instead of blanking the view. */}

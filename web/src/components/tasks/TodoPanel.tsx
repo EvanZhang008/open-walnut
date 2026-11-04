@@ -54,6 +54,7 @@ import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { WorkspacePill } from '@/components/workspaces/WorkspacePill';
+import { GitGlancePill } from '@/components/sessions/GitGlance';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
@@ -1219,6 +1220,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
           <WorkspacePill task={task} />
+          {!isDone && <GitGlancePill sessionId={resolveTaskSessionId(task)} />}
           <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />

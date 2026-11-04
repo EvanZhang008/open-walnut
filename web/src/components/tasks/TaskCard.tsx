@@ -12,6 +12,8 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { ICON_TRASH } from '../common/Icons';
 import { openTaskOnHome } from '@/utils/open-session';
+import { GitGlancePill } from '@/components/sessions/GitGlance';
+import { resolveTaskSessionId } from '@/utils/session-status';
 
 export type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -200,6 +202,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
         <div className="task-card-meta">
           {showPriority && <PriorityBadge priority={task.priority} />}
           <TaskSessionPill task={task} />
+          <GitGlancePill sessionId={resolveTaskSessionId(task)} />
           <ImportedPill task={task} className="task-card-imported-pill" />
           <span className="task-card-project text-xs text-muted">{task.project}</span>
           {userTags.length > 0 && (

@@ -9,6 +9,7 @@
 import type { ReactNode } from 'react';
 import type { ProcessStatus, SessionRecord, TaskPhase } from '@open-walnut/core';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
+import { GitGlanceLine } from '@/components/sessions/GitGlance';
 import { PHASE_LABELS, PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 
@@ -53,6 +54,8 @@ export function SessionRow({ sessionId, record, processStatus, isPlan, onOpen }:
         <span className="todo-detail-session-dot tdp-dot" style={{ background: processColor(processStatus) }} />
         {isPlan && <span className="todo-detail-plan-badge">Plan</span>}
         <span className={`tdp-row-title${record ? '' : ' is-loading'}`}>{title}</span>
+        {/* Its git state (branch, uncommitted files, +/- lines, unpushed commits) on the same line. */}
+        <GitGlanceLine sessionId={sessionId} className="tdp-row-git" />
         {ago && <span className="tdp-row-end">{ago}</span>}
       </div>
       {/* One quiet line: what it is doing now, or what it last did. */}

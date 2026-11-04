@@ -710,6 +710,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Not bridge-reachable: it writes refs and publishes. Optional: without it the
   // Changed tab says the host's daemon needs an update.
   'git-commit-v1',
+  // 'git-status-v1': `git.status { dirs }` answers the glanceable state of the
+  // repos those directories sit in (branch, changed paths, +/- lines, commits
+  // not pushed), one small lock-free read per repo (createGitStatus in
+  // git-diff-core.ts). Both twins implement it (the core is text-injected into
+  // the source twin), so it is NOT sidecar-gated. Not bridge-reachable: it reads
+  // host paths. Optional: without it session rows show no git state for that
+  // host until the next auto-deploy.
+  'git-status-v1',
   // 'workspace-v1': a task's isolated working copy (workspace-core.ts).
   // `workspace.detect` / `.create` / `.job` / `.status` / `.repos` / `.remove`
   // run the built-in git-worktree provider natively and plugin providers from an

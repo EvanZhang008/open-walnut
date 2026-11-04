@@ -85,6 +85,7 @@ import { createDtachBuild } from './dtach-build-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
+import { createGitStatus } from './git-diff-core.js'
 import { createOneShotCore } from './oneshot-core.js'
 import { createTransferCore } from './transfer-core.js'
 import { createTransferPack } from './transfer-pack-core.js'
@@ -307,6 +308,7 @@ export function getDaemonSource(): string {
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
+    ['__CREATE_GIT_STATUS__', createGitStatus.toString()],
     ['__CREATE_ONESHOT__', createOneShotCore.toString()],
     ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
     ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
@@ -751,6 +753,11 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     if (createLs) {
       const ls = createLs({ readdir: async () => [], stat: async () => { throw new Error('unused') } })
       if (typeof ls.list !== 'function') throw new Error('fs.ls core did not build a lister')
+    }
+    const createStatus = reconstructed['__CREATE_GIT_STATUS__'] as typeof createGitStatus | undefined
+    if (createStatus) {
+      const st = createStatus({ exec: async () => ({ stdout: '', stderr: '', code: 1 }) })
+      if (typeof st.status !== 'function') throw new Error('git status core did not build')
     }
     // Session commit smoke: the attribution and the hunk placement ride this
     // text, so a reconstructed copy must still claim a session's own edit, leave
@@ -4104,6 +4111,9 @@ function dispatchCommand(ws, id, cmd) {
     }
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
+    // 'git-status-v1': glanceable repo state; NOT bridge-reachable (reads host
+    // paths). Keep in sync with daemon-standalone.ts.
+    case 'git.status': return cmdGitStatus(ws, id, cmd);
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
     // it reads arbitrary host paths, which the cloud bridge must never reach.
     case 'git.fileLog': return cmdGitFileLog(ws, id, cmd);
@@ -12570,6 +12580,42 @@ async function cmdGitDiff(ws, id, cmd) {
     sendOk(ws, id, { repoRoot: repoRoot, files: files });
   } catch (err) {
     sendError(ws, id, 'git.diff failed: ' + err.message);
+  }
+}
+
+// -- Glanceable git state (host-local, capability 'git-status-v1') --
+// PARITY: keep in sync with daemon-standalone.ts. createGitStatus (git-diff-core.ts)
+// is injected as text.
+const gitStatus = (__CREATE_GIT_STATUS__)({
+  exec: function (argv, runCwd) {
+    return new Promise(function (resolve) {
+      execFile(argv[0], argv.slice(1), { cwd: runCwd, timeout: 10000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf-8' },
+        function (err, stdout, stderr) {
+          if (!err) return resolve({ stdout: stdout, stderr: stderr, code: 0 });
+          resolve({ stdout: stdout || '', stderr: stderr || err.message, code: typeof err.code === 'number' ? err.code : 1 });
+        });
+    });
+  },
+  readText: async function (absPath, maxBytes) {
+    try {
+      const st = await fs.promises.stat(absPath);
+      if (!st.isFile()) return null;
+      if (st.size > maxBytes) return { tooBig: true };
+      return { text: await fs.promises.readFile(absPath, 'utf-8') };
+    } catch (e) { return null; }
+  },
+});
+
+async function cmdGitStatus(ws, id, cmd) {
+  const dirs = Array.isArray(cmd.dirs)
+    ? cmd.dirs.filter(function (d) { return typeof d === 'string' && d.length > 0; })
+      .map(function (d) { return d === '~' || d.startsWith('~/') ? HOME_DIR + d.slice(1) : d; })
+    : [];
+  if (!dirs.length) return sendError(ws, id, 'git.status: missing dirs');
+  try {
+    sendOk(ws, id, { repos: await gitStatus.status(dirs) });
+  } catch (err) {
+    sendError(ws, id, 'git.status failed: ' + err.message);
   }
 }
 

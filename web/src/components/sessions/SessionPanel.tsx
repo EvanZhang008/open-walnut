@@ -41,6 +41,9 @@ import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { SessionChangedTab } from './SessionChangedTab';
+import { useSessionGitGlance } from '@/stores/session-git-store';
+import { changedChipTitle, compactCount } from '@/utils/git-glance-text';
+import '@/styles/git-glance.css';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { KANBAN_COLLAPSE_CHAT_BELOW } from '@/components/board/kanban/kanban-contract';
@@ -1059,6 +1062,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // Terminal tab. The host's own capability says so (its status frame), never
   // its alias; a host the server has not described yet keeps the tab.
   const terminalOffered = useHostStatus(session?.host)?.terminal !== false;
+  // The Changed chip's count and its git tooltip (session-git-store.ts).
+  const gitGlance = useSessionGitGlance(sessionId);
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
   } = useSessionLetters(sessionId);
@@ -2493,11 +2498,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                 <button
                   className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
                   onClick={() => toggleView('changed')}
-                  title="See the files this session changed, in a full-screen diff alongside the chat"
+                  title={changedChipTitle(gitGlance)}
                   data-header-id="changed"
                   data-hidden={hid('changed')}
+                  data-testid="session-changed-chip"
                 >
                   Changed
+                  {/* The number the tab lists (this session's own changed files). */}
+                  {!!gitGlance?.changedFiles && (
+                    <span className="session-chip-count" data-testid="session-changed-count">{compactCount(gitGlance.changedFiles)}</span>
+                  )}
                 </button>
                 <button
                   className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
