@@ -33,22 +33,24 @@ interface Mac {
   resultSeq?: { exit: number; state: string }[]
 }
 
-/** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call. */
-function fakeWalnut(macs: Mac[], outTgz: string): string {
+/** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call.
+ * `listFails`: host_list drops its answer (hub_timeout) this many times first. */
+function fakeWalnut(macs: Mac[], outTgz: string, fleet: { listFails?: number } = {}): string {
   const bin = path.join(dir, 'bin')
   fs.mkdirSync(bin, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz }))
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz, listFails: fleet.listFails || 0 }))
   fs.writeFileSync(path.join(bin, 'walnut'), `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 const dir = ${JSON.stringify(dir)}
-const { macs, outTgz } = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'))
+const { macs, outTgz, listFails } = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'))
 const [, , tools, call, op, argRef] = process.argv
 const args = JSON.parse(fs.readFileSync(argRef.slice(1), 'utf8'))
 fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify({ op, args }) + '\\n')
 const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0) }
 const mac = (h) => macs.find((m) => m.host === h)
-if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 const turn = (name) => { const f = path.join(dir, 'turn-' + name); const n = fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : 0; fs.writeFileSync(f, String(n + 1)); return n }
+if (op === 'host_list' && turn('list') < listFails) { process.stderr.write('walnut: hub_timeout: primary server timed out'); process.exit(1) }
+if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
 const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
 if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; return { host: m.host, known: l != null, loadPerCpu: l } }) }) }
 if (op === 'host_copy') {
@@ -253,7 +255,7 @@ describe('ios-fleet-test.sh', () => {
     ], outTgz())
     const r = run(['ui'], bin)
     expect(r.status).toBe(65)
-    expect(r.stderr).toContain('mac-mini is busy with another run; trying the next Mac')
+    expect(r.stderr).toContain('mac-mini is busy (see its BUSY line above); trying the next Mac')
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-mini', 'mac-two'])
     // Nothing is fetched from the busy one.
     expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.from_host).map((c) => c.args.from_host)).toEqual(['mac-two'])
@@ -372,9 +374,76 @@ describe('ios-fleet-test.sh', () => {
     const bin = fakeWalnut([{ host: 'mac-two', loadPerCpu: 0.2, resultSeq: [{ exit: 75, state: 'busy' }, { exit: 75, state: 'busy' }, { exit: 0, state: 'passed' }] }], outTgz())
     const r = run(['--host', 'mac-two', 'unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
     expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('every iOS Mac that could take it is busy with another run; waiting for one')
+    expect(r.stderr).toContain('every iOS Mac that could take it is busy; waiting for one')
     expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-two', 'mac-two', 'mac-two'])
     expect(r.stderr).toContain('results: ')
+    // The sources went once; the later tries use what is already there.
+    expect(r.calls.filter((c) => c.op === 'host_copy' && c.args.to_host)).toHaveLength(1)
+    expect(r.stderr.match(/the sources are already on mac-two from an earlier try/g)).toHaveLength(2)
+  })
+
+  it('a Mac that stays busy until the wait ends: its copy of the sources there is removed, and the scratch files here', () => {
+    // Before, a busy try went straight to the next one, and the unpacked sources stayed on the
+    // Mac (maybe someone else's computer) after the run gave up.
+    const bin = fakeWalnut([{ host: 'mac-two', loadPerCpu: 0.2, result: { exit: 75, state: 'busy' } }], outTgz())
+    const r = run(['--host', 'mac-two', 'unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '3', IOS_FLEET_WAIT_POLL_SECS: '0.1' })
+    expect(r.status).toBe(75)
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).length).toBeGreaterThanOrEqual(2)
+    const clean = r.calls.filter((c) => c.op === 'host_exec' && !c.args.background)
+    expect(clean).toHaveLength(1)
+    expect(clean[0].args.host).toBe('mac-two')
+    expect((clean[0].args.argv as string[])[2]).toMatch(/^rm -rf "\$HOME\/\.local\/state\/open-walnut\/tasks\/task-1\/ios-fleet\/\d{8}T\d{6}Z-\d+"$/)
+    for (const n of fs.readdirSync(path.join(taskDir, 'ios-fleet'))) {
+      expect(fs.existsSync(path.join(taskDir, 'ios-fleet', n, 'src.tgz'))).toBe(false)
+      expect(fs.existsSync(path.join(taskDir, 'ios-fleet', n, '.op-args.json'))).toBe(false)
+    }
+  })
+
+  it('a Mac that said busy goes after one that just became free', () => {
+    const bin = fakeWalnut([
+      { host: 'mac-a', loadPerCpu: 0.1, result: { exit: 75, state: 'busy' } },
+      { host: 'mac-c', loadSeq: [3, 0.3], result: { exit: 0, state: 'passed' } },
+    ], outTgz())
+    const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.calls.filter((c) => c.op === 'host_exec' && c.args.background).map((c) => c.args.host)).toEqual(['mac-a', 'mac-c'])
+  })
+
+  it('a reason that only changes its load figure is not printed again on every check', () => {
+    const bin = fakeWalnut([
+      { host: 'mac-hot', loadSeq: [2, 2.5, 3.1] },
+      { host: 'mac-mini', loadPerCpu: 0.1, resultSeq: [{ exit: 75, state: 'busy' }, { exit: 75, state: 'busy' }, { exit: 0, state: 'passed' }] },
+    ], outTgz())
+    const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr.match(/not using mac-hot/g)).toHaveLength(1)
+  })
+
+  it('a fleet read Walnut keeps dropping while the run waits is a round with no Mac, not the end of the run', () => {
+    // host_list was asked once with no retry: one hub_timeout ended a long wait with exit 1.
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, result: { exit: 0, state: 'passed' } }], outTgz(), { listFails: 9 })
+    const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('could not read the fleet now (hub_timeout); no Mac this round')
+    expect(r.calls.filter((c) => c.op === 'host_list')).toHaveLength(10)
+  })
+
+  it('no host tagged ios at all: says so at once (69), with nothing to wait for', () => {
+    const bin = fakeWalnut([{ host: 'devbox', tags: ['linux'], loadPerCpu: 0 }], outTgz())
+    const r = run(['unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '60' })
+    expect(r.status).toBe(69)
+    expect(r.stderr).toContain('no host in the fleet is tagged ios (host_list); name a Mac with --host')
+    expect(r.stderr).not.toContain('waiting for one')
+  })
+
+  it('--wait reads whole minutes in base 10 and refuses a number too long', () => {
+    // "08" was a bad octal number to bash's arithmetic, and the script died with exit 1.
+    const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1, result: { exit: 0, state: 'passed' } }], outTgz())
+    const r = run(['--wait', '08', 'unit'], bin, SCRIPT, { IOS_FLEET_WAIT_SECS: '' })
+    expect(r.status, r.stderr).toBe(0)
+    expect(run(['--wait', '12345', 'unit'], bin).status).toBe(64)
+    // The exit code is not part of the message.
+    expect(run(['--wait', 'soon', 'unit'], bin).stderr.trim()).toBe('ios-fleet: --wait takes whole minutes')
   })
 
   it('the wait has an end: none free within --wait exits 75 and says how long it waited', () => {

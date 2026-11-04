@@ -31,7 +31,8 @@
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
 #   --max-load N     refuse a Mac whose load per CPU is over N (default 0.75)
 #   --wait MIN       when no Mac can take the run now, wait up to MIN minutes for one
-#                    (default 30; 0 gives up at once)
+#                    (default 30; 0 gives up at once). A wait outlasts a tool call's
+#                    foreground limit: start the script in the background to wait
 #   --udid U         drive that simulator on the Mac instead of the run's own one
 #   --clean          remove this task's build products on that Mac afterwards
 #   --verbose        print the whole run log (default: the lines that matter; all of it
@@ -42,9 +43,12 @@
 # The Mac may be someone else's computer: see remote-run.sh for how a run stays out of
 # their way (no window, its own simulator, utility priority, refuses when busy).
 #
+# The sources are packed once, when the script starts, so a run that waits its turn tests
+# the checkout as it was then.
+#
 # Exit: the tests' own status; 75 no Mac could take the run within --wait; 74 the run ended but its
 # results did not come back (they stay on the Mac, and the line to fetch them is printed);
-# 64 a wrong option.
+# 69 no host in the fleet is tagged ios; 64 a wrong option.
 set -uo pipefail
 
 # The whole script is one block that ends in exit: bash reads all of it before it runs a
@@ -52,7 +56,7 @@ set -uo pipefail
 # of the run (2026-11-04: one did, and a passed run ended in a syntax error).
 {
 
-die() { printf 'ios-fleet: %s\n' "$*" >&2; exit "${2:-1}"; }
+die() { printf 'ios-fleet: %s\n' "$1" >&2; exit "${2:-1}"; }
 say() { printf 'ios-fleet: %s\n' "$*" >&2; }
 
 HOST=""; MAX_LOAD=0.75; FLAGS=(); CLEAN=0; VERBOSE=0; WAIT_MIN=30
@@ -73,11 +77,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 case $WAIT_MIN in ''|*[!0-9]*) die "--wait takes whole minutes" 64 ;; esac
+[ ${#WAIT_MIN} -le 4 ] || die "--wait takes at most 9999 minutes" 64
+WAIT_MIN=$((10#$WAIT_MIN))   # 10#: "08" is eight minutes, not a bad octal number
 # A queue, not a race: the Macs are shared (one is someone else's computer), so a run that
 # finds them all busy waits its turn instead of failing (2026-11-04: a UI test run failed at
 # once while another task's run held the only free Mac). The env knobs are for the tests.
 WAIT_SECS=${IOS_FLEET_WAIT_SECS:-$((WAIT_MIN * 60))}
 WAIT_POLL=${IOS_FLEET_WAIT_POLL_SECS:-60}
+case $WAIT_SECS in ''|*[!0-9]*) die "IOS_FLEET_WAIT_SECS takes whole seconds" 64 ;; esac
+case $WAIT_POLL in ''|*[!0-9.]*) die "IOS_FLEET_WAIT_POLL_SECS takes seconds" 64 ;; esac
 MODE=${1:-}; [ -n "$MODE" ] || die "say what to run: unit, ui, build or run (see --help)" 64
 shift
 [ "${1:-}" = "--" ] && shift
@@ -155,7 +163,7 @@ job_log_rest() { # $1 = host, $2 = job id, $3 = bytes already read, $4 = local l
 # The Macs to try, best first: connected, tagged ios, under the load cap.
 candidates() {
   local hosts loads
-  hosts=$(op host_list '{}') || return 1
+  hosts=$(op_again host_list '{}') || return 1
   loads=$(op host_load '{}') || loads='{"hosts":[]}'
   # A host whose load did not come back in time is asked once more.
   if printf '%s' "$loads" | js 'sys.exit(0 if any(not h.get("known") for h in d["hosts"]) else 1)'; then
@@ -164,6 +172,9 @@ candidates() {
   python3 - "$MAX_LOAD" "$hosts" "$loads" <<'PY'
 import json, sys
 cap = float(sys.argv[1]); hosts = json.loads(sys.argv[2])["hosts"]; loads = {h["host"]: h for h in json.loads(sys.argv[3])["hosts"]}
+# No host tagged ios at all (an offline one keeps its tags): nothing to wait for.
+if not any("ios" in ((h.get("capabilities") or {}).get("tags") or []) for h in hosts):
+    sys.exit(3)
 rows = []
 for h in hosts:
     if "ios" not in ((h.get("capabilities") or {}).get("tags") or []) or not (h.get("connection") or {}).get("connected"):
@@ -184,17 +195,32 @@ PY
 }
 
 [ -z "$HOST" ] || [ "${HOST#@}" = "$HOST" ] || [ "$HOST" = "@ios" ] || die "only @ios is a selector this script picks from; name a host instead" 64
-# The Macs to try now, into PICKS. The reasons a Mac was passed over are printed when they
-# change, so a long wait does not repeat the same lines every minute.
-SKIPS_SAID=""
+# The Macs to try now, into PICKS; one that said busy last round goes after the others. The
+# reasons a Mac was passed over are printed when they change (the load figures aside, which
+# move every minute), so a long wait does not repeat the same lines.
+SKIPS_SAID=""; BUSY_LAST=" "
 pick() {
   if [ -n "$HOST" ] && [ "${HOST#@}" = "$HOST" ]; then
     PICKS=$(printf '%s\tnamed with --host\n' "$HOST"); return
   fi
-  local skips
-  PICKS=$(candidates 2>"$LOCAL/.skips") || { cat "$LOCAL/.skips" >&2; die "could not read the fleet"; }
+  local skips key rc first="" last="" h n
+  PICKS=$(candidates 2>"$LOCAL/.skips"); rc=$?
+  [ "$rc" != 3 ] || die "no host in the fleet is tagged ios (host_list); name a Mac with --host" 69
+  if [ "$rc" != 0 ]; then
+    # Walnut kept dropping the answer (op_again gave up): no Mac this round, the wait goes on.
+    if grep -qE "$OP_AGAIN_WHY" "$LOCAL/.skips"; then
+      say "could not read the fleet now ($(grep -oE "$OP_AGAIN_WHY" "$LOCAL/.skips" | head -1)); no Mac this round"; PICKS=""; return
+    fi
+    cat "$LOCAL/.skips" >&2; die "could not read the fleet"
+  fi
   skips=$(sed 's/^SKIP\t/ios-fleet: not using /' "$LOCAL/.skips")
-  if [ "$skips" != "$SKIPS_SAID" ]; then [ -z "$skips" ] || printf '%s\n' "$skips" >&2; SKIPS_SAID=$skips; fi
+  key=$(printf '%s' "$skips" | sed -E 's/[0-9]+(\.[0-9]+)?/N/g')
+  if [ "$key" != "$SKIPS_SAID" ]; then [ -z "$skips" ] || printf '%s\n' "$skips" >&2; SKIPS_SAID=$key; fi
+  while IFS=$'\t' read -r h n; do
+    [ -n "$h" ] || continue
+    case "$BUSY_LAST" in *" $h "*) last="$last$h"$'\t'"$n"$'\n' ;; *) first="$first$h"$'\t'"$n"$'\n' ;; esac
+  done <<< "$PICKS"
+  PICKS="$first$last"
 }
 dur() { if [ "$1" -ge 60 ]; then echo "$(($1 / 60)) min"; else echo "$1 s"; fi; }
 WAIT_START=$(date +%s); WAIT_SAID=0
@@ -208,14 +234,22 @@ wait_turn() {
   if [ "$WAIT_SAID" = 0 ]; then
     say "$1; waiting for one (up to $(dur "$WAIT_SECS"), asking again every ${WAIT_POLL} s; --wait 0 does not wait)"; WAIT_SAID=1
   fi
-  sleep "$WAIT_POLL"
+  # Never past the end of the wait (the poll may be a fraction of a second in the tests).
+  sleep "$(awk -v p="$WAIT_POLL" -v l=$(( WAIT_SECS - waited )) 'BEGIN { print (p < l ? p : l) }')"
 }
-pick
-while [ -z "$PICKS" ]; do
-  wait_turn "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime)"
-  pick
-done
-[ "$WAIT_SAID" = 0 ] || say "a Mac is free after $(( $(date +%s) - WAIT_START )) s of waiting"
+# On the way out: this run's folder goes from every Mac the sources went to but that did not
+# run it to the end (a busy one, a stopped run), and the scratch files here go.
+SENT=" "; DONE_ON=""
+leave() {
+  local h
+  for h in $SENT; do
+    [ "$h" != "$DONE_ON" ] || continue
+    op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "timeout_ms": 60000}))' "$h" "rm -rf \"\$HOME/$REMOTE_REL\"")" >/dev/null 2>&1 || true
+  done
+  rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.op-err" "$LOCAL/.read-err" "$LOCAL/.skips"
+  rmdir "$LOCAL" 2>/dev/null || true
+}
+trap leave EXIT
 
 # The sources: what git tracks plus new files not ignored, under ios-native, the shared
 # script helpers the iOS scripts source, and every repo path the iOS sources name as a
@@ -231,16 +265,30 @@ while IFS= read -r p; do REFS+=("$p"); done < <(repo_refs)
   || die "could not pack the sources"
 say "packed $(du -h "$LOCAL/src.tgz" | cut -f1) of sources ($(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" status --porcelain -- ios-native | grep -q . && echo ', with uncommitted changes'))"
 
+pick
+while [ -z "$PICKS" ]; do
+  wait_turn "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime)"
+  pick
+done
+[ "$WAIT_SAID" = 0 ] || say "a Mac is free after $(( $(date +%s) - WAIT_START )) s of waiting"
+
 q() { printf '%q ' "$@"; }
 STATUS=1; FETCHED=1; RAN=0
 while :; do
+BUSY_NOW=" "
 while IFS=$'\t' read -r H NOTE; do
   [ -n "$H" ] || continue
   say "using $NOTE"
   REMOTE="~/$REMOTE_REL"
-  sent=$(copy "$(python3 -c 'import json,sys; print(json.dumps({"from": sys.argv[1], "to_host": sys.argv[2], "to": sys.argv[3]}))' "$LOCAL/src.tgz" "$H" "$REMOTE/src.tgz")") \
-    || die "could not send the sources to $H"
-  say "$(printf '%s' "$sent" | js 'print(d.get("outcome") or "sent")')"
+  # A Mac that said busy before keeps the sources this run sent it: they go once.
+  case "$SENT" in
+    *" $H "*) say "the sources are already on $H from an earlier try" ;;
+    *)
+      SENT="$SENT$H "
+      sent=$(copy "$(python3 -c 'import json,sys; print(json.dumps({"from": sys.argv[1], "to_host": sys.argv[2], "to": sys.argv[3]}))' "$LOCAL/src.tgz" "$H" "$REMOTE/src.tgz")") \
+        || die "could not send the sources to $H"
+      say "$(printf '%s' "$sent" | js 'print(d.get("outcome") or "sent")')" ;;
+  esac
   SCRIPT="D=\"\$HOME/$REMOTE_REL\"; mkdir -p \"\$D/src\" && tar -xzf \"\$D/src.tgz\" -C \"\$D/src\" && exec /bin/bash \"\$D/src/ios-native/tests/fleet/remote-run.sh\" \"\$D\" $(q "$MODE" ${FLAGS[@]+"${FLAGS[@]}"} --max-load "$MAX_LOAD" -- ${ARGS[@]+"${ARGS[@]}"})"
   started=$(op host_exec "$(python3 -c 'import json,sys; print(json.dumps({"host": sys.argv[1], "argv": ["/bin/bash", "-c", sys.argv[2]], "background": True, "timeout_ms": 7200000}))' "$H" "$SCRIPT")") \
     || die "could not start the run on $H"
@@ -280,9 +328,10 @@ while IFS=$'\t' read -r H NOTE; do
   [ -n "$RES" ] || die "the run on $H ended without a result line; its log: $LOG"
   STATUS=$(printf '%s' "$RES" | js 'print(d["exit"])')
   STATE=$(printf '%s' "$RES" | js 'print(d["state"])')
-  # Another run holds its simulator: the next Mac, or this one's turn after a wait.
-  if [ "$STATE" = busy ]; then say "$H is busy with another run; trying the next Mac"; continue; fi
-  RAN=1
+  # It refused to start (its BUSY line above says why: another run, its load, Simulator
+  # open): the next Mac, or this one's turn after a wait.
+  if [ "$STATE" = busy ]; then BUSY_NOW="$BUSY_NOW$H "; say "$H is busy (see its BUSY line above); trying the next Mac"; continue; fi
+  RAN=1; DONE_ON=$H
   VERSIONS=$(printf '%s' "$RES" | js 'print(" and ".join(x for x in (("Xcode " + d["xcode"]) if d.get("xcode") else "", d.get("runtime") or "") if x))')
   [ -z "$VERSIONS" ] || say "ran with $VERSIONS on $H"
   TIMES=$(printf '%s' "$RES" | js 'print("%s s there, %s to %s%s" % (d["secs"], d.get("startedAt", "?"), d.get("endedAt", "?"), (" (xcodebuild %s s)" % d["xcodeSecs"]) if "xcodeSecs" in d else "") if "secs" in d else "")')
@@ -304,12 +353,12 @@ while IFS=$'\t' read -r H NOTE; do
   break
 done <<< "$PICKS"
 [ "$RAN" = 0 ] || break
-wait_turn "every iOS Mac that could take it is busy with another run"
+BUSY_LAST=$BUSY_NOW
+wait_turn "every iOS Mac that could take it is busy"
 pick
 while [ -z "$PICKS" ]; do wait_turn "no iOS Mac can take a run now (each is busy, offline, or has no simulator runtime)"; pick; done
 done
 
-rm -f "$LOCAL/src.tgz" "$LOCAL/.op-args.json" "$LOCAL/.op-err" "$LOCAL/.read-err" "$LOCAL/.skips"
 if [ -f "$LOCAL/out/summary.json" ]; then
   python3 - "$LOCAL/out/summary.json" <<'PY' >&2
 import json, sys
