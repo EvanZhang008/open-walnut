@@ -17,8 +17,8 @@
  *               release and starts as it.
  *   field-work  an install in use (a task, a session whose CLI stays alive,
  *               its history) restarts into the update. Its daemon outlives the
- *               restart, as a person's does (WALNUT_DAEMON_HEARTBEAT_MS holds
- *               the isolated daemon's parent check off), so the release must
+ *               restart, as a person's does (IsolatedWalnut holds the isolated
+ *               daemon's parent check off), so the release must
  *               replace the old daemon with a session running: the task, the
  *               history and the session (a third message) are there, the old
  *               daemon and its CLI are gone, and the SQLite files the old
@@ -84,8 +84,6 @@ import { compareVersions } from './version-order.mjs'
 const nonce = () => crypto.randomBytes(4).toString('hex')
 const ask = (label, mark) => ({ text: `snapshot-clean-turn:answered ${label} ${mark}`, answer: `answered ${label} ${mark}` })
 const reports = (printed, version) => printed.split(/\s/)[0] === version
-/** Long enough that an isolated daemon outlives every restart of a scenario, as a person's daemon does. */
-const PERSISTENT_DAEMON_HEARTBEAT_MS = String(30 * 60_000)
 
 /** Every field scenario, in the order they run (--field-only picks some). */
 export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-cli', 'field-hand', 'field-lag', 'field-index', 'field-unscripted', 'field-archive']
@@ -415,7 +413,7 @@ async function updateInUse(w, from, field, registry, upstream) {
 
 async function inUse({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
-    const w = walnutFor(work, `field-work-${from.version}`, registry, walnuts, { WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS })
+    const w = walnutFor(work, `field-work-${from.version}`, registry, walnuts)
     const { done, file, daemon, live } = await updateInUse(w, from, field, registry, opts.upstream)
     await w.stop()
     const sqlite = checkSqlite(file, done.dbs.map((d) => path.join(w.walnutHome, d)), w.env)
@@ -458,7 +456,7 @@ export const REFUSAL = /Task database schema \d+ is newer than supported schema 
  */
 async function goneBack({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
-    const w = walnutFor(work, `field-back-${from.version}`, registry, walnuts, { WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS })
+    const w = walnutFor(work, `field-back-${from.version}`, registry, walnuts)
     const { done } = await updateInUse(w, from, field, registry, opts.upstream)
     await w.stop()
     // The way back: the dist-tags name the start point again (the release is
@@ -658,7 +656,7 @@ async function archived({ from, field, work, walnuts, opts }) {
     try {
       const w = new ArchiveWalnut({
         work, name: `field-archive-${from.version}`,
-        extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl, WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS },
+        extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl },
       })
       walnuts.push(w)
       // As a person did: that release's own install.sh, against (a copy of) its release.

@@ -165,8 +165,6 @@ async function installA(work, name, live, registry) {
       WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl,
       npm_config_registry: `${registry.url}/`,
       WALNUT_UPDATE_IDLE_MS: String(IDLE_MS),
-      // A person's daemon outlives its server (field.mjs does the same).
-      WALNUT_DAEMON_HEARTBEAT_MS: String(30 * 60_000),
     },
   })
   const bare = systemPathWithoutNode(path.join(work, 'system-bin'))

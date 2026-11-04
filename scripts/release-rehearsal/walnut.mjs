@@ -16,6 +16,16 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const MOCK_CLAUDE = path.join(repo, 'tests/providers/mock-claude.mjs')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * The isolated daemon's heartbeat, which runs its parent check: long enough that it
+ * outlives every restart of a scenario, as a person's daemon does. With the 30 s
+ * default it ended with its server at a random moment: on 2026-11-04 binary-restart's
+ * new server wrote its message to the old daemon's CLI 0.1 s before that daemon's
+ * parent check ended them both, and the message went unanswered. A rehearsal that dies
+ * still leaves no daemon for longer than this; a finished one stops its own.
+ */
+export const PERSISTENT_DAEMON_HEARTBEAT_MS = String(30 * 60_000)
+
 // The server's port comes from below the OS's ephemeral range: binary-restart stops and
 // starts it on the same port, and anything on the machine may be handed an ephemeral one.
 export { freePort } from '../lib/free-port.mjs'
@@ -83,6 +93,7 @@ export class IsolatedWalnut {
       WALNUT_LEGACY_STREAMS_DIR: `${this.daemonDir}-legacy-streams`,
       // The mock writes a transcript the way the CLI does, where the CLI keeps it.
       MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(this.home, '.claude/projects'),
+      WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS,
       ...extraEnv,
     }
   }

@@ -144,6 +144,24 @@ describe('IsolatedWalnut', () => {
     expect(w.bin).toBe(path.join(w.prefix, 'bin', 'open-walnut'))
   })
 
+  it('keeps its daemon across a restart of its server, as a person\'s is kept', () => {
+    // 2026-11-04: with the 30 s heartbeat the isolated daemon's parent check ended it at a
+    // random moment after its server stopped; binary-restart's new server wrote its message
+    // to the old daemon's CLI 0.1 s before that, and the message went unanswered.
+    expect(Number(w.env.WALNUT_DAEMON_HEARTBEAT_MS)).toBeGreaterThanOrEqual(30 * 60_000)
+    expect(new IsolatedWalnut({ work: tmp, name: 'iso2', extraEnv: { X: '1' } }).env.WALNUT_DAEMON_HEARTBEAT_MS).toBe(w.env.WALNUT_DAEMON_HEARTBEAT_MS)
+    // No scenario puts the short heartbeat back: every one that restarts its server would race it.
+    const users = [
+      ...fs.readdirSync(path.join(ROOT, 'scripts/release-rehearsal')).filter((f) => f.endsWith('.mjs') && f !== 'walnut.mjs')
+        .map((f) => `scripts/release-rehearsal/${f}`),
+      ...fs.readdirSync(path.join(ROOT, 'tests/scripts')).filter((f) => /\.(ts|mjs)$/.test(f) && f !== path.basename(__filename))
+        .map((f) => `tests/scripts/${f}`).filter((f) => fs.readFileSync(path.join(ROOT, f), 'utf8').includes('IsolatedWalnut')),
+    ]
+    expect(users.length).toBeGreaterThan(4)
+    const setters = users.filter((f) => /WALNUT_DAEMON_HEARTBEAT_MS['"]?\s*[:=]/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+    expect(setters).toEqual([])
+  })
+
   it('puts the mock CLI on PATH as `claude`, and where Claude Code installs itself', () => {
     for (const p of [path.join(w.binDir, 'claude'), path.join(w.home, '.local/bin/claude')]) {
       expect(fs.statSync(p).mode & 0o111).not.toBe(0)
