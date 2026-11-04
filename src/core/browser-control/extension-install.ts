@@ -156,6 +156,9 @@ function run(cmd: string, args: string[], input?: string): Promise<boolean> {
     const t = setTimeout(() => { child.kill(); resolve(false) }, 8000)
     child.on('error', () => { clearTimeout(t); resolve(false) })
     child.on('exit', (code) => { clearTimeout(t); resolve(code === 0) })
+    // A child that exits before it reads (pbcopy killed, say) makes the write EPIPE: heard here, or
+    // it is an uncaughtException that ends the server. Its exit already says what happened.
+    child.stdin?.on('error', () => {})
     if (input !== undefined) child.stdin?.end(input)
   })
 }
