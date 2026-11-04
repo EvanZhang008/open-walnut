@@ -251,7 +251,13 @@ for (const width of [1440, 900]) {
     // What sits on <body> names the layer that kept it open, should one ever do so.
     const bodyKids = () => page.evaluate(() => Array.from(document.body.children).map((el) =>
       `${el.tagName}.${(el as HTMLElement).className}[${el.getAttribute('role') ?? ''}] rects=${el.getClientRects().length}`).join(' ; '))
-    for (let press = 0; press < 2 && (await flyout.count()) > 0; press++) await page.keyboard.press('Escape')
+    // The focused tag is a link: its card shows a moment later and takes the first Escape.
+    const hoverCard = page.locator('[data-testid="link-hover-card"]')
+    await expect(hoverCard).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(hoverCard).toHaveCount(0)
+    await expect(flyout).toHaveCount(1)
+    await page.keyboard.press('Escape')
     await expect.poll(() => flyout.count(), { message: `the list stayed open; body: ${await bodyKids()}` }).toBe(0)
 
     // The Leader pill on the row still lists its workers, and a press on it closes the open
