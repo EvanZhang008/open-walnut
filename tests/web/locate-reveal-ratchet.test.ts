@@ -48,7 +48,7 @@ const KNOWN: Record<string, Entry> = {
   queryFoldedProjects: { opens: 'setQueryFoldedProjects(' },     // a list project folded for the active filter
   expandedParents: { opens: 'setExpandedParents(' },             // every collapsed parent up the chain
   folderFolds: { opens: 'setFolderFolds(' },                     // a folder, in its tier or the list
-  sectionOpen: { opens: 'openStatusSection(' },                  // a status section (the jump's own fold while a project jump is on)
+  sectionFolds: { opens: 'openStatusSection(' },                 // a status section (the jump's own fold while a project jump is on)
   openProjectFolds: { opens: 'toggleProjectFold(' },             // a project's Waiting / Completed fold
   listBatch: { hidesNoRow: 'cutRows always draws the focused row past the batch' },
   folderTargetId: { hidesNoRow: 'the folder a drag hovers, not a fold' },
@@ -61,12 +61,14 @@ const FOLD_LIKE = /fold|collaps|expand|open|reveal|hidden|shown|batch/i;
 function declaredFoldStates(): string[] {
   const names = new Set<string>();
   for (const m of SRC.matchAll(/const \[(\w+), (\w+)\] = (use\w+)/g)) if (FOLD_LIKE.test(m[1])) names.add(m[1]);
+  // A fold kept in a fold store (useFoldStore, the one fold rule) rather than a useState pair.
+  for (const m of SRC.matchAll(/const (\w+) = useFoldStore\(/g)) names.add(m[1]);
   return [...names].sort();
 }
 
 describe('locate reveal ratchet', () => {
   it('finds the fold states (the scan still reads the source)', () => {
-    expect(declaredFoldStates()).toEqual(expect.arrayContaining(['collapsedSections', 'expandedParents', 'folderFolds', 'sectionOpen']));
+    expect(declaredFoldStates()).toEqual(expect.arrayContaining(['collapsedSections', 'expandedParents', 'folderFolds', 'sectionFolds']));
   });
 
   it('every fold-like state of TodoPanel is listed with how a locate opens it', () => {

@@ -32,6 +32,7 @@ import { KanbanHeader } from './KanbanHeader';
 import { useKanbanFilter } from './useKanbanFilter';
 import { NO_PROJECTS, type ProjectOf } from '../board-view-projects';
 import { useKanbanSeen } from './useKanbanSeen';
+import { usePrefersReducedMotion } from './usePrefersReducedMotion';
 import { KanbanLeaderRow } from './KanbanLeaderRow';
 import { KanbanAddLane } from './KanbanAddLane';
 import { KanbanToasts, useKanbanToasts } from './KanbanToasts';
@@ -66,18 +67,6 @@ const FLASH_MS = 1200;
 const LANE_FLASH_MS = 600;
 /** A move's toast is in the corner by then, so its card can be moved out from under it. */
 const CLEAR_AFTER_MS = 350;
-
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    if (!mq) return;
-    const on = () => setReduced(mq.matches);
-    mq.addEventListener?.('change', on);
-    return () => mq.removeEventListener?.('change', on);
-  }, []);
-  return reduced;
-}
 
 const cardEl = (root: HTMLElement | null, taskId: string) =>
   root?.querySelector<HTMLElement>(`[data-testid="kanban-card"][data-task-id="${CSS.escape(taskId)}"]`) ?? null;

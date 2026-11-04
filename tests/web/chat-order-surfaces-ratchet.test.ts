@@ -56,6 +56,8 @@ const SURFACES: Record<string, string> = {
   'web/src/components/sessions/PendingSessionPanel.tsx': 'no stream',
   'web/src/components/workspaces/WorkspacePreparingPanel.tsx': 'no stream',
   'web/src/components/notes/NotesSessionChat.tsx': 'no stream before the session; SessionChatHistory after',
+  // Draws nothing: reads the rows SessionChatHistory already placed, in screen order, as text for the side panel's snapshot.
+  'web/src/popout/ext-snapshot.ts': 'reads drawn rows',
 };
 
 describe('ratchet: every chat surface keeps one order', () => {

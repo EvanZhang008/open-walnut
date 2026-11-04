@@ -27,6 +27,7 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'components/chat/island-store.ts': 'local',
   'components/chat/island-runtime.ts': 'local',
   'hooks/usePhoneRestore.ts': 'local',
+  'popout/PopoutExtPanel.tsx': 'local', // its snapshot goes to the parent frame, its history to IndexedDB
 }
 
 function walk(dir: string): string[] {
