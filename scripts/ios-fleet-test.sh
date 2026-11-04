@@ -245,6 +245,8 @@ while IFS=$'\t' read -r H NOTE; do
   if [ "$STATE" = busy ] && [ -z "$HOST" ]; then say "$H is busy; trying the next Mac"; continue; fi
   VERSIONS=$(printf '%s' "$RES" | js 'print(" and ".join(x for x in (("Xcode " + d["xcode"]) if d.get("xcode") else "", d.get("runtime") or "") if x))')
   [ -z "$VERSIONS" ] || say "ran with $VERSIONS on $H"
+  TIMES=$(printf '%s' "$RES" | js 'print("%s s there, %s to %s%s" % (d["secs"], d.get("startedAt", "?"), d.get("endedAt", "?"), (" (xcodebuild %s s)" % d["xcodeSecs"]) if "xcodeSecs" in d else "") if "secs" in d else "")')
+  [ -z "$TIMES" ] || say "took $TIMES"
   FETCH=$(python3 -c 'import json,sys; print(json.dumps({"from_host": sys.argv[1], "from": sys.argv[2], "to": sys.argv[3]}))' "$H" "$REMOTE/out.tgz" "$LOCAL/out.tgz")
   FETCHED=1
   if [ "$(printf '%s' "$RES" | js 'print(d.get("bytes", 0))')" != 0 ]; then

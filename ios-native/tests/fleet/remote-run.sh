@@ -53,13 +53,36 @@ DERIVED="$(dirname "$RUN_DIR")/DerivedData"
 LOCK_DIR="$HOME/Library/Caches/walnut-fleet/sim.lock"
 SIM_FILE="$HOME/Library/Caches/walnut-fleet/simulator-udid"   # the UDID of the one it made
 mkdir -p "$OUT"
+# In UTC, so runs on Macs in other time zones (and the caller) read the same clock.
+T0=$(date +%s); STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 UDID=""; REC_PID=""; STATUS=0; XCODE=""; RUNTIME_NAME=""
+# The test counts and xcodebuild's own time (build and tests) from the result bundle's summary,
+# as JSON members
+# (empty without one). plutil, never python3: on a Mac without the Command Line Tools,
+# /usr/bin/python3 opens their install dialog.
+counts() {
+  local f="$OUT/summary.json" k v out=""
+  [ -f "$f" ] || return 0
+  for k in passedTests failedTests skippedTests; do
+    v=$(/usr/bin/plutil -extract "$k" raw -o - "$f" 2>/dev/null) && case $v in ''|*[!0-9]*) ;; *) out="$out,\"${k%Tests}\":$v" ;; esac
+  done
+  local a b
+  a=$(/usr/bin/plutil -extract startTime raw -o - "$f" 2>/dev/null) && b=$(/usr/bin/plutil -extract finishTime raw -o - "$f" 2>/dev/null) \
+    && out="$out,\"xcodeSecs\":$(awk -v a="$a" -v b="$b" 'BEGIN { printf "%d", b - a + 0.5 }')"
+  printf '%s' "$out"
+}
 result() { # $1 = exit status, $2 = word
-  local bytes=0
+  local bytes=0 more ended secs
   [ -f "$RUN_DIR/out.tgz" ] && bytes=$(stat -f %z "$RUN_DIR/out.tgz")
-  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s","xcode":"%s","runtime":"%s"}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID" "$XCODE" "$RUNTIME_NAME"
+  more=$(counts); ended=$(date -u +%Y-%m-%dT%H:%M:%SZ); secs=$(( $(date +%s) - T0 ))
+  # One line a person reads instead of xcodebuild's thousands.
+  if [ -n "$more" ]; then
+    n() { printf '%s' "$more" | sed -n "s/.*\"$1\":\([0-9]*\).*/\1/p"; }
+    echo "remote-run: $2: $(n passed) passed, $(n failed) failed, $(n skipped) skipped; $secs s in all (xcodebuild $(n xcodeSecs) s), $STARTED to $ended" >&2
+  fi
+  printf 'FLEET_RESULT {"exit":%s,"state":"%s","out":"%s","bytes":%s,"udid":"%s","xcode":"%s","runtime":"%s","startedAt":"%s","endedAt":"%s","secs":%s%s}\n' "$1" "$2" "$RUN_DIR/out.tgz" "$bytes" "$UDID" "$XCODE" "$RUNTIME_NAME" "$STARTED" "$ended" "$secs" "$more"
 }
 refuse() { echo "remote-run: $2" >&2; result "$1" "$3"; exit "$1"; }
 

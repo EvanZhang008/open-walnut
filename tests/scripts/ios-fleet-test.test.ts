@@ -76,7 +76,7 @@ if (op === 'host_exec') {
 if (op === 'host_exec_read') {
   const m = mac(args.host)
   const r = m.result || { exit: 0, state: 'passed' }
-  const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U', xcode: r.xcode || '', runtime: r.runtime || '' }) + '\\n'
+  const tail = '** TEST ' + (r.exit ? 'FAILED' : 'SUCCEEDED') + ' **\\nFLEET_RESULT ' + JSON.stringify({ exit: r.exit, state: r.state, out: '/r/out.tgz', bytes: r.state === 'busy' ? 0 : 99, udid: 'U', xcode: r.xcode || '', runtime: r.runtime || '', startedAt: '2026-11-04T05:53:58Z', endedAt: '2026-11-04T06:00:56Z', secs: 418, ...(r.state === 'busy' ? {} : { passed: 41, failed: 0, skipped: 2, xcodeSecs: 397 }) }) + '\\n'
   // The run ends while 2 more chunks of its log are still unread.
   if (args.offset === 0) out({ output: 'remote-run: simulator X\\n', nextOffset: 24, outputBytes: 24, running: true })
   if (m.jobGone) { process.stderr.write('walnut: unknown_job: no job ' + args.job_id + ' on this host (finished jobs are kept for an hour; the log file stays)'); process.exit(1) }
@@ -231,6 +231,12 @@ describe('ios-fleet-test.sh', () => {
     expect(r.stderr).toContain('results: ')
   })
 
+  it('the run says how long it took there, on the UTC clock', () => {
+    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.1 }], outTgz()))
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('ios-fleet: took 418 s there, 2026-11-04T05:53:58Z to 2026-11-04T06:00:56Z (xcodebuild 397 s)')
+  })
+
   it('a Mac that turns out busy hands the run to the next one; a failed run keeps its exit code', () => {
     const bin = fakeWalnut([
       { host: 'mac-mini', loadPerCpu: 0.1, result: { exit: 75, state: 'busy' } },
@@ -373,6 +379,12 @@ describe('remote-run.sh (the Mac half)', () => {
     const last = r.stdout.trim().split('\n').pop() ?? ''
     expect(last.startsWith('FLEET_RESULT ')).toBe(true)
     expect(JSON.parse(last.slice('FLEET_RESULT '.length))).toMatchObject({ exit: 69, state: 'missing', bytes: 0, udid: '' })
+    // When it ran, in UTC, and for how long, also on a refusal; no counts without a result bundle.
+    const res = JSON.parse(last.slice('FLEET_RESULT '.length)) as Record<string, unknown>
+    expect(res.startedAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
+    expect(res.endedAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
+    expect(res.secs).toBeGreaterThanOrEqual(0)
+    expect(res).not.toHaveProperty('passed')
     // Nothing of a lock or a simulator was touched.
     expect(fs.existsSync(path.join(dir, 'Library'))).toBe(false)
   })
